@@ -19,12 +19,18 @@ export interface DroppedFinding extends Partial<Finding> {
 export interface PullFilePatch {
   filename: string;
   patch?: string | null;
+  status?: string;
+  additions?: number;
+  deletions?: number;
+  changes?: number;
+  previous_filename?: string;
 }
 
 export interface PullRequestSummary {
   number: number;
   title: string;
   draft: boolean;
+  body?: string | null;
   head: {
     sha: string;
     ref: string;
@@ -42,6 +48,8 @@ export interface PullRequestSummary {
     };
   };
   html_url: string;
+  requested_reviewers?: Array<{ login: string }>;
+  labels?: Array<{ name: string }>;
 }
 
 export interface ReviewComment {
@@ -58,4 +66,16 @@ export interface ReviewPlan {
   comments: ReviewComment[];
   dropped: DroppedFinding[];
   summary: string;
+  walkthrough?: WalkthroughComment;
+  walkthroughComment?: WalkthroughCommentPostResult;
 }
+
+export interface WalkthroughComment {
+  marker: string;
+  body: string;
+  postIssueComment: boolean;
+}
+
+export type WalkthroughCommentPostResult =
+  | { posted: true; action: "created" | "updated"; html_url?: string; id: number }
+  | { posted: false; reason: "disabled" | "missing_app_credentials" | "upsert_failed" };

@@ -7,6 +7,7 @@ export interface GitHubApiOptions {
   privateKeyPath?: string;
   token?: string;
   apiBaseUrl?: string;
+  botLogin?: string;
 }
 
 export class GitHubApi {
@@ -14,6 +15,7 @@ export class GitHubApi {
   private readonly privateKey?: string;
   private readonly token?: string;
   private readonly apiBaseUrl: string;
+  private readonly botLogin: string;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(options: GitHubApiOptions) {
@@ -21,6 +23,7 @@ export class GitHubApi {
     this.privateKey = options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined;
     this.token = options.token;
     this.apiBaseUrl = options.apiBaseUrl ?? "https://api.github.com";
+    this.botLogin = options.botLogin ?? "evaos-code-review-bot[bot]";
   }
 
   canPostAsApp(): boolean {
@@ -78,6 +81,53 @@ export class GitHubApi {
     });
   }
 
+  async upsertIssueComment(input: {
+    repo: string;
+    issueNumber: number;
+    marker: string;
+    body: string;
+  }): Promise<{ action: "created" | "updated"; html_url?: string; id: number }> {
+    if (!this.canPostAsApp()) {
+      throw new Error("GitHub App credentials are required before posting comments.");
+    }
+    const token = await this.getInstallationToken(input.repo);
+    const existing = await this.findIssueCommentByMarker(input.repo, input.issueNumber, input.marker, token);
+    if (existing) {
+      const updated = await this.request<{ html_url?: string; id: number }>(
+        `/repos/${input.repo}/issues/comments/${existing.id}`,
+        { method: "PATCH", token, body: { body: input.body } }
+      );
+      return { action: "updated", html_url: updated.html_url, id: updated.id };
+    }
+
+    const created = await this.request<{ html_url?: string; id: number }>(
+      `/repos/${input.repo}/issues/${input.issueNumber}/comments`,
+      { method: "POST", token, body: { body: input.body } }
+    );
+    return { action: "created", html_url: created.html_url, id: created.id };
+  }
+
+  private async findIssueCommentByMarker(
+    repo: string,
+    issueNumber: number,
+    marker: string,
+    token: string
+  ): Promise<IssueCommentSummary | undefined> {
+    for (let page = 1; ; page += 1) {
+      const comments = await this.request<IssueCommentSummary[]>(
+        `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
+        { token }
+      );
+      const existing = comments.find((comment) => comment.body?.includes(marker) && this.isBotAuthoredComment(comment));
+      if (existing) return existing;
+      if (comments.length < 100) return undefined;
+    }
+  }
+
+  private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
+    return comment.user?.type === "Bot" && comment.user.login === this.botLogin;
+  }
+
   private async getInstallationToken(repo: string): Promise<string> {
     const cached = this.installationTokens.get(repo);
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
@@ -130,6 +180,15 @@ export class GitHubApi {
 
     return (await response.json()) as T;
   }
+}
+
+interface IssueCommentSummary {
+  id: number;
+  body?: string | null;
+  user?: {
+    login: string;
+    type?: string;
+  } | null;
 }
 
 function describeFetchError(error: unknown): string {
