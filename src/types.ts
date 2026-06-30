@@ -67,6 +67,7 @@ export interface ReviewPlan {
   dropped: DroppedFinding[];
   summary: string;
   walkthrough?: WalkthroughComment;
+  walkthroughComment?: WalkthroughCommentPostResult;
 }
 
 export interface WalkthroughComment {
@@ -74,3 +75,7 @@ export interface WalkthroughComment {
   body: string;
   postIssueComment: boolean;
 }
+
+export type WalkthroughCommentPostResult =
+  | { posted: true; action: "created" | "updated"; html_url?: string; id: number }
+  | { posted: false; reason: "disabled" | "missing_app_credentials" | "upsert_failed" };
