@@ -13,6 +13,12 @@
   "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
   "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
+  "commands": {
+    "enabled": false,
+    "botMentions": ["@evaos-code-review-bot"],
+    "trustedAuthors": ["100yenadmin"],
+    "acknowledge": false
+  },
   "repoProfiles": {
     "enableOrgFallbacks": false,
     "repos": {

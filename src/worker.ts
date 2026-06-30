@@ -1,5 +1,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  buildCommandStatusBody,
+  buildCommandStatusMarker,
+  collectTrustedReviewCommands,
+  decideCommandAction,
+  type CommandDecision
+} from "./commands.js";
 import { loadConfig, type BotConfig } from "./config.js";
 import { validateFindingLocations } from "./diff.js";
 import { decideReviewEvent, normalizeFindingsForReview } from "./findings.js";
@@ -29,6 +36,9 @@ export interface RunOnceResult {
   skippedDraft: number;
   skippedCanary: number;
   skippedPolicy: number;
+  skippedCommandStop: number;
+  skippedCommandExplain: number;
+  commandReviewRequested: number;
   skippedProcessed: number;
   skippedCapacity: number;
   baselinedExisting: number;
@@ -37,9 +47,12 @@ export interface RunOnceResult {
 
 type ReviewPullResult =
   | "reviewed"
+  | "reviewed_command"
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_policy"
+  | "skipped_command_stop"
+  | "skipped_command_explain"
   | "skipped_processed"
   | "skipped_capacity";
 
@@ -55,6 +68,9 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     skippedDraft: 0,
     skippedCanary: 0,
     skippedPolicy: 0,
+    skippedCommandStop: 0,
+    skippedCommandExplain: 0,
+    commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,
     baselinedExisting: 0,
@@ -93,10 +109,13 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
           useZCode: options.useZCode ?? true,
           budget
         });
-        if (status === "reviewed") result.reviewed += 1;
+        if (status === "reviewed" || status === "reviewed_command") result.reviewed += 1;
         if (status === "skipped_draft") result.skippedDraft += 1;
         if (status === "skipped_canary") result.skippedCanary += 1;
         if (status === "skipped_policy") result.skippedPolicy += 1;
+        if (status === "skipped_command_stop") result.skippedCommandStop += 1;
+        if (status === "skipped_command_explain") result.skippedCommandExplain += 1;
+        if (status === "reviewed_command") result.commandReviewRequested += 1;
         if (status === "skipped_processed") result.skippedProcessed += 1;
         if (status === "skipped_capacity") result.skippedCapacity += 1;
       }
@@ -122,7 +141,19 @@ export async function reviewPull(input: {
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
-  if (state.hasProcessed(repo, pull.number, pull.head.sha)) return "skipped_processed";
+
+  const commandDecision = await resolvePullCommandDecision({ config, github, state, repo, pull });
+  if (commandDecision.action === "stop") {
+    await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
+    return "skipped_command_stop";
+  }
+  if (commandDecision.action === "explain") {
+    await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
+    return "skipped_command_explain";
+  }
+
+  const commandReviewRequested = commandDecision.shouldReview;
+  if (!commandReviewRequested && state.hasProcessed(repo, pull.number, pull.head.sha)) return "skipped_processed";
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   if (!budget.tryStart()) return "skipped_capacity";
   let lease: ReviewRunLease | undefined;
@@ -130,8 +161,12 @@ export async function reviewPull(input: {
   try {
     lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
     if (!lease) return "skipped_capacity";
+    if (commandReviewRequested) {
+      await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
+    }
 
-    const evidenceDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
+    const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
+    const evidenceDir = commandReviewRequested ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
     mkdirSync(evidenceDir, { recursive: true });
 
     const files = await github.listPullFiles(repo, pull.number);
@@ -151,6 +186,9 @@ export async function reviewPull(input: {
       maxPatchBytes: config.zcode.maxPatchBytes
     });
     writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
+    if (commandDecision.action !== "none") {
+      writeFileSync(join(evidenceDir, "command.json"), `${JSON.stringify(commandDecision.command, null, 2)}\n`);
+    }
     writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
 
     const zcodeResult = input.useZCode
@@ -174,7 +212,14 @@ export async function reviewPull(input: {
     const comments = normalized.comments;
     const dropped = sanitizeDroppedFindings([...zcodeResult.droppedFromSchema, ...located.dropped, ...normalized.dropped]);
     const event = decideReviewEvent(comments);
-    const summary = buildSummary({ repo, pull, comments, dropped, dryRun: input.dryRun });
+    const summary = buildSummary({
+      repo,
+      pull,
+      comments,
+      dropped,
+      dryRun: input.dryRun,
+      commandDecision
+    });
     const walkthrough = config.walkthrough.enabled
       ? buildWalkthroughComment({
           repo,
@@ -199,7 +244,7 @@ export async function reviewPull(input: {
 
     if (input.dryRun) {
       state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
-      return "reviewed";
+      return commandReviewRequested ? "reviewed_command" : "reviewed";
     }
 
     const reviewGithub = new GitHubApi(config.github);
@@ -226,7 +271,7 @@ export async function reviewPull(input: {
       event,
       reviewUrl: review.html_url
     });
-    return "reviewed";
+    return commandReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
     if (lease) state.releaseReviewRunLease(lease.leaseId);
     budget.finish();
@@ -274,6 +319,66 @@ export function isCanaryAllowed(config: Pick<BotConfig, "canaryPulls">, repo: st
   return new Set(config.canaryPulls).has(`${repo}#${pullNumber}`);
 }
 
+async function resolvePullCommandDecision(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+}): Promise<CommandDecision> {
+  if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
+
+  const comments = await input.github.listIssueComments(input.repo, input.pull.number);
+  const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  return decideCommandAction({
+    commands: collected.commands,
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    hasProcessedCommand: (repo, pullNumber, headSha, commentId) =>
+      input.state.hasProcessedCommand(repo, pullNumber, headSha, commentId)
+  });
+}
+
+async function recordAndAcknowledgeCommandDecision(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  commandDecision: Exclude<CommandDecision, { action: "none"; shouldReview: false }>;
+}): Promise<void> {
+  input.state.recordProcessedCommand({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    commentId: input.commandDecision.commandId,
+    action: input.commandDecision.action,
+    status:
+      input.commandDecision.action === "stop"
+        ? "stopped"
+        : input.commandDecision.action === "explain"
+          ? "explained"
+          : "triggered",
+    author: input.commandDecision.command.author,
+    url: input.commandDecision.command.url
+  });
+
+  if (input.config.commands.acknowledge && input.github.canPostAsApp()) {
+    await input.github.upsertIssueComment({
+      repo: input.repo,
+      issueNumber: input.pull.number,
+      marker: buildCommandStatusMarker(input.repo, input.pull.number, input.pull.head.sha),
+      body: buildCommandStatusBody({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        decision: input.commandDecision
+      })
+    });
+  }
+}
+
 export function localDateFolder(now = new Date()): string {
   const year = String(now.getFullYear()).padStart(4, "0");
   const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -298,11 +403,18 @@ function buildSummary(input: {
   comments: { severity: string }[];
   dropped: { reason: string }[];
   dryRun: boolean;
+  commandDecision?: CommandDecision;
 }): string {
   const p0p1 = input.comments.filter((comment) => comment.severity === "P0" || comment.severity === "P1").length;
-  return [
+  const lines = [
     `evaOS ZCode review ${input.dryRun ? "dry run" : "result"} for ${input.repo}#${input.pull.number} at ${input.pull.head.sha}.`,
     `Inline comments: ${input.comments.length}. High-severity comments: ${p0p1}. Dropped findings: ${input.dropped.length}.`,
     "Pilot policy: this bot never approves PRs; it requests changes only for validated P0/P1 findings."
-  ].join("\n\n");
+  ];
+  if (input.commandDecision && input.commandDecision.action !== "none") {
+    lines.push(
+      `Command source: ${input.commandDecision.action} comment ${input.commandDecision.commandId} by ${input.commandDecision.command.author}.`
+    );
+  }
+  return lines.join("\n\n");
 }

@@ -1,5 +1,6 @@
 import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
+import type { IssueCommentCommandSource } from "./commands.js";
 import type { PullFilePatch, PullRequestSummary, ReviewComment, ReviewEvent } from "./types.js";
 
 export interface GitHubApiOptions {
@@ -56,6 +57,18 @@ export class GitHubApi {
       );
       files.push(...chunk);
       if (chunk.length < 100) return files;
+    }
+  }
+
+  async listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]> {
+    const comments: IssueCommentCommandSource[] = [];
+    for (let page = 1; ; page += 1) {
+      const chunk = await this.request<IssueCommentCommandSource[]>(
+        `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
+        { token: await this.getReadToken(repo) }
+      );
+      comments.push(...chunk);
+      if (chunk.length < 100) return comments;
     }
   }
 

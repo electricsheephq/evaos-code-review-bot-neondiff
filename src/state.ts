@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import type { ReviewEvent } from "./types.js";
 
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
+export type ProcessedCommandAction = "review" | "re-review" | "explain" | "stop";
+export type ProcessedCommandStatus = "triggered" | "explained" | "stopped" | "ignored";
 
 export interface ProcessedReviewRecord {
   repo: string;
@@ -19,6 +21,17 @@ export interface ProcessedReviewRecord {
 export interface ReviewRunLease {
   leaseId: string;
   expiresAt: string;
+}
+
+export interface ProcessedCommandRecord {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  commentId: number;
+  action: ProcessedCommandAction;
+  status: ProcessedCommandStatus;
+  author?: string;
+  url?: string;
 }
 
 export class ReviewStateStore {
@@ -50,6 +63,20 @@ export class ReviewStateStore {
         lease_id text primary key,
         started_at text not null,
         expires_at text not null
+      );
+    `);
+    this.db.exec(`
+      create table if not exists processed_commands (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        comment_id integer not null,
+        action text not null,
+        status text not null,
+        author text,
+        url text,
+        created_at text not null default (datetime('now')),
+        primary key (repo, pull_number, head_sha, comment_id)
       );
     `);
   }
@@ -124,6 +151,36 @@ export class ReviewStateStore {
 
   releaseReviewRunLease(leaseId: string): void {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  hasProcessedCommand(repo: string, pullNumber: number, headSha: string, commentId: number): boolean {
+    const row = this.db
+      .prepare(
+        `select 1 from processed_commands
+         where repo = ? and pull_number = ? and head_sha = ? and comment_id = ?
+         limit 1`
+      )
+      .get(repo, pullNumber, headSha, commentId);
+    return Boolean(row);
+  }
+
+  recordProcessedCommand(record: ProcessedCommandRecord): void {
+    this.db
+      .prepare(
+        `insert or replace into processed_commands
+          (repo, pull_number, head_sha, comment_id, action, status, author, url, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      )
+      .run(
+        record.repo,
+        record.pullNumber,
+        record.headSha,
+        record.commentId,
+        record.action,
+        record.status,
+        record.author ?? null,
+        record.url ?? null
+      );
   }
 
   close(): void {

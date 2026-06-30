@@ -121,6 +121,12 @@ function minimalConfig(): BotConfig {
       enabled: false,
       postIssueComment: false
     },
+    commands: {
+      enabled: false,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: [],
+      acknowledge: false
+    },
     zcode: {
       cliPath: "/unused/zcode.cjs",
       appConfigPath: "/unused/config.json",

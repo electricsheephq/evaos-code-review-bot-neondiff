@@ -17,6 +17,7 @@ Pilot local worker for ZCode/GLM-5.2 pull request reviews.
 - Installs a temporary per-worktree ZCode policy that allows read-only file tools, disables Bash/mutation/subagents, then restores/removes it before the clean check.
 - Sets `ZCODE_MODEL_RETRY_MAX_RETRIES=0` by default so provider rate limits fail fast instead of multiplying requests.
 - Resolves repo profiles before review; once profiles are configured, unknown or disabled repos skip closed before GitHub PR fetches.
+- Keeps maintainer PR-comment commands disabled by default; when enabled, only configured trusted authors can steer read-only reviews.
 
 ## Commands
 
@@ -49,3 +50,11 @@ Use [docs/repo-profiles.md](docs/repo-profiles.md) to add repo-specific review
 guidance, risky paths, proof expectations, and path filters. Profiles are
 prompt/config metadata only; they do not expand GitHub permissions, live
 monitoring, ZCode tools, approvals, or repair behavior by themselves.
+
+## Maintainer Commands
+
+Use [docs/maintainer-commands.md](docs/maintainer-commands.md) for the dormant
+trusted command surface. Commands are PR comments such as
+`@evaos-code-review-bot review`, `re-review`, `explain`, and `stop`; they stay
+behind `commands.enabled` and cannot repair, merge, approve, push branches, or
+expand monitoring.
