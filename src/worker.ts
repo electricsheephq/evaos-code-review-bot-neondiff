@@ -41,6 +41,7 @@ export interface RunOnceResult {
   commandReviewRequested: number;
   skippedProcessed: number;
   skippedCapacity: number;
+  skippedStaleHead: number;
   baselinedExisting: number;
   policySkips: { repo: string; reason: string }[];
 }
@@ -54,7 +55,8 @@ type ReviewPullResult =
   | "skipped_command_stop"
   | "skipped_command_explain"
   | "skipped_processed"
-  | "skipped_capacity";
+  | "skipped_capacity"
+  | "skipped_stale_head";
 
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
@@ -73,6 +75,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,
+    skippedStaleHead: 0,
     baselinedExisting: 0,
     policySkips: []
   };
@@ -118,6 +121,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         if (status === "reviewed_command") result.commandReviewRequested += 1;
         if (status === "skipped_processed") result.skippedProcessed += 1;
         if (status === "skipped_capacity") result.skippedCapacity += 1;
+        if (status === "skipped_stale_head") result.skippedStaleHead += 1;
       }
     }
     return result;
@@ -153,6 +157,15 @@ export async function reviewPull(input: {
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
+  if (commandReviewRequested) {
+    const livePull = await github.getPull(repo, pull.number);
+    const stale = detectStalePullHead({ expected: pull, live: livePull, phase: "before_review" });
+    if (stale) {
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+      recordStaleHeadSkip({ state, repo, pull, stale, evidenceDir });
+      return "skipped_stale_head";
+    }
+  }
   if (!commandReviewRequested && state.hasProcessed(repo, pull.number, pull.head.sha)) return "skipped_processed";
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   if (!budget.tryStart()) return "skipped_capacity";
@@ -165,8 +178,7 @@ export async function reviewPull(input: {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
     }
 
-    const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
-    const evidenceDir = commandReviewRequested ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     mkdirSync(evidenceDir, { recursive: true });
 
     const files = await github.listPullFiles(repo, pull.number);
@@ -207,6 +219,13 @@ export async function reviewPull(input: {
 
     assertGitClean(worktree.path);
 
+    const liveBeforePlan = await github.getPull(repo, pull.number);
+    const staleBeforePlan = detectStalePullHead({ expected: pull, live: liveBeforePlan, phase: "before_plan" });
+    if (staleBeforePlan) {
+      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforePlan, evidenceDir });
+      return "skipped_stale_head";
+    }
+
     const located = validateFindingLocations(zcodeResult.findings, reviewFiles);
     const normalized = normalizeFindingsForReview(located.valid, { maxInlineComments: 25 });
     const comments = normalized.comments;
@@ -245,6 +264,13 @@ export async function reviewPull(input: {
     if (input.dryRun) {
       state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
       return commandReviewRequested ? "reviewed_command" : "reviewed";
+    }
+
+    const liveBeforePost = await github.getPull(repo, pull.number);
+    const staleBeforePost = detectStalePullHead({ expected: pull, live: liveBeforePost, phase: "before_post" });
+    if (staleBeforePost) {
+      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforePost, evidenceDir });
+      return "skipped_stale_head";
     }
 
     const reviewGithub = new GitHubApi(config.github);
@@ -317,6 +343,59 @@ export function activateRepoForNewOnlyReview(input: {
 export function isCanaryAllowed(config: Pick<BotConfig, "canaryPulls">, repo: string, pullNumber: number): boolean {
   if (!config.canaryPulls || config.canaryPulls.length === 0) return true;
   return new Set(config.canaryPulls).has(`${repo}#${pullNumber}`);
+}
+
+export type StaleHeadPhase = "before_review" | "before_plan" | "before_post";
+
+export interface StaleHeadEvidence {
+  reason: `stale_head_${StaleHeadPhase}`;
+  expectedHeadSha: string;
+  liveHeadSha: string;
+  expectedBaseSha: string;
+  liveBaseSha: string;
+}
+
+export function detectStalePullHead(input: {
+  expected: PullRequestSummary;
+  live: PullRequestSummary;
+  phase: StaleHeadPhase;
+}): StaleHeadEvidence | undefined {
+  if (input.expected.head.sha === input.live.head.sha && input.expected.base.sha === input.live.base.sha) return undefined;
+  return {
+    reason: `stale_head_${input.phase}`,
+    expectedHeadSha: input.expected.head.sha,
+    liveHeadSha: input.live.head.sha,
+    expectedBaseSha: input.expected.base.sha,
+    liveBaseSha: input.live.base.sha
+  };
+}
+
+function buildEvidenceDir(
+  config: BotConfig,
+  repo: string,
+  pull: PullRequestSummary,
+  commandDecision: CommandDecision
+): string {
+  const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
+  return commandDecision.shouldReview ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+}
+
+function recordStaleHeadSkip(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  stale: StaleHeadEvidence;
+  evidenceDir: string;
+}): void {
+  mkdirSync(input.evidenceDir, { recursive: true });
+  writeFileSync(join(input.evidenceDir, "stale-head.json"), `${JSON.stringify(input.stale, null, 2)}\n`);
+  input.state.recordProcessed({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    status: "skipped",
+    error: `${input.stale.reason}: live=${input.stale.liveHeadSha}`
+  });
 }
 
 async function resolvePullCommandDecision(input: {
