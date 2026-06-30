@@ -45,6 +45,7 @@ async function main(): Promise<void> {
       repoProfilesEnabled: Boolean(config.repoProfiles),
       activation: config.activation,
       reviewConcurrency: config.reviewConcurrency,
+      commandsEnabled: config.commands.enabled,
       statePath: config.statePath,
       workRoot: config.workRoot,
       zcode: zcode.redacted,
@@ -96,7 +97,8 @@ async function main(): Promise<void> {
         dryRun,
         pilotRepos: config.pilotRepos,
         monitoredRepos,
-        canaryPulls: config.canaryPulls ?? []
+        canaryPulls: config.canaryPulls ?? [],
+        commandsEnabled: config.commands.enabled
       }));
       try {
         const result = await runOnce({ configPath: args.config, dryRun });

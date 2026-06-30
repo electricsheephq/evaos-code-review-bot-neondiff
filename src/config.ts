@@ -20,6 +20,7 @@ export interface BotConfig {
     postIssueComment: boolean;
   };
   repoProfiles?: RepoProfilesConfig;
+  commands: CommandConfig;
   zcode: {
     cliPath: string;
     appConfigPath: string;
@@ -57,6 +58,13 @@ export interface RepoProfileConfig {
   suggestedReviewers?: string[];
 }
 
+export interface CommandConfig {
+  enabled: boolean;
+  botMentions: string[];
+  trustedAuthors: string[];
+  acknowledge: boolean;
+}
+
 const DEFAULT_CONFIG: BotConfig = {
   pilotRepos: ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
   pollIntervalMs: 90_000,
@@ -75,6 +83,12 @@ const DEFAULT_CONFIG: BotConfig = {
   walkthrough: {
     enabled: true,
     postIssueComment: false
+  },
+  commands: {
+    enabled: false,
+    botMentions: ["@evaos-code-review-bot"],
+    trustedAuthors: [],
+    acknowledge: false
   },
   zcode: {
     cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
@@ -114,6 +128,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function validateConfig(config: BotConfig): void {
   if (!Array.isArray(config.pilotRepos)) throw new Error("config.pilotRepos must be an array");
+  if (!Array.isArray(config.commands.botMentions)) throw new Error("config.commands.botMentions must be an array");
+  if (!Array.isArray(config.commands.trustedAuthors)) throw new Error("config.commands.trustedAuthors must be an array");
   if (!config.repoProfiles) return;
 
   validateProfileRecord(config.repoProfiles.repos, "repoProfiles.repos");

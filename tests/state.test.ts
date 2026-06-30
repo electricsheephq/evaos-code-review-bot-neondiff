@@ -67,4 +67,25 @@ describe("review state store", () => {
     expect(store.tryAcquireReviewRunLease(1, 1_000, new Date("2026-07-01T00:00:02.000Z"))).toBeDefined();
     store.close();
   });
+
+  it("deduplicates processed command comments per repo, PR, head SHA, and comment id", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-command-state-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 123)).toBe(false);
+    store.recordProcessedCommand({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1161,
+      headSha: "head-a",
+      commentId: 123,
+      action: "review",
+      status: "triggered"
+    });
+
+    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 123)).toBe(true);
+    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-b", 123)).toBe(false);
+    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 124)).toBe(false);
+    store.close();
+  });
 });
