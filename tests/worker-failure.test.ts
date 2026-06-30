@@ -8,6 +8,7 @@ import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import {
+  isSuccessfulRetryStatus,
   localDateFolder,
   prepareFailedHeadRetry,
   recordFailedReview,
@@ -406,6 +407,72 @@ describe("worker review failures", () => {
       error: "original timeout; retry_did_not_review=skipped_stale_head"
     });
     state.close();
+  });
+
+  it("treats a retry row posted after prepare as an already-resolved no-op", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-race-posted-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1233, "head-retry-race");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+    const github = {
+      getPull: async () => pull,
+      listIssueComments: async () => [],
+      listPullFiles: async () => {
+        throw new Error("already-resolved retry should not fetch files");
+      },
+      canPostAsApp: () => false
+    } as unknown as GitHubApi;
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async (input) => {
+        state.recordProcessed({
+          repo: "electricsheephq/WorldOS",
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1233#pullrequestreview-1"
+        });
+        return reviewPull(input);
+      }
+    });
+
+    expect(result.status).toBe("skipped_processed");
+    expect(isSuccessfulRetryStatus(result.status)).toBe(true);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "posted",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1233#pullrequestreview-1"
+    });
+    state.close();
+  });
+
+  it("keeps retry CLI success status mapping explicit", () => {
+    expect(isSuccessfulRetryStatus("reviewed")).toBe(true);
+    expect(isSuccessfulRetryStatus("reviewed_command")).toBe(true);
+    expect(isSuccessfulRetryStatus("dry_run")).toBe(true);
+    expect(isSuccessfulRetryStatus("skipped_processed")).toBe(true);
+    expect(isSuccessfulRetryStatus("failed")).toBe(false);
+    expect(isSuccessfulRetryStatus("skipped_capacity")).toBe(false);
+    expect(isSuccessfulRetryStatus("skipped_stale_head")).toBe(false);
   });
 });
 

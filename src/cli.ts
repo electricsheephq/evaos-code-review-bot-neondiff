@@ -4,7 +4,7 @@ import { runDaemonCycle } from "./daemon.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
-import { retryFailedHead, runOnce } from "./worker.js";
+import { isSuccessfulRetryStatus, retryFailedHead, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
 async function main(): Promise<void> {
@@ -124,9 +124,7 @@ async function main(): Promise<void> {
       useZCode: args.zcode !== "false"
     });
     console.log(JSON.stringify(result, null, 2));
-    if (result.status !== "reviewed" && result.status !== "reviewed_command" && result.status !== "dry_run") {
-      process.exitCode = 1;
-    }
+    if (!isSuccessfulRetryStatus(result.status)) process.exitCode = 1;
     return;
   }
 

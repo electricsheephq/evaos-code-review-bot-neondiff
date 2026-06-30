@@ -78,6 +78,27 @@ export type ReviewPullResult =
   | "skipped_capacity"
   | "skipped_stale_head";
 
+export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"]): boolean {
+  switch (status) {
+    case "reviewed":
+    case "reviewed_command":
+    case "dry_run":
+    case "skipped_processed":
+      return true;
+    case "failed":
+    case "skipped_draft":
+    case "skipped_canary":
+    case "skipped_policy":
+    case "skipped_command_stop":
+    case "skipped_command_explain":
+    case "skipped_capacity":
+    case "skipped_stale_head":
+      return false;
+    default:
+      return assertNever(status);
+  }
+}
+
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
   const github = new GitHubApi(config.github);
@@ -360,6 +381,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (!lease) return "skipped_capacity";
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (input.processedHeadPolicy === "retry_failed_head") {
+      const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
+      if (current?.status !== "failed") return "skipped_processed";
       const liveBeforeReview = await github.getPull(repo, pull.number);
       const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
       if (staleBeforeReview) {
@@ -621,6 +644,10 @@ export function recordFailedReview(input: {
 function retryFailureError(previousError: string | undefined, error: unknown): string {
   const retryError = error instanceof Error ? error.message : String(error);
   return previousError ? `${previousError}; retry_error=${retryError}` : retryError;
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled retry status: ${String(value)}`);
 }
 
 async function resolvePullCommandDecision(input: {
