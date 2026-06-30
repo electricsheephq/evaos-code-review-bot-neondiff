@@ -1,0 +1,133 @@
+import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
+
+const SEVERITY_RANK: Record<Severity, number> = {
+  P0: 0,
+  P1: 1,
+  P2: 2,
+  P3: 3
+};
+
+const SEVERITIES = new Set<Severity>(["P0", "P1", "P2", "P3"]);
+
+export function parseFindings(value: unknown): { findings: Finding[]; dropped: DroppedFinding[] } {
+  const rawFindings = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.findings)
+      ? value.findings
+      : [];
+  const findings: Finding[] = [];
+  const dropped: DroppedFinding[] = [];
+
+  for (const raw of rawFindings) {
+    if (!isRecord(raw)) {
+      dropped.push({ reason: "invalid_schema" });
+      continue;
+    }
+
+    const severity = raw.severity;
+    const path = raw.path;
+    const line = raw.line;
+    const title = raw.title;
+    const body = raw.body;
+    const confidence = raw.confidence;
+
+    if (
+      !SEVERITIES.has(severity as Severity) ||
+      typeof path !== "string" ||
+      typeof line !== "number" ||
+      !Number.isInteger(line) ||
+      line <= 0 ||
+      typeof title !== "string" ||
+      title.trim().length === 0 ||
+      typeof body !== "string" ||
+      body.trim().length === 0 ||
+      typeof confidence !== "number" ||
+      confidence < 0 ||
+      confidence > 1
+    ) {
+      dropped.push({ reason: "invalid_schema" });
+      continue;
+    }
+
+    findings.push({
+      severity: severity as Severity,
+      path,
+      line,
+      title: title.trim(),
+      body: body.trim(),
+      confidence,
+      ...(typeof raw.why_this_matters === "string" && raw.why_this_matters.trim()
+        ? { why_this_matters: raw.why_this_matters.trim() }
+        : {})
+    });
+  }
+
+  return { findings, dropped };
+}
+
+export function normalizeFindingsForReview(
+  findings: Finding[],
+  options: { maxInlineComments?: number } = {}
+): { comments: ReviewComment[]; dropped: DroppedFinding[] } {
+  const maxInlineComments = options.maxInlineComments ?? 25;
+  const accepted: Finding[] = [];
+  const dropped: DroppedFinding[] = [];
+
+  for (const finding of findings) {
+    if (containsSecretLikeText(`${finding.title}\n${finding.body}\n${finding.why_this_matters ?? ""}`)) {
+      dropped.push({ ...redactFinding(finding), reason: "secret_detected" });
+      continue;
+    }
+    accepted.push(finding);
+  }
+
+  accepted.sort((a, b) => {
+    const severity = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+    if (severity !== 0) return severity;
+    const path = a.path.localeCompare(b.path);
+    if (path !== 0) return path;
+    return a.line - b.line || a.title.localeCompare(b.title);
+  });
+
+  const kept = accepted.slice(0, maxInlineComments);
+  for (const finding of accepted.slice(maxInlineComments)) {
+    dropped.push({ ...finding, reason: "comment_cap_exceeded" });
+  }
+
+  return {
+    comments: kept.map((finding) => ({
+      path: finding.path,
+      line: finding.line,
+      side: "RIGHT",
+      severity: finding.severity,
+      title: finding.title,
+      body: formatReviewComment(finding)
+    })),
+    dropped
+  };
+}
+
+function redactFinding<T extends Finding>(finding: T): T {
+  return {
+    ...finding,
+    title: redactSecrets(finding.title),
+    body: redactSecrets(finding.body),
+    ...(finding.why_this_matters ? { why_this_matters: redactSecrets(finding.why_this_matters) } : {})
+  };
+}
+
+export function decideReviewEvent(findings: Pick<Finding, "severity">[]): ReviewEvent {
+  return findings.some((finding) => finding.severity === "P0" || finding.severity === "P1")
+    ? "REQUEST_CHANGES"
+    : "COMMENT";
+}
+
+export function formatReviewComment(finding: Finding): string {
+  const why = finding.why_this_matters ? `\n\nWhy this matters: ${finding.why_this_matters}` : "";
+  return `**${finding.severity}: ${finding.title}**\n\n${finding.body}${why}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

@@ -1,0 +1,24 @@
+{
+  "name": "evaos-code-review-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local ZCode-backed GitHub PR review bot pilot for evaOS repos.",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "doctor": "tsx src/cli.ts doctor",
+    "run-once": "tsx src/cli.ts run-once",
+    "daemon": "tsx src/cli.ts daemon"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.15",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
