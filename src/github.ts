@@ -120,7 +120,7 @@ export class GitHubApi {
         body: options.body === undefined ? undefined : JSON.stringify(options.body)
       });
     } catch (error) {
-      throw new Error(`GitHub API fetch failed for ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`GitHub API fetch failed for ${path}: ${describeFetchError(error)}`);
     }
 
     if (!response.ok) {
@@ -130,6 +130,13 @@ export class GitHubApi {
 
     return (await response.json()) as T;
   }
+}
+
+function describeFetchError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = "cause" in error ? (error as Error & { cause?: unknown }).cause : undefined;
+  const causeMessage = cause instanceof Error ? `${cause.name}: ${cause.message}` : cause ? String(cause) : "";
+  return causeMessage ? `${error.message}; cause=${causeMessage}` : error.message;
 }
 
 export function createAppJwt(appId: string, privateKey: string, nowSeconds = Math.floor(Date.now() / 1000)): string {
