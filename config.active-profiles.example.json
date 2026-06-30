@@ -1,0 +1,576 @@
+{
+  "pilotRepos": [
+    "electricsheephq/WorldOS",
+    "electricsheephq/evaos-code-review-bot",
+    "electricsheephq/electric-sheep-website-dashboard-6158a244",
+    "electricsheephq/evaos-support-control",
+    "electricsheephq/evaos-ws-proxy",
+    "electricsheephq/evaos-cortex-plugin",
+    "electricsheephq/evaOS-gitnexus",
+    "electricsheephq/electric-sheep-eva-marketing-site",
+    "electricsheephq/evaos-cortex",
+    "electricsheephq/worldOS-marketing-site",
+    "electricsheephq/ai-chief-of-staff",
+    "electricsheephq/vantage-portfolio-hub",
+    "electricsheephq/mission-control-paperclip",
+    "electricsheephq/evaos-golden",
+    "electricsheephq/eric-wilder",
+    "100yenadmin/evaOS-GUI",
+    "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+    "100yenadmin/worldos-unity",
+    "100yenadmin/ai-agent-resource-hog-watcher"
+  ],
+  "skipDrafts": true,
+  "activation": {
+    "reviewExistingOpenPrsOnActivation": false
+  },
+  "commands": {
+    "enabled": false,
+    "botMentions": ["@evaos-code-review-bot"],
+    "trustedAuthors": ["100yenadmin"],
+    "acknowledge": false
+  },
+  "repoProfiles": {
+    "enableOrgFallbacks": false,
+    "repos": {
+      "electricsheephq/WorldOS": {
+        "displayName": "WorldOS Unity",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize Unity scene, save-state, gameplay, release-regression, and data-loss risks.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
+        "pathInstructions": {
+          "Assets/**": ["Prioritize scene, prefab, save-state, asset-reference, and gameplay regressions."],
+          "ProjectSettings/**": ["Treat build, platform, input, graphics, and release behavior changes as high risk."]
+        },
+        "riskyPaths": ["Assets/**", "ProjectSettings/**", "Packages/manifest.json"],
+        "proofExpectations": ["Look for Unity editor, play-mode, fixture, or focused smoke evidence when runtime behavior changes."],
+        "validationHints": ["Prefer correctness, persistence, CI, release, and regression findings over style-only feedback."],
+        "readinessHints": ["Scene, save, build, input, or package changes need explicit rollback and smoke notes."],
+        "preMergeChecks": {
+          "title": {
+            "mode": "warning",
+            "instructions": "Title should name the gameplay, save, or release behavior changed."
+          },
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused Unity/editor smoke, CI, or fixture evidence when code changes affect runtime behavior."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false,
+            "instructions": "Declaration only until opt-in finishing-touch commands are enabled."
+          }
+        },
+        "suggestedLabels": ["unity", "gameplay", "regression-hardening"]
+      },
+      "electricsheephq/evaos-code-review-bot": {
+        "displayName": "evaOS Code Review Bot",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize App-authored identity, duplicate suppression, stale-head safety, secret redaction, and beta release cadence.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "tests/**", "docs/**", "config*.json", "package.json", "package-lock.json", "!runtime/**"],
+        "pathInstructions": {
+          "src/github.ts": ["Treat GitHub App identity or token-mode regressions as high risk."],
+          "src/state.ts": ["Check duplicate suppression, leases, processed heads, and migration safety."],
+          "src/worker.ts": ["Check stale-head guards, repo mutation protection, and review posting policy."],
+          "src/zcode.ts": ["Check read-only ZCode policy, prompt constraints, and output parsing."]
+        },
+        "riskyPaths": ["src/github.ts", "src/state.ts", "src/worker.ts", "src/zcode.ts", "src/config.ts"],
+        "proofExpectations": ["Require focused tests, TypeScript build, App-backed doctor, release-status proof, and launchd heartbeat before live promotion."],
+        "validationHints": ["Current-head, App-authored, no-secret, no-duplicate, and no-repo-mutation invariants outrank style feedback."],
+        "readinessHints": ["Live config or launchd changes need rollback command and post-restart cycle proof."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "error",
+            "instructions": "Require focused tests, TypeScript build, doctor, and beta release-status proof before live promotion."
+          },
+          "description": {
+            "mode": "warning",
+            "instructions": "Description should name runtime safety impact and validation evidence."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false,
+            "instructions": "Do not auto-generate tests during live review until opt-in command gates ship."
+          }
+        },
+        "suggestedLabels": ["bot", "regression-hardening", "release"]
+      },
+      "electricsheephq/electric-sheep-website-dashboard-6158a244": {
+        "displayName": "Electric Sheep Dashboard",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize authenticated dashboard behavior, Lovable publish safety, routing, data visibility, and deployment regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "app/**", "components/**", "pages/**", "lib/**", "public/**", "package.json", "package-lock.json", "!dist/**", "!build/**"],
+        "riskyPaths": ["src/**", "app/**", "lib/**", "package.json"],
+        "proofExpectations": ["Look for focused UI, auth, route, data, or deploy smoke evidence."],
+        "validationHints": ["Call out customer-visible dashboard, auth, billing, and public deploy regressions."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused smoke or CI proof for UI and deploy behavior."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["dashboard", "frontend", "regression-hardening"]
+      },
+      "electricsheephq/evaos-support-control": {
+        "displayName": "evaOS Support Control",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize VM/customer safety, release gates, backup/restore, provider snapshots, and support-control operator regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "scripts/**", "docs/**", "tests/**", "package.json", "package-lock.json"],
+        "pathInstructions": {
+          "docs/runbooks/**": ["Check that release, rollback, and operator evidence remains concrete."],
+          "scripts/**": ["Treat customer/runtime mutation and credential handling changes as high risk."]
+        },
+        "riskyPaths": ["scripts/**", "src/**", "docs/runbooks/**"],
+        "proofExpectations": ["Look for focused CLI/status proof, rollback notes, and no-secret evidence."],
+        "validationHints": ["Do not suggest broad local suites when remote CI or release-status proof is the right gate."],
+        "readinessHints": ["Runtime/customer-affecting changes need exact target, rollback, and evidence path."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "error",
+            "instructions": "Require focused support-control status, unit, or release proof before runtime promotion."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["support-control", "runtime-safe", "release"]
+      },
+      "electricsheephq/evaos-ws-proxy": {
+        "displayName": "evaOS WS Proxy",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize websocket auth, connection lifecycle, backpressure, retry, and proxy routing regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "server/**", "tests/**", "package.json", "package-lock.json", "Dockerfile", "docker/**"],
+        "riskyPaths": ["src/**", "server/**", "Dockerfile"],
+        "proofExpectations": ["Look for focused connection, auth, retry, or CI evidence."],
+        "validationHints": ["Call out dropped messages, auth bypass, runaway reconnects, and secret logging risks."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused proxy, socket, or CI proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["backend", "proxy", "runtime-safe"]
+      },
+      "electricsheephq/evaos-cortex-plugin": {
+        "displayName": "evaOS Cortex Plugin",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize plugin contract, tool boundary, prompt/context safety, and host integration regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "plugin/**", "tools/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["src/**", "plugin/**", "tools/**"],
+        "proofExpectations": ["Look for focused plugin contract or tool-call evidence."],
+        "validationHints": ["Call out tool permission widening, prompt injection, and stale context risks."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused plugin/tool contract proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["plugin", "agent-safety", "backend"]
+      },
+      "electricsheephq/evaOS-gitnexus": {
+        "displayName": "evaOS GitNexus",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize index freshness, query correctness, embeddings/storage safety, CLI reliability, and repo identity regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "packages/**", "bin/**", "cli/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["src/**", "packages/**", "bin/**", "cli/**"],
+        "proofExpectations": ["Look for focused CLI, index, query, or migration proof."],
+        "validationHints": ["Call out stale index, wrong repo identity, memory growth, and destructive analyze behavior."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused CLI/index proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["gitnexus", "code-intelligence", "backend"]
+      },
+      "electricsheephq/electric-sheep-eva-marketing-site": {
+        "displayName": "Electric Sheep EVA Marketing Site",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize public-site correctness, forms, analytics, SEO/GEO, accessibility, and deploy regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "app/**", "pages/**", "components/**", "content/**", "public/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["app/**", "pages/**", "content/**", "public/**"],
+        "proofExpectations": ["Look for focused route, form, SEO, accessibility, or deploy smoke evidence."],
+        "validationHints": ["Call out broken CTAs, forms, metadata, tracking, or public content regressions."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused public-site smoke or CI proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["marketing-site", "frontend", "seo"]
+      },
+      "electricsheephq/evaos-cortex": {
+        "displayName": "evaOS Cortex",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize agent runtime, tool execution, memory/context, auth, and customer-impacting service regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "server/**", "agents/**", "tools/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["agents/**", "tools/**", "server/**", "src/**"],
+        "proofExpectations": ["Look for focused agent/tool/runtime proof and no-secret evidence."],
+        "validationHints": ["Call out permission widening, unsafe tool execution, stale memory, and customer-data leakage."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused agent/runtime proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["agent-runtime", "backend", "safety"]
+      },
+      "electricsheephq/worldOS-marketing-site": {
+        "displayName": "WorldOS Marketing Site",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize public WorldOS positioning, forms, SEO/GEO, routing, accessibility, and deploy regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "app/**", "pages/**", "components/**", "content/**", "public/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["app/**", "pages/**", "content/**"],
+        "proofExpectations": ["Look for focused route, form, SEO, accessibility, or deploy smoke evidence."],
+        "validationHints": ["Call out broken CTAs, metadata, forms, and public content regressions."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused public-site smoke or CI proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["marketing-site", "frontend", "seo"]
+      },
+      "electricsheephq/ai-chief-of-staff": {
+        "displayName": "AI Chief of Staff",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize workflow automation, private-data boundaries, scheduling, notification, and integration regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "app/**", "server/**", "agents/**", "integrations/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["agents/**", "integrations/**", "server/**"],
+        "proofExpectations": ["Look for focused integration, workflow, auth, or notification proof."],
+        "validationHints": ["Call out private-data leakage, duplicate automation, stale state, and unsafe side effects."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused automation/integration proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["automation", "agent-safety", "backend"]
+      },
+      "electricsheephq/vantage-portfolio-hub": {
+        "displayName": "Vantage Portfolio Hub",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize portfolio data correctness, dashboard UI, auth, and customer-visible reporting regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "app/**", "components/**", "lib/**", "tests/**", "public/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["src/**", "app/**", "lib/**"],
+        "proofExpectations": ["Look for focused data, dashboard, auth, or route proof."],
+        "validationHints": ["Call out reporting accuracy, auth, and customer-visible dashboard regressions."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused dashboard/data proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["dashboard", "frontend", "data"]
+      },
+      "electricsheephq/mission-control-paperclip": {
+        "displayName": "Mission Control Paperclip",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize orchestration, queue safety, idempotency, tool execution, and runtime visibility regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "server/**", "orchestration/**", "workers/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["orchestration/**", "workers/**", "server/**"],
+        "proofExpectations": ["Look for focused queue, worker, idempotency, or orchestration proof."],
+        "validationHints": ["Call out duplicate execution, stale locks, unsafe retries, and missing rollback evidence."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused worker/orchestration proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["orchestration", "backend", "runtime-safe"]
+      },
+      "electricsheephq/evaos-golden": {
+        "displayName": "evaOS Golden",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize golden-path fixtures, baseline drift, release evidence, and regression-proof correctness.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "fixtures/**", "golden/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["fixtures/**", "golden/**", "src/**"],
+        "proofExpectations": ["Look for fixture update rationale, regression proof, and baseline drift notes."],
+        "validationHints": ["Call out silent fixture drift and missing expected-output explanation."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused fixture/golden proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["fixtures", "regression-hardening", "release"]
+      },
+      "electricsheephq/eric-wilder": {
+        "displayName": "Eric Wilder Customer Lane",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize customer-lane correctness, evidence boundaries, reporting accuracy, and no-secret/no-raw-customer-data handling.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "app/**", "components/**", "reports/**", "docs/**", "tests/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["reports/**", "src/**", "app/**"],
+        "proofExpectations": ["Look for focused reporting, data-shape, or customer-lane evidence without raw private data."],
+        "validationHints": ["Call out privacy, data accuracy, and customer-visible reporting regressions."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused customer-lane proof without exposing private data."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["customer-lane", "data", "privacy"]
+      },
+      "100yenadmin/evaOS-GUI": {
+        "displayName": "evaOS Workbench",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize Electron/Workbench runtime regressions, packaged-app resource shape, bridge control, and macOS permission identity risk.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "apps/**", "scripts/**", "tests/**", "package.json", "package-lock.json", "!dist/**", "!release/**"],
+        "pathInstructions": {
+          "apps/eva-desktop-mac/**": ["Check macOS identity, helper path, TCC identity, and packaged resource shape risk."],
+          "scripts/**": ["Treat release, packaging, and artifact-shape changes as high risk."]
+        },
+        "riskyPaths": ["scripts/**", "apps/eva-desktop-mac/**", "package.json"],
+        "proofExpectations": ["Look for focused app smoke, packaged resource checks, or CI artifact proof when relevant."],
+        "validationHints": ["Do not ask for broad local suites when remote CI or fast-smoke proof is the right gate."],
+        "readinessHints": ["Signed/notarized release proof is separate from dev/staging smoke proof."],
+        "preMergeChecks": {
+          "description": {
+            "mode": "warning",
+            "instructions": "Description should name app/runtime behavior and validation evidence."
+          },
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused app smoke, packaged resource checks, or CI proof."
+          }
+        },
+        "finishingTouches": {
+          "docstrings": {
+            "enabled": false,
+            "instructions": "Declaration only until opt-in finishing-touch commands are enabled."
+          },
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["workbench", "macos", "regression-hardening"]
+      },
+      "100yenadmin/Lossless-Codex-Orchestrator-LCO": {
+        "displayName": "Lossless Codex Orchestrator",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize session safety, lossless evidence handling, sanitizer correctness, HMAC/signature integrity, and orchestration regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "scripts/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["src/**", "scripts/**"],
+        "proofExpectations": ["Look for focused sanitizer, signature, orchestration, or fixture proof."],
+        "validationHints": ["Call out evidence leakage, replay/collision risks, duplicate side effects, and brittle sanitizer logic."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused sanitizer/orchestrator proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["orchestration", "security", "regression-hardening"]
+      },
+      "100yenadmin/worldos-unity": {
+        "displayName": "WorldOS Unity Sandbox",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize Unity project integrity, gameplay state, scene/prefab references, packages, and build regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
+        "pathInstructions": {
+          "Assets/**": ["Prioritize scene, prefab, asset-reference, and gameplay regressions."],
+          "ProjectSettings/**": ["Treat build, input, graphics, and package settings as high risk."]
+        },
+        "riskyPaths": ["Assets/**", "ProjectSettings/**", "Packages/manifest.json"],
+        "proofExpectations": ["Look for Unity editor, play-mode, fixture, or focused smoke evidence when runtime behavior changes."],
+        "validationHints": ["Prefer correctness, persistence, CI, release, and regression findings over style-only feedback."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused Unity/editor smoke, CI, or fixture evidence."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["unity", "gameplay", "regression-hardening"]
+      },
+      "100yenadmin/ai-agent-resource-hog-watcher": {
+        "displayName": "AI Agent Resource Hog Watcher",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize process monitoring correctness, resource accounting, kill-switch safety, and no-unintended-termination regressions.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "scripts/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "riskyPaths": ["src/**", "scripts/**"],
+        "proofExpectations": ["Look for focused monitor, threshold, process-selection, or CI proof."],
+        "validationHints": ["Call out false positives, runaway monitoring, unsafe process kills, and missing dry-run defaults."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused process/resource monitor proof."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["monitoring", "runtime-safe", "agent-safety"]
+      }
+    }
+  }
+}

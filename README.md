@@ -53,6 +53,10 @@ guidance, risky paths, proof expectations, and path filters. Profiles are
 prompt/config metadata only; they do not expand GitHub permissions, live
 monitoring, ZCode tools, approvals, or repair behavior by themselves.
 
+`config.active-profiles.example.json` is the tracked template for the current
+19-repo active monitor profile set. Validate it, dry-run it, and promote through
+the beta release runbook before copying any profile block into live config.
+
 ## Maintainer Commands
 
 Use [docs/maintainer-commands.md](docs/maintainer-commands.md) for the dormant
