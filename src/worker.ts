@@ -7,6 +7,7 @@ import { assertGitClean, preparePullWorktree } from "./git.js";
 import { GitHubApi } from "./github.js";
 import { redactSecrets } from "./secrets.js";
 import { ReviewStateStore } from "./state.js";
+import { buildWalkthroughComment } from "./walkthrough.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
 import type { PullRequestSummary, ReviewPlan } from "./types.js";
 
@@ -120,13 +121,27 @@ export async function reviewPull(input: {
   const comments = normalized.comments;
   const dropped = sanitizeDroppedFindings([...zcodeResult.droppedFromSchema, ...located.dropped, ...normalized.dropped]);
   const event = decideReviewEvent(comments);
+  const summary = buildSummary({ repo, pull, comments, dropped, dryRun: input.dryRun });
+  const walkthrough = config.walkthrough.enabled
+    ? buildWalkthroughComment({
+        repo,
+        pull,
+        files,
+        comments,
+        dropped,
+        event,
+        postIssueComment: config.walkthrough.postIssueComment
+      })
+    : undefined;
   const plan: ReviewPlan = {
     event,
     comments,
     dropped,
-    summary: buildSummary({ repo, pull, comments, dropped, dryRun: input.dryRun })
+    summary,
+    ...(walkthrough ? { walkthrough } : {})
   };
 
+  if (walkthrough) writeFileSync(join(evidenceDir, "walkthrough.md"), walkthrough.body);
   writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
 
   if (input.dryRun) {
@@ -135,11 +150,20 @@ export async function reviewPull(input: {
   }
 
   const reviewGithub = new GitHubApi(config.github);
+  if (plan.walkthrough?.postIssueComment) {
+    const walkthroughComment = await reviewGithub.upsertIssueComment({
+      repo,
+      issueNumber: pull.number,
+      marker: plan.walkthrough.marker,
+      body: plan.walkthrough.body
+    });
+    writeFileSync(join(evidenceDir, "walkthrough-comment.json"), `${JSON.stringify(walkthroughComment, null, 2)}\n`);
+  }
   const review = await reviewGithub.createReview({
     repo,
     pullNumber: pull.number,
     event,
-    body: plan.summary,
+    body: plan.walkthrough && !plan.walkthrough.postIssueComment ? plan.walkthrough.body : plan.summary,
     comments
   });
   state.recordProcessed({

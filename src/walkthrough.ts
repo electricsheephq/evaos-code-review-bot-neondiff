@@ -1,0 +1,151 @@
+import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+import type { DroppedFinding, PullFilePatch, PullRequestSummary, ReviewComment, ReviewEvent, Severity, WalkthroughComment } from "./types.js";
+
+export const WALKTHROUGH_MARKER_PREFIX = "<!-- evaos-code-review-bot:walkthrough";
+
+const SEVERITY_LABELS: Severity[] = ["P0", "P1", "P2", "P3"];
+
+export function buildWalkthroughComment(input: {
+  repo: string;
+  pull: PullRequestSummary;
+  files: PullFilePatch[];
+  comments: ReviewComment[];
+  dropped: DroppedFinding[];
+  event: ReviewEvent;
+  postIssueComment?: boolean;
+}): WalkthroughComment {
+  const marker = `${WALKTHROUGH_MARKER_PREFIX} ${input.repo}#${input.pull.number} ${input.pull.head.sha} -->`;
+  const files = input.files.map((file) => summarizeFile(file, input.comments));
+  const effort = estimateReviewEffort(input.files, input.comments);
+  const relatedRefs = extractRelatedRefs(`${input.pull.title}\n${input.pull.body ?? ""}`);
+  const suggestedLabels = suggestLabels(input.files, input.comments);
+  const suggestedReviewers = input.pull.requested_reviewers?.map((reviewer) => reviewer.login).filter(Boolean) ?? [];
+  const severityCounts = countSeverities(input.comments);
+  const highSeverity = severityCounts.P0 + severityCounts.P1;
+
+  const body = [
+    marker,
+    "## Walkthrough",
+    "",
+    `PR: ${input.repo}#${input.pull.number} - ${input.pull.title}`,
+    `Head: \`${input.pull.head.sha}\` into \`${input.pull.base.ref}\`. Review event: \`${input.event}\`.`,
+    "",
+    `Estimated review effort: ${effort.score}/5 (~${effort.minutes} min)`,
+    "",
+    "### Changed Files",
+    "",
+    "| File | Status | Churn | Purpose | Risk |",
+    "| --- | --- | --- | --- | --- |",
+    ...files.map((file) => `| \`${file.filename}\` | ${file.status} | ${file.churn} | ${file.purpose} | ${file.risk} |`),
+    "",
+    "### Review Signal",
+    "",
+    input.comments.length === 0
+      ? "No validated inline findings."
+      : `Validated inline findings: ${input.comments.length} (${formatSeverityCounts(severityCounts)}).`,
+    `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
+    "",
+    "### Related Context",
+    "",
+    `Related issues/PRs: ${relatedRefs.length > 0 ? relatedRefs.join(", ") : "none detected from PR metadata"}.`,
+    `Suggested labels: ${suggestedLabels.length > 0 ? suggestedLabels.join(", ") : "none"}.`,
+    `Suggested reviewers: ${suggestedReviewers.length > 0 ? suggestedReviewers.join(", ") : "none from current metadata"}.`,
+    "",
+    "### Pre-merge checklist",
+    "",
+    checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
+    checklistItem(!commentsContainSecretLikeText(input.comments), "No secret-like content survived into posted inline comments."),
+    checklistItem(input.event !== "REQUEST_CHANGES" || highSeverity > 0, "REQUEST_CHANGES is only used when P0/P1 findings survive validation."),
+    checklistItem(true, "Labels and reviewers are suggestions only; the bot did not auto-apply them.")
+  ].join("\n");
+
+  return {
+    marker,
+    body: redactSecrets(body),
+    postIssueComment: input.postIssueComment ?? false
+  };
+}
+
+function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {
+  filename: string;
+  status: string;
+  churn: string;
+  purpose: string;
+  risk: string;
+} {
+  const fileComments = comments.filter((comment) => comment.path === file.filename);
+  const maxSeverity = highestSeverity(fileComments);
+  const changes = file.changes ?? (file.additions ?? 0) + (file.deletions ?? 0);
+  return {
+    filename: file.filename,
+    status: file.status ?? "modified",
+    churn: `+${file.additions ?? 0}/-${file.deletions ?? 0}`,
+    purpose: inferPurpose(file.filename),
+    risk: inferRisk(file.filename, changes, maxSeverity)
+  };
+}
+
+function inferPurpose(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.includes("/test") || lower.includes(".test.") || lower.includes(".spec.")) return "Test coverage";
+  if (lower.startsWith("docs/") || lower.endsWith(".md")) return "Documentation";
+  if (lower.startsWith("assets/") || lower.endsWith(".cs")) return "Unity/gameplay state";
+  if (lower.includes("package.json") || lower.includes("package-lock") || lower.includes("config")) return "Configuration";
+  if (lower.startsWith("src/")) return "Runtime code";
+  return "Changed file";
+}
+
+function inferRisk(filename: string, changes: number, maxSeverity?: Severity): string {
+  if (maxSeverity === "P0" || maxSeverity === "P1") return `Elevated: validated ${maxSeverity} finding`;
+  if (maxSeverity === "P2" || maxSeverity === "P3") return `Moderate: validated ${maxSeverity} finding`;
+  const lower = filename.toLowerCase();
+  if (changes >= 200) return "Elevated: large change";
+  if (lower.startsWith("assets/") || lower.startsWith("src/") || lower.endsWith(".cs")) return "Moderate: runtime path";
+  return "Low";
+}
+
+function estimateReviewEffort(files: PullFilePatch[], comments: ReviewComment[]): { score: number; minutes: number } {
+  const totalChanges = files.reduce((sum, file) => sum + (file.changes ?? (file.additions ?? 0) + (file.deletions ?? 0)), 0);
+  const highSeverity = comments.filter((comment) => comment.severity === "P0" || comment.severity === "P1").length;
+  const rawScore = 1 + Math.floor(files.length / 4) + Math.floor(totalChanges / 250) + Math.min(highSeverity, 2);
+  const score = Math.min(5, Math.max(1, rawScore));
+  return { score, minutes: score * 10 + Math.min(20, files.length * 2) };
+}
+
+function extractRelatedRefs(text: string): string[] {
+  const refs = new Set<string>();
+  for (const match of text.matchAll(/#(\d+)/g)) refs.add(`#${match[1]}`);
+  return [...refs].slice(0, 8);
+}
+
+function suggestLabels(files: PullFilePatch[], comments: ReviewComment[]): string[] {
+  const labels = new Set<string>();
+  if (comments.some((comment) => comment.severity === "P0" || comment.severity === "P1")) labels.add("bug");
+  if (files.some((file) => file.filename.toLowerCase().startsWith("assets/") || file.filename.endsWith(".cs"))) labels.add("unity");
+  if (files.some((file) => file.filename.toLowerCase().startsWith("docs/") || file.filename.endsWith(".md"))) labels.add("docs");
+  if (files.some((file) => file.filename.toLowerCase().includes("/test") || file.filename.includes(".test."))) labels.add("tests");
+  return [...labels].slice(0, 6);
+}
+
+function countSeverities(comments: ReviewComment[]): Record<Severity, number> {
+  return Object.fromEntries(SEVERITY_LABELS.map((severity) => [
+    severity,
+    comments.filter((comment) => comment.severity === severity).length
+  ])) as Record<Severity, number>;
+}
+
+function formatSeverityCounts(counts: Record<Severity, number>): string {
+  return SEVERITY_LABELS.map((severity) => `${severity}: ${counts[severity]}`).join(", ");
+}
+
+function highestSeverity(comments: ReviewComment[]): Severity | undefined {
+  return SEVERITY_LABELS.find((severity) => comments.some((comment) => comment.severity === severity));
+}
+
+function commentsContainSecretLikeText(comments: ReviewComment[]): boolean {
+  return comments.some((comment) => containsSecretLikeText(`${comment.title}\n${comment.body}`));
+}
+
+function checklistItem(ok: boolean, text: string): string {
+  return `- [${ok ? "x" : " "}] ${text}`;
+}
