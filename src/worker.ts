@@ -244,10 +244,11 @@ export async function retryFailedHeadWithDeps(input: {
       budget,
       processedHeadPolicy: "retry_failed_head"
     });
-    const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
-    restoreFailedRetryRowIfNeeded({
-      state,
-      retryTarget,
+      const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
+      // A retry dry-run is a successful inspection, but the failed row must remain retryable for the later live run.
+      restoreFailedRetryRowIfNeeded({
+        state,
+        retryTarget,
       reason: retryStatus === "dry_run" ? "retry_dry_run" : `retry_did_not_review=${retryStatus}`
     });
     return {
