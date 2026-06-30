@@ -27,21 +27,74 @@
         "defaultBranch": "main",
         "reviewProfile": "assertive",
         "promptNote": "Prioritize Unity scene, save-state, gameplay, release-regression, and data-loss risks.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
         "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "src/**", "tests/**", "!Library/**"],
+        "pathInstructions": {
+          "Assets/**": ["Prioritize scene, prefab, save-state, and gameplay regressions."],
+          "ProjectSettings/**": ["Treat build/release behavior changes as high risk."]
+        },
         "riskyPaths": ["Assets/**", "ProjectSettings/**", "Packages/manifest.json"],
         "proofExpectations": ["Mention Unity editor/play-mode or focused smoke evidence when relevant."],
         "validationHints": ["Prefer correctness, persistence, CI, and release findings over style-only feedback."],
-        "readinessHints": ["Scene, save, build, or package changes need explicit rollback and smoke notes."]
+        "readinessHints": ["Scene, save, build, or package changes need explicit rollback and smoke notes."],
+        "preMergeChecks": {
+          "title": {
+            "mode": "warning",
+            "instructions": "Title should name the gameplay or release behavior changed."
+          },
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused Unity/editor smoke, CI, or fixture evidence when code changes affect runtime behavior."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false,
+            "instructions": "Design-only declaration until finishing-touch commands are explicitly enabled."
+          }
+        },
+        "suggestedLabels": ["unity", "gameplay", "regression-hardening"]
       },
       "100yenadmin/evaOS-GUI": {
         "displayName": "evaOS Workbench",
         "defaultBranch": "main",
         "reviewProfile": "assertive",
         "promptNote": "Prioritize Electron/Workbench runtime regressions, packaged-app resource shape, bridge control, and macOS permission identity risk.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
         "pathFilters": ["src/**", "apps/**", "scripts/**", "package.json", "package-lock.json", "!dist/**"],
+        "pathInstructions": {
+          "apps/eva-desktop-mac/**": ["Check macOS identity, helper path, and packaged resource shape risk."],
+          "scripts/**": ["Treat release, packaging, and artifact-shape changes as high risk."]
+        },
         "riskyPaths": ["scripts/**", "apps/eva-desktop-mac/**", "package.json"],
         "proofExpectations": ["Mention focused app smoke, packaged resource checks, or CI artifact proof when relevant."],
-        "validationHints": ["Do not ask for broad local suites when remote CI or fast-smoke proof is the right gate."]
+        "validationHints": ["Do not ask for broad local suites when remote CI or fast-smoke proof is the right gate."],
+        "preMergeChecks": {
+          "description": {
+            "mode": "warning",
+            "instructions": "Description should name app/runtime behavior and validation evidence."
+          },
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused app smoke, packaged resource checks, or CI proof."
+          }
+        },
+        "finishingTouches": {
+          "docstrings": {
+            "enabled": false,
+            "instructions": "Design-only declaration until finishing-touch commands are explicitly enabled."
+          },
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["workbench", "macos", "regression-hardening"]
       },
       "electricsheephq/evaos-code-review-bot": {
         "enabled": false,
@@ -52,7 +105,20 @@
         "pathFilters": ["src/**", "tests/**", "docs/**", "config.example.json", "package.json", "package-lock.json"],
         "riskyPaths": ["src/github.ts", "src/state.ts", "src/worker.ts", "src/zcode.ts"],
         "proofExpectations": ["Require focused tests, TypeScript build, duplicate-suppression proof, and release-status proof before live promotion."],
-        "readinessHints": ["Do not expand live monitoring from this example profile alone."]
+        "readinessHints": ["Do not expand live monitoring from this example profile alone."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "error",
+            "instructions": "Require focused tests, TypeScript build, and beta release-status proof before live promotion."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false,
+            "instructions": "Do not auto-generate tests from the bot during live review until opt-in command gates ship."
+          }
+        },
+        "suggestedLabels": ["bot", "regression-hardening"]
       }
     },
     "orgFallbacks": {
