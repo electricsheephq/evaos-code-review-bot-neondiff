@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "doctor": "tsx src/cli.ts doctor",
+    "release:status": "tsx src/cli.ts release-status",
     "run-once": "tsx src/cli.ts run-once",
     "daemon": "tsx src/cli.ts daemon"
   },

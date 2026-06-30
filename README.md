@@ -21,6 +21,7 @@ Pilot local worker for ZCode/GLM-5.2 pull request reviews.
 
 ```bash
 npm run doctor
+npm run release:status -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --expected-head "$(git rev-parse HEAD)"
 npm run run-once -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true --repo electricsheephq/WorldOS --pr 1161
 npm run daemon -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true
 ```
@@ -34,3 +35,9 @@ npm run run-once -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/c
 ```
 
 The worker derives transient ZCode CLI model environment from the existing ZCode app config at `/Volumes/LEXAR/zcode/.zcode/v2/config.json`; it does not copy the Z.ai API key into this repository.
+
+## Live Beta Releases
+
+The live launchd worker is a local beta release surface, not just whatever
+`main` happens to contain. Before promoting a merged PR to the live worker,
+follow [docs/beta-release-runbook.md](docs/beta-release-runbook.md).

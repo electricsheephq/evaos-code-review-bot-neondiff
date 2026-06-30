@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.js";
 import { formatDaemonLog } from "./daemon-log.js";
 import { GitHubApi } from "./github.js";
+import { collectReleaseStatus } from "./release-status.js";
 import { runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
@@ -44,6 +45,19 @@ async function main(): Promise<void> {
       }
     }, null, 2));
     if (readChecks.some((check) => !check.ok)) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "release-status") {
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      configPath: args.config,
+      expectedHead: args["expected-head"],
+      launchdLabel: args["launchd-label"],
+      statePath: args["state-path"]
+    });
+    console.log(JSON.stringify(status, null, 2));
+    if (!status.ok) process.exitCode = 1;
     return;
   }
 
@@ -121,6 +135,9 @@ interface ParsedArgs {
   config?: string;
   repo?: string;
   pr?: string;
+  "expected-head"?: string;
+  "launchd-label"?: string;
+  "state-path"?: string;
   "dry-run"?: string;
   zcode?: string;
   [key: string]: string | string[] | undefined;
