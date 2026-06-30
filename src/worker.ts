@@ -134,7 +134,8 @@ export async function reviewPull(input: {
     return "reviewed";
   }
 
-  const review = await github.createReview({
+  const reviewGithub = new GitHubApi(config.github);
+  const review = await reviewGithub.createReview({
     repo,
     pullNumber: pull.number,
     event,
