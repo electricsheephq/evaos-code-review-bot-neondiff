@@ -20,11 +20,31 @@ Profiles live under `repoProfiles` in the bot config:
         "defaultBranch": "main",
         "reviewProfile": "assertive",
         "promptNote": "Prioritize Unity scene, save-state, gameplay, and release-regression risks.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
         "pathFilters": ["Assets/**", "Packages/**", "!Library/**"],
+        "pathInstructions": {
+          "Assets/**": ["Prioritize scene, prefab, save-state, and gameplay regressions."]
+        },
         "riskyPaths": ["Assets/**", "ProjectSettings/**"],
         "proofExpectations": ["Mention Unity editor/play-mode smoke evidence when relevant."],
         "validationHints": ["Prefer correctness and release findings over style-only feedback."],
-        "readinessHints": ["Scene and save changes need rollback notes."]
+        "readinessHints": ["Scene and save changes need rollback notes."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused Unity/editor smoke, CI, or fixture evidence."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false,
+            "instructions": "Declaration only until opt-in finishing-touch commands are enabled."
+          }
+        },
+        "suggestedLabels": ["unity", "gameplay"]
       }
     }
   }
@@ -47,12 +67,40 @@ evidence are recorded.
 - `promptNote`: repo-specific review instruction injected into the ZCode prompt.
 - `pathFilters`: include/exclude globs applied before prompt construction.
   Excludes start with `!`.
+- `pathInstructions`: path-specific review guidance injected into the prompt
+  for matching code areas.
 - `riskyPaths`: high-risk file areas called out in the prompt.
 - `proofExpectations`: evidence the reviewer should look for in PRs.
 - `validationHints`: repo-specific correctness and CI guidance.
 - `readinessHints`: release or rollout readiness notes.
+- `autoReview`: declarative branch and label filters. These are reviewer policy
+  metadata only in v0.2; they do not grant new GitHub permissions or bypass
+  `skipDrafts`, `canaryPulls`, duplicate suppression, or live config gates.
+- `preMergeChecks`: advisory checks the reviewer should consider when building
+  summaries. Each check has `mode: "off" | "warning" | "error"`,
+  optional `instructions`, and optional numeric `threshold` from 0 to 100.
+  These modes do not create GitHub Checks or force `REQUEST_CHANGES` by
+  themselves.
+- `finishingTouches`: declaration surface for future opt-in commands such as
+  docstrings or unit-test suggestions. Entries must remain `enabled: false`
+  until #11 ships explicit command handling and promotion gates.
 - `suggestedLabels` / `suggestedReviewers`: reserved for later enrichment; they
   do not auto-apply labels or reviewers.
+
+## Validation Rules
+
+Configuration loads fail closed before the daemon starts when:
+
+- `pilotRepos` or profile repo keys are not GitHub `owner/repo` names.
+- `canaryPulls` are not `owner/repo#number` strings.
+- booleans, positive integer timeouts/concurrency values, string arrays, or
+  policy modes have the wrong type.
+- pre-merge check thresholds are outside 0-100.
+- finishing-touch declarations omit a boolean `enabled` value.
+
+This is intentionally stricter than the TypeScript interfaces. The live config
+is JSON outside this repository, so runtime validation is the safety net that
+prevents a typo from changing monitoring behavior silently.
 
 ## Graduation To Live Review
 
@@ -70,3 +118,6 @@ Use this path for each new repo from #14 or future allowlists:
 
 Do not treat `config.example.json` as live config. The active launchd config is
 outside the repo under `/Volumes/LEXAR/Codex/evaos-code-review-bot/config/`.
+Do not add repos whose GitHub App installation cannot be verified; public
+visibility or an admin user's `gh repo view` is not enough because reviews must
+be authored by `evaos-code-review-bot`.

@@ -2,7 +2,7 @@ import { loadConfig } from "./config.js";
 import { formatDaemonLog } from "./daemon-log.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
-import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
@@ -22,17 +22,19 @@ async function main(): Promise<void> {
     const monitoredRepos = listReposToScan(config);
     for (const repo of monitoredRepos) {
       const repoPolicy = resolveRepoProfile(config, repo);
+      const policy = buildRepoPolicySnapshot(config, repo);
       if (!repoPolicy.allowed) {
-        readChecks.push({ repo, ok: true, skippedByPolicy: repoPolicy.reason });
+        readChecks.push({ repo, ok: true, policy, skippedByPolicy: repoPolicy.reason });
         continue;
       }
       try {
         await github.listOpenPulls(repo);
-        readChecks.push({ repo, ok: true });
+        readChecks.push({ repo, ok: true, policy });
       } catch (error) {
         readChecks.push({
           repo,
           ok: false,
+          policy,
           error: error instanceof Error ? error.message : String(error)
         });
       }

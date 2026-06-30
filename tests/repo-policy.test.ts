@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
-import { buildRepoProfilePromptSection, filterPullFilesForProfile, resolveRepoProfile } from "../src/repo-policy.js";
+import {
+  buildRepoPolicySnapshot,
+  buildRepoProfilePromptSection,
+  filterPullFilesForProfile,
+  listReposToScan,
+  resolveRepoProfile
+} from "../src/repo-policy.js";
 import { runOnce } from "../src/worker.js";
 import { buildReviewPrompt } from "../src/zcode.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
@@ -108,6 +114,33 @@ describe("repo profile registry", () => {
     });
   });
 
+  it("matches repo profiles case-insensitively while preserving configured repo names", () => {
+    const config = loadConfig(
+      writeConfig({
+        pilotRepos: ["electricsheephq/worldOS", "ElectricSheepHQ/WorldOS"],
+        repoProfiles: {
+          repos: {
+            "electricsheephq/WorldOS": {
+              displayName: "WorldOS Unity",
+              reviewProfile: "assertive"
+            }
+          }
+        }
+      })
+    );
+
+    expect(listReposToScan(config)).toEqual(["electricsheephq/worldOS"]);
+    expect(resolveRepoProfile(config, "electricsheephq/worldOS")).toMatchObject({
+      allowed: true,
+      profile: {
+        repo: "electricsheephq/WorldOS",
+        canonicalRepo: "electricsheephq/worldos",
+        source: "explicit",
+        displayName: "WorldOS Unity"
+      }
+    });
+  });
+
   it("applies include and exclude path filters before prompt construction", () => {
     const resolved = resolveRepoProfile(
       loadConfig(
@@ -136,6 +169,154 @@ describe("repo profile registry", () => {
       "src/worker.ts",
       "README.md"
     ]);
+  });
+
+  it("rejects invalid repo policy config before runtime use", () => {
+    expect(() =>
+      loadConfig(
+        writeConfig({
+          pilotRepos: ["not-a-repo"],
+          repoProfiles: {
+            repos: {
+              "not-a-repo": {
+                reviewProfile: "loud"
+              }
+            }
+          }
+        })
+      )
+    ).toThrow(/owner\/repo/);
+
+    expect(() =>
+      loadConfig(
+        writeConfig({
+          canaryPulls: ["electricsheephq/WorldOS#abc"]
+        })
+      )
+    ).toThrow(/owner\/repo#number/);
+
+    expect(() =>
+      loadConfig(
+        writeConfig({
+          repoProfiles: {
+            repos: {
+              "electricsheephq/WorldOS": {
+                preMergeChecks: {
+                  testEvidence: { mode: "block" }
+                }
+              }
+            }
+          }
+        })
+      )
+    ).toThrow(/preMergeChecks\.testEvidence\.mode/);
+
+    expect(() =>
+      loadConfig(
+        writeConfig({
+          repoProfiles: {
+            repos: {
+              "electricsheephq/WorldOS": {
+                finishingTouches: {
+                  unitTests: { enabled: "yes" }
+                }
+              }
+            }
+          }
+        })
+      )
+    ).toThrow(/finishingTouches\.unitTests\.enabled/);
+  });
+
+  it("renders repo policy checks and finishing-touch declarations as prompt-only guidance", () => {
+    const resolved = resolveRepoProfile(
+      loadConfig(
+        writeConfig({
+          pilotRepos: ["electricsheephq/evaos-code-review-bot"],
+          repoProfiles: {
+            repos: {
+              "electricsheephq/evaos-code-review-bot": {
+                autoReview: {
+                  baseBranches: ["main", "release/.*"],
+                  labels: ["!wip", "ready-for-review"]
+                },
+                pathInstructions: {
+                  "src/github.ts": ["Treat App-authored identity regressions as high risk."],
+                  "src/state.ts": ["Check duplicate-suppression invariants."]
+                },
+                preMergeChecks: {
+                  title: { mode: "warning", instructions: "Title should name the safety behavior." },
+                  testEvidence: { mode: "error", instructions: "Require focused tests and release-status proof." },
+                  docstrings: { mode: "off", threshold: 80 }
+                },
+                finishingTouches: {
+                  docstrings: { enabled: false, instructions: "Design only; do not execute during review." },
+                  unitTests: { enabled: false }
+                },
+                suggestedLabels: ["bot", "regression-hardening"],
+                suggestedReviewers: ["100yenadmin"]
+              }
+            }
+          }
+        })
+      ),
+      "electricsheephq/evaos-code-review-bot"
+    );
+    const profile = expectAllowed(resolved);
+    const prompt = buildRepoProfilePromptSection(profile);
+
+    expect(prompt).toContain("Auto-review base branches: main; release/.*");
+    expect(prompt).toContain("src/github.ts: Treat App-authored identity regressions as high risk.");
+    expect(prompt).toContain("Pre-merge checks (advisory; do not invent CI status)");
+    expect(prompt).toContain("testEvidence: mode=error; Require focused tests and release-status proof.");
+    expect(prompt).toContain("Finishing-touch commands (declarations only");
+    expect(prompt).toContain("unitTests: enabled=false");
+    expect(prompt).toContain("Allowed label suggestions: bot; regression-hardening");
+    expect(prompt).toContain("Allowed reviewer suggestions: 100yenadmin");
+  });
+
+  it("builds compact policy snapshots for doctor and release evidence", () => {
+    const config = loadConfig(
+      writeConfig({
+        pilotRepos: ["electricsheephq/evaos-code-review-bot", "electricsheephq/unknown"],
+        repoProfiles: {
+          repos: {
+            "electricsheephq/evaos-code-review-bot": {
+              displayName: "Review bot",
+              pathFilters: ["src/**"],
+              preMergeChecks: {
+                testEvidence: { mode: "error", instructions: "Require focused test proof." }
+              },
+              finishingTouches: {
+                unitTests: { enabled: false }
+              }
+            }
+          }
+        }
+      })
+    );
+
+    expect(buildRepoPolicySnapshot(config, "electricsheephq/evaos-code-review-bot")).toMatchObject({
+      repo: "electricsheephq/evaos-code-review-bot",
+      canonicalRepo: "electricsheephq/evaos-code-review-bot",
+      allowed: true,
+      source: "explicit",
+      displayName: "Review bot",
+      reviewProfile: "assertive",
+      pathFilters: ["src/**"],
+      preMergeChecks: {
+        testEvidence: { mode: "error", instructions: "Require focused test proof." }
+      },
+      finishingTouches: {
+        unitTests: { enabled: false }
+      }
+    });
+    expect(buildRepoPolicySnapshot(config, "electricsheephq/unknown")).toEqual({
+      repo: "electricsheephq/unknown",
+      canonicalRepo: "electricsheephq/unknown",
+      allowed: false,
+      skippedByPolicy: "repo_profile_missing"
+    });
   });
 
   it("injects repo profile guidance into the ZCode prompt", () => {

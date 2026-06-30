@@ -50,12 +50,47 @@ export interface RepoProfileConfig {
   reviewProfile?: "chill" | "assertive";
   promptNote?: string;
   pathFilters?: string[];
+  pathInstructions?: Record<string, string[]>;
   riskyPaths?: string[];
   proofExpectations?: string[];
   validationHints?: string[];
   readinessHints?: string[];
+  autoReview?: RepoAutoReviewConfig;
+  preMergeChecks?: RepoPreMergeChecksConfig;
+  finishingTouches?: RepoFinishingTouchesConfig;
   suggestedLabels?: string[];
   suggestedReviewers?: string[];
+}
+
+export interface RepoAutoReviewConfig {
+  baseBranches?: string[];
+  labels?: string[];
+}
+
+export interface RepoPreMergeChecksConfig {
+  title?: RepoPreMergeCheckConfig;
+  description?: RepoPreMergeCheckConfig;
+  linkedIssue?: RepoPreMergeCheckConfig;
+  testEvidence?: RepoPreMergeCheckConfig;
+  docs?: RepoPreMergeCheckConfig;
+  docstrings?: RepoPreMergeCheckConfig;
+}
+
+export interface RepoPreMergeCheckConfig {
+  mode: "off" | "warning" | "error";
+  instructions?: string;
+  threshold?: number;
+}
+
+export interface RepoFinishingTouchesConfig {
+  docstrings?: RepoFinishingTouchConfig;
+  unitTests?: RepoFinishingTouchConfig;
+  stackedPr?: RepoFinishingTouchConfig;
+}
+
+export interface RepoFinishingTouchConfig {
+  enabled: boolean;
+  instructions?: string;
 }
 
 export interface CommandConfig {
@@ -127,11 +162,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function validateConfig(config: BotConfig): void {
-  if (!Array.isArray(config.pilotRepos)) throw new Error("config.pilotRepos must be an array");
-  if (!Array.isArray(config.commands.botMentions)) throw new Error("config.commands.botMentions must be an array");
-  if (!Array.isArray(config.commands.trustedAuthors)) throw new Error("config.commands.trustedAuthors must be an array");
+  validateStringArray(config.pilotRepos, "config.pilotRepos");
+  for (const repo of config.pilotRepos) validateRepoName(repo, "config.pilotRepos");
+  if (config.canaryPulls !== undefined) {
+    validateStringArray(config.canaryPulls, "config.canaryPulls");
+    for (const canary of config.canaryPulls) validateCanaryPull(canary, "config.canaryPulls");
+  }
+  validateBoolean(config.skipDrafts, "config.skipDrafts");
+  validatePositiveInteger(config.pollIntervalMs, "config.pollIntervalMs");
+  validateBoolean(config.activation.reviewExistingOpenPrsOnActivation, "config.activation.reviewExistingOpenPrsOnActivation");
+  validatePositiveInteger(config.reviewConcurrency.maxActiveRuns, "config.reviewConcurrency.maxActiveRuns");
+  validatePositiveInteger(config.reviewConcurrency.leaseTtlMs, "config.reviewConcurrency.leaseTtlMs");
+  validateBoolean(config.walkthrough.enabled, "config.walkthrough.enabled");
+  validateBoolean(config.walkthrough.postIssueComment, "config.walkthrough.postIssueComment");
+  validateBoolean(config.commands.enabled, "config.commands.enabled");
+  validateStringArray(config.commands.botMentions, "config.commands.botMentions");
+  validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
+  validateBoolean(config.commands.acknowledge, "config.commands.acknowledge");
+  validatePositiveInteger(config.zcode.timeoutMs, "config.zcode.timeoutMs");
+  validatePositiveInteger(config.zcode.maxPatchBytes, "config.zcode.maxPatchBytes");
+  validateNonNegativeInteger(config.zcode.retryMaxRetries, "config.zcode.retryMaxRetries");
+
   if (!config.repoProfiles) return;
 
+  if (config.repoProfiles.enableOrgFallbacks !== undefined) {
+    validateBoolean(config.repoProfiles.enableOrgFallbacks, "repoProfiles.enableOrgFallbacks");
+  }
   validateProfileRecord(config.repoProfiles.repos, "repoProfiles.repos");
   validateProfileRecord(config.repoProfiles.orgFallbacks, "repoProfiles.orgFallbacks");
 }
@@ -139,7 +195,13 @@ function validateConfig(config: BotConfig): void {
 function validateProfileRecord(record: Record<string, RepoProfileConfig> | undefined, label: string): void {
   if (!record) return;
   for (const [key, profile] of Object.entries(record)) {
+    if (label.endsWith(".repos")) validateRepoName(key, label);
+    if (label.endsWith(".orgFallbacks")) validateOwnerName(key, label);
     if (!isRecord(profile)) throw new Error(`${label}.${key} must be an object`);
+    if (profile.enabled !== undefined) validateBoolean(profile.enabled, `${label}.${key}.enabled`);
+    validateOptionalString(profile.displayName, `${label}.${key}.displayName`);
+    validateOptionalString(profile.defaultBranch, `${label}.${key}.defaultBranch`);
+    validateOptionalString(profile.promptNote, `${label}.${key}.promptNote`);
     if (profile.reviewProfile && profile.reviewProfile !== "chill" && profile.reviewProfile !== "assertive") {
       throw new Error(`${label}.${key}.reviewProfile must be "chill" or "assertive"`);
     }
@@ -152,10 +214,112 @@ function validateProfileRecord(record: Record<string, RepoProfileConfig> | undef
       "suggestedLabels",
       "suggestedReviewers"
     ] as const) {
-      const value = profile[field];
-      if (value !== undefined && (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))) {
-        throw new Error(`${label}.${key}.${field} must be an array of strings`);
-      }
+      validateOptionalStringArray(profile[field], `${label}.${key}.${field}`);
     }
+    validatePathInstructions(profile.pathInstructions, `${label}.${key}.pathInstructions`);
+    validateAutoReview(profile.autoReview, `${label}.${key}.autoReview`);
+    validatePreMergeChecks(profile.preMergeChecks, `${label}.${key}.preMergeChecks`);
+    validateFinishingTouches(profile.finishingTouches, `${label}.${key}.finishingTouches`);
   }
+}
+
+function validateAutoReview(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateOptionalStringArray(value.baseBranches, `${label}.baseBranches`);
+  validateOptionalStringArray(value.labels, `${label}.labels`);
+}
+
+function validatePreMergeChecks(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const field of ["title", "description", "linkedIssue", "testEvidence", "docs", "docstrings"] as const) {
+    validatePreMergeCheck(value[field], `${label}.${field}`);
+  }
+}
+
+function validatePreMergeCheck(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  if (value.mode !== "off" && value.mode !== "warning" && value.mode !== "error") {
+    throw new Error(`${label}.mode must be "off", "warning", or "error"`);
+  }
+  validateOptionalString(value.instructions, `${label}.instructions`);
+  if (value.threshold !== undefined) validatePercentage(value.threshold, `${label}.threshold`);
+}
+
+function validateFinishingTouches(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const field of ["docstrings", "unitTests", "stackedPr"] as const) {
+    validateFinishingTouch(value[field], `${label}.${field}`);
+  }
+}
+
+function validateFinishingTouch(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.instructions, `${label}.instructions`);
+}
+
+function validatePathInstructions(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const [pathPattern, instructions] of Object.entries(value)) {
+    if (!pathPattern.trim()) throw new Error(`${label} keys must be non-empty path patterns`);
+    validateStringArray(instructions, `${label}.${pathPattern}`);
+  }
+}
+
+function validateOptionalString(value: unknown, label: string): void {
+  if (value !== undefined && typeof value !== "string") throw new Error(`${label} must be a string`);
+}
+
+function validateStringArray(value: unknown, label: string): void {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.length === 0)) {
+    throw new Error(`${label} must be an array of non-empty strings`);
+  }
+}
+
+function validateOptionalStringArray(value: unknown, label: string): void {
+  if (value === undefined) return;
+  validateStringArray(value, label);
+}
+
+function validateBoolean(value: unknown, label: string): void {
+  if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
+}
+
+function validatePositiveInteger(value: unknown, label: string): void {
+  if (!Number.isInteger(value) || Number(value) < 1) throw new Error(`${label} must be a positive integer`);
+}
+
+function validateNonNegativeInteger(value: unknown, label: string): void {
+  if (!Number.isInteger(value) || Number(value) < 0) throw new Error(`${label} must be a non-negative integer`);
+}
+
+function validatePercentage(value: unknown, label: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+    throw new Error(`${label} must be a number from 0 to 100`);
+  }
+}
+
+function validateRepoName(value: string, label: string): void {
+  const [owner, repo, extra] = value.split("/");
+  if (extra !== undefined || !owner || !repo) throw new Error(`${label} entries must be GitHub owner/repo names`);
+  validateOwnerName(owner, `${label}.${value}.owner`);
+  validateOwnerName(repo, `${label}.${value}.repo`);
+}
+
+function validateOwnerName(value: string, label: string): void {
+  if (!/^[A-Za-z0-9_.-]+$/.test(value)) throw new Error(`${label} must contain only GitHub name characters`);
+}
+
+function validateCanaryPull(value: string, label: string): void {
+  const [repo, pullNumber, extra] = value.split("#");
+  if (extra !== undefined || !repo || !pullNumber || !/^[1-9][0-9]*$/.test(pullNumber)) {
+    throw new Error(`${label} entries must use owner/repo#number`);
+  }
+  validateRepoName(repo, label);
 }
