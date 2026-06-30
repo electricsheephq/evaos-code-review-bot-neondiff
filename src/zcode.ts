@@ -249,11 +249,29 @@ export function extractZCodeResponse(stdout: string): string {
   return response;
 }
 
-function extractJsonObject(text: string): string {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) return fenced[1]!.trim();
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < start) throw new Error("ZCode response did not contain a JSON object.");
-  return text.slice(start, end + 1);
+export function extractJsonObject(text: string): string {
+  const fencedMatches = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  for (const fenced of fencedMatches) {
+    const candidate = fenced[1]!.trim();
+    if (isReviewJsonObject(candidate)) return candidate;
+  }
+
+  const starts = [...text.matchAll(/\{/g)].map((match) => match.index).filter((index): index is number => index !== undefined);
+  const ends = [...text.matchAll(/\}/g)].map((match) => match.index).filter((index): index is number => index !== undefined);
+  for (const start of starts.reverse()) {
+    for (const end of ends.filter((index) => index > start).reverse()) {
+      const candidate = text.slice(start, end + 1).trim();
+      if (isReviewJsonObject(candidate)) return candidate;
+    }
+  }
+  throw new Error("ZCode response did not contain a parseable JSON review object.");
+}
+
+function isReviewJsonObject(candidate: string): boolean {
+  try {
+    const parsed = JSON.parse(candidate) as { findings?: unknown };
+    return typeof parsed === "object" && parsed !== null && Array.isArray(parsed.findings);
+  } catch {
+    return false;
+  }
 }

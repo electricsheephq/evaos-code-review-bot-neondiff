@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractZCodeResponse } from "../src/zcode.js";
+import { extractJsonObject, extractZCodeResponse } from "../src/zcode.js";
 
 describe("ZCode output parsing", () => {
   it("accepts pretty JSON emitted by current ZCode CLI", () => {
@@ -22,5 +22,18 @@ describe("ZCode output parsing", () => {
     ].join("\n");
 
     expect(extractZCodeResponse(stdout)).toBe("{\"findings\":[]}");
+  });
+
+  it("extracts the final review JSON when ZCode adds prose with earlier braces", () => {
+    const response = [
+      "I checked a callback like `confirmDrop(ctxMenu.item, () => postInvMove(...))` before finalizing.",
+      "Here is the result:",
+      "{\"findings\":[],\"summary\":\"No validated current-diff findings.\"}"
+    ].join("\n\n");
+
+    expect(JSON.parse(extractJsonObject(response))).toEqual({
+      findings: [],
+      summary: "No validated current-diff findings."
+    });
   });
 });
