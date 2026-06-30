@@ -3,6 +3,13 @@
   "pollIntervalMs": 90000,
   "skipDrafts": true,
   "canaryPulls": ["electricsheephq/WorldOS#1161", "100yenadmin/evaOS-GUI#497"],
+  "activation": {
+    "reviewExistingOpenPrsOnActivation": false
+  },
+  "reviewConcurrency": {
+    "maxActiveRuns": 5,
+    "leaseTtlMs": 900000
+  },
   "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
   "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",

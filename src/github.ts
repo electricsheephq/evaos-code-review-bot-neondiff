@@ -31,9 +31,14 @@ export class GitHubApi {
   }
 
   async listOpenPulls(repo: string): Promise<PullRequestSummary[]> {
-    return this.request<PullRequestSummary[]>(`/repos/${repo}/pulls?state=open&per_page=100`, {
-      token: await this.getReadToken(repo)
-    });
+    const pulls: PullRequestSummary[] = [];
+    for (let page = 1; ; page += 1) {
+      const chunk = await this.request<PullRequestSummary[]>(`/repos/${repo}/pulls?state=open&per_page=100&page=${page}`, {
+        token: await this.getReadToken(repo)
+      });
+      pulls.push(...chunk);
+      if (chunk.length < 100) return pulls;
+    }
   }
 
   async getPull(repo: string, pullNumber: number): Promise<PullRequestSummary> {

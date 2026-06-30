@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { ReviewEvent } from "./types.js";
@@ -13,6 +14,11 @@ export interface ProcessedReviewRecord {
   event?: ReviewEvent;
   reviewUrl?: string;
   error?: string;
+}
+
+export interface ReviewRunLease {
+  leaseId: string;
+  expiresAt: string;
 }
 
 export class ReviewStateStore {
@@ -32,6 +38,18 @@ export class ReviewStateStore {
         error text,
         created_at text not null default (datetime('now')),
         primary key (repo, pull_number, head_sha)
+      );
+
+      create table if not exists repo_activation_watermarks (
+        repo text primary key,
+        activated_at text not null,
+        created_at text not null default (datetime('now'))
+      );
+
+      create table if not exists review_run_leases (
+        lease_id text primary key,
+        started_at text not null,
+        expires_at text not null
       );
     `);
   }
@@ -59,6 +77,53 @@ export class ReviewStateStore {
         record.reviewUrl ?? null,
         record.error ?? null
       );
+  }
+
+  hasRepoActivation(repo: string): boolean {
+    const row = this.db.prepare("select 1 from repo_activation_watermarks where repo = ? limit 1").get(repo);
+    return Boolean(row);
+  }
+
+  recordRepoActivation(repo: string, activatedAt = new Date().toISOString()): void {
+    this.db
+      .prepare(
+        `insert or ignore into repo_activation_watermarks
+          (repo, activated_at, created_at)
+         values (?, ?, datetime('now'))`
+      )
+      .run(repo, activatedAt);
+  }
+
+  tryAcquireReviewRunLease(maxActiveRuns: number, leaseTtlMs: number, now = new Date()): ReviewRunLease | undefined {
+    if (!Number.isInteger(maxActiveRuns)) throw new Error("maxActiveRuns must be an integer");
+    if (maxActiveRuns < 1) throw new Error("maxActiveRuns must be at least 1");
+    if (!Number.isInteger(leaseTtlMs)) throw new Error("leaseTtlMs must be an integer");
+    if (leaseTtlMs < 1) throw new Error("leaseTtlMs must be at least 1");
+
+    const leaseId = randomUUID();
+    const startedAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + leaseTtlMs).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      this.db.prepare("delete from review_run_leases where expires_at <= ?").run(startedAt);
+      const row = this.db.prepare("select count(*) as count from review_run_leases").get() as { count: number };
+      if (row.count >= maxActiveRuns) {
+        this.db.exec("commit");
+        return undefined;
+      }
+      this.db
+        .prepare("insert into review_run_leases (lease_id, started_at, expires_at) values (?, ?, ?)")
+        .run(leaseId, startedAt, expiresAt);
+      this.db.exec("commit");
+      return { leaseId, expiresAt };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  releaseReviewRunLease(leaseId: string): void {
+    this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
   }
 
   close(): void {

@@ -32,7 +32,7 @@ describe("GitHub App read authentication", () => {
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       }
-      if (String(url).endsWith("/repos/owner/repo/pulls?state=open&per_page=100")) {
+      if (String(url).endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1")) {
         return jsonResponse([]);
       }
       return jsonResponse({ message: "unexpected" }, 404);
@@ -41,9 +41,42 @@ describe("GitHub App read authentication", () => {
     const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
     await github.listOpenPulls("owner/repo");
 
-    const readCall = calls.find((call) => call.url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100"));
+    const readCall = calls.find((call) => call.url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1"));
     expect(readCall?.authorization).toBe("Bearer installation-token");
     expect(readCall?.authorization).not.toBe("Bearer fallback-token");
+  });
+
+  it("paginates open PR reads so activation can baseline every listed open head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-read-pages-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      calls.push(String(url));
+      if (String(url).endsWith("/repos/owner/repo/installation")) {
+        return jsonResponse({ id: 123 });
+      }
+      if (String(url).endsWith("/app/installations/123/access_tokens")) {
+        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (String(url).endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1")) {
+        return jsonResponse(Array.from({ length: 100 }, (_, index) => pull(index + 1)));
+      }
+      if (String(url).endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=2")) {
+        return jsonResponse([pull(101)]);
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    const pulls = await github.listOpenPulls("owner/repo");
+
+    expect(pulls).toHaveLength(101);
+    expect(calls.some((url) => url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1"))).toBe(true);
+    expect(calls.some((url) => url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=2"))).toBe(true);
   });
 
   it("updates an existing marked PR walkthrough comment with the App token", async () => {
@@ -163,4 +196,24 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+function pull(number: number) {
+  return {
+    number,
+    title: `PR ${number}`,
+    draft: false,
+    head: {
+      sha: `head-${number}`,
+      ref: `pr-${number}`
+    },
+    base: {
+      sha: "base",
+      ref: "main",
+      repo: {
+        full_name: "owner/repo"
+      }
+    },
+    html_url: `https://github.test/owner/repo/pull/${number}`
+  };
 }
