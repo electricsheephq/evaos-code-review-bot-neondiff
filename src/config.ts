@@ -8,6 +8,13 @@ export interface BotConfig {
   statePath: string;
   evidenceDir: string;
   canaryPulls?: string[];
+  activation: {
+    reviewExistingOpenPrsOnActivation: boolean;
+  };
+  reviewConcurrency: {
+    maxActiveRuns: number;
+    leaseTtlMs: number;
+  };
   walkthrough: {
     enabled: boolean;
     postIssueComment: boolean;
@@ -58,6 +65,13 @@ const DEFAULT_CONFIG: BotConfig = {
   statePath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   evidenceDir: "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
   canaryPulls: undefined,
+  activation: {
+    reviewExistingOpenPrsOnActivation: false
+  },
+  reviewConcurrency: {
+    maxActiveRuns: 5,
+    leaseTtlMs: 15 * 60_000
+  },
   walkthrough: {
     enabled: true,
     postIssueComment: false

@@ -43,6 +43,8 @@ async function main(): Promise<void> {
       monitoredRepos,
       canaryPulls: config.canaryPulls ?? [],
       repoProfilesEnabled: Boolean(config.repoProfiles),
+      activation: config.activation,
+      reviewConcurrency: config.reviewConcurrency,
       statePath: config.statePath,
       workRoot: config.workRoot,
       zcode: zcode.redacted,
