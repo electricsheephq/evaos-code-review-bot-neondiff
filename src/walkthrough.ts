@@ -4,6 +4,7 @@ import type { DroppedFinding, PullFilePatch, PullRequestSummary, ReviewComment, 
 export const WALKTHROUGH_MARKER_PREFIX = "<!-- evaos-code-review-bot:walkthrough";
 
 const SEVERITY_LABELS: Severity[] = ["P0", "P1", "P2", "P3"];
+const MAX_CHANGED_FILE_ROWS = 25;
 
 export function buildWalkthroughComment(input: {
   repo: string;
@@ -14,8 +15,10 @@ export function buildWalkthroughComment(input: {
   event: ReviewEvent;
   postIssueComment?: boolean;
 }): WalkthroughComment {
-  const marker = `${WALKTHROUGH_MARKER_PREFIX} ${input.repo}#${input.pull.number} ${input.pull.head.sha} -->`;
+  const marker = `${WALKTHROUGH_MARKER_PREFIX} ${input.repo}#${input.pull.number} -->`;
   const files = input.files.map((file) => summarizeFile(file, input.comments));
+  const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);
+  const omittedFileCount = Math.max(0, files.length - visibleFiles.length);
   const effort = estimateReviewEffort(input.files, input.comments);
   const relatedRefs = extractRelatedRefs(`${input.pull.title}\n${input.pull.body ?? ""}`);
   const suggestedLabels = suggestLabels(input.files, input.comments);
@@ -36,7 +39,8 @@ export function buildWalkthroughComment(input: {
     "",
     "| File | Status | Churn | Purpose | Risk |",
     "| --- | --- | --- | --- | --- |",
-    ...files.map((file) => `| \`${file.filename}\` | ${file.status} | ${file.churn} | ${file.purpose} | ${file.risk} |`),
+    ...visibleFiles.map((file) => `| \`${file.filename}\` | ${file.status} | ${file.churn} | ${file.purpose} | ${file.risk} |`),
+    ...(omittedFileCount > 0 ? ["", `${omittedFileCount} additional changed files omitted from this walkthrough.`] : []),
     "",
     "### Review Signal",
     "",

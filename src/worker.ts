@@ -8,6 +8,7 @@ import { GitHubApi } from "./github.js";
 import { redactSecrets } from "./secrets.js";
 import { ReviewStateStore } from "./state.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
+import { postWalkthroughComment } from "./walkthrough-post.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
 import type { PullRequestSummary, ReviewPlan } from "./types.js";
 
@@ -150,15 +151,7 @@ export async function reviewPull(input: {
   }
 
   const reviewGithub = new GitHubApi(config.github);
-  if (plan.walkthrough?.postIssueComment) {
-    const walkthroughComment = await reviewGithub.upsertIssueComment({
-      repo,
-      issueNumber: pull.number,
-      marker: plan.walkthrough.marker,
-      body: plan.walkthrough.body
-    });
-    writeFileSync(join(evidenceDir, "walkthrough-comment.json"), `${JSON.stringify(walkthroughComment, null, 2)}\n`);
-  }
+  await postWalkthroughComment({ github: reviewGithub, repo, pullNumber: pull.number, evidenceDir, walkthrough: plan.walkthrough });
   const review = await reviewGithub.createReview({
     repo,
     pullNumber: pull.number,

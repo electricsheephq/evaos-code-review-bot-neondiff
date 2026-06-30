@@ -7,6 +7,7 @@ export interface GitHubApiOptions {
   privateKeyPath?: string;
   token?: string;
   apiBaseUrl?: string;
+  botLogin?: string;
 }
 
 export class GitHubApi {
@@ -14,6 +15,7 @@ export class GitHubApi {
   private readonly privateKey?: string;
   private readonly token?: string;
   private readonly apiBaseUrl: string;
+  private readonly botLogin: string;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(options: GitHubApiOptions) {
@@ -21,6 +23,7 @@ export class GitHubApi {
     this.privateKey = options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined;
     this.token = options.token;
     this.apiBaseUrl = options.apiBaseUrl ?? "https://api.github.com";
+    this.botLogin = options.botLogin ?? "evaos-code-review-bot[bot]";
   }
 
   canPostAsApp(): boolean {
@@ -109,16 +112,20 @@ export class GitHubApi {
     issueNumber: number,
     marker: string,
     token: string
-  ): Promise<{ id: number; body?: string | null } | undefined> {
+  ): Promise<IssueCommentSummary | undefined> {
     for (let page = 1; ; page += 1) {
-      const comments = await this.request<Array<{ id: number; body?: string | null }>>(
+      const comments = await this.request<IssueCommentSummary[]>(
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token }
       );
-      const existing = comments.find((comment) => comment.body?.includes(marker));
+      const existing = comments.find((comment) => comment.body?.includes(marker) && this.isBotAuthoredComment(comment));
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }
+  }
+
+  private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
+    return comment.user?.type === "Bot" && comment.user.login === this.botLogin;
   }
 
   private async getInstallationToken(repo: string): Promise<string> {
@@ -173,6 +180,15 @@ export class GitHubApi {
 
     return (await response.json()) as T;
   }
+}
+
+interface IssueCommentSummary {
+  id: number;
+  body?: string | null;
+  user?: {
+    login: string;
+    type?: string;
+  } | null;
 }
 
 function describeFetchError(error: unknown): string {

@@ -59,8 +59,17 @@ describe("walkthrough comment rendering", () => {
       dropped: [],
       event: "REQUEST_CHANGES"
     });
+    const walkthroughAgain = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull,
+      files,
+      comments,
+      dropped: [],
+      event: "REQUEST_CHANGES"
+    });
 
-    expect(walkthrough.marker).toBe(`${WALKTHROUGH_MARKER_PREFIX} electricsheephq/WorldOS#42 abc123def456 -->`);
+    expect(walkthroughAgain).toEqual(walkthrough);
+    expect(walkthrough.marker).toBe(`${WALKTHROUGH_MARKER_PREFIX} electricsheephq/WorldOS#42 -->`);
     expect(walkthrough.body).toContain(walkthrough.marker);
     expect(walkthrough.body).toContain("## Walkthrough");
     expect(walkthrough.body).toContain("| `Assets/Scripts/SaveGameController.cs` | modified | +44/-8 | Unity/gameplay state | Elevated: validated P1 finding |");
@@ -92,7 +101,7 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("No validated inline findings.");
     expect(walkthrough.body).toContain("Estimated review effort: 1/5");
     expect(walkthrough.body).not.toContain(secret);
-    expect(walkthrough.body).toContain("[redacted-secret]");
+    expect(walkthrough.body).toMatch(/Docs only \[redacted-secret\]/);
   });
 
   it("keeps the comment-secret checklist passing when secret-like findings were dropped", () => {
@@ -106,5 +115,28 @@ describe("walkthrough comment rendering", () => {
     });
 
     expect(walkthrough.body).toContain("- [x] No secret-like content survived into posted inline comments.");
+  });
+
+  it("caps changed-file rows so posted walkthrough bodies stay bounded", () => {
+    const files: PullFilePatch[] = Array.from({ length: 30 }, (_, index) => ({
+      filename: `src/generated/file-${index}.ts`,
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      changes: 1
+    }));
+
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull,
+      files,
+      comments: [],
+      dropped: [],
+      event: "COMMENT"
+    });
+
+    expect(walkthrough.body).toContain("5 additional changed files omitted from this walkthrough.");
+    expect(walkthrough.body).toContain("`src/generated/file-24.ts`");
+    expect(walkthrough.body).not.toContain("`src/generated/file-25.ts`");
   });
 });
