@@ -1,0 +1,143 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { parseFindings } from "./findings.js";
+import { resolveZCodeProviderEnv } from "./zcode-env.js";
+import type { Finding, PullFilePatch, PullRequestSummary } from "./types.js";
+
+export interface ZCodeReviewResult {
+  findings: Finding[];
+  droppedFromSchema: ReturnType<typeof parseFindings>["dropped"];
+  rawResponse: string;
+}
+
+export function buildReviewPrompt(input: {
+  repo: string;
+  pull: PullRequestSummary;
+  files: PullFilePatch[];
+  maxPatchBytes?: number;
+}): string {
+  const fileList = input.files.map((file) => `- ${file.filename}`).join("\n");
+  let remainingPatchBytes = input.maxPatchBytes ?? 80_000;
+  const patches = input.files
+    .map((file) => {
+      const rawPatch = file.patch ?? "[binary or too large for GitHub patch]";
+      const patch = truncateToBudget(rawPatch, remainingPatchBytes);
+      remainingPatchBytes = Math.max(0, remainingPatchBytes - Buffer.byteLength(patch));
+      return `### ${file.filename}\n\n\`\`\`diff\n${patch}\n\`\`\``;
+    })
+    .join("\n\n");
+
+  return [
+    "You are evaOS Code Review Bot. Review this pull request aggressively for correctness, security, data loss, CI-breaking behavior, Unity/game regression risk, and missing high-signal tests.",
+    "Do not modify files. Do not run project tests, package scripts, builds, app commands, or arbitrary PR code.",
+    "Do not call Bash or shell commands. If more context is needed, use read-only file inspection only. If that is impossible, return no findings rather than executing code.",
+    "Only inspect the checkout and the diff provided below.",
+    "Return JSON only, with shape: {\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\"}],\"summary\":\"short review summary\"}.",
+    "Use P0/P1 only for validated correctness, security, data-loss, CI-breaking, or release-regression issues. Prefer no finding over speculative noise.",
+    "Every finding must point at a RIGHT-side line in the current diff.",
+    "",
+    `Repository: ${input.repo}`,
+    `Pull request: #${input.pull.number} ${input.pull.title}`,
+    `Head SHA: ${input.pull.head.sha}`,
+    "",
+    "Files:",
+    fileList,
+    "",
+    "Diff:",
+    patches
+  ].join("\n");
+}
+
+export function runZCodeReview(input: {
+  cwd: string;
+  prompt: string;
+  cliPath: string;
+  appConfigPath: string;
+  model: string;
+  providerId?: string;
+  evidenceDir?: string;
+  timeoutMs?: number;
+}): ZCodeReviewResult {
+  const zcodeEnv = resolveZCodeProviderEnv({
+    appConfigPath: input.appConfigPath,
+    model: input.model,
+    providerId: input.providerId
+  });
+
+  const result = spawnSync(process.execPath, [
+    input.cliPath,
+    "--cwd",
+    input.cwd,
+    "--mode",
+    "plan",
+    "--json",
+    "--no-browser",
+    "--prompt",
+    input.prompt
+  ], {
+    env: {
+      ...process.env,
+      ZCODE_MODEL: zcodeEnv.ZCODE_MODEL,
+      ZCODE_BASE_URL: zcodeEnv.ZCODE_BASE_URL,
+      ZCODE_API_KEY: zcodeEnv.ZCODE_API_KEY
+    },
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: input.timeoutMs ?? 180_000
+  });
+
+  const stderr = result.stderr.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]");
+  if (input.evidenceDir) {
+    mkdirSync(input.evidenceDir, { recursive: true });
+    writeFileSync(join(input.evidenceDir, "zcode-last-stdout.jsonl"), result.stdout);
+    writeFileSync(join(input.evidenceDir, "zcode-last-stderr.txt"), stderr);
+  }
+
+  if (result.status !== 0) {
+    if (result.error) {
+      throw new Error(`ZCode failed before completion: ${result.error.message}`);
+    }
+    throw new Error(`ZCode failed with status ${result.status}: ${stderr || result.stdout.slice(0, 1000)}`);
+  }
+
+  const rawResponse = extractZCodeResponse(result.stdout);
+  const parsed = JSON.parse(extractJsonObject(rawResponse));
+  const { findings, dropped } = parseFindings(parsed);
+  return { findings, droppedFromSchema: dropped, rawResponse };
+}
+
+function truncateToBudget(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "[patch omitted: prompt budget exhausted]";
+  const bytes = Buffer.byteLength(text);
+  if (bytes <= maxBytes) return text;
+  return `${text.slice(0, maxBytes)}\n[patch truncated to fit prompt budget]`;
+}
+
+function extractZCodeResponse(stdout: string): string {
+  const candidates = stdout
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as { response?: unknown };
+      } catch {
+        return null;
+      }
+    })
+    .filter((value): value is { response?: unknown } => Boolean(value));
+
+  const response = [...candidates].reverse().find((value) => typeof value.response === "string")?.response;
+  if (typeof response !== "string") throw new Error("ZCode JSON output did not include a string response.");
+  return response;
+}
+
+function extractJsonObject(text: string): string {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) return fenced[1]!.trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end < start) throw new Error("ZCode response did not contain a JSON object.");
+  return text.slice(start, end + 1);
+}

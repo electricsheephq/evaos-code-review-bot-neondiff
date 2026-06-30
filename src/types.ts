@@ -1,0 +1,61 @@
+export type Severity = "P0" | "P1" | "P2" | "P3";
+
+export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
+
+export interface Finding {
+  severity: Severity;
+  path: string;
+  line: number;
+  title: string;
+  body: string;
+  confidence: number;
+  why_this_matters?: string;
+}
+
+export interface DroppedFinding extends Partial<Finding> {
+  reason: string;
+}
+
+export interface PullFilePatch {
+  filename: string;
+  patch?: string | null;
+}
+
+export interface PullRequestSummary {
+  number: number;
+  title: string;
+  draft: boolean;
+  head: {
+    sha: string;
+    ref: string;
+    repo?: {
+      full_name: string;
+      clone_url?: string;
+    } | null;
+  };
+  base: {
+    sha: string;
+    ref: string;
+    repo: {
+      full_name: string;
+      clone_url?: string;
+    };
+  };
+  html_url: string;
+}
+
+export interface ReviewComment {
+  path: string;
+  line: number;
+  side: "RIGHT";
+  body: string;
+  severity: Severity;
+  title: string;
+}
+
+export interface ReviewPlan {
+  event: ReviewEvent;
+  comments: ReviewComment[];
+  dropped: DroppedFinding[];
+  summary: string;
+}

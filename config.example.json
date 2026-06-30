@@ -1,0 +1,20 @@
+{
+  "pilotRepos": ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
+  "pollIntervalMs": 90000,
+  "skipDrafts": true,
+  "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
+  "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
+  "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
+  "zcode": {
+    "cliPath": "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+    "appConfigPath": "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+    "model": "GLM-5.2",
+    "timeoutMs": 180000,
+    "maxPatchBytes": 80000
+  },
+  "github": {
+    "appId": "set via EVAOS_REVIEW_BOT_APP_ID",
+    "privateKeyPath": "set via EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH",
+    "token": "optional read-only dry-run token, preferably GITHUB_TOKEN env"
+  }
+}

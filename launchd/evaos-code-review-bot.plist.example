@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.electricsheephq.evaos-code-review-bot</string>
+  <key>WorkingDirectory</key>
+  <string>/Volumes/LEXAR/repos/evaos-code-review-bot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/npm</string>
+    <string>run</string>
+    <string>daemon</string>
+    <string>--</string>
+    <string>--dry-run</string>
+    <string>true</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>EVAOS_REVIEW_BOT_APP_ID</key>
+    <string>REPLACE_WITH_APP_ID</string>
+    <key>EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH</key>
+    <string>/absolute/path/to/private-key.pem</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Volumes/LEXAR/Codex/evaos-code-review-bot/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Volumes/LEXAR/Codex/evaos-code-review-bot/logs/launchd.err.log</string>
+</dict>
+</plist>
