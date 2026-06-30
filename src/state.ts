@@ -18,6 +18,10 @@ export interface ProcessedReviewRecord {
   error?: string;
 }
 
+export interface StoredProcessedReviewRecord extends ProcessedReviewRecord {
+  createdAt: string;
+}
+
 export interface ReviewRunLease {
   leaseId: string;
   expiresAt: string;
@@ -86,6 +90,30 @@ export class ReviewStateStore {
       .prepare("select 1 from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1")
       .get(repo, pullNumber, headSha);
     return Boolean(row);
+  }
+
+  getProcessedReview(repo: string, pullNumber: number, headSha: string): StoredProcessedReviewRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, status, event, review_url, error, created_at
+         from processed_reviews
+         where repo = ? and pull_number = ? and head_sha = ?
+         limit 1`
+      )
+      .get(repo, pullNumber, headSha) as ProcessedReviewRow | undefined;
+    return row ? mapProcessedReviewRow(row) : undefined;
+  }
+
+  listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[] {
+    const rows = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, status, event, review_url, error, created_at
+         from processed_reviews
+         where repo = ? and pull_number = ?
+         order by datetime(created_at) desc`
+      )
+      .all(repo, pullNumber) as unknown as ProcessedReviewRow[];
+    return rows.map(mapProcessedReviewRow);
   }
 
   recordProcessed(record: ProcessedReviewRecord): void {
@@ -186,4 +214,28 @@ export class ReviewStateStore {
   close(): void {
     this.db.close();
   }
+}
+
+interface ProcessedReviewRow {
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  status: ProcessedStatus;
+  event: ReviewEvent | null;
+  review_url: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
+  return {
+    repo: row.repo,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    status: row.status,
+    ...(row.event ? { event: row.event } : {}),
+    ...(row.review_url ? { reviewUrl: row.review_url } : {}),
+    ...(row.error ? { error: row.error } : {}),
+    createdAt: row.created_at
+  };
 }
