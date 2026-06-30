@@ -42,7 +42,7 @@
           "baseBranches": ["main"],
           "labels": ["!wip", "!do-not-review"]
         },
-        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
+        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "extensions/**", "qa/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
         "pathInstructions": {
           "Assets/**": ["Prioritize scene, prefab, save-state, asset-reference, and gameplay regressions."],
           "ProjectSettings/**": ["Treat build, platform, input, graphics, and release behavior changes as high risk."]
@@ -251,7 +251,7 @@
           "baseBranches": ["main"],
           "labels": ["!wip", "!do-not-review"]
         },
-        "pathFilters": ["src/**", "app/**", "pages/**", "components/**", "content/**", "public/**", "package.json", "package-lock.json"],
+        "pathFilters": ["src/**", "app/**", "pages/**", "components/**", "content/**", "public/**", "supabase/**", "package.json", "package-lock.json"],
         "riskyPaths": ["app/**", "pages/**", "content/**", "public/**"],
         "proofExpectations": ["Look for focused route, form, SEO, accessibility, or deploy smoke evidence."],
         "validationHints": ["Call out broken CTAs, forms, metadata, tracking, or public content regressions."],
@@ -277,7 +277,7 @@
           "baseBranches": ["main"],
           "labels": ["!wip", "!do-not-review"]
         },
-        "pathFilters": ["src/**", "server/**", "agents/**", "tools/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "pathFilters": ["src/**", "server/**", "agents/**", "tools/**", "tests/**", "docs/**", "supabase/**", "package.json", "package-lock.json"],
         "riskyPaths": ["agents/**", "tools/**", "server/**", "src/**"],
         "proofExpectations": ["Look for focused agent/tool/runtime proof and no-secret evidence."],
         "validationHints": ["Call out permission widening, unsafe tool execution, stale memory, and customer-data leakage."],
@@ -459,7 +459,7 @@
           "baseBranches": ["main"],
           "labels": ["!wip", "!do-not-review"]
         },
-        "pathFilters": ["src/**", "apps/**", "scripts/**", "tests/**", "package.json", "package-lock.json", "!dist/**", "!release/**"],
+        "pathFilters": ["src/**", "apps/**", "mobile/**", "scripts/**", "tests/**", "package.json", "package-lock.json", "!dist/**", "!release/**"],
         "pathInstructions": {
           "apps/eva-desktop-mac/**": ["Check macOS identity, helper path, TCC identity, and packaged resource shape risk."],
           "scripts/**": ["Treat release, packaging, and artifact-shape changes as high risk."]
@@ -524,7 +524,7 @@
           "baseBranches": ["main"],
           "labels": ["!wip", "!do-not-review"]
         },
-        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
+        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "extensions/**", "qa/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
         "pathInstructions": {
           "Assets/**": ["Prioritize scene, prefab, asset-reference, and gameplay regressions."],
           "ProjectSettings/**": ["Treat build, input, graphics, and package settings as high risk."]

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import {
+  buildPullFileFilterImpact,
   buildRepoPolicySnapshot,
   buildRepoProfilePromptSection,
   filterPullFilesForProfile,
@@ -169,6 +170,66 @@ describe("repo profile registry", () => {
       "src/worker.ts",
       "README.md"
     ]);
+  });
+
+  it("keeps safety-critical root and workflow files visible despite narrow path filters", () => {
+    const profile = expectAllowed(
+      resolveRepoProfile(
+        loadConfig(
+          writeConfig({
+            repoProfiles: {
+              repos: {
+                "electricsheephq/WorldOS": {
+                  displayName: "WorldOS",
+                  pathFilters: ["Assets/**", "ProjectSettings/**", "!ProjectSettings/generated/**"]
+                }
+              }
+            }
+          })
+        ),
+        "electricsheephq/WorldOS"
+      )
+    );
+    const files: PullFilePatch[] = [
+      { filename: "Assets/Scene.unity", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "+scene" },
+      { filename: ".github/workflows/build.yml", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "+ci" },
+      { filename: "package-lock.json", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "+lock" },
+      { filename: "tsconfig.json", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "+ts" },
+      { filename: "ProjectSettings/generated/cache.asset", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "+cache" },
+      { filename: "docs/notes.md", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "+notes" }
+    ];
+
+    const impact = buildPullFileFilterImpact(files, profile);
+
+    expect(filterPullFilesForProfile(files, profile).map((file) => file.filename)).toEqual([
+      "Assets/Scene.unity",
+      ".github/workflows/build.yml",
+      "package-lock.json",
+      "tsconfig.json"
+    ]);
+    expect(impact).toMatchObject({
+      originalCount: 6,
+      includedCount: 4,
+      excludedCount: 2
+    });
+    expect(impact.included).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ filename: "Assets/Scene.unity", reason: "matched_profile_include", pattern: "Assets/**" }),
+        expect.objectContaining({ filename: ".github/workflows/build.yml", reason: "matched_safety_include", pattern: ".github/**" }),
+        expect.objectContaining({ filename: "package-lock.json", reason: "matched_safety_include", pattern: "package-lock.json" }),
+        expect.objectContaining({ filename: "tsconfig.json", reason: "matched_safety_include", pattern: "tsconfig*.json" })
+      ])
+    );
+    expect(impact.excluded).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          filename: "ProjectSettings/generated/cache.asset",
+          reason: "excluded_by_profile",
+          pattern: "ProjectSettings/generated/**"
+        }),
+        expect.objectContaining({ filename: "docs/notes.md", reason: "no_matching_include" })
+      ])
+    );
   });
 
   it("rejects invalid repo policy config before runtime use", () => {
@@ -346,6 +407,49 @@ describe("repo profile registry", () => {
     }
   });
 
+  it("keeps representative active-profile changed surfaces visible", () => {
+    const template = JSON.parse(readFileSync(new URL("../config.active-profiles.example.json", import.meta.url), "utf8"));
+    const config = loadConfig(writeConfig(template));
+    const cases = [
+      {
+        repo: "electricsheephq/WorldOS",
+        files: ["extensions/renderers/shared/room_recipes.json", "qa/export_scene_grid.py", "qa/seed_gfx_crypt_2room.py"]
+      },
+      {
+        repo: "100yenadmin/evaOS-GUI",
+        files: [
+          ".github/workflows/pr-checks.yml",
+          ".github/workflows/public-security-scan.yml",
+          ".gitleaks.toml",
+          "mobile/eas.json",
+          "mobile/scripts/build.js"
+        ]
+      },
+      {
+        repo: "electricsheephq/electric-sheep-eva-marketing-site",
+        files: ["supabase/functions/create-stripe-checkout/index.ts"]
+      },
+      {
+        repo: "electricsheephq/evaos-cortex",
+        files: [
+          ".env.example",
+          "supabase/config.toml",
+          "supabase/functions/_shared/finance_metrics.ts",
+          "supabase/functions/finance-metrics-refresh/index.test.ts",
+          "supabase/functions/finance-metrics-refresh/index.ts"
+        ]
+      }
+    ];
+
+    for (const testCase of cases) {
+      const profile = expectAllowed(resolveRepoProfile(config, testCase.repo));
+      const files = testCase.files.map((filename) => patchFile(filename));
+      const impact = buildPullFileFilterImpact(files, profile);
+      expect(impact.excluded, `${testCase.repo} excluded ${impact.excluded.map((entry) => entry.filename).join(", ")}`).toEqual([]);
+      expect(filterPullFilesForProfile(files, profile).map((file) => file.filename)).toEqual(testCase.files);
+    }
+  });
+
   it("injects repo profile guidance into the ZCode prompt", () => {
     const resolved = resolveRepoProfile(
       loadConfig(
@@ -414,6 +518,17 @@ function expectAllowed(resolution: RepoProfileResolution): ResolvedRepoProfile {
   expect(resolution.allowed).toBe(true);
   if (!resolution.allowed) throw new Error(`Expected repo profile to be allowed, got ${resolution.reason}`);
   return resolution.profile;
+}
+
+function patchFile(filename: string): PullFilePatch {
+  return {
+    filename,
+    status: "modified",
+    additions: 1,
+    deletions: 0,
+    changes: 1,
+    patch: `+${filename}`
+  };
 }
 
 const pull: PullRequestSummary = {
