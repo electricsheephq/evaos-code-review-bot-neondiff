@@ -3,9 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BotConfig } from "../src/config.js";
+import type { GitHubApi } from "../src/github.js";
+import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { localDateFolder, recordFailedReview } from "../src/worker.js";
+import {
+  isSuccessfulRetryStatus,
+  localDateFolder,
+  prepareFailedHeadRetry,
+  recordFailedReview,
+  restoreFailedRetryRowIfNeeded,
+  retryFailedHeadWithDeps,
+  reviewPull
+} from "../src/worker.js";
 
 describe("worker review failures", () => {
   const roots: string[] = [];
@@ -37,6 +47,432 @@ describe("worker review failures", () => {
     expect(evidence).toContain("ETIMEDOUT");
     expect(evidence).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
     state.close();
+  });
+
+  it("prepares exactly one failed current head for retry without deleting the failure row", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1223,
+      headSha: "head-retry",
+      status: "failed",
+      error: "transient API timeout"
+    });
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1223,
+      headSha: "other-head",
+      status: "failed",
+      error: "separate failure"
+    });
+
+    const result = prepareFailedHeadRetry({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1223,
+      headSha: "head-retry",
+      livePull: pullSummary(1223, "head-retry")
+    });
+    expect(result).toMatchObject({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1223,
+      headSha: "head-retry"
+    });
+    expect(state.getProcessedReview("electricsheephq/WorldOS", 1223, "head-retry")).toMatchObject({
+      status: "failed"
+    });
+    expect(state.getProcessedReview("electricsheephq/WorldOS", 1223, "other-head")).toMatchObject({
+      status: "failed"
+    });
+    state.close();
+  });
+
+  it("refuses retry when the requested failed head is stale", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-stale-retry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1224,
+      headSha: "old-head",
+      status: "failed",
+      error: "transient API timeout"
+    });
+    expect(() => prepareFailedHeadRetry({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1224,
+      headSha: "old-head",
+      livePull: pullSummary(1224, "new-head")
+    })).toThrow("Refusing retry for stale head");
+
+    expect(state.getProcessedReview("electricsheephq/WorldOS", 1224, "old-head")).toMatchObject({
+      status: "failed"
+    });
+    state.close();
+  });
+
+  it("refuses retry when the current head is not failed", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-nonfailed-retry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1225,
+      headSha: "head-posted",
+      status: "posted",
+      event: "COMMENT"
+    });
+    expect(() => prepareFailedHeadRetry({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1225,
+      headSha: "head-posted",
+      livePull: pullSummary(1225, "head-posted")
+    })).toThrow("status is posted, not failed");
+    state.close();
+  });
+
+  it("preserves the failed row when retry review work is skipped for capacity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-capacity-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1226, "head-capacity");
+    const budget = new ReviewRunBudget(1);
+    expect(budget.tryStart()).toBe(true);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1226,
+      headSha: "head-capacity",
+      status: "failed",
+      error: "transient API timeout"
+    });
+
+    await expect(reviewPull({
+      config,
+      github: {} as unknown as GitHubApi,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: false,
+      budget,
+      processedHeadPolicy: "retry_failed_head"
+    })).resolves.toBe("skipped_capacity");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", 1226, "head-capacity")).toMatchObject({
+      status: "failed"
+    });
+    budget.finish();
+    state.close();
+  });
+
+  it("restores a failed row after a retry dry-run records dry_run", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-dry-run-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const retryTarget = {
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1227,
+      headSha: "head-dry-run",
+      previousError: "transient API timeout"
+    };
+    state.recordProcessed({
+      repo: retryTarget.repo,
+      pullNumber: retryTarget.pullNumber,
+      headSha: retryTarget.headSha,
+      status: "dry_run",
+      event: "COMMENT"
+    });
+
+    restoreFailedRetryRowIfNeeded({ state, retryTarget, reason: "retry_dry_run" });
+
+    expect(state.getProcessedReview(retryTarget.repo, retryTarget.pullNumber, retryTarget.headSha)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("retry_dry_run")
+    });
+    state.close();
+  });
+
+  it("does not rewrite an already failed retry row for intentional skip statuses", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-skip-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const retryTarget = {
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1228,
+      headSha: "head-skip",
+      previousError: "original failure"
+    };
+    state.recordProcessed({
+      repo: retryTarget.repo,
+      pullNumber: retryTarget.pullNumber,
+      headSha: retryTarget.headSha,
+      status: "failed",
+      error: retryTarget.previousError
+    });
+
+    restoreFailedRetryRowIfNeeded({ state, retryTarget, reason: "retry_did_not_review=skipped_command_stop" });
+
+    expect(state.getProcessedReview(retryTarget.repo, retryTarget.pullNumber, retryTarget.headSha)).toMatchObject({
+      status: "failed",
+      error: "original failure"
+    });
+    state.close();
+  });
+
+  it("keeps a failed row after a retry dry-run reaches the reviewed path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-orchestrator-dry-run-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1229, "head-retry-dry-run");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: true,
+        useZCode: false
+      },
+      reviewPullImpl: async ({ state: retryState, repo, pull: retryPull }) => {
+        retryState.recordProcessed({
+          repo,
+          pullNumber: retryPull.number,
+          headSha: retryPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      }
+    });
+
+    expect(result.status).toBe("dry_run");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("original timeout; retry_dry_run")
+    });
+    state.close();
+  });
+
+  it("keeps a posted row after a live retry successfully posts a review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-orchestrator-posted-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1230, "head-retry-posted");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async ({ state: retryState, repo, pull: retryPull }) => {
+        retryState.recordProcessed({
+          repo,
+          pullNumber: retryPull.number,
+          headSha: retryPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1230#pullrequestreview-1"
+        });
+        return "reviewed";
+      }
+    });
+
+    expect(result.status).toBe("reviewed");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "posted",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1230#pullrequestreview-1"
+    });
+    state.close();
+  });
+
+  it("preserves original failure context when retry review work throws", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-orchestrator-throw-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1231, "head-retry-throw");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => {
+        throw new Error("second timeout");
+      }
+    });
+
+    expect(result.status).toBe("failed");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: "original timeout; retry_error=second timeout"
+    });
+    state.close();
+  });
+
+  it("restores a failed row after real reviewPull records a stale-head skip", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-real-stale-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1232, "head-retry-stale", "base-original");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+    let getPullCalls = 0;
+    const github = {
+      getPull: async () => {
+        getPullCalls += 1;
+        return getPullCalls === 1 ? pull : pullSummary(pull.number, pull.head.sha, "base-new");
+      },
+      listIssueComments: async () => [],
+      listPullFiles: async () => {
+        throw new Error("stale retry should not fetch files");
+      },
+      canPostAsApp: () => false
+    } as unknown as GitHubApi;
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: reviewPull
+    });
+
+    expect(result.status).toBe("skipped_stale_head");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: "original timeout; retry_did_not_review=skipped_stale_head"
+    });
+    state.close();
+  });
+
+  it("treats a retry row posted after prepare as an already-resolved no-op", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-race-posted-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1233, "head-retry-race");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+    const github = {
+      getPull: async () => pull,
+      listIssueComments: async () => [],
+      listPullFiles: async () => {
+        throw new Error("already-resolved retry should not fetch files");
+      },
+      canPostAsApp: () => false
+    } as unknown as GitHubApi;
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async (input) => {
+        state.recordProcessed({
+          repo: "electricsheephq/WorldOS",
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1233#pullrequestreview-1"
+        });
+        return reviewPull(input);
+      }
+    });
+
+    expect(result.status).toBe("skipped_processed");
+    expect(isSuccessfulRetryStatus(result.status)).toBe(true);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "posted",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1233#pullrequestreview-1"
+    });
+    state.close();
+  });
+
+  it("keeps retry CLI success status mapping explicit", () => {
+    expect(isSuccessfulRetryStatus("reviewed")).toBe(true);
+    expect(isSuccessfulRetryStatus("reviewed_command")).toBe(true);
+    expect(isSuccessfulRetryStatus("dry_run")).toBe(true);
+    expect(isSuccessfulRetryStatus("skipped_processed")).toBe(true);
+    expect(isSuccessfulRetryStatus("failed")).toBe(false);
+    expect(isSuccessfulRetryStatus("skipped_capacity")).toBe(false);
+    expect(isSuccessfulRetryStatus("skipped_stale_head")).toBe(false);
   });
 });
 
@@ -77,7 +513,7 @@ function minimalConfig(root: string): BotConfig {
   };
 }
 
-function pullSummary(number: number, headSha: string): PullRequestSummary {
+function pullSummary(number: number, headSha: string, baseSha = "base"): PullRequestSummary {
   return {
     number,
     title: `PR ${number}`,
@@ -88,10 +524,16 @@ function pullSummary(number: number, headSha: string): PullRequestSummary {
       repo: { full_name: "electricsheephq/WorldOS" }
     },
     base: {
-      sha: "base",
+      sha: baseSha,
       ref: "main",
       repo: { full_name: "electricsheephq/WorldOS" }
     },
     html_url: `https://github.com/electricsheephq/WorldOS/pull/${number}`
   };
+}
+
+function retryGithub(pull: PullRequestSummary): GitHubApi {
+  return {
+    getPull: async () => pull
+  } as unknown as GitHubApi;
 }
