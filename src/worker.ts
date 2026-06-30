@@ -205,8 +205,15 @@ export async function retryFailedHeadWithDeps(input: {
     livePull: pull
   });
   try {
+    const retryReviewConfig: BotConfig = {
+      ...config,
+      reviewConcurrency: {
+        ...config.reviewConcurrency,
+        maxActiveRuns: 1
+      }
+    };
     const status = await input.reviewPullImpl({
-      config,
+      config: retryReviewConfig,
       github,
       state,
       repo: options.repo,
@@ -328,15 +335,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
-  if (commandReviewRequested) {
-    const livePull = await github.getPull(repo, pull.number);
-    const stale = detectStalePullHead({ expected: pull, live: livePull, phase: "before_review" });
-    if (stale) {
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-      recordStaleHeadSkip({ state, repo, pull, stale, evidenceDir });
-      return "skipped_stale_head";
-    }
-  }
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !commandReviewRequested &&
@@ -351,11 +349,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   try {
     lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
     if (!lease) return "skipped_capacity";
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const liveBeforeReview = await github.getPull(repo, pull.number);
+    const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
+    if (staleBeforeReview) {
+      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeReview, evidenceDir });
+      return "skipped_stale_head";
+    }
     if (commandReviewRequested) {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
     }
 
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     mkdirSync(evidenceDir, { recursive: true });
 
     const files = await github.listPullFiles(repo, pull.number);

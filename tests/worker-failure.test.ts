@@ -358,6 +358,55 @@ describe("worker review failures", () => {
     });
     state.close();
   });
+
+  it("restores a failed row after real reviewPull records a stale-head skip", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-real-stale-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1232, "head-retry-stale", "base-original");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+    let getPullCalls = 0;
+    const github = {
+      getPull: async () => {
+        getPullCalls += 1;
+        return getPullCalls === 1 ? pull : pullSummary(pull.number, pull.head.sha, "base-new");
+      },
+      listIssueComments: async () => [],
+      listPullFiles: async () => {
+        throw new Error("stale retry should not fetch files");
+      },
+      canPostAsApp: () => false
+    } as unknown as GitHubApi;
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: reviewPull
+    });
+
+    expect(result.status).toBe("skipped_stale_head");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: "original timeout; retry_did_not_review=skipped_stale_head"
+    });
+    state.close();
+  });
 });
 
 function minimalConfig(root: string): BotConfig {
@@ -397,7 +446,7 @@ function minimalConfig(root: string): BotConfig {
   };
 }
 
-function pullSummary(number: number, headSha: string): PullRequestSummary {
+function pullSummary(number: number, headSha: string, baseSha = "base"): PullRequestSummary {
   return {
     number,
     title: `PR ${number}`,
@@ -408,7 +457,7 @@ function pullSummary(number: number, headSha: string): PullRequestSummary {
       repo: { full_name: "electricsheephq/WorldOS" }
     },
     base: {
-      sha: "base",
+      sha: baseSha,
       ref: "main",
       repo: { full_name: "electricsheephq/WorldOS" }
     },

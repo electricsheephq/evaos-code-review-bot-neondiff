@@ -70,6 +70,45 @@ describe("exact-head stale guards", () => {
     expect(store.hasProcessed("electricsheephq/WorldOS", 1213, "old-head")).toBe(true);
     store.close();
   });
+
+  it("skips a normal review when the live base moved before work starts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "stale-base-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = {
+      ...minimalConfig(root),
+      commands: {
+        enabled: false,
+        botMentions: ["@evaos-code-review-bot"],
+        trustedAuthors: [],
+        acknowledge: false
+      }
+    };
+    const github = {
+      getPull: async () => pull(1214, "same-head", "base-b"),
+      listPullFiles: async () => {
+        throw new Error("stale base review should not fetch files");
+      },
+      canPostAsApp: () => false
+    } as unknown as GitHubApi;
+
+    await expect(reviewPull({
+      config,
+      github,
+      state: store,
+      repo: "electricsheephq/WorldOS",
+      pull: pull(1214, "same-head", "base-a"),
+      dryRun: true,
+      useZCode: false,
+      budget: new ReviewRunBudget(1)
+    })).resolves.toBe("skipped_stale_head");
+
+    expect(store.getProcessedReview("electricsheephq/WorldOS", 1214, "same-head")).toMatchObject({
+      status: "skipped",
+      error: expect.stringContaining("stale_head_before_review")
+    });
+    store.close();
+  });
 });
 
 function minimalConfig(root: string): BotConfig {

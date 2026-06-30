@@ -124,7 +124,9 @@ async function main(): Promise<void> {
       useZCode: args.zcode !== "false"
     });
     console.log(JSON.stringify(result, null, 2));
-    if (result.status !== "reviewed" && result.status !== "reviewed_command") process.exitCode = 1;
+    if (result.status !== "reviewed" && result.status !== "reviewed_command" && result.status !== "dry_run") {
+      process.exitCode = 1;
+    }
     return;
   }
 
