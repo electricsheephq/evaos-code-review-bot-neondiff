@@ -16,6 +16,7 @@ Pilot local worker for ZCode/GLM-5.2 pull request reviews.
 - Caps ZCode prompt patch bytes and kills long ZCode runs with `zcode.timeoutMs`.
 - Installs a temporary per-worktree ZCode policy that allows read-only file tools, disables Bash/mutation/subagents, then restores/removes it before the clean check.
 - Sets `ZCODE_MODEL_RETRY_MAX_RETRIES=0` by default so provider rate limits fail fast instead of multiplying requests.
+- Resolves repo profiles before review; once profiles are configured, unknown or disabled repos skip closed before GitHub PR fetches.
 
 ## Commands
 
@@ -41,3 +42,10 @@ The worker derives transient ZCode CLI model environment from the existing ZCode
 The live launchd worker is a local beta release surface, not just whatever
 `main` happens to contain. Before promoting a merged PR to the live worker,
 follow [docs/beta-release-runbook.md](docs/beta-release-runbook.md).
+
+## Repo Profiles
+
+Use [docs/repo-profiles.md](docs/repo-profiles.md) to add repo-specific review
+guidance, risky paths, proof expectations, and path filters. Profiles are
+prompt/config metadata only; they do not expand GitHub permissions, live
+monitoring, ZCode tools, approvals, or repair behavior by themselves.

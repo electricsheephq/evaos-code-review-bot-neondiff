@@ -12,6 +12,7 @@ export interface BotConfig {
     enabled: boolean;
     postIssueComment: boolean;
   };
+  repoProfiles?: RepoProfilesConfig;
   zcode: {
     cliPath: string;
     appConfigPath: string;
@@ -26,6 +27,27 @@ export interface BotConfig {
     privateKeyPath?: string;
     token?: string;
   };
+}
+
+export interface RepoProfilesConfig {
+  enableOrgFallbacks?: boolean;
+  repos?: Record<string, RepoProfileConfig>;
+  orgFallbacks?: Record<string, RepoProfileConfig>;
+}
+
+export interface RepoProfileConfig {
+  enabled?: boolean;
+  displayName?: string;
+  defaultBranch?: string;
+  reviewProfile?: "chill" | "assertive";
+  promptNote?: string;
+  pathFilters?: string[];
+  riskyPaths?: string[];
+  proofExpectations?: string[];
+  validationHints?: string[];
+  readinessHints?: string[];
+  suggestedLabels?: string[];
+  suggestedReviewers?: string[];
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -58,6 +80,7 @@ export function loadConfig(configPath?: string): BotConfig {
   merged.github.appId = process.env.EVAOS_REVIEW_BOT_APP_ID ?? merged.github.appId;
   merged.github.privateKeyPath = process.env.EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH ?? merged.github.privateKeyPath;
   merged.github.token = process.env.GITHUB_TOKEN ?? merged.github.token;
+  validateConfig(merged);
 
   return merged;
 }
@@ -73,4 +96,36 @@ function deepMerge(base: unknown, overlay: unknown): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateConfig(config: BotConfig): void {
+  if (!Array.isArray(config.pilotRepos)) throw new Error("config.pilotRepos must be an array");
+  if (!config.repoProfiles) return;
+
+  validateProfileRecord(config.repoProfiles.repos, "repoProfiles.repos");
+  validateProfileRecord(config.repoProfiles.orgFallbacks, "repoProfiles.orgFallbacks");
+}
+
+function validateProfileRecord(record: Record<string, RepoProfileConfig> | undefined, label: string): void {
+  if (!record) return;
+  for (const [key, profile] of Object.entries(record)) {
+    if (!isRecord(profile)) throw new Error(`${label}.${key} must be an object`);
+    if (profile.reviewProfile && profile.reviewProfile !== "chill" && profile.reviewProfile !== "assertive") {
+      throw new Error(`${label}.${key}.reviewProfile must be "chill" or "assertive"`);
+    }
+    for (const field of [
+      "pathFilters",
+      "riskyPaths",
+      "proofExpectations",
+      "validationHints",
+      "readinessHints",
+      "suggestedLabels",
+      "suggestedReviewers"
+    ] as const) {
+      const value = profile[field];
+      if (value !== undefined && (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))) {
+        throw new Error(`${label}.${key}.${field} must be an array of strings`);
+      }
+    }
+  }
 }

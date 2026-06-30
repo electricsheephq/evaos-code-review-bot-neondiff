@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFindings } from "./findings.js";
+import { buildRepoProfilePromptSection, type ResolvedRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
 import { buildZCodeRuntimeEnv, resolveZCodeProviderEnv } from "./zcode-env.js";
 import type { Finding, PullFilePatch, PullRequestSummary } from "./types.js";
@@ -16,6 +17,7 @@ export function buildReviewPrompt(input: {
   repo: string;
   pull: PullRequestSummary;
   files: PullFilePatch[];
+  repoProfile?: ResolvedRepoProfile;
   maxPatchBytes?: number;
 }): string {
   const fileList = input.files.map((file) => `- ${file.filename}`).join("\n");
@@ -42,6 +44,7 @@ export function buildReviewPrompt(input: {
     `Pull request: #${input.pull.number} ${input.pull.title}`,
     `Head SHA: ${input.pull.head.sha}`,
     "",
+    ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile), ""] : []),
     "Files:",
     fileList,
     "",
