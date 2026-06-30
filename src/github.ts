@@ -107,16 +107,21 @@ export class GitHubApi {
     options: { method?: string; token?: string; body?: unknown } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
-    const response = await fetch(`${this.apiBaseUrl}${path}`, {
-      method: options.method ?? "GET",
-      headers: {
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(options.body === undefined ? {} : { "Content-Type": "application/json" })
-      },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body)
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiBaseUrl}${path}`, {
+        method: options.method ?? "GET",
+        headers: {
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(options.body === undefined ? {} : { "Content-Type": "application/json" })
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body)
+      });
+    } catch (error) {
+      throw new Error(`GitHub API fetch failed for ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
     if (!response.ok) {
       const text = await response.text();
