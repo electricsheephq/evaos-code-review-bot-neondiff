@@ -30,6 +30,77 @@ export interface RepoPolicySnapshot {
   skippedByPolicy?: RepoProfileSkipReason;
 }
 
+export type PullFileFilterReason =
+  | "no_profile_filters"
+  | "matched_profile_include"
+  | "matched_safety_include"
+  | "excluded_by_profile"
+  | "no_matching_include";
+
+export interface PullFileFilterDecision {
+  filename: string;
+  included: boolean;
+  reason: PullFileFilterReason;
+  pattern?: string;
+}
+
+export interface PullFileFilterImpact {
+  originalCount: number;
+  includedCount: number;
+  excludedCount: number;
+  profileIncludeFilters: string[];
+  profileExcludeFilters: string[];
+  safetyIncludePatterns: string[];
+  included: PullFileFilterDecision[];
+  excluded: PullFileFilterDecision[];
+}
+
+const SAFETY_INCLUDE_PATTERNS = [
+  ".github/**",
+  "README.md",
+  "AGENTS.md",
+  "CHANGELOG.md",
+  "SECURITY.md",
+  "CODEOWNERS",
+  "Dockerfile",
+  "Dockerfile.*",
+  "docker-compose*.yml",
+  "Makefile",
+  "justfile",
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "tsconfig*.json",
+  "vite.config.*",
+  "vitest.config.*",
+  "playwright.config.*",
+  "next.config.*",
+  "tailwind.config.*",
+  "eslint.config.*",
+  ".npmrc",
+  ".nvmrc",
+  ".node-version",
+  ".env.example",
+  ".gitleaks.toml",
+  ".gitattributes",
+  ".gitignore",
+  "go.mod",
+  "go.sum",
+  "Cargo.toml",
+  "Cargo.lock",
+  "pyproject.toml",
+  "uv.lock",
+  "requirements*.txt",
+  "poetry.lock",
+  "Pipfile",
+  "Pipfile.lock",
+  "**/*.plist",
+  "**/*.entitlements",
+  "**/*.entitlements.plist"
+];
+
 export function listReposToScan(config: BotConfig): string[] {
   const configured = uniqueRepos(config.pilotRepos);
   if (configured.length > 0) return configured;
@@ -102,17 +173,31 @@ export function buildRepoPolicySnapshot(config: BotConfig, repo: string): RepoPo
 }
 
 export function filterPullFilesForProfile(files: PullFilePatch[], profile: ResolvedRepoProfile): PullFilePatch[] {
-  const filters = profile.pathFilters?.filter(Boolean) ?? [];
-  if (filters.length === 0) return files;
+  const impact = buildPullFileFilterImpact(files, profile);
+  const included = new Set(impact.included.map((decision) => decision.filename));
+  return files.filter((file) => included.has(file.filename));
+}
 
+export function buildPullFileFilterImpact(
+  files: PullFilePatch[],
+  profile: ResolvedRepoProfile
+): PullFileFilterImpact {
+  const filters = profile.pathFilters?.filter(Boolean) ?? [];
   const includeFilters = filters.filter((pattern) => !pattern.startsWith("!"));
   const excludeFilters = filters.filter((pattern) => pattern.startsWith("!")).map((pattern) => pattern.slice(1));
-
-  return files.filter((file) => {
-    const included = includeFilters.length === 0 || includeFilters.some((pattern) => matchesGlob(file.filename, pattern));
-    const excluded = excludeFilters.some((pattern) => matchesGlob(file.filename, pattern));
-    return included && !excluded;
-  });
+  const decisions = files.map((file) => decideFileFilter(file.filename, includeFilters, excludeFilters));
+  const included = decisions.filter((decision) => decision.included);
+  const excluded = decisions.filter((decision) => !decision.included);
+  return {
+    originalCount: files.length,
+    includedCount: included.length,
+    excludedCount: excluded.length,
+    profileIncludeFilters: includeFilters,
+    profileExcludeFilters: excludeFilters,
+    safetyIncludePatterns: SAFETY_INCLUDE_PATTERNS,
+    included,
+    excluded
+  };
 }
 
 export function buildRepoProfilePromptSection(profile: ResolvedRepoProfile): string {
@@ -237,6 +322,56 @@ function uniqueRepos(values: string[]): string[] {
     output.push(value);
   }
   return output;
+}
+
+function decideFileFilter(
+  filename: string,
+  includeFilters: string[],
+  excludeFilters: string[]
+): PullFileFilterDecision {
+  const excludePattern = excludeFilters.find((pattern) => matchesGlob(filename, pattern));
+  if (excludePattern) {
+    return {
+      filename,
+      included: false,
+      reason: "excluded_by_profile",
+      pattern: excludePattern
+    };
+  }
+
+  if (includeFilters.length === 0) {
+    return {
+      filename,
+      included: true,
+      reason: "no_profile_filters"
+    };
+  }
+
+  const includePattern = includeFilters.find((pattern) => matchesGlob(filename, pattern));
+  if (includePattern) {
+    return {
+      filename,
+      included: true,
+      reason: "matched_profile_include",
+      pattern: includePattern
+    };
+  }
+
+  const safetyPattern = SAFETY_INCLUDE_PATTERNS.find((pattern) => matchesGlob(filename, pattern));
+  if (safetyPattern) {
+    return {
+      filename,
+      included: true,
+      reason: "matched_safety_include",
+      pattern: safetyPattern
+    };
+  }
+
+  return {
+    filename,
+    included: false,
+    reason: "no_matching_include"
+  };
 }
 
 function canonicalRepoName(repo: string): string {

@@ -66,7 +66,9 @@ evidence are recorded.
   `assertive`.
 - `promptNote`: repo-specific review instruction injected into the ZCode prompt.
 - `pathFilters`: include/exclude globs applied before prompt construction.
-  Excludes start with `!`.
+  Excludes start with `!`. Include filters are hard prompt filters, not just
+  ranking hints: files that do not match a profile include or a built-in safety
+  include are omitted from the model prompt.
 - `pathInstructions`: path-specific review guidance injected into the prompt
   for matching code areas.
 - `riskyPaths`: high-risk file areas called out in the prompt.
@@ -101,6 +103,25 @@ Configuration loads fail closed before the daemon starts when:
 This is intentionally stricter than the TypeScript interfaces. The live config
 is JSON outside this repository, so runtime validation is the safety net that
 prevents a typo from changing monitoring behavior silently.
+
+## Filter Impact Evidence
+
+The worker writes `filter-impact.json` in every review evidence directory before
+prompt construction. It records:
+
+- original changed-file count
+- included and excluded file counts
+- profile include/exclude filters
+- built-in safety include patterns
+- per-file include/exclude reason and matched pattern
+
+Profile include filters are augmented by a built-in safety include baseline for
+common root, workflow, dependency, runtime, release, and security files such as
+`.github/**`, `README.md`, `AGENTS.md`, `package-lock.json`, `pnpm-lock.yaml`,
+`tsconfig*.json`, `Dockerfile`, `Makefile`, `pyproject.toml`, `go.mod`,
+`Cargo.toml`, `*.plist`, and entitlements files. Explicit profile excludes
+still win, so do not add broad `!` filters without checking filter-impact
+evidence.
 
 ## Graduation To Live Review
 
@@ -147,4 +168,6 @@ npx tsx src/cli.ts doctor --config /path/to/candidate-live-config.json
 
 Then run dry-run review evidence for at least one current PR and one
 negative-control PR per newly profiled repo group before promoting through
-`docs/beta-release-runbook.md`.
+`docs/beta-release-runbook.md`. The promotion packet must include
+`filter-impact.json` summaries proving important changed files were not hidden
+by profile filters.

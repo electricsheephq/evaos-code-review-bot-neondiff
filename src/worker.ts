@@ -12,7 +12,12 @@ import { validateFindingLocations } from "./diff.js";
 import { decideReviewEvent, normalizeFindingsForReview } from "./findings.js";
 import { assertGitClean, preparePullWorktree } from "./git.js";
 import { GitHubApi } from "./github.js";
-import { filterPullFilesForProfile, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import {
+  buildPullFileFilterImpact,
+  filterPullFilesForProfile,
+  listReposToScan,
+  resolveRepoProfile
+} from "./repo-policy.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { redactSecrets } from "./secrets.js";
 import { ReviewStateStore, type ReviewRunLease } from "./state.js";
@@ -33,6 +38,7 @@ export interface RunOnceResult {
   reposScanned: number;
   pullsSeen: number;
   reviewed: number;
+  failed: number;
   skippedDraft: number;
   skippedCanary: number;
   skippedPolicy: number;
@@ -67,6 +73,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     reposScanned: 0,
     pullsSeen: 0,
     reviewed: 0,
+    failed: 0,
     skippedDraft: 0,
     skippedCanary: 0,
     skippedPolicy: 0,
@@ -102,16 +109,23 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
       });
       result.baselinedExisting += activation.baselined;
       for (const pull of pulls) {
-        const status = await reviewPull({
-          config,
-          github,
-          state,
-          repo,
-          pull,
-          dryRun: options.dryRun,
-          useZCode: options.useZCode ?? true,
-          budget
-        });
+        let status: ReviewPullResult;
+        try {
+          status = await reviewPull({
+            config,
+            github,
+            state,
+            repo,
+            pull,
+            dryRun: options.dryRun,
+            useZCode: options.useZCode ?? true,
+            budget
+          });
+        } catch (error) {
+          recordFailedReview({ config, state, repo, pull, error });
+          result.failed += 1;
+          continue;
+        }
         if (status === "reviewed" || status === "reviewed_command") result.reviewed += 1;
         if (status === "skipped_draft") result.skippedDraft += 1;
         if (status === "skipped_canary") result.skippedCanary += 1;
@@ -183,6 +197,7 @@ export async function reviewPull(input: {
 
     const files = await github.listPullFiles(repo, pull.number);
     const reviewFiles = filterPullFilesForProfile(files, repoPolicy.profile);
+    const filterImpact = buildPullFileFilterImpact(files, repoPolicy.profile);
     const worktree = preparePullWorktree({
       repo,
       pullNumber: pull.number,
@@ -198,6 +213,7 @@ export async function reviewPull(input: {
       maxPatchBytes: config.zcode.maxPatchBytes
     });
     writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
+    writeFileSync(join(evidenceDir, "filter-impact.json"), `${JSON.stringify(filterImpact, null, 2)}\n`);
     if (commandDecision.action !== "none") {
       writeFileSync(join(evidenceDir, "command.json"), `${JSON.stringify(commandDecision.command, null, 2)}\n`);
     }
@@ -395,6 +411,32 @@ function recordStaleHeadSkip(input: {
     headSha: input.pull.head.sha,
     status: "skipped",
     error: `${input.stale.reason}: live=${input.stale.liveHeadSha}`
+  });
+}
+
+export function recordFailedReview(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  error: unknown;
+}): void {
+  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
+  const errorMessage = redactSecrets(input.error instanceof Error ? input.error.message : String(input.error));
+  mkdirSync(evidenceDir, { recursive: true });
+  writeFileSync(join(evidenceDir, "review-error.json"), `${JSON.stringify({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    error: errorMessage,
+    recordedAt: new Date().toISOString()
+  }, null, 2)}\n`);
+  input.state.recordProcessed({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    status: "failed",
+    error: errorMessage
   });
 }
 
