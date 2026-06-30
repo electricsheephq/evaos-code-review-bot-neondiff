@@ -121,3 +121,30 @@ outside the repo under `/Volumes/LEXAR/Codex/evaos-code-review-bot/config/`.
 Do not add repos whose GitHub App installation cannot be verified; public
 visibility or an admin user's `gh repo view` is not enough because reviews must
 be authored by `evaos-code-review-bot`.
+
+## Active Monitor Profile Template
+
+`config.active-profiles.example.json` mirrors the 19 repositories currently in
+the live monitor allowlist and adds explicit repo profiles for each one. It is a
+tracked template for review, dry-run, and promotion planning; it is not loaded
+by launchd automatically.
+
+The template intentionally keeps:
+
+- `commands.enabled: false`
+- `repoProfiles.enableOrgFallbacks: false`
+- every `finishingTouches.*.enabled: false`
+- `Martian-Engineering/lossless-claw` and `zMartian-Engineering/lossless-claw`
+  out of the allowlist until the GitHub App installation is verified
+
+Before copying any part of the template into the active live config, run:
+
+```sh
+EVAOS_REVIEW_BOT_APP_ID=4184532 \
+EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH=/Volumes/LEXAR/Codex/evaos-code-review-bot/secrets/evaos-code-review-bot.private-key.pem \
+npx tsx src/cli.ts doctor --config /path/to/candidate-live-config.json
+```
+
+Then run dry-run review evidence for at least one current PR and one
+negative-control PR per newly profiled repo group before promoting through
+`docs/beta-release-runbook.md`.

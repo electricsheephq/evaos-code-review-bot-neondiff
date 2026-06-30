@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -319,6 +319,33 @@ describe("repo profile registry", () => {
     });
   });
 
+  it("keeps the active monitor profile template explicit and non-executing", () => {
+    const template = JSON.parse(readFileSync(new URL("../config.active-profiles.example.json", import.meta.url), "utf8"));
+    const config = loadConfig(writeConfig(template));
+    const repos = listReposToScan(config);
+
+    expect(repos).toEqual(activeMonitorRepos);
+    expect(repos).not.toContain("Martian-Engineering/lossless-claw");
+    expect(repos).not.toContain("zMartian-Engineering/lossless-claw");
+    expect(config.commands.enabled).toBe(false);
+    expect(config.repoProfiles?.enableOrgFallbacks).toBe(false);
+
+    for (const repo of activeMonitorRepos) {
+      const snapshot = buildRepoPolicySnapshot(config, repo);
+      expect(snapshot).toMatchObject({
+        repo,
+        canonicalRepo: repo.toLowerCase(),
+        allowed: true,
+        source: "explicit",
+        reviewProfile: "assertive"
+      });
+      expect(snapshot.finishingTouches).toBeDefined();
+      for (const touch of Object.values(snapshot.finishingTouches ?? {})) {
+        expect(touch?.enabled).toBe(false);
+      }
+    }
+  });
+
   it("injects repo profile guidance into the ZCode prompt", () => {
     const resolved = resolveRepoProfile(
       loadConfig(
@@ -407,3 +434,25 @@ const pull: PullRequestSummary = {
   html_url: "https://github.com/electricsheephq/evaos-code-review-bot/pull/32",
   requested_reviewers: []
 };
+
+const activeMonitorRepos = [
+  "electricsheephq/WorldOS",
+  "electricsheephq/evaos-code-review-bot",
+  "electricsheephq/electric-sheep-website-dashboard-6158a244",
+  "electricsheephq/evaos-support-control",
+  "electricsheephq/evaos-ws-proxy",
+  "electricsheephq/evaos-cortex-plugin",
+  "electricsheephq/evaOS-gitnexus",
+  "electricsheephq/electric-sheep-eva-marketing-site",
+  "electricsheephq/evaos-cortex",
+  "electricsheephq/worldOS-marketing-site",
+  "electricsheephq/ai-chief-of-staff",
+  "electricsheephq/vantage-portfolio-hub",
+  "electricsheephq/mission-control-paperclip",
+  "electricsheephq/evaos-golden",
+  "electricsheephq/eric-wilder",
+  "100yenadmin/evaOS-GUI",
+  "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+  "100yenadmin/worldos-unity",
+  "100yenadmin/ai-agent-resource-hog-watcher"
+];
