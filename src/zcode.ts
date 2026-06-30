@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFindings } from "./findings.js";
-import { resolveZCodeProviderEnv } from "./zcode-env.js";
+import { redactSecrets } from "./secrets.js";
+import { buildZCodeRuntimeEnv, resolveZCodeProviderEnv } from "./zcode-env.js";
 import type { Finding, PullFilePatch, PullRequestSummary } from "./types.js";
 
 export interface ZCodeReviewResult {
@@ -58,6 +59,7 @@ export function runZCodeReview(input: {
   providerId?: string;
   evidenceDir?: string;
   timeoutMs?: number;
+  retryMaxRetries?: number;
 }): ZCodeReviewResult {
   const zcodeEnv = resolveZCodeProviderEnv({
     appConfigPath: input.appConfigPath,
@@ -65,32 +67,34 @@ export function runZCodeReview(input: {
     providerId: input.providerId
   });
 
-  const result = spawnSync(process.execPath, [
-    input.cliPath,
-    "--cwd",
-    input.cwd,
-    "--mode",
-    "plan",
-    "--json",
-    "--no-browser",
-    "--prompt",
-    input.prompt
-  ], {
-    env: {
-      ...process.env,
-      ZCODE_MODEL: zcodeEnv.ZCODE_MODEL,
-      ZCODE_BASE_URL: zcodeEnv.ZCODE_BASE_URL,
-      ZCODE_API_KEY: zcodeEnv.ZCODE_API_KEY
-    },
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: input.timeoutMs ?? 180_000
-  });
+  const result = withTemporaryZCodeReviewPolicy(input.cwd, input.evidenceDir, () =>
+    spawnSync(process.execPath, [
+      input.cliPath,
+      "--cwd",
+      input.cwd,
+      "--mode",
+      "plan",
+      "--json",
+      "--no-browser",
+      "--prompt",
+      input.prompt
+    ], {
+      env: buildZCodeRuntimeEnv({
+        baseEnv: process.env,
+        providerEnv: zcodeEnv,
+        retryMaxRetries: input.retryMaxRetries ?? 0
+      }),
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: input.timeoutMs ?? 180_000
+    })
+  );
 
-  const stderr = result.stderr.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]");
+  const stdout = redactSecrets(result.stdout.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
+  const stderr = redactSecrets(result.stderr.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
   if (input.evidenceDir) {
     mkdirSync(input.evidenceDir, { recursive: true });
-    writeFileSync(join(input.evidenceDir, "zcode-last-stdout.jsonl"), result.stdout);
+    writeFileSync(join(input.evidenceDir, "zcode-last-stdout.jsonl"), stdout);
     writeFileSync(join(input.evidenceDir, "zcode-last-stderr.txt"), stderr);
   }
 
@@ -98,13 +102,86 @@ export function runZCodeReview(input: {
     if (result.error) {
       throw new Error(`ZCode failed before completion: ${result.error.message}`);
     }
-    throw new Error(`ZCode failed with status ${result.status}: ${stderr || result.stdout.slice(0, 1000)}`);
+    throw new Error(`ZCode failed with status ${result.status}: ${stderr || stdout.slice(0, 1000)}`);
   }
 
   const rawResponse = extractZCodeResponse(result.stdout);
   const parsed = JSON.parse(extractJsonObject(rawResponse));
   const { findings, dropped } = parseFindings(parsed);
   return { findings, droppedFromSchema: dropped, rawResponse };
+}
+
+export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: string | undefined, run: () => T): T {
+  const configDir = join(cwd, ".zcode");
+  const configPath = join(configDir, "config.json");
+  const hadConfigDir = existsSync(configDir);
+  const originalConfig = existsSync(configPath)
+    ? { contents: readFileSync(configPath, "utf8"), mode: statSync(configPath).mode }
+    : null;
+  const policy = buildZCodeReviewPolicy();
+
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+  if (evidenceDir) {
+    mkdirSync(evidenceDir, { recursive: true });
+    writeFileSync(join(evidenceDir, "zcode-review-policy.json"), `${JSON.stringify(policy, null, 2)}\n`);
+  }
+
+  try {
+    return run();
+  } finally {
+    if (originalConfig) {
+      writeFileSync(configPath, originalConfig.contents, { mode: originalConfig.mode });
+    } else {
+      rmSync(configPath, { force: true });
+      if (!hadConfigDir) {
+        try {
+          rmdirSync(configDir);
+        } catch {
+          // Leave a non-empty directory in place; the clean-worktree guard will catch it.
+        }
+      }
+    }
+  }
+}
+
+function buildZCodeReviewPolicy(): unknown {
+  return {
+    permission: {
+      mode: "build",
+      allowedTools: ["Read", "Grep", "Glob", "LS"],
+      disallowedTools: [
+        "Bash",
+        "Shell",
+        "Edit",
+        "Write",
+        "MultiEdit",
+        "NotebookEdit",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "Agent",
+        "Workflow",
+        "SendMessage"
+      ],
+      autoApproveHighRisk: false,
+      allowMediumRiskInAuto: false
+    },
+    features: {
+      subagent: false,
+      mcp: false,
+      memory: false,
+      skill: false
+    },
+    memory: {
+      use: false,
+      write: false,
+      autoConsolidate: false
+    },
+    toolConcurrency: {
+      maxConcurrency: 1
+    }
+  };
 }
 
 function truncateToBudget(text: string, maxBytes: number): string {
@@ -114,7 +191,14 @@ function truncateToBudget(text: string, maxBytes: number): string {
   return `${text.slice(0, maxBytes)}\n[patch truncated to fit prompt budget]`;
 }
 
-function extractZCodeResponse(stdout: string): string {
+export function extractZCodeResponse(stdout: string): string {
+  try {
+    const parsed = JSON.parse(stdout) as { response?: unknown };
+    if (typeof parsed.response === "string") return parsed.response;
+  } catch {
+    // Fall through to JSONL parsing for older ZCode CLI builds.
+  }
+
   const candidates = stdout
     .split(/\n+/)
     .map((line) => line.trim())

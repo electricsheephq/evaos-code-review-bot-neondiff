@@ -5,6 +5,7 @@ import { validateFindingLocations } from "./diff.js";
 import { decideReviewEvent, normalizeFindingsForReview } from "./findings.js";
 import { assertGitClean, preparePullWorktree } from "./git.js";
 import { GitHubApi } from "./github.js";
+import { redactSecrets } from "./secrets.js";
 import { ReviewStateStore } from "./state.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
 import type { PullRequestSummary, ReviewPlan } from "./types.js";
@@ -61,7 +62,7 @@ export async function reviewPull(input: {
   });
 
   const prompt = buildReviewPrompt({ repo, pull, files, maxPatchBytes: config.zcode.maxPatchBytes });
-  writeFileSync(join(evidenceDir, "review-prompt.txt"), prompt);
+  writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
 
   const zcodeResult = input.useZCode
     ? runZCodeReview({
@@ -72,7 +73,8 @@ export async function reviewPull(input: {
         model: config.zcode.model,
         providerId: config.zcode.providerId,
         evidenceDir,
-        timeoutMs: config.zcode.timeoutMs
+        timeoutMs: config.zcode.timeoutMs,
+        retryMaxRetries: config.zcode.retryMaxRetries
       })
     : { findings: [], droppedFromSchema: [], rawResponse: "{\"findings\":[]}" };
 
@@ -81,7 +83,7 @@ export async function reviewPull(input: {
   const located = validateFindingLocations(zcodeResult.findings, files);
   const normalized = normalizeFindingsForReview(located.valid, { maxInlineComments: 25 });
   const comments = normalized.comments;
-  const dropped = [...zcodeResult.droppedFromSchema, ...located.dropped, ...normalized.dropped];
+  const dropped = sanitizeDroppedFindings([...zcodeResult.droppedFromSchema, ...located.dropped, ...normalized.dropped]);
   const event = decideReviewEvent(comments);
   const plan: ReviewPlan = {
     event,
@@ -112,6 +114,17 @@ export async function reviewPull(input: {
     event,
     reviewUrl: review.html_url
   });
+}
+
+function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"]): ReviewPlan["dropped"] {
+  return dropped.map((finding) => ({
+    ...finding,
+    ...(typeof finding.title === "string" ? { title: redactSecrets(finding.title) } : {}),
+    ...(typeof finding.body === "string" ? { body: redactSecrets(finding.body) } : {}),
+    ...(typeof finding.why_this_matters === "string"
+      ? { why_this_matters: redactSecrets(finding.why_this_matters) }
+      : {})
+  }));
 }
 
 function buildSummary(input: {

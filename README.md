@@ -11,8 +11,11 @@ Pilot local worker for ZCode/GLM-5.2 pull request reviews.
 - Uses `REQUEST_CHANGES` only for validated P0/P1 findings.
 - Drops findings that cannot be placed on current RIGHT-side diff lines.
 - Drops secret-looking findings instead of redacting and posting them.
-- Verifies the ZCode worktree is clean after every review run.
+- Redacts secret-looking material from local evidence logs before writing them.
+- Verifies the ZCode worktree is clean, including untracked files, after every review run.
 - Caps ZCode prompt patch bytes and kills long ZCode runs with `zcode.timeoutMs`.
+- Installs a temporary per-worktree ZCode policy that allows read-only file tools, disables Bash/mutation/subagents, then restores/removes it before the clean check.
+- Sets `ZCODE_MODEL_RETRY_MAX_RETRIES=0` by default so provider rate limits fail fast instead of multiplying requests.
 
 ## Commands
 

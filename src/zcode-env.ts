@@ -57,6 +57,20 @@ export function resolveZCodeProviderEnv(options: ResolveZCodeProviderEnvOptions)
   };
 }
 
+export function buildZCodeRuntimeEnv(options: {
+  baseEnv: Record<string, string | undefined>;
+  providerEnv: ResolvedZCodeProviderEnv;
+  retryMaxRetries: number;
+}): Record<string, string | undefined> {
+  return {
+    ...options.baseEnv,
+    ZCODE_MODEL: options.providerEnv.ZCODE_MODEL,
+    ZCODE_BASE_URL: options.providerEnv.ZCODE_BASE_URL,
+    ZCODE_API_KEY: options.providerEnv.ZCODE_API_KEY,
+    ZCODE_MODEL_RETRY_MAX_RETRIES: String(Math.max(0, Math.floor(options.retryMaxRetries)))
+  };
+}
+
 interface ZCodeProviderConfig {
   enabled?: boolean;
   options?: {

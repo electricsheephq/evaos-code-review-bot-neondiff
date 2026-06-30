@@ -10,7 +10,8 @@
     "appConfigPath": "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
     "model": "GLM-5.2",
     "timeoutMs": 180000,
-    "maxPatchBytes": 80000
+    "maxPatchBytes": 80000,
+    "retryMaxRetries": 0
   },
   "github": {
     "appId": "set via EVAOS_REVIEW_BOT_APP_ID",

@@ -21,19 +21,39 @@ describe("finding normalization and review policy", () => {
   });
 
   it("drops any finding whose title or body contains secret-looking material", () => {
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
     const result = normalizeFindingsForReview([
       {
         severity: "P1",
         path: "a.ts",
         line: 1,
         title: "Leaked token",
-        body: "The raw token ghp_1234567890abcdefghijklmnopqrstuvwx should never be posted.",
+        body: `The raw token ${token} should never be posted.`,
         confidence: 0.99
       }
     ]);
 
     expect(result.comments).toEqual([]);
     expect(result.dropped).toEqual([expect.objectContaining({ reason: "secret_detected" })]);
+    expect(JSON.stringify(result.dropped)).not.toContain(token);
+  });
+
+  it("drops findings that repeat hyphenated fixture tokens", () => {
+    const fixtureToken = ["super", "secret", "token"].join("-");
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        path: "scripts/check-public-sensitive-content.js",
+        line: 64,
+        title: "Scanner self-trip",
+        body: `The scanner repeats ${fixtureToken} in its own source.`,
+        confidence: 0.9
+      }
+    ]);
+
+    expect(result.comments).toEqual([]);
+    expect(result.dropped).toEqual([expect.objectContaining({ reason: "secret_detected" })]);
+    expect(JSON.stringify(result.dropped)).not.toContain(fixtureToken);
   });
 
   it("requests changes only for P0 or P1 findings", () => {

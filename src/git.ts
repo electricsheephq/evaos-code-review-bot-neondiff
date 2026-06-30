@@ -60,6 +60,10 @@ export function preparePullWorktree(input: {
 export function assertGitClean(worktreePath: string): void {
   run("git", ["-C", worktreePath, "diff", "--exit-code"]);
   run("git", ["-C", worktreePath, "diff", "--cached", "--exit-code"]);
+  const status = run("git", ["-C", worktreePath, "status", "--porcelain=v1", "--untracked-files=all"]).stdout.trim();
+  if (status) {
+    throw new Error(`Worktree has untracked or modified files after review:\n${status}`);
+  }
 }
 
 function existsAsGitMirror(path: string): boolean {

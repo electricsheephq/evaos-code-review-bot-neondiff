@@ -14,6 +14,7 @@ export interface BotConfig {
     providerId?: string;
     timeoutMs: number;
     maxPatchBytes: number;
+    retryMaxRetries: number;
   };
   github: {
     appId?: string;
@@ -34,7 +35,8 @@ const DEFAULT_CONFIG: BotConfig = {
     appConfigPath: "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
     model: "GLM-5.2",
     timeoutMs: 180_000,
-    maxPatchBytes: 80_000
+    maxPatchBytes: 80_000,
+    retryMaxRetries: 0
   },
   github: {}
 };

@@ -1,4 +1,4 @@
-import { containsSecretLikeText } from "./secrets.js";
+import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -76,7 +76,7 @@ export function normalizeFindingsForReview(
 
   for (const finding of findings) {
     if (containsSecretLikeText(`${finding.title}\n${finding.body}\n${finding.why_this_matters ?? ""}`)) {
-      dropped.push({ ...finding, reason: "secret_detected" });
+      dropped.push({ ...redactFinding(finding), reason: "secret_detected" });
       continue;
     }
     accepted.push(finding);
@@ -105,6 +105,15 @@ export function normalizeFindingsForReview(
       body: formatReviewComment(finding)
     })),
     dropped
+  };
+}
+
+function redactFinding<T extends Finding>(finding: T): T {
+  return {
+    ...finding,
+    title: redactSecrets(finding.title),
+    body: redactSecrets(finding.body),
+    ...(finding.why_this_matters ? { why_this_matters: redactSecrets(finding.why_this_matters) } : {})
   };
 }
 
