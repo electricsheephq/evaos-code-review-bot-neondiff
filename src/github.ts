@@ -28,18 +28,23 @@ export class GitHubApi {
   }
 
   async listOpenPulls(repo: string): Promise<PullRequestSummary[]> {
-    return this.request<PullRequestSummary[]>(`/repos/${repo}/pulls?state=open&per_page=100`);
+    return this.request<PullRequestSummary[]>(`/repos/${repo}/pulls?state=open&per_page=100`, {
+      token: await this.getReadToken(repo)
+    });
   }
 
   async getPull(repo: string, pullNumber: number): Promise<PullRequestSummary> {
-    return this.request<PullRequestSummary>(`/repos/${repo}/pulls/${pullNumber}`);
+    return this.request<PullRequestSummary>(`/repos/${repo}/pulls/${pullNumber}`, {
+      token: await this.getReadToken(repo)
+    });
   }
 
   async listPullFiles(repo: string, pullNumber: number): Promise<PullFilePatch[]> {
     const files: PullFilePatch[] = [];
     for (let page = 1; ; page += 1) {
       const chunk = await this.request<PullFilePatch[]>(
-        `/repos/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`
+        `/repos/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`,
+        { token: await this.getReadToken(repo) }
       );
       files.push(...chunk);
       if (chunk.length < 100) return files;
@@ -90,6 +95,11 @@ export class GitHubApi {
       expiresAt: new Date(token.expires_at).getTime()
     });
     return token.token;
+  }
+
+  private async getReadToken(repo: string): Promise<string | undefined> {
+    if (this.canPostAsApp()) return this.getInstallationToken(repo);
+    return this.token;
   }
 
   private async request<T>(

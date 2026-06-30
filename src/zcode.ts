@@ -67,48 +67,80 @@ export function runZCodeReview(input: {
     providerId: input.providerId
   });
 
-  const result = withTemporaryZCodeReviewPolicy(input.cwd, input.evidenceDir, () =>
-    spawnSync(process.execPath, [
-      input.cliPath,
-      "--cwd",
-      input.cwd,
-      "--mode",
-      "plan",
-      "--json",
-      "--no-browser",
-      "--prompt",
-      input.prompt
-    ], {
-      env: buildZCodeRuntimeEnv({
-        baseEnv: process.env,
-        providerEnv: zcodeEnv,
-        retryMaxRetries: input.retryMaxRetries ?? 0
-      }),
-      encoding: "utf8",
-      maxBuffer: 20 * 1024 * 1024,
-      timeout: input.timeoutMs ?? 180_000
-    })
-  );
+  const prompts = [
+    input.prompt,
+    buildStrictJsonRetryPrompt(input.prompt)
+  ];
+  let lastParseError: unknown;
 
-  const stdout = redactSecrets(result.stdout.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
-  const stderr = redactSecrets(result.stderr.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
-  if (input.evidenceDir) {
-    mkdirSync(input.evidenceDir, { recursive: true });
-    writeFileSync(join(input.evidenceDir, "zcode-last-stdout.jsonl"), stdout);
-    writeFileSync(join(input.evidenceDir, "zcode-last-stderr.txt"), stderr);
-  }
+  for (let attempt = 1; attempt <= prompts.length; attempt += 1) {
+    const result = withTemporaryZCodeReviewPolicy(input.cwd, input.evidenceDir, () =>
+      spawnSync(process.execPath, [
+        input.cliPath,
+        "--cwd",
+        input.cwd,
+        "--mode",
+        "plan",
+        "--json",
+        "--no-browser",
+        "--prompt",
+        prompts[attempt - 1]!
+      ], {
+        env: buildZCodeRuntimeEnv({
+          baseEnv: process.env,
+          providerEnv: zcodeEnv,
+          retryMaxRetries: input.retryMaxRetries ?? 0
+        }),
+        encoding: "utf8",
+        maxBuffer: 20 * 1024 * 1024,
+        timeout: input.timeoutMs ?? 180_000
+      })
+    );
 
-  if (result.status !== 0) {
-    if (result.error) {
-      throw new Error(`ZCode failed before completion: ${result.error.message}`);
+    const stdout = redactSecrets(result.stdout.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
+    const stderr = redactSecrets(result.stderr.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
+    if (input.evidenceDir) {
+      mkdirSync(input.evidenceDir, { recursive: true });
+      writeFileSync(join(input.evidenceDir, `zcode-attempt-${attempt}-stdout.jsonl`), stdout);
+      writeFileSync(join(input.evidenceDir, `zcode-attempt-${attempt}-stderr.txt`), stderr);
+      writeFileSync(join(input.evidenceDir, "zcode-last-stdout.jsonl"), stdout);
+      writeFileSync(join(input.evidenceDir, "zcode-last-stderr.txt"), stderr);
     }
-    throw new Error(`ZCode failed with status ${result.status}: ${stderr || stdout.slice(0, 1000)}`);
+
+    if (result.status !== 0) {
+      if (result.error) {
+        throw new Error(`ZCode failed before completion: ${result.error.message}`);
+      }
+      throw new Error(`ZCode failed with status ${result.status}: ${stderr || stdout.slice(0, 1000)}`);
+    }
+
+    try {
+      const rawResponse = extractZCodeResponse(result.stdout);
+      const parsed = JSON.parse(extractJsonObject(rawResponse));
+      const { findings, dropped } = parseFindings(parsed);
+      return { findings, droppedFromSchema: dropped, rawResponse };
+    } catch (error) {
+      lastParseError = error;
+    }
   }
 
-  const rawResponse = extractZCodeResponse(result.stdout);
-  const parsed = JSON.parse(extractJsonObject(rawResponse));
-  const { findings, dropped } = parseFindings(parsed);
-  return { findings, droppedFromSchema: dropped, rawResponse };
+  throw new Error(
+    `ZCode response did not contain a parseable JSON review after ${prompts.length} attempts: ${
+      lastParseError instanceof Error ? lastParseError.message : String(lastParseError)
+    }`
+  );
+}
+
+function buildStrictJsonRetryPrompt(originalPrompt: string): string {
+  return [
+    "Your previous review output was rejected because it was not valid JSON.",
+    "Repeat the review and return ONLY the required JSON object. Do not include markdown, prose, analysis, confidence narration, or code fences.",
+    "The response must parse with JSON.parse and must have this exact top-level shape:",
+    "{\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\"}],\"summary\":\"short review summary\"}",
+    "If you cannot produce a finding with a current RIGHT-side diff line, return {\"findings\":[],\"summary\":\"No validated current-diff findings.\"}.",
+    "",
+    originalPrompt
+  ].join("\n");
 }
 
 export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: string | undefined, run: () => T): T {

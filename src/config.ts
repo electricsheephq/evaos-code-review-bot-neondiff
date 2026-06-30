@@ -7,6 +7,7 @@ export interface BotConfig {
   workRoot: string;
   statePath: string;
   evidenceDir: string;
+  canaryPulls?: string[];
   zcode: {
     cliPath: string;
     appConfigPath: string;
@@ -30,6 +31,7 @@ const DEFAULT_CONFIG: BotConfig = {
   workRoot: "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
   statePath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   evidenceDir: "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
+  canaryPulls: undefined,
   zcode: {
     cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
     appConfigPath: "/Volumes/LEXAR/zcode/.zcode/v2/config.json",

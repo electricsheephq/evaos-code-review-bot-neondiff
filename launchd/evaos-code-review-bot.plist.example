@@ -13,6 +13,8 @@
     <string>run</string>
     <string>daemon</string>
     <string>--</string>
+    <string>--config</string>
+    <string>/Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json</string>
     <string>--dry-run</string>
     <string>true</string>
   </array>

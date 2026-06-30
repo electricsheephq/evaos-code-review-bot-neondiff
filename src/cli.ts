@@ -1,4 +1,5 @@
 import { loadConfig } from "./config.js";
+import { formatDaemonLog } from "./daemon-log.js";
 import { GitHubApi } from "./github.js";
 import { runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -15,17 +16,34 @@ async function main(): Promise<void> {
       providerId: config.zcode.providerId
     });
     const github = new GitHubApi(config.github);
+    const readChecks = [];
+    for (const repo of config.pilotRepos) {
+      try {
+        await github.listOpenPulls(repo);
+        readChecks.push({ repo, ok: true });
+      } catch (error) {
+        readChecks.push({
+          repo,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
     console.log(JSON.stringify({
-      ok: true,
+      ok: readChecks.every((check) => check.ok),
       pilotRepos: config.pilotRepos,
+      canaryPulls: config.canaryPulls ?? [],
       statePath: config.statePath,
       workRoot: config.workRoot,
       zcode: zcode.redacted,
       github: {
         canPostAsApp: github.canPostAsApp(),
-        hasReadToken: Boolean(config.github.token)
+        readMode: github.canPostAsApp() ? "app_installation" : "fallback_token",
+        hasFallbackReadToken: Boolean(config.github.token),
+        readChecks
       }
     }, null, 2));
+    if (readChecks.some((check) => !check.ok)) process.exitCode = 1;
     return;
   }
 
@@ -42,8 +60,35 @@ async function main(): Promise<void> {
 
   if (command === "daemon") {
     const config = loadConfig(args.config);
+    let cycle = 0;
     for (;;) {
-      await runOnce({ configPath: args.config, dryRun: args["dry-run"] !== "false" });
+      cycle += 1;
+      const dryRun = args["dry-run"] !== "false";
+      console.log(formatDaemonLog({
+        event: "daemon_cycle_start",
+        cycle,
+        dryRun,
+        pilotRepos: config.pilotRepos,
+        canaryPulls: config.canaryPulls ?? []
+      }));
+      try {
+        const result = await runOnce({ configPath: args.config, dryRun });
+        console.log(formatDaemonLog({
+          event: "daemon_cycle_complete",
+          cycle,
+          dryRun,
+          result
+        }));
+      } catch (error) {
+        console.error(formatDaemonLog({
+          event: "daemon_cycle_failed",
+          level: "error",
+          cycle,
+          dryRun,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        throw error;
+      }
       await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
     }
   }

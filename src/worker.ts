@@ -18,20 +18,54 @@ export interface RunOnceOptions {
   useZCode?: boolean;
 }
 
-export async function runOnce(options: RunOnceOptions): Promise<void> {
+export interface RunOnceResult {
+  reposScanned: number;
+  pullsSeen: number;
+  reviewed: number;
+  skippedDraft: number;
+  skippedCanary: number;
+  skippedProcessed: number;
+}
+
+type ReviewPullResult = "reviewed" | "skipped_draft" | "skipped_canary" | "skipped_processed";
+
+export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
+  const result: RunOnceResult = {
+    reposScanned: 0,
+    pullsSeen: 0,
+    reviewed: 0,
+    skippedDraft: 0,
+    skippedCanary: 0,
+    skippedProcessed: 0
+  };
   try {
     const repos = options.repo ? [options.repo] : config.pilotRepos;
     for (const repo of repos) {
+      result.reposScanned += 1;
       const pulls = options.pullNumber
         ? [await github.getPull(repo, options.pullNumber)]
         : await github.listOpenPulls(repo);
+      result.pullsSeen += pulls.length;
       for (const pull of pulls) {
-        await reviewPull({ config, github, state, repo, pull, dryRun: options.dryRun, useZCode: options.useZCode ?? true });
+        const status = await reviewPull({
+          config,
+          github,
+          state,
+          repo,
+          pull,
+          dryRun: options.dryRun,
+          useZCode: options.useZCode ?? true
+        });
+        if (status === "reviewed") result.reviewed += 1;
+        if (status === "skipped_draft") result.skippedDraft += 1;
+        if (status === "skipped_canary") result.skippedCanary += 1;
+        if (status === "skipped_processed") result.skippedProcessed += 1;
       }
     }
+    return result;
   } finally {
     state.close();
   }
@@ -45,12 +79,13 @@ export async function reviewPull(input: {
   pull: PullRequestSummary;
   dryRun: boolean;
   useZCode: boolean;
-}): Promise<void> {
+}): Promise<ReviewPullResult> {
   const { config, github, state, repo, pull } = input;
-  if (config.skipDrafts && pull.draft) return;
-  if (state.hasProcessed(repo, pull.number, pull.head.sha)) return;
+  if (config.skipDrafts && pull.draft) return "skipped_draft";
+  if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
+  if (state.hasProcessed(repo, pull.number, pull.head.sha)) return "skipped_processed";
 
-  const evidenceDir = join(config.evidenceDir, new Date().toISOString().slice(0, 10), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
+  const evidenceDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
   mkdirSync(evidenceDir, { recursive: true });
 
   const files = await github.listPullFiles(repo, pull.number);
@@ -96,7 +131,7 @@ export async function reviewPull(input: {
 
   if (input.dryRun) {
     state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
-    return;
+    return "reviewed";
   }
 
   const review = await github.createReview({
@@ -114,6 +149,19 @@ export async function reviewPull(input: {
     event,
     reviewUrl: review.html_url
   });
+  return "reviewed";
+}
+
+export function isCanaryAllowed(config: Pick<BotConfig, "canaryPulls">, repo: string, pullNumber: number): boolean {
+  if (!config.canaryPulls || config.canaryPulls.length === 0) return true;
+  return new Set(config.canaryPulls).has(`${repo}#${pullNumber}`);
+}
+
+export function localDateFolder(now = new Date()): string {
+  const year = String(now.getFullYear()).padStart(4, "0");
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"]): ReviewPlan["dropped"] {

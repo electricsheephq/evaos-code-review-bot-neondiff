@@ -2,6 +2,7 @@
   "pilotRepos": ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
   "pollIntervalMs": 90000,
   "skipDrafts": true,
+  "canaryPulls": ["electricsheephq/WorldOS#1161", "100yenadmin/evaOS-GUI#497"],
   "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
   "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
@@ -16,6 +17,6 @@
   "github": {
     "appId": "set via EVAOS_REVIEW_BOT_APP_ID",
     "privateKeyPath": "set via EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH",
-    "token": "optional read-only dry-run token, preferably GITHUB_TOKEN env"
+    "token": "optional fallback token for local development only"
   }
 }

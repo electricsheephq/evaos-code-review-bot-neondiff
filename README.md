@@ -21,8 +21,8 @@ Pilot local worker for ZCode/GLM-5.2 pull request reviews.
 
 ```bash
 npm run doctor
-npm run run-once -- --dry-run true --repo electricsheephq/WorldOS --pr 1205
-npm run daemon -- --dry-run true
+npm run run-once -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true --repo electricsheephq/WorldOS --pr 1161
+npm run daemon -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true
 ```
 
 Posting reviews requires a GitHub App installed on the pilot repos:
@@ -30,7 +30,7 @@ Posting reviews requires a GitHub App installed on the pilot repos:
 ```bash
 export EVAOS_REVIEW_BOT_APP_ID=...
 export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH=/path/to/private-key.pem
-npm run run-once -- --dry-run false
+npm run run-once -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-live.json --dry-run false
 ```
 
 The worker derives transient ZCode CLI model environment from the existing ZCode app config at `/Volumes/LEXAR/zcode/.zcode/v2/config.json`; it does not copy the Z.ai API key into this repository.
