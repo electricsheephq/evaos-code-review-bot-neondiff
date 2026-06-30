@@ -30,6 +30,7 @@ export interface PullRequestSummary {
   number: number;
   title: string;
   draft: boolean;
+  state?: string;
   body?: string | null;
   head: {
     sha: string;

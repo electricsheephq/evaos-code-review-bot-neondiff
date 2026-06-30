@@ -1,4 +1,5 @@
 import { loadConfig } from "./config.js";
+import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
@@ -72,6 +73,27 @@ async function main(): Promise<void> {
     });
     console.log(JSON.stringify(status, null, 2));
     if (!status.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "coverage-audit") {
+    const config = loadConfig(args.config);
+    const github = new GitHubApi(config.github);
+    const state = CoverageStateReader.open(args["state-path"] ?? config.statePath);
+    try {
+      const audit = await collectCoverageAudit({
+        config,
+        github,
+        state,
+        repo: args.repo,
+        pullNumber: args.pr ? Number(args.pr) : undefined,
+        verifyCurrentHeads: args["verify-current-heads"] !== "false"
+      });
+      console.log(JSON.stringify(audit, null, 2));
+      if (!audit.ok) process.exitCode = 1;
+    } finally {
+      state.close();
+    }
     return;
   }
 
