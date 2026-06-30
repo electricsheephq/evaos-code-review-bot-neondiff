@@ -52,7 +52,21 @@ export interface RunOnceResult {
   policySkips: { repo: string; reason: string }[];
 }
 
-type ReviewPullResult =
+export interface RetryFailedHeadResult {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  status: ReviewPullResult | "failed" | "dry_run";
+}
+
+export interface FailedHeadRetryTarget {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  previousError?: string;
+}
+
+export type ReviewPullResult =
   | "reviewed"
   | "reviewed_command"
   | "skipped_draft"
@@ -144,6 +158,122 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   }
 }
 
+export async function retryFailedHead(options: {
+  configPath?: string;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  dryRun: boolean;
+  useZCode?: boolean;
+}): Promise<RetryFailedHeadResult> {
+  const config = loadConfig(options.configPath);
+  const github = new GitHubApi(config.github);
+  const state = new ReviewStateStore(config.statePath);
+  const budget = new ReviewRunBudget(1);
+  try {
+    const repoPolicy = resolveRepoProfile(config, options.repo);
+    if (!repoPolicy.allowed) {
+      throw new Error(`Refusing retry for repo skipped by policy: ${options.repo} (${repoPolicy.reason})`);
+    }
+    const pull = await github.getPull(options.repo, options.pullNumber);
+    const retryTarget = prepareFailedHeadRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      livePull: pull
+    });
+    try {
+      const status = await reviewPull({
+        config,
+        github,
+        state,
+        repo: options.repo,
+        pull,
+        dryRun: options.dryRun,
+        useZCode: options.useZCode ?? true,
+        budget,
+        ignoreProcessedHead: true
+      });
+      const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
+      restoreFailedRetryRowIfNeeded({
+        state,
+        retryTarget,
+        reason: retryStatus === "dry_run" ? "retry_dry_run" : `retry_did_not_review=${retryStatus}`
+      });
+      return {
+        repo: options.repo,
+        pullNumber: options.pullNumber,
+        headSha: options.headSha,
+        status: retryStatus
+      };
+    } catch (error) {
+      recordFailedReview({ config, state, repo: options.repo, pull, error });
+      return {
+        repo: options.repo,
+        pullNumber: options.pullNumber,
+        headSha: options.headSha,
+        status: "failed"
+      };
+    }
+  } finally {
+    state.close();
+  }
+}
+
+export function restoreFailedRetryRowIfNeeded(input: {
+  state: Pick<ReviewStateStore, "getProcessedReview" | "recordProcessed">;
+  retryTarget: FailedHeadRetryTarget;
+  reason: string;
+}): void {
+  const current = input.state.getProcessedReview(
+    input.retryTarget.repo,
+    input.retryTarget.pullNumber,
+    input.retryTarget.headSha
+  );
+  if (current?.status === "posted") return;
+  if (current?.status === "failed") return;
+
+  input.state.recordProcessed({
+    repo: input.retryTarget.repo,
+    pullNumber: input.retryTarget.pullNumber,
+    headSha: input.retryTarget.headSha,
+    status: "failed",
+    error: input.retryTarget.previousError
+      ? `${input.retryTarget.previousError}; ${input.reason}`
+      : input.reason
+  });
+}
+
+export function prepareFailedHeadRetry(input: {
+  state: Pick<ReviewStateStore, "getProcessedReview">;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  livePull: PullRequestSummary;
+}): FailedHeadRetryTarget {
+  if (input.livePull.head.sha !== input.headSha) {
+    throw new Error(`Refusing retry for stale head: requested=${input.headSha} live=${input.livePull.head.sha}`);
+  }
+
+  const processed = input.state.getProcessedReview(input.repo, input.pullNumber, input.headSha);
+  if (!processed) {
+    throw new Error(`No processed review row exists for ${input.repo}#${input.pullNumber}@${input.headSha}`);
+  }
+  if (processed.status !== "failed") {
+    throw new Error(
+      `Refusing retry for ${input.repo}#${input.pullNumber}@${input.headSha}: status is ${processed.status}, not failed`
+    );
+  }
+
+  return {
+    repo: input.repo,
+    pullNumber: input.pullNumber,
+    headSha: input.headSha,
+    ...(processed.error ? { previousError: processed.error } : {})
+  };
+}
+
 export async function reviewPull(input: {
   config: BotConfig;
   github: GitHubApi;
@@ -153,6 +283,7 @@ export async function reviewPull(input: {
   dryRun: boolean;
   useZCode: boolean;
   budget?: ReviewRunBudget;
+  ignoreProcessedHead?: boolean;
 }): Promise<ReviewPullResult> {
   const { config, github, state, repo, pull } = input;
   const repoPolicy = resolveRepoProfile(config, repo);
@@ -180,7 +311,9 @@ export async function reviewPull(input: {
       return "skipped_stale_head";
     }
   }
-  if (!commandReviewRequested && state.hasProcessed(repo, pull.number, pull.head.sha)) return "skipped_processed";
+  if (!input.ignoreProcessedHead && !commandReviewRequested && state.hasProcessed(repo, pull.number, pull.head.sha)) {
+    return "skipped_processed";
+  }
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   if (!budget.tryStart()) return "skipped_capacity";
   let lease: ReviewRunLease | undefined;

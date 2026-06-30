@@ -4,7 +4,7 @@ import { runDaemonCycle } from "./daemon.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
-import { runOnce } from "./worker.js";
+import { retryFailedHead, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
 async function main(): Promise<void> {
@@ -108,6 +108,26 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "retry-failed") {
+    if (!args.repo) throw new Error("--repo is required for retry-failed");
+    if (!args.pr) throw new Error("--pr is required for retry-failed");
+    if (!args["head-sha"]) throw new Error("--head-sha is required for retry-failed");
+    if (args["dry-run"] !== "true" && args["dry-run"] !== "false") {
+      throw new Error("retry-failed requires explicit --dry-run true or --dry-run false");
+    }
+    const result = await retryFailedHead({
+      configPath: args.config,
+      repo: args.repo,
+      pullNumber: Number(args.pr),
+      headSha: args["head-sha"],
+      dryRun: args["dry-run"] === "true",
+      useZCode: args.zcode !== "false"
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status !== "reviewed" && result.status !== "reviewed_command") process.exitCode = 1;
+    return;
+  }
+
   if (command === "daemon") {
     const config = loadConfig(args.config);
     const monitoredRepos = listReposToScan(config);
@@ -160,6 +180,7 @@ interface ParsedArgs {
   "launchd-label"?: string;
   "state-path"?: string;
   "dry-run"?: string;
+  "head-sha"?: string;
   zcode?: string;
   [key: string]: string | string[] | undefined;
 }
