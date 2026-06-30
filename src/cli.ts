@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { formatDaemonLog } from "./daemon-log.js";
+import { runDaemonCycle } from "./daemon.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
@@ -93,33 +93,15 @@ async function main(): Promise<void> {
     for (;;) {
       cycle += 1;
       const dryRun = args["dry-run"] !== "false";
-      console.log(formatDaemonLog({
-        event: "daemon_cycle_start",
+      await runDaemonCycle({
         cycle,
         dryRun,
         pilotRepos: config.pilotRepos,
         monitoredRepos,
         canaryPulls: config.canaryPulls ?? [],
-        commandsEnabled: config.commands.enabled
-      }));
-      try {
-        const result = await runOnce({ configPath: args.config, dryRun });
-        console.log(formatDaemonLog({
-          event: "daemon_cycle_complete",
-          cycle,
-          dryRun,
-          result
-        }));
-      } catch (error) {
-        console.error(formatDaemonLog({
-          event: "daemon_cycle_failed",
-          level: "error",
-          cycle,
-          dryRun,
-          error: error instanceof Error ? error.message : String(error)
-        }));
-        throw error;
-      }
+        commandsEnabled: config.commands.enabled,
+        configPath: args.config
+      });
       await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
     }
   }
