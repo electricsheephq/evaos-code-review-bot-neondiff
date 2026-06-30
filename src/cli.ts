@@ -2,6 +2,7 @@ import { loadConfig } from "./config.js";
 import { formatDaemonLog } from "./daemon-log.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
+import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
@@ -18,7 +19,13 @@ async function main(): Promise<void> {
     });
     const github = new GitHubApi(config.github);
     const readChecks = [];
-    for (const repo of config.pilotRepos) {
+    const monitoredRepos = listReposToScan(config);
+    for (const repo of monitoredRepos) {
+      const repoPolicy = resolveRepoProfile(config, repo);
+      if (!repoPolicy.allowed) {
+        readChecks.push({ repo, ok: true, skippedByPolicy: repoPolicy.reason });
+        continue;
+      }
       try {
         await github.listOpenPulls(repo);
         readChecks.push({ repo, ok: true });
@@ -33,7 +40,9 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({
       ok: readChecks.every((check) => check.ok),
       pilotRepos: config.pilotRepos,
+      monitoredRepos,
       canaryPulls: config.canaryPulls ?? [],
+      repoProfilesEnabled: Boolean(config.repoProfiles),
       statePath: config.statePath,
       workRoot: config.workRoot,
       zcode: zcode.redacted,
@@ -74,6 +83,7 @@ async function main(): Promise<void> {
 
   if (command === "daemon") {
     const config = loadConfig(args.config);
+    const monitoredRepos = listReposToScan(config);
     let cycle = 0;
     for (;;) {
       cycle += 1;
@@ -83,6 +93,7 @@ async function main(): Promise<void> {
         cycle,
         dryRun,
         pilotRepos: config.pilotRepos,
+        monitoredRepos,
         canaryPulls: config.canaryPulls ?? []
       }));
       try {

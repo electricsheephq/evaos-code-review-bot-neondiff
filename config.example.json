@@ -6,6 +6,51 @@
   "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
   "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
+  "repoProfiles": {
+    "enableOrgFallbacks": false,
+    "repos": {
+      "electricsheephq/WorldOS": {
+        "displayName": "WorldOS Unity",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize Unity scene, save-state, gameplay, release-regression, and data-loss risks.",
+        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "src/**", "tests/**", "!Library/**"],
+        "riskyPaths": ["Assets/**", "ProjectSettings/**", "Packages/manifest.json"],
+        "proofExpectations": ["Mention Unity editor/play-mode or focused smoke evidence when relevant."],
+        "validationHints": ["Prefer correctness, persistence, CI, and release findings over style-only feedback."],
+        "readinessHints": ["Scene, save, build, or package changes need explicit rollback and smoke notes."]
+      },
+      "100yenadmin/evaOS-GUI": {
+        "displayName": "evaOS Workbench",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize Electron/Workbench runtime regressions, packaged-app resource shape, bridge control, and macOS permission identity risk.",
+        "pathFilters": ["src/**", "apps/**", "scripts/**", "package.json", "package-lock.json", "!dist/**"],
+        "riskyPaths": ["scripts/**", "apps/eva-desktop-mac/**", "package.json"],
+        "proofExpectations": ["Mention focused app smoke, packaged resource checks, or CI artifact proof when relevant."],
+        "validationHints": ["Do not ask for broad local suites when remote CI or fast-smoke proof is the right gate."]
+      },
+      "electricsheephq/evaos-code-review-bot": {
+        "enabled": false,
+        "displayName": "evaOS Code Review Bot",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Self-monitoring profile for dry-run/eval only until the App install and live allowlist gates are approved.",
+        "pathFilters": ["src/**", "tests/**", "docs/**", "config.example.json", "package.json", "package-lock.json"],
+        "riskyPaths": ["src/github.ts", "src/state.ts", "src/worker.ts", "src/zcode.ts"],
+        "proofExpectations": ["Require focused tests, TypeScript build, duplicate-suppression proof, and release-status proof before live promotion."],
+        "readinessHints": ["Do not expand live monitoring from this example profile alone."]
+      }
+    },
+    "orgFallbacks": {
+      "electricsheephq": {
+        "displayName": "Electric Sheep conservative fallback",
+        "reviewProfile": "assertive",
+        "promptNote": "Conservative fallback profile for explicitly enabled dry-run scans only.",
+        "validationHints": ["Fallback profiles must not expand runtime permissions or live monitoring by themselves."]
+      }
+    }
+  },
   "zcode": {
     "cliPath": "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
     "appConfigPath": "/Volumes/LEXAR/zcode/.zcode/v2/config.json",

@@ -5,6 +5,7 @@ import { validateFindingLocations } from "./diff.js";
 import { decideReviewEvent, normalizeFindingsForReview } from "./findings.js";
 import { assertGitClean, preparePullWorktree } from "./git.js";
 import { GitHubApi } from "./github.js";
+import { filterPullFilesForProfile, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
 import { ReviewStateStore } from "./state.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
@@ -26,10 +27,12 @@ export interface RunOnceResult {
   reviewed: number;
   skippedDraft: number;
   skippedCanary: number;
+  skippedPolicy: number;
   skippedProcessed: number;
+  policySkips: { repo: string; reason: string }[];
 }
 
-type ReviewPullResult = "reviewed" | "skipped_draft" | "skipped_canary" | "skipped_processed";
+type ReviewPullResult = "reviewed" | "skipped_draft" | "skipped_canary" | "skipped_policy" | "skipped_processed";
 
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
@@ -41,12 +44,20 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     reviewed: 0,
     skippedDraft: 0,
     skippedCanary: 0,
-    skippedProcessed: 0
+    skippedPolicy: 0,
+    skippedProcessed: 0,
+    policySkips: []
   };
   try {
-    const repos = options.repo ? [options.repo] : config.pilotRepos;
+    const repos = options.repo ? [options.repo] : listReposToScan(config);
     for (const repo of repos) {
       result.reposScanned += 1;
+      const repoPolicy = resolveRepoProfile(config, repo);
+      if (!repoPolicy.allowed) {
+        result.skippedPolicy += 1;
+        result.policySkips.push({ repo, reason: repoPolicy.reason });
+        continue;
+      }
       const pulls = options.pullNumber
         ? [await github.getPull(repo, options.pullNumber)]
         : await github.listOpenPulls(repo);
@@ -64,6 +75,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         if (status === "reviewed") result.reviewed += 1;
         if (status === "skipped_draft") result.skippedDraft += 1;
         if (status === "skipped_canary") result.skippedCanary += 1;
+        if (status === "skipped_policy") result.skippedPolicy += 1;
         if (status === "skipped_processed") result.skippedProcessed += 1;
       }
     }
@@ -83,6 +95,8 @@ export async function reviewPull(input: {
   useZCode: boolean;
 }): Promise<ReviewPullResult> {
   const { config, github, state, repo, pull } = input;
+  const repoPolicy = resolveRepoProfile(config, repo);
+  if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
   if (state.hasProcessed(repo, pull.number, pull.head.sha)) return "skipped_processed";
@@ -91,6 +105,7 @@ export async function reviewPull(input: {
   mkdirSync(evidenceDir, { recursive: true });
 
   const files = await github.listPullFiles(repo, pull.number);
+  const reviewFiles = filterPullFilesForProfile(files, repoPolicy.profile);
   const worktree = preparePullWorktree({
     repo,
     pullNumber: pull.number,
@@ -98,7 +113,14 @@ export async function reviewPull(input: {
     workRoot: config.workRoot
   });
 
-  const prompt = buildReviewPrompt({ repo, pull, files, maxPatchBytes: config.zcode.maxPatchBytes });
+  const prompt = buildReviewPrompt({
+    repo,
+    pull,
+    files: reviewFiles,
+    repoProfile: repoPolicy.profile,
+    maxPatchBytes: config.zcode.maxPatchBytes
+  });
+  writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
   writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
 
   const zcodeResult = input.useZCode
@@ -117,7 +139,7 @@ export async function reviewPull(input: {
 
   assertGitClean(worktree.path);
 
-  const located = validateFindingLocations(zcodeResult.findings, files);
+  const located = validateFindingLocations(zcodeResult.findings, reviewFiles);
   const normalized = normalizeFindingsForReview(located.valid, { maxInlineComments: 25 });
   const comments = normalized.comments;
   const dropped = sanitizeDroppedFindings([...zcodeResult.droppedFromSchema, ...located.dropped, ...normalized.dropped]);
