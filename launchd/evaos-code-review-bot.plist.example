@@ -9,10 +9,10 @@
   <string>/Volumes/LEXAR/repos/evaos-code-review-bot</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/npm</string>
-    <string>run</string>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Volumes/LEXAR/repos/evaos-code-review-bot/node_modules/tsx/dist/cli.mjs</string>
+    <string>src/cli.ts</string>
     <string>daemon</string>
-    <string>--</string>
     <string>--config</string>
     <string>/Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json</string>
     <string>--dry-run</string>
@@ -20,6 +20,16 @@
   </array>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/sbin:/Users/lume/.bun/bin:/Users/lume/gbrain/bin:/Users/lume/.local/bin:/Users/lume/.openclaw/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>/Users/lume</string>
+    <key>USER</key>
+    <string>lume</string>
+    <key>LOGNAME</key>
+    <string>lume</string>
+    <key>SHELL</key>
+    <string>/bin/zsh</string>
     <key>EVAOS_REVIEW_BOT_APP_ID</key>
     <string>REPLACE_WITH_APP_ID</string>
     <key>EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH</key>
@@ -30,8 +40,8 @@
   <key>KeepAlive</key>
   <false/>
   <key>StandardOutPath</key>
-  <string>/Volumes/LEXAR/Codex/evaos-code-review-bot/logs/launchd.out.log</string>
+  <string>/Users/lume/Library/Logs/evaos-code-review-bot/launchd.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Volumes/LEXAR/Codex/evaos-code-review-bot/logs/launchd.err.log</string>
+  <string>/Users/lume/Library/Logs/evaos-code-review-bot/launchd.err.log</string>
 </dict>
 </plist>
