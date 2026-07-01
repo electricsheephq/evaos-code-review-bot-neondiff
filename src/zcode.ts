@@ -36,7 +36,7 @@ export function buildReviewPrompt(input: {
     "Do not modify files. Do not run project tests, package scripts, builds, app commands, or arbitrary PR code.",
     "Do not call Bash or shell commands. If more context is needed, use read-only file inspection only. If that is impossible, return no findings rather than executing code.",
     "Only inspect the checkout and the diff provided below.",
-    "Return JSON only, with shape: {\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\"}],\"summary\":\"short review summary\"}.",
+    "Return JSON only, with shape: {\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"category\":\"data_loss|auth|ci_build|unity_scene_prefab|security_boundary|migration|api_compatibility|release_regression|flaky_test_risk|proof_gap|runtime_correctness|dependency|docs_only|unknown\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\"}],\"summary\":\"short review summary\"}.",
     "Use P0/P1 only for validated correctness, security, data-loss, CI-breaking, or release-regression issues. Prefer no finding over speculative noise.",
     "Every finding must point at a RIGHT-side line in the current diff.",
     "",
@@ -139,7 +139,7 @@ function buildStrictJsonRetryPrompt(originalPrompt: string): string {
     "Your previous review output was rejected because it was not valid JSON.",
     "Repeat the review and return ONLY the required JSON object. Do not include markdown, prose, analysis, confidence narration, or code fences.",
     "The response must parse with JSON.parse and must have this exact top-level shape:",
-    "{\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\"}],\"summary\":\"short review summary\"}",
+    "{\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"category\":\"data_loss|auth|ci_build|unity_scene_prefab|security_boundary|migration|api_compatibility|release_regression|flaky_test_risk|proof_gap|runtime_correctness|dependency|docs_only|unknown\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\"}],\"summary\":\"short review summary\"}",
     "If you cannot produce a finding with a current RIGHT-side diff line, return {\"findings\":[],\"summary\":\"No validated current-diff findings.\"}.",
     "",
     originalPrompt

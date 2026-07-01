@@ -1,5 +1,17 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
-import type { DroppedFinding, PullFilePatch, PullRequestSummary, ReviewComment, ReviewEvent, Severity, WalkthroughComment } from "./types.js";
+import { categoryLabel } from "./regression-taxonomy.js";
+import type {
+  ChangedSurfaceValidationReport,
+  DroppedFinding,
+  ProofRequirementReport,
+  PullFilePatch,
+  PullRequestSummary,
+  RegressionCategory,
+  ReviewComment,
+  ReviewEvent,
+  Severity,
+  WalkthroughComment
+} from "./types.js";
 
 export const WALKTHROUGH_MARKER_PREFIX = "<!-- evaos-code-review-bot:walkthrough";
 
@@ -13,6 +25,8 @@ export function buildWalkthroughComment(input: {
   comments: ReviewComment[];
   dropped: DroppedFinding[];
   event: ReviewEvent;
+  validation?: ChangedSurfaceValidationReport;
+  proof?: ProofRequirementReport;
   postIssueComment?: boolean;
 }): WalkthroughComment {
   const marker = `${WALKTHROUGH_MARKER_PREFIX} ${input.repo}#${input.pull.number} -->`;
@@ -49,6 +63,14 @@ export function buildWalkthroughComment(input: {
       : `Validated inline findings: ${input.comments.length} (${formatSeverityCounts(severityCounts)}).`,
     `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
     "",
+    "### Risk Taxonomy",
+    "",
+    formatCategoryBreakdown(input.comments),
+    "",
+    "### Validation and Proof",
+    "",
+    ...formatValidationSection(input.validation, input.proof),
+    "",
     "### Related Context",
     "",
     `Related issues/PRs: ${relatedRefs.length > 0 ? relatedRefs.join(", ") : "none detected from PR metadata"}.`,
@@ -60,6 +82,7 @@ export function buildWalkthroughComment(input: {
     checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
     checklistItem(!commentsContainSecretLikeText(input.comments), "No secret-like content survived into posted inline comments."),
     checklistItem(input.event !== "REQUEST_CHANGES" || highSeverity > 0, "REQUEST_CHANGES is only used when P0/P1 findings survive validation."),
+    checklistItem(input.proof?.status !== "missing", "Required behavior proof is present or not applicable."),
     checklistItem(true, "Labels and reviewers are suggestions only; the bot did not auto-apply them.")
   ].join("\n");
 
@@ -140,6 +163,38 @@ function countSeverities(comments: ReviewComment[]): Record<Severity, number> {
 
 function formatSeverityCounts(counts: Record<Severity, number>): string {
   return SEVERITY_LABELS.map((severity) => `${severity}: ${counts[severity]}`).join(", ");
+}
+
+function formatCategoryBreakdown(comments: ReviewComment[]): string {
+  if (comments.length === 0) return "No finding categories.";
+  const counts: Partial<Record<RegressionCategory, number>> = {};
+  for (const comment of comments) counts[comment.category] = (counts[comment.category] ?? 0) + 1;
+  return Object.entries(counts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([category, count]) => `- ${categoryLabel(category as RegressionCategory)}: ${count}`)
+    .join("\n");
+}
+
+function formatValidationSection(
+  validation: ChangedSurfaceValidationReport | undefined,
+  proof: ProofRequirementReport | undefined
+): string[] {
+  if (!validation) return ["Validation selector did not run."];
+  const lines = [validation.summary];
+  for (const recommendation of validation.recommendations) {
+    lines.push(
+      `- ${recommendation.status}: ${recommendation.title} - ${recommendation.reason}` +
+        (recommendation.proofTypes.length > 0 ? ` Proof: ${recommendation.proofTypes.join("; ")}.` : "")
+    );
+  }
+  if (proof) lines.push(`Proof status: ${proof.status} - ${proof.summary}`);
+  if (validation.profileHints.validationHints.length > 0) {
+    lines.push(`Profile validation hints: ${validation.profileHints.validationHints.join("; ")}`);
+  }
+  if (validation.profileHints.proofExpectations.length > 0) {
+    lines.push(`Profile proof expectations: ${validation.profileHints.proofExpectations.join("; ")}`);
+  }
+  return lines;
 }
 
 function highestSeverity(comments: ReviewComment[]): Severity | undefined {

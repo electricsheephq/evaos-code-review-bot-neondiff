@@ -2,6 +2,22 @@ export type Severity = "P0" | "P1" | "P2" | "P3";
 
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
 
+export type RegressionCategory =
+  | "data_loss"
+  | "auth"
+  | "ci_build"
+  | "unity_scene_prefab"
+  | "security_boundary"
+  | "migration"
+  | "api_compatibility"
+  | "release_regression"
+  | "flaky_test_risk"
+  | "proof_gap"
+  | "runtime_correctness"
+  | "dependency"
+  | "docs_only"
+  | "unknown";
+
 export interface Finding {
   severity: Severity;
   path: string;
@@ -9,6 +25,7 @@ export interface Finding {
   title: string;
   body: string;
   confidence: number;
+  category?: RegressionCategory;
   why_this_matters?: string;
 }
 
@@ -60,6 +77,7 @@ export interface ReviewComment {
   side: "RIGHT";
   body: string;
   severity: Severity;
+  category: RegressionCategory;
   title: string;
 }
 
@@ -68,8 +86,48 @@ export interface ReviewPlan {
   comments: ReviewComment[];
   dropped: DroppedFinding[];
   summary: string;
+  deterministicGate?: DeterministicReviewGateSummary;
+  validation?: ChangedSurfaceValidationReport;
+  proof?: ProofRequirementReport;
   walkthrough?: WalkthroughComment;
   walkthroughComment?: WalkthroughCommentPostResult;
+}
+
+export interface DeterministicReviewGateSummary {
+  inputFindings: number;
+  acceptedComments: number;
+  droppedFindings: number;
+  event: ReviewEvent;
+  requestChangesEligible: number;
+  categoryCounts: Partial<Record<RegressionCategory, number>>;
+  dropReasonCounts: Record<string, number>;
+}
+
+export interface ChangedSurfaceValidationReport {
+  summary: string;
+  docsOnly: boolean;
+  recommendations: ValidationRecommendation[];
+  profileHints: {
+    validationHints: string[];
+    proofExpectations: string[];
+  };
+}
+
+export interface ValidationRecommendation {
+  id: string;
+  title: string;
+  status: "required" | "recommended" | "not_applicable";
+  reason: string;
+  matchedPaths: string[];
+  proofTypes: string[];
+}
+
+export interface ProofRequirementReport {
+  status: "sufficient" | "missing" | "not_applicable";
+  summary: string;
+  requiredRecommendationIds: string[];
+  missingRecommendationIds: string[];
+  detectedEvidence: string[];
 }
 
 export interface WalkthroughComment {

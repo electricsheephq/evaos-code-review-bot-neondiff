@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { decideReviewEvent, normalizeFindingsForReview } from "../src/findings.js";
+import { decideReviewEvent, normalizeFindingsForReview, parseFindings } from "../src/findings.js";
 import type { Finding } from "../src/types.js";
 
 describe("finding normalization and review policy", () => {
   it("keeps validated findings, caps aggressive inline comments, and sorts by severity", () => {
     const findings: Finding[] = Array.from({ length: 30 }, (_, index) => ({
       severity: index === 29 ? "P0" : index % 2 === 0 ? "P2" : "P3",
+      category: index === 29 ? "data_loss" : "runtime_correctness",
       path: "a.ts",
       line: 1,
       title: `Finding ${index}`,
@@ -17,6 +18,7 @@ describe("finding normalization and review policy", () => {
 
     expect(result.comments).toHaveLength(25);
     expect(result.comments[0]?.severity).toBe("P0");
+    expect(result.comments[0]?.category).toBe("data_loss");
     expect(result.dropped.filter((drop) => drop.reason === "comment_cap_exceeded")).toHaveLength(5);
   });
 
@@ -25,6 +27,7 @@ describe("finding normalization and review policy", () => {
     const result = normalizeFindingsForReview([
       {
         severity: "P1",
+        category: "security_boundary",
         path: "a.ts",
         line: 1,
         title: "Leaked token",
@@ -43,6 +46,7 @@ describe("finding normalization and review policy", () => {
     const result = normalizeFindingsForReview([
       {
         severity: "P1",
+        category: "security_boundary",
         path: "scripts/check-public-sensitive-content.js",
         line: 64,
         title: "Scanner self-trip",
@@ -56,9 +60,29 @@ describe("finding normalization and review policy", () => {
     expect(JSON.stringify(result.dropped)).not.toContain(fixtureToken);
   });
 
-  it("requests changes only for P0 or P1 findings", () => {
-    expect(decideReviewEvent([{ severity: "P2" }, { severity: "P3" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P0" }])).toBe("REQUEST_CHANGES");
+  it("requests changes only for P0 or P1 findings in eligible regression categories", () => {
+    expect(decideReviewEvent([{ severity: "P2", category: "data_loss" }, { severity: "P3", category: "auth" }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap" }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "data_loss" }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P0", category: "security_boundary" }])).toBe("REQUEST_CHANGES");
+  });
+
+  it("drops unsupported model categories at schema parse time", () => {
+    const parsed = parseFindings({
+      findings: [
+        {
+          severity: "P1",
+          category: "nitpick",
+          path: "a.ts",
+          line: 1,
+          title: "Bad category",
+          body: "This category is not in the deterministic taxonomy.",
+          confidence: 0.8
+        }
+      ]
+    });
+
+    expect(parsed.findings).toEqual([]);
+    expect(parsed.dropped).toEqual([{ reason: "invalid_schema" }]);
   });
 });
