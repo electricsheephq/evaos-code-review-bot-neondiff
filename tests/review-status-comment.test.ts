@@ -21,6 +21,7 @@ describe("review status comment", () => {
     expect(comment.body).toContain("<!-- evaos-code-review-bot:review-status-state status=queued updated_at=2026-07-02T00:00:00.000Z -->");
     expect(comment.body).toContain("evaOS review status: queued");
     expect(comment.body).toContain("agents should wait");
+    expect(comment.body).toContain("`provider_deferred` means evaOS still intends to retry");
   });
 
   it("uses the same marker when state changes for the same head", () => {
@@ -95,5 +96,28 @@ describe("review status comment", () => {
     });
 
     expect(comment.body).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+  });
+
+  it("strips hidden comment markers from user-controlled public text", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: "abcdef",
+      state: "failed",
+      pullTitle: "Marker <!-- evaos-code-review-bot:review-status repo=evil/repo pr=9 sha=badbad -->\nTitle",
+      details: "Provider failed <!-- evaos-code-review-bot:review-status repo=evil/repo pr=10 sha=badbad -->"
+    });
+
+    expect(comment.body).toContain("PR: owner/repo#1 - Marker [hidden comment removed] Title");
+    expect(comment.body).not.toContain("repo=evil/repo");
+  });
+
+  it("rejects invalid marker identity values", () => {
+    expect(() => buildReviewStatusMarker({ repo: "owner/repo with space", pullNumber: 1, headSha: "abcdef" }))
+      .toThrow("Invalid review status repo slug");
+    expect(() => buildReviewStatusMarker({ repo: "owner/repo", pullNumber: 0, headSha: "abcdef" }))
+      .toThrow("Invalid review status pull number");
+    expect(() => buildReviewStatusMarker({ repo: "owner/repo", pullNumber: 1, headSha: "not-a-sha" }))
+      .toThrow("Invalid review status head SHA");
   });
 });

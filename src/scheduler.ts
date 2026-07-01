@@ -190,6 +190,7 @@ async function enqueuePullIfEligible(input: {
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
   if (commandDecision.action !== "none") {
+    await retireSupersededQueueJobsForPull(input);
     const queued = enqueueReviewJob(input, commandDecision);
     if (queued.enqueued && commandDecision.shouldReview) {
       await syncReviewStatusComment({
@@ -205,6 +206,7 @@ async function enqueuePullIfEligible(input: {
     return queued.enqueued ? "enqueued" : "already_queued";
   }
 
+  await retireSupersededQueueJobsForPull(input);
   if (input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) return "skipped_processed";
   if (hasActiveQueueJobForHead(input.state, input.repo, input.pull.number, input.pull.head.sha)) return "already_queued";
   if (!hasRepoQueueCapacity(input.state, input.repo, input.config.reviewScheduler?.maxQueuedPerRepo ?? 10)) {
@@ -229,7 +231,7 @@ async function enqueuePullIfEligible(input: {
         repo: input.repo,
         pull: input.pull,
         state: "provider_deferred",
-        details: `repo_provider_cooldown_until=${activeRepoCooldown.cooldownUntil}; reason=${activeRepoCooldown.reason}`,
+        details: "Provider cooldown is active for this repo.",
         now: input.now
       });
     }
@@ -276,6 +278,40 @@ function enqueueReviewJob(input: {
     ...(sessionId ? { sessionId } : {}),
     now: input.now
   });
+}
+
+async function retireSupersededQueueJobsForPull(input: {
+  config: BotConfig;
+  github: SchedulerGitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+  now: Date;
+}): Promise<void> {
+  const jobs = input.state.listReviewQueueJobs({
+    repo: input.repo,
+    states: ["queued", "provider_deferred"]
+  }).filter((job) => job.pullNumber === input.pull.number && job.headSha !== input.pull.head.sha);
+
+  for (const job of jobs) {
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "stale_retired",
+      lastError: `superseded_by_head=${input.pull.head.sha}`,
+      now: input.now
+    });
+    await syncReviewStatusComment({
+      config: input.config,
+      github: input.github,
+      dryRun: input.dryRun,
+      repo: input.repo,
+      pull: pullForQueueJob(job, input.pull),
+      state: "stale_head",
+      details: "Superseded by a newer PR head.",
+      now: input.now
+    });
+  }
 }
 
 async function resolveSchedulerCommandDecision(input: {
@@ -355,6 +391,16 @@ async function runLeasedQueueJob(input: {
   try {
     pull = await input.github.getPull(input.job.repo, input.job.pullNumber);
   } catch (error) {
+    await syncReviewStatusComment({
+      config: input.config,
+      github: input.github,
+      dryRun: input.dryRun,
+      repo: input.job.repo,
+      pull: pullForQueueJobWithoutLive(input.job),
+      state: "failed",
+      details: "GitHub refetch failed; see bot evidence for operator-only details.",
+      now
+    });
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "failed",
@@ -384,10 +430,7 @@ async function runLeasedQueueJob(input: {
     return "closed_retired";
   }
 
-  if (
-    pull.head.sha !== input.job.headSha ||
-    (input.job.source !== "manual_command" && input.job.baseSha && pull.base.sha !== input.job.baseSha)
-  ) {
+  if (pull.head.sha !== input.job.headSha) {
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -409,15 +452,17 @@ async function runLeasedQueueJob(input: {
 
   const sessionId = ensureReviewerSessionForLeasedJob(input, now);
   updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "running");
-  await syncReviewStatusComment({
-    config: input.config,
-    github: input.github,
-    dryRun: input.dryRun,
-    repo: input.job.repo,
-    pull,
-    state: "in_progress",
-    now
-  });
+  if (input.job.source !== "manual_command") {
+    await syncReviewStatusComment({
+      config: input.config,
+      github: input.github,
+      dryRun: input.dryRun,
+      repo: input.job.repo,
+      pull,
+      state: "in_progress",
+      now
+    });
+  }
 
   try {
     const status = await input.reviewPullImpl({
@@ -467,7 +512,7 @@ async function runLeasedQueueJob(input: {
         repo: input.job.repo,
         pull,
         state: "provider_deferred",
-        details: error instanceof Error ? error.message : String(error),
+        details: "Provider cooldown recorded; see bot evidence for operator-only details.",
         now
       });
       updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "assigned");
@@ -492,7 +537,7 @@ async function runLeasedQueueJob(input: {
       repo: input.job.repo,
       pull,
       state: "failed",
-      details: error instanceof Error ? error.message : String(error),
+      details: "Review failed; see bot evidence for operator-only details.",
       now
     });
     updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "failed", "failed");
@@ -549,7 +594,6 @@ async function syncReviewStatusCommentForReviewResult(input: {
     pull: input.pull,
     state: nextState,
     ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-    ...(processed?.error ? { details: processed.error } : {}),
     now: input.now
   });
 }
@@ -592,6 +636,30 @@ function pullForQueueJob(job: ReviewQueueJobRecord, livePull: PullRequestSummary
           }
         }
       : {})
+  };
+}
+
+function pullForQueueJobWithoutLive(job: ReviewQueueJobRecord): PullRequestSummary {
+  return {
+    number: job.pullNumber,
+    title: "",
+    draft: false,
+    state: "open",
+    head: {
+      sha: job.headSha,
+      ref: job.headSha,
+      repo: {
+        full_name: job.repo
+      }
+    },
+    base: {
+      sha: job.baseSha ?? "",
+      ref: "",
+      repo: {
+        full_name: job.repo
+      }
+    },
+    html_url: `https://github.com/${job.repo}/pull/${job.pullNumber}`
   };
 }
 

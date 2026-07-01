@@ -173,7 +173,7 @@ const DEFAULT_CONFIG: BotConfig = {
     postIssueComment: false
   },
   reviewStatusComment: {
-    enabled: true
+    enabled: false
   },
   commands: {
     enabled: false,

@@ -73,7 +73,7 @@ describe("provider-aware review scheduler", () => {
     const result = await runScheduledCycleWithDeps({
       config,
       github: githubFromMap(new Map([
-        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+        ["org/repo-a", [pull("org/repo-a", 1, "abc123")]]
       ]), new Map(), statusCalls),
       state,
       options: { dryRun: false, useZCode: false },
@@ -94,7 +94,7 @@ describe("provider-aware review scheduler", () => {
     expect(result.reviewed).toBe(1);
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "completed"]);
     expect(new Set(statusCalls.map((call) => call.marker))).toEqual(new Set([
-      "<!-- evaos-code-review-bot:review-status repo=org/repo-a pr=1 sha=a1 -->"
+      "<!-- evaos-code-review-bot:review-status repo=org/repo-a pr=1 sha=abc123 -->"
     ]));
     expect(statusCalls.at(-1)?.body).toContain("https://github.com/org/repo-a/pull/1#pullrequestreview-status");
     state.close();
@@ -111,7 +111,7 @@ describe("provider-aware review scheduler", () => {
     const result = await runScheduledCycleWithDeps({
       config,
       github: githubFromMap(new Map([
-        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+        ["org/repo-a", [pull("org/repo-a", 1, "abc123")]]
       ]), new Map(), statusCalls),
       state,
       options: { dryRun: false, useZCode: true },
@@ -124,6 +124,40 @@ describe("provider-aware review scheduler", () => {
     expect(result.skippedProviderCooldown).toBe(1);
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "provider_deferred"]);
     expect(statusCalls.at(-1)?.body).toContain("temporarily unavailable or rate-limited");
+    expect(statusCalls.at(-1)?.body).not.toContain("ProviderBusinessError");
+    state.close();
+  });
+
+  it("marks a queued status failed when refetching the leased pull fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-refetch-failed-"));
+    roots.push(root);
+    const config = schedulerConfig(root, []);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: "abc123", baseSha: "base" });
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: {
+        ...githubFromMap(new Map(), new Map(), statusCalls),
+        getPull: async () => {
+          throw new Error("GitHub API fetch failed for /repos/org/repo-a/pulls/1: internal host detail");
+        }
+      },
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("should not review failed refetch");
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.failed).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["failed"]);
+    expect(statusCalls[0]?.body).toContain("GitHub refetch failed; see bot evidence");
+    expect(statusCalls[0]?.body).not.toContain("internal host detail");
+    expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(1);
     state.close();
   });
 
@@ -133,15 +167,15 @@ describe("provider-aware review scheduler", () => {
     const config = schedulerConfig(root, []);
     config.reviewStatusComment!.enabled = true;
     const state = new ReviewStateStore(config.statePath);
-    state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: "old-a", baseSha: "base" });
-    state.enqueueReviewQueueJob({ repo: "org/repo-b", pullNumber: 2, headSha: "closed-b", baseSha: "base" });
+    state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: "abc123", baseSha: "base" });
+    state.enqueueReviewQueueJob({ repo: "org/repo-b", pullNumber: 2, headSha: "fedcba", baseSha: "base" });
     const statusCalls: StatusCommentCall[] = [];
 
     const result = await runScheduledCycleWithDeps({
       config,
       github: githubFromMap(new Map([
-        ["org/repo-a", [pull("org/repo-a", 1, "new-a")]],
-        ["org/repo-b", [pull("org/repo-b", 2, "closed-b", "base", { state: "closed" })]]
+        ["org/repo-a", [pull("org/repo-a", 1, "def456")]],
+        ["org/repo-b", [pull("org/repo-b", 2, "fedcba", "base", { state: "closed" })]]
       ]), new Map(), statusCalls),
       state,
       options: { dryRun: false, useZCode: false },
@@ -155,9 +189,61 @@ describe("provider-aware review scheduler", () => {
     expect(result.queue.closedRetired).toBe(1);
     expect(statusCalls.map(statusFromBody).sort()).toEqual(["closed_or_merged_before_review", "stale_head"]);
     expect(statusCalls.map((call) => call.marker).sort()).toEqual([
-      "<!-- evaos-code-review-bot:review-status repo=org/repo-a pr=1 sha=old-a -->",
-      "<!-- evaos-code-review-bot:review-status repo=org/repo-b pr=2 sha=closed-b -->"
+      "<!-- evaos-code-review-bot:review-status repo=org/repo-a pr=1 sha=abc123 -->",
+      "<!-- evaos-code-review-bot:review-status repo=org/repo-b pr=2 sha=fedcba -->"
     ]);
+    state.close();
+  });
+
+  it("retires superseded queued status comments when a newer head is enqueued", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-superseded-head-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const oldJob = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "abc123",
+      baseSha: "base"
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: oldJob.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:05:00.000Z",
+      lastError: "provider cooldown",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "def456")]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(state.getReviewQueueJob(oldJob.jobId)).toMatchObject({
+      state: "stale_retired",
+      lastError: "superseded_by_head=def456"
+    });
+    expect(statusCalls.map(statusFromBody)).toEqual(["stale_head", "queued", "in_progress", "completed"]);
+    expect(statusCalls[0]?.marker).toBe("<!-- evaos-code-review-bot:review-status repo=org/repo-a pr=1 sha=abc123 -->");
+    expect(statusCalls.at(-1)?.marker).toBe("<!-- evaos-code-review-bot:review-status repo=org/repo-a pr=1 sha=def456 -->");
     state.close();
   });
 
@@ -172,7 +258,7 @@ describe("provider-aware review scheduler", () => {
     await runScheduledCycleWithDeps({
       config,
       github: githubFromMap(new Map([
-        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+        ["org/repo-a", [pull("org/repo-a", 1, "abc123")]]
       ]), new Map(), statusCalls),
       state,
       options: { dryRun: true, useZCode: false },
@@ -190,6 +276,46 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(statusCalls).toHaveLength(0);
+    state.close();
+  });
+
+  it("does not throw or upsert status comments when App credentials are absent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-token-mode-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    let upsertCalls = 0;
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: {
+        ...githubFromMap(new Map([
+          ["org/repo-a", [pull("org/repo-a", 1, "abc123")]]
+        ])),
+        canPostAsApp: () => false,
+        upsertIssueComment: async () => {
+          upsertCalls += 1;
+          throw new Error("should not upsert without App credentials");
+        }
+      },
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(upsertCalls).toBe(0);
     state.close();
   });
 
@@ -986,6 +1112,47 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.reviewed).toBe(1);
     expect(result.skippedStaleHead).toBe(0);
+    expect(state.listReviewQueueJobs({ state: "posted" })).toHaveLength(1);
+    state.close();
+  });
+
+  it("does not stale-retire automatic jobs when only the base SHA changed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-automatic-base-drift-"));
+    roots.push(root);
+    const config = schedulerConfig(root, []);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "abc123",
+      baseSha: "old-base"
+    });
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "abc123", "new-base")]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(result.skippedStaleHead).toBe(0);
+    expect(statusCalls.map(statusFromBody)).toEqual(["in_progress", "completed"]);
     expect(state.listReviewQueueJobs({ state: "posted" })).toHaveLength(1);
     state.close();
   });

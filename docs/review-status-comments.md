@@ -4,6 +4,11 @@
 soon as that head enters the durable review queue. The comment is marker-backed
 and edited in place as the head moves through the review lifecycle.
 
+The lane is default-off in the built-in config. Enable it only through explicit
+runtime config after a dry-run/release-status gate. Rollback is setting
+`reviewStatusComment.enabled=false`, redeploying the config, restarting launchd,
+and confirming the next `release:status` cycle is green.
+
 The identity marker is stable for one repo, pull request, and head SHA:
 
 ```html
@@ -25,6 +30,9 @@ Supported states:
 - `stale_head`
 - `closed_or_merged_before_review`
 - `failed`
+
+`provider_deferred` is not a settled state. It means the provider cooldown lane
+still intends to retry later; agents should keep waiting or inspect bot status.
 
 The marker is head-specific so a stale worker for an older head cannot overwrite
 the live head's queued or in-progress status. This intentionally follows the

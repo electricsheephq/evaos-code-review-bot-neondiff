@@ -37,12 +37,16 @@ export interface BuildReviewStatusCommentInput {
 
 export const REVIEW_STATUS_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-status";
 const REVIEW_STATUS_STATE_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-status-state";
+const REPO_SLUG_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const HEAD_SHA_PATTERN = /^[0-9a-f]{6,64}$/i;
+const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 
 export function buildReviewStatusMarker(input: {
   repo: string;
   pullNumber: number;
   headSha: string;
 }): string {
+  validateMarkerIdentity(input);
   return `${REVIEW_STATUS_MARKER_PREFIX} repo=${input.repo} pr=${input.pullNumber} sha=${input.headSha} -->`;
 }
 
@@ -52,23 +56,24 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
 } {
   const marker = buildReviewStatusMarker(input);
   const updatedAt = (input.now ?? new Date()).toISOString();
-  const title = input.pullTitle ? ` - ${input.pullTitle}` : "";
+  const title = formatInlinePublicText(input.pullTitle);
+  const details = sanitizePublicText(input.details);
   const lines = [
     marker,
     `${REVIEW_STATUS_STATE_MARKER_PREFIX} status=${input.state} updated_at=${updatedAt} -->`,
     "",
     `## evaOS review status: ${formatStatus(input.state)}`,
     "",
-    `PR: ${input.repo}#${input.pullNumber}${title}`,
+    `PR: ${input.repo}#${input.pullNumber}${title ? ` - ${title}` : ""}`,
     `Head: \`${input.headSha}\``,
     `Updated: ${updatedAt}`,
     "",
     statusMessage(input),
     "",
-    "Automation note: agents should wait for this comment to reach `completed`, `stale_head`, `closed_or_merged_before_review`, `provider_deferred`, or `failed` before treating evaOS review as settled for this head.",
+    "Automation note: agents should wait for this comment to reach `completed`, `stale_head`, `closed_or_merged_before_review`, or `failed` before treating evaOS review as settled for this head. `provider_deferred` means evaOS still intends to retry.",
     ...(input.pullUrl ? ["", `PR URL: ${input.pullUrl}`] : []),
     ...(input.reviewUrl ? ["", `Review URL: ${input.reviewUrl}`] : []),
-    ...(input.details ? ["", `Details: ${input.details}`] : [])
+    ...(details ? ["", `Details: ${details}`] : [])
   ];
 
   return {
@@ -116,6 +121,23 @@ export async function postReviewStatusComment(input: {
 
 function formatStatus(state: ReviewStatusCommentState): string {
   return state.replaceAll("_", " ");
+}
+
+function validateMarkerIdentity(input: { repo: string; pullNumber: number; headSha: string }): void {
+  if (!REPO_SLUG_PATTERN.test(input.repo)) throw new Error(`Invalid review status repo slug: ${input.repo}`);
+  if (!Number.isInteger(input.pullNumber) || input.pullNumber <= 0) {
+    throw new Error(`Invalid review status pull number: ${input.pullNumber}`);
+  }
+  if (!HEAD_SHA_PATTERN.test(input.headSha)) throw new Error(`Invalid review status head SHA: ${input.headSha}`);
+}
+
+function sanitizePublicText(value: string | undefined): string {
+  if (!value) return "";
+  return redactSecrets(value.replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")).trim();
+}
+
+function formatInlinePublicText(value: string | undefined): string {
+  return sanitizePublicText(value).replace(/\s+/g, " ").trim();
 }
 
 function statusMessage(input: BuildReviewStatusCommentInput): string {
