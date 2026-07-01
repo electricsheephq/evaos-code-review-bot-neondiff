@@ -86,7 +86,7 @@ describe("GitHub App read authentication", () => {
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
 
-    const marker = "<!-- evaos-code-review-bot:walkthrough owner/repo#42 -->";
+    const marker = "<!-- evaos-code-review-bot:walkthrough repo=owner/repo pr=42 -->";
     const calls: Array<{ url: string; method: string; authorization?: string; body?: unknown }> = [];
     globalThis.fetch = vi.fn(async (url, init) => {
       const method = init?.method ?? "GET";
@@ -143,7 +143,7 @@ describe("GitHub App read authentication", () => {
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
 
-    const marker = "<!-- evaos-code-review-bot:walkthrough owner/repo#42 -->";
+    const marker = "<!-- evaos-code-review-bot:walkthrough repo=owner/repo pr=42 -->";
     const calls: Array<{ url: string; method: string; authorization?: string; body?: unknown }> = [];
     globalThis.fetch = vi.fn(async (url, init) => {
       const method = init?.method ?? "GET";

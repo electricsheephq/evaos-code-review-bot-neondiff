@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRequestChangesEligible } from "./regression-taxonomy.js";
 import type {
@@ -14,9 +15,19 @@ import type {
 } from "./types.js";
 
 export const WALKTHROUGH_MARKER_PREFIX = "<!-- evaos-code-review-bot:walkthrough";
+export const WALKTHROUGH_STATE_MARKER_PREFIX = "<!-- evaos-code-review-bot:walkthrough-state";
+export const WALKTHROUGH_SCHEMA_VERSION = 1;
 
 const SEVERITY_LABELS: Severity[] = ["P0", "P1", "P2", "P3"];
 const MAX_CHANGED_FILE_ROWS = 25;
+const REPO_SLUG_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const HEAD_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
+
+export function buildWalkthroughMarker(input: { repo: string; pullNumber: number }): string {
+  validateWalkthroughRepoPull(input);
+  return `${WALKTHROUGH_MARKER_PREFIX} repo=${input.repo} pr=${input.pullNumber} -->`;
+}
 
 export function buildWalkthroughComment(input: {
   repo: string;
@@ -29,7 +40,8 @@ export function buildWalkthroughComment(input: {
   proof?: ProofRequirementReport;
   postIssueComment?: boolean;
 }): WalkthroughComment {
-  const marker = `${WALKTHROUGH_MARKER_PREFIX} ${input.repo}#${input.pull.number} -->`;
+  validateWalkthroughIdentity({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha });
+  const marker = buildWalkthroughMarker({ repo: input.repo, pullNumber: input.pull.number });
   const files = input.files.map((file) => summarizeFile(file, input.comments));
   const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);
   const omittedFileCount = Math.max(0, files.length - visibleFiles.length);
@@ -41,11 +53,10 @@ export function buildWalkthroughComment(input: {
   const highSeverity = severityCounts.P0 + severityCounts.P1;
   const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
 
-  const body = [
-    marker,
+  const visibleBody = [
     "## Walkthrough",
     "",
-    `PR: ${input.repo}#${input.pull.number} - ${input.pull.title}`,
+    `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title)}`,
     `Head: \`${input.pull.head.sha}\` into \`${input.pull.base.ref}\`. Review event: \`${input.event}\`.`,
     "",
     `Estimated review effort: ${effort.score}/5 (~${effort.minutes} min)`,
@@ -89,12 +100,59 @@ export function buildWalkthroughComment(input: {
     checklistItem(proofChecklistPassed(input.validation, input.proof), "Required behavior proof is present or not applicable."),
     checklistItem(true, "Labels and reviewers are suggestions only; the bot did not auto-apply them.")
   ].join("\n");
+  const redactedBody = redactSecrets(visibleBody);
+  const walkthroughHash = hashWalkthrough(redactedBody);
+  const stateMarker = buildWalkthroughStateMarker({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    verdict: input.event,
+    walkthroughHash
+  });
 
   return {
     marker,
-    body: redactSecrets(body),
+    body: [marker, stateMarker, redactedBody].join("\n"),
     postIssueComment: input.postIssueComment ?? false
   };
+}
+
+function buildWalkthroughStateMarker(input: {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  verdict: ReviewEvent;
+  walkthroughHash: string;
+}): string {
+  validateWalkthroughIdentity(input);
+  if (!/^[0-9a-f]{64}$/i.test(input.walkthroughHash)) {
+    throw new Error(`Invalid walkthrough hash: ${input.walkthroughHash}`);
+  }
+  return `${WALKTHROUGH_STATE_MARKER_PREFIX} version=${WALKTHROUGH_SCHEMA_VERSION} repo=${input.repo} pr=${input.pullNumber} sha=${input.headSha} verdict=${input.verdict} hash=${input.walkthroughHash} -->`;
+}
+
+function validateWalkthroughIdentity(input: { repo: string; pullNumber: number; headSha: string }): void {
+  validateWalkthroughRepoPull(input);
+  if (!HEAD_SHA_PATTERN.test(input.headSha)) throw new Error(`Invalid walkthrough head SHA: ${input.headSha}`);
+}
+
+function validateWalkthroughRepoPull(input: { repo: string; pullNumber: number }): void {
+  if (!REPO_SLUG_PATTERN.test(input.repo)) throw new Error(`Invalid walkthrough repo slug: ${input.repo}`);
+  if (!Number.isInteger(input.pullNumber) || input.pullNumber <= 0) {
+    throw new Error(`Invalid walkthrough pull number: ${input.pullNumber}`);
+  }
+}
+
+function hashWalkthrough(body: string): string {
+  return createHash("sha256").update(body, "utf8").digest("hex");
+}
+
+function formatInlinePublicText(value: string | undefined): string {
+  return redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]"))
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^#{1,6}\s+/, "")
+    .slice(0, 200);
 }
 
 function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {

@@ -26,7 +26,7 @@ describe("walkthrough comment posting", () => {
       pullNumber: 42,
       evidenceDir,
       walkthrough: {
-        marker: "<!-- evaos-code-review-bot:walkthrough owner/repo#42 -->",
+        marker: "<!-- evaos-code-review-bot:walkthrough repo=owner/repo pr=42 -->",
         body: "body",
         postIssueComment: true
       }
@@ -53,7 +53,7 @@ describe("walkthrough comment posting", () => {
       pullNumber: 42,
       evidenceDir,
       walkthrough: {
-        marker: "<!-- evaos-code-review-bot:walkthrough owner/repo#42 -->",
+        marker: "<!-- evaos-code-review-bot:walkthrough repo=owner/repo pr=42 -->",
         body: "body",
         postIssueComment: true
       }
@@ -68,7 +68,7 @@ describe("walkthrough comment posting", () => {
       reviewBodyAfterWalkthroughPost({
         summary: "compact summary",
         walkthrough: {
-          marker: "<!-- evaos-code-review-bot:walkthrough owner/repo#42 -->",
+          marker: "<!-- evaos-code-review-bot:walkthrough repo=owner/repo pr=42 -->",
           body: "walkthrough body",
           postIssueComment: true
         },
@@ -82,7 +82,7 @@ describe("walkthrough comment posting", () => {
       reviewBodyAfterWalkthroughPost({
         summary: "compact summary",
         walkthrough: {
-          marker: "<!-- evaos-code-review-bot:walkthrough owner/repo#42 -->",
+          marker: "<!-- evaos-code-review-bot:walkthrough repo=owner/repo pr=42 -->",
           body: "walkthrough body",
           postIssueComment: true
         },
