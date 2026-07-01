@@ -401,6 +401,34 @@ describe("beta release status", () => {
         10,
         10
       );
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at, head_count_used, head_count_limit)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        "stale-active-session",
+        "electricsheephq/WorldOS",
+        "active",
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:10.000Z",
+        "2026-07-01T00:10:00.000Z",
+        1,
+        10
+      );
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at, head_count_used, head_count_limit)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        "limit-reached-active-session",
+        "electricsheephq/evaos-code-review-bot",
+        "active",
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:10.000Z",
+        "2026-07-01T00:30:00.000Z",
+        10,
+        10
+      );
     } finally {
       db.close();
     }
@@ -413,9 +441,9 @@ describe("beta release status", () => {
       now: new Date("2026-07-01T00:15:00.000Z")
     });
 
-    expect(status.database.reviewerSessionCount).toBe(2);
+    expect(status.database.reviewerSessionCount).toBe(4);
     expect(status.database.activeReviewerSessionCount).toBe(1);
-    expect(status.database.expiredReviewerSessionCount).toBe(1);
+    expect(status.database.expiredReviewerSessionCount).toBe(3);
     expect(status.gates.every((gate) => gate.name !== "reviewer_sessions")).toBe(true);
   });
 

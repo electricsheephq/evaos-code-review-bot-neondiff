@@ -204,6 +204,7 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(config.reviewConcurrency.maxActiveRuns, "config.reviewConcurrency.maxActiveRuns");
   validatePositiveInteger(config.reviewConcurrency.leaseTtlMs, "config.reviewConcurrency.leaseTtlMs");
   const reviewerSessions = config.reviewerSessions ?? DEFAULT_CONFIG.reviewerSessions!;
+  config.reviewerSessions = reviewerSessions;
   validateBoolean(reviewerSessions.enabled, "config.reviewerSessions.enabled");
   validatePositiveInteger(reviewerSessions.ttlMs, "config.reviewerSessions.ttlMs");
   validatePositiveInteger(reviewerSessions.headCountLimit, "config.reviewerSessions.headCountLimit");

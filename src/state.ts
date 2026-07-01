@@ -146,6 +146,7 @@ export class ReviewStateStore {
   constructor(dbPath: string) {
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
+    this.db.exec("pragma foreign_keys = on");
     this.db.exec(`
       create table if not exists processed_reviews (
         repo text not null,
@@ -382,31 +383,35 @@ export class ReviewStateStore {
   }): ReviewerSessionAssignResult {
     validateReviewerSessionInput(input.ttlMs, input.headCountLimit, input.workerPid);
 
-    if (this.hasProcessed(input.repo, input.pullNumber, input.headSha)) {
-      return { assigned: false, reason: "already_processed" };
-    }
-
-    const existingJob = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha);
-    if (existingJob) {
-      return {
-        assigned: false,
-        reason: "already_assigned",
-        session: this.getReviewerSession(existingJob.sessionId),
-        job: existingJob
-      };
-    }
-
     const now = input.now ?? new Date();
     const nowIso = now.toISOString();
     const expiresAt = new Date(now.getTime() + input.ttlMs).toISOString();
     const workerPid = input.workerPid ?? process.pid;
     let assignmentReason = input.assignmentReason;
-    const hadPreviousRepoSession = this.listReviewerSessions({ repo: input.repo }).length > 0;
-    let session = this.getReusableReviewerSession(input.repo, now);
+    let session: ReviewerSessionRecord | undefined;
+    let assignedJob: ReviewerSessionJobRecord | undefined;
 
     this.db.exec("begin immediate");
     try {
-      this.expireReviewerSessions(now);
+      if (this.hasProcessed(input.repo, input.pullNumber, input.headSha)) {
+        this.db.exec("commit");
+        return { assigned: false, reason: "already_processed" };
+      }
+
+      const existingJob = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha);
+      if (existingJob) {
+        const result: ReviewerSessionAssignResult = {
+          assigned: false,
+          reason: "already_assigned",
+          session: this.getReviewerSession(existingJob.sessionId),
+          job: existingJob
+        };
+        this.db.exec("commit");
+        return result;
+      }
+
+      const hadPreviousRepoSession = this.hasReviewerSessionForRepo(input.repo);
+      const expiredRepoSessions = this.expireReviewerSessions(now, input.repo);
       session = this.getReusableReviewerSession(input.repo, now);
       if (!session) {
         session = this.createReviewerSession({
@@ -423,7 +428,8 @@ export class ReviewStateStore {
           provider: input.provider,
           zcodeCliVersion: input.zcodeCliVersion
         });
-        assignmentReason = assignmentReason ?? (hadPreviousRepoSession ? "session_expired_new_session" : "new_session");
+        assignmentReason =
+          assignmentReason ?? (hadPreviousRepoSession || expiredRepoSessions > 0 ? "session_expired_new_session" : "new_session");
       } else {
         assignmentReason = assignmentReason ?? "same_repo_active_session";
       }
@@ -445,18 +451,18 @@ export class ReviewStateStore {
            where session_id = ?`
         )
         .run(nextHeadCount, nowIso, nextState, session.sessionId);
+      assignedJob = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha)!;
       this.db.exec("commit");
     } catch (error) {
       this.db.exec("rollback");
       throw error;
     }
 
-    const job = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha)!;
     return {
       assigned: true,
-      session: this.getReviewerSession(job.sessionId)!,
-      job,
-      assignmentReason: job.assignmentReason
+      session: this.getReviewerSession(assignedJob!.sessionId)!,
+      job: assignedJob!,
+      assignmentReason: assignedJob!.assignmentReason
     };
   }
 
@@ -493,7 +499,7 @@ export class ReviewStateStore {
     activeOnly?: boolean;
     now?: Date;
   } = {}): ReviewerSessionRecord[] {
-    if (input.activeOnly) this.expireReviewerSessions(input.now ?? new Date());
+    const nowMs = (input.now ?? new Date()).getTime();
     const rows = (input.repo
       ? this.db
           .prepare(
@@ -517,7 +523,16 @@ export class ReviewStateStore {
     return rows
       .map(mapReviewerSessionRow)
       .filter((session) => !input.state || session.state === input.state)
-      .filter((session) => !input.activeOnly || session.state === "active" || session.state === "warming");
+      .filter((session) => {
+        if (!input.activeOnly) return true;
+        const expiresAtMs = Date.parse(session.expiresAt);
+        return (
+          (session.state === "active" || session.state === "warming") &&
+          Number.isFinite(expiresAtMs) &&
+          expiresAtMs > nowMs &&
+          session.headCountUsed < session.headCountLimit
+        );
+      });
   }
 
   updateReviewerSessionJobState(input: {
@@ -556,16 +571,26 @@ export class ReviewStateStore {
     return this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha)!;
   }
 
-  expireReviewerSessions(now = new Date()): number {
+  expireReviewerSessions(now = new Date(), repo?: string): number {
     const nowIso = now.toISOString();
-    const result = this.db
-      .prepare(
-        `update reviewer_sessions
-         set state = 'expired'
-         where state in ('warming', 'active')
-           and (expires_at <= ? or head_count_used >= head_count_limit)`
-      )
-      .run(nowIso);
+    const result = repo
+      ? this.db
+          .prepare(
+            `update reviewer_sessions
+             set state = 'expired'
+             where repo = ?
+               and state in ('warming', 'active')
+               and (expires_at <= ? or head_count_used >= head_count_limit)`
+          )
+          .run(repo, nowIso)
+      : this.db
+          .prepare(
+            `update reviewer_sessions
+             set state = 'expired'
+             where state in ('warming', 'active')
+               and (expires_at <= ? or head_count_used >= head_count_limit)`
+          )
+          .run(nowIso);
     return Number(result.changes);
   }
 
@@ -637,6 +662,11 @@ export class ReviewStateStore {
       )
       .get(repo, nowIso) as ReviewerSessionRow | undefined;
     return row ? mapReviewerSessionRow(row) : undefined;
+  }
+
+  private hasReviewerSessionForRepo(repo: string): boolean {
+    const row = this.db.prepare("select 1 from reviewer_sessions where repo = ? limit 1").get(repo);
+    return Boolean(row);
   }
 
   recordRepoProviderCooldown(input: { repo: string; cooldownUntil: Date; reason: string }): RepoProviderCooldownRecord {

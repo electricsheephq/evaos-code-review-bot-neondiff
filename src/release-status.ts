@@ -301,28 +301,29 @@ function readReviewerSessionCounts(db: DatabaseSync, now: Date): { total: number
     .prepare("select 1 from sqlite_master where type = 'table' and name = 'reviewer_sessions' limit 1")
     .get();
   if (!hasTable) return { total: 0, active: 0, expired: 0 };
-  const rows = db
-    .prepare("select state, expires_at, head_count_used, head_count_limit from reviewer_sessions")
-    .all() as unknown as Array<{
-      state: string;
-      expires_at: string;
-      head_count_used: number;
-      head_count_limit: number;
-    }>;
-  const active = rows.filter((row) => {
-    const expiresAtMs = Date.parse(row.expires_at);
-    return (
-      (row.state === "active" || row.state === "warming") &&
-      Number.isFinite(expiresAtMs) &&
-      expiresAtMs > now.getTime() &&
-      row.head_count_used < row.head_count_limit
-    );
-  }).length;
-  const expired = rows.filter((row) => {
-    const expiresAtMs = Date.parse(row.expires_at);
-    return row.state === "expired" || !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime();
-  }).length;
-  return { total: rows.length, active, expired };
+  const row = db
+    .prepare(
+      `select
+         count(*) as total,
+         sum(case
+           when state in ('active', 'warming')
+            and datetime(expires_at) > datetime(?)
+            and head_count_used < head_count_limit
+           then 1 else 0 end) as active,
+         sum(case
+           when state = 'expired'
+             or datetime(expires_at) is null
+             or datetime(expires_at) <= datetime(?)
+             or head_count_used >= head_count_limit
+           then 1 else 0 end) as expired
+       from reviewer_sessions`
+    )
+    .get(now.toISOString(), now.toISOString()) as { total?: number; active?: number | null; expired?: number | null };
+  return {
+    total: row.total ?? 0,
+    active: row.active ?? 0,
+    expired: row.expired ?? 0
+  };
 }
 
 function readActiveGlobalProviderCooldowns(db: DatabaseSync, now: Date): Array<{ repo: string; cooldownUntil: string }> {

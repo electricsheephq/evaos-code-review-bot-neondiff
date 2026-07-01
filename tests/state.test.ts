@@ -309,6 +309,27 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("filters active reviewer sessions without mutating stale rows from read APIs", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-active-read-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "head-a",
+      ttlMs: 1_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(store.listReviewerSessions({ activeOnly: true, now: new Date("2026-07-01T00:00:02.000Z") })).toHaveLength(0);
+    expect(store.listReviewerSessions({ state: "active" })).toHaveLength(1);
+    expect(store.expireReviewerSessions(new Date("2026-07-01T00:00:02.000Z"), "100yenadmin/evaOS-GUI")).toBe(1);
+    expect(store.listReviewerSessions({ state: "expired" })).toHaveLength(1);
+    store.close();
+  });
+
   it("tracks reviewer session job lifecycle without calling ZCode", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-jobs-"));
     roots.push(root);
