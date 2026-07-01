@@ -633,7 +633,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const validation = buildChangedSurfaceValidationReport({
       repo,
       pull,
-      files: reviewFiles,
+      files,
       profile: repoPolicy.profile
     });
     const proof = evaluateProofRequirements({ pull, validation });

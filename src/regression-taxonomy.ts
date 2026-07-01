@@ -56,7 +56,9 @@ export function isHighSeverity(severity: Severity): boolean {
 }
 
 export function normalizeFindingCategory(finding: Finding): RegressionCategory {
-  return finding.category ?? inferRegressionCategory(finding);
+  const inferred = inferRegressionCategory(finding);
+  if (inferred !== "unknown") return inferred;
+  return finding.category ?? inferred;
 }
 
 export function countCategories(comments: Pick<ReviewComment, "category">[]): Partial<Record<RegressionCategory, number>> {

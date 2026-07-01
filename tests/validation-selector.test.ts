@@ -88,6 +88,26 @@ describe("changed-surface validation selector", () => {
     expect(proof.detectedEvidence).toEqual([]);
   });
 
+  it("does not accept unrelated CI or negated test wording as proof", () => {
+    const weakBodies = [
+      "The CI passed on main but fails on this branch.",
+      "Ran vitest, that's not ok, tests are failing."
+    ];
+
+    for (const body of weakBodies) {
+      const pullWithWeakProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithWeakProof,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      const proof = evaluateProofRequirements({ pull: pullWithWeakProof, validation });
+
+      expect(proof.status).toBe("missing");
+      expect(proof.detectedEvidence).toEqual([]);
+    }
+  });
+
   it("does not count negated Unity visual proof as evidence", () => {
     const pullWithNegatedProof = pull({
       body: "No screenshot or recording was captured."

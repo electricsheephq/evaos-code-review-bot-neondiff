@@ -165,14 +165,14 @@ function hasBuildEvidence(text: string): boolean {
 function hasTestEvidence(text: string): boolean {
   if (hasNegatedOrHistoricalProof(text, ["validation", "test", "tests", "vitest", "jest", "npm test"])) return false;
   return (
-    /\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b.{0,48}\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b/.test(text) ||
-    /\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b.{0,48}\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b/.test(text)
+    /\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b.{0,48}\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b/.test(text) ||
+    /\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b.{0,48}\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b/.test(text)
   );
 }
 
 function hasCiEvidence(text: string): boolean {
   if (hasNegatedOrHistoricalProof(text, ["validation", "ci", "check", "checks"])) return false;
-  return /\b(checks? green|ci passed|github actions green|github checks passed)\b/.test(text);
+  return /\b(all checks? (?:are |is )?green|ci (?:run|pipeline) passed|github actions (?:run )?green|github checks passed)\b/.test(text);
 }
 
 function hasReleaseEvidence(text: string): boolean {

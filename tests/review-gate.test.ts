@@ -90,6 +90,6 @@ describe("deterministic review gate", () => {
     });
 
     expect(gate.event).toBe("REQUEST_CHANGES");
-    expect(gate.summary.categoryCounts).toEqual({ docs_only: 1 });
+    expect(gate.summary.categoryCounts).toEqual({ release_regression: 1 });
   });
 });

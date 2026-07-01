@@ -88,4 +88,24 @@ describe("finding normalization and review policy", () => {
     expect(parsed.findings).toEqual([]);
     expect(parsed.dropped).toEqual([{ reason: "invalid_schema" }]);
   });
+
+  it("treats model-supplied category as a hint, not the source of truth", () => {
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P0",
+        category: "docs_only",
+        path: "docs/operator-cli.md",
+        line: 2,
+        title: "Leaked private key in rollback docs",
+        body: "The private key is pasted into the operator rollback instructions.",
+        confidence: 0.98
+      }
+    ]);
+
+    expect(result.comments[0]).toMatchObject({
+      severity: "P0",
+      category: "security_boundary"
+    });
+    expect(decideReviewEvent(result.comments)).toBe("REQUEST_CHANGES");
+  });
 });
