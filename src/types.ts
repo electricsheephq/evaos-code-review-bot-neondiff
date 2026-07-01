@@ -31,6 +31,7 @@ export interface PullRequestSummary {
   title: string;
   draft: boolean;
   state?: string;
+  merged_at?: string | null;
   body?: string | null;
   head: {
     sha: string;

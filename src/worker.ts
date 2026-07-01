@@ -57,7 +57,7 @@ export interface RetryFailedHeadResult {
   repo: string;
   pullNumber: number;
   headSha: string;
-  status: ReviewPullResult | "failed" | "dry_run";
+  status: ReviewPullResult | "failed" | "dry_run" | "skipped_closed";
 }
 
 export interface FailedHeadRetryTarget {
@@ -85,6 +85,7 @@ export interface RetryProviderCooldownsResult {
     failed: number;
     skippedStaleHead: number;
     skippedProcessed: number;
+    skippedClosed: number;
     skippedCapacity: number;
     other: number;
   };
@@ -109,6 +110,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "reviewed_command":
     case "dry_run":
     case "skipped_processed":
+    case "skipped_closed":
       return true;
     case "failed":
     case "skipped_draft":
@@ -333,6 +335,15 @@ export async function retryFailedHeadWithDeps(input: {
     throw new Error(`Refusing retry for repo skipped by policy: ${options.repo} (${repoPolicy.reason})`);
   }
   const pull = await github.getPull(options.repo, options.pullNumber);
+  if (isClosedPull(pull)) {
+    recordClosedRetrySkip({ state, repo: options.repo, pull, headSha: options.headSha });
+    return {
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_closed"
+    };
+  }
   const retryTarget = prepareFailedHeadRetry({
     state,
     repo: options.repo,
@@ -862,6 +873,7 @@ function summarizeRetryProviderCooldownResults(results: RetryFailedHeadResult[])
     failed: 0,
     skippedStaleHead: 0,
     skippedProcessed: 0,
+    skippedClosed: 0,
     skippedCapacity: 0,
     other: 0
   };
@@ -886,6 +898,9 @@ function summarizeRetryProviderCooldownResults(results: RetryFailedHeadResult[])
       case "skipped_processed":
         summary.skippedProcessed += 1;
         break;
+      case "skipped_closed":
+        summary.skippedClosed += 1;
+        break;
       case "skipped_capacity":
         summary.skippedCapacity += 1;
         break;
@@ -895,6 +910,29 @@ function summarizeRetryProviderCooldownResults(results: RetryFailedHeadResult[])
     }
   }
   return summary;
+}
+
+function isClosedPull(pull: PullRequestSummary): boolean {
+  return Boolean(pull.state && pull.state !== "open");
+}
+
+function recordClosedRetrySkip(input: {
+  state: Pick<ReviewStateStore, "getProcessedReview" | "recordProcessed">;
+  repo: string;
+  pull: PullRequestSummary;
+  headSha: string;
+}): void {
+  const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.headSha);
+  const state = input.pull.state ?? "unknown";
+  const mergedAt = input.pull.merged_at ? `; merged_at=${input.pull.merged_at}` : "";
+  const previousError = previous?.error ? `; previous_error=${redactSecrets(previous.error)}` : "";
+  input.state.recordProcessed({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.headSha,
+    status: "skipped",
+    error: `closed_pr_retry_skip: state=${state}${mergedAt}${previousError}`
+  });
 }
 
 function retryFailureError(previousError: string | undefined, error: unknown): string {

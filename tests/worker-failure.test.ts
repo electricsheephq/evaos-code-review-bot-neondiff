@@ -333,6 +333,55 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("skips closed provider-cooldown retry candidates without running review work", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-cooldown-closed-bulk-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1239, "head-closed-provider-cooldown", "base", {
+      state: "closed",
+      mergedAt: "2026-07-01T06:00:00Z"
+    });
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2000-01-01T00:00:00.000Z; reason=provider_rate_limit"
+    });
+    let attempts = 0;
+
+    const result = await retryProviderCooldownsWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        dryRun: false,
+        expiredOnly: true
+      },
+      reviewPullImpl: async () => {
+        attempts += 1;
+        return "reviewed";
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.summary).toMatchObject({
+      skippedClosed: 1,
+      failed: 0
+    });
+    expect(result.results[0]).toMatchObject({
+      status: "skipped_closed"
+    });
+    expect(attempts).toBe(0);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "skipped",
+      error: expect.stringContaining("closed_pr_retry_skip: state=closed; merged_at=2026-07-01T06:00:00Z")
+    });
+    state.close();
+  });
+
   it("preserves the failed row when retry review work is skipped for capacity", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-capacity-"));
     roots.push(root);
@@ -667,6 +716,7 @@ describe("worker review failures", () => {
     expect(isSuccessfulRetryStatus("reviewed_command")).toBe(true);
     expect(isSuccessfulRetryStatus("dry_run")).toBe(true);
     expect(isSuccessfulRetryStatus("skipped_processed")).toBe(true);
+    expect(isSuccessfulRetryStatus("skipped_closed")).toBe(true);
     expect(isSuccessfulRetryStatus("failed")).toBe(false);
     expect(isSuccessfulRetryStatus("skipped_capacity")).toBe(false);
     expect(isSuccessfulRetryStatus("skipped_provider_cooldown")).toBe(false);
@@ -715,11 +765,18 @@ function minimalConfig(root: string): BotConfig {
   };
 }
 
-function pullSummary(number: number, headSha: string, baseSha = "base"): PullRequestSummary {
+function pullSummary(
+  number: number,
+  headSha: string,
+  baseSha = "base",
+  options: { state?: string; mergedAt?: string | null } = {}
+): PullRequestSummary {
   return {
     number,
     title: `PR ${number}`,
     draft: false,
+    ...(options.state ? { state: options.state } : {}),
+    ...(options.mergedAt !== undefined ? { merged_at: options.mergedAt } : {}),
     head: {
       sha: headSha,
       ref: `pr-${number}`,
