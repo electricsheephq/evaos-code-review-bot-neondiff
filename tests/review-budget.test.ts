@@ -47,11 +47,13 @@ describe("review run budget", () => {
   });
 
   it("prevents worker review work when the active run cap is reached", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-config-"));
+    roots.push(root);
     const budget = new ReviewRunBudget(1);
     expect(budget.tryStart()).toBe(true);
 
     const status = await reviewPull({
-      config: minimalConfig(),
+      config: minimalConfig(root),
       github: {} as GitHubApi,
       state: {
         hasProcessed: () => false
@@ -69,13 +71,15 @@ describe("review run budget", () => {
 
   it("uses SQLite leases to cap overlapping worker entrypoints", async () => {
     const store = createStore(roots);
-    const lease = store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-01T00:00:00.000Z"));
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-config-"));
+    roots.push(root);
+    const lease = store.tryAcquireReviewRunLease(1, 60_000, new Date());
     expect(lease).toBeDefined();
 
     const budget = new ReviewRunBudget(5);
     const status = await reviewPull({
       config: {
-        ...minimalConfig(),
+        ...minimalConfig(root),
         reviewConcurrency: {
           maxActiveRuns: 1,
           leaseTtlMs: 60_000
@@ -102,14 +106,14 @@ function createStore(roots: string[]): ReviewStateStore {
   return new ReviewStateStore(join(root, "state.sqlite"));
 }
 
-function minimalConfig(): BotConfig {
+function minimalConfig(root: string): BotConfig {
   return {
     pilotRepos: ["electricsheephq/WorldOS"],
     pollIntervalMs: 60_000,
     skipDrafts: true,
-    workRoot: "/unused",
-    statePath: "/unused/state.sqlite",
-    evidenceDir: "/unused/evidence",
+    workRoot: join(root, "work"),
+    statePath: join(root, "state.sqlite"),
+    evidenceDir: join(root, "evidence"),
     activation: {
       reviewExistingOpenPrsOnActivation: false
     },

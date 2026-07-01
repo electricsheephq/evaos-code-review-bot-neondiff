@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { redactSecrets } from "./secrets.js";
 import type { ReviewEvent } from "./types.js";
 
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
@@ -20,6 +21,13 @@ export interface ProcessedReviewRecord {
 
 export interface StoredProcessedReviewRecord extends ProcessedReviewRecord {
   createdAt: string;
+}
+
+export interface RetireFailedReviewInput {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  reason: string;
 }
 
 export interface ReviewRunLease {
@@ -134,6 +142,29 @@ export class ReviewStateStore {
       );
   }
 
+  retireFailedReview(input: RetireFailedReviewInput): StoredProcessedReviewRecord {
+    const existing = this.getProcessedReview(input.repo, input.pullNumber, input.headSha);
+    if (!existing) {
+      throw new Error(`Refusing to retire missing review row for ${input.repo}#${input.pullNumber}@${input.headSha}`);
+    }
+    if (existing.status !== "failed") {
+      throw new Error(
+        `Refusing to retire ${input.repo}#${input.pullNumber}@${input.headSha}: status is ${existing.status}, not failed`
+      );
+    }
+
+    const reason = normalizeRetirementReason(input.reason);
+    const previousError = existing.error ? `; previous_error=${redactSecrets(existing.error)}` : "";
+    this.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pullNumber,
+      headSha: input.headSha,
+      status: "skipped",
+      error: `retired_failed_head:${reason}${previousError}`
+    });
+    return this.getProcessedReview(input.repo, input.pullNumber, input.headSha)!;
+  }
+
   hasRepoActivation(repo: string): boolean {
     const row = this.db.prepare("select 1 from repo_activation_watermarks where repo = ? limit 1").get(repo);
     return Boolean(row);
@@ -214,6 +245,16 @@ export class ReviewStateStore {
   close(): void {
     this.db.close();
   }
+}
+
+function normalizeRetirementReason(reason: string): string {
+  const normalized = reason
+    .trim()
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9._-]+/g, "_")
+    .replaceAll(/^_+|_+$/g, "")
+    .slice(0, 80);
+  return normalized || "operator_acknowledged";
 }
 
 interface ProcessedReviewRow {
