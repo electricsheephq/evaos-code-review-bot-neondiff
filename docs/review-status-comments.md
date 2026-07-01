@@ -39,6 +39,11 @@ the live head's queued or in-progress status. This intentionally follows the
 same broad pattern used by CodeRabbit and ClawSweeper: acknowledge quickly,
 then edit a durable comment into the final state.
 
+Manual `review` / `re-review` commands may move directly from `queued` to
+`completed`; command acknowledgement/state lives in the separate command lane.
+Non-review commands such as `stop` and `explain` do not create review status
+comments.
+
 This is a soft coordination signal for humans and agents. It does not block
 GitHub merges by itself. Requiring the bot before merge should be implemented
 later with a dedicated GitHub Check and branch protection after the comment lane
