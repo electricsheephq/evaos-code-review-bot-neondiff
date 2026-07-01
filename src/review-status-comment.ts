@@ -1,0 +1,144 @@
+import { redactSecrets } from "./secrets.js";
+
+export type ReviewStatusCommentState =
+  | "queued"
+  | "in_progress"
+  | "completed"
+  | "provider_deferred"
+  | "stale_head"
+  | "closed_or_merged_before_review"
+  | "failed";
+
+export interface ReviewStatusCommentGithub {
+  canPostAsApp(): boolean;
+  upsertIssueComment(input: {
+    repo: string;
+    issueNumber: number;
+    marker: string;
+    body: string;
+  }): Promise<{ action: "created" | "updated"; html_url?: string; id: number }>;
+}
+
+export type ReviewStatusCommentPostResult =
+  | { posted: true; action: "created" | "updated"; html_url?: string; id: number; state: ReviewStatusCommentState }
+  | { posted: false; reason: "disabled" | "dry_run" | "missing_app_credentials" | "upsert_failed"; state: ReviewStatusCommentState; error?: string };
+
+export interface BuildReviewStatusCommentInput {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  state: ReviewStatusCommentState;
+  pullTitle?: string;
+  pullUrl?: string;
+  reviewUrl?: string;
+  details?: string;
+  now?: Date;
+}
+
+export const REVIEW_STATUS_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-status";
+const REVIEW_STATUS_STATE_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-status-state";
+
+export function buildReviewStatusMarker(input: {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+}): string {
+  return `${REVIEW_STATUS_MARKER_PREFIX} repo=${input.repo} pr=${input.pullNumber} sha=${input.headSha} -->`;
+}
+
+export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): {
+  marker: string;
+  body: string;
+} {
+  const marker = buildReviewStatusMarker(input);
+  const updatedAt = (input.now ?? new Date()).toISOString();
+  const title = input.pullTitle ? ` - ${input.pullTitle}` : "";
+  const lines = [
+    marker,
+    `${REVIEW_STATUS_STATE_MARKER_PREFIX} status=${input.state} updated_at=${updatedAt} -->`,
+    "",
+    `## evaOS review status: ${formatStatus(input.state)}`,
+    "",
+    `PR: ${input.repo}#${input.pullNumber}${title}`,
+    `Head: \`${input.headSha}\``,
+    `Updated: ${updatedAt}`,
+    "",
+    statusMessage(input),
+    "",
+    "Automation note: agents should wait for this comment to reach `completed`, `stale_head`, `closed_or_merged_before_review`, `provider_deferred`, or `failed` before treating evaOS review as settled for this head.",
+    ...(input.pullUrl ? ["", `PR URL: ${input.pullUrl}`] : []),
+    ...(input.reviewUrl ? ["", `Review URL: ${input.reviewUrl}`] : []),
+    ...(input.details ? ["", `Details: ${input.details}`] : [])
+  ];
+
+  return {
+    marker,
+    body: redactSecrets(lines.join("\n"))
+  };
+}
+
+export async function postReviewStatusComment(input: {
+  enabled: boolean;
+  dryRun: boolean;
+  github: ReviewStatusCommentGithub;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  state: ReviewStatusCommentState;
+  pullTitle?: string;
+  pullUrl?: string;
+  reviewUrl?: string;
+  details?: string;
+  now?: Date;
+}): Promise<ReviewStatusCommentPostResult> {
+  if (!input.enabled) return { posted: false, reason: "disabled", state: input.state };
+  if (input.dryRun) return { posted: false, reason: "dry_run", state: input.state };
+  if (!input.github.canPostAsApp()) return { posted: false, reason: "missing_app_credentials", state: input.state };
+
+  const comment = buildReviewStatusComment(input);
+  try {
+    const result = await input.github.upsertIssueComment({
+      repo: input.repo,
+      issueNumber: input.pullNumber,
+      marker: comment.marker,
+      body: comment.body
+    });
+    return { posted: true, state: input.state, ...result };
+  } catch (error) {
+    return {
+      posted: false,
+      reason: "upsert_failed",
+      state: input.state,
+      error: redactSecrets(error instanceof Error ? error.message : String(error))
+    };
+  }
+}
+
+function formatStatus(state: ReviewStatusCommentState): string {
+  return state.replaceAll("_", " ");
+}
+
+function statusMessage(input: BuildReviewStatusCommentInput): string {
+  switch (input.state) {
+    case "queued":
+      return "This PR head has entered the evaOS review queue. No final evaOS review has posted for this head yet.";
+    case "in_progress":
+      return "evaOS review is running for this PR head.";
+    case "completed":
+      return "evaOS review completed for this PR head.";
+    case "provider_deferred":
+      return "evaOS review is deferred because the model provider is temporarily unavailable or rate-limited. The worker will retry according to cooldown policy.";
+    case "stale_head":
+      return "evaOS review stopped because this queued head is no longer the live PR head.";
+    case "closed_or_merged_before_review":
+      return "evaOS review stopped because the PR closed or merged before this queued head could be reviewed.";
+    case "failed":
+      return "evaOS review failed for this head and needs retry or operator attention.";
+    default:
+      return assertNever(input.state);
+  }
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled review status comment state: ${String(value)}`);
+}
