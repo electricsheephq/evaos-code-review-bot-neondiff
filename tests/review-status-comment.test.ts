@@ -23,6 +23,7 @@ describe("review status comment", () => {
     expect(comment.body).toContain("<!-- evaos-code-review-bot:review-status-state status=queued updated_at=2026-07-02T00:00:00.000Z -->");
     expect(comment.body).toContain("evaOS review status: queued");
     expect(comment.body).toContain("agents should wait");
+    expect(comment.body).toContain("`skipped`");
     expect(comment.body).toContain("`provider_deferred` means evaOS still intends to retry");
   });
 

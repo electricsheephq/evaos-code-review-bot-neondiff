@@ -397,7 +397,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("sets terminal failed status when a queued job becomes policy-skipped after in-progress", async () => {
+  it("sets terminal skipped status when a queued job becomes policy-skipped after in-progress", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-policy-skip-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/repo-a"]);
@@ -417,7 +417,7 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(result.skippedPolicy).toBe(1);
-    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "failed"]);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
     expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(1);
     state.close();
   });
@@ -834,23 +834,25 @@ describe("provider-aware review scheduler", () => {
       trustedAuthors: ["100yenadmin"],
       acknowledge: false
     };
+    config.reviewStatusComment!.enabled = true;
     const state = new ReviewStateStore(config.statePath);
     state.recordProcessed({
       repo: "org/repo-a",
       pullNumber: 1,
-      headSha: "a1",
+      headSha: HEAD_A,
       status: "posted",
       event: "COMMENT",
       reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old"
     });
-    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, "a1")]]]);
+    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]);
     const comments = new Map([
       ["org/repo-a#1", [comment(222, "100yenadmin", "@evaos-code-review-bot re-review")]]
     ]);
+    const statusCalls: StatusCommentCall[] = [];
 
     const result = await runScheduledCycleWithDeps({
       config,
-      github: githubFromMap(pullMap, comments),
+      github: githubFromMap(pullMap, comments, statusCalls),
       state,
       options: { dryRun: false, useZCode: false },
       reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
@@ -869,6 +871,7 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.reviewed).toBe(1);
     expect(result.commandReviewRequested).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "completed"]);
     expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
       expect.objectContaining({
         source: "manual_command",

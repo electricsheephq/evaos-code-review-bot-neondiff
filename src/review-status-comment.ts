@@ -7,6 +7,7 @@ export type ReviewStatusCommentState =
   | "provider_deferred"
   | "stale_head"
   | "closed_or_merged_before_review"
+  | "skipped"
   | "failed";
 
 export interface ReviewStatusCommentGithub {
@@ -72,7 +73,7 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
     "",
     statusMessage(input),
     "",
-    "Automation note: agents should wait for this comment to reach `completed`, `stale_head`, `closed_or_merged_before_review`, or `failed` before treating evaOS review as settled for this head. `provider_deferred` means evaOS still intends to retry.",
+    "Automation note: agents should wait for this comment to reach `completed`, `stale_head`, `closed_or_merged_before_review`, `skipped`, or `failed` before treating evaOS review as settled for this head. `provider_deferred` means evaOS still intends to retry.",
     ...(pullUrl ? ["", `PR URL: ${pullUrl}`] : []),
     ...(reviewUrl ? ["", `Review URL: ${reviewUrl}`] : []),
     ...(details ? ["", `Details: ${details}`] : [])
@@ -156,6 +157,8 @@ function statusMessage(input: BuildReviewStatusCommentInput): string {
       return "evaOS review stopped because this queued head is no longer the live PR head.";
     case "closed_or_merged_before_review":
       return "evaOS review stopped because the PR closed or merged before this queued head could be reviewed.";
+    case "skipped":
+      return "evaOS review was intentionally skipped for this head because current repo, PR, or policy state says it should not run.";
     case "failed":
       return "evaOS review failed for this head and needs retry or operator attention.";
     default:

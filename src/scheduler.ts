@@ -697,7 +697,7 @@ function reviewResultStatusCommentState(status: ReviewPullResult): ReviewStatusC
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
-      return "failed";
+      return "skipped";
     case "skipped_command_stop":
     case "skipped_command_explain":
       return undefined;
