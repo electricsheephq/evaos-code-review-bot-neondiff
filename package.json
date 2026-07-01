@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "postbuild": "chmod +x dist/src/cli.js",
     "cli": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",

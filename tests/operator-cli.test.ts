@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it } from "vitest";
 import type { CoverageAuditReport } from "../src/coverage-audit.js";
 import {
   buildOperatorQueue,
   buildOperatorStatus,
+  collectOperatorLeases,
+  collectOperatorRepoProviderCooldowns,
   explainPullStatus,
   summarizeAgentInventory,
   type OperatorAgentInventory
@@ -10,6 +16,14 @@ import {
 import type { ReleaseStatus } from "../src/release-status.js";
 
 describe("operator CLI summaries", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("combines release health, coverage, agents, and cooldown backlog into one operator status", () => {
     const status = buildOperatorStatus({
       release: releaseStatus({ ok: false, recommendedActions: ["retry cooldowns"] }),
@@ -54,6 +68,11 @@ describe("operator CLI summaries", () => {
       ok: false,
       detail: "1 stale lease(s)"
     });
+    expect(status.gates).toContainEqual({
+      name: "queue_no_stale_heads",
+      ok: true,
+      detail: "0 stale head(s)"
+    });
     expect(status.recommendedActions).toContain("retry cooldowns");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
@@ -84,6 +103,72 @@ describe("operator CLI summaries", () => {
     expect(inventory.staleLeases).toEqual([
       expect.objectContaining({ leaseId: "expired", staleReason: "expired" }),
       expect.objectContaining({ leaseId: "dead-owner", staleReason: "owner_not_running" })
+    ]);
+  });
+
+  it("prefers dead-owner lease diagnostics over expiry when both are true", () => {
+    const inventory = summarizeAgentInventory({
+      launchd: { label: "com.electricsheephq.evaos-code-review-bot", state: "running", pid: 1234, dryRun: false },
+      heartbeat: {
+        status: "fresh",
+        maxAgeMs: 120_000,
+        latestAt: "2026-07-01T00:00:10.000Z",
+        ageMs: 5_000,
+        cycle: 42,
+        event: "daemon_cycle_complete",
+        dryRun: false
+      },
+      leases: [
+        lease("expired-dead-owner", "2026-06-30T23:00:00.000Z", "2026-06-30T23:10:00.000Z", 999999, false)
+      ],
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(inventory.staleLeases).toEqual([
+      expect.objectContaining({ leaseId: "expired-dead-owner", staleReason: "owner_not_running" })
+    ]);
+  });
+
+  it("reads lease inventories from pre-owner-pid state databases", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table review_run_leases (lease_id text primary key, started_at text not null, expires_at text not null)");
+      db.prepare("insert into review_run_leases (lease_id, started_at, expires_at) values (?, ?, ?)")
+        .run("legacy", "2026-07-01T00:00:00.000Z", "2026-07-01T00:10:00.000Z");
+    } finally {
+      db.close();
+    }
+
+    expect(collectOperatorLeases(statePath)).toEqual([
+      {
+        leaseId: "legacy",
+        startedAt: "2026-07-01T00:00:00.000Z",
+        expiresAt: "2026-07-01T00:10:00.000Z"
+      }
+    ]);
+  });
+
+  it("scopes repo provider cooldown inventory to the requested repo", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table repo_provider_cooldowns (repo text primary key, cooldown_until text not null, reason text not null, updated_at text not null)");
+      db.prepare("insert into repo_provider_cooldowns (repo, cooldown_until, reason, updated_at) values (?, ?, ?, ?)")
+        .run("owner/repo", "2026-07-01T00:05:00.000Z", "provider_request_rate_limit", "2026-07-01T00:00:00.000Z");
+      db.prepare("insert into repo_provider_cooldowns (repo, cooldown_until, reason, updated_at) values (?, ?, ?, ?)")
+        .run("owner/other", "2026-07-01T00:06:00.000Z", "provider_request_rate_limit", "2026-07-01T00:00:00.000Z");
+    } finally {
+      db.close();
+    }
+
+    expect(collectOperatorRepoProviderCooldowns(statePath, { repo: "owner/repo" })).toEqual([
+      {
+        repo: "owner/repo",
+        cooldownUntil: "2026-07-01T00:05:00.000Z",
+        reason: "provider_request_rate_limit",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
     ]);
   });
 
@@ -146,7 +231,38 @@ describe("operator CLI summaries", () => {
       nextAction: "run_scoped_coverage_audit"
     });
   });
+
+  it("prioritizes provider-deferred and stale-head explanations over processed rows", () => {
+    const report = coverageReport({
+      processed: [processedEntry(2, "head-cooldown", "skipped"), processedEntry(5, "old-head", "posted")],
+      providerDeferred: [providerDeferredEntry(2, "head-cooldown")],
+      staleHeads: [{
+        repo: "owner/repo",
+        pullNumber: 5,
+        expectedHeadSha: "old-head",
+        liveHeadSha: "new-head",
+        title: "stale",
+        url: "https://github.com/owner/repo/pull/5"
+      }]
+    });
+
+    expect(explainPullStatus(report, "owner/repo", 2)).toMatchObject({
+      state: "provider_deferred",
+      nextAction: "wait_or_retry_provider_cooldown"
+    });
+    expect(explainPullStatus(report, "owner/repo", 5)).toMatchObject({
+      state: "stale_head",
+      headSha: "new-head",
+      nextAction: "run_or_wait_for_daemon"
+    });
+  });
 });
+
+function createTempDatabase(tempDirs: string[]): string {
+  const dir = mkdtempSync(join(tmpdir(), "evaos-operator-cli-"));
+  tempDirs.push(dir);
+  return join(dir, "state.sqlite");
+}
 
 function releaseStatus(input: { ok: boolean; recommendedActions?: string[] }): ReleaseStatus {
   return {

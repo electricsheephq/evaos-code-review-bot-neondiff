@@ -139,6 +139,11 @@ export function buildOperatorStatus(input: {
       detail: readFailures === 0 ? "0 read failure(s)" : `${readFailures} read failure(s)`
     },
     {
+      name: "queue_no_stale_heads",
+      ok: staleHeads === 0,
+      detail: staleHeads === 0 ? "0 stale head(s)" : `${staleHeads} stale head(s)`
+    },
+    {
       name: "agents_no_stale_leases",
       ok: input.agents.summary.staleLeases === 0,
       detail: input.agents.summary.staleLeases === 0
@@ -151,6 +156,7 @@ export function buildOperatorStatus(input: {
     ...input.release.recommendedActions,
     ...(pendingHeads > 0 ? ["wait for daemon cycle or run scoped run-once"] : []),
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
+    ...(staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : [])
   ]);
 
@@ -191,13 +197,13 @@ export function summarizeAgentInventory(input: {
   const activeLeases: OperatorLeaseWithState[] = [];
   const staleLeases: OperatorLeaseWithState[] = [];
   for (const lease of input.leases) {
+    if (lease.ownerAlive === false) {
+      staleLeases.push({ ...lease, staleReason: "owner_not_running" });
+      continue;
+    }
     const expiresAtMs = Date.parse(lease.expiresAt);
     if (Number.isFinite(expiresAtMs) && expiresAtMs <= now.getTime()) {
       staleLeases.push({ ...lease, staleReason: "expired" });
-      continue;
-    }
-    if (lease.ownerAlive === false) {
-      staleLeases.push({ ...lease, staleReason: "owner_not_running" });
       continue;
     }
     activeLeases.push(lease);
@@ -226,8 +232,14 @@ export function collectOperatorLeases(statePath: string): OperatorLease[] {
       .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_run_leases' limit 1")
       .get();
     if (!table) return [];
+    const columns = db.prepare("pragma table_info(review_run_leases)").all() as unknown as Array<{ name: string }>;
+    const hasOwnerPid = columns.some((column) => column.name === "owner_pid");
     const rows = db
-      .prepare("select lease_id, started_at, expires_at, owner_pid from review_run_leases order by datetime(started_at) asc")
+      .prepare(
+        hasOwnerPid
+          ? "select lease_id, started_at, expires_at, owner_pid from review_run_leases order by datetime(started_at) asc"
+          : "select lease_id, started_at, expires_at, null as owner_pid from review_run_leases order by datetime(started_at) asc"
+      )
       .all() as unknown as Array<{
         lease_id: string;
         started_at: string;
@@ -303,19 +315,28 @@ export function collectOperatorProviderCooldowns(
 
 export function collectOperatorRepoProviderCooldowns(
   statePath: string,
-  input: { activeOnly?: boolean; now?: Date } = {}
+  input: { repo?: string; activeOnly?: boolean; now?: Date } = {}
 ): RepoProviderCooldownRecord[] {
   if (!existsSync(statePath)) return [];
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
     if (!hasTable(db, "repo_provider_cooldowns")) return [];
-    const rows = db
-      .prepare(
-        `select repo, cooldown_until, reason, updated_at
-         from repo_provider_cooldowns
-         order by datetime(cooldown_until) desc`
-      )
-      .all() as unknown as RepoProviderCooldownRow[];
+    const rows = (input.repo
+      ? db
+          .prepare(
+            `select repo, cooldown_until, reason, updated_at
+             from repo_provider_cooldowns
+             where repo = ?
+             order by datetime(cooldown_until) desc`
+          )
+          .all(input.repo)
+      : db
+          .prepare(
+            `select repo, cooldown_until, reason, updated_at
+             from repo_provider_cooldowns
+             order by datetime(cooldown_until) desc`
+          )
+          .all()) as unknown as RepoProviderCooldownRow[];
     const cooldowns = rows.map((row) => ({
       repo: row.repo,
       cooldownUntil: row.cooldown_until,
@@ -362,19 +383,6 @@ export function explainPullStatus(
   repo: string,
   pullNumber: number
 ): PullStatusExplanation {
-  const processed = report.processed.find((entry) => entry.repo === repo && entry.pullNumber === pullNumber);
-  if (processed) {
-    return {
-      repo,
-      pullNumber,
-      state: "processed",
-      headSha: processed.headSha,
-      ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-      ...(processed.error ? { error: processed.error } : {}),
-      nextAction: "none"
-    };
-  }
-
   const providerDeferred = report.providerDeferred.find((entry) => entry.repo === repo && entry.pullNumber === pullNumber);
   if (providerDeferred) {
     return {
@@ -385,6 +393,31 @@ export function explainPullStatus(
       ...(providerDeferred.reason ? { reason: providerDeferred.reason } : {}),
       ...(providerDeferred.error ? { error: providerDeferred.error } : {}),
       nextAction: "wait_or_retry_provider_cooldown"
+    };
+  }
+
+  const staleHead = report.staleHeads.find((entry) => entry.repo === repo && entry.pullNumber === pullNumber);
+  if (staleHead) {
+    return {
+      repo,
+      pullNumber,
+      state: "stale_head",
+      headSha: staleHead.liveHeadSha,
+      reason: `expected ${staleHead.expectedHeadSha}, live ${staleHead.liveHeadSha}`,
+      nextAction: "run_or_wait_for_daemon"
+    };
+  }
+
+  const processed = report.processed.find((entry) => entry.repo === repo && entry.pullNumber === pullNumber);
+  if (processed) {
+    return {
+      repo,
+      pullNumber,
+      state: "processed",
+      headSha: processed.headSha,
+      ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+      ...(processed.error ? { error: processed.error } : {}),
+      nextAction: "none"
     };
   }
 
@@ -408,18 +441,6 @@ export function explainPullStatus(
       ...(skipped.headSha ? { headSha: skipped.headSha } : {}),
       reason: skipped.reason,
       nextAction: "none"
-    };
-  }
-
-  const staleHead = report.staleHeads.find((entry) => entry.repo === repo && entry.pullNumber === pullNumber);
-  if (staleHead) {
-    return {
-      repo,
-      pullNumber,
-      state: "stale_head",
-      headSha: staleHead.liveHeadSha,
-      reason: `expected ${staleHead.expectedHeadSha}, live ${staleHead.liveHeadSha}`,
-      nextAction: "run_or_wait_for_daemon"
     };
   }
 
@@ -516,7 +537,8 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "EPERM") return true;
     return false;
   }
 }

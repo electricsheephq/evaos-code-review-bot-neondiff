@@ -194,6 +194,7 @@ async function main(): Promise<void> {
       now
     });
     const repoCooldowns = collectOperatorRepoProviderCooldowns(statePath, {
+      repo: args.repo,
       activeOnly: args["active-only"] === "true",
       now
     });
@@ -215,7 +216,7 @@ async function main(): Promise<void> {
       repoCooldowns,
       recommendedActions: providerRows.some((row) => row.expired)
         ? [
-            `npx tsx src/cli.ts retry-provider-cooldowns --config ${args.config ?? "(default config)"} --expired-only true --dry-run false --zcode true`
+            `npx tsx src/cli.ts retry-provider-cooldowns --config ${args.config ?? "(default config)"} --expired-only true --dry-run false${args.repo ? ` --repo ${args.repo}` : ""}`
           ]
         : []
     };
@@ -229,7 +230,11 @@ async function main(): Promise<void> {
     if (!args.pr) throw new Error("--pr is required for why");
     const config = loadConfig(args.config);
     const report = await collectCoverageReport(args, config, true);
-    const explanation = explainPullStatus(report, args.repo, Number(args.pr));
+    const repoWideReport = await collectCoverageReport({ ...args, pr: undefined }, config, true);
+    const repoWideExplanation = explainPullStatus(repoWideReport, args.repo, Number(args.pr));
+    const explanation = repoWideExplanation.state === "unknown"
+      ? explainPullStatus(report, args.repo, Number(args.pr))
+      : repoWideExplanation;
     console.log(JSON.stringify({
       ok: !["read_failure", "unknown"].includes(explanation.state),
       checkedAt: report.checkedAt,
@@ -238,6 +243,11 @@ async function main(): Promise<void> {
         summary: report.summary,
         staleHeads: report.staleHeads,
         readFailures: report.readFailures
+      },
+      repoCoverage: {
+        summary: repoWideReport.summary,
+        staleHeads: repoWideReport.staleHeads,
+        readFailures: repoWideReport.readFailures
       }
     }, null, 2));
     if (["read_failure", "unknown"].includes(explanation.state)) process.exitCode = 1;
