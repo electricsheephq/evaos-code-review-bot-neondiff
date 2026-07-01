@@ -293,6 +293,28 @@ export async function retryProviderCooldownsWithDeps(input: {
     limit,
     now: new Date()
   });
+  const activeProviderCooldown = input.state.getActiveProviderCooldown(new Date());
+  if (expiredOnly && candidates.length > 0 && activeProviderCooldown) {
+    const results = candidates.map((candidate) => ({
+      repo: candidate.repo,
+      pullNumber: candidate.pullNumber,
+      headSha: candidate.headSha,
+      status: "skipped_provider_cooldown" as const
+    }));
+    const summary = summarizeRetryProviderCooldownResults(results);
+    return {
+      ok: true,
+      checkedAt: new Date().toISOString(),
+      dryRun: input.options.dryRun,
+      expiredOnly,
+      limit,
+      ...(input.options.repo ? { repo: input.options.repo } : {}),
+      candidates: candidates.length,
+      attempted: 0,
+      results,
+      summary
+    };
+  }
   const results: RetryFailedHeadResult[] = [];
   for (const candidate of candidates) {
     const result = await retryFailedHeadWithDeps({

@@ -25,6 +25,10 @@ export interface ReleaseDatabaseStatus {
   providerCooldownCount?: number;
   activeProviderCooldownCount?: number;
   expiredProviderCooldownCount?: number;
+  activeGlobalProviderCooldownCount?: number;
+  coveredExpiredProviderCooldownCount?: number;
+  retryableExpiredProviderCooldownCount?: number;
+  providerThrottleState?: "none" | "active" | "expired_retryable";
 }
 
 export interface ReleaseHeartbeatStatus {
@@ -75,7 +79,14 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const launchdRunningOk = input.launchd.state === "running";
   const launchdConfigOk = input.launchd.configPath === input.configPath;
   const dbOk = input.database.errorCount === 0;
-  const expiredProviderCooldownOk = (input.database.expiredProviderCooldownCount ?? 0) === 0;
+  const providerThrottleState = input.database.providerThrottleState ?? inferProviderThrottleState(input.database);
+  const retryableExpiredProviderCooldownCount =
+    input.database.retryableExpiredProviderCooldownCount ??
+    Math.max(
+      0,
+      (input.database.expiredProviderCooldownCount ?? 0) - (input.database.coveredExpiredProviderCooldownCount ?? 0)
+    );
+  const expiredProviderCooldownOk = retryableExpiredProviderCooldownCount === 0;
   const heartbeatOk = input.heartbeat.status === "fresh";
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
@@ -117,8 +128,8 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       name: "provider_cooldown_backlog",
       ok: expiredProviderCooldownOk,
       detail: expiredProviderCooldownOk
-        ? describeProviderCooldownBacklog(input.database)
-        : `${describeProviderCooldownBacklog(input.database)}; retry: ${retryProviderCooldownCommand}`
+        ? describeProviderCooldownBacklog(input.database, providerThrottleState)
+        : `${describeProviderCooldownBacklog(input.database, providerThrottleState)}; retry: ${retryProviderCooldownCommand}`
     },
     {
       name: "daemon_heartbeat_recent",
@@ -234,30 +245,63 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
       };
     const providerCooldownRows = db
       .prepare(
-        `select error
+        `select repo, error
          from processed_reviews
          where status = 'skipped' and error like ?`
       )
-      .all(`${PROVIDER_COOLDOWN_ERROR_PREFIX}%`) as unknown as Array<{ error: string | null }>;
+      .all(`${PROVIDER_COOLDOWN_ERROR_PREFIX}%`) as unknown as Array<{ repo: string; error: string | null }>;
     const providerCooldowns = providerCooldownRows
-      .map((providerRow) => parseProviderCooldownError(providerRow.error ?? undefined))
-      .filter((cooldown): cooldown is NonNullable<typeof cooldown> => Boolean(cooldown));
+      .map((providerRow) => {
+        const parsed = parseProviderCooldownError(providerRow.error ?? undefined);
+        return parsed ? { repo: providerRow.repo, ...parsed } : undefined;
+      })
+      .filter((cooldown): cooldown is { repo: string; cooldownUntil: string; reason?: string } => Boolean(cooldown));
+    const activeGlobalProviderCooldowns = readActiveGlobalProviderCooldowns(db, now);
     const expiredProviderCooldownCount = providerCooldowns.filter((cooldown) => {
       const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
       return !Number.isFinite(cooldownUntilMs) || cooldownUntilMs <= now.getTime();
     }).length;
     const activeProviderCooldownCount = providerCooldowns.length - expiredProviderCooldownCount;
+    const coveredExpiredProviderCooldownCount = activeGlobalProviderCooldowns.length > 0
+      ? expiredProviderCooldownCount
+      : 0;
+    const retryableExpiredProviderCooldownCount = expiredProviderCooldownCount - coveredExpiredProviderCooldownCount;
+    const providerThrottleState = activeGlobalProviderCooldowns.length > 0 || activeProviderCooldownCount > 0
+      ? "active"
+      : retryableExpiredProviderCooldownCount > 0
+        ? "expired_retryable"
+        : "none";
     return {
       rowCount: row.rowCount ?? 0,
       skippedCount: row.skippedCount ?? 0,
       providerCooldownCount: row.providerCooldownCount ?? 0,
       activeProviderCooldownCount,
       expiredProviderCooldownCount,
+      activeGlobalProviderCooldownCount: activeGlobalProviderCooldowns.length,
+      coveredExpiredProviderCooldownCount,
+      retryableExpiredProviderCooldownCount,
+      providerThrottleState,
       errorCount: row.errorCount ?? 0
     };
   } finally {
     db.close();
   }
+}
+
+function readActiveGlobalProviderCooldowns(db: DatabaseSync, now: Date): Array<{ repo: string; cooldownUntil: string }> {
+  const hasTable = db
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'repo_provider_cooldowns' limit 1")
+    .get();
+  if (!hasTable) return [];
+  const rows = db
+    .prepare("select repo, cooldown_until from repo_provider_cooldowns")
+    .all() as unknown as Array<{ repo: string; cooldown_until: string }>;
+  return rows
+    .map((row) => ({ repo: row.repo, cooldownUntil: row.cooldown_until }))
+    .filter((row) => {
+      const cooldownUntilMs = Date.parse(row.cooldownUntil);
+      return Number.isFinite(cooldownUntilMs) && cooldownUntilMs > now.getTime();
+    });
 }
 
 function describeProviderCooldownCounts(database: ReleaseDatabaseStatus): string {
@@ -269,8 +313,25 @@ function describeProviderCooldownCounts(database: ReleaseDatabaseStatus): string
   );
 }
 
-function describeProviderCooldownBacklog(database: ReleaseDatabaseStatus): string {
+function describeProviderCooldownBacklog(
+  database: ReleaseDatabaseStatus,
+  providerThrottleState = inferProviderThrottleState(database)
+): string {
+  if (providerThrottleState === "active" && (database.coveredExpiredProviderCooldownCount ?? 0) > 0) {
+    return (
+      `provider throttle active; ${database.coveredExpiredProviderCooldownCount} expired provider cooldown row(s) ` +
+      "deferred by active provider cooldown"
+    );
+  }
   return `${database.expiredProviderCooldownCount ?? 0} expired provider cooldown row(s); ${database.activeProviderCooldownCount ?? 0} active provider cooldown row(s)`;
+}
+
+function inferProviderThrottleState(database: ReleaseDatabaseStatus): "none" | "active" | "expired_retryable" {
+  if ((database.activeGlobalProviderCooldownCount ?? 0) > 0 || (database.activeProviderCooldownCount ?? 0) > 0) {
+    return "active";
+  }
+  if ((database.expiredProviderCooldownCount ?? 0) > 0) return "expired_retryable";
+  return "none";
 }
 
 function readHeartbeatStatus(statePath: string, maxAgeMs: number, now: Date): ReleaseHeartbeatStatus {
