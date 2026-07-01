@@ -287,7 +287,7 @@ describe("review state store", () => {
       repo: "100yenadmin/evaOS-GUI",
       pullNumber: 497,
       headSha: "head-a",
-      ttlMs: 1_000,
+      ttlMs: 60_000,
       headCountLimit: 1,
       now: new Date("2026-07-01T00:00:00.000Z")
     });
@@ -302,11 +302,20 @@ describe("review state store", () => {
 
     expect(first).toMatchObject({
       assigned: true,
-      session: expect.objectContaining({ state: "expired", headCountUsed: 1, headCountLimit: 1 })
+      session: expect.objectContaining({ state: "draining", headCountUsed: 1, headCountLimit: 1 })
     });
     expect(second).toMatchObject({ assigned: true, assignmentReason: "session_expired_new_session" });
     if (!first.assigned || !second.assigned) throw new Error("expected both session assignments to succeed");
     expect(first.session.sessionId).not.toBe(second.session.sessionId);
+    expect(store.getReviewerSession(first.session.sessionId)).toMatchObject({ state: "draining" });
+    store.updateReviewerSessionJobState({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "head-a",
+      jobState: "completed",
+      processedReviewStatus: "posted",
+      now: new Date("2026-07-01T00:00:03.000Z")
+    });
     expect(store.listReviewerSessions({ state: "expired" })).toHaveLength(1);
     expect(store.listReviewerSessions({ activeOnly: true, now: new Date("2026-07-01T00:00:02.000Z") })).toHaveLength(1);
     store.close();

@@ -443,7 +443,7 @@ export class ReviewStateStore {
         .run(session.sessionId, input.repo, input.pullNumber, input.headSha, assignmentReason, nowIso);
 
       const nextHeadCount = session.headCountUsed + 1;
-      const nextState: ReviewerSessionState = nextHeadCount >= session.headCountLimit ? "expired" : "active";
+      const nextState: ReviewerSessionState = nextHeadCount >= session.headCountLimit ? "draining" : "active";
       this.db
         .prepare(
           `update reviewer_sessions
@@ -568,7 +568,11 @@ export class ReviewStateStore {
         input.pullNumber,
         input.headSha
       );
-    return this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha)!;
+    const updated = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha)!;
+    if (input.jobState === "completed" || input.jobState === "skipped" || input.jobState === "failed") {
+      this.expireDrainedReviewerSessionIfComplete(existing.sessionId);
+    }
+    return updated;
   }
 
   expireReviewerSessions(now = new Date(), repo?: string): number {
@@ -579,16 +583,16 @@ export class ReviewStateStore {
             `update reviewer_sessions
              set state = 'expired'
              where repo = ?
-               and state in ('warming', 'active')
-               and (expires_at <= ? or head_count_used >= head_count_limit)`
+               and state in ('warming', 'active', 'draining')
+               and (expires_at <= ? or (state in ('warming', 'active') and head_count_used >= head_count_limit))`
           )
           .run(repo, nowIso)
       : this.db
           .prepare(
             `update reviewer_sessions
              set state = 'expired'
-             where state in ('warming', 'active')
-               and (expires_at <= ? or head_count_used >= head_count_limit)`
+             where state in ('warming', 'active', 'draining')
+               and (expires_at <= ? or (state in ('warming', 'active') and head_count_used >= head_count_limit))`
           )
           .run(nowIso);
     return Number(result.changes);
@@ -643,6 +647,21 @@ export class ReviewStateStore {
         input.zcodeCliVersion ?? null
       );
     return this.getReviewerSession(sessionId)!;
+  }
+
+  private expireDrainedReviewerSessionIfComplete(sessionId: string): void {
+    const session = this.getReviewerSession(sessionId);
+    if (session?.state !== "draining") return;
+    const row = this.db
+      .prepare(
+        `select count(*) as activeJobCount
+         from reviewer_session_jobs
+         where session_id = ?
+           and job_state not in ('completed', 'skipped', 'failed')`
+      )
+      .get(sessionId) as { activeJobCount?: number };
+    if ((row.activeJobCount ?? 0) > 0) return;
+    this.db.prepare("update reviewer_sessions set state = 'expired' where session_id = ?").run(sessionId);
   }
 
   private getReusableReviewerSession(repo: string, now = new Date()): ReviewerSessionRecord | undefined {
