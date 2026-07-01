@@ -1,6 +1,8 @@
 import { loadConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
+import { readFileSync } from "node:fs";
+import { runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
@@ -95,6 +97,17 @@ async function main(): Promise<void> {
     } finally {
       state.close();
     }
+    return;
+  }
+
+  if (command === "eval-offline") {
+    if (!args.input) throw new Error("--input is required for eval-offline");
+    const input = JSON.parse(readFileSync(args.input, "utf8"));
+    const result = runOfflineEval(input, {
+      outputDir: args["output-dir"]
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
     return;
   }
 
@@ -254,6 +267,8 @@ interface ParsedArgs {
   "dry-run"?: string;
   "expired-only"?: string;
   "head-sha"?: string;
+  input?: string;
+  "output-dir"?: string;
   limit?: string;
   zcode?: string;
   [key: string]: string | string[] | undefined;
