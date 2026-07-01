@@ -1,0 +1,145 @@
+{
+  "evalName": "evaos-zcode-review-bot-comparison-v0.2",
+  "runId": "historical-pr-replay-fixture",
+  "repo": "electricsheephq/evaos-code-review-bot",
+  "pullNumber": 61,
+  "headSha": "historical123",
+  "suite": "historical_pr_replay",
+  "rawOutput": {
+    "findings": [
+      {
+        "severity": "P1",
+        "path": "src/eval-harness.ts",
+        "line": 42,
+        "title": "Schema drop hides failed review output",
+        "body": "Malformed findings must fail the schema gate instead of disappearing from the scorecard.",
+        "confidence": 0.92
+      },
+      {
+        "severity": "P2",
+        "path": "src/eval-harness.ts",
+        "line": 88,
+        "title": "Calibration report must stay uncalibrated",
+        "body": "The public confidence claim must remain uncalibrated until enough human labels exist.",
+        "confidence": 0.81
+      },
+      {
+        "severity": "P2",
+        "path": "src/worker.ts",
+        "line": 214,
+        "title": "Provider timeout must record failed row",
+        "body": "A provider timeout must record a failed row so coverage audit can backfill the missed pull request.",
+        "confidence": 0.84
+      },
+      {
+        "severity": "P3",
+        "path": "docs/eval-harness.md",
+        "line": 19,
+        "title": "Eval docs omit merged fix evidence",
+        "body": "Historical replay docs should name the merged fix evidence used as a comparison baseline.",
+        "confidence": 0.73
+      }
+    ]
+  },
+  "botFindings": {
+    "findings": [
+      {
+        "severity": "P1",
+        "path": "src/eval-harness.ts",
+        "line": 42,
+        "title": "Schema drop hides failed review output",
+        "body": "Malformed findings must fail the schema gate instead of disappearing from the scorecard.",
+        "confidence": 0.92
+      },
+      {
+        "severity": "P2",
+        "path": "src/eval-harness.ts",
+        "line": 88,
+        "title": "Calibration report must stay uncalibrated",
+        "body": "The public confidence claim must remain uncalibrated until enough human labels exist.",
+        "confidence": 0.81
+      },
+      {
+        "severity": "P2",
+        "path": "src/worker.ts",
+        "line": 214,
+        "title": "Provider timeout must record failed row",
+        "body": "A provider timeout must record a failed row so coverage audit can backfill the missed pull request.",
+        "confidence": 0.84
+      },
+      {
+        "severity": "P3",
+        "path": "docs/eval-harness.md",
+        "line": 19,
+        "title": "Eval docs omit merged fix evidence",
+        "body": "Historical replay docs should name the merged fix evidence used as a comparison baseline.",
+        "confidence": 0.73
+      }
+    ]
+  },
+  "ciMetadata": [
+    {
+      "provider": "github-actions",
+      "name": "test",
+      "status": "failure",
+      "conclusion": "vitest failure reproduced the schema drop",
+      "url": "https://github.com/electricsheephq/evaos-code-review-bot/actions/runs/1"
+    }
+  ],
+  "mergedFixes": [
+    {
+      "repo": "electricsheephq/evaos-code-review-bot",
+      "pullNumber": 61,
+      "mergeSha": "2475728d82634203bd62e9be62c1bb71885144f3",
+      "path": "src/eval-harness.ts",
+      "summary": "Merged fix made dropped schema findings fail the scorecard."
+    }
+  ],
+  "labels": [
+    {
+      "source": "coderabbit",
+      "severity": "P1",
+      "path": "src/eval-harness.ts",
+      "line": 42,
+      "title": "Schema drop hides failed review output",
+      "body": "Malformed findings must fail the schema gate instead of disappearing from the scorecard.",
+      "sourceUrl": "https://github.com/electricsheephq/evaos-code-review-bot/pull/61#discussion_r1",
+      "author": "coderabbitai"
+    },
+    {
+      "source": "human",
+      "severity": "P2",
+      "path": "src/eval-harness.ts",
+      "line": 88,
+      "title": "Calibration report must stay uncalibrated",
+      "body": "The public confidence claim must remain uncalibrated until enough human labels exist.",
+      "author": "100yenadmin"
+    },
+    {
+      "source": "ci_failure",
+      "severity": "P2",
+      "path": "src/worker.ts",
+      "line": 214,
+      "title": "Provider timeout must record failed row",
+      "body": "A provider timeout must record a failed row so coverage audit can backfill the missed pull request.",
+      "checkName": "test"
+    },
+    {
+      "source": "merged_fix",
+      "severity": "P3",
+      "path": "docs/eval-harness.md",
+      "line": 19,
+      "title": "Eval docs omit merged fix evidence",
+      "body": "Historical replay docs should name the merged fix evidence used as a comparison baseline.",
+      "mergeSha": "2475728d82634203bd62e9be62c1bb71885144f3",
+      "diffSummary": "Documented merged-fix evidence in the eval packet."
+    }
+  ],
+  "thresholds": {
+    "minPrecision": 1,
+    "minRecall": 1,
+    "minSeededRecall": 1,
+    "maxSecretFindings": 0,
+    "maxDuplicateFindings": 0
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "evalName": "evaos-zcode-review-bot-comparison-v0.2",
+  "runId": "seeded-defect-recall-fixture",
+  "repo": "electricsheephq/WorldOS",
+  "pullNumber": 1234,
+  "headSha": "seeded123",
+  "suite": "seeded_defect_recall",
+  "botFindings": {
+    "findings": [
+      {
+        "severity": "P1",
+        "path": "Assets/Scripts/CombatTurn.cs",
+        "line": 26,
+        "title": "Combat health reset breaks fights",
+        "body": "The player health reset during combat turn resolution makes active fights nearly fail.",
+        "confidence": 0.95
+      }
+    ]
+  },
+  "labels": [
+    {
+      "source": "seeded_defect",
+      "severity": "P1",
+      "path": "Assets/Scripts/CombatTurn.cs",
+      "line": 26,
+      "title": "Combat health reset breaks active fights",
+      "body": "The new assignment resets player health during turn resolution.",
+      "sourceId": "seed-combat-health-reset"
+    }
+  ],
+  "thresholds": {
+    "minPrecision": 1,
+    "minRecall": 1,
+    "minSeededRecall": 1,
+    "maxSecretFindings": 0,
+    "maxDuplicateFindings": 0
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "evalName": "evaos-zcode-review-bot-comparison-v0.2",
+  "runId": "canary-shadow-fixture",
+  "repo": "electricsheephq/WorldOS",
+  "pullNumber": 1161,
+  "headSha": "canary123",
+  "suite": "canary_shadow",
+  "botFindings": {
+    "findings": []
+  },
+  "labels": [],
+  "thresholds": {
+    "minPrecision": 1,
+    "minRecall": 1,
+    "minSeededRecall": 1,
+    "maxSecretFindings": 0,
+    "maxDuplicateFindings": 0
+  }
+}

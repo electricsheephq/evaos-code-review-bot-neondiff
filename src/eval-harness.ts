@@ -1,5 +1,6 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { Finding, Severity } from "./types.js";
@@ -20,8 +21,13 @@ export interface EvalScenarioInput {
   pullNumber: number;
   headSha: string;
   suite: EvalSuiteName;
+  mode?: "gating" | "exploratory";
+  scenarioSource?: EvalScenarioSourceInput;
   rawOutput?: unknown;
   botFindings: unknown;
+  inlinePreviews?: EvalInlinePreviewInput[];
+  ciMetadata?: EvalCiMetadataInput[];
+  mergedFixes?: EvalMergedFixInput[];
   labels: EvalLabelInput[];
   thresholds?: Partial<EvalThresholds>;
 }
@@ -33,7 +39,45 @@ export interface EvalLabelInput {
   line: number;
   title: string;
   body: string;
+  sourceId?: string;
+  sourceUrl?: string;
+  author?: string;
+  checkName?: string;
+  mergeSha?: string;
+  diffSummary?: string;
   expected?: boolean;
+}
+
+export interface EvalScenarioSourceInput {
+  path: string;
+  sha256?: string;
+}
+
+export interface EvalInlinePreviewInput {
+  path: string;
+  line: number;
+  side?: "RIGHT" | "LEFT";
+  severity?: Severity;
+  title: string;
+  body: string;
+  confidence?: number;
+}
+
+export interface EvalCiMetadataInput {
+  provider: string;
+  name: string;
+  status: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required" | "pending";
+  conclusion?: string;
+  url?: string;
+  summary?: string;
+}
+
+export interface EvalMergedFixInput {
+  repo: string;
+  pullNumber: number;
+  mergeSha: string;
+  path?: string;
+  summary: string;
 }
 
 export interface EvalThresholds {
@@ -75,6 +119,9 @@ export interface EvalScorecard {
     droppedFromSchema: number;
     secretFindings: number;
     duplicateFindings: number;
+    inlinePreviews: number;
+    ciMetadata: number;
+    mergedFixes: number;
   };
   metrics: {
     precision: number;
@@ -88,6 +135,7 @@ export interface EvalScorecard {
 interface NormalizedEvalFinding extends Finding {
   id: string;
   source: "bot" | EvalLabelSource;
+  evidence?: Record<string, string>;
 }
 
 interface EvalMatch {
@@ -104,7 +152,7 @@ const DEFAULT_THRESHOLDS: EvalThresholds = {
   maxDuplicateFindings: 0
 };
 
-const REQUIRED_SUITES: EvalSuiteName[] = [
+export const REQUIRED_SUITES: EvalSuiteName[] = [
   "canary_shadow",
   "historical_pr_replay",
   "seeded_defect_recall",
@@ -116,9 +164,11 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   validateEvalInput(input);
   const thresholds = { ...DEFAULT_THRESHOLDS, ...(input.thresholds ?? {}) };
   validateThresholds(thresholds);
+  validateThresholdPolicy(input.mode ?? "gating", input.thresholds ?? {});
 
   const evalName = input.evalName ?? "evaos-zcode-review-bot-comparison-v0.1";
   const outputDir = options.outputDir ?? defaultEvalOutputDir(input, options.now ?? new Date());
+  guardOutputDir(outputDir);
   mkdirSync(outputDir, { recursive: true });
 
   const parsedBot = parseFindings(input.botFindings);
@@ -126,6 +176,9 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   const labels = input.labels
     .filter((label) => label.expected !== false)
     .map((label, index) => normalizeFinding(label, label.source, `label-${index + 1}`));
+  const inlinePreviews = buildInlinePreviews(input.inlinePreviews, botFindings);
+  const ciMetadata = normalizeCiMetadata(input.ciMetadata ?? []);
+  const mergedFixes = normalizeMergedFixes(input.mergedFixes ?? []);
   const matches = matchFindings(botFindings, labels);
   const duplicateReport = findDuplicateFindings(botFindings);
   const redactionReport = buildRedactionReport(input, parsedBot.findings, input.labels, parsedBot.dropped.length);
@@ -138,6 +191,9 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
     duplicateCount: duplicateReport.duplicates.length,
     secretCount: redactionReport.secretLikeItems.length,
     droppedFromSchema: parsedBot.dropped.length,
+    inlinePreviewCount: inlinePreviews.length,
+    ciMetadataCount: ciMetadata.length,
+    mergedFixCount: mergedFixes.length,
     thresholds
   });
 
@@ -145,6 +201,9 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
     "manifest.json": join(outputDir, "manifest.json"),
     "raw-output.json": join(outputDir, "raw-output.json"),
     "normalized-findings.json": join(outputDir, "normalized-findings.json"),
+    "inline-previews.json": join(outputDir, "inline-previews.json"),
+    "ci-metadata.json": join(outputDir, "ci-metadata.json"),
+    "merged-fixes.json": join(outputDir, "merged-fixes.json"),
     "redaction-report.json": join(outputDir, "redaction-report.json"),
     "duplicate-report.json": join(outputDir, "duplicate-report.json"),
     "comparison.csv": join(outputDir, "comparison.csv"),
@@ -153,28 +212,44 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
     "scorecard.json": join(outputDir, "scorecard.json")
   };
 
-  writeJson(artifacts["manifest.json"]!, {
-    evalName,
-    runId: input.runId,
-    suite: input.suite,
-    requiredSuites: REQUIRED_SUITES,
-    repo: input.repo,
-    pullNumber: input.pullNumber,
-    headSha: input.headSha,
-    generatedAt: (options.now ?? new Date()).toISOString(),
-    proofBoundary: "offline comparison packet only; no GitHub posting or repo mutation"
-  });
   writeJson(artifacts["raw-output.json"]!, redactUnknown(input.rawOutput ?? input.botFindings));
   writeJson(artifacts["normalized-findings.json"]!, {
     botFindings,
     droppedFromSchema: parsedBot.dropped.map(redactUnknown)
   });
+  writeJson(artifacts["inline-previews.json"]!, inlinePreviews);
+  writeJson(artifacts["ci-metadata.json"]!, ciMetadata);
+  writeJson(artifacts["merged-fixes.json"]!, mergedFixes);
   writeJson(artifacts["redaction-report.json"]!, redactionReport);
   writeJson(artifacts["duplicate-report.json"]!, duplicateReport);
   writeFileSync(artifacts["comparison.csv"]!, buildComparisonCsv(botFindings, labels, matches));
   writeJson(artifacts["labels.json"]!, labels);
   writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, matches));
   writeJson(artifacts["scorecard.json"]!, scorecard);
+  writeJson(artifacts["manifest.json"]!, {
+    evalName,
+    artifactVersion: "0.2",
+    runId: input.runId,
+    suite: input.suite,
+    mode: input.mode ?? "gating",
+    requiredSuites: REQUIRED_SUITES,
+    repo: input.repo,
+    pullNumber: input.pullNumber,
+    headSha: input.headSha,
+    scenarioSource: input.scenarioSource ? redactUnknown(input.scenarioSource) : undefined,
+    negativeControl: labels.length === 0,
+    thresholds,
+    artifactInventory: Object.entries(artifacts)
+      .filter(([name]) => name !== "manifest.json")
+      .map(([name, path]) => ({ name, sha256: sha256File(path) })),
+    metadataCounts: {
+      inlinePreviews: inlinePreviews.length,
+      ciMetadata: ciMetadata.length,
+      mergedFixes: mergedFixes.length
+    },
+    generatedAt: (options.now ?? new Date()).toISOString(),
+    proofBoundary: "offline comparison packet only; no GitHub posting or repo mutation"
+  });
 
   return {
     ok: scorecard.gates.every((gate) => gate.ok),
@@ -193,6 +268,9 @@ function buildScorecard(input: {
   duplicateCount: number;
   secretCount: number;
   droppedFromSchema: number;
+  inlinePreviewCount: number;
+  ciMetadataCount: number;
+  mergedFixCount: number;
   thresholds: EvalThresholds;
 }): EvalScorecard {
   const matchedBotIds = new Set(input.matches.map((match) => match.botFindingId));
@@ -208,6 +286,13 @@ function buildScorecard(input: {
   const exactLineMatches = input.matches.filter((match) => match.kind === "exact_line").length;
   const nearbyLineMatches = input.matches.filter((match) => match.kind === "nearby_line").length;
   const semanticMatches = input.matches.filter((match) => match.kind === "semantic").length;
+  const suiteGate = evaluateSuiteRequirements({
+    suite: input.input.suite,
+    labels: input.labels,
+    thresholds: input.thresholds,
+    ciMetadataCount: input.ciMetadataCount,
+    mergedFixCount: input.mergedFixCount
+  });
 
   return {
     evalName: input.evalName,
@@ -227,7 +312,10 @@ function buildScorecard(input: {
       semanticMatches,
       droppedFromSchema: input.droppedFromSchema,
       secretFindings: input.secretCount,
-      duplicateFindings: input.duplicateCount
+      duplicateFindings: input.duplicateCount,
+      inlinePreviews: input.inlinePreviewCount,
+      ciMetadata: input.ciMetadataCount,
+      mergedFixes: input.mergedFixCount
     },
     metrics: {
       precision: roundMetric(precision),
@@ -265,9 +353,51 @@ function buildScorecard(input: {
         name: "duplicate_suppression",
         ok: input.duplicateCount <= input.thresholds.maxDuplicateFindings,
         detail: `${input.duplicateCount} <= ${input.thresholds.maxDuplicateFindings}`
+      },
+      {
+        name: "suite_requirements",
+        ok: suiteGate.ok,
+        detail: suiteGate.detail
       }
     ]
   };
+}
+
+function evaluateSuiteRequirements(input: {
+  suite: EvalSuiteName;
+  labels: NormalizedEvalFinding[];
+  thresholds: EvalThresholds;
+  ciMetadataCount: number;
+  mergedFixCount: number;
+}): { ok: boolean; detail: string } {
+  if (input.suite === "seeded_defect_recall") {
+    const seeded = input.labels.filter((label) => label.source === "seeded_defect").length;
+    return {
+      ok: seeded > 0,
+      detail: `${seeded} seeded_defect label(s)`
+    };
+  }
+  if (input.suite === "historical_pr_replay") {
+    const comparisonLabels = input.labels.filter((label) => label.source !== "seeded_defect").length;
+    const evidenceItems = input.ciMetadataCount + input.mergedFixCount;
+    return {
+      ok: comparisonLabels > 0 && evidenceItems > 0,
+      detail: `${comparisonLabels} comparison label(s), ${input.ciMetadataCount} CI evidence item(s), ${input.mergedFixCount} merged-fix evidence item(s)`
+    };
+  }
+  if (input.suite === "safety_redaction") {
+    return {
+      ok: input.thresholds.maxSecretFindings === 0,
+      detail: `maxSecretFindings=${input.thresholds.maxSecretFindings}`
+    };
+  }
+  if (input.suite === "duplicate_suppression") {
+    return {
+      ok: input.thresholds.maxDuplicateFindings === 0,
+      detail: `maxDuplicateFindings=${input.thresholds.maxDuplicateFindings}`
+    };
+  }
+  return { ok: true, detail: "canary shadow suite has no extra fixture requirement" };
 }
 
 function matchFindings(botFindings: NormalizedEvalFinding[], labels: NormalizedEvalFinding[]): EvalMatch[] {
@@ -306,6 +436,7 @@ function matchFindings(botFindings: NormalizedEvalFinding[], labels: NormalizedE
 }
 
 function classifyMatch(botFinding: NormalizedEvalFinding, label: NormalizedEvalFinding): EvalMatch["kind"] | undefined {
+  if (botFinding.severity !== label.severity) return undefined;
   const overlap = tokenOverlap(botFinding, label);
   if (botFinding.line === label.line && overlap >= 0.25) return "exact_line";
   if (Math.abs(botFinding.line - label.line) <= 3 && overlap >= 0.35) return "nearby_line";
@@ -347,6 +478,24 @@ function findDuplicateFindings(findings: NormalizedEvalFinding[]): {
     if (originalId) duplicates.push({ duplicateId: finding.id, originalId, key });
     else seen.set(key, finding.id);
   }
+  const duplicateIds = new Set(duplicates.map((duplicate) => duplicate.duplicateId));
+  for (let index = 0; index < findings.length; index += 1) {
+    const finding = findings[index]!;
+    if (duplicateIds.has(finding.id)) continue;
+    for (const prior of findings.slice(0, index)) {
+      if (finding.path !== prior.path || finding.severity !== prior.severity) continue;
+      if (finding.line === prior.line) continue;
+      if (Math.abs(finding.line - prior.line) > 3) continue;
+      if (tokenOverlap(finding, prior) < 0.55) continue;
+      duplicateIds.add(finding.id);
+      duplicates.push({
+        duplicateId: finding.id,
+        originalId: prior.id,
+        key: `${finding.path}:${prior.line}-${finding.line}:${finding.severity}:nearby_semantic`
+      });
+      break;
+    }
+  }
   return { duplicates };
 }
 
@@ -381,6 +530,20 @@ function buildRedactionReport(
       source: "raw",
       field: input.rawOutput !== undefined ? "rawOutput" : "botFindings"
     });
+  }
+  for (const [source, value] of [
+    ["labelEvidence", labels.map(extractLabelEvidenceForScan)],
+    ["inlinePreviews", input.inlinePreviews ?? []],
+    ["ciMetadata", input.ciMetadata ?? []],
+    ["mergedFixes", input.mergedFixes ?? []]
+  ] as const) {
+    if (containsSecretLikeText(JSON.stringify(value))) {
+      secretLikeItems.push({
+        id: source,
+        source: "metadata",
+        field: source
+      });
+    }
   }
   return { droppedFromSchema, secretLikeItems };
 }
@@ -451,6 +614,51 @@ function buildCalibrationReport(botFindings: NormalizedEvalFinding[], matches: E
   };
 }
 
+function buildInlinePreviews(
+  inputPreviews: EvalInlinePreviewInput[] | undefined,
+  botFindings: NormalizedEvalFinding[]
+): EvalInlinePreviewInput[] {
+  const previews = inputPreviews ?? botFindings.map((finding) => ({
+    path: finding.path,
+    line: finding.line,
+    side: "RIGHT" as const,
+    severity: finding.severity,
+    title: finding.title,
+    body: finding.body,
+    confidence: finding.confidence
+  }));
+  return previews.map((preview) => ({
+    path: preview.path,
+    line: preview.line,
+    side: preview.side ?? "RIGHT",
+    severity: preview.severity,
+    title: redactSecrets(preview.title.trim()),
+    body: redactSecrets(preview.body.trim()),
+    ...(typeof preview.confidence === "number" ? { confidence: preview.confidence } : {})
+  }));
+}
+
+function normalizeCiMetadata(items: EvalCiMetadataInput[]): EvalCiMetadataInput[] {
+  return items.map((item) => ({
+    provider: redactSecrets(item.provider.trim()),
+    name: redactSecrets(item.name.trim()),
+    status: item.status,
+    ...(item.conclusion ? { conclusion: redactSecrets(item.conclusion.trim()) } : {}),
+    ...(item.url ? { url: redactSecrets(item.url.trim()) } : {}),
+    ...(item.summary ? { summary: redactSecrets(item.summary.trim()) } : {})
+  }));
+}
+
+function normalizeMergedFixes(items: EvalMergedFixInput[]): EvalMergedFixInput[] {
+  return items.map((item) => ({
+    repo: redactSecrets(item.repo.trim()),
+    pullNumber: item.pullNumber,
+    mergeSha: redactSecrets(item.mergeSha.trim()),
+    ...(item.path ? { path: redactSecrets(item.path.trim()) } : {}),
+    summary: redactSecrets(item.summary.trim())
+  }));
+}
+
 function normalizeFinding(
   finding: Finding | EvalLabelInput,
   source: "bot" | EvalLabelSource,
@@ -460,6 +668,7 @@ function normalizeFinding(
     "why_this_matters" in finding && typeof finding.why_this_matters === "string"
       ? finding.why_this_matters
       : undefined;
+  const evidence = buildLabelEvidence(finding);
   return {
     id,
     source,
@@ -469,8 +678,20 @@ function normalizeFinding(
     title: redactSecrets(finding.title.trim()),
     body: redactSecrets(finding.body.trim()),
     confidence: "confidence" in finding && typeof finding.confidence === "number" ? finding.confidence : 1,
-    ...(whyThisMatters ? { why_this_matters: redactSecrets(whyThisMatters.trim()) } : {})
+    ...(whyThisMatters ? { why_this_matters: redactSecrets(whyThisMatters.trim()) } : {}),
+    ...(evidence ? { evidence } : {})
   };
+}
+
+function buildLabelEvidence(finding: Finding | EvalLabelInput): Record<string, string> | undefined {
+  const evidence: Record<string, string> = {};
+  const candidate = finding as unknown as Record<string, unknown>;
+  for (const field of ["sourceId", "sourceUrl", "author", "checkName", "mergeSha", "diffSummary"] as const) {
+    if (typeof candidate[field] === "string" && candidate[field].trim().length > 0) {
+      evidence[field] = redactSecrets(candidate[field].trim());
+    }
+  }
+  return Object.keys(evidence).length > 0 ? evidence : undefined;
 }
 
 function defaultEvalOutputDir(input: Pick<EvalScenarioInput, "runId">, now: Date): string {
@@ -488,6 +709,50 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function sha256File(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function guardOutputDir(outputDir: string): void {
+  const resolvedOutput = resolve(outputDir);
+  const gitRoot = findGitRoot(process.cwd());
+  if (!gitRoot) return;
+  const realOutput = resolveRealPathForPotentialOutput(resolvedOutput);
+  const realGitRoot = realpathSync(gitRoot);
+  const relation = relative(realGitRoot, realOutput);
+  if (relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))) {
+    throw new Error("outputDir must not be inside the current git checkout; write eval packets under /Volumes/LEXAR/Codex/evals or a temp directory");
+  }
+}
+
+function resolveRealPathForPotentialOutput(path: string): string {
+  const resolved = resolve(path);
+  if (existsSync(resolved)) return realpathSync(resolved);
+  const segments: string[] = [];
+  let cursor = resolved;
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) return resolved;
+    segments.unshift(cursor.slice(parent.length + 1));
+    cursor = parent;
+  }
+  return resolve(realpathSync(cursor), ...segments);
+}
+
+function findGitRoot(start: string): string | undefined {
+  let cursor = resolve(start);
+  for (;;) {
+    const gitPath = join(cursor, ".git");
+    if (existsSync(gitPath)) {
+      const stat = statSync(gitPath);
+      if (stat.isDirectory() || stat.isFile()) return cursor;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) return undefined;
+    cursor = parent;
+  }
+}
+
 function redactUnknown(value: unknown): unknown {
   if (typeof value === "string") return redactSecrets(value);
   if (Array.isArray(value)) return value.map(redactUnknown);
@@ -495,6 +760,14 @@ function redactUnknown(value: unknown): unknown {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactSecrets(key), redactUnknown(item)]));
   }
   return value;
+}
+
+function extractLabelEvidenceForScan(label: EvalLabelInput): Record<string, unknown> {
+  return Object.fromEntries(
+    (["sourceId", "sourceUrl", "author", "checkName", "mergeSha", "diffSummary"] as const)
+      .filter((field) => label[field] !== undefined)
+      .map((field) => [field, label[field]])
+  );
 }
 
 function csvCell(value: string): string {
@@ -514,8 +787,16 @@ function validateEvalInput(input: EvalScenarioInput): void {
   if (!REQUIRED_SUITES.includes(input.suite)) throw new Error(`suite must be one of ${REQUIRED_SUITES.join(", ")}`);
   if (!("botFindings" in input)) throw new Error("botFindings is required");
   if (!isFindingEnvelope(input.botFindings)) throw new Error("botFindings must be an array or an object with a findings array");
+  if (input.mode !== undefined && !["gating", "exploratory"].includes(input.mode)) throw new Error("mode must be gating or exploratory");
+  if (input.scenarioSource !== undefined) validateScenarioSource(input.scenarioSource);
   if (!Array.isArray(input.labels)) throw new Error("labels must be an array");
+  if (input.inlinePreviews !== undefined && !Array.isArray(input.inlinePreviews)) throw new Error("inlinePreviews must be an array");
+  if (input.ciMetadata !== undefined && !Array.isArray(input.ciMetadata)) throw new Error("ciMetadata must be an array");
+  if (input.mergedFixes !== undefined && !Array.isArray(input.mergedFixes)) throw new Error("mergedFixes must be an array");
   for (const [index, label] of input.labels.entries()) validateLabel(label, `labels[${index}]`);
+  for (const [index, preview] of (input.inlinePreviews ?? []).entries()) validateInlinePreview(preview, `inlinePreviews[${index}]`);
+  for (const [index, item] of (input.ciMetadata ?? []).entries()) validateCiMetadata(item, `ciMetadata[${index}]`);
+  for (const [index, item] of (input.mergedFixes ?? []).entries()) validateMergedFix(item, `mergedFixes[${index}]`);
 }
 
 function isFindingEnvelope(value: unknown): boolean {
@@ -536,6 +817,47 @@ function validateLabel(label: EvalLabelInput, labelPath: string): void {
   validateNonEmpty(label.title, `${labelPath}.title`);
   validateNonEmpty(label.body, `${labelPath}.body`);
   if (!Number.isInteger(label.line) || label.line <= 0) throw new Error(`${labelPath}.line must be a positive integer`);
+  for (const field of ["sourceId", "sourceUrl", "author", "checkName", "mergeSha", "diffSummary"] as const) {
+    if (label[field] !== undefined && typeof label[field] !== "string") throw new Error(`${labelPath}.${field} must be a string`);
+  }
+}
+
+function validateScenarioSource(source: EvalScenarioSourceInput): void {
+  validateNonEmpty(source.path, "scenarioSource.path");
+  if (source.sha256 !== undefined && !/^[a-f0-9]{64}$/i.test(source.sha256)) throw new Error("scenarioSource.sha256 must be a sha256 hex digest");
+}
+
+function validateInlinePreview(preview: EvalInlinePreviewInput, labelPath: string): void {
+  validateNonEmpty(preview.path, `${labelPath}.path`);
+  validateNonEmpty(preview.title, `${labelPath}.title`);
+  validateNonEmpty(preview.body, `${labelPath}.body`);
+  if (!Number.isInteger(preview.line) || preview.line <= 0) throw new Error(`${labelPath}.line must be a positive integer`);
+  if (preview.side !== undefined && !["RIGHT", "LEFT"].includes(preview.side)) throw new Error(`${labelPath}.side is invalid`);
+  if (preview.severity !== undefined && !["P0", "P1", "P2", "P3"].includes(preview.severity)) {
+    throw new Error(`${labelPath}.severity is invalid`);
+  }
+  if (preview.confidence !== undefined && (typeof preview.confidence !== "number" || preview.confidence < 0 || preview.confidence > 1)) {
+    throw new Error(`${labelPath}.confidence must be between 0 and 1`);
+  }
+}
+
+function validateCiMetadata(item: EvalCiMetadataInput, labelPath: string): void {
+  validateNonEmpty(item.provider, `${labelPath}.provider`);
+  validateNonEmpty(item.name, `${labelPath}.name`);
+  if (!["success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required", "pending"].includes(item.status)) {
+    throw new Error(`${labelPath}.status is invalid`);
+  }
+  for (const field of ["conclusion", "url", "summary"] as const) {
+    if (item[field] !== undefined && typeof item[field] !== "string") throw new Error(`${labelPath}.${field} must be a string`);
+  }
+}
+
+function validateMergedFix(item: EvalMergedFixInput, labelPath: string): void {
+  validateNonEmpty(item.repo, `${labelPath}.repo`);
+  validateNonEmpty(item.mergeSha, `${labelPath}.mergeSha`);
+  validateNonEmpty(item.summary, `${labelPath}.summary`);
+  if (!Number.isInteger(item.pullNumber) || item.pullNumber <= 0) throw new Error(`${labelPath}.pullNumber must be a positive integer`);
+  if (item.path !== undefined && typeof item.path !== "string") throw new Error(`${labelPath}.path must be a string`);
 }
 
 function validateThresholds(thresholds: EvalThresholds): void {
@@ -546,6 +868,20 @@ function validateThresholds(thresholds: EvalThresholds): void {
   }
   for (const key of ["maxSecretFindings", "maxDuplicateFindings"] as const) {
     if (!Number.isInteger(thresholds[key]) || thresholds[key] < 0) throw new Error(`${key} must be a non-negative integer`);
+  }
+}
+
+function validateThresholdPolicy(mode: "gating" | "exploratory", thresholds: Partial<EvalThresholds>): void {
+  if (mode === "exploratory") return;
+  for (const key of ["minPrecision", "minRecall", "minSeededRecall"] as const) {
+    if (thresholds[key] !== undefined && thresholds[key] < DEFAULT_THRESHOLDS[key]) {
+      throw new Error(`${key} below the default requires mode="exploratory"`);
+    }
+  }
+  for (const key of ["maxSecretFindings", "maxDuplicateFindings"] as const) {
+    if (thresholds[key] !== undefined && thresholds[key] > DEFAULT_THRESHOLDS[key]) {
+      throw new Error(`${key} above the default requires mode="exploratory"`);
+    }
   }
 }
 

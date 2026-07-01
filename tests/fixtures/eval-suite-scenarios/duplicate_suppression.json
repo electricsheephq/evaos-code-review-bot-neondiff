@@ -1,0 +1,19 @@
+{
+  "evalName": "evaos-zcode-review-bot-comparison-v0.2",
+  "runId": "duplicate-suppression-fixture",
+  "repo": "electricsheephq/evaos-code-review-bot",
+  "pullNumber": 9,
+  "headSha": "duplicate123",
+  "suite": "duplicate_suppression",
+  "botFindings": {
+    "findings": []
+  },
+  "labels": [],
+  "thresholds": {
+    "minPrecision": 1,
+    "minRecall": 1,
+    "minSeededRecall": 1,
+    "maxSecretFindings": 0,
+    "maxDuplicateFindings": 0
+  }
+}

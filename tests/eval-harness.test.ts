@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,7 +50,8 @@ describe("offline eval harness", () => {
           path: "Assets/Scripts/CombatTurn.cs",
           line: 26,
           title: "Combat health reset breaks active fights",
-          body: "The new assignment resets player health during turn resolution."
+          body: "The new assignment resets player health during turn resolution.",
+          sourceId: "seed-combat-health-reset"
         },
         {
           source: "coderabbit",
@@ -57,7 +59,9 @@ describe("offline eval harness", () => {
           path: "src/review.ts",
           line: 15,
           title: "Retry output omits failure status",
-          body: "The review summary misses failed retry state in the output."
+          body: "The review summary misses failed retry state in the output.",
+          sourceUrl: "https://github.com/electricsheephq/WorldOS/pull/1234#discussion_r1",
+          author: "coderabbitai"
         }
       ],
       thresholds: {
@@ -77,6 +81,9 @@ describe("offline eval harness", () => {
       "manifest.json",
       "raw-output.json",
       "normalized-findings.json",
+      "inline-previews.json",
+      "ci-metadata.json",
+      "merged-fixes.json",
       "redaction-report.json",
       "duplicate-report.json",
       "comparison.csv",
@@ -101,6 +108,27 @@ describe("offline eval harness", () => {
         seededRecall: 1
       }
     });
+    expect(scorecard.counts.inlinePreviews).toBe(2);
+    const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({
+      artifactVersion: "0.2",
+      mode: "gating",
+      thresholds: {
+        minPrecision: 1,
+        minRecall: 1,
+        minSeededRecall: 1,
+        maxSecretFindings: 0,
+        maxDuplicateFindings: 0
+      },
+      metadataCounts: {
+        inlinePreviews: 2,
+        ciMetadata: 0,
+        mergedFixes: 0
+      }
+    });
+    expect(manifest.artifactInventory.length).toBe(11);
+    const labels = JSON.parse(readFileSync(join(root, "labels.json"), "utf8"));
+    expect(labels[1].evidence).toMatchObject({ author: "coderabbitai" });
     expect(readFileSync(join(root, "comparison.csv"), "utf8")).toContain("true_positive,exact_line");
   });
 
@@ -114,6 +142,7 @@ describe("offline eval harness", () => {
       pullNumber: 497,
       headSha: "def456",
       suite: "safety_redaction",
+      mode: "exploratory",
       rawOutput: `raw model response contained ${token}`,
       botFindings: {
         findings: [
@@ -164,6 +193,7 @@ describe("offline eval harness", () => {
       pullNumber: 60,
       headSha: "abc",
       suite: "safety_redaction",
+      mode: "exploratory",
       botFindings: {
         findings: [
           {
@@ -201,6 +231,7 @@ describe("offline eval harness", () => {
       pullNumber: 61,
       headSha: "abc",
       suite: "canary_shadow",
+      mode: "exploratory",
       botFindings: {
         findings: [
           {
@@ -250,6 +281,7 @@ describe("offline eval harness", () => {
       pullNumber: 61,
       headSha: "abc",
       suite: "seeded_defect_recall",
+      mode: "exploratory",
       botFindings: {
         findings: [
           {
@@ -298,6 +330,7 @@ describe("offline eval harness", () => {
       pullNumber: 61,
       headSha: "abc",
       suite: "seeded_defect_recall",
+      mode: "exploratory",
       botFindings: {
         findings: [
           {
@@ -350,6 +383,7 @@ describe("offline eval harness", () => {
       pullNumber: 61,
       headSha: "abc",
       suite: "safety_redaction",
+      mode: "exploratory",
       botFindings: {
         findings: [],
         [token]: "secret in key"
@@ -389,5 +423,321 @@ describe("offline eval harness", () => {
 
     expect(result.outputDir).toBe(root);
     expect(result.ok).toBe(true);
+  });
+
+  it("runs a complete local fixture set across every required suite", () => {
+    const fixtureDir = join(process.cwd(), "tests/fixtures/eval-suite-scenarios");
+    const expectedSuites = [
+      "canary_shadow",
+      "historical_pr_replay",
+      "seeded_defect_recall",
+      "safety_redaction",
+      "duplicate_suppression"
+    ];
+
+    for (const suite of expectedSuites) {
+      const root = mkdtempSync(join(tmpdir(), `evaos-eval-harness-${suite}-`));
+      roots.push(root);
+      const scenario = JSON.parse(readFileSync(join(fixtureDir, `${suite}.json`), "utf8")) as EvalScenarioInput;
+      const result = runOfflineEval(scenario, { outputDir: root });
+
+      expect(result.ok, suite).toBe(true);
+      expect(result.scorecard.suite).toBe(suite);
+      expect(existsSync(join(root, "inline-previews.json")), suite).toBe(true);
+      expect(existsSync(join(root, "ci-metadata.json")), suite).toBe(true);
+      expect(existsSync(join(root, "merged-fixes.json")), suite).toBe(true);
+    }
+  });
+
+  it("rejects loosened gating thresholds unless the scenario is exploratory", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-threshold-policy-"));
+    roots.push(root);
+
+    expect(() => runOfflineEval({
+      runId: "unsafe-threshold",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: { findings: [] },
+      labels: [],
+      thresholds: {
+        minPrecision: 0
+      }
+    }, { outputDir: root })).toThrow('minPrecision below the default requires mode="exploratory"');
+  });
+
+  it("rejects seeded defect recall scenarios with no seeded labels", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-seeded-requirement-"));
+    roots.push(root);
+
+    const result = runOfflineEval({
+      runId: "missing-seeded-label",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "seeded_defect_recall",
+      botFindings: { findings: [] },
+      labels: []
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.gates.find((gate) => gate.name === "suite_requirements")).toMatchObject({ ok: false });
+  });
+
+  it("does not match findings when severity differs from the label", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-severity-"));
+    roots.push(root);
+
+    const result = runOfflineEval({
+      runId: "severity-mismatch",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "seeded_defect_recall",
+      mode: "exploratory",
+      botFindings: {
+        findings: [{
+          severity: "P2",
+          path: "src/a.ts",
+          line: 10,
+          title: "Dangerous retry loop",
+          body: "The retry loop can repeat a dangerous operation.",
+          confidence: 0.9
+        }]
+      },
+      labels: [{
+        source: "seeded_defect",
+        severity: "P1",
+        path: "src/a.ts",
+        line: 10,
+        title: "Dangerous retry loop",
+        body: "The retry loop can repeat a dangerous operation."
+      }],
+      thresholds: {
+        minPrecision: 0.8,
+        minRecall: 1,
+        minSeededRecall: 1
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.counts).toMatchObject({
+      truePositive: 0,
+      falsePositive: 1,
+      falseNegative: 1
+    });
+  });
+
+  it("detects nearby semantic duplicate findings", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-nearby-duplicate-"));
+    roots.push(root);
+
+    const result = runOfflineEval({
+      runId: "nearby-duplicate",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "duplicate_suppression",
+      mode: "exploratory",
+      botFindings: {
+        findings: [
+          {
+            severity: "P2",
+            path: "src/a.ts",
+            line: 10,
+            title: "Retry failure state omitted",
+            body: "The retry output omits failed provider state from the summary.",
+            confidence: 0.8
+          },
+          {
+            severity: "P2",
+            path: "src/a.ts",
+            line: 12,
+            title: "Retry failure state omitted again",
+            body: "The retry output omits failed provider state from the summary.",
+            confidence: 0.7
+          }
+        ]
+      },
+      labels: [],
+      thresholds: {
+        minPrecision: 0,
+        minRecall: 0,
+        maxDuplicateFindings: 0
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.counts.duplicateFindings).toBe(1);
+  });
+
+  it("rejects output under the repo checkout", () => {
+    expect(() => runOfflineEval({
+      runId: "repo-output",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: { findings: [] },
+      labels: []
+    }, { outputDir: join(process.cwd(), ".eval-output") }))
+      .toThrow("outputDir must not be inside the current git checkout");
+  });
+
+  it("rejects output under a symlinked repo checkout path", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-symlink-"));
+    roots.push(root);
+    const link = join(root, "repo-link");
+    symlinkSync(process.cwd(), link, "dir");
+
+    expect(() => runOfflineEval({
+      runId: "symlink-output",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: { findings: [] },
+      labels: []
+    }, { outputDir: join(link, ".eval-output") }))
+      .toThrow("outputDir must not be inside the current git checkout");
+  });
+
+  it("counts secret-like label evidence in the redaction gate", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-label-evidence-secret-"));
+    roots.push(root);
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+
+    const result = runOfflineEval({
+      runId: "label-evidence-secret",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "safety_redaction",
+      mode: "exploratory",
+      botFindings: { findings: [] },
+      labels: [{
+        source: "human",
+        severity: "P2",
+        path: "src/a.ts",
+        line: 1,
+        title: "Secret in label evidence",
+        body: "The label metadata contains a token.",
+        sourceUrl: `https://github.test/review?token=${token}`,
+        expected: false
+      }],
+      thresholds: {
+        minPrecision: 0,
+        minRecall: 0,
+        maxSecretFindings: 0
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.gates.find((gate) => gate.name === "secret_redaction")).toMatchObject({ ok: false });
+    expect(readFileSync(join(root, "labels.json"), "utf8")).not.toContain(token);
+  });
+
+  it("requires external evidence metadata for historical replay suite", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-historical-evidence-"));
+    roots.push(root);
+
+    const result = runOfflineEval({
+      runId: "historical-no-evidence",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "historical_pr_replay",
+      botFindings: { findings: [] },
+      labels: [{
+        source: "human",
+        severity: "P2",
+        path: "src/a.ts",
+        line: 1,
+        title: "Human comparison label",
+        body: "A comparison label without CI or merged-fix evidence."
+      }]
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.gates.find((gate) => gate.name === "suite_requirements")).toMatchObject({ ok: false });
+  });
+
+  it("reports duplicate runIds as structured eval-suite failures", () => {
+    const inputDir = mkdtempSync(join(tmpdir(), "evaos-eval-suite-duplicates-input-"));
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-eval-suite-duplicates-output-"));
+    roots.push(inputDir, outputRoot);
+    const scenario = {
+      runId: "duplicate-run",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: { findings: [] },
+      labels: []
+    };
+    writeFileSync(join(inputDir, "a.json"), `${JSON.stringify(scenario)}\n`);
+    writeFileSync(join(inputDir, "b.json"), `${JSON.stringify(scenario)}\n`);
+
+    let output = "";
+    try {
+      execFileSync("npx", [
+        "tsx",
+        "src/cli.ts",
+        "eval-suite",
+        "--input-dir",
+        inputDir,
+        "--output-root",
+        outputRoot
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      output = String((error as { stdout?: string }).stdout ?? "");
+    }
+
+    const summary = JSON.parse(output);
+    expect(summary.ok).toBe(false);
+    expect(summary.results[1]).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("duplicate runId")
+    });
+  });
+
+  it("fails eval-suite when a required suite fixture is missing", () => {
+    const inputDir = mkdtempSync(join(tmpdir(), "evaos-eval-suite-missing-input-"));
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-eval-suite-missing-output-"));
+    roots.push(inputDir, outputRoot);
+    writeFileSync(join(inputDir, "canary.json"), `${JSON.stringify({
+      runId: "canary-only",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: { findings: [] },
+      labels: []
+    })}\n`);
+
+    let output = "";
+    try {
+      execFileSync("npx", [
+        "tsx",
+        "src/cli.ts",
+        "eval-suite",
+        "--input-dir",
+        inputDir,
+        "--output-root",
+        outputRoot
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      output = String((error as { stdout?: string }).stdout ?? "");
+    }
+
+    const summary = JSON.parse(output);
+    expect(summary.ok).toBe(false);
+    expect(summary.missingSuites).toEqual([
+      "historical_pr_replay",
+      "seeded_defect_recall",
+      "safety_redaction",
+      "duplicate_suppression"
+    ]);
   });
 });
