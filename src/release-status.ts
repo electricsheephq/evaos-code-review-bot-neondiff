@@ -21,6 +21,7 @@ export interface ReleaseDatabaseStatus {
   rowCount: number;
   errorCount: number;
   skippedCount?: number;
+  providerCooldownCount?: number;
 }
 
 export interface ReleaseHeartbeatStatus {
@@ -100,7 +101,9 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     {
       name: "live_db_no_errors",
       ok: dbOk,
-      detail: `${input.database.errorCount} blocking error row(s)`
+      detail:
+        `${input.database.errorCount} blocking error row(s)` +
+        (input.database.providerCooldownCount ? `; ${input.database.providerCooldownCount} provider cooldown skip row(s)` : "")
     },
     {
       name: "daemon_heartbeat_recent",
@@ -191,16 +194,27 @@ function readDatabaseStatus(statePath: string): ReleaseDatabaseStatus {
         `select count(*) as rowCount,
                 sum(case when status = 'skipped' then 1 else 0 end) as skippedCount,
                 sum(case
+                  when status = 'skipped' and error like 'provider_rate_limit_cooldown_until=%' then 1
+                  else 0
+                end) as providerCooldownCount,
+                sum(case
                   when status = 'failed' then 1
+                  when status = 'skipped' and error like 'provider_rate_limit_cooldown_until=%' then 0
                   when status != 'skipped' and error is not null and error != '' then 1
                   else 0
                 end) as errorCount
            from processed_reviews`
       )
-      .get() as { rowCount?: number; skippedCount?: number | null; errorCount?: number | null };
+      .get() as {
+        rowCount?: number;
+        skippedCount?: number | null;
+        providerCooldownCount?: number | null;
+        errorCount?: number | null;
+      };
     return {
       rowCount: row.rowCount ?? 0,
       skippedCount: row.skippedCount ?? 0,
+      providerCooldownCount: row.providerCooldownCount ?? 0,
       errorCount: row.errorCount ?? 0
     };
   } finally {

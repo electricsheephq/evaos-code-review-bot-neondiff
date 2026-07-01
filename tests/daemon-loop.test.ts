@@ -64,6 +64,7 @@ describe("daemon cycle resilience", () => {
         commandReviewRequested: 0,
         skippedProcessed: 1,
         skippedCapacity: 0,
+        skippedProviderCooldown: 0,
         skippedStaleHead: 0,
         baselinedExisting: 0,
         policySkips: []

@@ -47,6 +47,7 @@ export interface RunOnceResult {
   commandReviewRequested: number;
   skippedProcessed: number;
   skippedCapacity: number;
+  skippedProviderCooldown: number;
   skippedStaleHead: number;
   baselinedExisting: number;
   policySkips: { repo: string; reason: string }[];
@@ -76,6 +77,7 @@ export type ReviewPullResult =
   | "skipped_command_explain"
   | "skipped_processed"
   | "skipped_capacity"
+  | "skipped_provider_cooldown"
   | "skipped_stale_head";
 
 export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"]): boolean {
@@ -92,6 +94,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "skipped_command_stop":
     case "skipped_command_explain":
     case "skipped_capacity":
+    case "skipped_provider_cooldown":
     case "skipped_stale_head":
       return false;
     default:
@@ -117,6 +120,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,
+    skippedProviderCooldown: 0,
     skippedStaleHead: 0,
     baselinedExisting: 0,
     policySkips: []
@@ -157,6 +161,10 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             budget
           });
         } catch (error) {
+          if (recordProviderRateLimitCooldownIfNeeded({ config, state, repo, pull, error })) {
+            result.skippedProviderCooldown += 1;
+            continue;
+          }
           recordFailedReview({ config, state, repo, pull, error });
           result.failed += 1;
           continue;
@@ -170,6 +178,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         if (status === "reviewed_command") result.commandReviewRequested += 1;
         if (status === "skipped_processed") result.skippedProcessed += 1;
         if (status === "skipped_capacity") result.skippedCapacity += 1;
+        if (status === "skipped_provider_cooldown") result.skippedProviderCooldown += 1;
         if (status === "skipped_stale_head") result.skippedStaleHead += 1;
       }
     }
@@ -258,6 +267,20 @@ export async function retryFailedHeadWithDeps(input: {
       status: retryStatus
     };
   } catch (error) {
+    if (recordProviderRateLimitCooldownIfNeeded({
+      config,
+      state,
+      repo: options.repo,
+      pull,
+      error: retryFailureError(retryTarget.previousError, error)
+    })) {
+      return {
+        repo: options.repo,
+        pullNumber: options.pullNumber,
+        headSha: options.headSha,
+        status: "skipped_provider_cooldown"
+      };
+    }
     recordFailedReview({
       config,
       state,
@@ -313,9 +336,9 @@ export function prepareFailedHeadRetry(input: {
   if (!processed) {
     throw new Error(`No processed review row exists for ${input.repo}#${input.pullNumber}@${input.headSha}`);
   }
-  if (processed.status !== "failed") {
+  if (processed.status !== "failed" && !isProviderCooldownProcessedReview(processed)) {
     throw new Error(
-      `Refusing retry for ${input.repo}#${input.pullNumber}@${input.headSha}: status is ${processed.status}, not failed`
+      `Refusing retry for ${input.repo}#${input.pullNumber}@${input.headSha}: status is ${processed.status}, not failed/provider-cooldown`
     );
   }
 
@@ -372,6 +395,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     state.hasProcessed(repo, pull.number, pull.head.sha)
   ) {
     return "skipped_processed";
+  }
+  const activeCooldown = config.providerCooldown.enabled && typeof state.getActiveRepoProviderCooldown === "function"
+    ? state.getActiveRepoProviderCooldown(repo)
+    : undefined;
+  if (activeCooldown && input.processedHeadPolicy !== "retry_failed_head") {
+    recordProviderCooldownSkip({
+      state,
+      repo,
+      pull,
+      cooldownUntil: activeCooldown.cooldownUntil,
+      reason: activeCooldown.reason
+    });
+    return "skipped_provider_cooldown";
   }
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   if (!budget.tryStart()) return "skipped_capacity";
@@ -640,6 +676,70 @@ export function recordFailedReview(input: {
     status: "failed",
     error: errorMessage
   });
+}
+
+export function recordProviderRateLimitCooldownIfNeeded(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  error: unknown;
+  now?: Date;
+}): boolean {
+  if (!input.config.providerCooldown.enabled) return false;
+  const classification = classifyProviderRateLimitError(input.error);
+  if (!classification.rateLimited) return false;
+
+  const now = input.now ?? new Date();
+  const cooldownUntil = new Date(now.getTime() + input.config.providerCooldown.durationMs);
+  input.state.recordRepoProviderCooldown({
+    repo: input.repo,
+    cooldownUntil,
+    reason: classification.reason
+  });
+  recordProviderCooldownSkip({
+    state: input.state,
+    repo: input.repo,
+    pull: input.pull,
+    cooldownUntil: cooldownUntil.toISOString(),
+    reason: classification.reason
+  });
+  return true;
+}
+
+export function classifyProviderRateLimitError(error: unknown): { rateLimited: boolean; reason: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  const rateLimited =
+    normalized.includes("rate limit") ||
+    normalized.includes("rate_limit_error") ||
+    normalized.includes("providercode: '1302'") ||
+    normalized.includes('providercode: "1302"') ||
+    normalized.includes("[1302]");
+  return {
+    rateLimited,
+    reason: rateLimited ? "provider_rate_limit" : "not_provider_rate_limit"
+  };
+}
+
+function recordProviderCooldownSkip(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  cooldownUntil: string;
+  reason: string;
+}): void {
+  input.state.recordProcessed({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    status: "skipped",
+    error: `provider_rate_limit_cooldown_until=${input.cooldownUntil}; reason=${redactSecrets(input.reason)}`
+  });
+}
+
+function isProviderCooldownProcessedReview(record: { status: string; error?: string }): boolean {
+  return record.status === "skipped" && Boolean(record.error?.startsWith("provider_rate_limit_cooldown_until="));
 }
 
 function retryFailureError(previousError: string | undefined, error: unknown): string {
