@@ -341,10 +341,7 @@ function readReviewQueueBudgetJobs(
   );
   const select = (column: string, fallback = "null") =>
     columns.has(column) ? column : `${fallback} as ${column}`;
-  const limitClause = limit === undefined ? "" : " limit ?";
-  const query = db
-    .prepare(
-      `select
+  const selectRows = `select
          job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
          ${select("base_sha")},
          ${select("provider_id")},
@@ -359,15 +356,28 @@ function readReviewQueueBudgetJobs(
          created_at, updated_at,
          ${select("started_at")},
          ${select("finished_at")}
-       from review_queue_jobs
-       where state in ('queued', 'leased', 'running', 'provider_deferred')
+       from review_queue_jobs`;
+  const activeRows = db
+    .prepare(
+      `${selectRows}
+       where state in ('leased', 'running')
+       order by priority asc, datetime(created_at) asc`
+    )
+    .all() as unknown as ReviewBudgetQueueJobRow[];
+  const limitClause = limit === undefined ? "" : " limit ?";
+  const pendingQuery = db
+    .prepare(
+      `${selectRows}
+       where state in ('queued', 'provider_deferred')
        order by priority asc, datetime(created_at) asc${limitClause}`
     );
-  const rows = (limit === undefined ? query.all() : query.all(limit + 1)) as unknown as ReviewBudgetQueueJobRow[];
-  const truncated = limit !== undefined && rows.length > limit;
-  const visibleRows = truncated ? rows.slice(0, limit) : rows;
+  const pendingRows = (limit === undefined
+    ? pendingQuery.all()
+    : pendingQuery.all(limit + 1)) as unknown as ReviewBudgetQueueJobRow[];
+  const truncated = limit !== undefined && pendingRows.length > limit;
+  const visiblePendingRows = truncated ? pendingRows.slice(0, limit) : pendingRows;
   return {
-    jobs: visibleRows.map(mapReviewBudgetQueueJobRow),
+    jobs: [...activeRows, ...visiblePendingRows].map(mapReviewBudgetQueueJobRow),
     truncated
   };
 }

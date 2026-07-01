@@ -604,14 +604,14 @@ describe("beta release status", () => {
       included: true,
       detailLimit: 1,
       inputJobLimit: 3,
-      inputJobsTruncated: true,
+      inputJobsTruncated: false,
       detailsTruncated: true
     });
     expect(detailedStatus.budget?.wouldLease.length).toBeLessThanOrEqual(1);
     expect(detailedStatus.budget?.delayed.length).toBeLessThanOrEqual(1);
   });
 
-  it("filters terminal queue rows before applying the budget row cap", () => {
+  it("filters terminal queue rows and preserves active jobs before applying the budget row cap", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-budget-cap-terminal-"));
     roots.push(root);
     const dbPath = join(root, "reviews.sqlite");
@@ -657,7 +657,9 @@ describe("beta release status", () => {
       `);
       insertQueueJob(db, "posted", "owner/repo", "terminal-posted");
       insertQueueJob(db, "failed", "owner/repo", "terminal-failed");
-      insertQueueJob(db, "running", "owner/repo", "live-running");
+      insertQueueJob(db, "queued", "owner/repo-a", "queued-a");
+      insertQueueJob(db, "queued", "owner/repo-b", "queued-b");
+      insertQueueJob(db, "running", "owner/repo-c", "live-running");
     } finally {
       db.close();
     }
@@ -676,10 +678,13 @@ describe("beta release status", () => {
         total: 1,
         running: 1
       },
+      queued: {
+        total: 1
+      },
       details: {
-        inputJobs: 1,
+        inputJobs: 2,
         inputJobLimit: 1,
-        inputJobsTruncated: false
+        inputJobsTruncated: true
       }
     });
   });
