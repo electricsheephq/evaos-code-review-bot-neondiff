@@ -212,7 +212,10 @@ function enqueueReviewJob(input: {
   now: Date;
 }, commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>) {
   const source: ReviewQueueJobSource = commandDecision ? "manual_command" : "automatic";
-  const sessionId = assignReviewerSessionForQueueJob(input, source)?.session?.sessionId;
+  const shouldAssignSession = !commandDecision || commandDecision.shouldReview;
+  const sessionId = shouldAssignSession
+    ? assignReviewerSessionForQueueJob(input, source, commandDecision)?.session?.sessionId
+    : undefined;
   return input.state.enqueueReviewQueueJob({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -223,6 +226,7 @@ function enqueueReviewJob(input: {
     providerId: input.providerId,
     priority: source === "manual_command" ? undefined : input.config.reviewScheduler?.backgroundPriority,
     ...(commandDecision ? { commentId: commandDecision.commandId } : {}),
+    ...(commandDecision ? { commandAction: commandDecision.action } : {}),
     ...(sessionId ? { sessionId } : {}),
     now: input.now
   });
@@ -260,18 +264,19 @@ function assignReviewerSessionForQueueJob(input: {
   pull: PullRequestSummary;
   providerId: string;
   now: Date;
-}, source: ReviewQueueJobSource) {
+}, source: ReviewQueueJobSource, commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>) {
   if (!input.config.reviewerSessions?.enabled) return undefined;
   const assignment = input.state.assignReviewerSessionJob({
     repo: input.repo,
     pullNumber: input.pull.number,
-    headSha: input.pull.head.sha,
+    headSha: reviewerSessionHeadShaForCommand(input.pull.head.sha, commandDecision),
     ttlMs: input.config.reviewerSessions.ttlMs,
     headCountLimit: input.config.reviewerSessions.headCountLimit,
     now: input.now,
     model: input.config.zcode.model,
     provider: input.providerId,
-    assignmentReason: source === "manual_command" ? "manual_command_priority" : undefined
+    assignmentReason: source === "manual_command" ? "manual_command_priority" : undefined,
+    allowProcessed: Boolean(commandDecision?.shouldReview)
   });
   return assignment.assigned || assignment.session ? assignment : undefined;
 }
@@ -388,18 +393,28 @@ function ensureReviewerSessionForLeasedJob(input: {
 }, now: Date): string | undefined {
   if (!input.config.reviewerSessions?.enabled) return input.job.sessionId;
   if (input.job.sessionId) return input.job.sessionId;
+  if (
+    input.job.source === "manual_command" &&
+    input.job.commandAction !== "review" &&
+    input.job.commandAction !== "re-review"
+  ) {
+    return undefined;
+  }
 
   const providerId = input.job.providerId ?? input.config.zcode.providerId ?? input.config.zcode.model ?? "zcode";
+  const assignmentReason = input.job.source === "manual_command" ? "manual_command_priority" : undefined;
+  const allowProcessed = input.job.commandAction === "review" || input.job.commandAction === "re-review";
   const assignment = input.state.assignReviewerSessionJob({
     repo: input.job.repo,
     pullNumber: input.job.pullNumber,
-    headSha: input.job.headSha,
+    headSha: reviewerSessionHeadShaForQueueJob(input.job),
     ttlMs: input.config.reviewerSessions.ttlMs,
     headCountLimit: input.config.reviewerSessions.headCountLimit,
     now,
     model: input.config.zcode.model,
     provider: providerId,
-    assignmentReason: input.job.source === "manual_command" ? "manual_command_priority" : undefined
+    assignmentReason,
+    allowProcessed
   });
   const sessionId = assignment.session?.sessionId;
   if (sessionId) {
@@ -451,10 +466,29 @@ function updateReviewerSessionJobFromQueueStatus(input: {
   input.state.updateReviewerSessionJobState({
     repo: input.job.repo,
     pullNumber: input.job.pullNumber,
-    headSha: input.job.headSha,
+    headSha: reviewerSessionHeadShaForQueueJob(input.job),
     jobState,
     ...(processedReviewStatus ? { processedReviewStatus } : {})
   });
+}
+
+function reviewerSessionHeadShaForCommand(
+  headSha: string,
+  commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>
+): string {
+  if (!commandDecision?.shouldReview) return headSha;
+  return `${headSha}:command:${commandDecision.commandId}`;
+}
+
+function reviewerSessionHeadShaForQueueJob(job: ReviewQueueJobRecord): string {
+  if (
+    job.source === "manual_command" &&
+    (job.commandAction === "review" || job.commandAction === "re-review") &&
+    job.commentId
+  ) {
+    return `${job.headSha}:command:${job.commentId}`;
+  }
+  return job.headSha;
 }
 
 function updateQueueJobAfterReviewStatus(input: {
@@ -512,14 +546,14 @@ function updateQueueJobAfterReviewStatus(input: {
     case "skipped_command_stop":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: "posted",
+        state: "command_recorded",
         lastError: "manual_command_stop_recorded"
       });
       return;
     case "skipped_command_explain":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: "posted",
+        state: "command_recorded",
         lastError: "manual_command_explain_recorded"
       });
       return;

@@ -301,6 +301,11 @@ describe("provider-aware review scheduler", () => {
       trustedAuthors: ["100yenadmin"],
       acknowledge: false
     };
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10
+    };
     const state = new ReviewStateStore(config.statePath);
     state.recordProcessed({
       repo: "org/repo-a",
@@ -341,10 +346,196 @@ describe("provider-aware review scheduler", () => {
         source: "manual_command",
         lane: "manual",
         commentId: 222,
+        commandAction: "re-review",
         repo: "org/repo-a",
         pullNumber: 1
       })
     ]);
+    expect(state.listReviewerSessions({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({
+        repo: "org/repo-a",
+        state: "active",
+        headCountUsed: 1,
+        provider: "zai-coding-plan"
+      })
+    ]);
+    expect(state.getReviewerSessionJob("org/repo-a", 1, "a1:command:222")).toMatchObject({
+      jobState: "completed",
+      assignmentReason: "manual_command_priority",
+      processedReviewStatus: "posted"
+    });
+    state.close();
+  });
+
+  it("assigns fresh repo-sticky headroom for manual re-review when the processed head already has a session job", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-rereview-existing-session-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old"
+    });
+    state.assignReviewerSessionJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:00.000Z"),
+      provider: "zai-coding-plan",
+      allowProcessed: true
+    });
+    state.updateReviewerSessionJobState({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      jobState: "completed",
+      processedReviewStatus: "posted",
+      now: new Date("2026-07-01T00:00:10.000Z")
+    });
+    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, "a1")]]]);
+    const comments = new Map([
+      ["org/repo-a#1", [comment(337, "100yenadmin", "@evaos-code-review-bot re-review")]]
+    ]);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(pullMap, comments),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-command"
+        });
+        return "reviewed_command";
+      },
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(state.getReviewerSessionJob("org/repo-a", 1, "a1")).toMatchObject({
+      jobState: "completed",
+      processedReviewStatus: "posted"
+    });
+    expect(state.getReviewerSessionJob("org/repo-a", 1, "a1:command:337")).toMatchObject({
+      jobState: "completed",
+      assignmentReason: "manual_command_priority",
+      processedReviewStatus: "posted"
+    });
+    expect(state.listReviewerSessions({ repo: "org/repo-a" })[0]).toMatchObject({
+      headCountUsed: 2
+    });
+    state.close();
+  });
+
+  it("does not consume repo-sticky session headroom for non-review commands", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-stop-no-session-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 1
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, "a1")]]]);
+    const comments = new Map([
+      ["org/repo-a#1", [comment(335, "100yenadmin", "@evaos-code-review-bot explain")]]
+    ]);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(pullMap, comments),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: reviewPull,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.skippedCommandExplain).toBe(1);
+    expect(state.listReviewerSessions()).toHaveLength(0);
+    const commandJobs = state.listReviewQueueJobs({ state: "command_recorded" });
+    expect(commandJobs).toEqual([
+      expect.objectContaining({
+        source: "manual_command",
+        lane: "manual",
+        commentId: 335,
+        commandAction: "explain",
+        lastError: "manual_command_explain_recorded"
+      })
+    ]);
+    expect(commandJobs[0]?.sessionId).toBeUndefined();
+    state.close();
+  });
+
+  it("does not consume repo-sticky session headroom for legacy manual command rows without action metadata", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-legacy-no-session-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 1
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      baseSha: "base",
+      source: "manual_command",
+      commentId: 336,
+      providerId: "zai-coding-plan",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, "a1")]]])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => "skipped_command_explain",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(result.skippedCommandExplain).toBe(1);
+    expect(state.listReviewerSessions()).toHaveLength(0);
+    const commandJobs = state.listReviewQueueJobs({ state: "command_recorded" });
+    expect(commandJobs).toEqual([
+      expect.objectContaining({
+        source: "manual_command",
+        commentId: 336,
+        lastError: "manual_command_explain_recorded"
+      })
+    ]);
+    expect(commandJobs[0]?.commandAction).toBeUndefined();
     state.close();
   });
 
@@ -378,14 +569,16 @@ describe("provider-aware review scheduler", () => {
       status: "skipped",
       error: expect.stringContaining("manual_command_stop")
     });
-    expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
+    expect(state.listReviewQueueJobs({ state: "command_recorded" })).toEqual([
       expect.objectContaining({
         source: "manual_command",
         lane: "manual",
         commentId: 333,
+        commandAction: "stop",
         lastError: "manual_command_stop_recorded"
       })
     ]);
+    expect(state.listReviewQueueJobs({ state: "posted" })).toHaveLength(0);
     state.close();
   });
 

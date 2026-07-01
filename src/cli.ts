@@ -525,6 +525,7 @@ const REVIEW_QUEUE_JOB_STATES: ReviewQueueJobState[] = [
   "provider_deferred",
   "stale_retired",
   "closed_retired",
+  "command_recorded",
   "posted",
   "failed"
 ];

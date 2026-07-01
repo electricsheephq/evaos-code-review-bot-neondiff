@@ -17,6 +17,7 @@ export type ReviewerSessionAssignmentReason =
   | "manual_command_priority";
 export type ReviewQueueJobSource = "automatic" | "manual_command";
 export type ReviewQueueJobLane = "background" | "manual";
+export type ReviewQueueCommandAction = "review" | "re-review" | "explain" | "stop";
 export type ReviewQueueJobState =
   | "queued"
   | "leased"
@@ -24,6 +25,7 @@ export type ReviewQueueJobState =
   | "provider_deferred"
   | "stale_retired"
   | "closed_retired"
+  | "command_recorded"
   | "posted"
   | "failed";
 
@@ -104,6 +106,7 @@ export interface ReviewQueueJobRecord {
   leaseExpiresAt?: string;
   sessionId?: string;
   commentId?: number;
+  commandAction?: ReviewQueueCommandAction;
   reviewUrl?: string;
   lastError?: string;
   createdAt: string;
@@ -282,6 +285,7 @@ export class ReviewStateStore {
         lease_expires_at text,
         session_id text,
         comment_id integer,
+        command_action text,
         review_url text,
         last_error text,
         created_at text not null,
@@ -455,6 +459,7 @@ export class ReviewStateStore {
     zcodeCliVersion?: string;
     repoFamily?: string;
     assignmentReason?: ReviewerSessionAssignmentReason;
+    allowProcessed?: boolean;
   }): ReviewerSessionAssignResult {
     validateReviewerSessionInput(input.ttlMs, input.headCountLimit, input.workerPid);
 
@@ -468,7 +473,7 @@ export class ReviewStateStore {
 
     this.db.exec("begin immediate");
     try {
-      if (this.hasProcessed(input.repo, input.pullNumber, input.headSha)) {
+      if (!input.allowProcessed && this.hasProcessed(input.repo, input.pullNumber, input.headSha)) {
         this.db.exec("commit");
         return { assigned: false, reason: "already_processed" };
       }
@@ -661,6 +666,7 @@ export class ReviewStateStore {
     priority?: number;
     attemptId?: string;
     commentId?: number;
+    commandAction?: ReviewQueueCommandAction;
     sessionId?: string;
     now?: Date;
   }): ReviewQueueEnqueueResult {
@@ -685,8 +691,8 @@ export class ReviewStateStore {
       .prepare(
         `insert into review_queue_jobs
           (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
-           provider_id, priority, state, session_id, comment_id, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
+           provider_id, priority, state, session_id, comment_id, command_action, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`
       )
       .run(
         jobId,
@@ -702,6 +708,7 @@ export class ReviewStateStore {
         priority,
         input.sessionId ?? null,
         input.commentId ?? null,
+        input.commandAction ?? null,
         nowIso,
         nowIso
       );
@@ -862,7 +869,7 @@ export class ReviewStateStore {
       .prepare(
         `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                comment_id, command_action, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
          where job_id = ?
          limit 1`
@@ -876,7 +883,7 @@ export class ReviewStateStore {
       .prepare(
         `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                comment_id, command_action, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
          where attempt_id = ?
          limit 1`
@@ -899,7 +906,7 @@ export class ReviewStateStore {
           .prepare(
             `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                     provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                    comment_id, command_action, review_url, last_error, created_at, updated_at, started_at, finished_at
              from review_queue_jobs
              where repo = ?
              order by priority asc, datetime(created_at) asc`
@@ -909,7 +916,7 @@ export class ReviewStateStore {
           .prepare(
             `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                     provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                    comment_id, command_action, review_url, last_error, created_at, updated_at, started_at, finished_at
              from review_queue_jobs
              order by priority asc, datetime(created_at) asc`
           )
@@ -1254,6 +1261,9 @@ export class ReviewStateStore {
     if (!columns.some((column) => column.name === "lease_expires_at")) {
       this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
     }
+    if (!columns.some((column) => column.name === "command_action")) {
+      this.db.exec("alter table review_queue_jobs add column command_action text");
+    }
   }
 }
 
@@ -1365,7 +1375,13 @@ function countBy<T>(items: T[], key: (item: T) => string): Map<string, number> {
 }
 
 function isTerminalQueueState(state: ReviewQueueJobState): boolean {
-  return state === "posted" || state === "failed" || state === "stale_retired" || state === "closed_retired";
+  return (
+    state === "posted" ||
+    state === "failed" ||
+    state === "stale_retired" ||
+    state === "closed_retired" ||
+    state === "command_recorded"
+  );
 }
 
 export function parseProviderCooldownError(error?: string): ParsedProviderCooldownError | undefined {
@@ -1459,6 +1475,7 @@ interface ReviewQueueJobRow {
   lease_expires_at: string | null;
   session_id: string | null;
   comment_id: number | null;
+  command_action: ReviewQueueCommandAction | null;
   review_url: string | null;
   last_error: string | null;
   created_at: string;
@@ -1544,6 +1561,7 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     ...(row.lease_expires_at ? { leaseExpiresAt: row.lease_expires_at } : {}),
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.comment_id ? { commentId: row.comment_id } : {}),
+    ...(row.command_action ? { commandAction: row.command_action } : {}),
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),
     createdAt: row.created_at,
