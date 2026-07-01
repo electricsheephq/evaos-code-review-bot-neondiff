@@ -38,7 +38,7 @@ export interface BuildReviewStatusCommentInput {
 export const REVIEW_STATUS_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-status";
 const REVIEW_STATUS_STATE_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-status-state";
 const REPO_SLUG_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const HEAD_SHA_PATTERN = /^[0-9a-f]{6,64}$/i;
+const HEAD_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 
 export function buildReviewStatusMarker(input: {

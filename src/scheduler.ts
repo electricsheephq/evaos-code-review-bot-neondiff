@@ -5,6 +5,7 @@ import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import {
   postReviewStatusComment,
   type ReviewStatusCommentGithub,
+  type ReviewStatusCommentPostResult,
   type ReviewStatusCommentState
 } from "./review-status-comment.js";
 import { ReviewRunBudget } from "./review-budget.js";
@@ -34,6 +35,7 @@ import {
 
 export interface ScheduledRunResult extends RunOnceResult {
   commandFetchErrors: number;
+  statusCommentFailures: number;
   queue: {
     enqueued: number;
     alreadyQueued: number;
@@ -123,6 +125,9 @@ export async function runScheduledCycleWithDeps(input: {
         providerId,
         now,
         dryRun: input.options.dryRun,
+        onStatusCommentFailure: () => {
+          result.statusCommentFailures += 1;
+        },
         onCommandFetchError: () => {
           result.commandFetchErrors += 1;
         }
@@ -154,6 +159,9 @@ export async function runScheduledCycleWithDeps(input: {
       useZCode: input.options.useZCode ?? true,
       reviewPullImpl: input.reviewPullImpl,
       budget,
+      onStatusCommentFailure: () => {
+        result.statusCommentFailures += 1;
+      },
       now
     });
     applyReviewStatus(result, status);
@@ -182,9 +190,13 @@ async function enqueuePullIfEligible(input: {
   providerId: string;
   now: Date;
   dryRun: boolean;
+  onStatusCommentFailure?: () => void;
   onCommandFetchError?: () => void;
 }): Promise<EnqueueStatus> {
-  if (isClosedPull(input.pull)) return "closed_retired";
+  if (isClosedPull(input.pull)) {
+    await retireQueuedJobsForClosedPull(input);
+    return "closed_retired";
+  }
   if (input.config.skipDrafts && input.pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(input.config, input.repo, input.pull.number)) return "skipped_canary";
 
@@ -200,6 +212,7 @@ async function enqueuePullIfEligible(input: {
         repo: input.repo,
         pull: input.pull,
         state: "queued",
+        onStatusCommentFailure: input.onStatusCommentFailure,
         now: input.now
       });
     }
@@ -232,6 +245,7 @@ async function enqueuePullIfEligible(input: {
         pull: input.pull,
         state: "provider_deferred",
         details: "Provider cooldown is active for this repo.",
+        onStatusCommentFailure: input.onStatusCommentFailure,
         now: input.now
       });
     }
@@ -247,6 +261,7 @@ async function enqueuePullIfEligible(input: {
       repo: input.repo,
       pull: input.pull,
       state: "queued",
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now: input.now
     });
   }
@@ -288,6 +303,7 @@ async function retireSupersededQueueJobsForPull(input: {
   pull: PullRequestSummary;
   dryRun: boolean;
   now: Date;
+  onStatusCommentFailure?: () => void;
 }): Promise<void> {
   const jobs = input.state.listReviewQueueJobs({
     repo: input.repo,
@@ -309,6 +325,43 @@ async function retireSupersededQueueJobsForPull(input: {
       pull: pullForQueueJob(job, input.pull),
       state: "stale_head",
       details: "Superseded by a newer PR head.",
+      onStatusCommentFailure: input.onStatusCommentFailure,
+      now: input.now
+    });
+  }
+}
+
+async function retireQueuedJobsForClosedPull(input: {
+  config: BotConfig;
+  github: SchedulerGitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+  now: Date;
+  onStatusCommentFailure?: () => void;
+}): Promise<void> {
+  const jobs = input.state.listReviewQueueJobs({
+    repo: input.repo,
+    states: ["queued", "provider_deferred"]
+  }).filter((job) => job.pullNumber === input.pull.number);
+
+  for (const job of jobs) {
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "closed_retired",
+      lastError: `closed_or_merged_before_review state=${input.pull.state ?? "unknown"}`,
+      now: input.now
+    });
+    await syncReviewStatusComment({
+      config: input.config,
+      github: input.github,
+      dryRun: input.dryRun,
+      repo: input.repo,
+      pull: pullForQueueJob(job, input.pull),
+      state: "closed_or_merged_before_review",
+      details: `state=${input.pull.state ?? "unknown"}`,
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now: input.now
     });
   }
@@ -378,6 +431,7 @@ async function runLeasedQueueJob(input: {
   useZCode: boolean;
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
   budget: ReviewRunBudget;
+  onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<ReviewPullResult | "failed" | "closed_retired" | "stale_retired"> {
   const now = input.now ?? new Date();
@@ -399,6 +453,7 @@ async function runLeasedQueueJob(input: {
       pull: pullForQueueJobWithoutLive(input.job),
       state: "failed",
       details: "GitHub refetch failed; see bot evidence for operator-only details.",
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
     input.state.updateReviewQueueJobState({
@@ -419,6 +474,7 @@ async function runLeasedQueueJob(input: {
       pull: pullForQueueJob(input.job, pull),
       state: "closed_or_merged_before_review",
       details: `state=${pull.state ?? "unknown"}`,
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
     input.state.updateReviewQueueJobState({
@@ -439,12 +495,24 @@ async function runLeasedQueueJob(input: {
       pull: pullForQueueJob(input.job, pull),
       state: "stale_head",
       details: `live=${pull.head.sha}`,
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "stale_retired",
       lastError: `stale_head_before_review live=${pull.head.sha}`
+    });
+    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
+    return "stale_retired";
+  }
+
+  if (input.job.source !== "manual_command" && input.job.baseSha && pull.base.sha !== input.job.baseSha) {
+    input.state.updateReviewQueueJobState({
+      jobId: input.job.jobId,
+      state: "stale_retired",
+      lastError: `base_changed_before_review live=${pull.base.sha}`,
+      now
     });
     updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     return "stale_retired";
@@ -460,6 +528,7 @@ async function runLeasedQueueJob(input: {
       repo: input.job.repo,
       pull,
       state: "in_progress",
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
   }
@@ -486,6 +555,7 @@ async function runLeasedQueueJob(input: {
       pull,
       status,
       state: input.state,
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
     updateReviewerSessionJobAfterReviewStatus({
@@ -513,6 +583,7 @@ async function runLeasedQueueJob(input: {
         pull,
         state: "provider_deferred",
         details: "Provider cooldown recorded; see bot evidence for operator-only details.",
+        onStatusCommentFailure: input.onStatusCommentFailure,
         now
       });
       updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "assigned");
@@ -538,6 +609,7 @@ async function runLeasedQueueJob(input: {
       pull,
       state: "failed",
       details: "Review failed; see bot evidence for operator-only details.",
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
     updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "failed", "failed");
@@ -554,11 +626,12 @@ async function syncReviewStatusComment(input: {
   state: ReviewStatusCommentState;
   reviewUrl?: string;
   details?: string;
+  onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<void> {
   if (!isReviewStatusCommentGithub(input.github)) return;
-  await postReviewStatusComment({
-    enabled: input.config.reviewStatusComment?.enabled ?? true,
+  const result = await postReviewStatusComment({
+    enabled: input.config.reviewStatusComment?.enabled ?? false,
     dryRun: input.dryRun,
     github: input.github,
     repo: input.repo,
@@ -571,6 +644,11 @@ async function syncReviewStatusComment(input: {
     ...(input.details ? { details: input.details } : {}),
     now: input.now
   });
+  if (isStatusCommentFailure(result)) input.onStatusCommentFailure?.();
+}
+
+function isStatusCommentFailure(result: ReviewStatusCommentPostResult): boolean {
+  return !result.posted && (result.reason === "missing_app_credentials" || result.reason === "upsert_failed");
 }
 
 async function syncReviewStatusCommentForReviewResult(input: {
@@ -581,6 +659,7 @@ async function syncReviewStatusCommentForReviewResult(input: {
   pull: PullRequestSummary;
   status: ReviewPullResult;
   state: ReviewStateStore;
+  onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<void> {
   const nextState = reviewResultStatusCommentState(input.status);
@@ -594,6 +673,7 @@ async function syncReviewStatusCommentForReviewResult(input: {
     pull: input.pull,
     state: nextState,
     ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+    onStatusCommentFailure: input.onStatusCommentFailure,
     now: input.now
   });
 }
@@ -979,6 +1059,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
     skippedStaleHead: 0,
     baselinedExisting: 0,
     commandFetchErrors: 0,
+    statusCommentFailures: 0,
     policySkips: [],
     queue: {
       enqueued: 0,
