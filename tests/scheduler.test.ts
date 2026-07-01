@@ -108,6 +108,67 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("retries expired provider-deferred queue jobs with failed-head retry policy", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-deferred-retry-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:01:00.000Z; reason=provider_request_rate_limit"
+    });
+    const job = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      baseSha: "base",
+      providerId: "zai",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-01T00:01:00.000Z",
+      lastError: "provider_rate_limit_cooldown_until=2026-07-01T00:01:00.000Z; reason=provider_request_rate_limit",
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+    const policies: Array<ReviewPullInput["processedHeadPolicy"]> = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, processedHeadPolicy }) => {
+        policies.push(processedHeadPolicy);
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: `https://github.com/${repo}/pull/${reviewPull.number}#pullrequestreview-2`
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:01:01.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(result.skippedProcessed).toBe(1);
+    expect(policies).toEqual(["retry_failed_head"]);
+    expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-2"
+    });
+    state.close();
+  });
+
   it("retires stale and closed queued jobs before running review work", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-retire-"));
     roots.push(root);

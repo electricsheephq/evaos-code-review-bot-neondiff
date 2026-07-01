@@ -116,6 +116,7 @@ export async function runScheduledCycleWithDeps(input: {
     maxRepoActive: scheduler.maxRepoActive,
     manualCommandReserve: scheduler.manualCommandReserve,
     limit: scheduler.maxProviderActive,
+    leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
     now
   });
   result.queue.leased = leased.length;
@@ -260,7 +261,8 @@ async function runLeasedQueueJob(input: {
       pull,
       dryRun: input.dryRun,
       useZCode: input.useZCode,
-      budget: input.budget
+      budget: input.budget,
+      processedHeadPolicy: isProviderDeferredRetryJob(input.job) ? "retry_failed_head" : "normal"
     });
     updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun });
     return status;
@@ -389,6 +391,15 @@ function hasRepoQueueCapacity(state: ReviewStateStore, repo: string, maxQueuedPe
     states: ["queued", "leased", "running", "provider_deferred"]
   });
   return active.length < maxQueuedPerRepo;
+}
+
+function isProviderDeferredRetryJob(job: ReviewQueueJobRecord): boolean {
+  return Boolean(
+    job.nextEligibleAt ||
+    parseProviderCooldownError(job.lastError) ||
+    job.lastError?.includes("repo_provider_cooldown_until=") ||
+    job.lastError === "provider_deferred_without_cooldown"
+  );
 }
 
 function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): void {

@@ -101,6 +101,7 @@ export interface ReviewQueueJobRecord {
   state: ReviewQueueJobState;
   nextEligibleAt?: string;
   leaseId?: string;
+  leaseExpiresAt?: string;
   sessionId?: string;
   commentId?: number;
   reviewUrl?: string;
@@ -278,6 +279,7 @@ export class ReviewStateStore {
         state text not null,
         next_eligible_at text,
         lease_id text,
+        lease_expires_at text,
         session_id text,
         comment_id integer,
         review_url text,
@@ -297,6 +299,7 @@ export class ReviewStateStore {
     `);
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
+    this.ensureReviewQueueJobColumns();
     this.db.exec(`
       create table if not exists processed_commands (
         repo text not null,
@@ -671,6 +674,7 @@ export class ReviewStateStore {
       repo: input.repo,
       pullNumber: input.pullNumber,
       headSha: input.headSha,
+      baseSha: input.baseSha,
       commentId: input.commentId
     });
     const existing = this.getReviewQueueJobByAttemptId(attemptId);
@@ -710,6 +714,7 @@ export class ReviewStateStore {
     maxRepoActive: number;
     manualCommandReserve?: number;
     limit?: number;
+    leaseTtlMs?: number;
     now?: Date;
   }): ReviewQueueJobRecord[] {
     validatePositiveQueueLimit(input.maxProviderActive, "maxProviderActive");
@@ -724,11 +729,30 @@ export class ReviewStateStore {
     }
     const limit = input.limit ?? input.maxProviderActive;
     validatePositiveQueueLimit(limit, "limit");
+    const leaseTtlMs = input.leaseTtlMs ?? 15 * 60_000;
+    validatePositiveQueueLimit(leaseTtlMs, "leaseTtlMs");
     const nowIso = (input.now ?? new Date()).toISOString();
+    const legacyLeaseCutoffIso = new Date(Date.parse(nowIso) - leaseTtlMs).toISOString();
+    const leaseExpiresAt = new Date(Date.parse(nowIso) + leaseTtlMs).toISOString();
     const leased: ReviewQueueJobRecord[] = [];
 
     this.db.exec("begin immediate");
     try {
+      this.db
+        .prepare(
+          `update review_queue_jobs
+           set state = 'queued',
+               lease_id = null,
+               lease_expires_at = null,
+               last_error = 'queue_lease_expired_requeued',
+               updated_at = ?
+           where state in ('leased', 'running')
+             and (
+               (lease_expires_at is not null and datetime(lease_expires_at) <= datetime(?))
+               or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
+             )`
+        )
+        .run(nowIso, nowIso, legacyLeaseCutoffIso);
       const jobs = this.listReviewQueueJobs();
       const eligible = jobs
         .filter((job) => isQueueJobEligible(job, nowIso))
@@ -759,10 +783,10 @@ export class ReviewStateStore {
         this.db
           .prepare(
             `update review_queue_jobs
-             set state = 'leased', lease_id = ?, updated_at = ?
+             set state = 'leased', lease_id = ?, lease_expires_at = ?, updated_at = ?
              where job_id = ? and state in ('queued', 'provider_deferred')`
           )
-          .run(leaseId, nowIso, job.jobId);
+          .run(leaseId, leaseExpiresAt, nowIso, job.jobId);
         providerActive.set(provider, providerCount + 1);
         orgActive.set(job.org, (orgActive.get(job.org) ?? 0) + 1);
         repoActive.set(job.repo, (repoActive.get(job.repo) ?? 0) + 1);
@@ -782,6 +806,7 @@ export class ReviewStateStore {
     state: ReviewQueueJobState;
     nextEligibleAt?: string;
     leaseId?: string;
+    leaseExpiresAt?: string;
     clearLease?: boolean;
     sessionId?: string;
     reviewUrl?: string;
@@ -803,6 +828,7 @@ export class ReviewStateStore {
          set state = ?,
              next_eligible_at = ?,
              lease_id = case when ? then null else coalesce(?, lease_id) end,
+             lease_expires_at = case when ? then null else coalesce(?, lease_expires_at) end,
              session_id = coalesce(?, session_id),
              review_url = coalesce(?, review_url),
              last_error = coalesce(?, last_error),
@@ -816,6 +842,8 @@ export class ReviewStateStore {
         input.nextEligibleAt ?? null,
         clearLease ? 1 : 0,
         input.leaseId ?? null,
+        clearLease ? 1 : 0,
+        input.leaseExpiresAt ?? null,
         input.sessionId ?? null,
         input.reviewUrl ?? null,
         input.lastError ? redactSecrets(input.lastError) : null,
@@ -833,7 +861,7 @@ export class ReviewStateStore {
     const row = this.db
       .prepare(
         `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
-                provider_id, priority, state, next_eligible_at, lease_id, session_id,
+                provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
          where job_id = ?
@@ -847,7 +875,7 @@ export class ReviewStateStore {
     const row = this.db
       .prepare(
         `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
-                provider_id, priority, state, next_eligible_at, lease_id, session_id,
+                provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
          where attempt_id = ?
@@ -870,7 +898,7 @@ export class ReviewStateStore {
       ? this.db
           .prepare(
             `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
-                    provider_id, priority, state, next_eligible_at, lease_id, session_id,
+                    provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                     comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
              from review_queue_jobs
              where repo = ?
@@ -880,7 +908,7 @@ export class ReviewStateStore {
       : this.db
           .prepare(
             `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
-                    provider_id, priority, state, next_eligible_at, lease_id, session_id,
+                    provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                     comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
              from review_queue_jobs
              order by priority asc, datetime(created_at) asc`
@@ -1220,6 +1248,13 @@ export class ReviewStateStore {
       this.db.exec("alter table review_run_leases add column owner_pid integer");
     }
   }
+
+  private ensureReviewQueueJobColumns(): void {
+    const columns = this.db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "lease_expires_at")) {
+      this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
+    }
+  }
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1281,12 +1316,13 @@ function buildReviewQueueAttemptId(input: {
   repo: string;
   pullNumber: number;
   headSha: string;
+  baseSha?: string;
   commentId?: number;
 }): string {
   if (input.source === "manual_command") {
     return `manual:${input.repo}#${input.pullNumber}@${input.headSha}:${input.commentId ?? randomUUID()}`;
   }
-  return `automatic:${input.repo}#${input.pullNumber}@${input.headSha}`;
+  return `automatic:${input.repo}#${input.pullNumber}@${input.headSha}:base=${input.baseSha ?? "unknown"}`;
 }
 
 function repoOrg(repo: string): string {
@@ -1297,7 +1333,9 @@ function isQueueJobEligible(job: ReviewQueueJobRecord, nowIso: string): boolean 
   if (job.state === "queued") return true;
   if (job.state !== "provider_deferred") return false;
   if (!job.nextEligibleAt) return true;
-  return Date.parse(job.nextEligibleAt) <= Date.parse(nowIso);
+  const nextEligibleAtMs = Date.parse(job.nextEligibleAt);
+  if (!Number.isFinite(nextEligibleAtMs)) return true;
+  return nextEligibleAtMs <= Date.parse(nowIso);
 }
 
 function compareQueueJobsForLease(left: ReviewQueueJobRecord, right: ReviewQueueJobRecord): number {
@@ -1408,6 +1446,7 @@ interface ReviewQueueJobRow {
   state: ReviewQueueJobState;
   next_eligible_at: string | null;
   lease_id: string | null;
+  lease_expires_at: string | null;
   session_id: string | null;
   comment_id: number | null;
   review_url: string | null;
@@ -1492,6 +1531,7 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     state: row.state,
     ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
     ...(row.lease_id ? { leaseId: row.lease_id } : {}),
+    ...(row.lease_expires_at ? { leaseExpiresAt: row.lease_expires_at } : {}),
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.comment_id ? { commentId: row.comment_id } : {}),
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
