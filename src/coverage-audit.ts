@@ -2,7 +2,11 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type { BotConfig } from "./config.js";
 import { listReposToScan, resolveRepoProfile, type RepoProfileSkipReason } from "./repo-policy.js";
-import { parseProviderCooldownError, type StoredProcessedReviewRecord } from "./state.js";
+import {
+  parseProviderCooldownError,
+  type RepoProviderCooldownRecord,
+  type StoredProcessedReviewRecord
+} from "./state.js";
 import { isCanaryAllowed } from "./worker.js";
 import type { PullRequestSummary } from "./types.js";
 
@@ -93,6 +97,7 @@ export interface CoverageGitHubApi {
 export interface CoverageStateLookup {
   getProcessedReview(repo: string, pullNumber: number, headSha: string): StoredProcessedReviewRecord | undefined;
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[];
+  getActiveRepoProviderCooldown?(repo: string, now?: Date): RepoProviderCooldownRecord | undefined;
 }
 
 export class CoverageStateReader implements CoverageStateLookup {
@@ -127,6 +132,23 @@ export class CoverageStateReader implements CoverageStateLookup {
       )
       .all(repo, pullNumber) as unknown as ProcessedReviewRow[];
     return rows.map(mapProcessedReviewRow);
+  }
+
+  getActiveRepoProviderCooldown(repo: string, now = new Date()): RepoProviderCooldownRecord | undefined {
+    if (!this.db) return undefined;
+    const row = this.db
+      .prepare(
+        `select repo, cooldown_until, reason, updated_at
+         from repo_provider_cooldowns
+         where repo = ?
+         limit 1`
+      )
+      .get(repo) as RepoProviderCooldownRow | undefined;
+    if (!row) return undefined;
+    const cooldown = mapRepoProviderCooldownRow(row);
+    const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
+    if (!Number.isFinite(cooldownUntilMs) || cooldownUntilMs <= now.getTime()) return undefined;
+    return cooldown;
   }
 
   close(): void {
@@ -283,6 +305,20 @@ function pushProcessedOrUnprocessed(
     return;
   }
 
+  const repoCooldown = state.getActiveRepoProviderCooldown?.(repo, now);
+  if (repoCooldown) {
+    report.providerDeferred.push({
+      ...pullEntry(repo, pull),
+      status: "skipped",
+      error: `repo_provider_cooldown_until=${repoCooldown.cooldownUntil}; reason=${repoCooldown.reason}`,
+      createdAt: repoCooldown.updatedAt,
+      cooldownUntil: repoCooldown.cooldownUntil,
+      reason: repoCooldown.reason
+    });
+    report.summary.providerDeferred += 1;
+    return;
+  }
+
   report.unprocessed.push({
     ...pullEntry(repo, pull),
     previousProcessedHeads: state
@@ -352,6 +388,13 @@ interface ProcessedReviewRow {
   created_at: string;
 }
 
+interface RepoProviderCooldownRow {
+  repo: string;
+  cooldown_until: string;
+  reason: string;
+  updated_at: string;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -362,5 +405,14 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),
     createdAt: row.created_at
+  };
+}
+
+function mapRepoProviderCooldownRow(row: RepoProviderCooldownRow): RepoProviderCooldownRecord {
+  return {
+    repo: row.repo,
+    cooldownUntil: row.cooldown_until,
+    reason: row.reason,
+    updatedAt: row.updated_at
   };
 }

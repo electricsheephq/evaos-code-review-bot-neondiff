@@ -126,6 +126,41 @@ describe("coverage audit", () => {
     state.close();
   });
 
+  it("reports eligible heads as provider-deferred under active repo cooldown even without a head row", async () => {
+    const { root, state } = createState();
+    state.recordRepoProviderCooldown({
+      repo: "owner/allowed",
+      cooldownUntil: new Date("2026-07-01T00:05:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(6, "head-repo-cooldown")]
+      } as unknown as GitHubApi,
+      state,
+      now: new Date("2026-07-01T00:04:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      processed: 0,
+      providerDeferred: 1,
+      unprocessed: 0
+    });
+    expect(audit.providerDeferred).toEqual([
+      expect.objectContaining({
+        repo: "owner/allowed",
+        pullNumber: 6,
+        headSha: "head-repo-cooldown",
+        cooldownUntil: "2026-07-01T00:05:00.000Z",
+        reason: "provider_request_rate_limit"
+      })
+    ]);
+    state.close();
+  });
+
   it("supports canary and single-PR scoping without marking closed PRs as misses", async () => {
     const { root, state } = createState();
     let getPullCount = 0;
