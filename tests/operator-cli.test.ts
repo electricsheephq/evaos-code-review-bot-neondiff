@@ -9,6 +9,7 @@ import {
   buildOperatorStatus,
   collectOperatorLeases,
   collectOperatorRepoProviderCooldowns,
+  collectOperatorReviewQueue,
   explainPullStatus,
   summarizeAgentInventory,
   type OperatorAgentInventory
@@ -44,6 +45,7 @@ describe("operator CLI summaries", () => {
           expired: true
         }
       ],
+      durableQueue: durableQueueSnapshot(),
       checkedAt: "2026-07-01T00:30:00.000Z"
     });
 
@@ -56,7 +58,11 @@ describe("operator CLI summaries", () => {
       pendingHeads: 1,
       providerDeferredHeads: 1,
       readFailures: 1,
-      expiredProviderCooldowns: 1
+      expiredProviderCooldowns: 1,
+      queuedJobs: 1,
+      runningJobs: 1,
+      providerDeferredJobs: 1,
+      failedQueueJobs: 1
     });
     expect(status.gates).toContainEqual({
       name: "queue_no_pending_heads",
@@ -74,6 +80,8 @@ describe("operator CLI summaries", () => {
       detail: "0 stale head(s)"
     });
     expect(status.recommendedActions).toContain("retry cooldowns");
+    expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
+    expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
 
@@ -170,6 +178,40 @@ describe("operator CLI summaries", () => {
         updatedAt: "2026-07-01T00:00:00.000Z"
       }
     ]);
+  });
+
+  it("summarizes durable review queue rows from the live state database", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table review_queue_jobs (job_id text primary key, attempt_id text not null unique, source text not null, lane text not null, repo text not null, org text not null, pull_number integer not null, head_sha text not null, base_sha text, provider_id text, priority integer not null, state text not null, next_eligible_at text, lease_id text, session_id text, comment_id integer, review_url text, last_error text, created_at text not null, updated_at text not null, started_at text, finished_at text)");
+      insertQueueJob(db, "queued", "owner/repo", 1, "head-queued");
+      insertQueueJob(db, "running", "owner/repo", 2, "head-running");
+      insertQueueJob(db, "provider_deferred", "owner/repo", 3, "head-deferred", "2026-07-01T00:01:00.000Z");
+      insertQueueJob(db, "provider_deferred", "owner/other", 4, "head-wait", "2026-07-01T00:10:00.000Z");
+      insertQueueJob(db, "failed", "owner/other", 5, "head-failed");
+    } finally {
+      db.close();
+    }
+
+    const queue = collectOperatorReviewQueue(statePath, {
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+
+    expect(queue.ok).toBe(false);
+    expect(queue.summary).toMatchObject({
+      total: 5,
+      queued: 1,
+      running: 1,
+      providerDeferred: 2,
+      retryableProviderDeferred: 1,
+      failed: 1
+    });
+    expect(queue.byRepo).toEqual([
+      expect.objectContaining({ repo: "owner/other", total: 2, providerDeferred: 1, retryableProviderDeferred: 0, failed: 1 }),
+      expect.objectContaining({ repo: "owner/repo", total: 3, queued: 1, running: 1, retryableProviderDeferred: 1 })
+    ]);
+    expect(collectOperatorReviewQueue(statePath, { repo: "owner/repo" }).jobs).toHaveLength(3);
   });
 
   it("builds queue buckets from coverage audit output", () => {
@@ -403,4 +445,51 @@ function agentInventory(input: Partial<OperatorAgentInventory>): OperatorAgentIn
     activeLeases: input.activeLeases ?? [],
     staleLeases: input.staleLeases ?? []
   };
+}
+
+function durableQueueSnapshot() {
+  return {
+    ok: false,
+    checkedAt: "2026-07-01T00:30:00.000Z",
+    summary: {
+      total: 4,
+      queued: 1,
+      leased: 0,
+      running: 1,
+      providerDeferred: 1,
+      retryableProviderDeferred: 1,
+      posted: 0,
+      failed: 1,
+      retired: 0
+    },
+    jobs: [],
+    byRepo: []
+  };
+}
+
+function insertQueueJob(
+  db: DatabaseSync,
+  state: string,
+  repo: string,
+  pullNumber: number,
+  headSha: string,
+  nextEligibleAt?: string
+): void {
+  db.prepare(
+    `insert into review_queue_jobs
+      (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+       priority, state, next_eligible_at, created_at, updated_at)
+     values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, ?, ?, ?, ?)`
+  ).run(
+    `${state}-${headSha}`,
+    `automatic:${repo}#${pullNumber}@${headSha}`,
+    repo,
+    repo.split("/")[0],
+    pullNumber,
+    headSha,
+    state,
+    nextEligibleAt ?? null,
+    "2026-07-01T00:00:00.000Z",
+    "2026-07-01T00:00:00.000Z"
+  );
 }

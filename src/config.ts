@@ -20,6 +20,7 @@ export interface BotConfig {
     ttlMs: number;
     headCountLimit: number;
   };
+  reviewScheduler?: ReviewSchedulerConfig;
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -115,6 +116,24 @@ export interface CommandConfig {
   acknowledge: boolean;
 }
 
+export interface ReviewSchedulerConfig {
+  enabled: boolean;
+  maxProviderActive: number;
+  maxOrgActive: number;
+  maxRepoActive: number;
+  maxQueuedPerRepo: number;
+  manualCommandReserve: number;
+  backgroundPriority: number;
+  manualPriority: number;
+  providerThrottleBackoff: {
+    requestRateLimitBaseMs: number;
+    requestRateLimitMaxMs: number;
+    overloadBaseMs: number;
+    overloadMaxMs: number;
+    quotaBaseMs: number;
+  };
+}
+
 const DEFAULT_CONFIG: BotConfig = {
   pilotRepos: ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
   pollIntervalMs: 90_000,
@@ -134,6 +153,23 @@ const DEFAULT_CONFIG: BotConfig = {
     enabled: false,
     ttlMs: 8 * 60 * 60_000,
     headCountLimit: 10
+  },
+  reviewScheduler: {
+    enabled: false,
+    maxProviderActive: 2,
+    maxOrgActive: 3,
+    maxRepoActive: 1,
+    maxQueuedPerRepo: 10,
+    manualCommandReserve: 1,
+    backgroundPriority: 50,
+    manualPriority: 10,
+    providerThrottleBackoff: {
+      requestRateLimitBaseMs: 30_000,
+      requestRateLimitMaxMs: 180_000,
+      overloadBaseMs: 60_000,
+      overloadMaxMs: 300_000,
+      quotaBaseMs: 30 * 60_000
+    }
   },
   providerCooldown: {
     enabled: true,
@@ -208,6 +244,9 @@ function validateConfig(config: BotConfig): void {
   validateBoolean(reviewerSessions.enabled, "config.reviewerSessions.enabled");
   validatePositiveInteger(reviewerSessions.ttlMs, "config.reviewerSessions.ttlMs");
   validatePositiveInteger(reviewerSessions.headCountLimit, "config.reviewerSessions.headCountLimit");
+  const reviewScheduler = config.reviewScheduler ?? DEFAULT_CONFIG.reviewScheduler!;
+  config.reviewScheduler = reviewScheduler;
+  validateReviewSchedulerConfig(reviewScheduler, "config.reviewScheduler");
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
@@ -304,6 +343,40 @@ function validateFinishingTouch(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validateBoolean(value.enabled, `${label}.enabled`);
   validateOptionalString(value.instructions, `${label}.instructions`);
+}
+
+function validateReviewSchedulerConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validatePositiveInteger(value.maxProviderActive, `${label}.maxProviderActive`);
+  validatePositiveInteger(value.maxOrgActive, `${label}.maxOrgActive`);
+  validatePositiveInteger(value.maxRepoActive, `${label}.maxRepoActive`);
+  validatePositiveInteger(value.maxQueuedPerRepo, `${label}.maxQueuedPerRepo`);
+  validateNonNegativeInteger(value.manualCommandReserve, `${label}.manualCommandReserve`);
+  validateNonNegativeInteger(value.backgroundPriority, `${label}.backgroundPriority`);
+  validateNonNegativeInteger(value.manualPriority, `${label}.manualPriority`);
+  const maxProviderActive = Number(value.maxProviderActive);
+  const manualCommandReserve = Number(value.manualCommandReserve);
+  if (manualCommandReserve > maxProviderActive) {
+    throw new Error(`${label}.manualCommandReserve must be <= ${label}.maxProviderActive`);
+  }
+  const backoff = value.providerThrottleBackoff;
+  if (!isRecord(backoff)) throw new Error(`${label}.providerThrottleBackoff must be an object`);
+  validatePositiveInteger(backoff.requestRateLimitBaseMs, `${label}.providerThrottleBackoff.requestRateLimitBaseMs`);
+  validatePositiveInteger(backoff.requestRateLimitMaxMs, `${label}.providerThrottleBackoff.requestRateLimitMaxMs`);
+  validatePositiveInteger(backoff.overloadBaseMs, `${label}.providerThrottleBackoff.overloadBaseMs`);
+  validatePositiveInteger(backoff.overloadMaxMs, `${label}.providerThrottleBackoff.overloadMaxMs`);
+  validatePositiveInteger(backoff.quotaBaseMs, `${label}.providerThrottleBackoff.quotaBaseMs`);
+  const requestRateLimitBaseMs = Number(backoff.requestRateLimitBaseMs);
+  const requestRateLimitMaxMs = Number(backoff.requestRateLimitMaxMs);
+  const overloadBaseMs = Number(backoff.overloadBaseMs);
+  const overloadMaxMs = Number(backoff.overloadMaxMs);
+  if (requestRateLimitBaseMs > requestRateLimitMaxMs) {
+    throw new Error(`${label}.providerThrottleBackoff.requestRateLimitBaseMs must be <= requestRateLimitMaxMs`);
+  }
+  if (overloadBaseMs > overloadMaxMs) {
+    throw new Error(`${label}.providerThrottleBackoff.overloadBaseMs must be <= overloadMaxMs`);
+  }
 }
 
 function validatePathInstructions(value: unknown, label: string): void {

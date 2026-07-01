@@ -33,6 +33,14 @@ export interface ReleaseDatabaseStatus {
   coveredExpiredProviderCooldownCount?: number;
   retryableExpiredProviderCooldownCount?: number;
   providerThrottleState?: "none" | "active" | "expired_retryable";
+  reviewQueueJobCount?: number;
+  queuedReviewQueueJobCount?: number;
+  leasedReviewQueueJobCount?: number;
+  runningReviewQueueJobCount?: number;
+  providerDeferredReviewQueueJobCount?: number;
+  retryableProviderDeferredReviewQueueJobCount?: number;
+  failedReviewQueueJobCount?: number;
+  reviewQueueJobsByRepo?: ReviewQueueRepoStatus[];
 }
 
 export interface ReviewerSessionRepoStatus {
@@ -40,6 +48,17 @@ export interface ReviewerSessionRepoStatus {
   total: number;
   active: number;
   expired: number;
+}
+
+export interface ReviewQueueRepoStatus {
+  repo: string;
+  total: number;
+  queued: number;
+  leased: number;
+  running: number;
+  providerDeferred: number;
+  retryableProviderDeferred: number;
+  failed: number;
 }
 
 export interface ReleaseHeartbeatStatus {
@@ -98,6 +117,8 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       (input.database.expiredProviderCooldownCount ?? 0) - (input.database.coveredExpiredProviderCooldownCount ?? 0)
     );
   const expiredProviderCooldownOk = retryableExpiredProviderCooldownCount === 0;
+  const failedQueueJobsOk = (input.database.failedReviewQueueJobCount ?? 0) === 0;
+  const retryableDeferredQueueJobsOk = (input.database.retryableProviderDeferredReviewQueueJobCount ?? 0) === 0;
   const heartbeatOk = input.heartbeat.status === "fresh";
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
@@ -143,6 +164,18 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
         : `${describeProviderCooldownBacklog(input.database, providerThrottleState)}; retry: ${retryProviderCooldownCommand}`
     },
     {
+      name: "queue_no_failed_jobs",
+      ok: failedQueueJobsOk,
+      detail: `${input.database.failedReviewQueueJobCount ?? 0} failed durable queue job(s)`
+    },
+    {
+      name: "queue_no_retryable_provider_deferred_jobs",
+      ok: retryableDeferredQueueJobsOk,
+      detail:
+        `${input.database.retryableProviderDeferredReviewQueueJobCount ?? 0} retryable provider-deferred queue job(s)` +
+        describeReviewQueueCounts(input.database)
+    },
+    {
       name: "daemon_heartbeat_recent",
       ok: heartbeatOk,
       detail: describeHeartbeat(input.heartbeat)
@@ -163,7 +196,9 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     database: input.database,
     heartbeat: input.heartbeat,
     recommendedActions: expiredProviderCooldownOk
-      ? []
+      ? retryableDeferredQueueJobsOk
+        ? []
+        : ["inspect operator queue and retry provider-deferred jobs whose nextEligibleAt has expired"]
       : [
           retryProviderCooldownCommand,
           `npx tsx src/cli.ts provider-cooldowns --config ${input.configPath} --expired-only true`
@@ -284,6 +319,7 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
         ? "expired_retryable"
         : "none";
     const reviewerSessions = readReviewerSessionCounts(db, now);
+    const reviewQueue = readReviewQueueCounts(db, now);
     return {
       rowCount: row.rowCount ?? 0,
       skippedCount: row.skippedCount ?? 0,
@@ -298,11 +334,89 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
       coveredExpiredProviderCooldownCount,
       retryableExpiredProviderCooldownCount,
       providerThrottleState,
+      reviewQueueJobCount: reviewQueue.total,
+      queuedReviewQueueJobCount: reviewQueue.queued,
+      leasedReviewQueueJobCount: reviewQueue.leased,
+      runningReviewQueueJobCount: reviewQueue.running,
+      providerDeferredReviewQueueJobCount: reviewQueue.providerDeferred,
+      retryableProviderDeferredReviewQueueJobCount: reviewQueue.retryableProviderDeferred,
+      failedReviewQueueJobCount: reviewQueue.failed,
+      reviewQueueJobsByRepo: reviewQueue.byRepo,
       errorCount: row.errorCount ?? 0
     };
   } finally {
     db.close();
   }
+}
+
+function readReviewQueueCounts(
+  db: DatabaseSync,
+  now: Date
+): {
+  total: number;
+  queued: number;
+  leased: number;
+  running: number;
+  providerDeferred: number;
+  retryableProviderDeferred: number;
+  failed: number;
+  byRepo: ReviewQueueRepoStatus[];
+} {
+  const hasTable = db
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_queue_jobs' limit 1")
+    .get();
+  if (!hasTable) {
+    return { total: 0, queued: 0, leased: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 0, byRepo: [] };
+  }
+  const nowIso = now.toISOString();
+  const row = db
+    .prepare(
+      `select
+         count(*) as total,
+         sum(case when state = 'queued' then 1 else 0 end) as queued,
+         sum(case when state = 'leased' then 1 else 0 end) as leased,
+         sum(case when state = 'running' then 1 else 0 end) as running,
+         sum(case when state = 'provider_deferred' then 1 else 0 end) as providerDeferred,
+         sum(case when state = 'provider_deferred' and (next_eligible_at is null or datetime(next_eligible_at) <= datetime(?)) then 1 else 0 end) as retryableProviderDeferred,
+         sum(case when state = 'failed' then 1 else 0 end) as failed
+       from review_queue_jobs`
+    )
+    .get(nowIso) as QueueCountRow;
+  const byRepoRows = db
+    .prepare(
+      `select
+         repo,
+         count(*) as total,
+         sum(case when state = 'queued' then 1 else 0 end) as queued,
+         sum(case when state = 'leased' then 1 else 0 end) as leased,
+         sum(case when state = 'running' then 1 else 0 end) as running,
+         sum(case when state = 'provider_deferred' then 1 else 0 end) as providerDeferred,
+         sum(case when state = 'provider_deferred' and (next_eligible_at is null or datetime(next_eligible_at) <= datetime(?)) then 1 else 0 end) as retryableProviderDeferred,
+         sum(case when state = 'failed' then 1 else 0 end) as failed
+       from review_queue_jobs
+       group by repo
+       order by repo`
+    )
+    .all(nowIso) as unknown as Array<QueueCountRow & { repo: string }>;
+  return {
+    total: row.total ?? 0,
+    queued: row.queued ?? 0,
+    leased: row.leased ?? 0,
+    running: row.running ?? 0,
+    providerDeferred: row.providerDeferred ?? 0,
+    retryableProviderDeferred: row.retryableProviderDeferred ?? 0,
+    failed: row.failed ?? 0,
+    byRepo: byRepoRows.map((repoRow) => ({
+      repo: repoRow.repo,
+      total: repoRow.total ?? 0,
+      queued: repoRow.queued ?? 0,
+      leased: repoRow.leased ?? 0,
+      running: repoRow.running ?? 0,
+      providerDeferred: repoRow.providerDeferred ?? 0,
+      retryableProviderDeferred: repoRow.retryableProviderDeferred ?? 0,
+      failed: repoRow.failed ?? 0
+    }))
+  };
 }
 
 function readReviewerSessionCounts(
@@ -401,6 +515,19 @@ function describeProviderCooldownBacklog(
   return `${database.expiredProviderCooldownCount ?? 0} expired provider cooldown row(s); ${database.activeProviderCooldownCount ?? 0} active provider cooldown row(s)`;
 }
 
+function describeReviewQueueCounts(database: ReleaseDatabaseStatus): string {
+  const total = database.reviewQueueJobCount ?? 0;
+  if (total === 0) return "";
+  return (
+    `; queue total=${total}` +
+    ` queued=${database.queuedReviewQueueJobCount ?? 0}` +
+    ` leased=${database.leasedReviewQueueJobCount ?? 0}` +
+    ` running=${database.runningReviewQueueJobCount ?? 0}` +
+    ` provider_deferred=${database.providerDeferredReviewQueueJobCount ?? 0}` +
+    ` failed=${database.failedReviewQueueJobCount ?? 0}`
+  );
+}
+
 function inferProviderThrottleState(database: ReleaseDatabaseStatus): "none" | "active" | "expired_retryable" {
   if ((database.activeGlobalProviderCooldownCount ?? 0) > 0 || (database.activeProviderCooldownCount ?? 0) > 0) {
     return "active";
@@ -462,4 +589,14 @@ function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+interface QueueCountRow {
+  total?: number;
+  queued?: number | null;
+  leased?: number | null;
+  running?: number | null;
+  providerDeferred?: number | null;
+  retryableProviderDeferred?: number | null;
+  failed?: number | null;
 }

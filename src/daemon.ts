@@ -1,5 +1,6 @@
 import { formatDaemonLog } from "./daemon-log.js";
 import { loadConfig } from "./config.js";
+import { runScheduledCycle } from "./scheduler.js";
 import { ReviewStateStore, type DaemonHeartbeatEvent } from "./state.js";
 import { retryProviderCooldowns, runOnce, type RetryProviderCooldownsResult, type RunOnceResult } from "./worker.js";
 
@@ -31,7 +32,8 @@ export interface RunDaemonCycleOptions {
 export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<DaemonCycleResult> {
   const stdout = input.stdout ?? console.log;
   const stderr = input.stderr ?? console.error;
-  const runOnceImpl = input.runOnceImpl ?? runOnce;
+  const schedulerEnabled = input.runOnceImpl ? false : loadConfig(input.configPath).reviewScheduler?.enabled === true;
+  const runOnceImpl = input.runOnceImpl ?? (schedulerEnabled ? runScheduledCycle : runOnce);
   const retryProviderCooldownsImpl = input.retryProviderCooldownsImpl ?? retryProviderCooldowns;
   const recordHeartbeat = input.recordHeartbeatImpl ?? ((event: DaemonHeartbeatEvent, error?: string) => {
     recordDaemonHeartbeatFromConfig({
@@ -58,6 +60,14 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   try {
     const result = await runOnceImpl({ configPath: input.configPath, dryRun: input.dryRun });
     try {
+      if (schedulerEnabled) {
+        stdout(formatDaemonLog({
+          event: "daemon_provider_cooldown_retry_skipped",
+          cycle: input.cycle,
+          dryRun: input.dryRun,
+          reason: "review_scheduler_enabled"
+        }));
+      } else {
       const providerCooldownRetry = await retryProviderCooldownsImpl({
         configPath: input.configPath,
         dryRun: input.dryRun,
@@ -71,6 +81,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
         dryRun: input.dryRun,
         result: providerCooldownRetry
       }));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       stderr(formatDaemonLog({

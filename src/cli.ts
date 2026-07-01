@@ -12,12 +12,13 @@ import {
   collectOperatorLeases,
   collectOperatorProviderCooldowns,
   collectOperatorRepoProviderCooldowns,
+  collectOperatorReviewQueue,
   explainPullStatus,
   summarizeAgentInventory
 } from "./operator-cli.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
-import { ReviewStateStore } from "./state.js";
+import { ReviewStateStore, type ReviewQueueJobState } from "./state.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
@@ -137,11 +138,16 @@ async function main(): Promise<void> {
       expiredOnly: false,
       limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
     });
+    const durableQueue = collectOperatorReviewQueue(args["state-path"] ?? config.statePath, {
+      repo: args.repo,
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+    });
     const status = buildOperatorStatus({
       release,
       coverage,
       agents,
-      providerCooldowns
+      providerCooldowns,
+      durableQueue
     });
     console.log(JSON.stringify(status, null, 2));
     if (!status.ok) process.exitCode = 1;
@@ -171,8 +177,14 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const report = await collectCoverageReport(args, config);
     const queue = buildOperatorQueue(report);
-    console.log(JSON.stringify(queue, null, 2));
-    if (!queue.ok) process.exitCode = 1;
+    const durableQueue = collectOperatorReviewQueue(args["state-path"] ?? config.statePath, {
+      repo: args.repo,
+      state: parseReviewQueueJobState(args.state),
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+    });
+    const output = { ok: queue.ok && durableQueue.ok, coverage: queue, durableQueue };
+    console.log(JSON.stringify(output, null, 2));
+    if (!output.ok) process.exitCode = 1;
     return;
   }
 
@@ -472,6 +484,7 @@ function buildHelp() {
       "npx tsx src/cli.ts status --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts agents --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json",
+      "npx tsx src/cli.ts queue --config /path/to/live.json --state provider_deferred",
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
@@ -502,6 +515,25 @@ function parsePositiveInteger(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
   return parsed;
+}
+
+const REVIEW_QUEUE_JOB_STATES: ReviewQueueJobState[] = [
+  "queued",
+  "leased",
+  "running",
+  "provider_deferred",
+  "stale_retired",
+  "closed_retired",
+  "posted",
+  "failed"
+];
+
+function parseReviewQueueJobState(value?: string): ReviewQueueJobState | undefined {
+  if (!value) return undefined;
+  if (REVIEW_QUEUE_JOB_STATES.includes(value as ReviewQueueJobState)) {
+    return value as ReviewQueueJobState;
+  }
+  throw new Error(`--state must be one of: ${REVIEW_QUEUE_JOB_STATES.join(", ")}`);
 }
 
 function listJsonFiles(inputDir: string): string[] {
@@ -543,6 +575,7 @@ interface ParsedArgs {
   "output-dir"?: string;
   "output-root"?: string;
   limit?: string;
+  state?: string;
   zcode?: string;
   "active-only"?: string;
   "verify-current-heads"?: string;
