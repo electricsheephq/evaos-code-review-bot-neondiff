@@ -18,12 +18,14 @@ import {
   parseProviderCooldownError,
   ReviewStateStore,
   type ProcessedStatus,
+  type ProcessedCommandAction,
+  type ReviewReadinessState,
   type ReviewerSessionJobState,
   type ReviewQueueJobRecord,
   type ReviewQueueJobState,
   type ReviewQueueJobSource
 } from "./state.js";
-import type { PullRequestSummary } from "./types.js";
+import type { PullRequestSummary, ReviewEvent } from "./types.js";
 import type { IssueCommentCommandSource } from "./commands.js";
 import {
   activateRepoForNewOnlyReview,
@@ -213,8 +215,29 @@ async function enqueuePullIfEligible(input: {
     await retireQueuedJobsForClosedPull(input);
     return "closed_retired";
   }
-  if (input.config.skipDrafts && input.pull.draft) return "skipped_draft";
-  if (!isCanaryAllowed(input.config, input.repo, input.pull.number)) return "skipped_canary";
+  markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
+  if (input.config.skipDrafts && input.pull.draft) {
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      readinessState: "skipped",
+      reason: "draft_pr",
+      now: input.now
+    });
+    return "skipped_draft";
+  }
+  if (!isCanaryAllowed(input.config, input.repo, input.pull.number)) {
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      readinessState: "skipped",
+      reason: "canary_policy",
+      now: input.now
+    });
+    return "skipped_canary";
+  }
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
   if (commandDecision.action !== "none") {
@@ -222,6 +245,15 @@ async function enqueuePullIfEligible(input: {
       await retireSupersededQueueJobsForPull(input);
     }
     const queued = enqueueReviewJob(input, commandDecision);
+    recordReadinessForEnqueue({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      source: "manual_command",
+      commandAction: commandDecision.action,
+      commandCommentId: commandDecision.commandId,
+      now: input.now
+    });
     if (queued.enqueued && commandDecision.shouldReview) {
       await syncReviewStatusComment({
         config: input.config,
@@ -238,9 +270,24 @@ async function enqueuePullIfEligible(input: {
   }
 
   await retireSupersededQueueJobsForPull(input);
-  if (input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) return "skipped_processed";
-  if (hasActiveQueueJobForHead(input.state, input.repo, input.pull.number, input.pull.head.sha)) return "already_queued";
+  if (input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) {
+    backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
+    return "skipped_processed";
+  }
+  const activeQueueJob = getActiveQueueJobForHead(input.state, input.repo, input.pull.number, input.pull.head.sha);
+  if (activeQueueJob) {
+    backfillReadinessFromActiveQueueJob(input.state, input.repo, input.pull, activeQueueJob, input.now);
+    return "already_queued";
+  }
   if (!hasRepoQueueCapacity(input.state, input.repo, input.config.reviewScheduler?.maxQueuedPerRepo ?? 10)) {
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      readinessState: "provider_deferred",
+      reason: "repo_queue_capacity_full",
+      now: input.now
+    });
     return "skipped_capacity";
   }
 
@@ -252,6 +299,14 @@ async function enqueuePullIfEligible(input: {
       state: "provider_deferred",
       nextEligibleAt: activeRepoCooldown.cooldownUntil,
       lastError: `repo_provider_cooldown_until=${activeRepoCooldown.cooldownUntil}; reason=${activeRepoCooldown.reason}`,
+      now: input.now
+    });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      readinessState: "provider_deferred",
+      reason: "repo_provider_cooldown_active",
       now: input.now
     });
     if (queued.enqueued) {
@@ -271,6 +326,13 @@ async function enqueuePullIfEligible(input: {
   }
 
   const enqueued = enqueueReviewJob(input);
+  recordReadinessForEnqueue({
+    state: input.state,
+    repo: input.repo,
+    pull: input.pull,
+    source: "automatic",
+    now: input.now
+  });
   if (enqueued.enqueued) {
     await syncReviewStatusComment({
       config: input.config,
@@ -313,6 +375,65 @@ function enqueueReviewJob(input: {
   });
 }
 
+function recordReadinessForEnqueue(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  source: ReviewQueueJobSource;
+  commandAction?: ProcessedCommandAction;
+  commandCommentId?: number;
+  now: Date;
+}): void {
+  const isManual = input.source === "manual_command";
+  const readinessState: ReviewReadinessState =
+    isManual && input.commandAction === "re-review" ? "awaiting_re_review" :
+    isManual && input.commandAction === "stop" ? "skipped" :
+    isManual && input.commandAction === "explain" ? "command_recorded" :
+    "queued";
+  const reason = isManual && input.commandAction
+    ? `trusted_${input.commandAction.replace("-", "_")}_command`
+    : "automatic_enqueue";
+  recordReadinessTransition({
+    state: input.state,
+    repo: input.repo,
+    pull: input.pull,
+    readinessState,
+    reason,
+    ...(input.commandAction ? { commandAction: input.commandAction } : {}),
+    ...(input.commandCommentId ? { commandCommentId: input.commandCommentId } : {}),
+    ...(isManual ? {} : { clearCommandMetadata: true }),
+    now: input.now
+  });
+}
+
+function markSupersededReadinessRowsForPull(
+  state: ReviewStateStore,
+  repo: string,
+  pull: PullRequestSummary,
+  now: Date
+): void {
+  const supersedableStates: ReviewReadinessState[] = [
+    "queued",
+    "reviewing",
+    "needs_fix",
+    "awaiting_re_review",
+    "ready_for_human",
+    "provider_deferred",
+    "command_recorded"
+  ];
+  for (const readiness of state.listReviewReadiness({ repo, pullNumber: pull.number, states: supersedableStates })) {
+    if (readiness.headSha === pull.head.sha) continue;
+    state.recordReviewReadiness({
+      repo,
+      pullNumber: pull.number,
+      headSha: readiness.headSha,
+      state: "stale",
+      reason: `superseded_by_head=${pull.head.sha}`,
+      now
+    });
+  }
+}
+
 async function retireSupersededQueueJobsForPull(input: {
   config: BotConfig;
   github: SchedulerGitHubApi;
@@ -334,6 +455,14 @@ async function retireSupersededQueueJobsForPull(input: {
       jobId: job.jobId,
       state: "stale_retired",
       lastError: `superseded_by_head=${input.pull.head.sha}`,
+      now: input.now
+    });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: pullForQueueJob(job, input.pull),
+      readinessState: "stale",
+      reason: `superseded_by_head=${input.pull.head.sha}`,
       now: input.now
     });
     updateReviewerSessionJobFromQueueStatus({ state: input.state, job }, "skipped", "skipped");
@@ -372,6 +501,14 @@ async function retireQueuedJobsForClosedPull(input: {
       jobId: job.jobId,
       state: "closed_retired",
       lastError: `closed_or_merged_before_review state=${input.pull.state ?? "unknown"}`,
+      now: input.now
+    });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: pullForQueueJob(job, input.pull),
+      readinessState: "closed",
+      reason: `closed_or_merged_before_review state=${input.pull.state ?? "unknown"}`,
       now: input.now
     });
     updateReviewerSessionJobFromQueueStatus({ state: input.state, job }, "skipped", "skipped");
@@ -462,15 +599,34 @@ async function runLeasedQueueJob(input: {
     state: "running",
     now
   });
+  if (shouldMarkJobReviewing(input.state, input.job)) {
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.job.repo,
+      pull: pullForQueueJobWithoutLive(input.job),
+      readinessState: "reviewing",
+      reason: "queue_job_running",
+      now
+    });
+  }
 
   let pull: PullRequestSummary;
   try {
     pull = await input.github.getPull(input.job.repo, input.job.pullNumber);
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "failed",
-      lastError: error instanceof Error ? error.message : String(error),
+      lastError: errorMessage,
+      now
+    });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.job.repo,
+      pull: pullForQueueJobWithoutLive(input.job),
+      readinessState: "failed",
+      reason: `github_refetch_failed: ${errorMessage}`,
       now
     });
     updateReviewerSessionJobFromQueueStatus(input, "failed", "failed");
@@ -495,6 +651,14 @@ async function runLeasedQueueJob(input: {
       lastError: `closed_or_merged_before_review state=${pull.state ?? "unknown"}`,
       now
     });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.job.repo,
+      pull: pullForQueueJob(input.job, pull),
+      readinessState: "closed",
+      reason: `closed_or_merged_before_review state=${pull.state ?? "unknown"}`,
+      now
+    });
     updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
@@ -517,6 +681,14 @@ async function runLeasedQueueJob(input: {
       lastError: `stale_head_before_review live=${pull.head.sha}`,
       now
     });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.job.repo,
+      pull: pullForQueueJob(input.job, pull),
+      readinessState: "stale",
+      reason: `stale_head_before_review live=${pull.head.sha}`,
+      now
+    });
     updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
@@ -537,6 +709,14 @@ async function runLeasedQueueJob(input: {
       jobId: input.job.jobId,
       state: "stale_retired",
       lastError: `base_changed_before_review live=${pull.base.sha}`,
+      now
+    });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.job.repo,
+      pull: pullForQueueJob(input.job, pull),
+      readinessState: "stale",
+      reason: `base_changed_before_review live=${pull.base.sha}`,
       now
     });
     updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
@@ -583,6 +763,13 @@ async function runLeasedQueueJob(input: {
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
     updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun });
+    syncReadinessForReviewResult({
+      state: input.state,
+      job: input.job,
+      pull,
+      status,
+      now
+    });
     await syncReviewStatusCommentForReviewResult({
       config: input.config,
       github: input.github,
@@ -611,6 +798,14 @@ async function runLeasedQueueJob(input: {
       now
     })) {
       markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull, error, config: input.config, now });
+      recordReadinessTransition({
+        state: input.state,
+        repo: input.job.repo,
+        pull,
+        readinessState: "provider_deferred",
+        reason: "provider_rate_limit_cooldown",
+        now
+      });
       await syncReviewStatusComment({
         config: input.config,
         github: input.github,
@@ -632,10 +827,19 @@ async function runLeasedQueueJob(input: {
       pull,
       error
     });
+    const errorMessage = error instanceof Error ? error.message : String(error);
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "failed",
-      lastError: error instanceof Error ? error.message : String(error)
+      lastError: errorMessage
+    });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.job.repo,
+      pull,
+      readinessState: "failed",
+      reason: `review_failed: ${errorMessage}`,
+      now
     });
     await syncReviewStatusComment({
       config: input.config,
@@ -741,6 +945,210 @@ function reviewResultStatusCommentState(status: ReviewPullResult, processedStatu
     default:
       return assertNever(status);
   }
+}
+
+function syncReadinessForReviewResult(input: {
+  state: ReviewStateStore;
+  job: ReviewQueueJobRecord;
+  pull: PullRequestSummary;
+  status: ReviewPullResult;
+  now: Date;
+}): void {
+  const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+  const readinessState = readinessStateForReviewResult(input.status, processed?.status, processed?.event);
+  if (!readinessState) return;
+  recordReadinessTransition({
+    state: input.state,
+    repo: input.job.repo,
+    pull: input.pull,
+    readinessState,
+    reason: readinessReasonForReviewResult(input.status, processed?.status, processed?.event),
+    ...(processed?.event ? { event: processed.event } : {}),
+    ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+    now: input.now
+  });
+}
+
+function backfillReadinessFromProcessedHead(
+  state: ReviewStateStore,
+  repo: string,
+  pull: PullRequestSummary,
+  now: Date
+): void {
+  const processed = state.getProcessedReview(repo, pull.number, pull.head.sha);
+  if (!processed) return;
+  const existing = state.getReviewReadiness(repo, pull.number, pull.head.sha);
+  const targetState = readinessStateForProcessedStatus(processed.status, processed.event, processed.error);
+  if (
+    existing?.state === targetState &&
+    (!processed.event || existing.event === processed.event) &&
+    (!processed.reviewUrl || existing.reviewUrl === processed.reviewUrl)
+  ) {
+    return;
+  }
+  recordReadinessTransition({
+    state,
+    repo,
+    pull,
+    readinessState: targetState,
+    reason: readinessReasonForProcessedHead(processed),
+    ...(processed.event ? { event: processed.event } : {}),
+    ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+    now
+  });
+}
+
+function backfillReadinessFromActiveQueueJob(
+  state: ReviewStateStore,
+  repo: string,
+  pull: PullRequestSummary,
+  job: ReviewQueueJobRecord,
+  now: Date
+): void {
+  const readinessState = readinessStateForActiveQueueJob(job);
+  recordReadinessTransition({
+    state,
+    repo,
+    pull,
+    readinessState,
+    reason: readinessReasonForActiveQueueJob(job),
+    ...(job.source === "manual_command" && job.commentId ? { commandCommentId: job.commentId } : {}),
+    ...(job.source === "manual_command" ? {} : { clearCommandMetadata: true }),
+    now
+  });
+}
+
+function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobRecord): boolean {
+  if (job.source !== "manual_command") return true;
+  const existing = state.getReviewReadiness(job.repo, job.pullNumber, job.headSha);
+  // Only stop/explain commands suppress reviewing because they do not perform review work.
+  return existing?.commandAction !== "stop" && existing?.commandAction !== "explain";
+}
+
+function readinessStateForReviewResult(
+  status: ReviewPullResult,
+  processedStatus?: ProcessedStatus,
+  event?: ReviewEvent
+): ReviewReadinessState | undefined {
+  switch (status) {
+    case "reviewed":
+    case "reviewed_command":
+      return event === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
+    case "skipped_processed":
+      return readinessStateForProcessedStatus(processedStatus, event);
+    case "skipped_provider_cooldown":
+    case "skipped_capacity":
+      return "provider_deferred";
+    case "skipped_stale_head":
+      return "stale";
+    case "skipped_draft":
+    case "skipped_canary":
+    case "skipped_command_stop":
+      return "skipped";
+    case "skipped_policy":
+      return "failed";
+    case "skipped_command_explain":
+      return undefined;
+    default:
+      return assertNever(status);
+  }
+}
+
+function readinessReasonForReviewResult(
+  status: ReviewPullResult,
+  processedStatus?: ProcessedStatus,
+  event?: ReviewEvent
+): string {
+  switch (status) {
+    case "reviewed":
+    case "reviewed_command":
+      return event === "REQUEST_CHANGES" ? "request_changes_review_posted" : "comment_review_posted";
+    case "skipped_processed":
+      return `processed_head_already_${processedStatus ?? "unknown"}`;
+    case "skipped_provider_cooldown":
+      return "provider_cooldown";
+    case "skipped_capacity":
+      return "review_capacity_busy";
+    case "skipped_stale_head":
+      return "stale_head";
+    case "skipped_draft":
+      return "draft_pr";
+    case "skipped_canary":
+      return "canary_policy";
+    case "skipped_policy":
+      return "unexpected_scheduler_review_status=skipped_policy";
+    case "skipped_command_stop":
+      return "manual_command_stop";
+    case "skipped_command_explain":
+      return "manual_command_explain";
+    default:
+      return assertNever(status);
+  }
+}
+
+function readinessStateForProcessedStatus(
+  status?: ProcessedStatus,
+  event?: ReviewEvent,
+  error?: string
+): ReviewReadinessState {
+  if (parseProviderCooldownError(error)) return "provider_deferred";
+  switch (status) {
+    case "posted":
+    case "dry_run":
+      return event === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "skipped";
+    case undefined:
+      return "ready_for_human";
+    default:
+      return assertNever(status);
+  }
+}
+
+function readinessReasonForProcessedHead(processed: { status: ProcessedStatus; error?: string }): string {
+  const providerCooldown = parseProviderCooldownError(processed.error);
+  if (providerCooldown) return `processed_head_provider_deferred: ${providerCooldown.reason ?? "provider_cooldown"}`;
+  return `processed_head_already_${processed.status}`;
+}
+
+function readinessStateForActiveQueueJob(job: ReviewQueueJobRecord): ReviewReadinessState {
+  if (job.state === "provider_deferred") return "provider_deferred";
+  if (job.state === "leased" || job.state === "running") return "reviewing";
+  return "queued";
+}
+
+function readinessReasonForActiveQueueJob(job: ReviewQueueJobRecord): string {
+  return job.lastError ? `active_queue_job_${job.state}: ${job.lastError}` : `active_queue_job_${job.state}`;
+}
+
+function recordReadinessTransition(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  readinessState: ReviewReadinessState;
+  reason: string;
+  event?: ReviewEvent;
+  reviewUrl?: string;
+  commandAction?: ProcessedCommandAction;
+  commandCommentId?: number;
+  clearCommandMetadata?: boolean;
+  now: Date;
+}): void {
+  input.state.recordReviewReadiness({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: input.readinessState,
+    reason: input.reason,
+    ...(input.event ? { event: input.event } : {}),
+    ...(input.reviewUrl ? { reviewUrl: input.reviewUrl } : {}),
+    ...(input.commandAction ? { commandAction: input.commandAction } : {}),
+    ...(input.commandCommentId ? { commandCommentId: input.commandCommentId } : {}),
+    ...(input.clearCommandMetadata ? { clearCommandMetadata: true } : {}),
+    now: input.now
+  });
 }
 
 function pullForQueueJob(job: ReviewQueueJobRecord, livePull: PullRequestSummary): PullRequestSummary {
@@ -1032,10 +1440,19 @@ function hasActiveQueueJobForHead(
   pullNumber: number,
   headSha: string
 ): boolean {
+  return Boolean(getActiveQueueJobForHead(state, repo, pullNumber, headSha));
+}
+
+function getActiveQueueJobForHead(
+  state: ReviewStateStore,
+  repo: string,
+  pullNumber: number,
+  headSha: string
+): ReviewQueueJobRecord | undefined {
   return state.listReviewQueueJobs({
     repo,
     states: ["queued", "leased", "running", "provider_deferred"]
-  }).some((job) => job.pullNumber === pullNumber && job.headSha === headSha);
+  }).find((job) => job.pullNumber === pullNumber && job.headSha === headSha);
 }
 
 function hasRepoQueueCapacity(state: ReviewStateStore, repo: string, maxQueuedPerRepo: number): boolean {

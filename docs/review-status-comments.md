@@ -46,6 +46,38 @@ and may move directly from `queued` to `completed`; command
 acknowledgement/state lives in the separate command lane. Non-review commands
 such as `stop` and `explain` do not create review status comments.
 
+## Durable Readiness State
+
+The worker also persists one machine-readable `review_readiness` row per repo,
+PR, and head SHA. This row is the durable state-machine source for operators and
+future dashboards; the public sticky comment remains only a human coordination
+surface.
+
+Readiness states:
+
+- `queued`: a review job was accepted into the durable queue.
+- `reviewing`: a leased queue job is currently running review work.
+- `needs_fix`: a posted or dry-run review ended in `REQUEST_CHANGES`.
+- `awaiting_re_review`: a trusted `re-review` command was accepted.
+- `blocked_on_checks`: reserved for future check-gated readiness.
+- `blocked_on_proof`: reserved for future evidence/proof-gated readiness.
+- `ready_for_human`: the head has a non-blocking bot review or dry-run result.
+- `provider_deferred`: capacity or provider cooldown deferred the head.
+- `stale`: an older head was superseded by a newer PR head, or the queued
+  head's base/head changed before review.
+- `closed`: the PR closed or merged before review work completed.
+- `command_recorded`: a trusted non-review command such as `explain` was
+  recorded.
+- `skipped`: policy, draft, canary, or trusted `stop` skipped the head.
+- `failed`: GitHub refetch, review execution, or worker failure stopped the
+  head.
+
+No-op scheduler cycles preserve `updated_at`. In practice this means duplicate
+processed-head scans do not create fresh readiness events and should not trigger
+new comments. Manual command metadata (`command_action`, `command_comment_id`)
+is retained across the later terminal transition so operators can connect
+`ready_for_human` or `needs_fix` back to the command that requested it.
+
 This is a soft coordination signal for humans and agents. It does not block
 GitHub merges by itself. Requiring the bot before merge should be implemented
 later with a dedicated GitHub Check and branch protection after the comment lane
