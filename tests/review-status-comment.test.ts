@@ -88,6 +88,34 @@ describe("review status comment", () => {
     })).resolves.toEqual({ posted: false, reason: "missing_app_credentials", state: "queued" });
   });
 
+  it("returns a best-effort failure when comment building rejects invalid identity", async () => {
+    let upsertCalls = 0;
+    const result = await postReviewStatusComment({
+      enabled: true,
+      dryRun: false,
+      github: {
+        canPostAsApp: () => true,
+        upsertIssueComment: async () => {
+          upsertCalls += 1;
+          throw new Error("should not upsert invalid marker identity");
+        }
+      },
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: "short",
+      state: "queued"
+    });
+
+    expect(result).toMatchObject({
+      posted: false,
+      reason: "upsert_failed",
+      state: "queued"
+    });
+    if (result.posted) throw new Error("expected best-effort failure");
+    expect(result.error).toContain("Invalid review status head SHA");
+    expect(upsertCalls).toBe(0);
+  });
+
   it("redacts secret-like details before posting", () => {
     const comment = buildReviewStatusComment({
       repo: "owner/repo",

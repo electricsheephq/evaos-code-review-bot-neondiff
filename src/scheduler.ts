@@ -202,7 +202,9 @@ async function enqueuePullIfEligible(input: {
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
   if (commandDecision.action !== "none") {
-    await retireSupersededQueueJobsForPull(input);
+    if (commandDecision.shouldReview) {
+      await retireSupersededQueueJobsForPull(input);
+    }
     const queued = enqueueReviewJob(input, commandDecision);
     if (queued.enqueued && commandDecision.shouldReview) {
       await syncReviewStatusComment({

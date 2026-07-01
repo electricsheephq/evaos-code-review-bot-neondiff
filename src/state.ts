@@ -295,6 +295,8 @@ export class ReviewStateStore {
         on review_queue_jobs (state, priority, created_at);
       create index if not exists idx_review_queue_jobs_repo_state
         on review_queue_jobs (repo, state);
+      create index if not exists idx_review_queue_jobs_repo_pull_state
+        on review_queue_jobs (repo, pull_number, state);
       create index if not exists idx_review_queue_jobs_provider_state
         on review_queue_jobs (provider_id, state);
     `);

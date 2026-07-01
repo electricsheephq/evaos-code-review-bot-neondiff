@@ -1313,6 +1313,50 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("does not retire superseded queued heads when a trusted non-review command is recorded", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-stop-no-stale-retire-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const oldJob = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base"
+    }).job;
+    const comments = new Map([
+      ["org/repo-a#1", [comment(501, "100yenadmin", "@evaos-code-review-bot stop")]]
+    ]);
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_B)]]
+      ]), comments, statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => "skipped_command_stop",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.skippedCommandStop).toBe(1);
+    expect(result.queue.staleRetired).toBe(0);
+    expect(statusCalls).toHaveLength(0);
+    expect(state.getReviewQueueJob(oldJob.jobId)).toMatchObject({ state: "queued" });
+    expect(state.listReviewQueueJobs({ state: "command_recorded" })).toEqual([
+      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_B, commentId: 501 })
+    ]);
+    state.close();
+  });
+
   it("does not stale-retire manual command jobs when only the base SHA changed", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-manual-base-drift-"));
     roots.push(root);

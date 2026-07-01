@@ -102,8 +102,8 @@ export async function postReviewStatusComment(input: {
   if (input.dryRun) return { posted: false, reason: "dry_run", state: input.state };
   if (!input.github.canPostAsApp()) return { posted: false, reason: "missing_app_credentials", state: input.state };
 
-  const comment = buildReviewStatusComment(input);
   try {
+    const comment = buildReviewStatusComment(input);
     const result = await input.github.upsertIssueComment({
       repo: input.repo,
       issueNumber: input.pullNumber,
