@@ -155,6 +155,7 @@ describe("walkthrough comment rendering", () => {
 
     expect(walkthrough.body).toContain("No validated inline findings.");
     expect(walkthrough.body).toContain("Estimated review effort: 1/5");
+    expect(walkthrough.body).toContain("- [x] Required behavior proof is present or not applicable.");
     expect(walkthrough.body).not.toContain(secret);
     expect(walkthrough.body).toMatch(/Docs only \[redacted-secret\]/);
   });

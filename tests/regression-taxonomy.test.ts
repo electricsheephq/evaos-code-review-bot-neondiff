@@ -16,6 +16,9 @@ describe("regression taxonomy", () => {
     expect(inferRegressionCategory(finding("src/config.ts", "Leaked private key", "The private key is copied into logs."))).toBe(
       "security_boundary"
     );
+    expect(inferRegressionCategory(finding("src/auth.ts", "Leaked access token", "The handler writes an access token into audit logs."))).toBe(
+      "security_boundary"
+    );
   });
 });
 

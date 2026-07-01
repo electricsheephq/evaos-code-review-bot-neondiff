@@ -77,7 +77,7 @@ export function inferRegressionCategory(finding: Pick<Finding, "path" | "title" 
   ) {
     return "data_loss";
   }
-  if (matchesAny(haystack, ["secret", "credential", "private key", "cookie", "xss", "csrf", "ssrf", "injection"])) {
+  if (matchesAny(haystack, ["secret", "credential", "private key", "api key", "access token", "leaked token", "cookie", "xss", "csrf", "ssrf", "injection"])) {
     return "security_boundary";
   }
   if (matchesAny(haystack, ["auth", "permission", "unauthorized", "oauth", "session", "login", "token"])) {

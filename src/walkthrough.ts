@@ -1,5 +1,5 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
-import { categoryLabel } from "./regression-taxonomy.js";
+import { categoryLabel, isRequestChangesEligible } from "./regression-taxonomy.js";
 import type {
   ChangedSurfaceValidationReport,
   DroppedFinding,
@@ -39,6 +39,7 @@ export function buildWalkthroughComment(input: {
   const suggestedReviewers = input.pull.requested_reviewers?.map((reviewer) => reviewer.login).filter(Boolean) ?? [];
   const severityCounts = countSeverities(input.comments);
   const highSeverity = severityCounts.P0 + severityCounts.P1;
+  const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
 
   const body = [
     marker,
@@ -81,7 +82,10 @@ export function buildWalkthroughComment(input: {
     "",
     checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
     checklistItem(!commentsContainSecretLikeText(input.comments), "No secret-like content survived into posted inline comments."),
-    checklistItem(input.event !== "REQUEST_CHANGES" || highSeverity > 0, "REQUEST_CHANGES is only used when P0/P1 findings survive validation."),
+    checklistItem(
+      input.event !== "REQUEST_CHANGES" || requestChangesEligible > 0,
+      "REQUEST_CHANGES is only used when eligible P0/P1 findings survive validation."
+    ),
     checklistItem(proofChecklistPassed(input.validation, input.proof), "Required behavior proof is present or not applicable."),
     checklistItem(true, "Labels and reviewers are suggestions only; the bot did not auto-apply them.")
   ].join("\n");
@@ -201,7 +205,8 @@ function proofChecklistPassed(
   validation: ChangedSurfaceValidationReport | undefined,
   proof: ProofRequirementReport | undefined
 ): boolean {
-  if (!validation || !proof) return false;
+  if (!validation) return true;
+  if (!proof) return false;
   return proof.status === "sufficient" || proof.status === "not_applicable";
 }
 
