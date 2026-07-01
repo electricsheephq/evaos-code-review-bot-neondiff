@@ -335,6 +335,123 @@ describe("beta release status", () => {
     expect(status.gates.some((gate) => gate.name === "provider_cooldown_backlog" && !gate.ok)).toBe(true);
   });
 
+  it("reports reviewer session counts from the live state database", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-reviewer-sessions-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table reviewer_sessions (
+          session_id text primary key,
+          repo text not null,
+          repo_family text,
+          state text not null,
+          started_at text not null,
+          last_used_at text not null,
+          expires_at text not null,
+          head_count_used integer not null,
+          head_count_limit integer not null,
+          worker_pid integer,
+          model text,
+          provider text,
+          zcode_cli_version text,
+          memory_packet_sha text,
+          gitnexus_packet_sha text,
+          last_error text
+        );
+      `);
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at, head_count_used, head_count_limit)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        "active-session",
+        "100yenadmin/evaOS-GUI",
+        "active",
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:10.000Z",
+        "2026-07-01T00:30:00.000Z",
+        1,
+        10
+      );
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at, head_count_used, head_count_limit)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        "expired-session",
+        "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+        "expired",
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:10.000Z",
+        "2026-07-01T00:10:00.000Z",
+        10,
+        10
+      );
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at, head_count_used, head_count_limit)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        "stale-active-session",
+        "electricsheephq/WorldOS",
+        "active",
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:10.000Z",
+        "2026-07-01T00:10:00.000Z",
+        1,
+        10
+      );
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at, head_count_used, head_count_limit)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        "limit-reached-active-session",
+        "electricsheephq/evaos-code-review-bot",
+        "active",
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:10.000Z",
+        "2026-07-01T00:30:00.000Z",
+        10,
+        10
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-01T00:15:00.000Z")
+    });
+
+    expect(status.database.reviewerSessionCount).toBe(4);
+    expect(status.database.activeReviewerSessionCount).toBe(1);
+    expect(status.database.expiredReviewerSessionCount).toBe(3);
+    expect(status.database.reviewerSessionsByRepo).toEqual([
+      { repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO", total: 1, active: 0, expired: 1 },
+      { repo: "100yenadmin/evaOS-GUI", total: 1, active: 1, expired: 0 },
+      { repo: "electricsheephq/WorldOS", total: 1, active: 0, expired: 1 },
+      { repo: "electricsheephq/evaos-code-review-bot", total: 1, active: 0, expired: 1 }
+    ]);
+  });
+
   it("treats malformed provider cooldown timestamps as actionable backlog", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-db-invalid-cooldown-"));
     roots.push(root);

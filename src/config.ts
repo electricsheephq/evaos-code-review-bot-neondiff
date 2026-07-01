@@ -15,6 +15,11 @@ export interface BotConfig {
     maxActiveRuns: number;
     leaseTtlMs: number;
   };
+  reviewerSessions?: {
+    enabled: boolean;
+    ttlMs: number;
+    headCountLimit: number;
+  };
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -125,6 +130,11 @@ const DEFAULT_CONFIG: BotConfig = {
     maxActiveRuns: 1,
     leaseTtlMs: 15 * 60_000
   },
+  reviewerSessions: {
+    enabled: false,
+    ttlMs: 8 * 60 * 60_000,
+    headCountLimit: 10
+  },
   providerCooldown: {
     enabled: true,
     durationMs: 15 * 60_000,
@@ -193,6 +203,11 @@ function validateConfig(config: BotConfig): void {
   validateBoolean(config.activation.reviewExistingOpenPrsOnActivation, "config.activation.reviewExistingOpenPrsOnActivation");
   validatePositiveInteger(config.reviewConcurrency.maxActiveRuns, "config.reviewConcurrency.maxActiveRuns");
   validatePositiveInteger(config.reviewConcurrency.leaseTtlMs, "config.reviewConcurrency.leaseTtlMs");
+  const reviewerSessions = config.reviewerSessions ?? DEFAULT_CONFIG.reviewerSessions!;
+  config.reviewerSessions = reviewerSessions;
+  validateBoolean(reviewerSessions.enabled, "config.reviewerSessions.enabled");
+  validatePositiveInteger(reviewerSessions.ttlMs, "config.reviewerSessions.ttlMs");
+  validatePositiveInteger(reviewerSessions.headCountLimit, "config.reviewerSessions.headCountLimit");
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
