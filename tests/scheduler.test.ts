@@ -748,6 +748,10 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.queue.closedRetired).toBe(1);
     expect(state.getReviewQueueJob(oldJob.jobId)).toMatchObject({ state: "closed_retired" });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "closed",
+      reason: "closed_or_merged_before_review state=closed"
+    });
     expect(statusCalls.map(statusFromBody)).toEqual(["closed_or_merged_before_review"]);
     state.close();
   });
@@ -781,6 +785,11 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(statusCalls).toHaveLength(0);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT"
+    });
     state.close();
   });
 
@@ -2002,6 +2011,10 @@ describe("provider-aware review scheduler", () => {
     expect(state.listReviewQueueJobs({ state: "stale_retired" })).toEqual([
       expect.objectContaining({ lastError: "base_changed_before_review live=new-base" })
     ]);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "stale",
+      reason: "base_changed_before_review live=new-base"
+    });
     state.close();
   });
 
