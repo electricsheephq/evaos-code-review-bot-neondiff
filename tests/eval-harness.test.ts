@@ -129,7 +129,7 @@ describe("offline eval harness", () => {
             severity: "P2",
             path: "src/a.ts",
             line: 10,
-            title: "Duplicate issue",
+            title: "Same bug with different words",
             body: "The same finding appears twice.",
             confidence: 0.7
           }
@@ -191,7 +191,187 @@ describe("offline eval harness", () => {
     expect(normalized).toContain("[redacted-secret]");
   });
 
-  it("defaults output under the eval evidence root", () => {
+  it("fails closed on malformed findings dropped by schema parsing", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-schema-"));
+    roots.push(root);
+
+    const result = runOfflineEval({
+      runId: "schema-drop",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 61,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: {
+        findings: [
+          {
+            severity: "P1",
+            path: "src/a.ts",
+            line: "not-a-number",
+            title: "Bad schema",
+            body: "This should be dropped.",
+            confidence: 0.9
+          }
+        ]
+      },
+      labels: [],
+      thresholds: {
+        minPrecision: 0,
+        minRecall: 0
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.counts.droppedFromSchema).toBe(1);
+    expect(result.scorecard.gates.find((gate) => gate.name === "schema_valid")).toMatchObject({ ok: false });
+  });
+
+  it("rejects missing botFindings instead of treating the scenario as empty", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-missing-"));
+    roots.push(root);
+
+    expect(() => runOfflineEval({
+      runId: "missing-findings",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 61,
+      headSha: "abc",
+      suite: "canary_shadow",
+      labels: []
+    } as unknown as EvalScenarioInput, { outputDir: root }))
+      .toThrow("botFindings is required");
+  });
+
+  it("requires semantic overlap even for exact-line matches", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-exact-overlap-"));
+    roots.push(root);
+
+    const result = runOfflineEval({
+      runId: "exact-overlap",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 61,
+      headSha: "abc",
+      suite: "seeded_defect_recall",
+      botFindings: {
+        findings: [
+          {
+            severity: "P1",
+            path: "src/eval-harness.ts",
+            line: 10,
+            title: "Completely unrelated cache bug",
+            body: "This text has no useful overlap with the expected issue.",
+            confidence: 0.9
+          }
+        ]
+      },
+      labels: [
+        {
+          source: "seeded_defect",
+          severity: "P1",
+          path: "src/eval-harness.ts",
+          line: 10,
+          title: "Secret redaction misses object keys",
+          body: "Raw output can store credentials in JSON object keys."
+        }
+      ],
+      thresholds: {
+        minPrecision: 0,
+        minRecall: 1,
+        minSeededRecall: 1
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.counts).toMatchObject({
+      truePositive: 0,
+      falsePositive: 1,
+      falseNegative: 1,
+      exactLineMatches: 0
+    });
+  });
+
+  it("prefers exact-line matches globally before lower-ranked matches", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-global-exact-"));
+    roots.push(root);
+
+    const result = runOfflineEval({
+      runId: "global-exact",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 61,
+      headSha: "abc",
+      suite: "seeded_defect_recall",
+      botFindings: {
+        findings: [
+          {
+            severity: "P1",
+            path: "src/eval-harness.ts",
+            line: 10,
+            title: "Secret redaction misses keys",
+            body: "Raw output object keys can keep leaked secret tokens.",
+            confidence: 0.8
+          }
+        ]
+      },
+      labels: [
+        {
+          source: "human",
+          severity: "P1",
+          path: "src/eval-harness.ts",
+          line: 12,
+          title: "Secret redaction misses keys nearby",
+          body: "Object keys can keep leaked tokens."
+        },
+        {
+          source: "seeded_defect",
+          severity: "P1",
+          path: "src/eval-harness.ts",
+          line: 10,
+          title: "Secret redaction misses keys",
+          body: "Raw output object keys can keep leaked tokens."
+        }
+      ],
+      thresholds: {
+        minPrecision: 1,
+        minRecall: 0.5,
+        minSeededRecall: 1
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(join(root, "comparison.csv"), "utf8")).toContain("true_positive,exact_line,bot-1,label-2");
+  });
+
+  it("scans fallback botFindings and redacts secret-looking object keys", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-secret-key-"));
+    roots.push(root);
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+
+    const result = runOfflineEval({
+      runId: "secret-key",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 61,
+      headSha: "abc",
+      suite: "safety_redaction",
+      botFindings: {
+        findings: [],
+        [token]: "secret in key"
+      },
+      labels: [],
+      thresholds: {
+        minPrecision: 0,
+        minRecall: 0,
+        maxSecretFindings: 0
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.gates.find((gate) => gate.name === "secret_redaction")).toMatchObject({ ok: false });
+    const rawOutput = readFileSync(join(root, "raw-output.json"), "utf8");
+    expect(rawOutput).not.toContain(token);
+    expect(rawOutput).toContain("[redacted-secret]");
+  });
+
+  it("writes output under an explicit test directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-default-path-"));
+    roots.push(root);
     const scenario: EvalScenarioInput = {
       runId: "default-path",
       repo: "electricsheephq/evaos-code-review-bot",
@@ -203,11 +383,11 @@ describe("offline eval harness", () => {
     };
 
     const result = runOfflineEval(scenario, {
+      outputDir: root,
       now: new Date("2026-07-01T07:00:00Z")
     });
-    roots.push("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/2026-07-01/default-path");
 
-    expect(result.outputDir).toBe("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/2026-07-01/default-path");
+    expect(result.outputDir).toBe(root);
     expect(result.ok).toBe(true);
   });
 });

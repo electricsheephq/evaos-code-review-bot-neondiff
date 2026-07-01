@@ -72,6 +72,7 @@ export interface EvalScorecard {
     exactLineMatches: number;
     nearbyLineMatches: number;
     semanticMatches: number;
+    droppedFromSchema: number;
     secretFindings: number;
     duplicateFindings: number;
   };
@@ -136,6 +137,7 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
     matches,
     duplicateCount: duplicateReport.duplicates.length,
     secretCount: redactionReport.secretLikeItems.length,
+    droppedFromSchema: parsedBot.dropped.length,
     thresholds
   });
 
@@ -190,6 +192,7 @@ function buildScorecard(input: {
   matches: EvalMatch[];
   duplicateCount: number;
   secretCount: number;
+  droppedFromSchema: number;
   thresholds: EvalThresholds;
 }): EvalScorecard {
   const matchedBotIds = new Set(input.matches.map((match) => match.botFindingId));
@@ -222,6 +225,7 @@ function buildScorecard(input: {
       exactLineMatches,
       nearbyLineMatches,
       semanticMatches,
+      droppedFromSchema: input.droppedFromSchema,
       secretFindings: input.secretCount,
       duplicateFindings: input.duplicateCount
     },
@@ -253,6 +257,11 @@ function buildScorecard(input: {
         detail: `${input.secretCount} <= ${input.thresholds.maxSecretFindings}`
       },
       {
+        name: "schema_valid",
+        ok: input.droppedFromSchema === 0,
+        detail: `${input.droppedFromSchema} dropped finding(s)`
+      },
+      {
         name: "duplicate_suppression",
         ok: input.duplicateCount <= input.thresholds.maxDuplicateFindings,
         detail: `${input.duplicateCount} <= ${input.thresholds.maxDuplicateFindings}`
@@ -262,24 +271,34 @@ function buildScorecard(input: {
 }
 
 function matchFindings(botFindings: NormalizedEvalFinding[], labels: NormalizedEvalFinding[]): EvalMatch[] {
-  const matches: EvalMatch[] = [];
+  const candidates = labels.flatMap((label) => botFindings
+    .filter((finding) => finding.path === label.path)
+    .map((finding) => ({ finding, label, kind: classifyMatch(finding, label) }))
+    .filter((candidate): candidate is {
+      finding: NormalizedEvalFinding;
+      label: NormalizedEvalFinding;
+      kind: EvalMatch["kind"];
+    } => Boolean(candidate.kind)));
+
+  candidates.sort((a, b) =>
+    matchRank(a.kind) - matchRank(b.kind) ||
+    Math.abs(a.finding.line - a.label.line) - Math.abs(b.finding.line - b.label.line) ||
+    b.finding.confidence - a.finding.confidence ||
+    a.label.id.localeCompare(b.label.id)
+  );
+
   const usedBotIds = new Set<string>();
   const usedLabelIds = new Set<string>();
+  const matches: EvalMatch[] = [];
 
-  for (const label of labels) {
-    const candidates = botFindings
-      .filter((finding) => !usedBotIds.has(finding.id) && finding.path === label.path)
-      .map((finding) => ({ finding, kind: classifyMatch(finding, label) }))
-      .filter((candidate): candidate is { finding: NormalizedEvalFinding; kind: EvalMatch["kind"] } => Boolean(candidate.kind))
-      .sort((a, b) => matchRank(a.kind) - matchRank(b.kind) || Math.abs(a.finding.line - label.line) - Math.abs(b.finding.line - label.line));
-    const best = candidates[0];
-    if (!best) continue;
-    usedBotIds.add(best.finding.id);
-    usedLabelIds.add(label.id);
+  for (const candidate of candidates) {
+    if (usedBotIds.has(candidate.finding.id) || usedLabelIds.has(candidate.label.id)) continue;
+    usedBotIds.add(candidate.finding.id);
+    usedLabelIds.add(candidate.label.id);
     matches.push({
-      botFindingId: best.finding.id,
-      labelId: label.id,
-      kind: best.kind
+      botFindingId: candidate.finding.id,
+      labelId: candidate.label.id,
+      kind: candidate.kind
     });
   }
 
@@ -287,9 +306,10 @@ function matchFindings(botFindings: NormalizedEvalFinding[], labels: NormalizedE
 }
 
 function classifyMatch(botFinding: NormalizedEvalFinding, label: NormalizedEvalFinding): EvalMatch["kind"] | undefined {
-  if (botFinding.line === label.line) return "exact_line";
-  if (Math.abs(botFinding.line - label.line) <= 3 && tokenOverlap(botFinding, label) >= 0.35) return "nearby_line";
-  if (tokenOverlap(botFinding, label) >= 0.55) return "semantic";
+  const overlap = tokenOverlap(botFinding, label);
+  if (botFinding.line === label.line && overlap >= 0.25) return "exact_line";
+  if (Math.abs(botFinding.line - label.line) <= 3 && overlap >= 0.35) return "nearby_line";
+  if (overlap >= 0.55) return "semantic";
   return undefined;
 }
 
@@ -322,7 +342,7 @@ function findDuplicateFindings(findings: NormalizedEvalFinding[]): {
   const seen = new Map<string, string>();
   const duplicates: Array<{ duplicateId: string; originalId: string; key: string }> = [];
   for (const finding of findings) {
-    const key = `${finding.path}:${finding.line}:${finding.severity}:${finding.title.trim().toLowerCase()}`;
+    const key = `${finding.path}:${finding.line}:${finding.severity}`;
     const originalId = seen.get(key);
     if (originalId) duplicates.push({ duplicateId: finding.id, originalId, key });
     else seen.set(key, finding.id);
@@ -354,8 +374,13 @@ function buildRedactionReport(
     }
     return items;
   });
-  if (input.rawOutput !== undefined && containsSecretLikeText(JSON.stringify(input.rawOutput))) {
-    secretLikeItems.push({ id: "raw-output", source: "raw", field: "rawOutput" });
+  const rawPayload = input.rawOutput ?? input.botFindings;
+  if (containsSecretLikeText(JSON.stringify(rawPayload))) {
+    secretLikeItems.push({
+      id: "raw-output",
+      source: "raw",
+      field: input.rawOutput !== undefined ? "rawOutput" : "botFindings"
+    });
   }
   return { droppedFromSchema, secretLikeItems };
 }
@@ -467,7 +492,7 @@ function redactUnknown(value: unknown): unknown {
   if (typeof value === "string") return redactSecrets(value);
   if (Array.isArray(value)) return value.map(redactUnknown);
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactUnknown(item)]));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactSecrets(key), redactUnknown(item)]));
   }
   return value;
 }
@@ -487,8 +512,19 @@ function validateEvalInput(input: EvalScenarioInput): void {
   validateNonEmpty(input.headSha, "headSha");
   if (!Number.isInteger(input.pullNumber) || input.pullNumber <= 0) throw new Error("pullNumber must be a positive integer");
   if (!REQUIRED_SUITES.includes(input.suite)) throw new Error(`suite must be one of ${REQUIRED_SUITES.join(", ")}`);
+  if (!("botFindings" in input)) throw new Error("botFindings is required");
+  if (!isFindingEnvelope(input.botFindings)) throw new Error("botFindings must be an array or an object with a findings array");
   if (!Array.isArray(input.labels)) throw new Error("labels must be an array");
   for (const [index, label] of input.labels.entries()) validateLabel(label, `labels[${index}]`);
+}
+
+function isFindingEnvelope(value: unknown): boolean {
+  return Array.isArray(value) || (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Array.isArray((value as { findings?: unknown }).findings)
+  );
 }
 
 function validateLabel(label: EvalLabelInput, labelPath: string): void {
