@@ -33,6 +33,7 @@ export interface RetireFailedReviewInput {
 export interface ReviewRunLease {
   leaseId: string;
   expiresAt: string;
+  ownerPid: number;
 }
 
 export interface RepoProviderCooldownRecord {
@@ -114,7 +115,8 @@ export class ReviewStateStore {
       create table if not exists review_run_leases (
         lease_id text primary key,
         started_at text not null,
-        expires_at text not null
+        expires_at text not null,
+        owner_pid integer
       );
 
       create table if not exists repo_provider_cooldowns (
@@ -134,6 +136,7 @@ export class ReviewStateStore {
       );
     `);
     this.ensureDaemonHeartbeatColumns();
+    this.ensureReviewRunLeaseColumns();
     this.db.exec(`
       create table if not exists processed_commands (
         repo text not null,
@@ -237,11 +240,17 @@ export class ReviewStateStore {
       .run(repo, activatedAt);
   }
 
-  tryAcquireReviewRunLease(maxActiveRuns: number, leaseTtlMs: number, now = new Date()): ReviewRunLease | undefined {
+  tryAcquireReviewRunLease(
+    maxActiveRuns: number,
+    leaseTtlMs: number,
+    now = new Date(),
+    ownerPid = process.pid
+  ): ReviewRunLease | undefined {
     if (!Number.isInteger(maxActiveRuns)) throw new Error("maxActiveRuns must be an integer");
     if (maxActiveRuns < 1) throw new Error("maxActiveRuns must be at least 1");
     if (!Number.isInteger(leaseTtlMs)) throw new Error("leaseTtlMs must be an integer");
     if (leaseTtlMs < 1) throw new Error("leaseTtlMs must be at least 1");
+    if (!Number.isInteger(ownerPid) || ownerPid < 1) throw new Error("ownerPid must be a positive integer");
 
     const leaseId = randomUUID();
     const startedAt = now.toISOString();
@@ -249,16 +258,17 @@ export class ReviewStateStore {
     this.db.exec("begin immediate");
     try {
       this.db.prepare("delete from review_run_leases where expires_at <= ?").run(startedAt);
+      this.pruneInactiveReviewRunLeases();
       const row = this.db.prepare("select count(*) as count from review_run_leases").get() as { count: number };
       if (row.count >= maxActiveRuns) {
         this.db.exec("commit");
         return undefined;
       }
       this.db
-        .prepare("insert into review_run_leases (lease_id, started_at, expires_at) values (?, ?, ?)")
-        .run(leaseId, startedAt, expiresAt);
+        .prepare("insert into review_run_leases (lease_id, started_at, expires_at, owner_pid) values (?, ?, ?, ?)")
+        .run(leaseId, startedAt, expiresAt, ownerPid);
       this.db.exec("commit");
-      return { leaseId, expiresAt };
+      return { leaseId, expiresAt, ownerPid };
     } catch (error) {
       this.db.exec("rollback");
       throw error;
@@ -267,6 +277,17 @@ export class ReviewStateStore {
 
   releaseReviewRunLease(leaseId: string): void {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  private pruneInactiveReviewRunLeases(): void {
+    const rows = this.db
+      .prepare("select lease_id, owner_pid from review_run_leases")
+      .all() as unknown as Array<{ lease_id: string; owner_pid: number | null }>;
+    for (const row of rows) {
+      if (row.owner_pid === null || !isProcessAlive(row.owner_pid)) {
+        this.db.prepare("delete from review_run_leases where lease_id = ?").run(row.lease_id);
+      }
+    }
   }
 
   recordRepoProviderCooldown(input: { repo: string; cooldownUntil: Date; reason: string }): RepoProviderCooldownRecord {
@@ -445,6 +466,25 @@ export class ReviewStateStore {
     if (!names.has("started_at")) {
       this.db.exec("alter table daemon_heartbeat add column started_at text");
     }
+  }
+
+  private ensureReviewRunLeaseColumns(): void {
+    const columns = this.db.prepare("pragma table_info(review_run_leases)").all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "owner_pid")) {
+      this.db.exec("alter table review_run_leases add column owner_pid integer");
+    }
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+    return code === "EPERM";
   }
 }
 

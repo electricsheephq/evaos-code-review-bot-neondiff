@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseProviderCooldownError, ReviewStateStore } from "../src/state.js";
 
@@ -122,6 +123,35 @@ describe("review state store", () => {
 
     expect(store.tryAcquireReviewRunLease(1, 1_000, new Date("2026-07-01T00:00:00.000Z"))).toBeDefined();
     expect(store.tryAcquireReviewRunLease(1, 1_000, new Date("2026-07-01T00:00:02.000Z"))).toBeDefined();
+    store.close();
+  });
+
+  it("prunes dead-owner review leases before enforcing capacity", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    expect(store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-01T00:00:00.000Z"), 999_999_999)).toBeDefined();
+    const next = store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-01T00:00:01.000Z"));
+
+    expect(next).toBeDefined();
+    expect(next?.ownerPid).toBe(process.pid);
+    store.close();
+  });
+
+  it("prunes legacy ownerless review leases before enforcing capacity", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const db = new DatabaseSync(dbPath);
+    db.prepare("insert into review_run_leases (lease_id, started_at, expires_at) values (?, ?, ?)")
+      .run("legacy-ownerless", "2026-07-01T00:00:00.000Z", "2026-07-01T00:15:00.000Z");
+
+    expect(store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-01T00:00:01.000Z"))).toBeDefined();
+    const rows = db.prepare("select lease_id from review_run_leases where lease_id = ?").all("legacy-ownerless");
+    expect(rows).toHaveLength(0);
+    db.close();
     store.close();
   });
 
