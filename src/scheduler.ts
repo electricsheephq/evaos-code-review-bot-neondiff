@@ -28,6 +28,7 @@ import {
 } from "./worker.js";
 
 export interface ScheduledRunResult extends RunOnceResult {
+  commandFetchErrors: number;
   queue: {
     enqueued: number;
     alreadyQueued: number;
@@ -113,7 +114,10 @@ export async function runScheduledCycleWithDeps(input: {
         repo,
         pull,
         providerId,
-        now
+        now,
+        onCommandFetchError: () => {
+          result.commandFetchErrors += 1;
+        }
       });
       applyEnqueueStatus(result, enqueueStatus);
     }
@@ -169,6 +173,7 @@ async function enqueuePullIfEligible(input: {
   pull: PullRequestSummary;
   providerId: string;
   now: Date;
+  onCommandFetchError?: () => void;
 }): Promise<EnqueueStatus> {
   if (isClosedPull(input.pull)) return "closed_retired";
   if (input.config.skipDrafts && input.pull.draft) return "skipped_draft";
@@ -236,12 +241,14 @@ async function resolveSchedulerCommandDecision(input: {
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
+  onCommandFetchError?: () => void;
 }): Promise<CommandDecision> {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
   try {
     comments = await input.github.listIssueComments(input.repo, input.pull.number);
   } catch {
+    input.onCommandFetchError?.();
     return { action: "none", shouldReview: false };
   }
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
@@ -702,6 +709,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
     skippedProviderCooldown: 0,
     skippedStaleHead: 0,
     baselinedExisting: 0,
+    commandFetchErrors: 0,
     policySkips: [],
     queue: {
       enqueued: 0,

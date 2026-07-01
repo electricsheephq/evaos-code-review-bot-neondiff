@@ -559,6 +559,7 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(result.failed).toBe(0);
+    expect(result.commandFetchErrors).toBe(1);
     expect(reviewed).toHaveLength(2);
     state.close();
   });
