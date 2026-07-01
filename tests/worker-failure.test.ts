@@ -351,10 +351,16 @@ describe("worker review failures", () => {
       })
     ]));
     expect(attempts).toBe(1);
-    expect(state.getProcessedReview("electricsheephq/WorldOS", currentPull.number, "head-stale-provider-cooldown")).toMatchObject({
+    const staleRetryRow = state.getProcessedReview("electricsheephq/WorldOS", currentPull.number, "head-stale-provider-cooldown");
+    expect(staleRetryRow).toMatchObject({
       status: "skipped",
-      error: expect.stringContaining("retry_did_not_review=skipped_stale_head")
+      error: expect.stringContaining("provider_cooldown_retry_stale_head")
     });
+    expect(staleRetryRow?.error).toContain("retry_did_not_review=skipped_stale_head");
+    expect(staleRetryRow?.error).not.toMatch(/^provider_rate_limit_cooldown_until=/);
+    expect(state.listProviderCooldownReviews({ expiredOnly: true }).map((row) => row.headSha)).toEqual([
+      "head-current-provider-cooldown"
+    ]);
     expect(state.getProcessedReview("electricsheephq/WorldOS", currentPull.number, currentPull.head.sha)).toMatchObject({
       status: "skipped",
       error: expect.stringContaining("retry_dry_run")
