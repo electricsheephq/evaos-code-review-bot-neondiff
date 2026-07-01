@@ -20,6 +20,7 @@ import {
   type ProcessedStatus,
   type ReviewerSessionJobState,
   type ReviewQueueJobRecord,
+  type ReviewQueueJobState,
   type ReviewQueueJobSource
 } from "./state.js";
 import type { PullRequestSummary } from "./types.js";
@@ -486,6 +487,13 @@ async function runLeasedQueueJob(input: {
   }
 
   if (isClosedPull(pull)) {
+    input.state.updateReviewQueueJobState({
+      jobId: input.job.jobId,
+      state: "closed_retired",
+      lastError: `closed_or_merged_before_review state=${pull.state ?? "unknown"}`,
+      now
+    });
+    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -497,16 +505,17 @@ async function runLeasedQueueJob(input: {
       onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
-    input.state.updateReviewQueueJobState({
-      jobId: input.job.jobId,
-      state: "closed_retired",
-      lastError: `closed_or_merged_before_review state=${pull.state ?? "unknown"}`
-    });
-    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     return "closed_retired";
   }
 
   if (pull.head.sha !== input.job.headSha) {
+    input.state.updateReviewQueueJobState({
+      jobId: input.job.jobId,
+      state: "stale_retired",
+      lastError: `stale_head_before_review live=${pull.head.sha}`,
+      now
+    });
+    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -518,12 +527,6 @@ async function runLeasedQueueJob(input: {
       onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
-    input.state.updateReviewQueueJobState({
-      jobId: input.job.jobId,
-      state: "stale_retired",
-      lastError: `stale_head_before_review live=${pull.head.sha}`
-    });
-    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     return "stale_retired";
   }
 
@@ -697,9 +700,9 @@ async function syncReviewStatusCommentForReviewResult(input: {
   onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<void> {
-  const nextState = reviewResultStatusCommentState(input.status);
-  if (!nextState) return;
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+  const nextState = reviewResultStatusCommentState(input.status, processed?.status);
+  if (!nextState) return;
   await syncReviewStatusComment({
     config: input.config,
     github: input.github,
@@ -713,12 +716,13 @@ async function syncReviewStatusCommentForReviewResult(input: {
   });
 }
 
-function reviewResultStatusCommentState(status: ReviewPullResult): ReviewStatusCommentState | undefined {
+function reviewResultStatusCommentState(status: ReviewPullResult, processedStatus?: ProcessedStatus): ReviewStatusCommentState | undefined {
   switch (status) {
     case "reviewed":
     case "reviewed_command":
-    case "skipped_processed":
       return "completed";
+    case "skipped_processed":
+      return reviewStatusCommentStateForProcessedStatus(processedStatus);
     case "skipped_provider_cooldown":
       return "provider_deferred";
     case "skipped_stale_head":
@@ -826,9 +830,14 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
   switch (input.status) {
     case "reviewed":
     case "reviewed_command":
-    case "skipped_processed":
       updateReviewerSessionJobFromQueueStatus(input, "completed", input.dryRun ? "dry_run" : "posted");
       return;
+    case "skipped_processed": {
+      const processed = input.state.getProcessedReview(input.job.repo, input.job.pullNumber, input.job.headSha);
+      const sessionState = reviewerSessionJobStateForProcessedStatus(processed?.status);
+      updateReviewerSessionJobFromQueueStatus(input, sessionState, processed?.status ?? (input.dryRun ? "dry_run" : "posted"));
+      return;
+    }
     case "skipped_provider_cooldown":
     case "skipped_capacity":
       updateReviewerSessionJobFromQueueStatus(input, "assigned");
@@ -890,10 +899,12 @@ function updateQueueJobAfterReviewStatus(input: {
       });
       return;
     case "skipped_processed":
+      const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: "posted",
-        lastError: "processed_head_already_exists"
+        state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun),
+        ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+        lastError: `processed_head_already_${processed?.status ?? "unknown"}`
       });
       return;
     case "skipped_capacity":
@@ -928,6 +939,54 @@ function updateQueueJobAfterReviewStatus(input: {
       return;
     default:
       assertNever(input.status);
+  }
+}
+
+function reviewStatusCommentStateForProcessedStatus(status: ProcessedStatus | undefined): ReviewStatusCommentState {
+  switch (status) {
+    case "posted":
+    case "dry_run":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "skipped";
+    case undefined:
+      return "completed";
+    default:
+      return assertNever(status);
+  }
+}
+
+function reviewQueueJobStateForProcessedStatus(status: ProcessedStatus | undefined, dryRun: boolean): ReviewQueueJobState {
+  switch (status) {
+    case "posted":
+      return "posted";
+    case "dry_run":
+      return "queued";
+    case "failed":
+    case "skipped":
+      return "failed";
+    case undefined:
+      return dryRun ? "queued" : "posted";
+    default:
+      return assertNever(status);
+  }
+}
+
+function reviewerSessionJobStateForProcessedStatus(status: ProcessedStatus | undefined): ReviewerSessionJobState {
+  switch (status) {
+    case "posted":
+    case "dry_run":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "skipped";
+    case undefined:
+      return "completed";
+    default:
+      return assertNever(status);
   }
 }
 
