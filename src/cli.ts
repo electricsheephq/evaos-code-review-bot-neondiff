@@ -19,8 +19,9 @@ import {
   formatRuntimeInventoryHuman,
   summarizeAgentInventory
 } from "./operator-cli.js";
-import { collectReleaseStatus } from "./release-status.js";
+import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { redactSecrets } from "./secrets.js";
 import { ReviewStateStore, type ReviewQueueJobState } from "./state.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -88,15 +89,47 @@ async function main(): Promise<void> {
   }
 
   if (command === "release-status") {
+    const budgetDetailLimit = args["budget-detail-limit"]
+      ? parsePositiveInteger(args["budget-detail-limit"], "--budget-detail-limit")
+      : undefined;
+    const budgetJobLimit = args["budget-job-limit"]
+      ? parsePositiveInteger(args["budget-job-limit"], "--budget-job-limit")
+      : undefined;
     const status = collectReleaseStatus({
       cwd: process.cwd(),
       configPath: args.config,
       expectedHead: args["expected-head"],
       launchdLabel: args["launchd-label"],
-      statePath: args["state-path"]
+      statePath: args["state-path"],
+      budgetDetails: args["budget-details"] === "true",
+      ...(budgetDetailLimit !== undefined ? { budgetDetailLimit } : {}),
+      ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {})
     });
     console.log(JSON.stringify(status, null, 2));
     if (!status.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "budget-status") {
+    const budgetDetailLimit = args.limit ? parsePositiveInteger(args.limit, "--limit") : 50;
+    const budgetJobLimit = args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : 1_000;
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      configPath: args.config,
+      expectedHead: args["expected-head"],
+      launchdLabel: args["launchd-label"],
+      statePath: args["state-path"],
+      budgetDetails: true,
+      budgetDetailLimit,
+      budgetJobLimit
+    });
+    const ok = status.budget?.enabled === true && status.budget.details.inputJobsTruncated !== true;
+    console.log(JSON.stringify({
+      ok,
+      checkedAt: status.checkedAt,
+      budget: status.budget
+    }, null, 2));
+    if (!ok) process.exitCode = 1;
     return;
   }
 
@@ -238,7 +271,7 @@ async function main(): Promise<void> {
       state: parseReviewQueueJobState(args.state),
       limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
     });
-    const output = { ...queue, ok: queue.ok, coverage: queue, durableQueue };
+    const output = { ...queue, ok: queue.ok, coverage: queue, durableQueue, ...collectQueueBudget(args) };
     console.log(JSON.stringify(output, null, 2));
     if (!output.ok) process.exitCode = 1;
     return;
@@ -511,6 +544,27 @@ async function collectCoverageReport(args: ParsedArgs, config = loadConfig(args.
   }
 }
 
+function collectQueueBudget(args: ParsedArgs): {
+  budget?: ReleaseStatus["budget"];
+  budgetError?: string;
+} {
+  try {
+    return {
+      budget: collectReleaseStatus({
+        cwd: process.cwd(),
+        configPath: args.config,
+        expectedHead: args["expected-head"],
+        launchdLabel: args["launchd-label"],
+        statePath: args["state-path"]
+      }).budget
+    };
+  } catch (error) {
+    return {
+      budgetError: redactSecrets(error instanceof Error ? error.message : String(error))
+    };
+  }
+}
+
 function buildHelp() {
   return {
     ok: true,
@@ -520,6 +574,7 @@ function buildHelp() {
         "runtime-inventory",
         "agents",
         "queue",
+        "budget-status",
         "coverage",
         "cooldowns",
         "why"
@@ -545,6 +600,7 @@ function buildHelp() {
       "npx tsx src/cli.ts agents --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json --state provider_deferred",
+      "npx tsx src/cli.ts budget-status --config /path/to/live.json",
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
@@ -636,6 +692,9 @@ interface ParsedArgs {
   "output-dir"?: string;
   "output-root"?: string;
   limit?: string;
+  "budget-detail-limit"?: string;
+  "budget-job-limit"?: string;
+  "job-limit"?: string;
   state?: string;
   zcode?: string;
   "active-only"?: string;

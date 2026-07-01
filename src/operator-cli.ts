@@ -9,6 +9,7 @@ import type {
   CoverageStaleHead,
   CoverageUnprocessedEntry
 } from "./coverage-audit.js";
+import type { ReviewBudgetStatus } from "./review-budget.js";
 import type { ReleaseHeartbeatStatus, ReleaseLaunchdStatus, ReleaseStatus } from "./release-status.js";
 import { redactSecrets } from "./secrets.js";
 import {
@@ -40,10 +41,13 @@ export interface OperatorStatus {
     runningJobs: number;
     providerDeferredJobs: number;
     failedQueueJobs: number;
+    budgetWouldLeaseJobs: number;
+    budgetDelayedJobs: number;
   };
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   recommendedActions: string[];
   release: ReleaseStatus;
+  budget?: ReviewBudgetStatus;
   coverage?: OperatorQueueSnapshot;
   agents: OperatorAgentInventory;
   providerCooldowns: ProviderCooldownReviewRecord[];
@@ -66,6 +70,8 @@ export interface RuntimeInventory {
     providerDeferredJobs: number;
     failedQueueJobs: number;
     retryableProviderDeferredJobs: number;
+    budgetWouldLeaseJobs: number;
+    budgetDelayedJobs: number;
     pendingHeads: number;
     coveredPendingHeads: number;
     uncoveredPendingHeads: number;
@@ -85,6 +91,7 @@ export interface RuntimeInventory {
   activeWork: ReviewQueueJobRecord[];
   uncoveredPendingHeads: OperatorQueueEntry[];
   release: ReleaseStatus;
+  budget?: ReviewBudgetStatus;
   agents: OperatorAgentInventory;
   processes?: RuntimeProcessInventory;
   durableQueue?: OperatorDurableQueueSnapshot;
@@ -240,6 +247,7 @@ export function buildOperatorStatus(input: {
   const failedRows = input.release.database.errorCount;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
   const retryableProviderDeferredJobs = durableQueue?.summary.retryableProviderDeferred ?? 0;
+  const budget = input.release.budget;
 
   const gates = [
     ...input.release.gates,
@@ -306,11 +314,14 @@ export function buildOperatorStatus(input: {
       queuedJobs: durableQueue?.summary.queued ?? 0,
       runningJobs: durableQueue?.summary.running ?? 0,
       providerDeferredJobs: durableQueue?.summary.providerDeferred ?? 0,
-      failedQueueJobs
+      failedQueueJobs,
+      budgetWouldLeaseJobs: budget?.wouldLeaseCount ?? 0,
+      budgetDelayedJobs: budget?.delayedCount ?? 0
     },
     gates,
     recommendedActions,
     release: input.release,
+    ...(budget ? { budget } : {}),
     ...(queue ? { coverage: queue } : {}),
     agents: input.agents,
     providerCooldowns,
@@ -359,6 +370,7 @@ export function buildRuntimeInventory(input: {
   const readFailures = queue?.summary.readFailures ?? 0;
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
+  const budget = input.release.budget;
 
   const gates = [
     ...input.release.gates,
@@ -447,6 +459,8 @@ export function buildRuntimeInventory(input: {
       providerDeferredJobs,
       failedQueueJobs,
       retryableProviderDeferredJobs,
+      budgetWouldLeaseJobs: budget?.wouldLeaseCount ?? 0,
+      budgetDelayedJobs: budget?.delayedCount ?? 0,
       pendingHeads: queue?.summary.pending ?? 0,
       coveredPendingHeads,
       uncoveredPendingHeads: uncoveredPendingHeads.length,
@@ -466,6 +480,7 @@ export function buildRuntimeInventory(input: {
     activeWork,
     uncoveredPendingHeads,
     release: input.release,
+    ...(budget ? { budget } : {}),
     agents: input.agents,
     ...(input.processes ? { processes: input.processes } : {}),
     ...(durableQueue ? { durableQueue } : {}),
@@ -542,6 +557,9 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
     `queue: active=${inventory.summary.activeQueueJobs} queued=${inventory.summary.queuedJobs}` +
       ` running=${inventory.summary.runningJobs} providerDeferred=${inventory.summary.providerDeferredJobs}` +
       ` failed=${inventory.summary.failedQueueJobs}`,
+    `budget: wouldLease=${inventory.summary.budgetWouldLeaseJobs}` +
+      ` delayed=${inventory.summary.budgetDelayedJobs}` +
+      ` delayedByReason=${JSON.stringify(inventory.budget?.delayedByReason ?? {})}`,
     `pending: total=${inventory.summary.pendingHeads} covered=${inventory.summary.coveredPendingHeads}` +
       ` uncovered=${inventory.summary.uncoveredPendingHeads}`,
     `cooldowns: expired=${inventory.summary.expiredProviderCooldowns}` +
