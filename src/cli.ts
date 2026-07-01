@@ -1,7 +1,8 @@
 import { loadConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
@@ -108,6 +109,32 @@ async function main(): Promise<void> {
     });
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "eval-suite") {
+    if (!args["input-dir"]) throw new Error("--input-dir is required for eval-suite");
+    if (!args["output-root"]) throw new Error("--output-root is required for eval-suite");
+    const scenarioFiles = listJsonFiles(args["input-dir"]);
+    const results = scenarioFiles.map((scenarioPath) => {
+      const input = JSON.parse(readFileSync(scenarioPath, "utf8"));
+      input.scenarioSource = input.scenarioSource ?? { path: scenarioPath };
+      return {
+        scenarioPath,
+        ...runOfflineEval(input, {
+          outputDir: join(args["output-root"]!, input.runId)
+        })
+      };
+    });
+    const suites = [...new Set(results.map((result) => result.scorecard.suite))].sort();
+    const summary = {
+      ok: results.every((result) => result.ok),
+      scenarioCount: results.length,
+      suites,
+      results
+    };
+    console.log(JSON.stringify(summary, null, 2));
+    if (!summary.ok) process.exitCode = 1;
     return;
   }
 
@@ -255,6 +282,13 @@ function parsePositiveInteger(value: string, label: string): number {
   return parsed;
 }
 
+function listJsonFiles(inputDir: string): string[] {
+  return readdirSync(inputDir)
+    .map((entry) => join(inputDir, entry))
+    .filter((path) => statSync(path).isFile() && path.endsWith(".json"))
+    .sort();
+}
+
 interface ParsedArgs {
   _: string[];
   config?: string;
@@ -268,7 +302,9 @@ interface ParsedArgs {
   "expired-only"?: string;
   "head-sha"?: string;
   input?: string;
+  "input-dir"?: string;
   "output-dir"?: string;
+  "output-root"?: string;
   limit?: string;
   zcode?: string;
   [key: string]: string | string[] | undefined;
