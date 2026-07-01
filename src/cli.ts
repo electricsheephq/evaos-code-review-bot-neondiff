@@ -7,13 +7,16 @@ import { join } from "node:path";
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
 import {
+  buildRuntimeInventory,
   buildOperatorQueue,
   buildOperatorStatus,
+  collectBotProcessInventory,
   collectOperatorLeases,
   collectOperatorProviderCooldowns,
   collectOperatorRepoProviderCooldowns,
   collectOperatorReviewQueue,
   explainPullStatus,
+  formatRuntimeInventoryHuman,
   summarizeAgentInventory
 } from "./operator-cli.js";
 import { collectReleaseStatus } from "./release-status.js";
@@ -151,6 +154,59 @@ async function main(): Promise<void> {
     });
     console.log(JSON.stringify(status, null, 2));
     if (!status.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "runtime-inventory") {
+    const config = loadConfig(args.config);
+    const release = collectReleaseStatus({
+      cwd: process.cwd(),
+      configPath: args.config,
+      expectedHead: args["expected-head"],
+      launchdLabel: args["launchd-label"],
+      statePath: args["state-path"]
+    });
+    const coverage = await collectCoverageReport(args, config);
+    const statePath = args["state-path"] ?? config.statePath;
+    const now = new Date();
+    const agents = summarizeAgentInventory({
+      launchd: release.launchd,
+      heartbeat: release.heartbeat,
+      leases: collectOperatorLeases(statePath),
+      now
+    });
+    const providerCooldowns = collectOperatorProviderCooldowns(statePath, {
+      repo: args.repo,
+      expiredOnly: false,
+      now
+    });
+    const repoProviderCooldowns = collectOperatorRepoProviderCooldowns(statePath, {
+      repo: args.repo,
+      activeOnly: args["active-only"] === "true",
+      now
+    });
+    const durableQueue = collectOperatorReviewQueue(statePath, {
+      repo: args.repo,
+      now
+    });
+    const processes = collectBotProcessInventory({
+      repoPath: process.cwd(),
+      launchdLabel: release.launchd.label,
+      launchdPid: release.launchd.pid,
+      now
+    });
+    const inventory = buildRuntimeInventory({
+      release,
+      coverage,
+      agents,
+      processes,
+      providerCooldowns,
+      repoProviderCooldowns,
+      durableQueue,
+      checkedAt: now.toISOString()
+    });
+    console.log(args.human === "true" ? formatRuntimeInventoryHuman(inventory) : JSON.stringify(inventory, null, 2));
+    if (!inventory.ok) process.exitCode = 1;
     return;
   }
 
@@ -461,6 +517,7 @@ function buildHelp() {
     commands: {
       operator: [
         "status",
+        "runtime-inventory",
         "agents",
         "queue",
         "coverage",
@@ -483,6 +540,8 @@ function buildHelp() {
     },
     examples: [
       "npx tsx src/cli.ts status --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
+      "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
+      "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --human",
       "npx tsx src/cli.ts agents --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json --state provider_deferred",
@@ -579,6 +638,8 @@ interface ParsedArgs {
   state?: string;
   zcode?: string;
   "active-only"?: string;
+  human?: string;
+  json?: string;
   "verify-current-heads"?: string;
   [key: string]: string | string[] | undefined;
 }

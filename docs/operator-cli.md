@@ -21,6 +21,12 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
   durable queue counts, and recommended actions.
+- `runtime-inventory`: read-only runtime classifier for release operators. It
+  includes release status, coverage, durable queue work, provider cooldowns,
+  leases, heartbeat, and bot-owned process rows. It can classify the worker as
+  `healthy_active` when open PR heads are already covered by active queue work,
+  even if the stricter `status` command is nonzero because live PR churn exists.
+  JSON is the default; use `--human` for a compact operator summary.
 - `agents`: launchd, heartbeat, and review-run lease inventory. This is
   read-only; it does not restart, kill, prune, or retire anything.
 - `queue`: open PR-head coverage grouped into processed, provider-deferred,
@@ -40,6 +46,18 @@ Check whether the live bot is healthy:
 
 ```bash
 npx tsx src/cli.ts status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
+```
+
+Classify whether the bot is idle, healthy-active, or blocked:
+
+```bash
+npx tsx src/cli.ts runtime-inventory --json --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
+```
+
+Show the same runtime inventory as a short human summary:
+
+```bash
+npx tsx src/cli.ts runtime-inventory --human --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
 See whether review agents are active, idle, or stale:
@@ -77,6 +95,11 @@ npx tsx src/cli.ts cooldowns --config /Volumes/LEXAR/Codex/evaos-code-review-bot
 Default operator commands are read-only. They can return nonzero when a gate is
 unhealthy, but they do not mutate GitHub, launchd, config files, worktrees, or
 SQLite rows.
+
+`runtime-inventory` process rows are bounded to the bot launchd PID, commands
+containing the current bot repo path or launchd label, and children of those
+matched bot processes. It redacts token-like strings and does not inspect or
+print process environments.
 
 Mutating commands remain explicit:
 
