@@ -147,6 +147,12 @@ plan/package exhaustion uses separate codes such as `1308`, `1309`, and `1310`.
 Do not describe `1302`/`1305` as user quota exhaustion unless the evidence also
 proves an exhausted plan counter.
 
+Default beta policy is intentionally short for transient `1302`: four bounded
+jittered retries first, then a 90-second cooldown. Keep true quota/package
+cooldowns long. If a user-visible quota panel shows plenty of remaining usage,
+record that as supporting evidence for provider/request throttling, not as proof
+that the bot should disable cooldown handling.
+
 Keep provider cooldown rows visible in `release:status`, then retry after the
 cooldown expires or resolve the ZCode provider source. The bot should run with
 one in-flight ZCode review by default; live configs that override

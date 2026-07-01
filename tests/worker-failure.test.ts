@@ -73,9 +73,9 @@ describe("worker review failures", () => {
     expect(handled).toBe(true);
     expect(state.getProcessedReview("electricsheephq/WorldOS", 1234, "head-rate-limit")).toMatchObject({
       status: "skipped",
-      error: "provider_rate_limit_cooldown_until=2026-07-01T00:05:00.000Z; reason=provider_request_rate_limit"
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:01:30.000Z; reason=provider_request_rate_limit"
     });
-    expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:04:00.000Z"))).toMatchObject({
+    expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:01:00.000Z"))).toMatchObject({
       reason: "provider_request_rate_limit"
     });
     state.close();
@@ -110,7 +110,7 @@ describe("worker review failures", () => {
       retryable: false,
       cooldown: true
     });
-    expect(providerCooldownDurationMs(config, rateLimit)).toBe(5 * 60_000);
+    expect(providerCooldownDurationMs(config, rateLimit)).toBe(90_000);
     expect(providerCooldownDurationMs(config, overload)).toBe(2 * 60_000);
     expect(providerCooldownDurationMs(config, quota)).toBe(30 * 60_000);
   });
@@ -951,10 +951,10 @@ function minimalConfig(root: string): BotConfig {
     providerCooldown: {
       enabled: true,
       durationMs: 15 * 60_000,
-      requestRateLimitDurationMs: 5 * 60_000,
+      requestRateLimitDurationMs: 90_000,
       overloadDurationMs: 2 * 60_000,
       quotaDurationMs: 30 * 60_000,
-      transientRetryAttempts: 2,
+      transientRetryAttempts: 4,
       transientRetryBaseDelayMs: 1,
       transientRetryMaxDelayMs: 1
     },
