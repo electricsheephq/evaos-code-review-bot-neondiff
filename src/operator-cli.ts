@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type {
@@ -9,6 +10,7 @@ import type {
   CoverageUnprocessedEntry
 } from "./coverage-audit.js";
 import type { ReleaseHeartbeatStatus, ReleaseLaunchdStatus, ReleaseStatus } from "./release-status.js";
+import { redactSecrets } from "./secrets.js";
 import {
   parseProviderCooldownError,
   PROVIDER_COOLDOWN_ERROR_PREFIX,
@@ -46,6 +48,77 @@ export interface OperatorStatus {
   agents: OperatorAgentInventory;
   providerCooldowns: ProviderCooldownReviewRecord[];
   durableQueue?: OperatorDurableQueueSnapshot;
+}
+
+export interface RuntimeInventory {
+  ok: boolean;
+  checkedAt: string;
+  runtimeState: RuntimeClassification;
+  classification: RuntimeClassification;
+  summary: {
+    launchdState: ReleaseLaunchdStatus["state"];
+    heartbeatStatus: ReleaseHeartbeatStatus["status"];
+    activeLeases: number;
+    staleLeases: number;
+    activeQueueJobs: number;
+    queuedJobs: number;
+    runningJobs: number;
+    providerDeferredJobs: number;
+    failedQueueJobs: number;
+    retryableProviderDeferredJobs: number;
+    pendingHeads: number;
+    coveredPendingHeads: number;
+    uncoveredPendingHeads: number;
+    providerDeferredHeads: number;
+    staleHeads: number;
+    readFailures: number;
+    expiredProviderCooldowns: number;
+    retryableExpiredProviderCooldowns: number;
+    coveredExpiredProviderCooldowns: number;
+    activeProviderCooldowns: number;
+    repoCooldowns: number;
+    activeRepoCooldowns: number;
+    botProcesses: number;
+  };
+  gates: Array<{ name: string; ok: boolean; detail: string }>;
+  recommendedActions: string[];
+  activeWork: ReviewQueueJobRecord[];
+  uncoveredPendingHeads: OperatorQueueEntry[];
+  release: ReleaseStatus;
+  agents: OperatorAgentInventory;
+  processes?: RuntimeProcessInventory;
+  durableQueue?: OperatorDurableQueueSnapshot;
+  coverage?: OperatorQueueSnapshot;
+  providerCooldowns: ProviderCooldownReviewRecord[];
+  repoProviderCooldowns: RepoProviderCooldownRecord[];
+}
+
+export type RuntimeClassification = "healthy_idle" | "healthy_active" | "blocked";
+
+export interface RuntimeProcessRow {
+  pid: number;
+  ppid: number;
+  command: string;
+}
+
+export interface RuntimeProcessRecord extends RuntimeProcessRow {
+  classification: "launchd_worker" | "repo_command" | "child_process";
+  matchedBy: string[];
+}
+
+export interface RuntimeProcessInventory {
+  ok: boolean;
+  checkedAt: string;
+  summary: {
+    total: number;
+    launchdPidMatched: number;
+    repoPathMatched: number;
+    launchdLabelMatched: number;
+    childProcessMatched: number;
+    errors: number;
+  };
+  processes: RuntimeProcessRecord[];
+  errors: string[];
 }
 
 export interface OperatorLease {
@@ -243,6 +316,252 @@ export function buildOperatorStatus(input: {
   };
 }
 
+export function buildRuntimeInventory(input: {
+  release: ReleaseStatus;
+  coverage?: CoverageAuditReport;
+  agents: OperatorAgentInventory;
+  processes?: RuntimeProcessInventory;
+  providerCooldowns?: ProviderCooldownReviewRecord[];
+  repoProviderCooldowns?: RepoProviderCooldownRecord[];
+  durableQueue?: OperatorDurableQueueSnapshot;
+  checkedAt?: string;
+}): RuntimeInventory {
+  const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
+  const durableQueue = input.durableQueue;
+  const providerCooldowns = input.providerCooldowns ?? [];
+  const repoProviderCooldowns = input.repoProviderCooldowns ?? [];
+  const activeWork = (durableQueue?.jobs ?? []).filter((job) =>
+    job.state === "queued" || job.state === "leased" || job.state === "running"
+  );
+  const uncoveredPendingHeads = (queue?.pending ?? []).filter((pending) =>
+    !activeWork.some((job) => sameHead(job, pending))
+  );
+  const coveredPendingHeads = (queue?.pending.length ?? 0) - uncoveredPendingHeads.length;
+  const expiredProviderCooldowns = providerCooldowns.filter((cooldown) => cooldown.expired).length;
+  const activeProviderCooldowns = providerCooldowns.length - expiredProviderCooldowns;
+  const checkedAtMs = Date.parse(input.checkedAt ?? input.release.checkedAt);
+  const nowMs = Number.isFinite(checkedAtMs) ? checkedAtMs : Date.now();
+  const activeRepoCooldowns = repoProviderCooldowns.filter((cooldown) => {
+    const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
+    return Number.isFinite(cooldownUntilMs) && cooldownUntilMs > nowMs;
+  }).length;
+  const coveredExpiredProviderCooldowns =
+    input.release.database.coveredExpiredProviderCooldownCount ??
+    (activeRepoCooldowns > 0 || activeProviderCooldowns > 0 ? expiredProviderCooldowns : 0);
+  const retryableExpiredProviderCooldowns =
+    input.release.database.retryableExpiredProviderCooldownCount ??
+    Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
+  const failedQueueJobs = durableQueue?.summary.failed ?? 0;
+  const retryableProviderDeferredJobs = durableQueue?.summary.retryableProviderDeferred ?? 0;
+  const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
+  const readFailures = queue?.summary.readFailures ?? 0;
+  const staleHeads = queue?.summary.staleHeads ?? 0;
+  const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
+
+  const gates = [
+    ...input.release.gates,
+    {
+      name: "runtime_no_stale_leases",
+      ok: input.agents.summary.staleLeases === 0,
+      detail: `${input.agents.summary.staleLeases} stale lease(s)`
+    },
+    {
+      name: "runtime_no_failed_queue_jobs",
+      ok: failedQueueJobs === 0,
+      detail: `${failedQueueJobs} failed durable queue job(s)`
+    },
+    {
+      name: "runtime_no_retryable_provider_deferred_jobs",
+      ok: retryableProviderDeferredJobs === 0,
+      detail: `${retryableProviderDeferredJobs} retryable provider-deferred durable queue job(s)`
+    },
+    {
+      name: "runtime_pending_heads_covered",
+      ok: uncoveredPendingHeads.length === 0,
+      detail:
+        uncoveredPendingHeads.length === 0
+          ? `${coveredPendingHeads} pending head(s) covered by active durable queue work`
+          : `${uncoveredPendingHeads.length} pending head(s) without active durable queue work`
+    },
+    {
+      name: "runtime_no_read_failures",
+      ok: readFailures === 0,
+      detail: `${readFailures} read failure(s)`
+    },
+    {
+      name: "runtime_no_stale_heads",
+      ok: staleHeads === 0,
+      detail: `${staleHeads} stale head(s)`
+    },
+    {
+      name: "runtime_no_retryable_provider_cooldowns",
+      ok: retryableExpiredProviderCooldowns === 0,
+      detail:
+        `${retryableExpiredProviderCooldowns} retryable expired provider cooldown row(s)` +
+        (coveredExpiredProviderCooldowns > 0
+          ? `; ${coveredExpiredProviderCooldowns} covered by active provider/repo cooldown`
+          : "")
+    },
+    {
+      name: "runtime_process_inventory_available",
+      ok: input.processes?.ok ?? true,
+      detail: input.processes
+        ? `${input.processes.summary.total} bot-owned process(es), ${input.processes.summary.errors} process inventory error(s)`
+        : "not collected"
+    }
+  ];
+
+  const ok = gates.every((gate) => gate.ok);
+  const runtimeState: RuntimeClassification = !ok
+    ? "blocked"
+    : activeWork.length > 0 || coveredPendingHeads > 0 || providerDeferredJobs > 0
+      ? "healthy_active"
+      : "healthy_idle";
+
+  const recommendedActions = uniqueStrings([
+    ...input.release.recommendedActions,
+    ...(activeWork.length > 0 ? ["monitor active review work; avoid restarting a healthy in-flight run"] : []),
+    ...(uncoveredPendingHeads.length > 0 ? ["wait for daemon cycle or run scoped run-once for uncovered pending heads"] : []),
+    ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
+    ...(input.agents.summary.staleLeases > 0 ? ["inspect stale leases before restarting launchd"] : []),
+    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
+    ...(retryableExpiredProviderCooldowns > 0 ? ["retry expired provider cooldowns or inspect provider health"] : [])
+  ]);
+
+  return {
+    ok,
+    checkedAt: input.checkedAt ?? input.release.checkedAt,
+    runtimeState,
+    classification: runtimeState,
+    summary: {
+      launchdState: input.release.launchd.state,
+      heartbeatStatus: input.release.heartbeat.status,
+      activeLeases: input.agents.summary.activeLeases,
+      staleLeases: input.agents.summary.staleLeases,
+      activeQueueJobs: activeWork.length,
+      queuedJobs: durableQueue?.summary.queued ?? 0,
+      runningJobs: durableQueue?.summary.running ?? 0,
+      providerDeferredJobs,
+      failedQueueJobs,
+      retryableProviderDeferredJobs,
+      pendingHeads: queue?.summary.pending ?? 0,
+      coveredPendingHeads,
+      uncoveredPendingHeads: uncoveredPendingHeads.length,
+      providerDeferredHeads,
+      staleHeads,
+      readFailures,
+      expiredProviderCooldowns,
+      retryableExpiredProviderCooldowns,
+      coveredExpiredProviderCooldowns,
+      activeProviderCooldowns,
+      repoCooldowns: repoProviderCooldowns.length,
+      activeRepoCooldowns,
+      botProcesses: input.processes?.summary.total ?? 0
+    },
+    gates,
+    recommendedActions,
+    activeWork,
+    uncoveredPendingHeads,
+    release: input.release,
+    agents: input.agents,
+    ...(input.processes ? { processes: input.processes } : {}),
+    ...(durableQueue ? { durableQueue } : {}),
+    ...(queue ? { coverage: queue } : {}),
+    providerCooldowns,
+    repoProviderCooldowns
+  };
+}
+
+export function collectBotProcessInventory(input: {
+  repoPath: string;
+  launchdLabel: string;
+  launchdPid?: number;
+  now?: Date;
+}): RuntimeProcessInventory {
+  const now = input.now ?? new Date();
+  const result = spawnSync("ps", ["-axo", "pid=,ppid=,command="], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024
+  });
+  if (result.status !== 0) {
+    const error = redactSecrets(result.stderr.trim() || `ps exited with status ${result.status ?? "unknown"}`);
+    return emptyProcessInventory(now, [error]);
+  }
+  const rows = parseProcessRows(result.stdout);
+  return buildProcessInventory(filterBotProcessRows(rows, input), now);
+}
+
+export function filterBotProcessRows(
+  rows: RuntimeProcessRow[],
+  input: { repoPath: string; launchdLabel: string; launchdPid?: number }
+): RuntimeProcessRecord[] {
+  const repoPath = input.repoPath.trim();
+  const launchdLabel = input.launchdLabel.trim();
+  const included = new Map<number, RuntimeProcessRecord>();
+
+  for (const row of rows) {
+    const matchedBy: string[] = [];
+    if (input.launchdPid !== undefined && row.pid === input.launchdPid) matchedBy.push("launchd_pid");
+    if (repoPath && row.command.includes(repoPath)) matchedBy.push("repo_path");
+    if (launchdLabel && row.command.includes(launchdLabel)) matchedBy.push("launchd_label");
+    if (matchedBy.length > 0) {
+      included.set(row.pid, runtimeProcessRecord(row, matchedBy));
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      if (included.has(row.pid)) continue;
+      if (!included.has(row.ppid)) continue;
+      if (!looksLikeBotRuntimeChild(row.command)) continue;
+      included.set(row.pid, runtimeProcessRecord(row, ["child_of_bot_process"]));
+      changed = true;
+    }
+  }
+
+  return [...included.values()].sort((left, right) => left.pid - right.pid);
+}
+
+export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string {
+  const lines = [
+    `runtime: ${inventory.classification} (${inventory.ok ? "ok" : "blocked"})`,
+    `checkedAt: ${inventory.checkedAt}`,
+    `launchd: ${inventory.summary.launchdState}` +
+      (inventory.release.launchd.pid ? ` pid=${inventory.release.launchd.pid}` : "") +
+      (inventory.release.launchd.configPath ? ` config=${inventory.release.launchd.configPath}` : ""),
+    `heartbeat: ${inventory.summary.heartbeatStatus}` +
+      (inventory.release.heartbeat.cycle !== undefined ? ` cycle=${inventory.release.heartbeat.cycle}` : "") +
+      (inventory.release.heartbeat.ageMs !== undefined ? ` ageMs=${inventory.release.heartbeat.ageMs}` : ""),
+    `repo: ${inventory.release.repo.branch}@${inventory.release.repo.head}` +
+      (inventory.release.repo.dirtyFiles.length > 0 ? ` dirty=${inventory.release.repo.dirtyFiles.length}` : " clean"),
+    `queue: active=${inventory.summary.activeQueueJobs} queued=${inventory.summary.queuedJobs}` +
+      ` running=${inventory.summary.runningJobs} providerDeferred=${inventory.summary.providerDeferredJobs}` +
+      ` failed=${inventory.summary.failedQueueJobs}`,
+    `pending: total=${inventory.summary.pendingHeads} covered=${inventory.summary.coveredPendingHeads}` +
+      ` uncovered=${inventory.summary.uncoveredPendingHeads}`,
+    `cooldowns: expired=${inventory.summary.expiredProviderCooldowns}` +
+      ` retryable=${inventory.summary.retryableExpiredProviderCooldowns}` +
+      ` covered=${inventory.summary.coveredExpiredProviderCooldowns}` +
+      ` activeRepo=${inventory.summary.activeRepoCooldowns}`,
+    `processes: botOwned=${inventory.summary.botProcesses}`,
+    `leases: active=${inventory.summary.activeLeases} stale=${inventory.summary.staleLeases}`
+  ];
+
+  const failingGates = inventory.gates.filter((gate) => !gate.ok);
+  if (failingGates.length > 0) {
+    lines.push("failingGates:");
+    for (const gate of failingGates) lines.push(`- ${gate.name}: ${gate.detail}`);
+  }
+  if (inventory.recommendedActions.length > 0) {
+    lines.push("recommendedActions:");
+    for (const action of inventory.recommendedActions) lines.push(`- ${action}`);
+  }
+  return lines.join("\n");
+}
+
 export function summarizeAgentInventory(input: {
   launchd: ReleaseLaunchdStatus;
   heartbeat: ReleaseHeartbeatStatus;
@@ -420,12 +739,11 @@ export function collectOperatorReviewQueue(
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
     if (!hasTable(db, "review_queue_jobs")) return emptyDurableQueue(now);
+    const selectColumns = reviewQueueSelectColumns(db);
     const rows = (input.repo
       ? db
           .prepare(
-            `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
-                    provider_id, priority, state, next_eligible_at, lease_id, session_id,
-                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+            `${selectColumns}
              from review_queue_jobs
              where repo = ?
              order by priority asc, datetime(created_at) asc`
@@ -433,9 +751,7 @@ export function collectOperatorReviewQueue(
           .all(input.repo)
       : db
           .prepare(
-            `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
-                    provider_id, priority, state, next_eligible_at, lease_id, session_id,
-                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+            `${selectColumns}
              from review_queue_jobs
              order by priority asc, datetime(created_at) asc`
           )
@@ -671,6 +987,10 @@ function isRetryableQueueJob(job: ReviewQueueJobRecord, now: Date): boolean {
   return !Number.isFinite(nextEligibleAtMs) || nextEligibleAtMs <= now.getTime();
 }
 
+function sameHead(job: ReviewQueueJobRecord, pending: OperatorQueueEntry): boolean {
+  return job.repo === pending.repo && job.pullNumber === pending.pullNumber && job.headSha === pending.headSha;
+}
+
 function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
   return {
     jobId: row.job_id,
@@ -687,6 +1007,7 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     state: row.state,
     ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
     ...(row.lease_id ? { leaseId: row.lease_id } : {}),
+    ...(row.lease_expires_at ? { leaseExpiresAt: row.lease_expires_at } : {}),
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.comment_id ? { commentId: row.comment_id } : {}),
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
@@ -714,6 +1035,94 @@ function hasTable(db: DatabaseSync, tableName: string): boolean {
       .prepare("select 1 from sqlite_master where type = 'table' and name = ? limit 1")
       .get(tableName)
   );
+}
+
+function hasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
+  const columns = db.prepare(`pragma table_info(${tableName})`).all() as unknown as Array<{ name: string }>;
+  return columns.some((column) => column.name === columnName);
+}
+
+function reviewQueueSelectColumns(db: DatabaseSync): string {
+  const leaseExpiresAtColumn = hasColumn(db, "review_queue_jobs", "lease_expires_at")
+    ? "lease_expires_at"
+    : "null as lease_expires_at";
+  return `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                 provider_id, priority, state, next_eligible_at, lease_id, ${leaseExpiresAtColumn}, session_id,
+                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at`;
+}
+
+function emptyProcessInventory(now: Date, errors: string[] = []): RuntimeProcessInventory {
+  return {
+    ok: errors.length === 0,
+    checkedAt: now.toISOString(),
+    summary: {
+      total: 0,
+      launchdPidMatched: 0,
+      repoPathMatched: 0,
+      launchdLabelMatched: 0,
+      childProcessMatched: 0,
+      errors: errors.length
+    },
+    processes: [],
+    errors
+  };
+}
+
+function buildProcessInventory(processes: RuntimeProcessRecord[], now: Date): RuntimeProcessInventory {
+  return {
+    ok: true,
+    checkedAt: now.toISOString(),
+    summary: {
+      total: processes.length,
+      launchdPidMatched: processes.filter((processRow) => processRow.matchedBy.includes("launchd_pid")).length,
+      repoPathMatched: processes.filter((processRow) => processRow.matchedBy.includes("repo_path")).length,
+      launchdLabelMatched: processes.filter((processRow) => processRow.matchedBy.includes("launchd_label")).length,
+      childProcessMatched: processes.filter((processRow) => processRow.matchedBy.includes("child_of_bot_process")).length,
+      errors: 0
+    },
+    processes,
+    errors: []
+  };
+}
+
+function parseProcessRows(stdout: string): RuntimeProcessRow[] {
+  return stdout
+    .split("\n")
+    .map((line) => {
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/);
+      if (!match) return undefined;
+      return {
+        pid: Number(match[1]),
+        ppid: Number(match[2]),
+        command: match[3] ?? ""
+      };
+    })
+    .filter((row): row is RuntimeProcessRow =>
+      row !== undefined && Number.isInteger(row.pid) && Number.isInteger(row.ppid)
+    );
+}
+
+function runtimeProcessRecord(row: RuntimeProcessRow, matchedBy: string[]): RuntimeProcessRecord {
+  const classification: RuntimeProcessRecord["classification"] = matchedBy.includes("launchd_pid")
+    ? "launchd_worker"
+    : matchedBy.includes("child_of_bot_process")
+      ? "child_process"
+      : "repo_command";
+  return {
+    pid: row.pid,
+    ppid: row.ppid,
+    classification,
+    matchedBy,
+    command: truncateCommand(redactSecrets(row.command))
+  };
+}
+
+function looksLikeBotRuntimeChild(command: string): boolean {
+  return /\b(node|tsx|npm|zcode|evaos-review-bot)\b/i.test(command) || command.includes("zcode.cjs");
+}
+
+function truncateCommand(command: string): string {
+  return command.length > 240 ? `${command.slice(0, 237)}...` : command;
 }
 
 interface ProcessedReviewRow {
@@ -749,6 +1158,7 @@ interface ReviewQueueJobRow {
   state: ReviewQueueJobState;
   next_eligible_at: string | null;
   lease_id: string | null;
+  lease_expires_at: string | null;
   session_id: string | null;
   comment_id: number | null;
   review_url: string | null;

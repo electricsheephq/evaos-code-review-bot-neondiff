@@ -5,16 +5,21 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CoverageAuditReport } from "../src/coverage-audit.js";
 import {
+  buildRuntimeInventory,
   buildOperatorQueue,
   buildOperatorStatus,
   collectOperatorLeases,
   collectOperatorRepoProviderCooldowns,
   collectOperatorReviewQueue,
   explainPullStatus,
+  filterBotProcessRows,
+  formatRuntimeInventoryHuman,
   summarizeAgentInventory,
-  type OperatorAgentInventory
+  type OperatorAgentInventory,
+  type OperatorDurableQueueSnapshot
 } from "../src/operator-cli.js";
 import type { ReleaseStatus } from "../src/release-status.js";
+import type { RepoProviderCooldownRecord } from "../src/state.js";
 
 describe("operator CLI summaries", () => {
   const tempDirs: string[] = [];
@@ -83,6 +88,172 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("treats pending heads covered by durable queue work as healthy active runtime", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table review_queue_jobs (job_id text primary key, attempt_id text not null unique, source text not null, lane text not null, repo text not null, org text not null, pull_number integer not null, head_sha text not null, base_sha text, provider_id text, priority integer not null, state text not null, next_eligible_at text, lease_id text, lease_expires_at text, session_id text, comment_id integer, review_url text, last_error text, created_at text not null, updated_at text not null, started_at text, finished_at text)");
+      insertQueueJob(db, "running", "owner/repo", 3, "head-pending");
+      db.prepare("update review_queue_jobs set lease_id = ?, lease_expires_at = ? where job_id = ?")
+        .run("lease-active", "2026-07-01T00:10:00.000Z", "running-head-pending");
+    } finally {
+      db.close();
+    }
+
+    const inventory = buildRuntimeInventory({
+      release: releaseStatus({ ok: true }),
+      coverage: coverageReport({ unprocessed: [pullEntry(3, "head-pending")] }),
+      agents: agentInventory({
+        ok: true,
+        activeLeases: [lease("lease-active", "2026-07-01T00:00:00.000Z", "2026-07-01T00:10:00.000Z")]
+      }),
+      durableQueue: collectOperatorReviewQueue(statePath, { now: new Date("2026-07-01T00:05:00.000Z") }),
+      providerCooldowns: [],
+      repoProviderCooldowns: [],
+      checkedAt: "2026-07-01T00:05:00.000Z"
+    });
+
+    expect(inventory.ok).toBe(true);
+    expect(inventory.runtimeState).toBe("healthy_active");
+    expect(inventory.classification).toBe("healthy_active");
+    expect(inventory.summary).toMatchObject({
+      pendingHeads: 1,
+      coveredPendingHeads: 1,
+      uncoveredPendingHeads: 0,
+      activeQueueJobs: 1,
+      runningJobs: 1
+    });
+    expect(inventory.activeWork[0]).toMatchObject({
+      repo: "owner/repo",
+      pullNumber: 3,
+      headSha: "head-pending",
+      leaseExpiresAt: "2026-07-01T00:10:00.000Z"
+    });
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_pending_heads_covered",
+      ok: true,
+      detail: "1 pending head(s) covered by active durable queue work"
+    });
+    expect(JSON.stringify(inventory)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("flags uncovered pending heads as blocked runtime inventory", () => {
+    const inventory = buildRuntimeInventory({
+      release: releaseStatus({ ok: true }),
+      coverage: coverageReport({ unprocessed: [pullEntry(3, "head-pending")] }),
+      agents: agentInventory({ ok: true }),
+      durableQueue: durableQueueSnapshot({ ok: true, summary: { total: 0, queued: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 0 } }),
+      providerCooldowns: [],
+      repoProviderCooldowns: [],
+      checkedAt: "2026-07-01T00:05:00.000Z"
+    });
+
+    expect(inventory.ok).toBe(false);
+    expect(inventory.runtimeState).toBe("blocked");
+    expect(inventory.classification).toBe("blocked");
+    expect(inventory.summary.uncoveredPendingHeads).toBe(1);
+    expect(inventory.uncoveredPendingHeads[0]).toMatchObject({
+      repo: "owner/repo",
+      pullNumber: 3,
+      headSha: "head-pending"
+    });
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_pending_heads_covered",
+      ok: false,
+      detail: "1 pending head(s) without active durable queue work"
+    });
+  });
+
+  it("keeps covered expired provider cooldown rows from blocking runtime inventory", () => {
+    const inventory = buildRuntimeInventory({
+      release: releaseStatus({
+        ok: true,
+        database: {
+          providerCooldownCount: 1,
+          expiredProviderCooldownCount: 1,
+          activeGlobalProviderCooldownCount: 1,
+          coveredExpiredProviderCooldownCount: 1,
+          retryableExpiredProviderCooldownCount: 0,
+          providerThrottleState: "active"
+        }
+      }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
+      providerCooldowns: [
+        {
+          ...processedRecord(3, "head-cooldown", "skipped"),
+          cooldownUntil: "2026-07-01T00:01:00.000Z",
+          reason: "provider_request_rate_limit",
+          expired: true
+        }
+      ],
+      repoProviderCooldowns: [repoProviderCooldown("owner/repo", "2026-07-01T00:10:00.000Z")],
+      checkedAt: "2026-07-01T00:05:00.000Z"
+    });
+
+    expect(inventory.ok).toBe(true);
+    expect(inventory.summary).toMatchObject({
+      expiredProviderCooldowns: 1,
+      retryableExpiredProviderCooldowns: 0,
+      coveredExpiredProviderCooldowns: 1,
+      activeRepoCooldowns: 1
+    });
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_no_retryable_provider_cooldowns",
+      ok: true,
+      detail: "0 retryable expired provider cooldown row(s); 1 covered by active provider/repo cooldown"
+    });
+    expect(inventory.recommendedActions).not.toContain("retry expired provider cooldowns or inspect provider health");
+  });
+
+  it("formats a concise human runtime inventory without leaking secrets", () => {
+    const inventory = buildRuntimeInventory({
+      release: releaseStatus({ ok: true }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
+      providerCooldowns: [],
+      repoProviderCooldowns: [],
+      checkedAt: "2026-07-01T00:05:00.000Z"
+    });
+
+    const output = formatRuntimeInventoryHuman(inventory);
+
+    expect(output).toContain("runtime: healthy_idle (ok)");
+    expect(output).toContain("queue: active=0 queued=0 running=0 providerDeferred=0 failed=0");
+    expect(output).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("filters runtime processes to bot-owned rows and redacts command text", () => {
+    const rows = [
+      { pid: 10, ppid: 1, command: "node /Volumes/LEXAR/repos/evaos-code-review-bot/dist/cli.js daemon --config live.json --token=ghp_123456789012345678901234" },
+      { pid: 11, ppid: 10, command: "node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs --cwd /Volumes/LEXAR/repos/some-worktree" },
+      { pid: 12, ppid: 1, command: "node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs --cwd /Users/lume/other" },
+      { pid: 13, ppid: 1, command: "node /tmp/not-the-bot.js" },
+      { pid: 14, ppid: 13, command: "node child-of-non-bot.js" },
+      { pid: 15, ppid: 1, command: "tsx src/cli.ts daemon --launchd-label com.electricsheephq.evaos-code-review-bot" }
+    ];
+
+    const processes = filterBotProcessRows(rows, {
+      repoPath: "/Volumes/LEXAR/repos/evaos-code-review-bot",
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      launchdPid: 10
+    });
+
+    expect(processes.map((processRow) => processRow.pid)).toEqual([10, 11, 15]);
+    expect(processes[0]).toMatchObject({
+      classification: "launchd_worker",
+      matchedBy: ["launchd_pid", "repo_path"]
+    });
+    expect(processes[1]).toMatchObject({
+      classification: "child_process",
+      matchedBy: ["child_of_bot_process"]
+    });
+    expect(JSON.stringify(processes)).not.toMatch(/ghp_123456789012345678901234/);
+    expect(JSON.stringify(processes)).toContain("[redacted-secret]");
   });
 
   it("summarizes active and stale agent leases without mutating runtime state", () => {
@@ -317,7 +488,13 @@ function createTempDatabase(tempDirs: string[]): string {
   return join(dir, "state.sqlite");
 }
 
-function releaseStatus(input: { ok: boolean; recommendedActions?: string[] }): ReleaseStatus {
+function releaseStatus(input: {
+  ok: boolean;
+  recommendedActions?: string[];
+  database?: Partial<ReleaseStatus["database"]>;
+}): ReleaseStatus {
+  const providerCooldownCount = input.database?.providerCooldownCount ?? (input.ok ? 0 : 1);
+  const expiredProviderCooldownCount = input.database?.expiredProviderCooldownCount ?? providerCooldownCount;
   return {
     ok: input.ok,
     checkedAt: "2026-07-01T00:30:00.000Z",
@@ -332,9 +509,10 @@ function releaseStatus(input: { ok: boolean; recommendedActions?: string[] }): R
     database: {
       rowCount: 10,
       errorCount: 0,
-      providerCooldownCount: 1,
-      expiredProviderCooldownCount: 1,
-      activeProviderCooldownCount: 0
+      providerCooldownCount,
+      expiredProviderCooldownCount,
+      activeProviderCooldownCount: 0,
+      ...input.database
     },
     heartbeat: {
       status: "fresh",
@@ -346,7 +524,15 @@ function releaseStatus(input: { ok: boolean; recommendedActions?: string[] }): R
       dryRun: false
     },
     recommendedActions: input.recommendedActions ?? [],
-    gates: [{ name: "provider_cooldown_backlog", ok: false, detail: "1 expired provider cooldown row(s)" }],
+    gates: [
+      {
+        name: "provider_cooldown_backlog",
+        ok: input.ok,
+        detail: input.ok
+          ? `${input.database?.retryableExpiredProviderCooldownCount ?? expiredProviderCooldownCount} expired provider cooldown row(s)`
+          : "1 expired provider cooldown row(s)"
+      }
+    ],
     rollback: {
       restartCommand: "launchctl kickstart -k gui/501/com.electricsheephq.evaos-code-review-bot",
       unloadCommand: "launchctl bootout gui/501 ~/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist"
@@ -424,6 +610,15 @@ function processedRecord(pullNumber: number, headSha: string, status: "posted" |
   };
 }
 
+function repoProviderCooldown(repo: string, cooldownUntil: string): RepoProviderCooldownRecord {
+  return {
+    repo,
+    cooldownUntil,
+    reason: "provider_request_rate_limit",
+    updatedAt: "2026-07-01T00:00:00.000Z"
+  };
+}
+
 function lease(
   leaseId: string,
   startedAt: string,
@@ -458,23 +653,42 @@ function agentInventory(input: Partial<OperatorAgentInventory>): OperatorAgentIn
   };
 }
 
-function durableQueueSnapshot() {
+function durableQueueSnapshot(input: {
+  ok?: boolean;
+  summary?: Partial<OperatorDurableQueueSnapshot["summary"]>;
+  jobs?: OperatorDurableQueueSnapshot["jobs"];
+  byRepo?: OperatorDurableQueueSnapshot["byRepo"];
+} = {}): OperatorDurableQueueSnapshot {
   return {
-    ok: false,
+    ok: input.ok ?? false,
     checkedAt: "2026-07-01T00:30:00.000Z",
     summary: {
-      total: 4,
-      queued: 1,
-      leased: 0,
-      running: 1,
-      providerDeferred: 1,
-      retryableProviderDeferred: 1,
-      posted: 0,
-      failed: 1,
-      retired: 0
+      total: input.summary?.total ?? 4,
+      queued: input.summary?.queued ?? 1,
+      leased: input.summary?.leased ?? 0,
+      running: input.summary?.running ?? 1,
+      providerDeferred: input.summary?.providerDeferred ?? 1,
+      retryableProviderDeferred: input.summary?.retryableProviderDeferred ?? 1,
+      posted: input.summary?.posted ?? 0,
+      failed: input.summary?.failed ?? 1,
+      retired: input.summary?.retired ?? 0
     },
-    jobs: [],
-    byRepo: []
+    jobs: input.jobs ?? [],
+    byRepo: input.byRepo ?? []
+  };
+}
+
+function cleanDurableQueueSummary(): Partial<OperatorDurableQueueSnapshot["summary"]> {
+  return {
+    total: 0,
+    queued: 0,
+    leased: 0,
+    running: 0,
+    providerDeferred: 0,
+    retryableProviderDeferred: 0,
+    posted: 0,
+    failed: 0,
+    retired: 0
   };
 }
 
