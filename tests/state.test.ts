@@ -125,6 +125,72 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("stores the latest daemon heartbeat as a singleton", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordDaemonHeartbeat({
+      cycle: 1,
+      event: "daemon_cycle_start",
+      dryRun: false,
+      recordedAt: new Date("2026-07-01T00:00:00.000Z")
+    });
+    store.recordDaemonHeartbeat({
+      cycle: 1,
+      event: "daemon_cycle_complete",
+      dryRun: false,
+      recordedAt: new Date("2026-07-01T00:00:05.000Z")
+    });
+
+    expect(store.getDaemonHeartbeat()).toEqual({
+      cycle: 1,
+      event: "daemon_cycle_complete",
+      dryRun: false,
+      recordedAt: "2026-07-01T00:00:05.000Z",
+      startedCycle: 1,
+      startedAt: "2026-07-01T00:00:00.000Z"
+    });
+    store.close();
+  });
+
+  it("does not treat a start-only heartbeat as a terminal daemon heartbeat", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-start-only-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordDaemonHeartbeat({
+      cycle: 7,
+      event: "daemon_cycle_start",
+      dryRun: false,
+      recordedAt: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(store.getDaemonHeartbeat()).toBeUndefined();
+    store.close();
+  });
+
+  it("redacts daemon heartbeat errors", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-redact-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordDaemonHeartbeat({
+      cycle: 2,
+      event: "daemon_cycle_failed",
+      dryRun: false,
+      error: "request failed with ghp_1234567890abcdefghijklmnopqrstuvwx",
+      recordedAt: new Date("2026-07-01T00:00:10.000Z")
+    });
+
+    expect(store.getDaemonHeartbeat()).toMatchObject({
+      cycle: 2,
+      event: "daemon_cycle_failed",
+      error: "request failed with [redacted-secret]"
+    });
+    store.close();
+  });
+
   it("deduplicates processed command comments per repo, PR, head SHA, and comment id", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-command-state-"));
     roots.push(root);
