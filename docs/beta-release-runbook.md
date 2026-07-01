@@ -141,9 +141,17 @@ repo through the tracked allowlist/policy lane when the provider is repeatedly
 rate-limited.
 
 Provider cooldown rows are not failed rows. They mean the provider was
-rate-limited before ZCode produced a review. Keep them visible in
-`release:status`, then retry after the cooldown expires or resolve the ZCode
-provider entitlement/rate-limit source. A release may be green with provider
+rate-limited or overloaded before ZCode produced a review. Z.ai provider code
+`1302` is request-rate throttling, `1305` is temporary overload, and true
+plan/package exhaustion uses separate codes such as `1308`, `1309`, and `1310`.
+Do not describe `1302`/`1305` as user quota exhaustion unless the evidence also
+proves an exhausted plan counter.
+
+Keep provider cooldown rows visible in `release:status`, then retry after the
+cooldown expires or resolve the ZCode provider source. The bot should run with
+one in-flight ZCode review by default; live configs that override
+`reviewConcurrency.maxActiveRuns` must set it to `1` unless a later release
+proves a higher concurrency is safe. A release may be green with provider
 cooldown rows only when all provider cooldown rows are still active and the
 packet names the affected PR head and follow-up.
 

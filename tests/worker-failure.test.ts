@@ -8,15 +8,18 @@ import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import {
+  classifyProviderError,
   isSuccessfulRetryStatus,
   localDateFolder,
   prepareFailedHeadRetry,
+  providerCooldownDurationMs,
   recordFailedReview,
   recordProviderRateLimitCooldownIfNeeded,
   restoreFailedRetryRowIfNeeded,
   retryFailedHeadWithDeps,
   retryProviderCooldownsWithDeps,
-  reviewPull
+  reviewPull,
+  runWithProviderRetry
 } from "../src/worker.js";
 
 describe("worker review failures", () => {
@@ -70,12 +73,140 @@ describe("worker review failures", () => {
     expect(handled).toBe(true);
     expect(state.getProcessedReview("electricsheephq/WorldOS", 1234, "head-rate-limit")).toMatchObject({
       status: "skipped",
-      error: "provider_rate_limit_cooldown_until=2026-07-01T00:15:00.000Z; reason=provider_rate_limit"
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:05:00.000Z; reason=provider_request_rate_limit"
     });
-    expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:10:00.000Z"))).toMatchObject({
-      reason: "provider_rate_limit"
+    expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:04:00.000Z"))).toMatchObject({
+      reason: "provider_request_rate_limit"
     });
     state.close();
+  });
+
+  it("classifies provider throttle, overload, and true quota separately", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-classify-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const rateLimit = classifyProviderError(new Error("ProviderBusinessError: [1302][Rate limit reached for requests] providerRequestId: 'req-1'"));
+    const overload = classifyProviderError(new Error("ProviderBusinessError: [1305][The service may be temporarily overloaded, please try again later]"));
+    const quota = classifyProviderError(new Error("ProviderBusinessError: [1310][Weekly/Monthly Limit Exhausted]"));
+
+    expect(rateLimit).toMatchObject({
+      category: "request_rate_limit",
+      providerCode: "1302",
+      reason: "provider_request_rate_limit",
+      retryable: true,
+      cooldown: true
+    });
+    expect(overload).toMatchObject({
+      category: "overloaded",
+      providerCode: "1305",
+      reason: "provider_overloaded",
+      retryable: true,
+      cooldown: true
+    });
+    expect(quota).toMatchObject({
+      category: "quota_exhausted",
+      providerCode: "1310",
+      reason: "provider_quota_exhausted",
+      retryable: false,
+      cooldown: true
+    });
+    expect(providerCooldownDurationMs(config, rateLimit)).toBe(5 * 60_000);
+    expect(providerCooldownDurationMs(config, overload)).toBe(2 * 60_000);
+    expect(providerCooldownDurationMs(config, quota)).toBe(30 * 60_000);
+  });
+
+  it("retries transient provider throttles before surfacing failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-retry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    let attempts = 0;
+
+    const result = await runWithProviderRetry({
+      config,
+      evidenceDir: join(root, "evidence"),
+      operation: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("ProviderBusinessError: [1302][Rate limit reached for requests] providerRequestId: 'req-retry'");
+        }
+        return "ok";
+      }
+    });
+
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+    const evidence = JSON.parse(readFileSync(join(root, "evidence", "provider-retry.json"), "utf8"));
+    expect(evidence).toMatchObject([
+      {
+        attempt: 1,
+        category: "request_rate_limit",
+        providerCode: "1302",
+        reason: "provider_request_rate_limit",
+        retryable: true
+      },
+      {
+        attempt: 2,
+        category: "none",
+        reason: "success_after_retry",
+        final: true
+      }
+    ]);
+  });
+
+  it("records Retry-After hints in provider retry evidence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-retry-after-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    let attempts = 0;
+
+    const result = await runWithProviderRetry({
+      config,
+      evidenceDir: join(root, "evidence"),
+      operation: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("ProviderBusinessError: [1305][temporarily overloaded] retry-after: 0.001");
+        }
+        return "ok";
+      }
+    });
+
+    expect(result).toBe("ok");
+    const evidence = JSON.parse(readFileSync(join(root, "evidence", "provider-retry.json"), "utf8"));
+    expect(evidence[0]).toMatchObject({
+      attempt: 1,
+      category: "overloaded",
+      providerCode: "1305",
+      retryAfterMs: 1,
+      nextDelayMs: 1
+    });
+  });
+
+  it("does not retry true quota exhaustion provider errors", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-no-retry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    let attempts = 0;
+
+    await expect(runWithProviderRetry({
+      config,
+      evidenceDir: join(root, "evidence"),
+      operation: () => {
+        attempts += 1;
+        throw new Error("ProviderBusinessError: [1310][Weekly/Monthly Limit Exhausted]");
+      }
+    })).rejects.toThrow("1310");
+
+    expect(attempts).toBe(1);
+    const evidence = JSON.parse(readFileSync(join(root, "evidence", "provider-retry.json"), "utf8"));
+    expect(evidence[0]).toMatchObject({
+      attempt: 1,
+      category: "quota_exhausted",
+      providerCode: "1310",
+      reason: "provider_quota_exhausted",
+      retryable: false,
+      final: true
+    });
   });
 
   it("prepares exactly one failed current head for retry without deleting the failure row", () => {
@@ -819,7 +950,13 @@ function minimalConfig(root: string): BotConfig {
     },
     providerCooldown: {
       enabled: true,
-      durationMs: 15 * 60_000
+      durationMs: 15 * 60_000,
+      requestRateLimitDurationMs: 5 * 60_000,
+      overloadDurationMs: 2 * 60_000,
+      quotaDurationMs: 30 * 60_000,
+      transientRetryAttempts: 2,
+      transientRetryBaseDelayMs: 1,
+      transientRetryMaxDelayMs: 1
     },
     walkthrough: {
       enabled: false,

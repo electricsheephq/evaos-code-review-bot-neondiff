@@ -123,7 +123,13 @@ function minimalConfig(root: string): BotConfig {
     },
     providerCooldown: {
       enabled: true,
-      durationMs: 15 * 60_000
+      durationMs: 15 * 60_000,
+      requestRateLimitDurationMs: 5 * 60_000,
+      overloadDurationMs: 2 * 60_000,
+      quotaDurationMs: 30 * 60_000,
+      transientRetryAttempts: 2,
+      transientRetryBaseDelayMs: 1,
+      transientRetryMaxDelayMs: 1
     },
     walkthrough: {
       enabled: false,

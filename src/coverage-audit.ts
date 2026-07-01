@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type { BotConfig } from "./config.js";
 import { listReposToScan, resolveRepoProfile, type RepoProfileSkipReason } from "./repo-policy.js";
-import type { StoredProcessedReviewRecord } from "./state.js";
+import { parseProviderCooldownError, type StoredProcessedReviewRecord } from "./state.js";
 import { isCanaryAllowed } from "./worker.js";
 import type { PullRequestSummary } from "./types.js";
 
@@ -12,6 +12,7 @@ export interface CoverageAuditSummary {
   reposScanned: number;
   pullsSeen: number;
   processed: number;
+  providerDeferred: number;
   unprocessed: number;
   skipped: number;
   staleHeads: number;
@@ -38,6 +39,11 @@ export interface CoverageProcessedEntry extends CoverageAuditPullEntry {
 
 export interface CoverageUnprocessedEntry extends CoverageAuditPullEntry {
   previousProcessedHeads: string[];
+}
+
+export interface CoverageProviderDeferredEntry extends CoverageProcessedEntry {
+  cooldownUntil: string;
+  reason?: string;
 }
 
 export interface CoverageSkippedEntry {
@@ -72,6 +78,7 @@ export interface CoverageAuditReport {
   scopedPullNumber?: number;
   summary: CoverageAuditSummary;
   processed: CoverageProcessedEntry[];
+  providerDeferred: CoverageProviderDeferredEntry[];
   unprocessed: CoverageUnprocessedEntry[];
   skipped: CoverageSkippedEntry[];
   staleHeads: CoverageStaleHead[];
@@ -145,12 +152,14 @@ export async function collectCoverageAudit(input: {
       reposScanned: 0,
       pullsSeen: 0,
       processed: 0,
+      providerDeferred: 0,
       unprocessed: 0,
       skipped: 0,
       staleHeads: 0,
       readFailures: 0
     },
     processed: [],
+    providerDeferred: [],
     unprocessed: [],
     skipped: [],
     staleHeads: [],
@@ -230,12 +239,12 @@ export async function collectCoverageAudit(input: {
             pushSkipped(report, repo, livePull, "draft");
             continue;
           }
-          pushProcessedOrUnprocessed(report, input.state, repo, livePull);
+          pushProcessedOrUnprocessed(report, input.state, repo, livePull, input.now ?? new Date());
           continue;
         }
       }
 
-      pushProcessedOrUnprocessed(report, input.state, repo, pull);
+      pushProcessedOrUnprocessed(report, input.state, repo, pull, input.now ?? new Date());
     }
   }
 
@@ -247,19 +256,30 @@ function pushProcessedOrUnprocessed(
   report: CoverageAuditReport,
   state: CoverageStateLookup,
   repo: string,
-  pull: PullRequestSummary
+  pull: PullRequestSummary,
+  now: Date
 ): void {
   const processed = state.getProcessedReview(repo, pull.number, pull.head.sha);
   if (processed) {
-    report.processed.push({
+    const entry: CoverageProcessedEntry = {
       ...pullEntry(repo, pull),
       status: processed.status,
       ...(processed.event ? { event: processed.event } : {}),
       ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
       ...(processed.error ? { error: processed.error } : {}),
       createdAt: processed.createdAt
-    });
+    };
+    report.processed.push(entry);
     report.summary.processed += 1;
+    const providerCooldown = activeProviderCooldown(processed, now);
+    if (providerCooldown) {
+      report.providerDeferred.push({
+        ...entry,
+        cooldownUntil: providerCooldown.cooldownUntil,
+        ...(providerCooldown.reason ? { reason: providerCooldown.reason } : {})
+      });
+      report.summary.providerDeferred += 1;
+    }
     return;
   }
 
@@ -271,6 +291,21 @@ function pushProcessedOrUnprocessed(
       .map((record) => record.headSha)
   });
   report.summary.unprocessed += 1;
+}
+
+function activeProviderCooldown(
+  processed: StoredProcessedReviewRecord,
+  now: Date
+): { cooldownUntil: string; reason?: string } | undefined {
+  if (processed.status !== "skipped" || !processed.error) return undefined;
+  const parsed = parseProviderCooldownError(processed.error);
+  if (!parsed) return undefined;
+  const cooldownUntilMs = Date.parse(parsed.cooldownUntil);
+  if (!Number.isFinite(cooldownUntilMs) || cooldownUntilMs <= now.getTime()) return undefined;
+  return {
+    cooldownUntil: parsed.cooldownUntil,
+    ...(parsed.reason ? { reason: parsed.reason } : {})
+  };
 }
 
 function pushSkipped(
