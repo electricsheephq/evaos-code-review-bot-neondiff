@@ -1222,6 +1222,16 @@ async function recordAndAcknowledgeCommandDecision(input: {
     url: input.commandDecision.command.url
   });
 
+  if (input.commandDecision.action === "stop") {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "skipped",
+      error: `manual_command_stop comment_id=${input.commandDecision.commandId}; author=${input.commandDecision.command.author}`
+    });
+  }
+
   if (input.config.commands.acknowledge && input.github.canPostAsApp()) {
     await input.github.upsertIssueComment({
       repo: input.repo,

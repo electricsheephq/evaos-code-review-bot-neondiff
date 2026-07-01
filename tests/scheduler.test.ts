@@ -6,7 +6,7 @@ import type { BotConfig } from "../src/config.js";
 import { runScheduledCycleWithDeps, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import type { ReviewPullInput, ReviewPullResult } from "../src/worker.js";
+import { reviewPull, type ReviewPullInput, type ReviewPullResult } from "../src/worker.js";
 
 describe("provider-aware review scheduler", () => {
   const roots: string[] = [];
@@ -291,6 +291,159 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("enqueues trusted command reviews even when the current head is already processed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-processed-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old"
+    });
+    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, "a1")]]]);
+    const comments = new Map([
+      ["org/repo-a#1", [comment(222, "100yenadmin", "@evaos-code-review-bot re-review")]]
+    ]);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(pullMap, comments),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-command"
+        });
+        return "reviewed_command";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(result.commandReviewRequested).toBe(1);
+    expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
+      expect.objectContaining({
+        source: "manual_command",
+        lane: "manual",
+        commentId: 222,
+        repo: "org/repo-a",
+        pullNumber: 1
+      })
+    ]);
+    state.close();
+  });
+
+  it("records trusted stop commands as terminal skips for the current head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-stop-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, "a1")]]]);
+    const comments = new Map([
+      ["org/repo-a#1", [comment(333, "100yenadmin", "@evaos-code-review-bot stop")]]
+    ]);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(pullMap, comments),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: reviewPull,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.skippedCommandStop).toBe(1);
+    expect(state.getProcessedReview("org/repo-a", 1, "a1")).toMatchObject({
+      status: "skipped",
+      error: expect.stringContaining("manual_command_stop")
+    });
+    expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
+      expect.objectContaining({
+        source: "manual_command",
+        lane: "manual",
+        commentId: 333,
+        lastError: "manual_command_stop_recorded"
+      })
+    ]);
+    state.close();
+  });
+
+  it("assigns scheduler jobs to reusable repo-sticky reviewer sessions when enabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pullMap = new Map([
+      ["org/repo-a", [pull("org/repo-a", 1, "a1"), pull("org/repo-a", 2, "a2")]]
+    ]);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(pullMap),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: `https://github.com/${repo}/pull/${reviewPull.number}#pullrequestreview-sticky`
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    const jobs = state.listReviewQueueJobs({ repo: "org/repo-a" });
+    expect(result.queue.enqueued).toBe(2);
+    expect(result.queue.leased).toBe(1);
+    expect(new Set(jobs.map((job) => job.sessionId))).toHaveLength(1);
+    expect(state.listReviewerSessions({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({
+        repo: "org/repo-a",
+        state: "active",
+        headCountUsed: 2,
+        provider: "zai-coding-plan"
+      })
+    ]);
+    expect(state.getReviewerSessionJob("org/repo-a", 1, "a1")).toMatchObject({
+      jobState: "completed",
+      processedReviewStatus: "posted"
+    });
+    expect(state.getReviewerSessionJob("org/repo-a", 2, "a2")).toMatchObject({
+      jobState: "assigned"
+    });
+    state.close();
+  });
+
   it("honors per-repo queue capacity before active provider cooldown enqueue", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-cooldown-capacity-"));
     roots.push(root);
@@ -389,14 +542,18 @@ function schedulerConfig(root: string, repos: string[]): BotConfig {
   };
 }
 
-function githubFromMap(pullsByRepo: Map<string, PullRequestSummary[]>): SchedulerGitHubApi {
+function githubFromMap(
+  pullsByRepo: Map<string, PullRequestSummary[]>,
+  commentsByPull = new Map<string, ReturnType<typeof comment>[]>()
+): SchedulerGitHubApi {
   return {
     listOpenPulls: async (repo) => pullsByRepo.get(repo)?.filter((entry) => entry.state === undefined || entry.state === "open") ?? [],
     getPull: async (repo, pullNumber) => {
       const pull = pullsByRepo.get(repo)?.find((entry) => entry.number === pullNumber);
       if (!pull) throw new Error(`missing pull ${repo}#${pullNumber}`);
       return pull;
-    }
+    },
+    listIssueComments: async (repo, issueNumber) => commentsByPull.get(`${repo}#${issueNumber}`) ?? []
   };
 }
 
@@ -424,5 +581,17 @@ function pull(
       repo: { full_name: repo }
     },
     html_url: `https://github.com/${repo}/pull/${number}`
+  };
+}
+
+function comment(id: number, login: string, body: string) {
+  return {
+    id,
+    body,
+    html_url: `https://github.test/comment/${id}`,
+    user: {
+      login,
+      type: login.endsWith("bot") ? "Bot" : "User"
+    }
   };
 }
