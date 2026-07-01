@@ -1,13 +1,18 @@
 import { loadConfig, type BotConfig } from "./config.js";
+import { collectTrustedReviewCommands, decideCommandAction, type CommandDecision } from "./commands.js";
 import { GitHubApi } from "./github.js";
 import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import {
   parseProviderCooldownError,
   ReviewStateStore,
-  type ReviewQueueJobRecord
+  type ProcessedStatus,
+  type ReviewerSessionJobState,
+  type ReviewQueueJobRecord,
+  type ReviewQueueJobSource
 } from "./state.js";
 import type { PullRequestSummary } from "./types.js";
+import type { IssueCommentCommandSource } from "./commands.js";
 import {
   activateRepoForNewOnlyReview,
   isCanaryAllowed,
@@ -39,6 +44,7 @@ export interface ScheduledRunResult extends RunOnceResult {
 export interface SchedulerGitHubApi {
   listOpenPulls(repo: string): Promise<PullRequestSummary[]>;
   getPull(repo: string, pullNumber: number): Promise<PullRequestSummary>;
+  listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
 }
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
@@ -100,8 +106,9 @@ export async function runScheduledCycleWithDeps(input: {
     result.baselinedExisting += activation.baselined;
 
     for (const pull of pulls) {
-      const enqueueStatus = enqueuePullIfEligible({
+      const enqueueStatus = await enqueuePullIfEligible({
         config,
+        github: input.github,
         state: input.state,
         repo,
         pull,
@@ -154,17 +161,25 @@ type EnqueueStatus =
   | "provider_deferred"
   | "closed_retired";
 
-function enqueuePullIfEligible(input: {
+async function enqueuePullIfEligible(input: {
   config: BotConfig;
+  github: SchedulerGitHubApi;
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
   providerId: string;
   now: Date;
-}): EnqueueStatus {
+}): Promise<EnqueueStatus> {
   if (isClosedPull(input.pull)) return "closed_retired";
   if (input.config.skipDrafts && input.pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(input.config, input.repo, input.pull.number)) return "skipped_canary";
+
+  const commandDecision = await resolveSchedulerCommandDecision(input);
+  if (commandDecision.action !== "none") {
+    const queued = enqueueReviewJob(input, commandDecision);
+    return queued.enqueued ? "enqueued" : "already_queued";
+  }
+
   if (input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) return "skipped_processed";
   if (hasActiveQueueJobForHead(input.state, input.repo, input.pull.number, input.pull.head.sha)) return "already_queued";
   if (!hasRepoQueueCapacity(input.state, input.repo, input.config.reviewScheduler?.maxQueuedPerRepo ?? 10)) {
@@ -195,16 +210,65 @@ function enqueueReviewJob(input: {
   pull: PullRequestSummary;
   providerId: string;
   now: Date;
-}) {
+}, commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>) {
+  const source: ReviewQueueJobSource = commandDecision ? "manual_command" : "automatic";
+  const sessionId = assignReviewerSessionForQueueJob(input, source)?.session?.sessionId;
   return input.state.enqueueReviewQueueJob({
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,
     baseSha: input.pull.base.sha,
+    source,
+    lane: source === "manual_command" ? "manual" : "background",
     providerId: input.providerId,
-    priority: input.config.reviewScheduler?.backgroundPriority,
+    priority: source === "manual_command" ? undefined : input.config.reviewScheduler?.backgroundPriority,
+    ...(commandDecision ? { commentId: commandDecision.commandId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     now: input.now
   });
+}
+
+async function resolveSchedulerCommandDecision(input: {
+  config: BotConfig;
+  github: SchedulerGitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+}): Promise<CommandDecision> {
+  if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
+  const comments = await input.github.listIssueComments(input.repo, input.pull.number);
+  const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  return decideCommandAction({
+    commands: collected.commands,
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    hasProcessedCommand: (repo, pullNumber, headSha, commentId) =>
+      input.state.hasProcessedCommand(repo, pullNumber, headSha, commentId)
+  });
+}
+
+function assignReviewerSessionForQueueJob(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  providerId: string;
+  now: Date;
+}, source: ReviewQueueJobSource) {
+  if (!input.config.reviewerSessions?.enabled) return undefined;
+  const assignment = input.state.assignReviewerSessionJob({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    ttlMs: input.config.reviewerSessions.ttlMs,
+    headCountLimit: input.config.reviewerSessions.headCountLimit,
+    now: input.now,
+    model: input.config.zcode.model,
+    provider: input.providerId,
+    assignmentReason: source === "manual_command" ? "manual_command_priority" : undefined
+  });
+  return assignment.assigned || assignment.session ? assignment : undefined;
 }
 
 async function runLeasedQueueJob(input: {
@@ -234,6 +298,7 @@ async function runLeasedQueueJob(input: {
       state: "failed",
       lastError: error instanceof Error ? error.message : String(error)
     });
+    updateReviewerSessionJobFromQueueStatus(input, "failed", "failed");
     return "failed";
   }
 
@@ -243,6 +308,7 @@ async function runLeasedQueueJob(input: {
       state: "closed_retired",
       lastError: `closed_or_merged_before_review state=${pull.state ?? "unknown"}`
     });
+    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     return "closed_retired";
   }
 
@@ -252,8 +318,12 @@ async function runLeasedQueueJob(input: {
       state: "stale_retired",
       lastError: `stale_head_before_review live=${pull.head.sha}`
     });
+    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
     return "stale_retired";
   }
+
+  const sessionId = ensureReviewerSessionForLeasedJob(input, now);
+  updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "running");
 
   try {
     const status = await input.reviewPullImpl({
@@ -268,6 +338,11 @@ async function runLeasedQueueJob(input: {
       processedHeadPolicy: isProviderDeferredRetryJob(input.job) ? "retry_failed_head" : "normal"
     });
     updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun });
+    updateReviewerSessionJobAfterReviewStatus({
+      state: input.state,
+      job: { ...input.job, ...(sessionId ? { sessionId } : {}) },
+      status
+    });
     return status;
   } catch (error) {
     if (recordProviderRateLimitCooldownIfNeeded({
@@ -279,6 +354,7 @@ async function runLeasedQueueJob(input: {
       now
     })) {
       markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull, error, config: input.config, now });
+      updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "assigned");
       return "skipped_provider_cooldown";
     }
     recordFailedReview({
@@ -293,8 +369,85 @@ async function runLeasedQueueJob(input: {
       state: "failed",
       lastError: error instanceof Error ? error.message : String(error)
     });
+    updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "failed", "failed");
     return "failed";
   }
+}
+
+function ensureReviewerSessionForLeasedJob(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  job: ReviewQueueJobRecord;
+  now?: Date;
+}, now: Date): string | undefined {
+  if (!input.config.reviewerSessions?.enabled) return input.job.sessionId;
+  if (input.job.sessionId) return input.job.sessionId;
+
+  const providerId = input.job.providerId ?? input.config.zcode.providerId ?? input.config.zcode.model ?? "zcode";
+  const assignment = input.state.assignReviewerSessionJob({
+    repo: input.job.repo,
+    pullNumber: input.job.pullNumber,
+    headSha: input.job.headSha,
+    ttlMs: input.config.reviewerSessions.ttlMs,
+    headCountLimit: input.config.reviewerSessions.headCountLimit,
+    now,
+    model: input.config.zcode.model,
+    provider: providerId,
+    assignmentReason: input.job.source === "manual_command" ? "manual_command_priority" : undefined
+  });
+  const sessionId = assignment.session?.sessionId;
+  if (sessionId) {
+    input.state.updateReviewQueueJobState({
+      jobId: input.job.jobId,
+      state: input.job.state,
+      sessionId,
+      clearLease: false,
+      now
+    });
+  }
+  return sessionId;
+}
+
+function updateReviewerSessionJobAfterReviewStatus(input: {
+  state: ReviewStateStore;
+  job: ReviewQueueJobRecord;
+  status: ReviewPullResult;
+}): void {
+  switch (input.status) {
+    case "reviewed":
+    case "reviewed_command":
+    case "skipped_processed":
+      updateReviewerSessionJobFromQueueStatus(input, "completed", "posted");
+      return;
+    case "skipped_provider_cooldown":
+    case "skipped_capacity":
+      updateReviewerSessionJobFromQueueStatus(input, "assigned");
+      return;
+    case "skipped_draft":
+    case "skipped_canary":
+    case "skipped_policy":
+    case "skipped_command_stop":
+    case "skipped_command_explain":
+    case "skipped_stale_head":
+      updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
+      return;
+    default:
+      assertNever(input.status);
+  }
+}
+
+function updateReviewerSessionJobFromQueueStatus(input: {
+  state: ReviewStateStore;
+  job: ReviewQueueJobRecord;
+}, jobState: ReviewerSessionJobState, processedReviewStatus?: ProcessedStatus): void {
+  if (!input.job.sessionId) return;
+  input.state.updateReviewerSessionJobState({
+    repo: input.job.repo,
+    pullNumber: input.job.pullNumber,
+    headSha: input.job.headSha,
+    jobState,
+    ...(processedReviewStatus ? { processedReviewStatus } : {})
+  });
 }
 
 function updateQueueJobAfterReviewStatus(input: {
@@ -343,12 +496,24 @@ function updateQueueJobAfterReviewStatus(input: {
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
-    case "skipped_command_stop":
-    case "skipped_command_explain":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "failed",
         lastError: `unexpected_scheduler_review_status=${input.status}`
+      });
+      return;
+    case "skipped_command_stop":
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "posted",
+        lastError: "manual_command_stop_recorded"
+      });
+      return;
+    case "skipped_command_explain":
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "posted",
+        lastError: "manual_command_explain_recorded"
       });
       return;
     default:
