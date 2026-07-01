@@ -35,6 +35,9 @@ export interface BotConfig {
     enabled: boolean;
     postIssueComment: boolean;
   };
+  reviewStatusComment?: {
+    enabled: boolean;
+  };
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -169,6 +172,9 @@ const DEFAULT_CONFIG: BotConfig = {
     enabled: true,
     postIssueComment: false
   },
+  reviewStatusComment: {
+    enabled: false
+  },
   commands: {
     enabled: false,
     botMentions: ["@evaos-code-review-bot"],
@@ -241,6 +247,9 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(config.providerCooldown.transientRetryMaxDelayMs, "config.providerCooldown.transientRetryMaxDelayMs");
   validateBoolean(config.walkthrough.enabled, "config.walkthrough.enabled");
   validateBoolean(config.walkthrough.postIssueComment, "config.walkthrough.postIssueComment");
+  const reviewStatusComment = config.reviewStatusComment ?? DEFAULT_CONFIG.reviewStatusComment!;
+  config.reviewStatusComment = reviewStatusComment;
+  validateBoolean(reviewStatusComment.enabled, "config.reviewStatusComment.enabled");
   validateBoolean(config.commands.enabled, "config.commands.enabled");
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");

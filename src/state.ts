@@ -295,6 +295,8 @@ export class ReviewStateStore {
         on review_queue_jobs (state, priority, created_at);
       create index if not exists idx_review_queue_jobs_repo_state
         on review_queue_jobs (repo, state);
+      create index if not exists idx_review_queue_jobs_repo_pull_state
+        on review_queue_jobs (repo, pull_number, state);
       create index if not exists idx_review_queue_jobs_provider_state
         on review_queue_jobs (provider_id, state);
     `);
@@ -680,7 +682,14 @@ export class ReviewStateStore {
       commentId: input.commentId
     });
     const existing = this.getReviewQueueJobByAttemptId(attemptId);
-    if (existing) return { enqueued: false, reason: "already_queued", job: existing };
+    if (existing && !isTerminalQueueState(existing.state)) {
+      return { enqueued: false, reason: "already_queued", job: existing };
+    }
+    const existingRetry = existing ? this.getActiveReviewQueueRetryJobByAttemptId(attemptId) : undefined;
+    if (existingRetry) {
+      return { enqueued: false, reason: "already_queued", job: existingRetry };
+    }
+    const queueAttemptId = existing ? `${attemptId}:after-terminal:${randomUUID()}` : attemptId;
 
     const jobId = randomUUID();
     this.db
@@ -692,7 +701,7 @@ export class ReviewStateStore {
       )
       .run(
         jobId,
-        attemptId,
+        queueAttemptId,
         source,
         lane,
         input.repo,
@@ -887,6 +896,23 @@ export class ReviewStateStore {
     return row ? mapReviewQueueJobRow(row) : undefined;
   }
 
+  private getActiveReviewQueueRetryJobByAttemptId(attemptId: string): ReviewQueueJobRecord | undefined {
+    const retryPrefix = `${attemptId}:after-terminal:`;
+    const row = this.db
+      .prepare(
+        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+         from review_queue_jobs
+         where substr(attempt_id, 1, ?) = ?
+           and state in ('queued', 'leased', 'running', 'provider_deferred')
+         order by datetime(created_at) desc
+         limit 1`
+      )
+      .get(retryPrefix.length, retryPrefix) as ReviewQueueJobRow | undefined;
+    return row ? mapReviewQueueJobRow(row) : undefined;
+  }
+
   listReviewQueueJobs(input: {
     repo?: string;
     state?: ReviewQueueJobState;
@@ -921,6 +947,43 @@ export class ReviewStateStore {
       .map(mapReviewQueueJobRow)
       .filter((job) => !states || states.includes(job.state));
     return input.limit ? jobs.slice(0, input.limit) : jobs;
+  }
+
+  listReviewQueueJobsForPull(input: {
+    repo: string;
+    pullNumber: number;
+    state?: ReviewQueueJobState;
+    states?: ReviewQueueJobState[];
+    limit?: number;
+  }): ReviewQueueJobRecord[] {
+    if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
+      throw new Error("limit must be a positive integer");
+    }
+    const states = input.states ?? (input.state ? [input.state] : undefined);
+    const statePredicate = states?.length
+      ? ` and state in (${states.map(() => "?").join(", ")})`
+      : "";
+    const limitPredicate = input.limit ? " limit ?" : "";
+    const params = [
+      input.repo,
+      input.pullNumber,
+      ...(states ?? []),
+      ...(input.limit ? [input.limit] : [])
+    ];
+    const rows = this.db
+      .prepare(
+        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+         from review_queue_jobs
+         where repo = ?
+           and pull_number = ?
+           ${statePredicate}
+         order by priority asc, datetime(created_at) asc
+         ${limitPredicate}`
+      )
+      .all(...params) as unknown as ReviewQueueJobRow[];
+    return rows.map(mapReviewQueueJobRow);
   }
 
   expireReviewerSessions(now = new Date(), repo?: string): number {

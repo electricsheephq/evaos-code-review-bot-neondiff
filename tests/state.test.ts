@@ -490,6 +490,58 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("allows same-attempt queue jobs to be re-enqueued after terminal retirement", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-terminal-reenqueue-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const first = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      baseSha: "base-a",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: first.jobId,
+      state: "stale_retired",
+      lastError: "superseded_by_head=head-b",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    const second = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      baseSha: "base-a",
+      now: new Date("2026-07-01T00:02:00.000Z")
+    });
+    const third = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      baseSha: "base-a",
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(second).toMatchObject({
+      enqueued: true,
+      job: {
+        repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+        pullNumber: 220,
+        headSha: "head-a",
+        state: "queued"
+      }
+    });
+    expect(second.job.attemptId).toContain(":after-terminal:");
+    expect(third).toMatchObject({
+      enqueued: false,
+      reason: "already_queued",
+      job: { jobId: second.job.jobId }
+    });
+    expect(store.listReviewQueueJobs({ repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO" })).toHaveLength(2);
+    store.close();
+  });
+
   it("leases bounded queue jobs by provider org repo and manual reserve", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-lease-"));
     roots.push(root);
