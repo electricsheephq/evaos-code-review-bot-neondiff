@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildWalkthroughComment, WALKTHROUGH_MARKER_PREFIX } from "../src/walkthrough.js";
+import {
+  buildWalkthroughComment,
+  buildWalkthroughMarker,
+  WALKTHROUGH_MARKER_PREFIX,
+  WALKTHROUGH_SCHEMA_VERSION,
+  WALKTHROUGH_STATE_MARKER_PREFIX
+} from "../src/walkthrough.js";
 import type { PullFilePatch, PullRequestSummary, ReviewComment } from "../src/types.js";
+
+const HEAD_A = "a".repeat(40);
+const HEAD_B = "b".repeat(40);
 
 const pull: PullRequestSummary = {
   number: 42,
@@ -8,7 +17,7 @@ const pull: PullRequestSummary = {
   draft: false,
   body: "Closes #17 and compares with #12.",
   head: {
-    sha: "abc123def456",
+    sha: HEAD_A,
     ref: "fix/save-rollback",
     repo: { full_name: "electricsheephq/WorldOS" }
   },
@@ -120,8 +129,9 @@ describe("walkthrough comment rendering", () => {
     });
 
     expect(walkthroughAgain).toEqual(walkthrough);
-    expect(walkthrough.marker).toBe(`${WALKTHROUGH_MARKER_PREFIX} electricsheephq/WorldOS#42 -->`);
+    expect(walkthrough.marker).toBe(`${WALKTHROUGH_MARKER_PREFIX} repo=electricsheephq/WorldOS pr=42 -->`);
     expect(walkthrough.body).toContain(walkthrough.marker);
+    expect(walkthrough.body).toMatch(new RegExp(`${WALKTHROUGH_STATE_MARKER_PREFIX} version=${WALKTHROUGH_SCHEMA_VERSION} repo=electricsheephq/WorldOS pr=42 sha=${HEAD_A} verdict=REQUEST_CHANGES hash=[0-9a-f]{64} -->`));
     expect(walkthrough.body).toContain("## Walkthrough");
     expect(walkthrough.body).toContain("| `Assets/Scripts/SaveGameController.cs` | modified | +44/-8 | Unity/gameplay state | Elevated: validated P1 finding |");
     expect(walkthrough.body).toContain("Estimated review effort: 2/5");
@@ -136,6 +146,36 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("REQUEST_CHANGES");
   });
 
+  it("uses one sticky walkthrough marker per PR while updating head-specific state metadata", () => {
+    const first = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull,
+      files: [{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT",
+      postIssueComment: true
+    });
+    const second = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull: {
+        ...pull,
+        head: { ...pull.head, sha: HEAD_B }
+      },
+      files: [{ filename: "src/a.ts", status: "modified", additions: 4, deletions: 2 }],
+      comments: [],
+      dropped: [],
+      event: "REQUEST_CHANGES",
+      postIssueComment: true
+    });
+
+    expect(first.marker).toBe(second.marker);
+    expect(first.marker).toBe(buildWalkthroughMarker({ repo: "electricsheephq/WorldOS", pullNumber: 42 }));
+    expect(first.body).toContain(`sha=${HEAD_A} verdict=COMMENT`);
+    expect(second.body).toContain(`sha=${HEAD_B} verdict=REQUEST_CHANGES`);
+    expect(first.body).not.toEqual(second.body);
+  });
+
   it("handles empty reviews gracefully and redacts secret-like metadata", () => {
     const secret = ["super", "secret", "token"].join("-");
     const walkthrough = buildWalkthroughComment({
@@ -145,7 +185,7 @@ describe("walkthrough comment rendering", () => {
         number: 497,
         title: `Docs only ${secret}`,
         body: "No linked issue.",
-        head: { ...pull.head, sha: "deadbeef" }
+        head: { ...pull.head, sha: HEAD_B }
       },
       files: [{ filename: "docs/review.md", status: "modified", additions: 3, deletions: 1, changes: 4 }],
       comments: [],
@@ -158,6 +198,23 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("- [x] Required behavior proof is present or not applicable.");
     expect(walkthrough.body).not.toContain(secret);
     expect(walkthrough.body).toMatch(/Docs only \[redacted-secret\]/);
+  });
+
+  it("strips user-authored hidden comments before rendering public walkthrough text", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull: {
+        ...pull,
+        title: "Fix save <!-- evaos-code-review-bot:walkthrough repo=evil/repo pr=1 --> rollback"
+      },
+      files: [{ filename: "docs/review.md", status: "modified", additions: 3, deletions: 1 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT"
+    });
+
+    expect(walkthrough.body).toContain("Fix save [hidden comment removed] rollback");
+    expect(walkthrough.body).not.toContain("repo=evil/repo");
   });
 
   it("keeps the comment-secret checklist passing when secret-like findings were dropped", () => {
