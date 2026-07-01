@@ -236,7 +236,12 @@ async function resolveSchedulerCommandDecision(input: {
   pull: PullRequestSummary;
 }): Promise<CommandDecision> {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
-  const comments = await input.github.listIssueComments(input.repo, input.pull.number);
+  let comments: IssueCommentCommandSource[];
+  try {
+    comments = await input.github.listIssueComments(input.repo, input.pull.number);
+  } catch {
+    return { action: "none", shouldReview: false };
+  }
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
   return decideCommandAction({
     commands: collected.commands,
@@ -341,7 +346,8 @@ async function runLeasedQueueJob(input: {
     updateReviewerSessionJobAfterReviewStatus({
       state: input.state,
       job: { ...input.job, ...(sessionId ? { sessionId } : {}) },
-      status
+      status,
+      dryRun: input.dryRun
     });
     return status;
   } catch (error) {
@@ -399,7 +405,7 @@ function ensureReviewerSessionForLeasedJob(input: {
   if (sessionId) {
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
-      state: input.job.state,
+      state: "running",
       sessionId,
       clearLease: false,
       now
@@ -412,12 +418,13 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
   state: ReviewStateStore;
   job: ReviewQueueJobRecord;
   status: ReviewPullResult;
+  dryRun: boolean;
 }): void {
   switch (input.status) {
     case "reviewed":
     case "reviewed_command":
     case "skipped_processed":
-      updateReviewerSessionJobFromQueueStatus(input, "completed", "posted");
+      updateReviewerSessionJobFromQueueStatus(input, "completed", input.dryRun ? "dry_run" : "posted");
       return;
     case "skipped_provider_cooldown":
     case "skipped_capacity":
