@@ -46,8 +46,7 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
       body.trim().length === 0 ||
       typeof confidence !== "number" ||
       confidence < 0 ||
-      confidence > 1 ||
-      (category !== undefined && !isRegressionCategory(category))
+      confidence > 1
     ) {
       dropped.push({ reason: "invalid_schema" });
       continue;
@@ -60,7 +59,7 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
       title: title.trim(),
       body: body.trim(),
       confidence,
-      ...(category ? { category } : {}),
+      ...(isRegressionCategory(category) ? { category } : {}),
       ...(typeof raw.why_this_matters === "string" && raw.why_this_matters.trim()
         ? { why_this_matters: raw.why_this_matters.trim() }
         : {})

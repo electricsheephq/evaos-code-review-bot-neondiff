@@ -61,6 +61,25 @@ describe("changed-surface validation selector", () => {
     expect(proof.detectedEvidence).toEqual(expect.arrayContaining(["build/typecheck", "tests", "release/operator checks"]));
   });
 
+  it("requires both focused tests and build evidence for bot runtime changes", () => {
+    const weakBodies = [
+      "Validation: npm run build passed. release:status is green.",
+      "Validation: focused Vitest passed. release:status is green."
+    ];
+
+    for (const body of weakBodies) {
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pull({ body }),
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      const proof = evaluateProofRequirements({ pull: pull({ body }), validation });
+
+      expect(proof.status).toBe("missing");
+      expect(proof.missingRecommendationIds).toContain("bot_focused_tests");
+    }
+  });
+
   it("does not treat near-miss repo names as WorldOS", () => {
     const validation = buildChangedSurfaceValidationReport({
       repo: "electricsheephq/worldos-utils",

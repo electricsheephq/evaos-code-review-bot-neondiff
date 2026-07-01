@@ -70,23 +70,33 @@ describe("finding normalization and review policy", () => {
     expect(decideReviewEvent([{ severity: "P0", category: "security_boundary" }])).toBe("REQUEST_CHANGES");
   });
 
-  it("drops unsupported model categories at schema parse time", () => {
+  it("ignores unsupported optional model categories without dropping the finding", () => {
     const parsed = parseFindings({
       findings: [
         {
           severity: "P1",
-          category: "nitpick",
-          path: "a.ts",
+          category: "correctness",
+          path: "src/auth.ts",
           line: 1,
-          title: "Bad category",
-          body: "This category is not in the deterministic taxonomy.",
+          title: "Session token regression",
+          body: "The session token refresh path now returns stale credentials.",
           confidence: 0.8
         }
       ]
     });
 
-    expect(parsed.findings).toEqual([]);
-    expect(parsed.dropped).toEqual([{ reason: "invalid_schema" }]);
+    expect(parsed.dropped).toEqual([]);
+    expect(parsed.findings).toEqual([
+      expect.objectContaining({
+        severity: "P1",
+        path: "src/auth.ts",
+        title: "Session token regression"
+      })
+    ]);
+
+    const normalized = normalizeFindingsForReview(parsed.findings);
+    expect(normalized.comments[0]).toMatchObject({ severity: "P1", category: "auth" });
+    expect(decideReviewEvent(normalized.comments)).toBe("REQUEST_CHANGES");
   });
 
   it("treats model-supplied category as a hint, not the source of truth", () => {

@@ -137,7 +137,7 @@ function hasEvidenceForRecommendation(recommendation: ValidationRecommendation, 
   if (recommendation.id === "unity_editor_smoke") return hasUnityEvidence(normalized);
   if (recommendation.id === "typescript_build") return hasBuildEvidence(normalized) || hasTestEvidence(normalized) || hasCiEvidence(normalized);
   if (recommendation.id === "ci_release_smoke") return hasReleaseEvidence(normalized) || hasCiEvidence(normalized);
-  if (recommendation.id === "bot_focused_tests") return hasBuildEvidence(normalized) || hasTestEvidence(normalized) || hasReleaseEvidence(normalized);
+  if (recommendation.id === "bot_focused_tests") return hasBuildEvidence(normalized) && hasTestEvidence(normalized);
   return recommendation.proofTypes.some((proofType) => normalized.includes(proofType.toLowerCase()));
 }
 
