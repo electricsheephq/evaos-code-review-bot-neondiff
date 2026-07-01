@@ -351,6 +351,47 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("backfills readiness for already-active queue jobs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-active-job-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    const job = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:15:00.000Z",
+      lastError: "provider_rate_limit_cooldown_until=2026-07-02T00:15:00.000Z; reason=provider_request_rate_limit",
+      now: new Date("2026-07-02T00:00:01.000Z")
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("active queue jobs must not enqueue duplicate work");
+      },
+      now: new Date("2026-07-02T00:05:00.000Z")
+    });
+
+    expect(result.queue.enqueued).toBe(0);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "provider_deferred",
+      reason: expect.stringContaining("active_queue_job_provider_deferred")
+    });
+    state.close();
+  });
+
   it("updates sticky status to provider_deferred when a leased review hits provider cooldown", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-provider-deferred-"));
     roots.push(root);
@@ -379,6 +420,22 @@ describe("provider-aware review scheduler", () => {
     expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
       state: "provider_deferred",
       reason: "provider_rate_limit_cooldown"
+    });
+
+    await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: true },
+      reviewPullImpl: async () => {
+        throw new Error("provider-deferred processed heads must not rerun before retry");
+      },
+      now: new Date("2026-07-02T00:01:00.000Z")
+    });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "provider_deferred"
     });
     state.close();
   });
@@ -1630,6 +1687,31 @@ describe("provider-aware review scheduler", () => {
       commandAction: "explain",
       commandCommentId: 336
     });
+
+    await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(pullMap, comments),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+    const readinessAfterAutomaticReview = state.getReviewReadiness("org/repo-a", 1, "a1");
+    expect(readinessAfterAutomaticReview).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted"
+    });
+    expect(readinessAfterAutomaticReview?.commandAction).toBeUndefined();
+    expect(readinessAfterAutomaticReview?.commandCommentId).toBeUndefined();
     state.close();
   });
 

@@ -439,6 +439,7 @@ export class ReviewStateStore {
     reviewUrl?: string;
     commandAction?: ProcessedCommandAction;
     commandCommentId?: number;
+    clearCommandMetadata?: boolean;
     now?: Date;
   }): ReviewReadinessRecord {
     validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, undefined, input.commandCommentId);
@@ -448,8 +449,8 @@ export class ReviewStateStore {
       const reason = input.reason ? redactSecrets(input.reason).trim().slice(0, 500) : undefined;
       const event = input.event ?? existing?.event;
       const reviewUrl = input.reviewUrl ? redactSecrets(input.reviewUrl).trim().slice(0, 500) : existing?.reviewUrl;
-      const commandAction = input.commandAction ?? existing?.commandAction;
-      const commandCommentId = input.commandCommentId ?? existing?.commandCommentId;
+      const commandAction = input.clearCommandMetadata ? undefined : input.commandAction ?? existing?.commandAction;
+      const commandCommentId = input.clearCommandMetadata ? undefined : input.commandCommentId ?? existing?.commandCommentId;
 
       if (
         existing &&

@@ -274,7 +274,11 @@ async function enqueuePullIfEligible(input: {
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }
-  if (hasActiveQueueJobForHead(input.state, input.repo, input.pull.number, input.pull.head.sha)) return "already_queued";
+  const activeQueueJob = getActiveQueueJobForHead(input.state, input.repo, input.pull.number, input.pull.head.sha);
+  if (activeQueueJob) {
+    backfillReadinessFromActiveQueueJob(input.state, input.repo, input.pull, activeQueueJob, input.now);
+    return "already_queued";
+  }
   if (!hasRepoQueueCapacity(input.state, input.repo, input.config.reviewScheduler?.maxQueuedPerRepo ?? 10)) {
     recordReadinessTransition({
       state: input.state,
@@ -397,6 +401,7 @@ function recordReadinessForEnqueue(input: {
     reason,
     ...(input.commandAction ? { commandAction: input.commandAction } : {}),
     ...(input.commandCommentId ? { commandCommentId: input.commandCommentId } : {}),
+    ...(isManual ? {} : { clearCommandMetadata: true }),
     now: input.now
   });
 }
@@ -973,7 +978,7 @@ function backfillReadinessFromProcessedHead(
   const processed = state.getProcessedReview(repo, pull.number, pull.head.sha);
   if (!processed) return;
   const existing = state.getReviewReadiness(repo, pull.number, pull.head.sha);
-  const targetState = readinessStateForProcessedStatus(processed.status, processed.event);
+  const targetState = readinessStateForProcessedStatus(processed.status, processed.event, processed.error);
   if (
     existing?.state === targetState &&
     (!processed.event || existing.event === processed.event) &&
@@ -986,9 +991,29 @@ function backfillReadinessFromProcessedHead(
     repo,
     pull,
     readinessState: targetState,
-    reason: `processed_head_already_${processed.status}`,
+    reason: readinessReasonForProcessedHead(processed),
     ...(processed.event ? { event: processed.event } : {}),
     ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+    now
+  });
+}
+
+function backfillReadinessFromActiveQueueJob(
+  state: ReviewStateStore,
+  repo: string,
+  pull: PullRequestSummary,
+  job: ReviewQueueJobRecord,
+  now: Date
+): void {
+  const readinessState = readinessStateForActiveQueueJob(job);
+  recordReadinessTransition({
+    state,
+    repo,
+    pull,
+    readinessState,
+    reason: readinessReasonForActiveQueueJob(job),
+    ...(job.source === "manual_command" && job.commentId ? { commandCommentId: job.commentId } : {}),
+    ...(job.source === "manual_command" ? {} : { clearCommandMetadata: true }),
     now
   });
 }
@@ -1061,8 +1086,10 @@ function readinessReasonForReviewResult(
 
 function readinessStateForProcessedStatus(
   status?: ProcessedStatus,
-  event?: ReviewEvent
+  event?: ReviewEvent,
+  error?: string
 ): ReviewReadinessState {
+  if (parseProviderCooldownError(error)) return "provider_deferred";
   switch (status) {
     case "posted":
     case "dry_run":
@@ -1078,6 +1105,22 @@ function readinessStateForProcessedStatus(
   }
 }
 
+function readinessReasonForProcessedHead(processed: { status: ProcessedStatus; error?: string }): string {
+  const providerCooldown = parseProviderCooldownError(processed.error);
+  if (providerCooldown) return `processed_head_provider_deferred: ${providerCooldown.reason ?? "provider_cooldown"}`;
+  return `processed_head_already_${processed.status}`;
+}
+
+function readinessStateForActiveQueueJob(job: ReviewQueueJobRecord): ReviewReadinessState {
+  if (job.state === "provider_deferred") return "provider_deferred";
+  if (job.state === "leased" || job.state === "running") return "reviewing";
+  return "queued";
+}
+
+function readinessReasonForActiveQueueJob(job: ReviewQueueJobRecord): string {
+  return job.lastError ? `active_queue_job_${job.state}: ${job.lastError}` : `active_queue_job_${job.state}`;
+}
+
 function recordReadinessTransition(input: {
   state: ReviewStateStore;
   repo: string;
@@ -1088,6 +1131,7 @@ function recordReadinessTransition(input: {
   reviewUrl?: string;
   commandAction?: ProcessedCommandAction;
   commandCommentId?: number;
+  clearCommandMetadata?: boolean;
   now: Date;
 }): void {
   input.state.recordReviewReadiness({
@@ -1100,6 +1144,7 @@ function recordReadinessTransition(input: {
     ...(input.reviewUrl ? { reviewUrl: input.reviewUrl } : {}),
     ...(input.commandAction ? { commandAction: input.commandAction } : {}),
     ...(input.commandCommentId ? { commandCommentId: input.commandCommentId } : {}),
+    ...(input.clearCommandMetadata ? { clearCommandMetadata: true } : {}),
     now: input.now
   });
 }
@@ -1393,10 +1438,19 @@ function hasActiveQueueJobForHead(
   pullNumber: number,
   headSha: string
 ): boolean {
+  return Boolean(getActiveQueueJobForHead(state, repo, pullNumber, headSha));
+}
+
+function getActiveQueueJobForHead(
+  state: ReviewStateStore,
+  repo: string,
+  pullNumber: number,
+  headSha: string
+): ReviewQueueJobRecord | undefined {
   return state.listReviewQueueJobs({
     repo,
     states: ["queued", "leased", "running", "provider_deferred"]
-  }).some((job) => job.pullNumber === pullNumber && job.headSha === headSha);
+  }).find((job) => job.pullNumber === pullNumber && job.headSha === headSha);
 }
 
 function hasRepoQueueCapacity(state: ReviewStateStore, repo: string, maxQueuedPerRepo: number): boolean {
