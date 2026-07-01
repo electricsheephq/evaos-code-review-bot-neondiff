@@ -1,6 +1,6 @@
-# evaOS Code Review Bot
+# evaOS Code Review Bot - CODENAME "OpenRabbit"
 
-Pilot local worker for ZCode/GLM-5.2 pull request reviews.
+Code review agents are getting expensive. This is an OpenSource replacement for CodeRabbit and Copilot. 
 
 ## Safety Defaults
 
