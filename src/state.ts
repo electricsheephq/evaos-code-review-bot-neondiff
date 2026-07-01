@@ -42,6 +42,19 @@ export interface RepoProviderCooldownRecord {
   updatedAt: string;
 }
 
+export const PROVIDER_COOLDOWN_ERROR_PREFIX = "provider_rate_limit_cooldown_until=";
+
+export interface ParsedProviderCooldownError {
+  cooldownUntil: string;
+  reason?: string;
+}
+
+export interface ProviderCooldownReviewRecord extends StoredProcessedReviewRecord {
+  cooldownUntil: string;
+  reason?: string;
+  expired: boolean;
+}
+
 export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_complete" | "daemon_cycle_failed";
 
 export interface DaemonHeartbeatRecord {
@@ -290,6 +303,55 @@ export class ReviewStateStore {
     return cooldown;
   }
 
+  listProviderCooldownReviews(input: {
+    repo?: string;
+    now?: Date;
+    expiredOnly?: boolean;
+    limit?: number;
+  } = {}): ProviderCooldownReviewRecord[] {
+    if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
+      throw new Error("limit must be a positive integer");
+    }
+
+    const now = input.now ?? new Date();
+    const rows = (input.repo
+      ? this.db
+          .prepare(
+            `select repo, pull_number, head_sha, status, event, review_url, error, created_at
+             from processed_reviews
+             where repo = ? and status = 'skipped' and error like ?
+             order by datetime(created_at) asc`
+          )
+          .all(input.repo, `${PROVIDER_COOLDOWN_ERROR_PREFIX}%`)
+      : this.db
+          .prepare(
+            `select repo, pull_number, head_sha, status, event, review_url, error, created_at
+             from processed_reviews
+             where status = 'skipped' and error like ?
+             order by datetime(created_at) asc`
+          )
+          .all(`${PROVIDER_COOLDOWN_ERROR_PREFIX}%`)) as unknown as ProcessedReviewRow[];
+
+    const mapped = rows
+      .map((row) => {
+        const record = mapProcessedReviewRow(row);
+        const parsed = parseProviderCooldownError(record.error);
+        if (!parsed) return undefined;
+        const cooldownUntilMs = Date.parse(parsed.cooldownUntil);
+        const expired = Number.isFinite(cooldownUntilMs) && cooldownUntilMs <= now.getTime();
+        return {
+          ...record,
+          cooldownUntil: parsed.cooldownUntil,
+          ...(parsed.reason ? { reason: parsed.reason } : {}),
+          expired
+        };
+      })
+      .filter((record): record is ProviderCooldownReviewRecord => Boolean(record))
+      .filter((record) => !input.expiredOnly || record.expired);
+
+    return input.limit ? mapped.slice(0, input.limit) : mapped;
+  }
+
   recordDaemonHeartbeat(record: DaemonHeartbeatRecord): void {
     if (record.event === "daemon_cycle_start") {
       this.db
@@ -394,6 +456,19 @@ function normalizeRetirementReason(reason: string): string {
     .replaceAll(/^_+|_+$/g, "")
     .slice(0, 80);
   return normalized || "operator_acknowledged";
+}
+
+export function parseProviderCooldownError(error?: string): ParsedProviderCooldownError | undefined {
+  if (!error?.startsWith(PROVIDER_COOLDOWN_ERROR_PREFIX)) return undefined;
+  const [cooldownPart, ...rest] = error.split(";");
+  const cooldownUntil = cooldownPart?.slice(PROVIDER_COOLDOWN_ERROR_PREFIX.length).trim();
+  if (!cooldownUntil) return undefined;
+  const reasonPart = rest.map((part) => part.trim()).find((part) => part.startsWith("reason="));
+  const reason = reasonPart?.slice("reason=".length).trim();
+  return {
+    cooldownUntil,
+    ...(reason ? { reason } : {})
+  };
 }
 
 interface ProcessedReviewRow {

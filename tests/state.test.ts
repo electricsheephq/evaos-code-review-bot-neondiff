@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ReviewStateStore } from "../src/state.js";
+import { parseProviderCooldownError, ReviewStateStore } from "../src/state.js";
 
 describe("review state store", () => {
   const roots: string[] = [];
@@ -188,6 +188,57 @@ describe("review state store", () => {
       event: "daemon_cycle_failed",
       error: "request failed with [redacted-secret]"
     });
+    store.close();
+  });
+
+  it("parses and filters provider cooldown review rows by expiry", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-provider-cooldown-list-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordProcessed({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 219,
+      headSha: "expired-head",
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:15:00.000Z; reason=provider_rate_limit"
+    });
+    store.recordProcessed({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "active-head",
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:45:00.000Z; reason=provider_rate_limit"
+    });
+    store.recordProcessed({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 221,
+      headSha: "baseline-head",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+
+    expect(parseProviderCooldownError("provider_rate_limit_cooldown_until=2026-07-01T00:15:00.000Z; reason=provider_rate_limit")).toEqual({
+      cooldownUntil: "2026-07-01T00:15:00.000Z",
+      reason: "provider_rate_limit"
+    });
+    expect(store.listProviderCooldownReviews({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      now: new Date("2026-07-01T00:30:00.000Z")
+    })).toHaveLength(2);
+    expect(store.listProviderCooldownReviews({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      expiredOnly: true,
+      now: new Date("2026-07-01T00:30:00.000Z")
+    })).toEqual([
+      expect.objectContaining({
+        pullNumber: 219,
+        headSha: "expired-head",
+        cooldownUntil: "2026-07-01T00:15:00.000Z",
+        reason: "provider_rate_limit",
+        expired: true
+      })
+    ]);
     store.close();
   });
 

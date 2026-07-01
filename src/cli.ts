@@ -5,7 +5,7 @@ import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { ReviewStateStore } from "./state.js";
-import { isSuccessfulRetryStatus, retryFailedHead, runOnce } from "./worker.js";
+import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
 async function main(): Promise<void> {
@@ -129,6 +129,49 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "provider-cooldowns") {
+    const config = loadConfig(args.config);
+    const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
+    try {
+      const expiredOnly = args["expired-only"] === "true";
+      const limit = args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined;
+      const rows = state.listProviderCooldownReviews({
+        repo: args.repo,
+        expiredOnly,
+        limit
+      });
+      console.log(JSON.stringify({
+        ok: true,
+        checkedAt: new Date().toISOString(),
+        expiredOnly,
+        ...(args.repo ? { repo: args.repo } : {}),
+        count: rows.length,
+        expiredCount: rows.filter((row) => row.expired).length,
+        rows
+      }, null, 2));
+    } finally {
+      state.close();
+    }
+    return;
+  }
+
+  if (command === "retry-provider-cooldowns") {
+    if (args["dry-run"] !== "true" && args["dry-run"] !== "false") {
+      throw new Error("retry-provider-cooldowns requires explicit --dry-run true or --dry-run false");
+    }
+    const result = await retryProviderCooldowns({
+      configPath: args.config,
+      repo: args.repo,
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined,
+      expiredOnly: args["expired-only"] !== "false",
+      dryRun: args["dry-run"] === "true",
+      useZCode: args.zcode !== "false"
+    });
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
   if (command === "retire-failed") {
     if (!args.repo) throw new Error("--repo is required for retire-failed");
     if (!args.pr) throw new Error("--pr is required for retire-failed");
@@ -193,6 +236,12 @@ function parseArgs(argv: string[]): ParsedArgs {
   return parsed;
 }
 
+function parsePositiveInteger(value: string, label: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
+  return parsed;
+}
+
 interface ParsedArgs {
   _: string[];
   config?: string;
@@ -203,7 +252,9 @@ interface ParsedArgs {
   "launchd-label"?: string;
   "state-path"?: string;
   "dry-run"?: string;
+  "expired-only"?: string;
   "head-sha"?: string;
+  limit?: string;
   zcode?: string;
   [key: string]: string | string[] | undefined;
 }
