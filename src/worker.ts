@@ -20,7 +20,7 @@ import {
 } from "./repo-policy.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { redactSecrets } from "./secrets.js";
-import { ReviewStateStore, type ReviewRunLease } from "./state.js";
+import { parseProviderCooldownError, ReviewStateStore, type ReviewRunLease } from "./state.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
@@ -64,7 +64,30 @@ export interface FailedHeadRetryTarget {
   repo: string;
   pullNumber: number;
   headSha: string;
+  previousStatus: "failed" | "skipped";
   previousError?: string;
+}
+
+export interface RetryProviderCooldownsResult {
+  ok: boolean;
+  checkedAt: string;
+  dryRun: boolean;
+  expiredOnly: boolean;
+  limit: number;
+  repo?: string;
+  candidates: number;
+  attempted: number;
+  results: RetryFailedHeadResult[];
+  summary: {
+    reviewed: number;
+    dryRun: number;
+    remainedCooldown: number;
+    failed: number;
+    skippedStaleHead: number;
+    skippedProcessed: number;
+    skippedCapacity: number;
+    other: number;
+  };
 }
 
 export type ReviewPullResult =
@@ -207,6 +230,89 @@ export async function retryFailedHead(options: {
   }
 }
 
+export async function retryProviderCooldowns(options: {
+  configPath?: string;
+  repo?: string;
+  limit?: number;
+  expiredOnly?: boolean;
+  dryRun: boolean;
+  useZCode?: boolean;
+}): Promise<RetryProviderCooldownsResult> {
+  const config = loadConfig(options.configPath);
+  const github = new GitHubApi(config.github);
+  const state = new ReviewStateStore(config.statePath);
+  const budget = new ReviewRunBudget(1);
+  try {
+    return await retryProviderCooldownsWithDeps({
+      config,
+      github,
+      state,
+      budget,
+      options,
+      reviewPullImpl: reviewPull
+    });
+  } finally {
+    state.close();
+  }
+}
+
+export async function retryProviderCooldownsWithDeps(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  budget: ReviewRunBudget;
+  options: {
+    repo?: string;
+    limit?: number;
+    expiredOnly?: boolean;
+    dryRun: boolean;
+    useZCode?: boolean;
+  };
+  reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+}): Promise<RetryProviderCooldownsResult> {
+  const limit = input.options.limit ?? 5;
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("limit must be a positive integer");
+  const expiredOnly = input.options.expiredOnly ?? true;
+  const candidates = input.state.listProviderCooldownReviews({
+    repo: input.options.repo,
+    expiredOnly,
+    limit,
+    now: new Date()
+  });
+  const results: RetryFailedHeadResult[] = [];
+  for (const candidate of candidates) {
+    const result = await retryFailedHeadWithDeps({
+      config: input.config,
+      github: input.github,
+      state: input.state,
+      budget: input.budget,
+      options: {
+        repo: candidate.repo,
+        pullNumber: candidate.pullNumber,
+        headSha: candidate.headSha,
+        dryRun: input.options.dryRun,
+        useZCode: input.options.useZCode
+      },
+      reviewPullImpl: input.reviewPullImpl
+    });
+    results.push(result);
+  }
+
+  const summary = summarizeRetryProviderCooldownResults(results);
+  return {
+    ok: summary.failed === 0 && summary.skippedCapacity === 0,
+    checkedAt: new Date().toISOString(),
+    dryRun: input.options.dryRun,
+    expiredOnly,
+    limit,
+    ...(input.options.repo ? { repo: input.options.repo } : {}),
+    candidates: candidates.length,
+    attempted: results.length,
+    results,
+    summary
+  };
+}
+
 export async function retryFailedHeadWithDeps(input: {
   config: BotConfig;
   github: GitHubApi;
@@ -253,11 +359,11 @@ export async function retryFailedHeadWithDeps(input: {
       budget,
       processedHeadPolicy: "retry_failed_head"
     });
-      const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
-      // A retry dry-run is a successful inspection, but the failed row must remain retryable for the later live run.
-      restoreFailedRetryRowIfNeeded({
-        state,
-        retryTarget,
+    const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
+    // A retry dry-run is a successful inspection, but the original row must remain retryable for the later live run.
+    restoreFailedRetryRowIfNeeded({
+      state,
+      retryTarget,
       reason: retryStatus === "dry_run" ? "retry_dry_run" : `retry_did_not_review=${retryStatus}`
     });
     return {
@@ -310,11 +416,14 @@ export function restoreFailedRetryRowIfNeeded(input: {
   if (current?.status === "posted") return;
   if (current?.status === "failed") return;
 
+  const restoreAsProviderCooldown =
+    input.retryTarget.previousStatus === "skipped" &&
+    Boolean(parseProviderCooldownError(input.retryTarget.previousError));
   input.state.recordProcessed({
     repo: input.retryTarget.repo,
     pullNumber: input.retryTarget.pullNumber,
     headSha: input.retryTarget.headSha,
-    status: "failed",
+    status: restoreAsProviderCooldown ? "skipped" : "failed",
     error: input.retryTarget.previousError
       ? `${input.retryTarget.previousError}; ${input.reason}`
       : input.reason
@@ -346,6 +455,7 @@ export function prepareFailedHeadRetry(input: {
     repo: input.repo,
     pullNumber: input.pullNumber,
     headSha: input.headSha,
+    previousStatus: processed.status === "skipped" ? "skipped" : "failed",
     ...(processed.error ? { previousError: processed.error } : {})
   };
 }
@@ -419,7 +529,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (input.processedHeadPolicy === "retry_failed_head") {
       const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
-      if (current?.status !== "failed") return "skipped_processed";
+      if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
+        return "skipped_processed";
+      }
       const liveBeforeReview = await github.getPull(repo, pull.number);
       const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
       if (staleBeforeReview) {
@@ -739,7 +851,50 @@ function recordProviderCooldownSkip(input: {
 }
 
 function isProviderCooldownProcessedReview(record: { status: string; error?: string }): boolean {
-  return record.status === "skipped" && Boolean(record.error?.startsWith("provider_rate_limit_cooldown_until="));
+  return record.status === "skipped" && Boolean(parseProviderCooldownError(record.error));
+}
+
+function summarizeRetryProviderCooldownResults(results: RetryFailedHeadResult[]): RetryProviderCooldownsResult["summary"] {
+  const summary: RetryProviderCooldownsResult["summary"] = {
+    reviewed: 0,
+    dryRun: 0,
+    remainedCooldown: 0,
+    failed: 0,
+    skippedStaleHead: 0,
+    skippedProcessed: 0,
+    skippedCapacity: 0,
+    other: 0
+  };
+  for (const result of results) {
+    switch (result.status) {
+      case "reviewed":
+      case "reviewed_command":
+        summary.reviewed += 1;
+        break;
+      case "dry_run":
+        summary.dryRun += 1;
+        break;
+      case "skipped_provider_cooldown":
+        summary.remainedCooldown += 1;
+        break;
+      case "failed":
+        summary.failed += 1;
+        break;
+      case "skipped_stale_head":
+        summary.skippedStaleHead += 1;
+        break;
+      case "skipped_processed":
+        summary.skippedProcessed += 1;
+        break;
+      case "skipped_capacity":
+        summary.skippedCapacity += 1;
+        break;
+      default:
+        summary.other += 1;
+        break;
+    }
+  }
+  return summary;
 }
 
 function retryFailureError(previousError: string | undefined, error: unknown): string {
