@@ -532,7 +532,7 @@ describe("beta release status", () => {
         retryableProviderDeferred: 1
       },
       delayedByReason: {
-        provider_capacity: 1,
+        repo_capacity: 1,
         provider_cooldown: 1
       },
       wouldLeaseCount: 1,

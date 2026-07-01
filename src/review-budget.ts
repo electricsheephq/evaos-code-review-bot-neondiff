@@ -180,29 +180,19 @@ export function buildReviewBudgetStatus(input: {
     const providerCount = simulatedProviderActive.get(provider) ?? 0;
     const orgCount = simulatedOrgActive.get(job.org) ?? 0;
     const repoCount = simulatedRepoActive.get(job.repo) ?? 0;
+    const capacityReason = capacityDelayReason(job, {
+      scheduler,
+      providerCount,
+      orgCount,
+      repoCount,
+      hasManualAfter: hasManualAfter[index] ?? false
+    });
+    if (capacityReason) {
+      delayed.push(delay(job, capacityReason));
+      continue;
+    }
     if (wouldLease.length >= scheduler.maxProviderActive) {
       delayed.push(delay(job, "lease_limit"));
-      continue;
-    }
-    if (providerCount >= scheduler.maxProviderActive) {
-      delayed.push(delay(job, "provider_capacity"));
-      continue;
-    }
-    if (orgCount >= scheduler.maxOrgActive) {
-      delayed.push(delay(job, "org_capacity"));
-      continue;
-    }
-    if (repoCount >= scheduler.maxRepoActive) {
-      delayed.push(delay(job, "repo_capacity"));
-      continue;
-    }
-    if (
-      job.lane === "background" &&
-      hasManualAfter[index] &&
-      scheduler.manualCommandReserve > 0 &&
-      providerCount >= scheduler.maxProviderActive - scheduler.manualCommandReserve
-    ) {
-      delayed.push(delay(job, "manual_reserve"));
       continue;
     }
 
@@ -330,7 +320,31 @@ function compareQueueJobsForBudget(left: ReviewQueueJobRecord, right: ReviewQueu
   if (left.priority !== right.priority) return left.priority - right.priority;
   const created = Date.parse(left.createdAt) - Date.parse(right.createdAt);
   if (created !== 0) return created;
-  return left.jobId.localeCompare(right.jobId);
+  return 0;
+}
+
+function capacityDelayReason(
+  job: ReviewQueueJobRecord,
+  input: {
+    scheduler: NonNullable<BotConfig["reviewScheduler"]>;
+    providerCount: number;
+    orgCount: number;
+    repoCount: number;
+    hasManualAfter: boolean;
+  }
+): ReviewQueueDelayReason | undefined {
+  if (input.providerCount >= input.scheduler.maxProviderActive) return "provider_capacity";
+  if (input.orgCount >= input.scheduler.maxOrgActive) return "org_capacity";
+  if (input.repoCount >= input.scheduler.maxRepoActive) return "repo_capacity";
+  if (
+    job.lane === "background" &&
+    input.hasManualAfter &&
+    input.scheduler.manualCommandReserve > 0 &&
+    input.providerCount >= input.scheduler.maxProviderActive - input.scheduler.manualCommandReserve
+  ) {
+    return "manual_reserve";
+  }
+  return undefined;
 }
 
 function buildManualEligibilitySuffix(jobs: ReviewQueueJobRecord[]): boolean[] {

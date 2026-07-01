@@ -19,8 +19,9 @@ import {
   formatRuntimeInventoryHuman,
   summarizeAgentInventory
 } from "./operator-cli.js";
-import { collectReleaseStatus } from "./release-status.js";
+import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { redactSecrets } from "./secrets.js";
 import { ReviewStateStore, type ReviewQueueJobState } from "./state.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -122,11 +123,13 @@ async function main(): Promise<void> {
       budgetDetailLimit,
       budgetJobLimit
     });
+    const ok = status.budget?.enabled === true && status.budget.details.inputJobsTruncated !== true;
     console.log(JSON.stringify({
-      ok: true,
+      ok,
       checkedAt: status.checkedAt,
       budget: status.budget
     }, null, 2));
+    if (!ok) process.exitCode = 1;
     return;
   }
 
@@ -261,13 +264,6 @@ async function main(): Promise<void> {
 
   if (command === "queue") {
     const config = loadConfig(args.config);
-    const release = collectReleaseStatus({
-      cwd: process.cwd(),
-      configPath: args.config,
-      expectedHead: args["expected-head"],
-      launchdLabel: args["launchd-label"],
-      statePath: args["state-path"]
-    });
     const report = await collectCoverageReport(args, config);
     const queue = buildOperatorQueue(report);
     const durableQueue = collectOperatorReviewQueue(args["state-path"] ?? config.statePath, {
@@ -275,7 +271,7 @@ async function main(): Promise<void> {
       state: parseReviewQueueJobState(args.state),
       limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
     });
-    const output = { ...queue, ok: queue.ok, coverage: queue, durableQueue, budget: release.budget };
+    const output = { ...queue, ok: queue.ok, coverage: queue, durableQueue, ...collectQueueBudget(args) };
     console.log(JSON.stringify(output, null, 2));
     if (!output.ok) process.exitCode = 1;
     return;
@@ -545,6 +541,27 @@ async function collectCoverageReport(args: ParsedArgs, config = loadConfig(args.
     });
   } finally {
     state.close();
+  }
+}
+
+function collectQueueBudget(args: ParsedArgs): {
+  budget?: ReleaseStatus["budget"];
+  budgetError?: string;
+} {
+  try {
+    return {
+      budget: collectReleaseStatus({
+        cwd: process.cwd(),
+        configPath: args.config,
+        expectedHead: args["expected-head"],
+        launchdLabel: args["launchd-label"],
+        statePath: args["state-path"]
+      }).budget
+    };
+  } catch (error) {
+    return {
+      budgetError: redactSecrets(error instanceof Error ? error.message : String(error))
+    };
   }
 }
 

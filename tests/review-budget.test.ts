@@ -190,7 +190,7 @@ describe("review run budget", () => {
       })
     ]);
     expect(status.delayedByReason).toEqual({
-      lease_limit: 1
+      provider_capacity: 1
     });
   });
 
