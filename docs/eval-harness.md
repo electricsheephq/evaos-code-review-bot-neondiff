@@ -16,6 +16,10 @@ npm run eval:suite -- \
   --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/local-suite
 ```
 
+The suite command exits non-zero when any scenario fails, when two scenarios use
+the same `runId`, when a `runId` is not a safe path segment, or when any required
+suite is missing from the input directory.
+
 By default, packets are written under:
 
 ```text

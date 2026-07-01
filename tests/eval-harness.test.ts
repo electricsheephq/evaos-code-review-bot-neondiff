@@ -701,4 +701,43 @@ describe("offline eval harness", () => {
       error: expect.stringContaining("duplicate runId")
     });
   });
+
+  it("fails eval-suite when a required suite fixture is missing", () => {
+    const inputDir = mkdtempSync(join(tmpdir(), "evaos-eval-suite-missing-input-"));
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-eval-suite-missing-output-"));
+    roots.push(inputDir, outputRoot);
+    writeFileSync(join(inputDir, "canary.json"), `${JSON.stringify({
+      runId: "canary-only",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: { findings: [] },
+      labels: []
+    })}\n`);
+
+    let output = "";
+    try {
+      execFileSync("npx", [
+        "tsx",
+        "src/cli.ts",
+        "eval-suite",
+        "--input-dir",
+        inputDir,
+        "--output-root",
+        outputRoot
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      output = String((error as { stdout?: string }).stdout ?? "");
+    }
+
+    const summary = JSON.parse(output);
+    expect(summary.ok).toBe(false);
+    expect(summary.missingSuites).toEqual([
+      "historical_pr_replay",
+      "seeded_defect_recall",
+      "safety_redaction",
+      "duplicate_suppression"
+    ]);
+  });
 });

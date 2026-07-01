@@ -152,7 +152,7 @@ const DEFAULT_THRESHOLDS: EvalThresholds = {
   maxDuplicateFindings: 0
 };
 
-const REQUIRED_SUITES: EvalSuiteName[] = [
+export const REQUIRED_SUITES: EvalSuiteName[] = [
   "canary_shadow",
   "historical_pr_replay",
   "seeded_defect_recall",

@@ -3,7 +3,7 @@ import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { runOfflineEval } from "./eval-harness.js";
+import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
@@ -140,10 +140,12 @@ async function main(): Promise<void> {
       }
     });
     const suites = [...new Set(results.flatMap((result) => "scorecard" in result ? [result.scorecard.suite] : []))].sort();
+    const missingSuites = REQUIRED_SUITES.filter((suite) => !suites.includes(suite));
     const summary = {
-      ok: results.every((result) => result.ok),
+      ok: results.every((result) => result.ok) && missingSuites.length === 0,
       scenarioCount: results.length,
       suites,
+      missingSuites,
       results
     };
     console.log(JSON.stringify(summary, null, 2));
