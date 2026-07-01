@@ -23,15 +23,23 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   durable queue counts, and recommended actions.
 - `runtime-inventory`: read-only runtime classifier for release operators. It
   includes release status, coverage, durable queue work, provider cooldowns,
-  leases, heartbeat, and bot-owned process rows. It can classify the worker as
-  `healthy_active` when open PR heads are already covered by active queue work,
-  even if the stricter `status` command is nonzero because live PR churn exists.
-  JSON is the default; use `--human` for a compact operator summary.
+  budget status, leases, heartbeat, and bot-owned process rows. It can classify
+  the worker as `healthy_active` when open PR heads are already covered by
+  active queue work, even if the stricter `status` command is nonzero because
+  live PR churn exists. JSON is the default; use `--human` for a compact
+  operator summary.
 - `agents`: launchd, heartbeat, and review-run lease inventory. This is
   read-only; it does not restart, kill, prune, or retire anything.
 - `queue`: open PR-head coverage grouped into processed, provider-deferred,
   pending review, skipped, stale-head, and read-failure buckets. Also includes
-  durable `review_queue_jobs` rows when the state DB has the scheduler table.
+  durable `review_queue_jobs` rows and budget delay reasons when the state DB
+  has the scheduler table.
+- `budget-status`: read-only scheduler budget projection. Shows active counts,
+  queued counts, would-lease jobs, delayed jobs, and deterministic delay reasons
+  such as `provider_cooldown`, `provider_capacity`, `org_capacity`,
+  `repo_capacity`, `manual_reserve`, and `lease_limit`. Broad status commands
+  include only compact budget counts and reason histograms; use this command for
+  capped row-level details.
 - `coverage`: raw coverage-audit report with the shorter operator command name.
 - `cooldowns`: provider cooldown review rows plus repo/global cooldown rows.
 - `why --repo <owner/name> --pr <number>`: scoped explanation for why one PR
@@ -77,6 +85,16 @@ Inspect only durable provider-deferred jobs:
 ```bash
 npx tsx src/cli.ts queue --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --state provider_deferred
 ```
+
+Inspect only the scheduler budget projection:
+
+```bash
+npx tsx src/cli.ts budget-status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
+```
+
+Use `--limit <n>` to cap returned `wouldLease`/`delayed` rows and
+`--job-limit <n>` to cap the queue rows read for projection. The output includes
+truncation metadata when either cap is hit.
 
 Explain one PR:
 

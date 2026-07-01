@@ -521,6 +521,31 @@ describe("beta release status", () => {
       retryableProviderDeferredReviewQueueJobCount: 1,
       failedReviewQueueJobCount: 1
     });
+    expect(status.budget).toMatchObject({
+      active: {
+        total: 1,
+        running: 1
+      },
+      queued: {
+        total: 3,
+        providerDeferred: 2,
+        retryableProviderDeferred: 1
+      },
+      delayedByReason: {
+        provider_capacity: 1,
+        provider_cooldown: 1
+      },
+      wouldLeaseCount: 1,
+      delayedCount: 2,
+      details: {
+        included: false,
+        wouldLeaseReturned: 0,
+        delayedReturned: 0,
+        detailsTruncated: true
+      },
+      wouldLease: [],
+      delayed: []
+    });
     expect(status.database.reviewQueueJobsByRepo).toEqual([
       {
         repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
@@ -564,6 +589,99 @@ describe("beta release status", () => {
       detail: "1 retryable provider-deferred queue job(s); queue total=5 queued=1 leased=0 running=1 provider_deferred=2 failed=1"
     });
     expect(status.recommendedActions).toContain("inspect operator queue and retry provider-deferred jobs whose nextEligibleAt has expired");
+
+    const detailedStatus = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      budgetDetails: true,
+      budgetDetailLimit: 1,
+      budgetJobLimit: 3,
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+    expect(detailedStatus.budget?.details).toMatchObject({
+      included: true,
+      detailLimit: 1,
+      inputJobLimit: 3,
+      inputJobsTruncated: true,
+      detailsTruncated: true
+    });
+    expect(detailedStatus.budget?.wouldLease.length).toBeLessThanOrEqual(1);
+    expect(detailedStatus.budget?.delayed.length).toBeLessThanOrEqual(1);
+  });
+
+  it("filters terminal queue rows before applying the budget row cap", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-budget-cap-terminal-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      insertQueueJob(db, "posted", "owner/repo", "terminal-posted");
+      insertQueueJob(db, "failed", "owner/repo", "terminal-failed");
+      insertQueueJob(db, "running", "owner/repo", "live-running");
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      budgetJobLimit: 1,
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+
+    expect(status.budget).toMatchObject({
+      active: {
+        total: 1,
+        running: 1
+      },
+      details: {
+        inputJobs: 1,
+        inputJobLimit: 1,
+        inputJobsTruncated: false
+      }
+    });
   });
 
   it("treats malformed provider cooldown timestamps as actionable backlog", () => {

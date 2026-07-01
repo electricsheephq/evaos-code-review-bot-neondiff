@@ -53,6 +53,15 @@ describe("provider-aware review scheduler", () => {
       completed: 2,
       remainingQueued: 10
     });
+    expect(result.queue.budget?.wouldLeaseCount).toBe(2);
+    expect(result.queue.budget?.delayedCount).toBe(8);
+    expect(result.queue.budget?.details.included).toBe(false);
+    expect(result.queue.budget?.wouldLease).toHaveLength(0);
+    expect(result.queue.budget?.delayed).toHaveLength(0);
+    expect((result.queue.delayedByReason.lease_limit ?? 0) + (result.queue.delayedByReason.repo_capacity ?? 0)).toBe(8);
+    expect(Object.keys(result.queue.delayedByReason).sort()).toEqual(
+      expect.arrayContaining(["lease_limit"])
+    );
     expect(reviewed).toHaveLength(2);
     expect(new Set(reviewed.map((entry) => entry.split("#")[0]))).toHaveLength(2);
     expect(state.listReviewQueueJobs({ state: "posted" })).toHaveLength(0);

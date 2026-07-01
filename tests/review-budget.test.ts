@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BotConfig } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
-import { ReviewRunBudget } from "../src/review-budget.js";
-import { ReviewStateStore } from "../src/state.js";
+import { buildReviewBudgetStatus, ReviewRunBudget } from "../src/review-budget.js";
+import { ReviewStateStore, type ReviewQueueJobRecord } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { reviewPull } from "../src/worker.js";
 
@@ -67,6 +67,131 @@ describe("review run budget", () => {
 
     expect(status).toBe("skipped_capacity");
     expect(budget.activeRuns).toBe(1);
+  });
+
+  it("falls back to concurrency settings when scheduler config is absent", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-status-fallback-"));
+    roots.push(root);
+
+    const status = buildReviewBudgetStatus({
+      config: minimalConfig(root),
+      jobs: [],
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.enabled).toBe(false);
+    expect(status.config.scheduler).toMatchObject({
+      enabled: false,
+      maxProviderActive: 5,
+      maxOrgActive: 5,
+      maxRepoActive: 1
+    });
+  });
+
+  it("explains provider cooldown, active capacity, repo caps, and manual reserve delays", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-status-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 2,
+        maxOrgActive: 10,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 1,
+        backgroundPriority: 50
+      }
+    };
+    const now = new Date("2026-07-01T00:00:00.000Z");
+    const jobs = [
+      queueJob("active-a", { repo: "owner/repo-a", state: "running", priority: 10 }),
+      queueJob("repo-cap", { repo: "owner/repo-a", state: "queued", priority: 20 }),
+      queueJob("manual-reserve", { repo: "owner/repo-b", state: "queued", priority: 30 }),
+      queueJob("manual-slot", { repo: "owner/repo-c", state: "queued", lane: "manual", source: "manual_command", priority: 40 }),
+      queueJob("cooldown", {
+        repo: "owner/repo-d",
+        state: "provider_deferred",
+        priority: 50,
+        nextEligibleAt: "2026-07-01T00:05:00.000Z"
+      })
+    ];
+
+    const status = buildReviewBudgetStatus({ config, jobs, now });
+
+    expect(status.active.total).toBe(1);
+    expect(status.queued).toMatchObject({
+      total: 4,
+      manual: 1,
+      background: 3,
+      providerDeferred: 1,
+      retryableProviderDeferred: 0
+    });
+    expect(status.wouldLease.map((entry) => entry.jobId)).toEqual(["manual-slot"]);
+    expect(status.delayedByReason).toMatchObject({
+      repo_capacity: 1,
+      manual_reserve: 1,
+      provider_cooldown: 1
+    });
+    expect(status.manualReserve).toMatchObject({
+      configured: 1,
+      activeManual: 0,
+      queuedManual: 1,
+      reservedSlotsOpen: 1,
+      backgroundSlotsAvailableBeforeReserve: 0
+    });
+  });
+
+  it("does not count expired leased or running jobs against active capacity", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-expired-lease-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      }
+    };
+
+    const status = buildReviewBudgetStatus({
+      config,
+      now: new Date("2026-07-01T00:05:00.000Z"),
+      jobs: [
+        queueJob("expired-running", {
+          repo: "owner/repo-a",
+          state: "running",
+          leaseId: "old-lease",
+          leaseExpiresAt: "2026-07-01T00:04:00.000Z",
+          priority: 10
+        }),
+        queueJob("fresh-queued", {
+          repo: "owner/repo-b",
+          state: "queued",
+          priority: 20
+        })
+      ]
+    });
+
+    expect(status.active.total).toBe(0);
+    expect(status.queued.total).toBe(2);
+    expect(status.wouldLease).toEqual([
+      expect.objectContaining({
+        jobId: "expired-running",
+        repo: "owner/repo-a"
+      })
+    ]);
+    expect(status.delayedByReason).toEqual({
+      lease_limit: 1
+    });
   });
 
   it("uses SQLite leases to cap overlapping worker entrypoints", async () => {
@@ -170,5 +295,40 @@ function pull(number: number, sha: string): PullRequestSummary {
       }
     },
     html_url: `https://github.test/owner/repo/pull/${number}`
+  };
+}
+
+function queueJob(
+  jobId: string,
+  input: Partial<ReviewQueueJobRecord> & {
+    repo: string;
+    state: ReviewQueueJobRecord["state"];
+  }
+): ReviewQueueJobRecord {
+  const [org] = input.repo.split("/");
+  return {
+    jobId,
+    attemptId: `attempt-${jobId}`,
+    source: input.source ?? "automatic",
+    lane: input.lane ?? "background",
+    repo: input.repo,
+    org: input.org ?? org ?? "owner",
+    pullNumber: input.pullNumber ?? 1,
+    headSha: input.headSha ?? `head-${jobId}`,
+    ...(input.baseSha ? { baseSha: input.baseSha } : {}),
+    providerId: input.providerId ?? "zai-coding-plan",
+    priority: input.priority ?? 50,
+    state: input.state,
+    ...(input.nextEligibleAt ? { nextEligibleAt: input.nextEligibleAt } : {}),
+    ...(input.leaseId ? { leaseId: input.leaseId } : {}),
+    ...(input.leaseExpiresAt ? { leaseExpiresAt: input.leaseExpiresAt } : {}),
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.commentId ? { commentId: input.commentId } : {}),
+    ...(input.reviewUrl ? { reviewUrl: input.reviewUrl } : {}),
+    ...(input.lastError ? { lastError: input.lastError } : {}),
+    createdAt: input.createdAt ?? "2026-07-01T00:00:00.000Z",
+    updatedAt: input.updatedAt ?? "2026-07-01T00:00:00.000Z",
+    ...(input.startedAt ? { startedAt: input.startedAt } : {}),
+    ...(input.finishedAt ? { finishedAt: input.finishedAt } : {})
   };
 }
