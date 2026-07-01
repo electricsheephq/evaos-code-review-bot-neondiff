@@ -108,6 +108,44 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("returns RepoSticky session jobs to assigned on provider cooldown", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-provider-throttle-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10
+    };
+    const state = new ReviewStateStore(config.statePath);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: true },
+      reviewPullImpl: async () => {
+        throw new Error("ProviderBusinessError: [1302][Rate limit reached for requests]");
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.skippedProviderCooldown).toBe(1);
+    expect(state.listReviewQueueJobs({ state: "provider_deferred" })).toEqual([
+      expect.objectContaining({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        nextEligibleAt: "2026-07-01T00:01:30.000Z"
+      })
+    ]);
+    expect(state.getReviewerSessionJob("org/repo-a", 1, "a1")).toMatchObject({
+      jobState: "assigned"
+    });
+    state.close();
+  });
+
   it("retries expired provider-deferred queue jobs with failed-head retry policy", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-deferred-retry-"));
     roots.push(root);
