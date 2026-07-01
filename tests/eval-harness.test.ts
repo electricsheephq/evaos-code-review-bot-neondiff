@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -494,6 +495,7 @@ describe("offline eval harness", () => {
       pullNumber: 9,
       headSha: "abc",
       suite: "seeded_defect_recall",
+      mode: "exploratory",
       botFindings: {
         findings: [{
           severity: "P2",
@@ -581,5 +583,122 @@ describe("offline eval harness", () => {
       labels: []
     }, { outputDir: join(process.cwd(), ".eval-output") }))
       .toThrow("outputDir must not be inside the current git checkout");
+  });
+
+  it("rejects output under a symlinked repo checkout path", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-symlink-"));
+    roots.push(root);
+    const link = join(root, "repo-link");
+    symlinkSync(process.cwd(), link, "dir");
+
+    expect(() => runOfflineEval({
+      runId: "symlink-output",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: { findings: [] },
+      labels: []
+    }, { outputDir: join(link, ".eval-output") }))
+      .toThrow("outputDir must not be inside the current git checkout");
+  });
+
+  it("counts secret-like label evidence in the redaction gate", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-label-evidence-secret-"));
+    roots.push(root);
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+
+    const result = runOfflineEval({
+      runId: "label-evidence-secret",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "safety_redaction",
+      mode: "exploratory",
+      botFindings: { findings: [] },
+      labels: [{
+        source: "human",
+        severity: "P2",
+        path: "src/a.ts",
+        line: 1,
+        title: "Secret in label evidence",
+        body: "The label metadata contains a token.",
+        sourceUrl: `https://github.test/review?token=${token}`,
+        expected: false
+      }],
+      thresholds: {
+        minPrecision: 0,
+        minRecall: 0,
+        maxSecretFindings: 0
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.gates.find((gate) => gate.name === "secret_redaction")).toMatchObject({ ok: false });
+    expect(readFileSync(join(root, "labels.json"), "utf8")).not.toContain(token);
+  });
+
+  it("requires external evidence metadata for historical replay suite", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-historical-evidence-"));
+    roots.push(root);
+
+    const result = runOfflineEval({
+      runId: "historical-no-evidence",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "historical_pr_replay",
+      botFindings: { findings: [] },
+      labels: [{
+        source: "human",
+        severity: "P2",
+        path: "src/a.ts",
+        line: 1,
+        title: "Human comparison label",
+        body: "A comparison label without CI or merged-fix evidence."
+      }]
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.scorecard.gates.find((gate) => gate.name === "suite_requirements")).toMatchObject({ ok: false });
+  });
+
+  it("reports duplicate runIds as structured eval-suite failures", () => {
+    const inputDir = mkdtempSync(join(tmpdir(), "evaos-eval-suite-duplicates-input-"));
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-eval-suite-duplicates-output-"));
+    roots.push(inputDir, outputRoot);
+    const scenario = {
+      runId: "duplicate-run",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 9,
+      headSha: "abc",
+      suite: "canary_shadow",
+      botFindings: { findings: [] },
+      labels: []
+    };
+    writeFileSync(join(inputDir, "a.json"), `${JSON.stringify(scenario)}\n`);
+    writeFileSync(join(inputDir, "b.json"), `${JSON.stringify(scenario)}\n`);
+
+    let output = "";
+    try {
+      execFileSync("npx", [
+        "tsx",
+        "src/cli.ts",
+        "eval-suite",
+        "--input-dir",
+        inputDir,
+        "--output-root",
+        outputRoot
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      output = String((error as { stdout?: string }).stdout ?? "");
+    }
+
+    const summary = JSON.parse(output);
+    expect(summary.ok).toBe(false);
+    expect(summary.results[1]).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("duplicate runId")
+    });
   });
 });

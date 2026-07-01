@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -379,10 +379,10 @@ function evaluateSuiteRequirements(input: {
   }
   if (input.suite === "historical_pr_replay") {
     const comparisonLabels = input.labels.filter((label) => label.source !== "seeded_defect").length;
-    const evidenceItems = comparisonLabels + input.ciMetadataCount + input.mergedFixCount;
+    const evidenceItems = input.ciMetadataCount + input.mergedFixCount;
     return {
       ok: comparisonLabels > 0 && evidenceItems > 0,
-      detail: `${comparisonLabels} comparison label(s), ${input.ciMetadataCount} CI item(s), ${input.mergedFixCount} merged-fix item(s)`
+      detail: `${comparisonLabels} comparison label(s), ${input.ciMetadataCount} CI evidence item(s), ${input.mergedFixCount} merged-fix evidence item(s)`
     };
   }
   if (input.suite === "safety_redaction") {
@@ -532,6 +532,7 @@ function buildRedactionReport(
     });
   }
   for (const [source, value] of [
+    ["labelEvidence", labels.map(extractLabelEvidenceForScan)],
     ["inlinePreviews", input.inlinePreviews ?? []],
     ["ciMetadata", input.ciMetadata ?? []],
     ["mergedFixes", input.mergedFixes ?? []]
@@ -650,10 +651,10 @@ function normalizeCiMetadata(items: EvalCiMetadataInput[]): EvalCiMetadataInput[
 
 function normalizeMergedFixes(items: EvalMergedFixInput[]): EvalMergedFixInput[] {
   return items.map((item) => ({
-    repo: item.repo.trim(),
+    repo: redactSecrets(item.repo.trim()),
     pullNumber: item.pullNumber,
-    mergeSha: item.mergeSha.trim(),
-    ...(item.path ? { path: item.path.trim() } : {}),
+    mergeSha: redactSecrets(item.mergeSha.trim()),
+    ...(item.path ? { path: redactSecrets(item.path.trim()) } : {}),
     summary: redactSecrets(item.summary.trim())
   }));
 }
@@ -716,10 +717,26 @@ function guardOutputDir(outputDir: string): void {
   const resolvedOutput = resolve(outputDir);
   const gitRoot = findGitRoot(process.cwd());
   if (!gitRoot) return;
-  const relation = relative(gitRoot, resolvedOutput);
+  const realOutput = resolveRealPathForPotentialOutput(resolvedOutput);
+  const realGitRoot = realpathSync(gitRoot);
+  const relation = relative(realGitRoot, realOutput);
   if (relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))) {
     throw new Error("outputDir must not be inside the current git checkout; write eval packets under /Volumes/LEXAR/Codex/evals or a temp directory");
   }
+}
+
+function resolveRealPathForPotentialOutput(path: string): string {
+  const resolved = resolve(path);
+  if (existsSync(resolved)) return realpathSync(resolved);
+  const segments: string[] = [];
+  let cursor = resolved;
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) return resolved;
+    segments.unshift(cursor.slice(parent.length + 1));
+    cursor = parent;
+  }
+  return resolve(realpathSync(cursor), ...segments);
 }
 
 function findGitRoot(start: string): string | undefined {
@@ -743,6 +760,14 @@ function redactUnknown(value: unknown): unknown {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactSecrets(key), redactUnknown(item)]));
   }
   return value;
+}
+
+function extractLabelEvidenceForScan(label: EvalLabelInput): Record<string, unknown> {
+  return Object.fromEntries(
+    (["sourceId", "sourceUrl", "author", "checkName", "mergeSha", "diffSummary"] as const)
+      .filter((field) => label[field] !== undefined)
+      .map((field) => [field, label[field]])
+  );
 }
 
 function csvCell(value: string): string {

@@ -116,17 +116,30 @@ async function main(): Promise<void> {
     if (!args["input-dir"]) throw new Error("--input-dir is required for eval-suite");
     if (!args["output-root"]) throw new Error("--output-root is required for eval-suite");
     const scenarioFiles = listJsonFiles(args["input-dir"]);
+    const seenRunIds = new Map<string, string>();
     const results = scenarioFiles.map((scenarioPath) => {
-      const input = JSON.parse(readFileSync(scenarioPath, "utf8"));
-      input.scenarioSource = input.scenarioSource ?? { path: scenarioPath };
-      return {
-        scenarioPath,
-        ...runOfflineEval(input, {
-          outputDir: join(args["output-root"]!, input.runId)
-        })
-      };
+      try {
+        const input = JSON.parse(readFileSync(scenarioPath, "utf8"));
+        const runId = validateScenarioRunId(input, scenarioPath);
+        const duplicatePath = seenRunIds.get(runId);
+        if (duplicatePath) throw new Error(`duplicate runId "${runId}" already used by ${duplicatePath}`);
+        seenRunIds.set(runId, scenarioPath);
+        input.scenarioSource = input.scenarioSource ?? { path: scenarioPath };
+        return {
+          scenarioPath,
+          ...runOfflineEval(input, {
+            outputDir: join(args["output-root"]!, runId)
+          })
+        };
+      } catch (error) {
+        return {
+          scenarioPath,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        };
+      }
     });
-    const suites = [...new Set(results.map((result) => result.scorecard.suite))].sort();
+    const suites = [...new Set(results.flatMap((result) => "scorecard" in result ? [result.scorecard.suite] : []))].sort();
     const summary = {
       ok: results.every((result) => result.ok),
       scenarioCount: results.length,
@@ -287,6 +300,21 @@ function listJsonFiles(inputDir: string): string[] {
     .map((entry) => join(inputDir, entry))
     .filter((path) => statSync(path).isFile() && path.endsWith(".json"))
     .sort();
+}
+
+function validateScenarioRunId(input: unknown, scenarioPath: string): string {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error(`${scenarioPath}: scenario must be a JSON object`);
+  }
+  const runId = (input as { runId?: unknown }).runId;
+  if (typeof runId !== "string" || runId.trim().length === 0) {
+    throw new Error(`${scenarioPath}: runId must be a non-empty string`);
+  }
+  const trimmed = runId.trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed) || trimmed === "." || trimmed === "..") {
+    throw new Error(`${scenarioPath}: runId must be a safe path segment`);
+  }
+  return trimmed;
 }
 
 interface ParsedArgs {
