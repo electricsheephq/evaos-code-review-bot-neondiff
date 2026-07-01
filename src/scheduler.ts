@@ -305,10 +305,11 @@ async function retireSupersededQueueJobsForPull(input: {
   now: Date;
   onStatusCommentFailure?: () => void;
 }): Promise<void> {
-  const jobs = input.state.listReviewQueueJobs({
+  const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
+    pullNumber: input.pull.number,
     states: ["queued", "provider_deferred"]
-  }).filter((job) => job.pullNumber === input.pull.number && job.headSha !== input.pull.head.sha);
+  }).filter((job) => job.headSha !== input.pull.head.sha);
 
   for (const job of jobs) {
     input.state.updateReviewQueueJobState({
@@ -341,10 +342,11 @@ async function retireQueuedJobsForClosedPull(input: {
   now: Date;
   onStatusCommentFailure?: () => void;
 }): Promise<void> {
-  const jobs = input.state.listReviewQueueJobs({
+  const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
+    pullNumber: input.pull.number,
     states: ["queued", "provider_deferred"]
-  }).filter((job) => job.pullNumber === input.pull.number);
+  });
 
   for (const job of jobs) {
     input.state.updateReviewQueueJobState({
@@ -689,7 +691,7 @@ function reviewResultStatusCommentState(status: ReviewPullResult): ReviewStatusC
     case "skipped_stale_head":
       return "stale_head";
     case "skipped_capacity":
-      return "queued";
+      return undefined;
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":

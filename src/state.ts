@@ -923,6 +923,43 @@ export class ReviewStateStore {
     return input.limit ? jobs.slice(0, input.limit) : jobs;
   }
 
+  listReviewQueueJobsForPull(input: {
+    repo: string;
+    pullNumber: number;
+    state?: ReviewQueueJobState;
+    states?: ReviewQueueJobState[];
+    limit?: number;
+  }): ReviewQueueJobRecord[] {
+    if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
+      throw new Error("limit must be a positive integer");
+    }
+    const states = input.states ?? (input.state ? [input.state] : undefined);
+    const statePredicate = states?.length
+      ? ` and state in (${states.map(() => "?").join(", ")})`
+      : "";
+    const limitPredicate = input.limit ? " limit ?" : "";
+    const params = [
+      input.repo,
+      input.pullNumber,
+      ...(states ?? []),
+      ...(input.limit ? [input.limit] : [])
+    ];
+    const rows = this.db
+      .prepare(
+        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+         from review_queue_jobs
+         where repo = ?
+           and pull_number = ?
+           ${statePredicate}
+         order by priority asc, datetime(created_at) asc
+         ${limitPredicate}`
+      )
+      .all(...params) as unknown as ReviewQueueJobRow[];
+    return rows.map(mapReviewQueueJobRow);
+  }
+
   expireReviewerSessions(now = new Date(), repo?: string): number {
     const nowIso = now.toISOString();
     const result = repo

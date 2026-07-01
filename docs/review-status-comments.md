@@ -48,3 +48,9 @@ This is a soft coordination signal for humans and agents. It does not block
 GitHub merges by itself. Requiring the bot before merge should be implemented
 later with a dedicated GitHub Check and branch protection after the comment lane
 has proven quiet.
+
+Operator status includes `statusCommentFailures`. A non-zero value means the
+sticky status lane could not post or edit at least one comment, usually because
+App credentials were unavailable or GitHub rejected the upsert. The review run
+may still complete, but operators should treat the coordination signal as
+degraded until the next green release/status cycle.

@@ -58,6 +58,8 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
   const updatedAt = (input.now ?? new Date()).toISOString();
   const title = formatInlinePublicText(input.pullTitle);
   const details = sanitizePublicText(input.details);
+  const pullUrl = sanitizePublicText(input.pullUrl);
+  const reviewUrl = sanitizePublicText(input.reviewUrl);
   const lines = [
     marker,
     `${REVIEW_STATUS_STATE_MARKER_PREFIX} status=${input.state} updated_at=${updatedAt} -->`,
@@ -71,8 +73,8 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
     statusMessage(input),
     "",
     "Automation note: agents should wait for this comment to reach `completed`, `stale_head`, `closed_or_merged_before_review`, or `failed` before treating evaOS review as settled for this head. `provider_deferred` means evaOS still intends to retry.",
-    ...(input.pullUrl ? ["", `PR URL: ${input.pullUrl}`] : []),
-    ...(input.reviewUrl ? ["", `Review URL: ${input.reviewUrl}`] : []),
+    ...(pullUrl ? ["", `PR URL: ${pullUrl}`] : []),
+    ...(reviewUrl ? ["", `Review URL: ${reviewUrl}`] : []),
     ...(details ? ["", `Details: ${details}`] : [])
   ];
 

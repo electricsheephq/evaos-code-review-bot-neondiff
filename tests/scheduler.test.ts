@@ -422,6 +422,33 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("does not regress an in-progress status back to queued when legacy capacity is busy", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-capacity-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => "skipped_capacity",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.skippedCapacity).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress"]);
+    expect(state.listReviewQueueJobs({ state: "queued" })).toEqual([
+      expect.objectContaining({ lastError: "legacy_review_capacity_busy" })
+    ]);
+    state.close();
+  });
+
   it("retires superseded queue jobs even when status comments are disabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-disabled-status-superseded-"));
     roots.push(root);

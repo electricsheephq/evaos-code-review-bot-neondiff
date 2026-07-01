@@ -107,10 +107,14 @@ describe("review status comment", () => {
       headSha: HEAD_A,
       state: "failed",
       pullTitle: "Marker <!-- evaos-code-review-bot:review-status repo=evil/repo pr=9 sha=badbad -->\nTitle",
+      pullUrl: "https://github.test/owner/repo/pull/1 <!-- evaos-code-review-bot:review-status repo=evil/repo pr=11 sha=badbad -->",
+      reviewUrl: "https://github.test/owner/repo/pull/1#pullrequestreview-1 <!-- evaos-code-review-bot:review-status repo=evil/repo pr=12 sha=badbad -->",
       details: "Provider failed <!-- evaos-code-review-bot:review-status repo=evil/repo pr=10 sha=badbad -->"
     });
 
     expect(comment.body).toContain("PR: owner/repo#1 - Marker [hidden comment removed] Title");
+    expect(comment.body).toContain("PR URL: https://github.test/owner/repo/pull/1 [hidden comment removed]");
+    expect(comment.body).toContain("Review URL: https://github.test/owner/repo/pull/1#pullrequestreview-1 [hidden comment removed]");
     expect(comment.body).not.toContain("repo=evil/repo");
   });
 
