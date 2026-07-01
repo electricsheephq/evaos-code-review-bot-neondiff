@@ -562,6 +562,50 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("keeps a failed terminal status from being resurrected after in-progress posted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-failed-rerun-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+    const github = githubFromMap(new Map([
+      ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+    ]), new Map(), statusCalls);
+
+    const first = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("synthetic review failure after in-progress status");
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(first.failed).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "failed"]);
+    expect(state.listReviewQueueJobs({ state: "failed" })).toEqual([
+      expect.objectContaining({ lastError: "synthetic review failure after in-progress status" })
+    ]);
+
+    const second = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("processed failed heads must not rerun automatically");
+      },
+      now: new Date("2026-07-02T00:01:00.000Z")
+    });
+
+    expect(second.skippedProcessed).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "failed"]);
+    state.close();
+  });
+
   it("sets terminal skipped status when a queued job becomes policy-skipped after in-progress", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-policy-skip-"));
     roots.push(root);
