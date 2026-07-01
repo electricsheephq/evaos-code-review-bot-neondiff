@@ -336,6 +336,7 @@ async function retireSupersededQueueJobsForPull(input: {
       lastError: `superseded_by_head=${input.pull.head.sha}`,
       now: input.now
     });
+    updateReviewerSessionJobFromQueueStatus({ state: input.state, job }, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -373,6 +374,7 @@ async function retireQueuedJobsForClosedPull(input: {
       lastError: `closed_or_merged_before_review state=${input.pull.state ?? "unknown"}`,
       now: input.now
     });
+    updateReviewerSessionJobFromQueueStatus({ state: input.state, job }, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,

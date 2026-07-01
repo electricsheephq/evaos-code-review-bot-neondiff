@@ -255,6 +255,68 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("settles RepoSticky session jobs when scan-time retirement supersedes or closes queued jobs", async () => {
+    const scenarios = [
+      { name: "superseded", pull: pull("org/repo-a", 1, HEAD_B), expectedQueueState: "stale_retired" },
+      { name: "closed", pull: pull("org/repo-a", 1, HEAD_A, "base", { state: "closed" }), expectedQueueState: "closed_retired" }
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-session-retire-${scenario.name}-`));
+      roots.push(root);
+      const config = schedulerConfig(root, ["org/repo-a"]);
+      config.reviewerSessions = {
+        enabled: true,
+        ttlMs: 8 * 60 * 60_000,
+        headCountLimit: 10
+      };
+      const state = new ReviewStateStore(config.statePath);
+      const assignment = state.assignReviewerSessionJob({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: HEAD_A,
+        ttlMs: config.reviewerSessions.ttlMs,
+        headCountLimit: config.reviewerSessions.headCountLimit,
+        now: new Date("2026-07-02T00:00:00.000Z")
+      });
+      if (!assignment.assigned) throw new Error("expected test session assignment");
+      const job = state.enqueueReviewQueueJob({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: HEAD_A,
+        baseSha: "base",
+        sessionId: assignment.session.sessionId
+      }).job;
+
+      await runScheduledCycleWithDeps({
+        config,
+        github: githubFromMap(new Map([["org/repo-a", [scenario.pull]]])),
+        state,
+        options: scenario.name === "closed"
+          ? { repo: "org/repo-a", pullNumber: 1, dryRun: false, useZCode: false }
+          : { dryRun: false, useZCode: false },
+        reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+          reviewState.recordProcessed({
+            repo,
+            pullNumber: reviewPull.number,
+            headSha: reviewPull.head.sha,
+            status: "posted",
+            event: "COMMENT"
+          });
+          return "reviewed";
+        },
+        now: new Date("2026-07-02T00:01:00.000Z")
+      });
+
+      expect(state.getReviewQueueJob(job.jobId)).toMatchObject({ state: scenario.expectedQueueState });
+      expect(state.getReviewerSessionJob("org/repo-a", 1, HEAD_A)).toMatchObject({
+        jobState: "skipped",
+        processedReviewStatus: "skipped"
+      });
+      state.close();
+    }
+  });
+
   it("maps duplicate processed-head status comments from the stored processed outcome", async () => {
     const scenarios = [
       { processedStatus: "posted", expectedStatus: "completed", expectedQueueState: "posted" },

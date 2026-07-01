@@ -685,6 +685,10 @@ export class ReviewStateStore {
     if (existing && !isTerminalQueueState(existing.state)) {
       return { enqueued: false, reason: "already_queued", job: existing };
     }
+    const existingRetry = existing ? this.getActiveReviewQueueRetryJobByAttemptId(attemptId) : undefined;
+    if (existingRetry) {
+      return { enqueued: false, reason: "already_queued", job: existingRetry };
+    }
     const queueAttemptId = existing ? `${attemptId}:after-terminal:${randomUUID()}` : attemptId;
 
     const jobId = randomUUID();
@@ -889,6 +893,23 @@ export class ReviewStateStore {
          limit 1`
       )
       .get(attemptId) as ReviewQueueJobRow | undefined;
+    return row ? mapReviewQueueJobRow(row) : undefined;
+  }
+
+  private getActiveReviewQueueRetryJobByAttemptId(attemptId: string): ReviewQueueJobRecord | undefined {
+    const retryPrefix = `${attemptId}:after-terminal:`;
+    const row = this.db
+      .prepare(
+        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+         from review_queue_jobs
+         where substr(attempt_id, 1, ?) = ?
+           and state in ('queued', 'leased', 'running', 'provider_deferred')
+         order by datetime(created_at) desc
+         limit 1`
+      )
+      .get(retryPrefix.length, retryPrefix) as ReviewQueueJobRow | undefined;
     return row ? mapReviewQueueJobRow(row) : undefined;
   }
 

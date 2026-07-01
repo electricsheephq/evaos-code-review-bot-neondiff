@@ -81,7 +81,7 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
 
   return {
     marker,
-    body: redactSecrets(lines.join("\n"))
+    body: lines.join("\n")
   };
 }
 

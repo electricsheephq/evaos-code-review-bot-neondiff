@@ -139,6 +139,20 @@ describe("review status comment", () => {
     expect(comment.body).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
   });
 
+  it("keeps the sticky marker stable when repo slugs look secret-like", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/api-token-rotator",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "queued",
+      details: "provider failed with ghp_1234567890abcdefghijklmnopqrstuvwx"
+    });
+
+    expect(comment.body).toContain(comment.marker);
+    expect(comment.marker).toContain("owner/api-token-rotator");
+    expect(comment.body).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+  });
+
   it("strips heading markers from PR titles before rendering bot-authored text", () => {
     const comment = buildReviewStatusComment({
       repo: "owner/repo",
