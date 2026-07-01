@@ -8,7 +8,12 @@ import {
   type ReviewStatusCommentPostResult,
   type ReviewStatusCommentState
 } from "./review-status-comment.js";
-import { ReviewRunBudget } from "./review-budget.js";
+import {
+  buildReviewBudgetStatus,
+  ReviewRunBudget,
+  type ReviewBudgetStatus,
+  type ReviewQueueDelayReason
+} from "./review-budget.js";
 import {
   parseProviderCooldownError,
   ReviewStateStore,
@@ -46,6 +51,8 @@ export interface ScheduledRunResult extends RunOnceResult {
     closedRetired: number;
     failedQueueJobs: number;
     remainingQueued: number;
+    delayedByReason: Partial<Record<ReviewQueueDelayReason, number>>;
+    budget?: ReviewBudgetStatus;
   };
 }
 
@@ -135,6 +142,14 @@ export async function runScheduledCycleWithDeps(input: {
       applyEnqueueStatus(result, enqueueStatus);
     }
   }
+
+  result.queue.budget = buildReviewBudgetStatus({
+    config,
+    jobs: input.state.listReviewQueueJobs(),
+    now,
+    includeDetails: false
+  });
+  result.queue.delayedByReason = result.queue.budget.delayedByReason;
 
   const leased = input.state.leaseNextReviewQueueJobs({
     maxProviderActive: scheduler.maxProviderActive,
@@ -1091,7 +1106,8 @@ function emptyScheduledRunResult(): ScheduledRunResult {
       staleRetired: 0,
       closedRetired: 0,
       failedQueueJobs: 0,
-      remainingQueued: 0
+      remainingQueued: 0,
+      delayedByReason: {}
     }
   };
 }

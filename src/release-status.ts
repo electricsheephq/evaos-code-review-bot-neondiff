@@ -2,7 +2,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
+import { buildReviewBudgetStatus, type ReviewBudgetStatus } from "./review-budget.js";
 import { parseProviderCooldownError, PROVIDER_COOLDOWN_ERROR_PREFIX } from "./state.js";
+import type { BotConfig } from "./config.js";
+import type { ReviewQueueJobRecord } from "./state.js";
 
 export interface ReleaseRepoStatus {
   branch: string;
@@ -82,6 +85,7 @@ export interface ReleaseStatusInput {
   launchd: ReleaseLaunchdStatus;
   database: ReleaseDatabaseStatus;
   heartbeat: ReleaseHeartbeatStatus;
+  budget?: ReviewBudgetStatus;
   now?: Date;
 }
 
@@ -98,6 +102,7 @@ export interface ReleaseStatus {
   launchd: ReleaseLaunchdStatus;
   database: ReleaseDatabaseStatus;
   heartbeat: ReleaseHeartbeatStatus;
+  budget?: ReviewBudgetStatus;
   recommendedActions: string[];
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   rollback: {
@@ -199,6 +204,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     launchd: input.launchd,
     database: input.database,
     heartbeat: input.heartbeat,
+    ...(input.budget ? { budget: input.budget } : {}),
     recommendedActions: expiredProviderCooldownOk
       ? retryableDeferredQueueJobsOk
         ? []
@@ -221,23 +227,32 @@ export function collectReleaseStatus(input: {
   expectedHead?: string;
   launchdLabel?: string;
   statePath?: string;
+  budgetDetails?: boolean;
+  budgetDetailLimit?: number;
+  budgetJobLimit?: number;
   now?: Date;
 }): ReleaseStatus {
   const config = loadConfig(input.configPath);
   const configPath = input.configPath ?? "(default config)";
   const now = input.now ?? new Date();
+  const statePath = input.statePath ?? config.statePath;
   return buildReleaseStatus({
     repo: readRepoStatus(input.cwd),
     expectedHead: input.expectedHead,
     configPath,
     launchd: readLaunchdStatus(input.launchdLabel ?? "com.electricsheephq.evaos-code-review-bot"),
-    database: readDatabaseStatus(input.statePath ?? config.statePath, now),
+    database: readDatabaseStatus(statePath, now),
     heartbeat: readHeartbeatStatus(
-      input.statePath ?? config.statePath,
+      statePath,
       config.pollIntervalMs * 2,
       Math.max(config.pollIntervalMs * 2, (config.zcode.timeoutMs * 2) + 60_000),
       now
     ),
+    budget: readReviewBudgetStatus(statePath, config, now, {
+      includeDetails: input.budgetDetails === true,
+      detailLimit: input.budgetDetailLimit,
+      jobLimit: input.budgetJobLimit ?? 1_000
+    }),
     now
   });
 }
@@ -270,6 +285,100 @@ function readLaunchdStatus(label: string): ReleaseLaunchdStatus {
     ...(pidText ? { pid: Number(pidText) } : {}),
     ...(configMatch?.[1] ? { configPath: configMatch[1].trim() } : {}),
     ...(dryRunMatch?.[1] ? { dryRun: dryRunMatch[1].trim() !== "false" } : {})
+  };
+}
+
+function readReviewBudgetStatus(
+  statePath: string,
+  config: BotConfig,
+  now: Date,
+  options: {
+    includeDetails: boolean;
+    detailLimit?: number;
+    jobLimit?: number;
+  }
+): ReviewBudgetStatus {
+  if (!existsSync(statePath)) {
+    return buildReviewBudgetStatus({
+      config,
+      jobs: [],
+      now,
+      includeDetails: options.includeDetails,
+      ...(options.detailLimit !== undefined ? { detailLimit: options.detailLimit } : {}),
+      ...(options.jobLimit !== undefined ? { inputJobLimit: options.jobLimit } : {}),
+      inputJobsTruncated: false
+    });
+  }
+  const db = new DatabaseSync(statePath, { readOnly: true });
+  try {
+    const queueJobs = readReviewQueueBudgetJobs(db, options.jobLimit);
+    return buildReviewBudgetStatus({
+      config,
+      jobs: queueJobs.jobs,
+      now,
+      includeDetails: options.includeDetails,
+      ...(options.detailLimit !== undefined ? { detailLimit: options.detailLimit } : {}),
+      ...(options.jobLimit !== undefined ? { inputJobLimit: options.jobLimit } : {}),
+      inputJobsTruncated: queueJobs.truncated
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function readReviewQueueBudgetJobs(
+  db: DatabaseSync,
+  limit?: number
+): { jobs: ReviewQueueJobRecord[]; truncated: boolean } {
+  const hasTable = db
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_queue_jobs' limit 1")
+    .get();
+  if (!hasTable) return { jobs: [], truncated: false };
+
+  const columns = new Set(
+    (db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>)
+      .map((column) => column.name)
+  );
+  const select = (column: string, fallback = "null") =>
+    columns.has(column) ? column : `${fallback} as ${column}`;
+  const selectRows = `select
+         job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+         ${select("base_sha")},
+         ${select("provider_id")},
+         priority, state,
+         ${select("next_eligible_at")},
+         ${select("lease_id")},
+         ${select("lease_expires_at")},
+         ${select("session_id")},
+         ${select("comment_id")},
+         ${select("review_url")},
+         ${select("last_error")},
+         created_at, updated_at,
+         ${select("started_at")},
+         ${select("finished_at")}
+       from review_queue_jobs`;
+  const activeRows = db
+    .prepare(
+      `${selectRows}
+       where state in ('leased', 'running')
+       order by priority asc, datetime(created_at) asc`
+    )
+    .all() as unknown as ReviewBudgetQueueJobRow[];
+  const limitClause = limit === undefined ? "" : " limit ?";
+  const pendingQuery = db
+    .prepare(
+      `${selectRows}
+       where state in ('queued', 'provider_deferred')
+       order by priority asc, datetime(created_at) asc${limitClause}`
+    );
+  const pendingRows = (limit === undefined
+    ? pendingQuery.all()
+    : pendingQuery.all(limit + 1)) as unknown as ReviewBudgetQueueJobRow[];
+  const truncated = limit !== undefined && pendingRows.length > limit;
+  const visiblePendingRows = truncated ? pendingRows.slice(0, limit) : pendingRows;
+  return {
+    jobs: [...activeRows, ...visiblePendingRows].map(mapReviewBudgetQueueJobRow),
+    truncated
   };
 }
 
@@ -658,4 +767,58 @@ interface QueueCountRow {
   providerDeferred?: number | null;
   retryableProviderDeferred?: number | null;
   failed?: number | null;
+}
+
+interface ReviewBudgetQueueJobRow {
+  job_id: string;
+  attempt_id: string;
+  source: ReviewQueueJobRecord["source"];
+  lane: ReviewQueueJobRecord["lane"];
+  repo: string;
+  org: string;
+  pull_number: number;
+  head_sha: string;
+  base_sha?: string | null;
+  provider_id?: string | null;
+  priority: number;
+  state: ReviewQueueJobRecord["state"];
+  next_eligible_at?: string | null;
+  lease_id?: string | null;
+  lease_expires_at?: string | null;
+  session_id?: string | null;
+  comment_id?: number | null;
+  review_url?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+function mapReviewBudgetQueueJobRow(row: ReviewBudgetQueueJobRow): ReviewQueueJobRecord {
+  return {
+    jobId: row.job_id,
+    attemptId: row.attempt_id,
+    source: row.source,
+    lane: row.lane,
+    repo: row.repo,
+    org: row.org,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    ...(row.base_sha ? { baseSha: row.base_sha } : {}),
+    ...(row.provider_id ? { providerId: row.provider_id } : {}),
+    priority: row.priority,
+    state: row.state,
+    ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
+    ...(row.lease_id ? { leaseId: row.lease_id } : {}),
+    ...(row.lease_expires_at ? { leaseExpiresAt: row.lease_expires_at } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.comment_id !== null && row.comment_id !== undefined ? { commentId: row.comment_id } : {}),
+    ...(row.review_url ? { reviewUrl: row.review_url } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {})
+  };
 }

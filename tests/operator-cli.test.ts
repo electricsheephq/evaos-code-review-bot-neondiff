@@ -18,6 +18,7 @@ import {
   type OperatorAgentInventory,
   type OperatorDurableQueueSnapshot
 } from "../src/operator-cli.js";
+import type { ReviewBudgetStatus } from "../src/review-budget.js";
 import type { ReleaseStatus } from "../src/release-status.js";
 import type { RepoProviderCooldownRecord } from "../src/state.js";
 
@@ -211,7 +212,7 @@ describe("operator CLI summaries", () => {
 
   it("formats a concise human runtime inventory without leaking secrets", () => {
     const inventory = buildRuntimeInventory({
-      release: releaseStatus({ ok: true }),
+      release: releaseStatus({ ok: true, budget: reviewBudgetStatus() }),
       coverage: coverageReport({ ok: true }),
       agents: agentInventory({ ok: true }),
       durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
@@ -224,6 +225,7 @@ describe("operator CLI summaries", () => {
 
     expect(output).toContain("runtime: healthy_idle (ok)");
     expect(output).toContain("queue: active=0 queued=0 running=0 providerDeferred=0 failed=0");
+    expect(output).toContain("budget: wouldLease=1 delayed=1 delayedByReason={\"manual_reserve\":1}");
     expect(output).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
 
@@ -492,6 +494,7 @@ function releaseStatus(input: {
   ok: boolean;
   recommendedActions?: string[];
   database?: Partial<ReleaseStatus["database"]>;
+  budget?: ReviewBudgetStatus;
 }): ReleaseStatus {
   const providerCooldownCount = input.database?.providerCooldownCount ?? (input.ok ? 0 : 1);
   const expiredProviderCooldownCount = input.database?.expiredProviderCooldownCount ?? providerCooldownCount;
@@ -514,6 +517,7 @@ function releaseStatus(input: {
       activeProviderCooldownCount: 0,
       ...input.database
     },
+    ...(input.budget ? { budget: input.budget } : {}),
     heartbeat: {
       status: "fresh",
       maxAgeMs: 120_000,
@@ -536,6 +540,91 @@ function releaseStatus(input: {
     rollback: {
       restartCommand: "launchctl kickstart -k gui/501/com.electricsheephq.evaos-code-review-bot",
       unloadCommand: "launchctl bootout gui/501 ~/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist"
+    }
+  };
+}
+
+function reviewBudgetStatus(): ReviewBudgetStatus {
+  return {
+    enabled: true,
+    checkedAt: "2026-07-01T00:30:00.000Z",
+    config: {
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 60_000
+      },
+      scheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 1,
+        backgroundPriority: 50
+      }
+    },
+    active: {
+      total: 0,
+      leased: 0,
+      running: 0,
+      manual: 0,
+      background: 0,
+      byProvider: [],
+      byOrg: [],
+      byRepo: []
+    },
+    queued: {
+      total: 2,
+      manual: 1,
+      background: 1,
+      providerDeferred: 0,
+      retryableProviderDeferred: 0
+    },
+    manualReserve: {
+      configured: 1,
+      activeManual: 0,
+      queuedManual: 1,
+      reservedSlotsOpen: 1,
+      backgroundSlotsAvailableBeforeReserve: 0
+    },
+    wouldLeaseCount: 1,
+    delayedCount: 1,
+    details: {
+      included: true,
+      detailLimit: 50,
+      wouldLeaseReturned: 1,
+      delayedReturned: 1,
+      detailsTruncated: false,
+      inputJobs: 2,
+      inputJobLimit: 1_000,
+      inputJobsTruncated: false
+    },
+    wouldLease: [{
+      jobId: "manual-job",
+      source: "manual_command",
+      lane: "manual",
+      repo: "owner/repo",
+      org: "owner",
+      pullNumber: 7,
+      headSha: "head-manual",
+      providerId: "zai",
+      priority: 40
+    }],
+    delayed: [{
+      reason: "manual_reserve",
+      jobId: "background-job",
+      source: "automatic",
+      lane: "background",
+      repo: "owner/repo",
+      org: "owner",
+      pullNumber: 8,
+      headSha: "head-background",
+      providerId: "zai",
+      priority: 30,
+      state: "queued"
+    }],
+    delayedByReason: {
+      manual_reserve: 1
     }
   };
 }
