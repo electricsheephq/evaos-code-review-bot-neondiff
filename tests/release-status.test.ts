@@ -674,6 +674,46 @@ describe("beta release status", () => {
       detail: "stale; age 180000ms; max 120000ms; event daemon_cycle_complete; cycle 5"
     });
   });
+
+  it("treats a bounded active daemon cycle as a healthy heartbeat", () => {
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false
+      },
+      database: { rowCount: 21, errorCount: 0, skippedCount: 16 },
+      heartbeat: {
+        status: "active",
+        maxAgeMs: 120_000,
+        activeMaxAgeMs: 420_000,
+        latestAt: "2026-06-30T23:57:00.000Z",
+        ageMs: 180_000,
+        cycle: 5,
+        event: "daemon_cycle_complete",
+        dryRun: false,
+        activeCycle: 6,
+        activeStartedAt: "2026-06-30T23:59:00.000Z",
+        activeAgeMs: 60_000
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.gates).toContainEqual({
+      name: "daemon_heartbeat_recent",
+      ok: true,
+      detail: "active; active age 60000ms; max 420000ms; started cycle 6; last event daemon_cycle_complete; last cycle 5"
+    });
+  });
 });
 
 function freshHeartbeat() {

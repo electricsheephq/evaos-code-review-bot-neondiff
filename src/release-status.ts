@@ -62,13 +62,17 @@ export interface ReviewQueueRepoStatus {
 }
 
 export interface ReleaseHeartbeatStatus {
-  status: "fresh" | "stale" | "missing";
+  status: "fresh" | "active" | "stale" | "missing";
   maxAgeMs: number;
+  activeMaxAgeMs?: number;
   latestAt?: string;
   ageMs?: number;
   cycle?: number;
   event?: string;
   dryRun?: boolean;
+  activeCycle?: number;
+  activeStartedAt?: string;
+  activeAgeMs?: number;
 }
 
 export interface ReleaseStatusInput {
@@ -119,7 +123,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const expiredProviderCooldownOk = retryableExpiredProviderCooldownCount === 0;
   const failedQueueJobsOk = (input.database.failedReviewQueueJobCount ?? 0) === 0;
   const retryableDeferredQueueJobsOk = (input.database.retryableProviderDeferredReviewQueueJobCount ?? 0) === 0;
-  const heartbeatOk = input.heartbeat.status === "fresh";
+  const heartbeatOk = input.heartbeat.status === "fresh" || input.heartbeat.status === "active";
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
     "--expired-only true --dry-run false --zcode true";
@@ -228,7 +232,12 @@ export function collectReleaseStatus(input: {
     configPath,
     launchd: readLaunchdStatus(input.launchdLabel ?? "com.electricsheephq.evaos-code-review-bot"),
     database: readDatabaseStatus(input.statePath ?? config.statePath, now),
-    heartbeat: readHeartbeatStatus(input.statePath ?? config.statePath, config.pollIntervalMs * 2, now),
+    heartbeat: readHeartbeatStatus(
+      input.statePath ?? config.statePath,
+      config.pollIntervalMs * 2,
+      Math.max(config.pollIntervalMs * 2, (config.zcode.timeoutMs * 2) + 60_000),
+      now
+    ),
     now
   });
 }
@@ -536,7 +545,12 @@ function inferProviderThrottleState(database: ReleaseDatabaseStatus): "none" | "
   return "none";
 }
 
-function readHeartbeatStatus(statePath: string, maxAgeMs: number, now: Date): ReleaseHeartbeatStatus {
+function readHeartbeatStatus(
+  statePath: string,
+  maxAgeMs: number,
+  activeMaxAgeMs: number,
+  now: Date
+): ReleaseHeartbeatStatus {
   if (!existsSync(statePath)) return { status: "missing", maxAgeMs };
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
@@ -545,24 +559,58 @@ function readHeartbeatStatus(statePath: string, maxAgeMs: number, now: Date): Re
       .get();
     if (!table) return { status: "missing", maxAgeMs };
 
+    const columns = new Set(
+      (db.prepare("pragma table_info(daemon_heartbeat)").all() as unknown as Array<{ name: string }>)
+        .map((column) => column.name)
+    );
+    const startedCycleSelect = columns.has("started_cycle") ? "started_cycle" : "null as started_cycle";
+    const startedAtSelect = columns.has("started_at") ? "started_at" : "null as started_at";
     const row = db
       .prepare(
-        `select cycle, event, dry_run, recorded_at
+        `select cycle, event, dry_run, recorded_at, ${startedCycleSelect}, ${startedAtSelect}
          from daemon_heartbeat
-         where id = 1 and recorded_at is not null
+         where id = 1
          limit 1`
       )
-      .get() as { cycle: number; event: string; dry_run: number; recorded_at: string } | undefined;
+      .get() as {
+        cycle: number | null;
+        event: string | null;
+        dry_run: number | null;
+        recorded_at: string | null;
+        started_cycle: number | null;
+        started_at: string | null;
+      } | undefined;
     if (!row) return { status: "missing", maxAgeMs };
 
-    const latestTime = Date.parse(row.recorded_at);
+    const latestTime = row.recorded_at ? Date.parse(row.recorded_at) : NaN;
+    const activeStartedTime = row.started_at ? Date.parse(row.started_at) : NaN;
+    const hasActiveCycle =
+      Number.isFinite(activeStartedTime) &&
+      (!Number.isFinite(latestTime) || activeStartedTime > latestTime);
+    if (hasActiveCycle) {
+      const activeAgeMs = Math.max(0, now.getTime() - activeStartedTime);
+      return {
+        status: activeAgeMs <= activeMaxAgeMs ? "active" : "stale",
+        maxAgeMs,
+        activeMaxAgeMs,
+        ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
+        ...(Number.isFinite(latestTime) ? { ageMs: Math.max(0, now.getTime() - latestTime) } : {}),
+        ...(row.cycle !== null ? { cycle: row.cycle } : {}),
+        ...(row.event ? { event: row.event } : {}),
+        dryRun: row.dry_run === 1,
+        ...(row.started_cycle !== null ? { activeCycle: row.started_cycle } : {}),
+        ...(row.started_at ? { activeStartedAt: row.started_at } : {}),
+        activeAgeMs
+      };
+    }
+
     if (!Number.isFinite(latestTime)) {
       return {
         status: "stale",
         maxAgeMs,
-        latestAt: row.recorded_at,
-        cycle: row.cycle,
-        event: row.event,
+        ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
+        ...(row.cycle !== null ? { cycle: row.cycle } : {}),
+        ...(row.event ? { event: row.event } : {}),
         dryRun: row.dry_run === 1
       };
     }
@@ -570,10 +618,10 @@ function readHeartbeatStatus(statePath: string, maxAgeMs: number, now: Date): Re
     return {
       status: ageMs <= maxAgeMs ? "fresh" : "stale",
       maxAgeMs,
-      latestAt: row.recorded_at,
+      ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
       ageMs,
-      cycle: row.cycle,
-      event: row.event,
+      ...(row.cycle !== null ? { cycle: row.cycle } : {}),
+      ...(row.event ? { event: row.event } : {}),
       dryRun: row.dry_run === 1
     };
   } finally {
@@ -583,8 +631,19 @@ function readHeartbeatStatus(statePath: string, maxAgeMs: number, now: Date): Re
 
 function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
   if (heartbeat.status === "missing") return `missing heartbeat row; max age ${heartbeat.maxAgeMs}ms`;
+  if (heartbeat.status === "active") {
+    const activeAge = heartbeat.activeAgeMs === undefined ? "unknown" : `${heartbeat.activeAgeMs}ms`;
+    return (
+      `active; active age ${activeAge}; max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; ` +
+      `started cycle ${heartbeat.activeCycle ?? "unknown"}; last event ${heartbeat.event ?? "unknown"}; ` +
+      `last cycle ${heartbeat.cycle ?? "unknown"}`
+    );
+  }
   const age = heartbeat.ageMs === undefined ? "unknown" : `${heartbeat.ageMs}ms`;
-  return `${heartbeat.status}; age ${age}; max ${heartbeat.maxAgeMs}ms; event ${heartbeat.event ?? "unknown"}; cycle ${heartbeat.cycle ?? "unknown"}`;
+  const activeSuffix = heartbeat.activeAgeMs === undefined
+    ? ""
+    : `; active age ${heartbeat.activeAgeMs}ms; active max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; active cycle ${heartbeat.activeCycle ?? "unknown"}`;
+  return `${heartbeat.status}; age ${age}; max ${heartbeat.maxAgeMs}ms; event ${heartbeat.event ?? "unknown"}; cycle ${heartbeat.cycle ?? "unknown"}${activeSuffix}`;
 }
 
 function git(cwd: string, args: string[]): string {
