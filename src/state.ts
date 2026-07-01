@@ -324,6 +324,27 @@ export class ReviewStateStore {
     return cooldown;
   }
 
+  getActiveProviderCooldown(now = new Date()): RepoProviderCooldownRecord | undefined {
+    return this.listRepoProviderCooldowns({ activeOnly: true, now })[0];
+  }
+
+  listRepoProviderCooldowns(input: { activeOnly?: boolean; now?: Date } = {}): RepoProviderCooldownRecord[] {
+    const now = input.now ?? new Date();
+    const rows = this.db
+      .prepare(
+        `select repo, cooldown_until, reason, updated_at
+         from repo_provider_cooldowns
+         order by datetime(cooldown_until) desc`
+      )
+      .all() as unknown as RepoProviderCooldownRow[];
+    const cooldowns = rows.map(mapRepoProviderCooldownRow);
+    if (!input.activeOnly) return cooldowns;
+    return cooldowns.filter((cooldown) => {
+      const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
+      return Number.isFinite(cooldownUntilMs) && cooldownUntilMs > now.getTime();
+    });
+  }
+
   listProviderCooldownReviews(input: {
     repo?: string;
     now?: Date;

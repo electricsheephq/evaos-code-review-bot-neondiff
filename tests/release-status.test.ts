@@ -229,6 +229,44 @@ describe("beta release status", () => {
     expect(status.recommendedActions).toContain(retryCommand);
   });
 
+  it("keeps release status green when expired per-head cooldowns are covered by an active provider throttle", () => {
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false
+      },
+      database: {
+        rowCount: 21,
+        errorCount: 0,
+        skippedCount: 16,
+        providerCooldownCount: 2,
+        activeProviderCooldownCount: 1,
+        expiredProviderCooldownCount: 1,
+        providerThrottleState: "active",
+        coveredExpiredProviderCooldownCount: 1
+      },
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.gates).toContainEqual({
+      name: "provider_cooldown_backlog",
+      ok: true,
+      detail: "provider throttle active; 1 expired provider cooldown row(s) deferred by active provider cooldown"
+    });
+    expect(status.recommendedActions).toEqual([]);
+  });
+
   it("counts active and expired provider cooldown rows from the live state database", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-db-"));
     roots.push(root);

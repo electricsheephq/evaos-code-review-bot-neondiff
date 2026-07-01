@@ -366,6 +366,62 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("does not immediately retry expired provider-cooldown heads while a global provider cooldown is active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-cooldown-global-active-bulk-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1236, "head-expired-provider-cooldown");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2000-01-01T00:00:00.000Z; reason=provider_rate_limit"
+    });
+    state.recordRepoProviderCooldown({
+      repo: "100yenadmin/evaOS-GUI",
+      cooldownUntil: new Date("2999-01-01T00:00:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+    let attempts = 0;
+
+    const result = await retryProviderCooldownsWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        dryRun: false,
+        expiredOnly: true
+      },
+      reviewPullImpl: async () => {
+        attempts += 1;
+        return "reviewed";
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      candidates: 1,
+      attempted: 0,
+      summary: {
+        remainedCooldown: 1,
+        failed: 0
+      }
+    });
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        repo: "electricsheephq/WorldOS",
+        pullNumber: 1236,
+        headSha: "head-expired-provider-cooldown",
+        status: "skipped_provider_cooldown"
+      })
+    ]);
+    expect(attempts).toBe(0);
+    state.close();
+  });
+
   it("retries expired provider-cooldown heads and keeps dry-runs retryable as cooldown skips", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-cooldown-expired-bulk-"));
     roots.push(root);

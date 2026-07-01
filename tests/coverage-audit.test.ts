@@ -161,6 +161,41 @@ describe("coverage audit", () => {
     state.close();
   });
 
+  it("reports eligible heads as provider-deferred under an active global provider cooldown", async () => {
+    const { root, state } = createState();
+    state.recordRepoProviderCooldown({
+      repo: "owner/other",
+      cooldownUntil: new Date("2026-07-01T00:05:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(13, "head-global-cooldown")]
+      } as unknown as GitHubApi,
+      state,
+      now: new Date("2026-07-01T00:04:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      processed: 0,
+      providerDeferred: 1,
+      unprocessed: 0
+    });
+    expect(audit.providerDeferred).toEqual([
+      expect.objectContaining({
+        repo: "owner/allowed",
+        pullNumber: 13,
+        headSha: "head-global-cooldown",
+        cooldownUntil: "2026-07-01T00:05:00.000Z",
+        reason: "provider_request_rate_limit"
+      })
+    ]);
+    state.close();
+  });
+
   it("supports canary and single-PR scoping without marking closed PRs as misses", async () => {
     const { root, state } = createState();
     let getPullCount = 0;
@@ -260,6 +295,42 @@ describe("coverage audit", () => {
     expect(audit.unprocessed[0]?.previousProcessedHeads).toEqual([]);
     expect(existsSync(statePath)).toBe(false);
     expect(existsSync(join(root, "missing"))).toBe(false);
+  });
+
+  it("treats legacy DBs without provider cooldown tables as normal unprocessed coverage", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-coverage-legacy-db-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const db = new DatabaseSync(statePath);
+    db.exec(`
+      create table processed_reviews (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        status text not null,
+        event text,
+        review_url text,
+        error text,
+        created_at text not null
+      )
+    `);
+    db.close();
+    const state = CoverageStateReader.open(statePath);
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(14, "head-14")]
+      } as unknown as GitHubApi,
+      state
+    });
+
+    expect(audit.ok).toBe(false);
+    expect(audit.summary).toMatchObject({
+      providerDeferred: 0,
+      unprocessed: 1
+    });
+    state.close();
   });
 
   it("re-reads unprocessed open candidates and reports stale heads separately", async () => {

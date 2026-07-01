@@ -98,6 +98,7 @@ export interface CoverageStateLookup {
   getProcessedReview(repo: string, pullNumber: number, headSha: string): StoredProcessedReviewRecord | undefined;
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[];
   getActiveRepoProviderCooldown?(repo: string, now?: Date): RepoProviderCooldownRecord | undefined;
+  getActiveProviderCooldown?(now?: Date): RepoProviderCooldownRecord | undefined;
 }
 
 export class CoverageStateReader implements CoverageStateLookup {
@@ -136,6 +137,7 @@ export class CoverageStateReader implements CoverageStateLookup {
 
   getActiveRepoProviderCooldown(repo: string, now = new Date()): RepoProviderCooldownRecord | undefined {
     if (!this.db) return undefined;
+    if (!this.hasRepoProviderCooldownTable()) return undefined;
     const row = this.db
       .prepare(
         `select repo, cooldown_until, reason, updated_at
@@ -151,8 +153,35 @@ export class CoverageStateReader implements CoverageStateLookup {
     return cooldown;
   }
 
+  getActiveProviderCooldown(now = new Date()): RepoProviderCooldownRecord | undefined {
+    if (!this.db) return undefined;
+    if (!this.hasRepoProviderCooldownTable()) return undefined;
+    const rows = this.db
+      .prepare(
+        `select repo, cooldown_until, reason, updated_at
+         from repo_provider_cooldowns
+         order by datetime(cooldown_until) desc`
+      )
+      .all() as unknown as RepoProviderCooldownRow[];
+    return rows
+      .map(mapRepoProviderCooldownRow)
+      .find((cooldown) => {
+        const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
+        return Number.isFinite(cooldownUntilMs) && cooldownUntilMs > now.getTime();
+      });
+  }
+
   close(): void {
     this.db?.close();
+  }
+
+  private hasRepoProviderCooldownTable(): boolean {
+    if (!this.db) return false;
+    return Boolean(
+      this.db
+        .prepare("select 1 from sqlite_master where type = 'table' and name = 'repo_provider_cooldowns' limit 1")
+        .get()
+    );
   }
 }
 
@@ -314,6 +343,20 @@ function pushProcessedOrUnprocessed(
       createdAt: repoCooldown.updatedAt,
       cooldownUntil: repoCooldown.cooldownUntil,
       reason: repoCooldown.reason
+    });
+    report.summary.providerDeferred += 1;
+    return;
+  }
+
+  const providerCooldown = state.getActiveProviderCooldown?.(now);
+  if (providerCooldown) {
+    report.providerDeferred.push({
+      ...pullEntry(repo, pull),
+      status: "skipped",
+      error: `provider_cooldown_until=${providerCooldown.cooldownUntil}; reason=${providerCooldown.reason}`,
+      createdAt: providerCooldown.updatedAt,
+      cooldownUntil: providerCooldown.cooldownUntil,
+      reason: providerCooldown.reason
     });
     report.summary.providerDeferred += 1;
     return;
