@@ -135,9 +135,9 @@ function dedupeRecommendations(recommendations: ValidationRecommendation[]): Val
 function hasEvidenceForRecommendation(recommendation: ValidationRecommendation, text: string): boolean {
   const normalized = text.toLowerCase();
   if (recommendation.id === "unity_editor_smoke") return /play\s*mode|playmode|unity editor|scene smoke|prefab smoke|recording|screenshot/.test(normalized);
-  if (recommendation.id === "typescript_build") return /npm run build|pnpm build|typecheck|tsc|vitest|jest|checks? green|ci passed|build passed/.test(normalized);
-  if (recommendation.id === "ci_release_smoke") return /release:status|coverage-audit|provider-cooldown|rollback|checks? green|ci passed|github actions/.test(normalized);
-  if (recommendation.id === "bot_focused_tests") return /vitest|npm run build|release:status|coverage-audit|focused test/.test(normalized);
+  if (recommendation.id === "typescript_build") return hasBuildEvidence(normalized) || hasTestEvidence(normalized) || hasCiEvidence(normalized);
+  if (recommendation.id === "ci_release_smoke") return hasReleaseEvidence(normalized) || hasCiEvidence(normalized);
+  if (recommendation.id === "bot_focused_tests") return hasBuildEvidence(normalized) || hasTestEvidence(normalized) || hasReleaseEvidence(normalized);
   return recommendation.proofTypes.some((proofType) => normalized.includes(proofType.toLowerCase()));
 }
 
@@ -146,11 +146,30 @@ function detectEvidenceMentions(text: string): string[] {
   const evidence = new Set<string>();
   if (/play\s*mode|playmode|unity editor/.test(normalized)) evidence.add("Unity smoke");
   if (/screenshot|recording/.test(normalized)) evidence.add("visual proof");
-  if (/npm run build|pnpm build|typecheck|tsc/.test(normalized)) evidence.add("build/typecheck");
-  if (/vitest|jest|test passed|focused test/.test(normalized)) evidence.add("tests");
-  if (/checks? green|ci passed|github actions/.test(normalized)) evidence.add("CI checks");
-  if (/release:status|coverage-audit|provider-cooldown/.test(normalized)) evidence.add("release/operator checks");
+  if (hasBuildEvidence(normalized)) evidence.add("build/typecheck");
+  if (hasTestEvidence(normalized)) evidence.add("tests");
+  if (hasCiEvidence(normalized)) evidence.add("CI checks");
+  if (hasReleaseEvidence(normalized)) evidence.add("release/operator checks");
   return [...evidence];
+}
+
+function hasBuildEvidence(text: string): boolean {
+  return /\b(npm run build|pnpm build|yarn build|bun run build|typecheck|tsc --noemit|tsc -p)\b/.test(text);
+}
+
+function hasTestEvidence(text: string): boolean {
+  return (
+    /\b(focused\s+)?(vitest|jest)\b.{0,48}\b(pass(?:ed)?|green|ok)\b/.test(text) ||
+    /\b(pass(?:ed)?|green|ok)\b.{0,48}\b(focused\s+)?(vitest|jest)\b/.test(text)
+  );
+}
+
+function hasCiEvidence(text: string): boolean {
+  return /\b(checks? green|ci passed|github actions green|github checks passed)\b/.test(text);
+}
+
+function hasReleaseEvidence(text: string): boolean {
+  return /\b(release:status|coverage-audit|provider-cooldowns?|rollback note)\b/.test(text);
 }
 
 function isDocsPath(path: string): boolean {

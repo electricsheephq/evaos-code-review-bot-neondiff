@@ -31,6 +31,9 @@ describe("changed-surface validation selector", () => {
 
     expect(validation.docsOnly).toBe(true);
     expect(validation.summary).toContain("Documentation-only");
+    expect(validation.recommendations).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "bot_focused_tests" })])
+    );
     expect(proof.status).toBe("not_applicable");
   });
 
@@ -56,6 +59,33 @@ describe("changed-surface validation selector", () => {
     );
     expect(proof.status).toBe("sufficient");
     expect(proof.detectedEvidence).toEqual(expect.arrayContaining(["build/typecheck", "tests", "release/operator checks"]));
+  });
+
+  it("does not treat near-miss repo names as WorldOS", () => {
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/worldos-utils",
+      pull: pull({ body: "" }),
+      files: [{ filename: "src/index.ts", additions: 1, deletions: 0 }]
+    });
+
+    expect(validation.recommendations).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "unity_editor_smoke" })])
+    );
+  });
+
+  it("does not accept unrelated historical proof wording as current proof", () => {
+    const pullWithWeakProof = pull({
+      body: "The previous build passed but we reverted that branch. No current validation was run."
+    });
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: pullWithWeakProof,
+      files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+    });
+    const proof = evaluateProofRequirements({ pull: pullWithWeakProof, validation });
+
+    expect(proof.status).toBe("missing");
+    expect(proof.detectedEvidence).toEqual([]);
   });
 });
 

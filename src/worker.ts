@@ -657,8 +657,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       writeFileSync(join(evidenceDir, "command.json"), `${JSON.stringify(commandDecision.command, null, 2)}\n`);
     }
     writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
-    writeFileSync(join(evidenceDir, "validation-selector.json"), `${JSON.stringify(validation, null, 2)}\n`);
-    writeFileSync(join(evidenceDir, "proof-requirements.json"), `${JSON.stringify(proof, null, 2)}\n`);
+    writeRedactedJson(join(evidenceDir, "validation-selector.json"), validation);
+    writeRedactedJson(join(evidenceDir, "proof-requirements.json"), proof);
 
     const zcodeResult = input.useZCode
       ? await runZCodeReviewWithProviderRetry({
@@ -687,10 +687,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const comments = gate.comments;
     const dropped = sanitizeDroppedFindings(gate.dropped);
     const event = gate.event;
-    writeFileSync(
-      join(evidenceDir, "deterministic-gate.json"),
-      `${JSON.stringify({ ...gate, dropped }, null, 2)}\n`
-    );
+    writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
     const summary = buildSummary({
       repo,
       pull,
@@ -1293,6 +1290,10 @@ function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"]): ReviewPlan["dr
       ? { why_this_matters: redactSecrets(finding.why_this_matters) }
       : {})
   }));
+}
+
+function writeRedactedJson(path: string, value: unknown): void {
+  writeFileSync(path, `${redactSecrets(JSON.stringify(value, null, 2))}\n`);
 }
 
 function buildSummary(input: {

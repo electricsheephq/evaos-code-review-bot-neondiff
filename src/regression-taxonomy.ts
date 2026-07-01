@@ -31,12 +31,12 @@ export const REGRESSION_CATEGORY_POLICY: Record<RegressionCategory, RegressionCa
   migration: { label: "Migration", requestChangesEligible: true },
   api_compatibility: { label: "API compatibility", requestChangesEligible: true },
   release_regression: { label: "Release regression", requestChangesEligible: true },
-  flaky_test_risk: { label: "Flaky test risk", requestChangesEligible: false },
+  flaky_test_risk: { label: "Flaky test risk", requestChangesEligible: true },
   proof_gap: { label: "Proof gap", requestChangesEligible: false },
   runtime_correctness: { label: "Runtime correctness", requestChangesEligible: true },
   dependency: { label: "Dependency", requestChangesEligible: true },
   docs_only: { label: "Docs only", requestChangesEligible: false },
-  unknown: { label: "Uncategorized", requestChangesEligible: false }
+  unknown: { label: "Uncategorized", requestChangesEligible: true }
 };
 
 export function isRegressionCategory(value: unknown): value is RegressionCategory {
@@ -69,14 +69,17 @@ export function inferRegressionCategory(finding: Pick<Finding, "path" | "title" 
   const haystack = `${finding.path}\n${finding.title}\n${finding.body}\n${finding.why_this_matters ?? ""}`.toLowerCase();
   const path = finding.path.toLowerCase();
 
-  if (matchesAny(haystack, ["data loss", "delete", "overwrite", "clobber", "truncate", "rollback", "corrupt"])) {
+  if (
+    matchesAny(haystack, ["data loss", "overwrite", "clobber", "truncate", "corrupt"]) ||
+    (matchesAny(haystack, ["rollback"]) && matchesAny(haystack, ["save", "state", "database", "customer data"]))
+  ) {
     return "data_loss";
-  }
-  if (matchesAny(haystack, ["auth", "permission", "unauthorized", "oauth", "session", "login", "token"])) {
-    return "auth";
   }
   if (matchesAny(haystack, ["secret", "credential", "private key", "cookie", "xss", "csrf", "ssrf", "injection"])) {
     return "security_boundary";
+  }
+  if (matchesAny(haystack, ["auth", "permission", "unauthorized", "oauth", "session", "login", "token"])) {
+    return "auth";
   }
   if (matchesAny(path, [".github/workflows/", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "tsconfig"])) {
     return "ci_build";
@@ -106,5 +109,12 @@ export function inferRegressionCategory(finding: Pick<Finding, "path" | "title" 
 }
 
 function matchesAny(text: string, needles: string[]): boolean {
-  return needles.some((needle) => text.includes(needle));
+  return needles.some((needle) => {
+    if (/[\s/.*_-]/.test(needle)) return text.includes(needle);
+    return new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}([^a-z0-9]|$)`).test(text);
+  });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
