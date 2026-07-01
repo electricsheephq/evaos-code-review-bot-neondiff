@@ -1,4 +1,5 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory } from "./regression-taxonomy.js";
 import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -31,6 +32,7 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
     const title = raw.title;
     const body = raw.body;
     const confidence = raw.confidence;
+    const category = raw.category;
 
     if (
       !SEVERITIES.has(severity as Severity) ||
@@ -57,6 +59,7 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
       title: title.trim(),
       body: body.trim(),
       confidence,
+      ...(isRegressionCategory(category) ? { category } : {}),
       ...(typeof raw.why_this_matters === "string" && raw.why_this_matters.trim()
         ? { why_this_matters: raw.why_this_matters.trim() }
         : {})
@@ -96,14 +99,18 @@ export function normalizeFindingsForReview(
   }
 
   return {
-    comments: kept.map((finding) => ({
-      path: finding.path,
-      line: finding.line,
-      side: "RIGHT",
-      severity: finding.severity,
-      title: finding.title,
-      body: formatReviewComment(finding)
-    })),
+    comments: kept.map((finding) => {
+      const category = normalizeFindingCategory(finding);
+      return {
+        path: finding.path,
+        line: finding.line,
+        side: "RIGHT",
+        severity: finding.severity,
+        category,
+        title: finding.title,
+        body: formatReviewComment({ ...finding, category })
+      };
+    }),
     dropped
   };
 }
@@ -117,15 +124,14 @@ function redactFinding<T extends Finding>(finding: T): T {
   };
 }
 
-export function decideReviewEvent(findings: Pick<Finding, "severity">[]): ReviewEvent {
-  return findings.some((finding) => finding.severity === "P0" || finding.severity === "P1")
-    ? "REQUEST_CHANGES"
-    : "COMMENT";
+export function decideReviewEvent(findings: Pick<ReviewComment, "severity" | "category">[]): ReviewEvent {
+  return findings.some((finding) => isRequestChangesEligible(finding)) ? "REQUEST_CHANGES" : "COMMENT";
 }
 
 export function formatReviewComment(finding: Finding): string {
+  const category = finding.category ? `\n\nCategory: ${categoryLabel(finding.category)}` : "";
   const why = finding.why_this_matters ? `\n\nWhy this matters: ${finding.why_this_matters}` : "";
-  return `**${finding.severity}: ${finding.title}**\n\n${finding.body}${why}`;
+  return `**${finding.severity}: ${finding.title}**\n\n${finding.body}${category}${why}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

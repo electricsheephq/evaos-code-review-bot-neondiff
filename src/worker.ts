@@ -8,8 +8,6 @@ import {
   type CommandDecision
 } from "./commands.js";
 import { loadConfig, type BotConfig } from "./config.js";
-import { validateFindingLocations } from "./diff.js";
-import { decideReviewEvent, normalizeFindingsForReview } from "./findings.js";
 import { assertGitClean, preparePullWorktree } from "./git.js";
 import { GitHubApi } from "./github.js";
 import {
@@ -18,9 +16,11 @@ import {
   listReposToScan,
   resolveRepoProfile
 } from "./repo-policy.js";
+import { applyDeterministicReviewGate } from "./review-gate.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { redactSecrets } from "./secrets.js";
 import { parseProviderCooldownError, ReviewStateStore, type ReviewRunLease } from "./state.js";
+import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
@@ -630,6 +630,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const files = await github.listPullFiles(repo, pull.number);
     const reviewFiles = filterPullFilesForProfile(files, repoPolicy.profile);
     const filterImpact = buildPullFileFilterImpact(files, repoPolicy.profile);
+    const validation = buildChangedSurfaceValidationReport({
+      repo,
+      pull,
+      files,
+      profile: repoPolicy.profile
+    });
+    const proof = evaluateProofRequirements({ pull, validation });
     const worktree = preparePullWorktree({
       repo,
       pullNumber: pull.number,
@@ -650,6 +657,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       writeFileSync(join(evidenceDir, "command.json"), `${JSON.stringify(commandDecision.command, null, 2)}\n`);
     }
     writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
+    writeRedactedJson(join(evidenceDir, "validation-selector.json"), validation);
+    writeRedactedJson(join(evidenceDir, "proof-requirements.json"), proof);
 
     const zcodeResult = input.useZCode
       ? await runZCodeReviewWithProviderRetry({
@@ -669,11 +678,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_stale_head";
     }
 
-    const located = validateFindingLocations(zcodeResult.findings, reviewFiles);
-    const normalized = normalizeFindingsForReview(located.valid, { maxInlineComments: 25 });
-    const comments = normalized.comments;
-    const dropped = sanitizeDroppedFindings([...zcodeResult.droppedFromSchema, ...located.dropped, ...normalized.dropped]);
-    const event = decideReviewEvent(comments);
+    const gate = applyDeterministicReviewGate({
+      findings: zcodeResult.findings,
+      files: reviewFiles,
+      droppedFromSchema: zcodeResult.droppedFromSchema,
+      maxInlineComments: 25
+    });
+    const comments = gate.comments;
+    const dropped = sanitizeDroppedFindings(gate.dropped);
+    const event = gate.event;
+    writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
     const summary = buildSummary({
       repo,
       pull,
@@ -690,6 +704,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           comments,
           dropped,
           event,
+          validation,
+          proof,
           postIssueComment: config.walkthrough.postIssueComment
         })
       : undefined;
@@ -698,6 +714,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       comments,
       dropped,
       summary,
+      deterministicGate: gate.summary,
+      validation,
+      proof,
       ...(walkthrough ? { walkthrough } : {})
     };
 
@@ -1271,6 +1290,10 @@ function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"]): ReviewPlan["dr
       ? { why_this_matters: redactSecrets(finding.why_this_matters) }
       : {})
   }));
+}
+
+function writeRedactedJson(path: string, value: unknown): void {
+  writeFileSync(path, `${redactSecrets(JSON.stringify(value, null, 2))}\n`);
 }
 
 function buildSummary(input: {

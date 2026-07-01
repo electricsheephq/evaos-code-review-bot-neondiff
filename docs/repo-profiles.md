@@ -89,6 +89,23 @@ evidence are recorded.
 - `suggestedLabels` / `suggestedReviewers`: reserved for later enrichment; they
   do not auto-apply labels or reviewers.
 
+## Changed-Surface Validation
+
+For every review, the worker now writes deterministic validation and proof
+evidence beside the review plan:
+
+- `validation-selector.json`: diff-only recommendations selected from changed
+  paths, repo name, and repo profile hints.
+- `proof-requirements.json`: whether PR metadata mentions acceptable proof for
+  the selected recommendations.
+- `deterministic-gate.json`: final inline comment, drop-reason, category, and
+  `REQUEST_CHANGES` decisions after schema, diff-line, secret, cap, and taxonomy
+  gates.
+
+These selectors do not run tests, builds, project scripts, Unity, or arbitrary
+PR code. They only decide which proof a reviewer should expect and whether that
+proof appears in PR metadata.
+
 ## Validation Rules
 
 Configuration loads fail closed before the daemon starts when:

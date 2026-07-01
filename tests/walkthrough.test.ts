@@ -46,6 +46,7 @@ describe("walkthrough comment rendering", () => {
         line: 11,
         side: "RIGHT",
         severity: "P1",
+        category: "data_loss",
         title: "Rollback can overwrite fresh saves",
         body: "The rollback path can clobber newer save data."
       }
@@ -57,7 +58,32 @@ describe("walkthrough comment rendering", () => {
       files,
       comments,
       dropped: [],
-      event: "REQUEST_CHANGES"
+      event: "REQUEST_CHANGES",
+      validation: {
+        summary: "1 required validation/proof recommendation(s) selected from changed files.",
+        docsOnly: false,
+        recommendations: [
+          {
+            id: "unity_editor_smoke",
+            title: "Unity editor or Play Mode smoke",
+            status: "required",
+            reason: "Unity asset/script/project files changed.",
+            matchedPaths: ["Assets/Scripts/SaveGameController.cs"],
+            proofTypes: ["Unity editor smoke", "Play Mode log"]
+          }
+        ],
+        profileHints: {
+          validationHints: [],
+          proofExpectations: []
+        }
+      },
+      proof: {
+        status: "missing",
+        summary: "1 required validation/proof recommendation(s) missing from PR metadata.",
+        requiredRecommendationIds: ["unity_editor_smoke"],
+        missingRecommendationIds: ["unity_editor_smoke"],
+        detectedEvidence: []
+      }
     });
     const walkthroughAgain = buildWalkthroughComment({
       repo: "electricsheephq/WorldOS",
@@ -65,7 +91,32 @@ describe("walkthrough comment rendering", () => {
       files,
       comments,
       dropped: [],
-      event: "REQUEST_CHANGES"
+      event: "REQUEST_CHANGES",
+      validation: {
+        summary: "1 required validation/proof recommendation(s) selected from changed files.",
+        docsOnly: false,
+        recommendations: [
+          {
+            id: "unity_editor_smoke",
+            title: "Unity editor or Play Mode smoke",
+            status: "required",
+            reason: "Unity asset/script/project files changed.",
+            matchedPaths: ["Assets/Scripts/SaveGameController.cs"],
+            proofTypes: ["Unity editor smoke", "Play Mode log"]
+          }
+        ],
+        profileHints: {
+          validationHints: [],
+          proofExpectations: []
+        }
+      },
+      proof: {
+        status: "missing",
+        summary: "1 required validation/proof recommendation(s) missing from PR metadata.",
+        requiredRecommendationIds: ["unity_editor_smoke"],
+        missingRecommendationIds: ["unity_editor_smoke"],
+        detectedEvidence: []
+      }
     });
 
     expect(walkthroughAgain).toEqual(walkthrough);
@@ -77,6 +128,10 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("Related issues/PRs: #17, #12");
     expect(walkthrough.body).toContain("Suggested reviewers: reviewer-one");
     expect(walkthrough.body).toContain("Suggested labels: bug, unity");
+    expect(walkthrough.body).toContain("Risk Taxonomy");
+    expect(walkthrough.body).toContain("- Data loss: 1");
+    expect(walkthrough.body).toContain("Validation and Proof");
+    expect(walkthrough.body).toContain("Proof status: missing");
     expect(walkthrough.body).toContain("Pre-merge checklist");
     expect(walkthrough.body).toContain("REQUEST_CHANGES");
   });
@@ -100,6 +155,7 @@ describe("walkthrough comment rendering", () => {
 
     expect(walkthrough.body).toContain("No validated inline findings.");
     expect(walkthrough.body).toContain("Estimated review effort: 1/5");
+    expect(walkthrough.body).toContain("- [x] Required behavior proof is present or not applicable.");
     expect(walkthrough.body).not.toContain(secret);
     expect(walkthrough.body).toMatch(/Docs only \[redacted-secret\]/);
   });
