@@ -389,6 +389,93 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("does not let trusted stop commands clobber an existing posted review row", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-stop-posted-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-original"
+    });
+    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, "a1")]]]);
+    const comments = new Map([
+      ["org/repo-a#1", [comment(334, "100yenadmin", "@evaos-code-review-bot stop")]]
+    ]);
+
+    await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(pullMap, comments),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: reviewPull,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(state.getProcessedReview("org/repo-a", 1, "a1")).toMatchObject({
+      status: "posted",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-original"
+    });
+    state.close();
+  });
+
+  it("keeps a comment fetch failure scoped to that pull instead of failing the scheduler cycle", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-fetch-failure-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pullMap = new Map([
+      ["org/repo-a", [pull("org/repo-a", 1, "a1")]],
+      ["org/repo-b", [pull("org/repo-b", 1, "b1")]]
+    ]);
+    const reviewed: string[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: {
+        ...githubFromMap(pullMap),
+        listIssueComments: async (repo, issueNumber) => {
+          if (repo === "org/repo-a" && issueNumber === 1) throw new Error("GitHub 500");
+          return [];
+        }
+      },
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewed.push(`${repo}#${reviewPull.number}`);
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.failed).toBe(0);
+    expect(reviewed).toHaveLength(2);
+    state.close();
+  });
+
   it("assigns scheduler jobs to reusable repo-sticky reviewer sessions when enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-"));
     roots.push(root);
@@ -425,7 +512,7 @@ describe("provider-aware review scheduler", () => {
     const jobs = state.listReviewQueueJobs({ repo: "org/repo-a" });
     expect(result.queue.enqueued).toBe(2);
     expect(result.queue.leased).toBe(1);
-    expect(new Set(jobs.map((job) => job.sessionId))).toHaveLength(1);
+    expect(new Set(jobs.map((job) => job.sessionId)).size).toBe(1);
     expect(state.listReviewerSessions({ repo: "org/repo-a" })).toEqual([
       expect.objectContaining({
         repo: "org/repo-a",
@@ -440,6 +527,49 @@ describe("provider-aware review scheduler", () => {
     });
     expect(state.getReviewerSessionJob("org/repo-a", 2, "a2")).toMatchObject({
       jobState: "assigned"
+    });
+    state.close();
+  });
+
+  it("preserves dry-run processed status in repo-sticky reviewer session jobs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-dry-run-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10
+    };
+    const state = new ReviewStateStore(config.statePath);
+
+    await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(state.getReviewerSessionJob("org/repo-a", 1, "a1")).toMatchObject({
+      jobState: "completed",
+      processedReviewStatus: "dry_run"
+    });
+    const [queueJob] = state.listReviewQueueJobs();
+    expect(queueJob).toMatchObject({
+      state: "queued",
+      lastError: "dry_run_completed_not_posted"
     });
     state.close();
   });
