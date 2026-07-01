@@ -26,6 +26,7 @@ Pilot local worker for ZCode/GLM-5.2 pull request reviews.
 
 ```bash
 npm run doctor
+npm run eval:offline -- --input /path/to/scenario.json
 npm run release:status -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --expected-head "$(git rev-parse HEAD)"
 npm run run-once -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true --repo electricsheephq/WorldOS --pr 1161
 npm run daemon -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true
@@ -67,3 +68,11 @@ trusted command surface. Commands are PR comments such as
 `@evaos-code-review-bot review`, `re-review`, `explain`, and `stop`; they stay
 behind `commands.enabled` and cannot repair, merge, approve, push branches, or
 expand monitoring.
+
+## Offline Evals
+
+Use [docs/eval-harness.md](docs/eval-harness.md) to create read-only
+CodeRabbit/human/CI/seeded-defect comparison packets under
+`/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/`. Eval packets are advisory
+and uncalibrated until enough labeled findings exist for measured reliability
+bins.
