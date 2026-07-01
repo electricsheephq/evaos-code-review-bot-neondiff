@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "evaos-review-bot": "dist/src/cli.js"
+  },
   "description": "Local ZCode-backed GitHub PR review bot pilot for evaOS repos.",
   "engines": {
     "node": ">=26"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "cli": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "doctor": "tsx src/cli.ts doctor",
