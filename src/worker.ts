@@ -449,14 +449,22 @@ export function restoreFailedRetryRowIfNeeded(input: {
   const restoreAsProviderCooldown =
     input.retryTarget.previousStatus === "skipped" &&
     Boolean(parseProviderCooldownError(input.retryTarget.previousError));
+  const retireStaleProviderCooldown =
+    restoreAsProviderCooldown &&
+    input.reason === "retry_did_not_review=skipped_stale_head";
+  const previousError = input.retryTarget.previousError
+    ? `${retireStaleProviderCooldown ? "; previous_error=" : ""}${input.retryTarget.previousError}`
+    : "";
   input.state.recordProcessed({
     repo: input.retryTarget.repo,
     pullNumber: input.retryTarget.pullNumber,
     headSha: input.retryTarget.headSha,
     status: restoreAsProviderCooldown ? "skipped" : "failed",
-    error: input.retryTarget.previousError
-      ? `${input.retryTarget.previousError}; ${input.reason}`
-      : input.reason
+    error: retireStaleProviderCooldown
+      ? `provider_cooldown_retry_stale_head; ${input.reason}${previousError}`
+      : input.retryTarget.previousError
+        ? `${input.retryTarget.previousError}; ${input.reason}`
+        : input.reason
   });
 }
 
