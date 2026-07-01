@@ -188,7 +188,8 @@ describe("review state store", () => {
       assigned: true,
       assignmentReason: "same_repo_active_session"
     });
-    expect(first.assigned && second.assigned && second.session.sessionId).toBe(first.assigned && first.session.sessionId);
+    if (!first.assigned || !second.assigned) throw new Error("expected both session assignments to succeed");
+    expect(second.session.sessionId).toBe(first.session.sessionId);
     expect(store.listReviewerSessions({ repo: "100yenadmin/evaOS-GUI" })).toEqual([
       expect.objectContaining({
         repo: "100yenadmin/evaOS-GUI",
@@ -224,7 +225,8 @@ describe("review state store", () => {
       now: new Date("2026-07-01T00:00:01.000Z")
     });
 
-    expect(gui.assigned && lco.assigned && gui.session.sessionId).not.toBe(lco.assigned && lco.session.sessionId);
+    if (!gui.assigned || !lco.assigned) throw new Error("expected both repo session assignments to succeed");
+    expect(gui.session.sessionId).not.toBe(lco.session.sessionId);
     expect(store.listReviewerSessions()).toHaveLength(2);
     store.close();
   });
@@ -303,9 +305,43 @@ describe("review state store", () => {
       session: expect.objectContaining({ state: "expired", headCountUsed: 1, headCountLimit: 1 })
     });
     expect(second).toMatchObject({ assigned: true, assignmentReason: "session_expired_new_session" });
-    expect(first.assigned && second.assigned && first.session.sessionId).not.toBe(second.assigned && second.session.sessionId);
+    if (!first.assigned || !second.assigned) throw new Error("expected both session assignments to succeed");
+    expect(first.session.sessionId).not.toBe(second.session.sessionId);
     expect(store.listReviewerSessions({ state: "expired" })).toHaveLength(1);
     expect(store.listReviewerSessions({ activeOnly: true, now: new Date("2026-07-01T00:00:02.000Z") })).toHaveLength(1);
+    store.close();
+  });
+
+  it("does not reuse reviewer sessions owned by dead workers", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-dead-worker-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const first = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "head-a",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      workerPid: 999_999_999,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const second = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 498,
+      headSha: "head-b",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+
+    if (!first.assigned || !second.assigned) throw new Error("expected both session assignments to succeed");
+    expect(second.session.sessionId).not.toBe(first.session.sessionId);
+    expect(store.getReviewerSession(first.session.sessionId)).toMatchObject({
+      state: "failed",
+      lastError: "owner_pid_not_alive:999999999"
+    });
+    expect(store.listReviewerSessions({ activeOnly: true, now: new Date("2026-07-01T00:00:01.000Z") })).toHaveLength(1);
     store.close();
   });
 

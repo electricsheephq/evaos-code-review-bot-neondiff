@@ -25,6 +25,7 @@ export interface ReleaseDatabaseStatus {
   reviewerSessionCount?: number;
   activeReviewerSessionCount?: number;
   expiredReviewerSessionCount?: number;
+  reviewerSessionsByRepo?: ReviewerSessionRepoStatus[];
   providerCooldownCount?: number;
   activeProviderCooldownCount?: number;
   expiredProviderCooldownCount?: number;
@@ -32,6 +33,13 @@ export interface ReleaseDatabaseStatus {
   coveredExpiredProviderCooldownCount?: number;
   retryableExpiredProviderCooldownCount?: number;
   providerThrottleState?: "none" | "active" | "expired_retryable";
+}
+
+export interface ReviewerSessionRepoStatus {
+  repo: string;
+  total: number;
+  active: number;
+  expired: number;
 }
 
 export interface ReleaseHeartbeatStatus {
@@ -282,6 +290,7 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
       reviewerSessionCount: reviewerSessions.total,
       activeReviewerSessionCount: reviewerSessions.active,
       expiredReviewerSessionCount: reviewerSessions.expired,
+      reviewerSessionsByRepo: reviewerSessions.byRepo,
       providerCooldownCount: row.providerCooldownCount ?? 0,
       activeProviderCooldownCount,
       expiredProviderCooldownCount,
@@ -296,33 +305,61 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
   }
 }
 
-function readReviewerSessionCounts(db: DatabaseSync, now: Date): { total: number; active: number; expired: number } {
+function readReviewerSessionCounts(
+  db: DatabaseSync,
+  now: Date
+): { total: number; active: number; expired: number; byRepo: ReviewerSessionRepoStatus[] } {
   const hasTable = db
     .prepare("select 1 from sqlite_master where type = 'table' and name = 'reviewer_sessions' limit 1")
     .get();
-  if (!hasTable) return { total: 0, active: 0, expired: 0 };
+  if (!hasTable) return { total: 0, active: 0, expired: 0, byRepo: [] };
+  const activeSql = `
+    state in ('active', 'warming')
+    and datetime(expires_at) > datetime(?)
+    and head_count_used < head_count_limit
+  `;
+  const expiredSql = `
+    state = 'expired'
+    or datetime(expires_at) is null
+    or datetime(expires_at) <= datetime(?)
+    or head_count_used >= head_count_limit
+  `;
   const row = db
     .prepare(
       `select
          count(*) as total,
-         sum(case
-           when state in ('active', 'warming')
-            and datetime(expires_at) > datetime(?)
-            and head_count_used < head_count_limit
-           then 1 else 0 end) as active,
-         sum(case
-           when state = 'expired'
-             or datetime(expires_at) is null
-             or datetime(expires_at) <= datetime(?)
-             or head_count_used >= head_count_limit
-           then 1 else 0 end) as expired
+         sum(case when ${activeSql} then 1 else 0 end) as active,
+         sum(case when ${expiredSql} then 1 else 0 end) as expired
        from reviewer_sessions`
     )
     .get(now.toISOString(), now.toISOString()) as { total?: number; active?: number | null; expired?: number | null };
+  const byRepoRows = db
+    .prepare(
+      `select
+         repo,
+         count(*) as total,
+         sum(case when ${activeSql} then 1 else 0 end) as active,
+         sum(case when ${expiredSql} then 1 else 0 end) as expired
+       from reviewer_sessions
+       group by repo
+       order by repo`
+    )
+    .all(now.toISOString(), now.toISOString()) as unknown as Array<{
+      repo: string;
+      total?: number;
+      active?: number | null;
+      expired?: number | null;
+    }>;
   return {
     total: row.total ?? 0,
     active: row.active ?? 0,
-    expired: row.expired ?? 0
+    expired: row.expired ?? 0,
+    byRepo: byRepoRows.map((repoRow) => ({
+      repo: repoRow.repo,
+      total: repoRow.total ?? 0,
+      active: repoRow.active ?? 0,
+      expired: repoRow.expired ?? 0
+    }))
   };
 }
 

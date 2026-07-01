@@ -436,7 +436,7 @@ describe("beta release status", () => {
     const status = collectReleaseStatus({
       cwd: process.cwd(),
       statePath: dbPath,
-      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      configPath: undefined,
       launchdLabel: "com.electricsheephq.evaos-code-review-bot",
       now: new Date("2026-07-01T00:15:00.000Z")
     });
@@ -444,7 +444,12 @@ describe("beta release status", () => {
     expect(status.database.reviewerSessionCount).toBe(4);
     expect(status.database.activeReviewerSessionCount).toBe(1);
     expect(status.database.expiredReviewerSessionCount).toBe(3);
-    expect(status.gates.every((gate) => gate.name !== "reviewer_sessions")).toBe(true);
+    expect(status.database.reviewerSessionsByRepo).toEqual([
+      { repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO", total: 1, active: 0, expired: 1 },
+      { repo: "100yenadmin/evaOS-GUI", total: 1, active: 1, expired: 0 },
+      { repo: "electricsheephq/WorldOS", total: 1, active: 0, expired: 1 },
+      { repo: "electricsheephq/evaos-code-review-bot", total: 1, active: 0, expired: 1 }
+    ]);
   });
 
   it("treats malformed provider cooldown timestamps as actionable backlog", () => {

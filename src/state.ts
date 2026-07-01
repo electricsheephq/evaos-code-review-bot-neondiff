@@ -647,7 +647,7 @@ export class ReviewStateStore {
 
   private getReusableReviewerSession(repo: string, now = new Date()): ReviewerSessionRecord | undefined {
     const nowIso = now.toISOString();
-    const row = this.db
+    const rows = this.db
       .prepare(
         `select session_id, repo, repo_family, state, started_at, last_used_at, expires_at,
                 head_count_used, head_count_limit, worker_pid, model, provider, zcode_cli_version,
@@ -657,11 +657,20 @@ export class ReviewStateStore {
            and state in ('warming', 'active')
            and expires_at > ?
            and head_count_used < head_count_limit
-         order by datetime(last_used_at) desc
-         limit 1`
+         order by datetime(last_used_at) desc`
       )
-      .get(repo, nowIso) as ReviewerSessionRow | undefined;
-    return row ? mapReviewerSessionRow(row) : undefined;
+      .all(repo, nowIso) as unknown as ReviewerSessionRow[];
+    for (const row of rows) {
+      const session = mapReviewerSessionRow(row);
+      if (session.workerPid !== undefined && !isProcessAlive(session.workerPid)) {
+        this.db
+          .prepare("update reviewer_sessions set state = 'failed', last_error = ? where session_id = ?")
+          .run(`owner_pid_not_alive:${session.workerPid}`, session.sessionId);
+        continue;
+      }
+      return session;
+    }
+    return undefined;
   }
 
   private hasReviewerSessionForRepo(repo: string): boolean {
