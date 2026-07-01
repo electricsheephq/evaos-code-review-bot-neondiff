@@ -188,6 +188,7 @@ export interface OperatorDurableQueueSnapshot {
     running: number;
     providerDeferred: number;
     retryableProviderDeferred: number;
+    commandRecorded: number;
     posted: number;
     failed: number;
     retired: number;
@@ -201,6 +202,7 @@ export interface OperatorDurableQueueSnapshot {
     running: number;
     providerDeferred: number;
     retryableProviderDeferred: number;
+    commandRecorded: number;
     posted: number;
     failed: number;
     retired: number;
@@ -975,6 +977,7 @@ function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): Ope
     running: jobs.filter((job) => job.state === "running").length,
     providerDeferred: jobs.filter((job) => job.state === "provider_deferred").length,
     retryableProviderDeferred: jobs.filter((job) => job.state === "provider_deferred" && isRetryableQueueJob(job, now)).length,
+    commandRecorded: jobs.filter((job) => job.state === "command_recorded").length,
     posted: jobs.filter((job) => job.state === "posted").length,
     failed: jobs.filter((job) => job.state === "failed").length,
     retired: jobs.filter((job) => job.state === "stale_retired" || job.state === "closed_retired").length

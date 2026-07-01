@@ -669,6 +669,7 @@ function durableQueueSnapshot(input: {
       running: input.summary?.running ?? 1,
       providerDeferred: input.summary?.providerDeferred ?? 1,
       retryableProviderDeferred: input.summary?.retryableProviderDeferred ?? 1,
+      commandRecorded: input.summary?.commandRecorded ?? 0,
       posted: input.summary?.posted ?? 0,
       failed: input.summary?.failed ?? 1,
       retired: input.summary?.retired ?? 0
@@ -686,6 +687,7 @@ function cleanDurableQueueSummary(): Partial<OperatorDurableQueueSnapshot["summa
     running: 0,
     providerDeferred: 0,
     retryableProviderDeferred: 0,
+    commandRecorded: 0,
     posted: 0,
     failed: 0,
     retired: 0

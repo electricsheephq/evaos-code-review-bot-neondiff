@@ -551,6 +551,7 @@ export interface ReviewPullInput {
   useZCode: boolean;
   budget?: ReviewRunBudget;
   processedHeadPolicy?: "normal" | "retry_failed_head";
+  commandCommentId?: number;
 }
 
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
@@ -1183,13 +1184,17 @@ async function resolvePullCommandDecision(input: {
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
+  commandCommentId?: number;
 }): Promise<CommandDecision> {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
 
   const comments = await input.github.listIssueComments(input.repo, input.pull.number);
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  const commands = input.commandCommentId
+    ? collected.commands.filter((command) => command.commentId === input.commandCommentId)
+    : collected.commands;
   return decideCommandAction({
-    commands: collected.commands,
+    commands,
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,

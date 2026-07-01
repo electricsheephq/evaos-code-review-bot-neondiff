@@ -780,7 +780,7 @@ describe("review state store", () => {
     store.close();
   });
 
-  it("deduplicates processed command comments per repo, PR, head SHA, and comment id", () => {
+  it("deduplicates processed command comments per repo, PR, and comment id", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-command-state-"));
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
@@ -796,7 +796,7 @@ describe("review state store", () => {
     });
 
     expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 123)).toBe(true);
-    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-b", 123)).toBe(false);
+    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-b", 123)).toBe(true);
     expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 124)).toBe(false);
     store.close();
   });

@@ -24,6 +24,7 @@ export type ReviewQueueJobState =
   | "provider_deferred"
   | "stale_retired"
   | "closed_retired"
+  | "command_recorded"
   | "posted"
   | "failed";
 
@@ -455,6 +456,7 @@ export class ReviewStateStore {
     zcodeCliVersion?: string;
     repoFamily?: string;
     assignmentReason?: ReviewerSessionAssignmentReason;
+    allowProcessed?: boolean;
   }): ReviewerSessionAssignResult {
     validateReviewerSessionInput(input.ttlMs, input.headCountLimit, input.workerPid);
 
@@ -468,7 +470,7 @@ export class ReviewStateStore {
 
     this.db.exec("begin immediate");
     try {
-      if (this.hasProcessed(input.repo, input.pullNumber, input.headSha)) {
+      if (!input.allowProcessed && this.hasProcessed(input.repo, input.pullNumber, input.headSha)) {
         this.db.exec("commit");
         return { assigned: false, reason: "already_processed" };
       }
@@ -1199,10 +1201,11 @@ export class ReviewStateStore {
     const row = this.db
       .prepare(
         `select 1 from processed_commands
-         where repo = ? and pull_number = ? and head_sha = ? and comment_id = ?
+         where repo = ? and pull_number = ? and comment_id = ?
          limit 1`
       )
-      .get(repo, pullNumber, headSha, commentId);
+      .get(repo, pullNumber, commentId);
+    void headSha;
     return Boolean(row);
   }
 
@@ -1365,7 +1368,11 @@ function countBy<T>(items: T[], key: (item: T) => string): Map<string, number> {
 }
 
 function isTerminalQueueState(state: ReviewQueueJobState): boolean {
-  return state === "posted" || state === "failed" || state === "stale_retired" || state === "closed_retired";
+  return state === "posted" ||
+    state === "failed" ||
+    state === "stale_retired" ||
+    state === "closed_retired" ||
+    state === "command_recorded";
 }
 
 export function parseProviderCooldownError(error?: string): ParsedProviderCooldownError | undefined {

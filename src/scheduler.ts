@@ -212,7 +212,9 @@ function enqueueReviewJob(input: {
   now: Date;
 }, commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>) {
   const source: ReviewQueueJobSource = commandDecision ? "manual_command" : "automatic";
-  const sessionId = assignReviewerSessionForQueueJob(input, source)?.session?.sessionId;
+  const sessionId = shouldAssignReviewerSession(commandDecision)
+    ? assignReviewerSessionForQueueJob(input, source, commandDecision)?.session?.sessionId
+    : undefined;
   return input.state.enqueueReviewQueueJob({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -253,6 +255,10 @@ async function resolveSchedulerCommandDecision(input: {
   });
 }
 
+function shouldAssignReviewerSession(commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>): boolean {
+  return !commandDecision || commandDecision.shouldReview;
+}
+
 function assignReviewerSessionForQueueJob(input: {
   config: BotConfig;
   state: ReviewStateStore;
@@ -260,7 +266,7 @@ function assignReviewerSessionForQueueJob(input: {
   pull: PullRequestSummary;
   providerId: string;
   now: Date;
-}, source: ReviewQueueJobSource) {
+}, source: ReviewQueueJobSource, commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>) {
   if (!input.config.reviewerSessions?.enabled) return undefined;
   const assignment = input.state.assignReviewerSessionJob({
     repo: input.repo,
@@ -271,7 +277,8 @@ function assignReviewerSessionForQueueJob(input: {
     now: input.now,
     model: input.config.zcode.model,
     provider: input.providerId,
-    assignmentReason: source === "manual_command" ? "manual_command_priority" : undefined
+    assignmentReason: source === "manual_command" ? "manual_command_priority" : undefined,
+    allowProcessed: commandDecision?.shouldReview === true
   });
   return assignment.assigned || assignment.session ? assignment : undefined;
 }
@@ -317,7 +324,10 @@ async function runLeasedQueueJob(input: {
     return "closed_retired";
   }
 
-  if (pull.head.sha !== input.job.headSha || (input.job.baseSha && pull.base.sha !== input.job.baseSha)) {
+  if (
+    pull.head.sha !== input.job.headSha ||
+    (input.job.source !== "manual_command" && input.job.baseSha && pull.base.sha !== input.job.baseSha)
+  ) {
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "stale_retired",
@@ -340,7 +350,8 @@ async function runLeasedQueueJob(input: {
       dryRun: input.dryRun,
       useZCode: input.useZCode,
       budget: input.budget,
-      processedHeadPolicy: isProviderDeferredRetryJob(input.job) ? "retry_failed_head" : "normal"
+      processedHeadPolicy: isProviderDeferredRetryJob(input.job) ? "retry_failed_head" : "normal",
+      ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
     updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun });
     updateReviewerSessionJobAfterReviewStatus({
@@ -388,6 +399,7 @@ function ensureReviewerSessionForLeasedJob(input: {
 }, now: Date): string | undefined {
   if (!input.config.reviewerSessions?.enabled) return input.job.sessionId;
   if (input.job.sessionId) return input.job.sessionId;
+  if (input.job.source === "manual_command") return undefined;
 
   const providerId = input.job.providerId ?? input.config.zcode.providerId ?? input.config.zcode.model ?? "zcode";
   const assignment = input.state.assignReviewerSessionJob({
@@ -398,8 +410,7 @@ function ensureReviewerSessionForLeasedJob(input: {
     headCountLimit: input.config.reviewerSessions.headCountLimit,
     now,
     model: input.config.zcode.model,
-    provider: providerId,
-    assignmentReason: input.job.source === "manual_command" ? "manual_command_priority" : undefined
+    provider: providerId
   });
   const sessionId = assignment.session?.sessionId;
   if (sessionId) {
@@ -512,14 +523,14 @@ function updateQueueJobAfterReviewStatus(input: {
     case "skipped_command_stop":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: "posted",
+        state: "command_recorded",
         lastError: "manual_command_stop_recorded"
       });
       return;
     case "skipped_command_explain":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: "posted",
+        state: "command_recorded",
         lastError: "manual_command_explain_recorded"
       });
       return;
