@@ -80,6 +80,25 @@ Rows recorded as `status=skipped` with a baseline activation reason are not
 release-blocking errors. They are the expected way to prevent retroactive review
 spam when a live beta starts monitoring existing open PR heads.
 
+Failed rows remain release-blocking until they are retried, superseded by a
+successful current-head review, or explicitly retired with evidence that the
+head is no longer eligible. Before retiring a failed row, run `coverage-audit`
+and confirm the target PR is closed, draft-skipped, stale, or otherwise absent
+from the eligible open-head set. Retire only the exact failed head:
+
+```bash
+npx tsx src/cli.ts retire-failed \
+  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --repo owner/repo \
+  --pr 123 \
+  --head-sha <failed-head-sha> \
+  --reason closed_or_stale_after_coverage_audit
+```
+
+Do not retire an active failed current head. Use `retry-failed` or disable the
+repo through the tracked allowlist/policy lane when the provider is repeatedly
+rate-limited.
+
 ## Rollback
 
 Default rollback is to restart the existing launchd job after checking out the

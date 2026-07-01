@@ -43,6 +43,63 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("retires an exact failed head into a nonblocking historical skip", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-state-retire-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordProcessed({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 212,
+      headSha: "failed-head",
+      status: "failed",
+      error: "ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+
+    const retired = store.retireFailedReview({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 212,
+      headSha: "failed-head",
+      reason: "closed_or_stale_after_coverage_audit"
+    });
+
+    expect(retired).toMatchObject({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 212,
+      headSha: "failed-head",
+      status: "skipped",
+      error: "retired_failed_head:closed_or_stale_after_coverage_audit; previous_error=ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+    expect(store.getProcessedReview("100yenadmin/Lossless-Codex-Orchestrator-LCO", 212, "failed-head")).toMatchObject({
+      status: "skipped",
+      error: expect.stringContaining("retired_failed_head:closed_or_stale_after_coverage_audit")
+    });
+    expect(store.hasProcessed("100yenadmin/Lossless-Codex-Orchestrator-LCO", 212, "failed-head")).toBe(true);
+    store.close();
+  });
+
+  it("refuses to retire a non-failed processed head", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-state-retire-posted-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1214,
+      headSha: "posted-head",
+      status: "posted",
+      event: "COMMENT"
+    });
+
+    expect(() => store.retireFailedReview({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1214,
+      headSha: "posted-head",
+      reason: "operator_request"
+    })).toThrow("status is posted, not failed");
+    store.close();
+  });
+
   it("caps active review leases and releases them", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
     roots.push(root);

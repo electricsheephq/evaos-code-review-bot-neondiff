@@ -4,6 +4,7 @@ import { runDaemonCycle } from "./daemon.js";
 import { GitHubApi } from "./github.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { ReviewStateStore } from "./state.js";
 import { isSuccessfulRetryStatus, retryFailedHead, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
@@ -128,6 +129,27 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "retire-failed") {
+    if (!args.repo) throw new Error("--repo is required for retire-failed");
+    if (!args.pr) throw new Error("--pr is required for retire-failed");
+    if (!args["head-sha"]) throw new Error("--head-sha is required for retire-failed");
+    if (!args.reason) throw new Error("--reason is required for retire-failed");
+    const config = loadConfig(args.config);
+    const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
+    try {
+      const retired = state.retireFailedReview({
+        repo: args.repo,
+        pullNumber: Number(args.pr),
+        headSha: args["head-sha"],
+        reason: args.reason
+      });
+      console.log(JSON.stringify({ ok: true, retired }, null, 2));
+    } finally {
+      state.close();
+    }
+    return;
+  }
+
   if (command === "daemon") {
     const config = loadConfig(args.config);
     const monitoredRepos = listReposToScan(config);
@@ -176,6 +198,7 @@ interface ParsedArgs {
   config?: string;
   repo?: string;
   pr?: string;
+  reason?: string;
   "expected-head"?: string;
   "launchd-label"?: string;
   "state-path"?: string;
