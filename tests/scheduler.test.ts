@@ -74,6 +74,7 @@ describe("provider-aware review scheduler", () => {
     expect(state.listReviewQueueJobs({ state: "queued" })).toHaveLength(10);
     expect(state.listReviewQueueJobs({ state: "queued" })
       .filter((job) => job.lastError === "dry_run_completed_not_posted")).toHaveLength(2);
+    expect(state.listReviewReadiness({ states: ["queued"] }).length).toBeGreaterThan(0);
     state.close();
   });
 
@@ -84,6 +85,7 @@ describe("provider-aware review scheduler", () => {
     config.reviewStatusComment!.enabled = true;
     const state = new ReviewStateStore(config.statePath);
     const statusCalls: StatusCommentCall[] = [];
+    const readinessObservedDuringReview: string[] = [];
 
     const result = await runScheduledCycleWithDeps({
       config,
@@ -93,6 +95,7 @@ describe("provider-aware review scheduler", () => {
       state,
       options: { dryRun: false, useZCode: false },
       reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        readinessObservedDuringReview.push(reviewState.getReviewReadiness(repo, reviewPull.number, reviewPull.head.sha)?.state ?? "missing");
         reviewState.recordProcessed({
           repo,
           pullNumber: reviewPull.number,
@@ -107,11 +110,244 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(result.reviewed).toBe(1);
+    expect(readinessObservedDuringReview).toEqual(["reviewing"]);
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "completed"]);
     expect(new Set(statusCalls.map((call) => call.marker))).toEqual(new Set([
       `<!-- evaos-code-review-bot:review-status repo=org/repo-a pr=1 sha=${HEAD_A} -->`
     ]));
     expect(statusCalls.at(-1)?.body).toContain("https://github.com/org/repo-a/pull/1#pullrequestreview-status");
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-status"
+    });
+    state.close();
+  });
+
+  it("persists REQUEST_CHANGES reviews as needs_fix readiness", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-needs-fix-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "REQUEST_CHANGES",
+          reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-blocking"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "needs_fix",
+      reason: "request_changes_review_posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-blocking"
+    });
+    state.close();
+  });
+
+  it("preserves readiness state on duplicate processed-head scheduler cycles", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-duplicate-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+    const github = githubFromMap(new Map([
+      ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+    ]), new Map(), statusCalls);
+
+    const first = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-first"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    const readiness = state.getReviewReadiness("org/repo-a", 1, HEAD_A);
+
+    const second = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("duplicate processed heads must not run review work");
+      },
+      now: new Date("2026-07-02T00:05:00.000Z")
+    });
+
+    expect(first.reviewed).toBe(1);
+    expect(second.skippedProcessed).toBe(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toEqual(readiness);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "completed"]);
+    state.close();
+  });
+
+  it("marks older readiness rows stale when a newer PR head is scanned", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-superseded-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    state.recordReviewReadiness({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "needs_fix",
+      reason: "request_changes_review_posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_B)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-new"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:05:00.000Z")
+    });
+
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "stale",
+      reason: `superseded_by_head=${HEAD_B}`,
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old"
+    });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_B)).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted"
+    });
+    state.close();
+  });
+
+  it("marks older readiness rows stale even when the new head is skipped by canary policy", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-canary-superseded-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.canaryPulls = ["org/repo-a#99"];
+    const state = new ReviewStateStore(config.statePath);
+    state.recordReviewReadiness({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_B)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("canary-skipped heads must not run review work");
+      },
+      now: new Date("2026-07-02T00:05:00.000Z")
+    });
+
+    expect(result.skippedCanary).toBe(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "stale",
+      reason: `superseded_by_head=${HEAD_B}`,
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old"
+    });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_B)).toMatchObject({
+      state: "skipped",
+      reason: "canary_policy"
+    });
+    state.close();
+  });
+
+  it("repairs non-terminal readiness rows from processed review truth", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-backfill-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-existing"
+    });
+    state.recordReviewReadiness({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "reviewing",
+      reason: "queue_job_running",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("processed heads must not run review work");
+      },
+      now: new Date("2026-07-02T00:05:00.000Z")
+    });
+
+    expect(result.skippedProcessed).toBe(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "needs_fix",
+      reason: "processed_head_already_posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-existing",
+      updatedAt: "2026-07-02T00:05:00.000Z"
+    });
     state.close();
   });
 
@@ -1058,6 +1294,7 @@ describe("provider-aware review scheduler", () => {
       ["org/repo-a#1", [comment(222, "100yenadmin", "@evaos-code-review-bot re-review")]]
     ]);
     const statusCalls: StatusCommentCall[] = [];
+    const readinessObservedDuringCommandReview: string[] = [];
 
     const result = await runScheduledCycleWithDeps({
       config,
@@ -1065,6 +1302,8 @@ describe("provider-aware review scheduler", () => {
       state,
       options: { dryRun: false, useZCode: false },
       reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        const readiness = reviewState.getReviewReadiness(repo, reviewPull.number, reviewPull.head.sha);
+        readinessObservedDuringCommandReview.push(`${readiness?.state ?? "missing"}:${readiness?.reason ?? "missing"}`);
         reviewState.recordProcessed({
           repo,
           pullNumber: reviewPull.number,
@@ -1080,7 +1319,14 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.reviewed).toBe(1);
     expect(result.commandReviewRequested).toBe(1);
+    expect(readinessObservedDuringCommandReview).toEqual(["awaiting_re_review:trusted_re_review_command"]);
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "completed"]);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      commandAction: "re-review",
+      commandCommentId: 222
+    });
     expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
       expect.objectContaining({
         source: "manual_command",
@@ -1122,6 +1368,12 @@ describe("provider-aware review scheduler", () => {
     expect(state.getProcessedReview("org/repo-a", 1, "a1")).toMatchObject({
       status: "skipped",
       error: expect.stringContaining("manual_command_stop")
+    });
+    expect(state.getReviewReadiness("org/repo-a", 1, "a1")).toMatchObject({
+      state: "skipped",
+      reason: "manual_command_stop",
+      commandAction: "stop",
+      commandCommentId: 333
     });
     expect(state.listReviewQueueJobs({ state: "command_recorded" })).toEqual([
       expect.objectContaining({
@@ -1360,6 +1612,12 @@ describe("provider-aware review scheduler", () => {
     const [recordedJob] = state.listReviewQueueJobs({ state: "command_recorded" });
     expect(recordedJob).toMatchObject({ commentId: 336 });
     expect(recordedJob?.sessionId).toBeUndefined();
+    expect(state.getReviewReadiness("org/repo-a", 1, "a1")).toMatchObject({
+      state: "command_recorded",
+      reason: "trusted_explain_command",
+      commandAction: "explain",
+      commandCommentId: 336
+    });
     state.close();
   });
 

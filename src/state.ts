@@ -27,6 +27,20 @@ export type ReviewQueueJobState =
   | "command_recorded"
   | "posted"
   | "failed";
+export type ReviewReadinessState =
+  | "queued"
+  | "reviewing"
+  | "needs_fix"
+  | "awaiting_re_review"
+  | "blocked_on_checks"
+  | "blocked_on_proof"
+  | "ready_for_human"
+  | "provider_deferred"
+  | "stale"
+  | "closed"
+  | "command_recorded"
+  | "skipped"
+  | "failed";
 
 export interface ProcessedReviewRecord {
   repo: string;
@@ -111,6 +125,20 @@ export interface ReviewQueueJobRecord {
   updatedAt: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export interface ReviewReadinessRecord {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  state: ReviewReadinessState;
+  reason?: string;
+  event?: ReviewEvent;
+  reviewUrl?: string;
+  commandAction?: ProcessedCommandAction;
+  commandCommentId?: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type ReviewQueueEnqueueResult =
@@ -299,6 +327,26 @@ export class ReviewStateStore {
         on review_queue_jobs (repo, pull_number, state);
       create index if not exists idx_review_queue_jobs_provider_state
         on review_queue_jobs (provider_id, state);
+
+      create table if not exists review_readiness (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        state text not null,
+        reason text,
+        event text,
+        review_url text,
+        command_action text,
+        command_comment_id integer,
+        created_at text not null,
+        updated_at text not null,
+        primary key (repo, pull_number, head_sha)
+      );
+
+      create index if not exists idx_review_readiness_state
+        on review_readiness (state, updated_at);
+      create index if not exists idx_review_readiness_repo_pull
+        on review_readiness (repo, pull_number, updated_at);
     `);
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
@@ -366,6 +414,125 @@ export class ReviewStateStore {
         record.reviewUrl ?? null,
         record.error ?? null
       );
+  }
+
+  getReviewReadiness(repo: string, pullNumber: number, headSha: string): ReviewReadinessRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, state, reason, event, review_url,
+                command_action, command_comment_id, created_at, updated_at
+         from review_readiness
+         where repo = ? and pull_number = ? and head_sha = ?
+         limit 1`
+      )
+      .get(repo, pullNumber, headSha) as ReviewReadinessRow | undefined;
+    return row ? mapReviewReadinessRow(row) : undefined;
+  }
+
+  recordReviewReadiness(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    state: ReviewReadinessState;
+    reason?: string;
+    event?: ReviewEvent;
+    reviewUrl?: string;
+    commandAction?: ProcessedCommandAction;
+    commandCommentId?: number;
+    now?: Date;
+  }): ReviewReadinessRecord {
+    validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, undefined, input.commandCommentId);
+    const existing = this.getReviewReadiness(input.repo, input.pullNumber, input.headSha);
+    const reason = input.reason ? redactSecrets(input.reason).trim().slice(0, 500) : undefined;
+    const event = input.event ?? existing?.event;
+    const reviewUrl = input.reviewUrl ? redactSecrets(input.reviewUrl).trim().slice(0, 500) : existing?.reviewUrl;
+    const commandAction = input.commandAction ?? existing?.commandAction;
+    const commandCommentId = input.commandCommentId ?? existing?.commandCommentId;
+
+    if (
+      existing &&
+      existing.state === input.state &&
+      existing.reason === reason &&
+      existing.event === event &&
+      existing.reviewUrl === reviewUrl &&
+      existing.commandAction === commandAction &&
+      existing.commandCommentId === commandCommentId
+    ) {
+      return existing;
+    }
+
+    const nowIso = (input.now ?? new Date()).toISOString();
+    this.db
+      .prepare(
+        `insert into review_readiness
+          (repo, pull_number, head_sha, state, reason, event, review_url,
+           command_action, command_comment_id, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict(repo, pull_number, head_sha) do update set
+           state = excluded.state,
+           reason = excluded.reason,
+           event = excluded.event,
+           review_url = excluded.review_url,
+           command_action = excluded.command_action,
+           command_comment_id = excluded.command_comment_id,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        input.repo,
+        input.pullNumber,
+        input.headSha,
+        input.state,
+        reason ?? null,
+        event ?? null,
+        reviewUrl ?? null,
+        commandAction ?? null,
+        commandCommentId ?? null,
+        existing?.createdAt ?? nowIso,
+        nowIso
+      );
+    return this.getReviewReadiness(input.repo, input.pullNumber, input.headSha)!;
+  }
+
+  listReviewReadiness(input: {
+    repo?: string;
+    pullNumber?: number;
+    state?: ReviewReadinessState;
+    states?: ReviewReadinessState[];
+    limit?: number;
+  } = {}): ReviewReadinessRecord[] {
+    if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
+      throw new Error("limit must be a positive integer");
+    }
+    const states = input.states ?? (input.state ? [input.state] : undefined);
+    const predicates: string[] = [];
+    const params: Array<string | number> = [];
+    if (input.repo) {
+      predicates.push("repo = ?");
+      params.push(input.repo);
+    }
+    if (input.pullNumber !== undefined) {
+      if (!Number.isInteger(input.pullNumber) || input.pullNumber < 1) throw new Error("pullNumber must be a positive integer");
+      predicates.push("pull_number = ?");
+      params.push(input.pullNumber);
+    }
+    if (states?.length) {
+      predicates.push(`state in (${states.map(() => "?").join(", ")})`);
+      params.push(...states);
+    }
+    const where = predicates.length ? `where ${predicates.join(" and ")}` : "";
+    const limit = input.limit ? " limit ?" : "";
+    if (input.limit) params.push(input.limit);
+    const rows = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, state, reason, event, review_url,
+                command_action, command_comment_id, created_at, updated_at
+         from review_readiness
+         ${where}
+         order by datetime(updated_at) desc
+         ${limit}`
+      )
+      .all(...params) as unknown as ReviewReadinessRow[];
+    return rows.map(mapReviewReadinessRow);
   }
 
   retireFailedReview(input: RetireFailedReviewInput): StoredProcessedReviewRecord {
@@ -1537,6 +1704,20 @@ interface ReviewQueueJobRow {
   finished_at: string | null;
 }
 
+interface ReviewReadinessRow {
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  state: ReviewReadinessState;
+  reason: string | null;
+  event: ReviewEvent | null;
+  review_url: string | null;
+  command_action: ProcessedCommandAction | null;
+  command_comment_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -1547,6 +1728,22 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),
     createdAt: row.created_at
+  };
+}
+
+function mapReviewReadinessRow(row: ReviewReadinessRow): ReviewReadinessRecord {
+  return {
+    repo: row.repo,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    state: row.state,
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.event ? { event: row.event } : {}),
+    ...(row.review_url ? { reviewUrl: row.review_url } : {}),
+    ...(row.command_action ? { commandAction: row.command_action } : {}),
+    ...(row.command_comment_id ? { commandCommentId: row.command_comment_id } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }
 

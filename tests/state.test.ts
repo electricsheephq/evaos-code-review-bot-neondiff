@@ -44,6 +44,98 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("persists review readiness transitions without touching updatedAt on no-op repeats", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-readiness-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const queued = store.recordReviewReadiness({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1236,
+      headSha: "head-a",
+      state: "queued",
+      reason: "automatic_enqueue",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const repeated = store.recordReviewReadiness({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1236,
+      headSha: "head-a",
+      state: "queued",
+      reason: "automatic_enqueue",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+    const reviewed = store.recordReviewReadiness({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1236,
+      headSha: "head-a",
+      state: "needs_fix",
+      reason: "request_changes_review_posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1236#pullrequestreview-1",
+      now: new Date("2026-07-01T00:02:00.000Z")
+    });
+    const stale = store.recordReviewReadiness({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1236,
+      headSha: "head-a",
+      state: "stale",
+      reason: "superseded_by_head=head-b",
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(queued).toMatchObject({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1236,
+      headSha: "head-a",
+      state: "queued",
+      reason: "automatic_enqueue"
+    });
+    expect(repeated.updatedAt).toBe(queued.updatedAt);
+    expect(reviewed).toMatchObject({
+      state: "needs_fix",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1236#pullrequestreview-1"
+    });
+    expect(stale).toMatchObject({
+      state: "stale",
+      reason: "superseded_by_head=head-b",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1236#pullrequestreview-1"
+    });
+    expect(reviewed.createdAt).toBe(queued.createdAt);
+    expect(reviewed.updatedAt).toBe("2026-07-01T00:02:00.000Z");
+    expect(stale.createdAt).toBe(queued.createdAt);
+    expect(stale.updatedAt).toBe("2026-07-01T00:03:00.000Z");
+    expect(store.listReviewReadiness({ states: ["stale"] })).toEqual([stale]);
+    store.close();
+  });
+
+  it("records command metadata on review readiness rows", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-readiness-command-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const readiness = store.recordReviewReadiness({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 289,
+      headSha: "head-command",
+      state: "awaiting_re_review",
+      reason: "trusted_re_review_command",
+      commandAction: "re-review",
+      commandCommentId: 222,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(readiness).toMatchObject({
+      state: "awaiting_re_review",
+      commandAction: "re-review",
+      commandCommentId: 222
+    });
+    expect(store.getReviewReadiness("100yenadmin/Lossless-Codex-Orchestrator-LCO", 289, "head-command")).toEqual(readiness);
+    store.close();
+  });
+
   it("retires an exact failed head into a nonblocking historical skip", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-state-retire-"));
     roots.push(root);
