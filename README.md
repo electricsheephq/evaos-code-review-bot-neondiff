@@ -50,6 +50,13 @@ follow [docs/beta-release-runbook.md](docs/beta-release-runbook.md).
 Named release packets live under [docs/releases](docs/releases), starting with
 `v0.2.1-runtime-resilience`.
 
+Tag-driven release governance is defined in
+[docs/release-governance.md](docs/release-governance.md). Agents operating the
+release lane should use
+[docs/skills/release-operator.md](docs/skills/release-operator.md). A live beta
+promotion is not green unless it has an immutable Git tag, a GitHub prerelease,
+runtime status proof, and rollback instructions.
+
 ## Repo Profiles
 
 Use [docs/repo-profiles.md](docs/repo-profiles.md) to add repo-specific review
