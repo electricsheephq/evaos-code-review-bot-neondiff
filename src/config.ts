@@ -18,6 +18,12 @@ export interface BotConfig {
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
+    requestRateLimitDurationMs: number;
+    overloadDurationMs: number;
+    quotaDurationMs: number;
+    transientRetryAttempts: number;
+    transientRetryBaseDelayMs: number;
+    transientRetryMaxDelayMs: number;
   };
   walkthrough: {
     enabled: boolean;
@@ -116,12 +122,18 @@ const DEFAULT_CONFIG: BotConfig = {
     reviewExistingOpenPrsOnActivation: false
   },
   reviewConcurrency: {
-    maxActiveRuns: 5,
+    maxActiveRuns: 1,
     leaseTtlMs: 15 * 60_000
   },
   providerCooldown: {
     enabled: true,
-    durationMs: 15 * 60_000
+    durationMs: 15 * 60_000,
+    requestRateLimitDurationMs: 5 * 60_000,
+    overloadDurationMs: 2 * 60_000,
+    quotaDurationMs: 30 * 60_000,
+    transientRetryAttempts: 2,
+    transientRetryBaseDelayMs: 1_000,
+    transientRetryMaxDelayMs: 5_000
   },
   walkthrough: {
     enabled: true,
@@ -183,6 +195,12 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(config.reviewConcurrency.leaseTtlMs, "config.reviewConcurrency.leaseTtlMs");
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
+  validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
+  validatePositiveInteger(config.providerCooldown.overloadDurationMs, "config.providerCooldown.overloadDurationMs");
+  validatePositiveInteger(config.providerCooldown.quotaDurationMs, "config.providerCooldown.quotaDurationMs");
+  validateNonNegativeInteger(config.providerCooldown.transientRetryAttempts, "config.providerCooldown.transientRetryAttempts");
+  validatePositiveInteger(config.providerCooldown.transientRetryBaseDelayMs, "config.providerCooldown.transientRetryBaseDelayMs");
+  validatePositiveInteger(config.providerCooldown.transientRetryMaxDelayMs, "config.providerCooldown.transientRetryMaxDelayMs");
   validateBoolean(config.walkthrough.enabled, "config.walkthrough.enabled");
   validateBoolean(config.walkthrough.postIssueComment, "config.walkthrough.postIssueComment");
   validateBoolean(config.commands.enabled, "config.commands.enabled");

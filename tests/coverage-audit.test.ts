@@ -89,6 +89,43 @@ describe("coverage audit", () => {
     state.close();
   });
 
+  it("separately reports active provider-deferred heads", async () => {
+    const { root, state } = createState();
+    state.recordProcessed({
+      repo: "owner/allowed",
+      pullNumber: 5,
+      headSha: "head-cooldown",
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:05:00.000Z; reason=provider_request_rate_limit"
+    });
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(5, "head-cooldown")]
+      } as unknown as GitHubApi,
+      state,
+      now: new Date("2026-07-01T00:04:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      processed: 1,
+      providerDeferred: 1,
+      unprocessed: 0
+    });
+    expect(audit.providerDeferred).toEqual([
+      expect.objectContaining({
+        repo: "owner/allowed",
+        pullNumber: 5,
+        headSha: "head-cooldown",
+        cooldownUntil: "2026-07-01T00:05:00.000Z",
+        reason: "provider_request_rate_limit"
+      })
+    ]);
+    state.close();
+  });
+
   it("supports canary and single-PR scoping without marking closed PRs as misses", async () => {
     const { root, state } = createState();
     let getPullCount = 0;
@@ -322,7 +359,13 @@ function minimalConfig(root: string): BotConfig {
     },
     providerCooldown: {
       enabled: true,
-      durationMs: 15 * 60_000
+      durationMs: 15 * 60_000,
+      requestRateLimitDurationMs: 5 * 60_000,
+      overloadDurationMs: 2 * 60_000,
+      quotaDurationMs: 30 * 60_000,
+      transientRetryAttempts: 2,
+      transientRetryBaseDelayMs: 1,
+      transientRetryMaxDelayMs: 1
     },
     walkthrough: {
       enabled: false,

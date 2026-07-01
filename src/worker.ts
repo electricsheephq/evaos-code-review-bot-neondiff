@@ -91,6 +91,18 @@ export interface RetryProviderCooldownsResult {
   };
 }
 
+export type ProviderErrorCategory = "none" | "request_rate_limit" | "overloaded" | "quota_exhausted";
+
+export interface ProviderErrorClassification {
+  category: ProviderErrorCategory;
+  providerCode?: string;
+  providerRequestId?: string;
+  retryAfterMs?: number;
+  reason: string;
+  retryable: boolean;
+  cooldown: boolean;
+}
+
 export type ReviewPullResult =
   | "reviewed"
   | "reviewed_command"
@@ -617,16 +629,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
 
     const zcodeResult = input.useZCode
-      ? runZCodeReview({
-          cwd: worktree.path,
+      ? await runZCodeReviewWithProviderRetry({
+          config,
+          worktreePath: worktree.path,
           prompt,
-          cliPath: config.zcode.cliPath,
-          appConfigPath: config.zcode.appConfigPath,
-          model: config.zcode.model,
-          providerId: config.zcode.providerId,
-          evidenceDir,
-          timeoutMs: config.zcode.timeoutMs,
-          retryMaxRetries: config.zcode.retryMaxRetries
+          evidenceDir
         })
       : { findings: [], droppedFromSchema: [], rawResponse: "{\"findings\":[]}" };
 
@@ -846,11 +853,11 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   now?: Date;
 }): boolean {
   if (!input.config.providerCooldown.enabled) return false;
-  const classification = classifyProviderRateLimitError(input.error);
-  if (!classification.rateLimited) return false;
+  const classification = classifyProviderError(input.error);
+  if (!classification.cooldown) return false;
 
   const now = input.now ?? new Date();
-  const cooldownUntil = new Date(now.getTime() + input.config.providerCooldown.durationMs);
+  const cooldownUntil = new Date(now.getTime() + providerCooldownDurationMs(input.config, classification));
   input.state.recordRepoProviderCooldown({
     repo: input.repo,
     cooldownUntil,
@@ -866,19 +873,187 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   return true;
 }
 
-export function classifyProviderRateLimitError(error: unknown): { rateLimited: boolean; reason: string } {
+export function classifyProviderError(error: unknown): ProviderErrorClassification {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
-  const rateLimited =
+  const providerCode = extractProviderCode(message);
+  const providerRequestId = extractProviderRequestId(message);
+  const retryAfterMs = extractRetryAfterMs(message);
+  const requestRateLimited =
     normalized.includes("rate limit") ||
     normalized.includes("rate_limit_error") ||
     normalized.includes("providercode: '1302'") ||
     normalized.includes('providercode: "1302"') ||
-    normalized.includes("[1302]");
-  return {
-    rateLimited,
-    reason: rateLimited ? "provider_rate_limit" : "not_provider_rate_limit"
+    normalized.includes("[1302]") ||
+    providerCode === "1302";
+  const overloaded =
+    normalized.includes("temporarily overloaded") ||
+    normalized.includes("overloaded_error") ||
+    normalized.includes("providercode: '1305'") ||
+    normalized.includes('providercode: "1305"') ||
+    normalized.includes("[1305]") ||
+    providerCode === "1305";
+  const quotaExhausted =
+    normalized.includes("usage limit reached") ||
+    normalized.includes("weekly/monthly limit exhausted") ||
+    normalized.includes("package has expired") ||
+    ["1308", "1309", "1310", "1316", "1317"].includes(providerCode ?? "");
+  const base = {
+    ...(providerCode ? { providerCode } : {}),
+    ...(providerRequestId ? { providerRequestId } : {}),
+    ...(retryAfterMs ? { retryAfterMs } : {})
   };
+  if (quotaExhausted) {
+    return { ...base, category: "quota_exhausted", reason: "provider_quota_exhausted", retryable: false, cooldown: true };
+  }
+  if (overloaded) {
+    return { ...base, category: "overloaded", reason: "provider_overloaded", retryable: true, cooldown: true };
+  }
+  if (requestRateLimited) {
+    return { ...base, category: "request_rate_limit", reason: "provider_request_rate_limit", retryable: true, cooldown: true };
+  }
+  return {
+    ...base,
+    category: "none",
+    reason: "not_provider_retryable",
+    retryable: false,
+    cooldown: false
+  };
+}
+
+export function providerCooldownDurationMs(config: BotConfig, classification: ProviderErrorClassification): number {
+  if (classification.category === "request_rate_limit") return config.providerCooldown.requestRateLimitDurationMs;
+  if (classification.category === "overloaded") return config.providerCooldown.overloadDurationMs;
+  if (classification.category === "quota_exhausted") return config.providerCooldown.quotaDurationMs;
+  return config.providerCooldown.durationMs;
+}
+
+async function runZCodeReviewWithProviderRetry(input: {
+  config: BotConfig;
+  worktreePath: string;
+  prompt: string;
+  evidenceDir: string;
+}): Promise<ReturnType<typeof runZCodeReview>> {
+  return runWithProviderRetry({
+    config: input.config,
+    evidenceDir: input.evidenceDir,
+    operation: () => runZCodeReview({
+      cwd: input.worktreePath,
+      prompt: input.prompt,
+      cliPath: input.config.zcode.cliPath,
+      appConfigPath: input.config.zcode.appConfigPath,
+      model: input.config.zcode.model,
+      providerId: input.config.zcode.providerId,
+      evidenceDir: input.evidenceDir,
+      timeoutMs: input.config.zcode.timeoutMs,
+      retryMaxRetries: input.config.zcode.retryMaxRetries
+    })
+  });
+}
+
+export async function runWithProviderRetry<T>(input: {
+  config: BotConfig;
+  evidenceDir: string;
+  operation: () => T | Promise<T>;
+}): Promise<T> {
+  let lastError: unknown;
+  const maxAttempts = Math.max(1, input.config.providerCooldown.transientRetryAttempts + 1);
+  const attempts: Array<{
+    attempt: number;
+    providerCode?: string;
+    providerRequestId?: string;
+    retryAfterMs?: number;
+    category: ProviderErrorCategory;
+    reason: string;
+    retryable: boolean;
+    nextDelayMs?: number;
+    final?: boolean;
+  }> = [];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await input.operation();
+      if (attempts.length > 0) {
+        attempts.push({ attempt, category: "none", reason: "success_after_retry", retryable: false, final: true });
+        writeProviderRetryEvidence(input.evidenceDir, attempts);
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      const classification = classifyProviderError(error);
+      const shouldRetry = classification.retryable && attempt < maxAttempts;
+      const nextDelayMs = shouldRetry ? providerRetryDelayMs(input.config, attempt, classification.retryAfterMs) : undefined;
+      attempts.push({
+        attempt,
+        ...(classification.providerCode ? { providerCode: classification.providerCode } : {}),
+        ...(classification.providerRequestId ? { providerRequestId: classification.providerRequestId } : {}),
+        ...(classification.retryAfterMs ? { retryAfterMs: classification.retryAfterMs } : {}),
+        category: classification.category,
+        reason: classification.reason,
+        retryable: classification.retryable,
+        ...(nextDelayMs !== undefined ? { nextDelayMs } : {}),
+        final: !shouldRetry
+      });
+      writeProviderRetryEvidence(input.evidenceDir, attempts);
+      if (!shouldRetry) break;
+      await sleep(nextDelayMs);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function providerRetryDelayMs(config: BotConfig, attempt: number, retryAfterMs?: number): number {
+  const base = config.providerCooldown.transientRetryBaseDelayMs;
+  const max = config.providerCooldown.transientRetryMaxDelayMs;
+  if (retryAfterMs !== undefined) return Math.min(max, Math.max(1, retryAfterMs));
+  const exponential = base * 2 ** Math.max(0, attempt - 1);
+  const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(base / 2)));
+  return Math.min(max, exponential + jitter);
+}
+
+function writeProviderRetryEvidence(evidenceDir: string, attempts: unknown): void {
+  mkdirSync(evidenceDir, { recursive: true });
+  writeFileSync(join(evidenceDir, "provider-retry.json"), `${JSON.stringify(attempts, null, 2)}\n`);
+}
+
+function extractProviderCode(message: string): string | undefined {
+  return (
+    message.match(/providerCode:\s*['"]?(\d{4})['"]?/)?.[1] ??
+    message.match(/"code"\s*:\s*"(\d{4})"/)?.[1] ??
+    message.match(/\[(\d{4})\]/)?.[1]
+  );
+}
+
+function extractProviderRequestId(message: string): string | undefined {
+  return (
+    message.match(/providerRequestId:\s*['"]([^'"]+)['"]/)?.[1] ??
+    message.match(/request_id['"]?\s*:\s*['"]([^'"]+)['"]/)?.[1]
+  );
+}
+
+function extractRetryAfterMs(message: string): number | undefined {
+  const numeric =
+    message.match(/retry-after['"]?\s*[:=]\s*['"]?(\d+(?:\.\d+)?)['"]?/i)?.[1] ??
+    message.match(/retryAfterMs['"]?\s*[:=]\s*['"]?(\d+(?:\.\d+)?)['"]?/i)?.[1];
+  if (numeric !== undefined) {
+    const value = Number(numeric);
+    if (Number.isFinite(value) && value > 0) {
+      return message.toLowerCase().includes("retryafterms") ? Math.ceil(value) : Math.ceil(value * 1000);
+    }
+  }
+
+  const date = message.match(/retry-after['"]?\s*[:=]\s*['"]?([^'",\n}]+)/i)?.[1];
+  if (!date) return undefined;
+  const parsed = Date.parse(date);
+  if (!Number.isFinite(parsed)) return undefined;
+  const delayMs = parsed - Date.now();
+  return delayMs > 0 ? Math.ceil(delayMs) : undefined;
+}
+
+function sleep(ms: number | undefined): Promise<void> {
+  if (!ms || ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function recordProviderCooldownSkip(input: {
