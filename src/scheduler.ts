@@ -1021,6 +1021,7 @@ function backfillReadinessFromActiveQueueJob(
 function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobRecord): boolean {
   if (job.source !== "manual_command") return true;
   const existing = state.getReviewReadiness(job.repo, job.pullNumber, job.headSha);
+  // Only stop/explain commands suppress reviewing because they do not perform review work.
   return existing?.commandAction !== "stop" && existing?.commandAction !== "explain";
 }
 
@@ -1042,9 +1043,10 @@ function readinessStateForReviewResult(
       return "stale";
     case "skipped_draft":
     case "skipped_canary":
-    case "skipped_policy":
     case "skipped_command_stop":
       return "skipped";
+    case "skipped_policy":
+      return "failed";
     case "skipped_command_explain":
       return undefined;
     default:
@@ -1074,7 +1076,7 @@ function readinessReasonForReviewResult(
     case "skipped_canary":
       return "canary_policy";
     case "skipped_policy":
-      return "repo_policy";
+      return "unexpected_scheduler_review_status=skipped_policy";
     case "skipped_command_stop":
       return "manual_command_stop";
     case "skipped_command_explain":
