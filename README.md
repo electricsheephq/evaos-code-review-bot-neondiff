@@ -46,6 +46,8 @@ The worker derives transient ZCode CLI model environment from the existing ZCode
 The live launchd worker is a local beta release surface, not just whatever
 `main` happens to contain. Before promoting a merged PR to the live worker,
 follow [docs/beta-release-runbook.md](docs/beta-release-runbook.md).
+Named release packets live under [docs/releases](docs/releases), starting with
+`v0.2.1-runtime-resilience`.
 
 ## Repo Profiles
 

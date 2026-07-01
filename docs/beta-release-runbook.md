@@ -23,9 +23,37 @@ their own tracked issue, PR, dry-run evidence, and explicit promotion gate.
   fix requires a patch beta.
 - Prefer small beta releases after each merged PR that changes live reviewer
   behavior.
+- Cut a named patch beta whenever a change touches launchd behavior,
+  `release:status`, state DB interpretation, retry/backfill semantics, provider
+  failure handling, monitored repos, App auth, posting policy, ZCode invocation,
+  or duplicate-suppression behavior.
+- Documentation-only PRs may be merged without restarting launchd, but the live
+  checkout must still be fast-forwarded and `release:status` must be recorded
+  with the new source SHA so the release surface is not stale.
+- Use the next patch name only after the previous packet is linked from the
+  tracker issue. For this sprint, the runtime-resilience packet is
+  `v0.2.1-runtime-resilience`.
 - Keep the live daemon scoped to the current active config until the allowlist
   issue and App-install gates pass.
 - Do not let launchd run an unrecorded or stale checkout after a merge.
+
+## Patch vs Sprint Branch
+
+Continue on the same sprint branch when the change is still local, unmerged, or
+purely refines the same unpromoted behavior.
+
+Cut a patch beta after merge when any of these are true:
+
+- live launchd needs a restart to pick up source changes,
+- the worker may post, skip, retry, or suppress a different set of PR heads,
+- release-health interpretation changes,
+- state rows are migrated, retired, or reclassified,
+- a runtime incident was fixed or explicitly contained,
+- the next maintainer needs a stable rollback SHA.
+
+Do not bundle unrelated fixes into a patch beta just because the daemon is
+already being restarted. File a follow-up issue and keep the release packet
+bounded to what was actually promoted.
 
 ## Promotion Flow
 
@@ -53,6 +81,10 @@ If the first `release:status` fails only because launchd is still on the
 previous head before restart, record that as pre-promotion state. The
 post-restart `release:status` must pass before calling the beta promoted.
 
+Prefer `npx tsx src/cli.ts release-status ...` when writing machine-readable JSON
+to an evidence file, because `npm run release:status` prepends npm's command
+banner to stdout.
+
 ## Required Gates
 
 - GitHub PR merged to `main` with checks green and no current-head actionable
@@ -63,6 +95,12 @@ post-restart `release:status` must pass before calling the beta promoted.
   launchd dry-run mode, state DB row count, and error count.
 - launchd emits a fresh heartbeat after restart.
 - live DB has no unexpected error rows.
+- provider cooldown rows are allowed only when they are explicit
+  `provider_rate_limit_cooldown_until=...` skips with a follow-up retry issue or
+  retry plan. They prove provider degradation was contained; they do not prove
+  the affected PR head was reviewed.
+- `coverage-audit` has zero unprocessed eligible heads unless every miss is
+  explained in the release packet.
 - GitHub tracker issue records source SHA, config path, launchd proof, DB proof,
   rollback command, and next action.
 
@@ -99,6 +137,12 @@ Do not retire an active failed current head. Use `retry-failed` or disable the
 repo through the tracked allowlist/policy lane when the provider is repeatedly
 rate-limited.
 
+Provider cooldown rows are not failed rows. They mean the provider was
+rate-limited before ZCode produced a review. Keep them visible in
+`release:status`, then retry after the cooldown expires or resolve the ZCode
+provider entitlement/rate-limit source. A release may be green with provider
+cooldown rows only when the packet names the affected PR head and follow-up.
+
 ## Rollback
 
 Default rollback is to restart the existing launchd job after checking out the
@@ -128,13 +172,57 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.electricsheephq.evaos-
 For each beta promotion, record:
 
 - GitHub PR and merge commit.
+- release name, release type, owner, and monitor window.
 - `release:status` JSON before and after restart.
 - `npm test` and `npm run build` result.
+- `doctor` app-auth/readiness summary.
+- `coverage-audit` summary.
 - launchd stdout heartbeat lines after restart.
 - live DB row/error count.
+- provider cooldown rows, if any, with affected repo, PR, head SHA, and
+  cooldown expiry.
 - rollback SHA and command.
 - next monitoring action or heartbeat.
 
 Keep raw evidence under `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
 or session notes. Do not paste secrets, private keys, tokens, cookies, raw
 customer data, or long logs into GitHub comments.
+
+## Release Packet Template
+
+Use this shape in `docs/releases/<release-name>.md` or in the GitHub tracker
+when a docs file is not warranted:
+
+```markdown
+# <release-name>
+
+- Release type:
+- Source SHA:
+- Merged PRs:
+- Live checkout:
+- launchd label:
+- launchd PID:
+- Live config:
+- State DB:
+- Evidence path:
+- Monitor owner/window:
+- Rollback SHA:
+- Rollback command:
+
+## Gates
+
+- PR checks/reviews:
+- Build/tests:
+- release-status:
+- doctor:
+- coverage-audit:
+- heartbeat:
+- DB state:
+- provider cooldown rows:
+
+## Notes
+
+- What changed:
+- What did not change:
+- Open follow-ups:
+```
