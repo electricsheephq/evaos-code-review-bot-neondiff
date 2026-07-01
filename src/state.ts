@@ -35,6 +35,26 @@ export interface ReviewRunLease {
   expiresAt: string;
 }
 
+export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_complete" | "daemon_cycle_failed";
+
+export interface DaemonHeartbeatRecord {
+  cycle: number;
+  event: DaemonHeartbeatEvent;
+  dryRun: boolean;
+  recordedAt?: Date;
+  error?: string;
+}
+
+export interface StoredDaemonHeartbeatRecord {
+  cycle: number;
+  event: DaemonHeartbeatEvent;
+  dryRun: boolean;
+  recordedAt: string;
+  error?: string;
+  startedCycle?: number;
+  startedAt?: string;
+}
+
 export interface ProcessedCommandRecord {
   repo: string;
   pullNumber: number;
@@ -76,7 +96,17 @@ export class ReviewStateStore {
         started_at text not null,
         expires_at text not null
       );
+
+      create table if not exists daemon_heartbeat (
+        id integer primary key check (id = 1),
+        cycle integer,
+        event text,
+        dry_run integer,
+        recorded_at text,
+        error text
+      );
     `);
+    this.ensureDaemonHeartbeatColumns();
     this.db.exec(`
       create table if not exists processed_commands (
         repo text not null,
@@ -212,6 +242,54 @@ export class ReviewStateStore {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
   }
 
+  recordDaemonHeartbeat(record: DaemonHeartbeatRecord): void {
+    if (record.event === "daemon_cycle_start") {
+      this.db
+        .prepare(
+          `insert into daemon_heartbeat
+            (id, started_cycle, started_at)
+           values (1, ?, ?)
+           on conflict(id) do update set
+             started_cycle = excluded.started_cycle,
+             started_at = excluded.started_at`
+        )
+        .run(record.cycle, (record.recordedAt ?? new Date()).toISOString());
+      return;
+    }
+
+    this.db
+      .prepare(
+        `insert or replace into daemon_heartbeat
+          (id, cycle, event, dry_run, recorded_at, error, started_cycle, started_at)
+         values (
+           1, ?, ?, ?, ?, ?,
+           coalesce((select started_cycle from daemon_heartbeat where id = 1), ?),
+           coalesce((select started_at from daemon_heartbeat where id = 1), ?)
+         )`
+      )
+      .run(
+        record.cycle,
+        record.event,
+        record.dryRun ? 1 : 0,
+        (record.recordedAt ?? new Date()).toISOString(),
+        record.error ? redactSecrets(record.error) : null,
+        record.cycle,
+        (record.recordedAt ?? new Date()).toISOString()
+      );
+  }
+
+  getDaemonHeartbeat(): StoredDaemonHeartbeatRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select cycle, event, dry_run, recorded_at, error, started_cycle, started_at
+         from daemon_heartbeat
+         where id = 1 and recorded_at is not null
+         limit 1`
+      )
+      .get() as DaemonHeartbeatRow | undefined;
+    return row ? mapDaemonHeartbeatRow(row) : undefined;
+  }
+
   hasProcessedCommand(repo: string, pullNumber: number, headSha: string, commentId: number): boolean {
     const row = this.db
       .prepare(
@@ -245,6 +323,19 @@ export class ReviewStateStore {
   close(): void {
     this.db.close();
   }
+
+  private ensureDaemonHeartbeatColumns(): void {
+    const columns = this.db
+      .prepare("pragma table_info(daemon_heartbeat)")
+      .all() as unknown as Array<{ name: string }>;
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("started_cycle")) {
+      this.db.exec("alter table daemon_heartbeat add column started_cycle integer");
+    }
+    if (!names.has("started_at")) {
+      this.db.exec("alter table daemon_heartbeat add column started_at text");
+    }
+  }
 }
 
 function normalizeRetirementReason(reason: string): string {
@@ -268,6 +359,16 @@ interface ProcessedReviewRow {
   created_at: string;
 }
 
+interface DaemonHeartbeatRow {
+  cycle: number | null;
+  event: DaemonHeartbeatEvent | null;
+  dry_run: number | null;
+  recorded_at: string | null;
+  error: string | null;
+  started_cycle: number | null;
+  started_at: string | null;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -278,5 +379,17 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),
     createdAt: row.created_at
+  };
+}
+
+function mapDaemonHeartbeatRow(row: DaemonHeartbeatRow): StoredDaemonHeartbeatRecord {
+  return {
+    cycle: row.cycle!,
+    event: row.event!,
+    dryRun: row.dry_run === 1,
+    recordedAt: row.recorded_at!,
+    ...(row.error ? { error: row.error } : {}),
+    ...(row.started_cycle !== null ? { startedCycle: row.started_cycle } : {}),
+    ...(row.started_at ? { startedAt: row.started_at } : {})
   };
 }
