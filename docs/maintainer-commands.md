@@ -53,12 +53,12 @@ Commands are deduped by:
 
 - repo
 - PR number
-- live head SHA
 - GitHub comment id
 
-Reprocessing the same command comment on the same head does nothing. A new push
-creates a new head SHA, so the same comment id is not treated as proof for the
-new head unless a trusted author comments again.
+Reprocessing the same command comment does nothing, including after a new push.
+A new head SHA needs a new trusted command comment. This keeps old `stop`
+comments from suppressing future pushes and keeps old `review` commands from
+silently re-triggering on new code.
 
 ## Evidence
 
