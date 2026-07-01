@@ -682,7 +682,10 @@ export class ReviewStateStore {
       commentId: input.commentId
     });
     const existing = this.getReviewQueueJobByAttemptId(attemptId);
-    if (existing) return { enqueued: false, reason: "already_queued", job: existing };
+    if (existing && !isTerminalQueueState(existing.state)) {
+      return { enqueued: false, reason: "already_queued", job: existing };
+    }
+    const queueAttemptId = existing ? `${attemptId}:after-terminal:${randomUUID()}` : attemptId;
 
     const jobId = randomUUID();
     this.db
@@ -694,7 +697,7 @@ export class ReviewStateStore {
       )
       .run(
         jobId,
-        attemptId,
+        queueAttemptId,
         source,
         lane,
         input.repo,

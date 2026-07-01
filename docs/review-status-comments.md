@@ -53,8 +53,9 @@ has proven quiet.
 
 Operator status includes `statusCommentFailures`. A non-zero value means the
 sticky status lane could not post or edit at least one comment, usually because
-App credentials were unavailable or GitHub rejected the upsert. The review run
-may still complete, but operators should treat the coordination signal as
-degraded until the next green release/status cycle. Token-mode deployments
-without GitHub App credentials should keep `reviewStatusComment.enabled=false`
-or expect `missing_app_credentials` failures while the lane is enabled.
+App credentials were unavailable, comment construction failed, or GitHub
+rejected the upsert. The review run may still complete, but operators should
+treat the coordination signal as degraded until the next green release/status
+cycle. Token-mode deployments without GitHub App credentials should keep
+`reviewStatusComment.enabled=false` or expect `missing_app_credentials` failures
+while the lane is enabled.

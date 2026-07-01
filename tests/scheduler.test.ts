@@ -1401,7 +1401,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("stale-retires automatic base-drift jobs without posting a terminal same-head status", async () => {
+  it("stale-retires automatic base-drift jobs and posts a terminal same-head status", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-automatic-base-drift-"));
     roots.push(root);
     const config = schedulerConfig(root, []);
@@ -1437,7 +1437,7 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.reviewed).toBe(0);
     expect(result.skippedStaleHead).toBe(1);
-    expect(statusCalls).toHaveLength(0);
+    expect(statusCalls.map(statusFromBody)).toEqual(["stale_head"]);
     expect(state.listReviewQueueJobs({ state: "stale_retired" })).toEqual([
       expect.objectContaining({ lastError: "base_changed_before_review live=new-base" })
     ]);

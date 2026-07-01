@@ -520,6 +520,17 @@ async function runLeasedQueueJob(input: {
       now
     });
     updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
+    await syncReviewStatusComment({
+      config: input.config,
+      github: input.github,
+      dryRun: input.dryRun,
+      repo: input.job.repo,
+      pull: pullForQueueJob(input.job, pull),
+      state: "stale_head",
+      details: `base_changed live=${pull.base.sha}`,
+      onStatusCommentFailure: input.onStatusCommentFailure,
+      now
+    });
     return "stale_retired";
   }
 
@@ -653,7 +664,11 @@ async function syncReviewStatusComment(input: {
 }
 
 function isStatusCommentFailure(result: ReviewStatusCommentPostResult): boolean {
-  return !result.posted && (result.reason === "missing_app_credentials" || result.reason === "upsert_failed");
+  return !result.posted && (
+    result.reason === "missing_app_credentials" ||
+    result.reason === "build_failed" ||
+    result.reason === "upsert_failed"
+  );
 }
 
 async function syncReviewStatusCommentForReviewResult(input: {

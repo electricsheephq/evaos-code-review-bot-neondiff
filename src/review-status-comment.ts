@@ -22,7 +22,7 @@ export interface ReviewStatusCommentGithub {
 
 export type ReviewStatusCommentPostResult =
   | { posted: true; action: "created" | "updated"; html_url?: string; id: number; state: ReviewStatusCommentState }
-  | { posted: false; reason: "disabled" | "dry_run" | "missing_app_credentials" | "upsert_failed"; state: ReviewStatusCommentState; error?: string };
+  | { posted: false; reason: "disabled" | "dry_run" | "missing_app_credentials" | "build_failed" | "upsert_failed"; state: ReviewStatusCommentState; error?: string };
 
 export interface BuildReviewStatusCommentInput {
   repo: string;
@@ -103,8 +103,19 @@ export async function postReviewStatusComment(input: {
   if (input.dryRun) return { posted: false, reason: "dry_run", state: input.state };
   if (!input.github.canPostAsApp()) return { posted: false, reason: "missing_app_credentials", state: input.state };
 
+  let comment: ReturnType<typeof buildReviewStatusComment>;
   try {
-    const comment = buildReviewStatusComment(input);
+    comment = buildReviewStatusComment(input);
+  } catch (error) {
+    return {
+      posted: false,
+      reason: "build_failed",
+      state: input.state,
+      error: redactSecrets(error instanceof Error ? error.message : String(error))
+    };
+  }
+
+  try {
     const result = await input.github.upsertIssueComment({
       repo: input.repo,
       issueNumber: input.pullNumber,

@@ -60,13 +60,23 @@ describe("review status comment", () => {
     expect(calls[0]?.body).toContain("status=in_progress");
   });
 
-  it("does not post in dry-run or without App credentials", async () => {
+  it("does not post when disabled, in dry-run, or without App credentials", async () => {
     const github = {
       canPostAsApp: () => false,
       upsertIssueComment: async () => {
         throw new Error("should not post");
       }
     };
+
+    await expect(postReviewStatusComment({
+      enabled: false,
+      dryRun: false,
+      github,
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "queued"
+    })).resolves.toEqual({ posted: false, reason: "disabled", state: "queued" });
 
     await expect(postReviewStatusComment({
       enabled: true,
@@ -109,7 +119,7 @@ describe("review status comment", () => {
 
     expect(result).toMatchObject({
       posted: false,
-      reason: "upsert_failed",
+      reason: "build_failed",
       state: "queued"
     });
     if (result.posted) throw new Error("expected best-effort failure");
