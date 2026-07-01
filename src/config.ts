@@ -20,6 +20,7 @@ export interface BotConfig {
     ttlMs: number;
     headCountLimit: number;
   };
+  reviewScheduler?: ReviewSchedulerConfig;
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -115,6 +116,16 @@ export interface CommandConfig {
   acknowledge: boolean;
 }
 
+export interface ReviewSchedulerConfig {
+  enabled: boolean;
+  maxProviderActive: number;
+  maxOrgActive: number;
+  maxRepoActive: number;
+  maxQueuedPerRepo: number;
+  manualCommandReserve: number;
+  backgroundPriority: number;
+}
+
 const DEFAULT_CONFIG: BotConfig = {
   pilotRepos: ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
   pollIntervalMs: 90_000,
@@ -134,6 +145,15 @@ const DEFAULT_CONFIG: BotConfig = {
     enabled: false,
     ttlMs: 8 * 60 * 60_000,
     headCountLimit: 10
+  },
+  reviewScheduler: {
+    enabled: false,
+    maxProviderActive: 2,
+    maxOrgActive: 3,
+    maxRepoActive: 1,
+    maxQueuedPerRepo: 10,
+    manualCommandReserve: 1,
+    backgroundPriority: 50
   },
   providerCooldown: {
     enabled: true,
@@ -208,6 +228,9 @@ function validateConfig(config: BotConfig): void {
   validateBoolean(reviewerSessions.enabled, "config.reviewerSessions.enabled");
   validatePositiveInteger(reviewerSessions.ttlMs, "config.reviewerSessions.ttlMs");
   validatePositiveInteger(reviewerSessions.headCountLimit, "config.reviewerSessions.headCountLimit");
+  const reviewScheduler = config.reviewScheduler ?? DEFAULT_CONFIG.reviewScheduler!;
+  config.reviewScheduler = reviewScheduler;
+  validateReviewSchedulerConfig(reviewScheduler, "config.reviewScheduler");
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
@@ -304,6 +327,22 @@ function validateFinishingTouch(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validateBoolean(value.enabled, `${label}.enabled`);
   validateOptionalString(value.instructions, `${label}.instructions`);
+}
+
+function validateReviewSchedulerConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validatePositiveInteger(value.maxProviderActive, `${label}.maxProviderActive`);
+  validatePositiveInteger(value.maxOrgActive, `${label}.maxOrgActive`);
+  validatePositiveInteger(value.maxRepoActive, `${label}.maxRepoActive`);
+  validatePositiveInteger(value.maxQueuedPerRepo, `${label}.maxQueuedPerRepo`);
+  validateNonNegativeInteger(value.manualCommandReserve, `${label}.manualCommandReserve`);
+  validateNonNegativeInteger(value.backgroundPriority, `${label}.backgroundPriority`);
+  const maxProviderActive = Number(value.maxProviderActive);
+  const manualCommandReserve = Number(value.manualCommandReserve);
+  if (manualCommandReserve > maxProviderActive) {
+    throw new Error(`${label}.manualCommandReserve must be <= ${label}.maxProviderActive`);
+  }
 }
 
 function validatePathInstructions(value: unknown, label: string): void {

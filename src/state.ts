@@ -15,6 +15,17 @@ export type ReviewerSessionAssignmentReason =
   | "new_session"
   | "session_expired_new_session"
   | "manual_command_priority";
+export type ReviewQueueJobSource = "automatic" | "manual_command";
+export type ReviewQueueJobLane = "background" | "manual";
+export type ReviewQueueJobState =
+  | "queued"
+  | "leased"
+  | "running"
+  | "provider_deferred"
+  | "stale_retired"
+  | "closed_retired"
+  | "posted"
+  | "failed";
 
 export interface ProcessedReviewRecord {
   repo: string;
@@ -74,6 +85,36 @@ export interface ReviewerSessionJobRecord {
   finishedAt?: string;
   processedReviewStatus?: ProcessedStatus;
 }
+
+export interface ReviewQueueJobRecord {
+  jobId: string;
+  attemptId: string;
+  source: ReviewQueueJobSource;
+  lane: ReviewQueueJobLane;
+  repo: string;
+  org: string;
+  pullNumber: number;
+  headSha: string;
+  baseSha?: string;
+  providerId?: string;
+  priority: number;
+  state: ReviewQueueJobState;
+  nextEligibleAt?: string;
+  leaseId?: string;
+  leaseExpiresAt?: string;
+  sessionId?: string;
+  commentId?: number;
+  reviewUrl?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export type ReviewQueueEnqueueResult =
+  | { enqueued: true; job: ReviewQueueJobRecord }
+  | { enqueued: false; reason: "already_queued"; job: ReviewQueueJobRecord };
 
 export type ReviewerSessionAssignResult =
   | {
@@ -222,9 +263,43 @@ export class ReviewStateStore {
         primary key (repo, pull_number, head_sha),
         foreign key (session_id) references reviewer_sessions(session_id)
       );
+
+      create table if not exists review_queue_jobs (
+        job_id text primary key,
+        attempt_id text not null unique,
+        source text not null,
+        lane text not null,
+        repo text not null,
+        org text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        base_sha text,
+        provider_id text,
+        priority integer not null,
+        state text not null,
+        next_eligible_at text,
+        lease_id text,
+        lease_expires_at text,
+        session_id text,
+        comment_id integer,
+        review_url text,
+        last_error text,
+        created_at text not null,
+        updated_at text not null,
+        started_at text,
+        finished_at text
+      );
+
+      create index if not exists idx_review_queue_jobs_state_priority
+        on review_queue_jobs (state, priority, created_at);
+      create index if not exists idx_review_queue_jobs_repo_state
+        on review_queue_jobs (repo, state);
+      create index if not exists idx_review_queue_jobs_provider_state
+        on review_queue_jobs (provider_id, state);
     `);
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
+    this.ensureReviewQueueJobColumns();
     this.db.exec(`
       create table if not exists processed_commands (
         repo text not null,
@@ -575,6 +650,277 @@ export class ReviewStateStore {
     return updated;
   }
 
+  enqueueReviewQueueJob(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    baseSha?: string;
+    source?: ReviewQueueJobSource;
+    lane?: ReviewQueueJobLane;
+    providerId?: string;
+    priority?: number;
+    attemptId?: string;
+    commentId?: number;
+    sessionId?: string;
+    now?: Date;
+  }): ReviewQueueEnqueueResult {
+    validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, input.priority, input.commentId);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const source = input.source ?? "automatic";
+    const lane = input.lane ?? (source === "manual_command" ? "manual" : "background");
+    const priority = input.priority ?? (lane === "manual" ? 10 : 50);
+    const attemptId = input.attemptId ?? buildReviewQueueAttemptId({
+      source,
+      repo: input.repo,
+      pullNumber: input.pullNumber,
+      headSha: input.headSha,
+      baseSha: input.baseSha,
+      commentId: input.commentId
+    });
+    const existing = this.getReviewQueueJobByAttemptId(attemptId);
+    if (existing) return { enqueued: false, reason: "already_queued", job: existing };
+
+    const jobId = randomUUID();
+    this.db
+      .prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+           provider_id, priority, state, session_id, comment_id, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
+      )
+      .run(
+        jobId,
+        attemptId,
+        source,
+        lane,
+        input.repo,
+        repoOrg(input.repo),
+        input.pullNumber,
+        input.headSha,
+        input.baseSha ?? null,
+        input.providerId ?? null,
+        priority,
+        input.sessionId ?? null,
+        input.commentId ?? null,
+        nowIso,
+        nowIso
+      );
+    return { enqueued: true, job: this.getReviewQueueJob(jobId)! };
+  }
+
+  leaseNextReviewQueueJobs(input: {
+    maxProviderActive: number;
+    maxOrgActive: number;
+    maxRepoActive: number;
+    manualCommandReserve?: number;
+    limit?: number;
+    leaseTtlMs?: number;
+    now?: Date;
+  }): ReviewQueueJobRecord[] {
+    validatePositiveQueueLimit(input.maxProviderActive, "maxProviderActive");
+    validatePositiveQueueLimit(input.maxOrgActive, "maxOrgActive");
+    validatePositiveQueueLimit(input.maxRepoActive, "maxRepoActive");
+    const manualCommandReserve = input.manualCommandReserve ?? 0;
+    if (!Number.isInteger(manualCommandReserve) || manualCommandReserve < 0) {
+      throw new Error("manualCommandReserve must be a non-negative integer");
+    }
+    if (manualCommandReserve > input.maxProviderActive) {
+      throw new Error("manualCommandReserve must be <= maxProviderActive");
+    }
+    const limit = input.limit ?? input.maxProviderActive;
+    validatePositiveQueueLimit(limit, "limit");
+    const leaseTtlMs = input.leaseTtlMs ?? 15 * 60_000;
+    validatePositiveQueueLimit(leaseTtlMs, "leaseTtlMs");
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const legacyLeaseCutoffIso = new Date(Date.parse(nowIso) - leaseTtlMs).toISOString();
+    const leaseExpiresAt = new Date(Date.parse(nowIso) + leaseTtlMs).toISOString();
+    const leased: ReviewQueueJobRecord[] = [];
+
+    this.db.exec("begin immediate");
+    try {
+      this.db
+        .prepare(
+          `update review_queue_jobs
+           set state = 'queued',
+               lease_id = null,
+               lease_expires_at = null,
+               last_error = 'queue_lease_expired_requeued',
+               updated_at = ?
+           where state in ('leased', 'running')
+             and (
+               (lease_expires_at is not null and datetime(lease_expires_at) <= datetime(?))
+               or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
+             )`
+        )
+        .run(nowIso, nowIso, legacyLeaseCutoffIso);
+      const jobs = this.listReviewQueueJobs();
+      const eligible = jobs
+        .filter((job) => isQueueJobEligible(job, nowIso))
+        .sort(compareQueueJobsForLease);
+      const active = jobs.filter((job) => job.state === "leased" || job.state === "running");
+      const providerActive = countBy(active, (job) => job.providerId ?? "default");
+      const orgActive = countBy(active, (job) => job.org);
+      const repoActive = countBy(active, (job) => job.repo);
+      const hasManualAfter = buildManualEligibilitySuffix(eligible);
+
+      for (const [index, job] of eligible.entries()) {
+        if (leased.length >= limit) break;
+        const provider = job.providerId ?? "default";
+        const providerCount = (providerActive.get(provider) ?? 0);
+        if (providerCount >= input.maxProviderActive) continue;
+        if ((orgActive.get(job.org) ?? 0) >= input.maxOrgActive) continue;
+        if ((repoActive.get(job.repo) ?? 0) >= input.maxRepoActive) continue;
+        if (
+          job.lane === "background" &&
+          hasManualAfter[index] &&
+          manualCommandReserve > 0 &&
+          providerCount >= input.maxProviderActive - manualCommandReserve
+        ) {
+          continue;
+        }
+
+        const leaseId = randomUUID();
+        this.db
+          .prepare(
+            `update review_queue_jobs
+             set state = 'leased', lease_id = ?, lease_expires_at = ?, updated_at = ?
+             where job_id = ? and state in ('queued', 'provider_deferred')`
+          )
+          .run(leaseId, leaseExpiresAt, nowIso, job.jobId);
+        providerActive.set(provider, providerCount + 1);
+        orgActive.set(job.org, (orgActive.get(job.org) ?? 0) + 1);
+        repoActive.set(job.repo, (repoActive.get(job.repo) ?? 0) + 1);
+        leased.push(this.getReviewQueueJob(job.jobId)!);
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+
+    return leased;
+  }
+
+  updateReviewQueueJobState(input: {
+    jobId: string;
+    state: ReviewQueueJobState;
+    nextEligibleAt?: string;
+    leaseId?: string;
+    leaseExpiresAt?: string;
+    clearLease?: boolean;
+    sessionId?: string;
+    reviewUrl?: string;
+    lastError?: string;
+    now?: Date;
+  }): ReviewQueueJobRecord {
+    const existing = this.getReviewQueueJob(input.jobId);
+    if (!existing) throw new Error(`No review queue job for jobId ${input.jobId}`);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const terminal = isTerminalQueueState(input.state);
+    const clearLease = input.clearLease ?? (
+      terminal ||
+      input.state === "queued" ||
+      input.state === "provider_deferred"
+    );
+    this.db
+      .prepare(
+        `update review_queue_jobs
+         set state = ?,
+             next_eligible_at = ?,
+             lease_id = case when ? then null else coalesce(?, lease_id) end,
+             lease_expires_at = case when ? then null else coalesce(?, lease_expires_at) end,
+             session_id = coalesce(?, session_id),
+             review_url = coalesce(?, review_url),
+             last_error = coalesce(?, last_error),
+             updated_at = ?,
+             started_at = case when ? = 'running' and started_at is null then ? else started_at end,
+             finished_at = case when ? then ? else finished_at end
+         where job_id = ?`
+      )
+      .run(
+        input.state,
+        input.nextEligibleAt ?? null,
+        clearLease ? 1 : 0,
+        input.leaseId ?? null,
+        clearLease ? 1 : 0,
+        input.leaseExpiresAt ?? null,
+        input.sessionId ?? null,
+        input.reviewUrl ?? null,
+        input.lastError ? redactSecrets(input.lastError) : null,
+        nowIso,
+        input.state,
+        nowIso,
+        terminal ? 1 : 0,
+        nowIso,
+        input.jobId
+      );
+    return this.getReviewQueueJob(input.jobId)!;
+  }
+
+  getReviewQueueJob(jobId: string): ReviewQueueJobRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+         from review_queue_jobs
+         where job_id = ?
+         limit 1`
+      )
+      .get(jobId) as ReviewQueueJobRow | undefined;
+    return row ? mapReviewQueueJobRow(row) : undefined;
+  }
+
+  getReviewQueueJobByAttemptId(attemptId: string): ReviewQueueJobRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+         from review_queue_jobs
+         where attempt_id = ?
+         limit 1`
+      )
+      .get(attemptId) as ReviewQueueJobRow | undefined;
+    return row ? mapReviewQueueJobRow(row) : undefined;
+  }
+
+  listReviewQueueJobs(input: {
+    repo?: string;
+    state?: ReviewQueueJobState;
+    states?: ReviewQueueJobState[];
+    limit?: number;
+  } = {}): ReviewQueueJobRecord[] {
+    if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
+      throw new Error("limit must be a positive integer");
+    }
+    const rows = (input.repo
+      ? this.db
+          .prepare(
+            `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                    provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
+                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+             from review_queue_jobs
+             where repo = ?
+             order by priority asc, datetime(created_at) asc`
+          )
+          .all(input.repo)
+      : this.db
+          .prepare(
+            `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                    provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
+                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+             from review_queue_jobs
+             order by priority asc, datetime(created_at) asc`
+          )
+          .all()) as unknown as ReviewQueueJobRow[];
+    const states = input.states ?? (input.state ? [input.state] : undefined);
+    const jobs = rows
+      .map(mapReviewQueueJobRow)
+      .filter((job) => !states || states.includes(job.state));
+    return input.limit ? jobs.slice(0, input.limit) : jobs;
+  }
+
   expireReviewerSessions(now = new Date(), repo?: string): number {
     const nowIso = now.toISOString();
     const result = repo
@@ -902,6 +1248,13 @@ export class ReviewStateStore {
       this.db.exec("alter table review_run_leases add column owner_pid integer");
     }
   }
+
+  private ensureReviewQueueJobColumns(): void {
+    const columns = this.db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "lease_expires_at")) {
+      this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
+    }
+  }
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -934,6 +1287,85 @@ function validateReviewerSessionInput(ttlMs: number, headCountLimit: number, wor
   if (workerPid !== undefined && (!Number.isInteger(workerPid) || workerPid < 1)) {
     throw new Error("workerPid must be a positive integer");
   }
+}
+
+function validateReviewQueueInput(
+  repo: string,
+  pullNumber: number,
+  headSha: string,
+  priority?: number,
+  commentId?: number
+): void {
+  if (!repoOrg(repo)) throw new Error("repo must be an owner/repo name");
+  if (!Number.isInteger(pullNumber) || pullNumber < 1) throw new Error("pullNumber must be a positive integer");
+  if (!headSha.trim()) throw new Error("headSha must be non-empty");
+  if (priority !== undefined && (!Number.isInteger(priority) || priority < 0)) {
+    throw new Error("priority must be a non-negative integer");
+  }
+  if (commentId !== undefined && (!Number.isInteger(commentId) || commentId < 1)) {
+    throw new Error("commentId must be a positive integer");
+  }
+}
+
+function validatePositiveQueueLimit(value: number, label: string): void {
+  if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`);
+}
+
+function buildReviewQueueAttemptId(input: {
+  source: ReviewQueueJobSource;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  baseSha?: string;
+  commentId?: number;
+}): string {
+  if (input.source === "manual_command") {
+    return `manual:${input.repo}#${input.pullNumber}@${input.headSha}:${input.commentId ?? randomUUID()}`;
+  }
+  return `automatic:${input.repo}#${input.pullNumber}@${input.headSha}:base=${input.baseSha ?? "unknown"}`;
+}
+
+function repoOrg(repo: string): string {
+  return repo.split("/")[0] ?? "";
+}
+
+function isQueueJobEligible(job: ReviewQueueJobRecord, nowIso: string): boolean {
+  if (job.state === "queued") return true;
+  if (job.state !== "provider_deferred") return false;
+  if (!job.nextEligibleAt) return true;
+  const nextEligibleAtMs = Date.parse(job.nextEligibleAt);
+  if (!Number.isFinite(nextEligibleAtMs)) return true;
+  return nextEligibleAtMs <= Date.parse(nowIso);
+}
+
+function compareQueueJobsForLease(left: ReviewQueueJobRecord, right: ReviewQueueJobRecord): number {
+  if (left.priority !== right.priority) return left.priority - right.priority;
+  const leftCreated = Date.parse(left.createdAt);
+  const rightCreated = Date.parse(right.createdAt);
+  return leftCreated - rightCreated;
+}
+
+function buildManualEligibilitySuffix(jobs: ReviewQueueJobRecord[]): boolean[] {
+  const hasManualAfter = new Array<boolean>(jobs.length).fill(false);
+  let seenManual = false;
+  for (let index = jobs.length - 1; index >= 0; index -= 1) {
+    hasManualAfter[index] = seenManual;
+    if (jobs[index]?.lane === "manual") seenManual = true;
+  }
+  return hasManualAfter;
+}
+
+function countBy<T>(items: T[], key: (item: T) => string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const value = key(item);
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function isTerminalQueueState(state: ReviewQueueJobState): boolean {
+  return state === "posted" || state === "failed" || state === "stale_retired" || state === "closed_retired";
 }
 
 export function parseProviderCooldownError(error?: string): ParsedProviderCooldownError | undefined {
@@ -1009,6 +1441,32 @@ interface ReviewerSessionJobRow {
   processed_review_status: ProcessedStatus | null;
 }
 
+interface ReviewQueueJobRow {
+  job_id: string;
+  attempt_id: string;
+  source: ReviewQueueJobSource;
+  lane: ReviewQueueJobLane;
+  repo: string;
+  org: string;
+  pull_number: number;
+  head_sha: string;
+  base_sha: string | null;
+  provider_id: string | null;
+  priority: number;
+  state: ReviewQueueJobState;
+  next_eligible_at: string | null;
+  lease_id: string | null;
+  lease_expires_at: string | null;
+  session_id: string | null;
+  comment_id: number | null;
+  review_url: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -1064,6 +1522,34 @@ function mapReviewerSessionJobRow(row: ReviewerSessionJobRow): ReviewerSessionJo
     ...(row.started_at ? { startedAt: row.started_at } : {}),
     ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
     ...(row.processed_review_status ? { processedReviewStatus: row.processed_review_status } : {})
+  };
+}
+
+function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
+  return {
+    jobId: row.job_id,
+    attemptId: row.attempt_id,
+    source: row.source,
+    lane: row.lane,
+    repo: row.repo,
+    org: row.org,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    ...(row.base_sha ? { baseSha: row.base_sha } : {}),
+    ...(row.provider_id ? { providerId: row.provider_id } : {}),
+    priority: row.priority,
+    state: row.state,
+    ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
+    ...(row.lease_id ? { leaseId: row.lease_id } : {}),
+    ...(row.lease_expires_at ? { leaseExpiresAt: row.lease_expires_at } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.comment_id ? { commentId: row.comment_id } : {}),
+    ...(row.review_url ? { reviewUrl: row.review_url } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {})
   };
 }
 

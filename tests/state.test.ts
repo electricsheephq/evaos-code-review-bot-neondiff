@@ -419,6 +419,250 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("dedupes automatic queue attempts while preserving distinct manual attempts", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-attempts-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const automatic = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      baseSha: "base-a",
+      providerId: "builtin:zai-coding-plan",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const duplicateAutomatic = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      baseSha: "base-a",
+      providerId: "builtin:zai-coding-plan",
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+    const sameHeadNewBase = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      baseSha: "base-b",
+      providerId: "builtin:zai-coding-plan",
+      now: new Date("2026-07-01T00:00:02.000Z")
+    });
+    const manual = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      source: "manual_command",
+      commentId: 9876,
+      now: new Date("2026-07-01T00:00:03.000Z")
+    });
+
+    expect(automatic).toMatchObject({
+      enqueued: true,
+      job: {
+        attemptId: "automatic:100yenadmin/Lossless-Codex-Orchestrator-LCO#220@head-a:base=base-a",
+        lane: "background",
+        priority: 50,
+        state: "queued"
+      }
+    });
+    expect(duplicateAutomatic).toMatchObject({
+      enqueued: false,
+      reason: "already_queued",
+      job: { jobId: automatic.job.jobId }
+    });
+    expect(sameHeadNewBase).toMatchObject({
+      enqueued: true,
+      job: {
+        attemptId: "automatic:100yenadmin/Lossless-Codex-Orchestrator-LCO#220@head-a:base=base-b"
+      }
+    });
+    expect(manual).toMatchObject({
+      enqueued: true,
+      job: {
+        attemptId: "manual:100yenadmin/Lossless-Codex-Orchestrator-LCO#220@head-a:9876",
+        lane: "manual",
+        priority: 10,
+        commentId: 9876
+      }
+    });
+    expect(store.listReviewQueueJobs({ repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO" })).toHaveLength(3);
+    store.close();
+  });
+
+  it("leases bounded queue jobs by provider org repo and manual reserve", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-lease-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-07-01T00:00:00.000Z");
+
+    const manual = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "manual-head",
+      source: "manual_command",
+      commentId: 1,
+      providerId: "zai",
+      now
+    }).job;
+    const sameRepoBackground = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 498,
+      headSha: "same-repo-head",
+      providerId: "zai",
+      now
+    }).job;
+    const otherRepoBackground = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1214,
+      headSha: "world-head",
+      providerId: "zai",
+      now
+    }).job;
+    store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 88,
+      headSha: "bot-head",
+      providerId: "zai",
+      now
+    });
+
+    const leased = store.leaseNextReviewQueueJobs({
+      maxProviderActive: 2,
+      maxOrgActive: 2,
+      maxRepoActive: 1,
+      manualCommandReserve: 1,
+      limit: 3,
+      now: new Date("2026-07-01T00:00:10.000Z")
+    });
+
+    expect(leased.map((job) => job.jobId)).toEqual([manual.jobId, otherRepoBackground.jobId]);
+    expect(store.getReviewQueueJob(manual.jobId)).toMatchObject({ state: "leased", leaseId: expect.any(String) });
+    expect(store.getReviewQueueJob(otherRepoBackground.jobId)).toMatchObject({ state: "leased", leaseId: expect.any(String) });
+    expect(store.getReviewQueueJob(sameRepoBackground.jobId)).toMatchObject({ state: "queued" });
+    store.close();
+  });
+
+  it("requeues expired durable queue leases before leasing new work", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-expired-lease-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const job = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 89,
+      headSha: "head-a",
+      providerId: "zai",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    }).job;
+
+    const firstLease = store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      leaseTtlMs: 1_000,
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+    expect(firstLease).toHaveLength(1);
+    expect(firstLease[0]).toMatchObject({
+      jobId: job.jobId,
+      state: "leased",
+      leaseExpiresAt: "2026-07-01T00:00:02.000Z"
+    });
+
+    expect(store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      leaseTtlMs: 1_000,
+      now: new Date("2026-07-01T00:00:01.500Z")
+    })).toEqual([]);
+
+    const renewedLease = store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      leaseTtlMs: 1_000,
+      now: new Date("2026-07-01T00:00:02.001Z")
+    });
+    expect(renewedLease).toHaveLength(1);
+    expect(renewedLease[0]).toMatchObject({
+      jobId: job.jobId,
+      state: "leased",
+      lastError: "queue_lease_expired_requeued",
+      leaseExpiresAt: "2026-07-01T00:00:03.001Z"
+    });
+    expect(renewedLease[0].leaseId).not.toEqual(firstLease[0].leaseId);
+    store.close();
+  });
+
+  it("defers and later leases provider-deferred queue jobs after next eligible time", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-deferred-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const job = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1214,
+      headSha: "head-a",
+      providerId: "zai",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    }).job;
+
+    store.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-01T00:05:00.000Z",
+      lastError: "provider 1302 with ghp_1234567890abcdefghijklmnopqrstuvwx",
+      now: new Date("2026-07-01T00:00:05.000Z")
+    });
+    expect(store.leaseNextReviewQueueJobs({
+      maxProviderActive: 2,
+      maxOrgActive: 2,
+      maxRepoActive: 1,
+      now: new Date("2026-07-01T00:04:00.000Z")
+    })).toEqual([]);
+
+    const leased = store.leaseNextReviewQueueJobs({
+      maxProviderActive: 2,
+      maxOrgActive: 2,
+      maxRepoActive: 1,
+      now: new Date("2026-07-01T00:05:01.000Z")
+    });
+    expect(leased).toHaveLength(1);
+    expect(leased[0]).toMatchObject({ jobId: job.jobId, state: "leased", lastError: "provider 1302 with [redacted-secret]" });
+    store.close();
+  });
+
+  it("treats malformed provider-deferred eligibility timestamps as retryable backlog", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-malformed-deferred-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const job = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1214,
+      headSha: "head-b",
+      providerId: "zai",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    }).job;
+
+    store.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "not-a-date",
+      lastError: "legacy provider cooldown",
+      now: new Date("2026-07-01T00:00:05.000Z")
+    });
+
+    expect(store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      now: new Date("2026-07-01T00:00:10.000Z")
+    })).toEqual([
+      expect.objectContaining({ jobId: job.jobId, state: "leased" })
+    ]);
+    store.close();
+  });
+
   it("stores the latest daemon heartbeat as a singleton", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-"));
     roots.push(root);

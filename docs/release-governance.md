@@ -126,6 +126,8 @@ The release is green only when:
 - no blocking DB error rows exist
 - coverage audit has zero unprocessed eligible heads
 - provider cooldowns are either absent or active and named in release notes
+- durable queue jobs have zero failed rows and zero retryable provider-deferred
+  backlog
 
 Expired provider cooldown rows are backlog. Retry or retire stale/closed heads
 before calling the release green.

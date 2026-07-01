@@ -13,6 +13,8 @@ import {
   parseProviderCooldownError,
   PROVIDER_COOLDOWN_ERROR_PREFIX,
   type ProviderCooldownReviewRecord,
+  type ReviewQueueJobRecord,
+  type ReviewQueueJobState,
   type RepoProviderCooldownRecord
 } from "./state.js";
 
@@ -32,6 +34,10 @@ export interface OperatorStatus {
     failedRows: number;
     expiredProviderCooldowns: number;
     activeProviderCooldowns: number;
+    queuedJobs: number;
+    runningJobs: number;
+    providerDeferredJobs: number;
+    failedQueueJobs: number;
   };
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   recommendedActions: string[];
@@ -39,6 +45,7 @@ export interface OperatorStatus {
   coverage?: OperatorQueueSnapshot;
   agents: OperatorAgentInventory;
   providerCooldowns: ProviderCooldownReviewRecord[];
+  durableQueue?: OperatorDurableQueueSnapshot;
 }
 
 export interface OperatorLease {
@@ -98,6 +105,35 @@ export interface OperatorQueueSnapshot {
   readFailures: Array<{ repo: string; error: string; nextAction: string }>;
 }
 
+export interface OperatorDurableQueueSnapshot {
+  ok: boolean;
+  checkedAt: string;
+  summary: {
+    total: number;
+    queued: number;
+    leased: number;
+    running: number;
+    providerDeferred: number;
+    retryableProviderDeferred: number;
+    posted: number;
+    failed: number;
+    retired: number;
+  };
+  jobs: ReviewQueueJobRecord[];
+  byRepo: Array<{
+    repo: string;
+    total: number;
+    queued: number;
+    leased: number;
+    running: number;
+    providerDeferred: number;
+    retryableProviderDeferred: number;
+    posted: number;
+    failed: number;
+    retired: number;
+  }>;
+}
+
 export interface PullStatusExplanation {
   repo: string;
   pullNumber: number;
@@ -114,17 +150,21 @@ export function buildOperatorStatus(input: {
   coverage?: CoverageAuditReport;
   agents: OperatorAgentInventory;
   providerCooldowns?: ProviderCooldownReviewRecord[];
+  durableQueue?: OperatorDurableQueueSnapshot;
   checkedAt?: string;
 }): OperatorStatus {
   const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
   const providerCooldowns = input.providerCooldowns ?? [];
   const expiredProviderCooldowns = providerCooldowns.filter((cooldown) => cooldown.expired).length;
   const activeProviderCooldowns = providerCooldowns.length - expiredProviderCooldowns;
+  const durableQueue = input.durableQueue;
   const pendingHeads = queue?.summary.pending ?? 0;
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
   const readFailures = queue?.summary.readFailures ?? 0;
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const failedRows = input.release.database.errorCount;
+  const failedQueueJobs = durableQueue?.summary.failed ?? 0;
+  const retryableProviderDeferredJobs = durableQueue?.summary.retryableProviderDeferred ?? 0;
 
   const gates = [
     ...input.release.gates,
@@ -149,6 +189,16 @@ export function buildOperatorStatus(input: {
       detail: input.agents.summary.staleLeases === 0
         ? "0 stale lease(s)"
         : `${input.agents.summary.staleLeases} stale lease(s)`
+    },
+    {
+      name: "durable_queue_no_failed_jobs",
+      ok: failedQueueJobs === 0,
+      detail: `${failedQueueJobs} failed durable queue job(s)`
+    },
+    {
+      name: "durable_queue_no_retryable_provider_deferred_jobs",
+      ok: retryableProviderDeferredJobs === 0,
+      detail: `${retryableProviderDeferredJobs} retryable provider-deferred durable queue job(s)`
     }
   ];
 
@@ -157,7 +207,9 @@ export function buildOperatorStatus(input: {
     ...(pendingHeads > 0 ? ["wait for daemon cycle or run scoped run-once"] : []),
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : []),
-    ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : [])
+    ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : []),
+    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : [])
   ]);
 
   return {
@@ -175,14 +227,19 @@ export function buildOperatorStatus(input: {
       readFailures,
       failedRows,
       expiredProviderCooldowns,
-      activeProviderCooldowns
+      activeProviderCooldowns,
+      queuedJobs: durableQueue?.summary.queued ?? 0,
+      runningJobs: durableQueue?.summary.running ?? 0,
+      providerDeferredJobs: durableQueue?.summary.providerDeferred ?? 0,
+      failedQueueJobs
     },
     gates,
     recommendedActions,
     release: input.release,
     ...(queue ? { coverage: queue } : {}),
     agents: input.agents,
-    providerCooldowns
+    providerCooldowns,
+    ...(durableQueue ? { durableQueue } : {})
   };
 }
 
@@ -349,6 +406,44 @@ export function collectOperatorRepoProviderCooldowns(
       const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
       return Number.isFinite(cooldownUntilMs) && cooldownUntilMs > now.getTime();
     });
+  } finally {
+    db.close();
+  }
+}
+
+export function collectOperatorReviewQueue(
+  statePath: string,
+  input: { repo?: string; state?: ReviewQueueJobState; now?: Date; limit?: number } = {}
+): OperatorDurableQueueSnapshot {
+  const now = input.now ?? new Date();
+  if (!existsSync(statePath)) return emptyDurableQueue(now);
+  const db = new DatabaseSync(statePath, { readOnly: true });
+  try {
+    if (!hasTable(db, "review_queue_jobs")) return emptyDurableQueue(now);
+    const rows = (input.repo
+      ? db
+          .prepare(
+            `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                    provider_id, priority, state, next_eligible_at, lease_id, session_id,
+                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+             from review_queue_jobs
+             where repo = ?
+             order by priority asc, datetime(created_at) asc`
+          )
+          .all(input.repo)
+      : db
+          .prepare(
+            `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+                    provider_id, priority, state, next_eligible_at, lease_id, session_id,
+                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+             from review_queue_jobs
+             order by priority asc, datetime(created_at) asc`
+          )
+          .all()) as unknown as ReviewQueueJobRow[];
+    const jobs = rows
+      .map(mapReviewQueueJobRow)
+      .filter((job) => !input.state || job.state === input.state);
+    return buildDurableQueueSnapshot(jobs, now, input.limit ? jobs.slice(0, input.limit) : jobs);
   } finally {
     db.close();
   }
@@ -533,6 +628,76 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
+function emptyDurableQueue(now: Date): OperatorDurableQueueSnapshot {
+  return buildDurableQueueSnapshot([], now);
+}
+
+function buildDurableQueueSnapshot(
+  jobs: ReviewQueueJobRecord[],
+  now: Date,
+  visibleJobs: ReviewQueueJobRecord[] = jobs
+): OperatorDurableQueueSnapshot {
+  const summary = summarizeDurableQueueJobs(jobs, now);
+  const repos = [...new Set(jobs.map((job) => job.repo))].sort();
+  return {
+    ok: summary.failed === 0 && summary.retryableProviderDeferred === 0,
+    checkedAt: now.toISOString(),
+    summary,
+    jobs: visibleJobs,
+    byRepo: repos.map((repo) => ({
+      repo,
+      ...summarizeDurableQueueJobs(jobs.filter((job) => job.repo === repo), now)
+    }))
+  };
+}
+
+function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): OperatorDurableQueueSnapshot["summary"] {
+  return {
+    total: jobs.length,
+    queued: jobs.filter((job) => job.state === "queued").length,
+    leased: jobs.filter((job) => job.state === "leased").length,
+    running: jobs.filter((job) => job.state === "running").length,
+    providerDeferred: jobs.filter((job) => job.state === "provider_deferred").length,
+    retryableProviderDeferred: jobs.filter((job) => job.state === "provider_deferred" && isRetryableQueueJob(job, now)).length,
+    posted: jobs.filter((job) => job.state === "posted").length,
+    failed: jobs.filter((job) => job.state === "failed").length,
+    retired: jobs.filter((job) => job.state === "stale_retired" || job.state === "closed_retired").length
+  };
+}
+
+function isRetryableQueueJob(job: ReviewQueueJobRecord, now: Date): boolean {
+  if (!job.nextEligibleAt) return true;
+  const nextEligibleAtMs = Date.parse(job.nextEligibleAt);
+  return !Number.isFinite(nextEligibleAtMs) || nextEligibleAtMs <= now.getTime();
+}
+
+function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
+  return {
+    jobId: row.job_id,
+    attemptId: row.attempt_id,
+    source: row.source,
+    lane: row.lane,
+    repo: row.repo,
+    org: row.org,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    ...(row.base_sha ? { baseSha: row.base_sha } : {}),
+    ...(row.provider_id ? { providerId: row.provider_id } : {}),
+    priority: row.priority,
+    state: row.state,
+    ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
+    ...(row.lease_id ? { leaseId: row.lease_id } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.comment_id ? { commentId: row.comment_id } : {}),
+    ...(row.review_url ? { reviewUrl: row.review_url } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {})
+  };
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -567,4 +732,29 @@ interface RepoProviderCooldownRow {
   cooldown_until: string;
   reason: string;
   updated_at: string;
+}
+
+interface ReviewQueueJobRow {
+  job_id: string;
+  attempt_id: string;
+  source: ReviewQueueJobRecord["source"];
+  lane: ReviewQueueJobRecord["lane"];
+  repo: string;
+  org: string;
+  pull_number: number;
+  head_sha: string;
+  base_sha: string | null;
+  provider_id: string | null;
+  priority: number;
+  state: ReviewQueueJobState;
+  next_eligible_at: string | null;
+  lease_id: string | null;
+  session_id: string | null;
+  comment_id: number | null;
+  review_url: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }

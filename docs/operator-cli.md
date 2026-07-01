@@ -20,11 +20,12 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
 
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
-  and recommended actions.
+  durable queue counts, and recommended actions.
 - `agents`: launchd, heartbeat, and review-run lease inventory. This is
   read-only; it does not restart, kill, prune, or retire anything.
 - `queue`: open PR-head coverage grouped into processed, provider-deferred,
-  pending review, skipped, stale-head, and read-failure buckets.
+  pending review, skipped, stale-head, and read-failure buckets. Also includes
+  durable `review_queue_jobs` rows when the state DB has the scheduler table.
 - `coverage`: raw coverage-audit report with the shorter operator command name.
 - `cooldowns`: provider cooldown review rows plus repo/global cooldown rows.
 - `why --repo <owner/name> --pr <number>`: scoped explanation for why one PR
@@ -51,6 +52,12 @@ Find open PR heads that still need review work:
 
 ```bash
 npx tsx src/cli.ts queue --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+```
+
+Inspect only durable provider-deferred jobs:
+
+```bash
+npx tsx src/cli.ts queue --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --state provider_deferred
 ```
 
 Explain one PR:

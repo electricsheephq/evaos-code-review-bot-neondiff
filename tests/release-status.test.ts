@@ -452,6 +452,120 @@ describe("beta release status", () => {
     ]);
   });
 
+  it("reports durable review queue counts and fails retryable deferred or failed jobs", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-review-queue-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      insertQueueJob(db, "queued", "electricsheephq/WorldOS", "queued-head");
+      insertQueueJob(db, "running", "electricsheephq/WorldOS", "running-head");
+      insertQueueJob(db, "provider_deferred", "100yenadmin/evaOS-GUI", "deferred-head", "2026-07-01T00:10:00.000Z");
+      insertQueueJob(db, "provider_deferred", "100yenadmin/evaOS-GUI", "retryable-head", "2026-07-01T00:01:00.000Z");
+      insertQueueJob(db, "failed", "100yenadmin/Lossless-Codex-Orchestrator-LCO", "failed-head");
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+
+    expect(status.database).toMatchObject({
+      reviewQueueJobCount: 5,
+      queuedReviewQueueJobCount: 1,
+      runningReviewQueueJobCount: 1,
+      providerDeferredReviewQueueJobCount: 2,
+      retryableProviderDeferredReviewQueueJobCount: 1,
+      failedReviewQueueJobCount: 1
+    });
+    expect(status.database.reviewQueueJobsByRepo).toEqual([
+      {
+        repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+        total: 1,
+        queued: 0,
+        leased: 0,
+        running: 0,
+        providerDeferred: 0,
+        retryableProviderDeferred: 0,
+        failed: 1
+      },
+      {
+        repo: "100yenadmin/evaOS-GUI",
+        total: 2,
+        queued: 0,
+        leased: 0,
+        running: 0,
+        providerDeferred: 2,
+        retryableProviderDeferred: 1,
+        failed: 0
+      },
+      {
+        repo: "electricsheephq/WorldOS",
+        total: 2,
+        queued: 1,
+        leased: 0,
+        running: 1,
+        providerDeferred: 0,
+        retryableProviderDeferred: 0,
+        failed: 0
+      }
+    ]);
+    expect(status.gates).toContainEqual({
+      name: "queue_no_failed_jobs",
+      ok: false,
+      detail: "1 failed durable queue job(s)"
+    });
+    expect(status.gates).toContainEqual({
+      name: "queue_no_retryable_provider_deferred_jobs",
+      ok: false,
+      detail: "1 retryable provider-deferred queue job(s); queue total=5 queued=1 leased=0 running=1 provider_deferred=2 failed=1"
+    });
+    expect(status.recommendedActions).toContain("inspect operator queue and retry provider-deferred jobs whose nextEligibleAt has expired");
+  });
+
   it("treats malformed provider cooldown timestamps as actionable backlog", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-db-invalid-cooldown-"));
     roots.push(root);
@@ -560,6 +674,46 @@ describe("beta release status", () => {
       detail: "stale; age 180000ms; max 120000ms; event daemon_cycle_complete; cycle 5"
     });
   });
+
+  it("treats a bounded active daemon cycle as a healthy heartbeat", () => {
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false
+      },
+      database: { rowCount: 21, errorCount: 0, skippedCount: 16 },
+      heartbeat: {
+        status: "active",
+        maxAgeMs: 120_000,
+        activeMaxAgeMs: 420_000,
+        latestAt: "2026-06-30T23:57:00.000Z",
+        ageMs: 180_000,
+        cycle: 5,
+        event: "daemon_cycle_complete",
+        dryRun: false,
+        activeCycle: 6,
+        activeStartedAt: "2026-06-30T23:59:00.000Z",
+        activeAgeMs: 60_000
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.gates).toContainEqual({
+      name: "daemon_heartbeat_recent",
+      ok: true,
+      detail: "active; active age 60000ms; max 420000ms; started cycle 6; last event daemon_cycle_complete; last cycle 5"
+    });
+  });
 });
 
 function freshHeartbeat() {
@@ -572,4 +726,29 @@ function freshHeartbeat() {
     event: "daemon_cycle_complete",
     dryRun: false
   };
+}
+
+function insertQueueJob(
+  db: DatabaseSync,
+  state: string,
+  repo: string,
+  headSha: string,
+  nextEligibleAt?: string
+): void {
+  db.prepare(
+    `insert into review_queue_jobs
+      (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+       priority, state, next_eligible_at, created_at, updated_at)
+     values (?, ?, 'automatic', 'background', ?, ?, 1, ?, 50, ?, ?, ?, ?)`
+  ).run(
+    `${state}-${headSha}`,
+    `automatic:${repo}#1@${headSha}`,
+    repo,
+    repo.split("/")[0],
+    headSha,
+    state,
+    nextEligibleAt ?? null,
+    "2026-07-01T00:00:00.000Z",
+    "2026-07-01T00:00:00.000Z"
+  );
 }
