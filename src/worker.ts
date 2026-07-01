@@ -344,6 +344,25 @@ export async function retryFailedHeadWithDeps(input: {
       status: "skipped_closed"
     };
   }
+  if (pull.head.sha !== options.headSha) {
+    const retryTarget = prepareRetryTargetFromProcessedRow({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha
+    });
+    restoreFailedRetryRowIfNeeded({
+      state,
+      retryTarget,
+      reason: "retry_did_not_review=skipped_stale_head"
+    });
+    return {
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_stale_head"
+    };
+  }
   const retryTarget = prepareFailedHeadRetry({
     state,
     repo: options.repo,
@@ -452,6 +471,15 @@ export function prepareFailedHeadRetry(input: {
     throw new Error(`Refusing retry for stale head: requested=${input.headSha} live=${input.livePull.head.sha}`);
   }
 
+  return prepareRetryTargetFromProcessedRow(input);
+}
+
+function prepareRetryTargetFromProcessedRow(input: {
+  state: Pick<ReviewStateStore, "getProcessedReview">;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+}): FailedHeadRetryTarget {
   const processed = input.state.getProcessedReview(input.repo, input.pullNumber, input.headSha);
   if (!processed) {
     throw new Error(`No processed review row exists for ${input.repo}#${input.pullNumber}@${input.headSha}`);

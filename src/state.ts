@@ -338,7 +338,7 @@ export class ReviewStateStore {
         const parsed = parseProviderCooldownError(record.error);
         if (!parsed) return undefined;
         const cooldownUntilMs = Date.parse(parsed.cooldownUntil);
-        const expired = Number.isFinite(cooldownUntilMs) && cooldownUntilMs <= now.getTime();
+        const expired = !Number.isFinite(cooldownUntilMs) || cooldownUntilMs <= now.getTime();
         return {
           ...record,
           cooldownUntil: parsed.cooldownUntil,

@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
+import { parseProviderCooldownError, PROVIDER_COOLDOWN_ERROR_PREFIX } from "./state.js";
 
 export interface ReleaseRepoStatus {
   branch: string;
@@ -22,6 +23,8 @@ export interface ReleaseDatabaseStatus {
   errorCount: number;
   skippedCount?: number;
   providerCooldownCount?: number;
+  activeProviderCooldownCount?: number;
+  expiredProviderCooldownCount?: number;
 }
 
 export interface ReleaseHeartbeatStatus {
@@ -57,6 +60,7 @@ export interface ReleaseStatus {
   launchd: ReleaseLaunchdStatus;
   database: ReleaseDatabaseStatus;
   heartbeat: ReleaseHeartbeatStatus;
+  recommendedActions: string[];
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   rollback: {
     restartCommand: string;
@@ -71,7 +75,11 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const launchdRunningOk = input.launchd.state === "running";
   const launchdConfigOk = input.launchd.configPath === input.configPath;
   const dbOk = input.database.errorCount === 0;
+  const expiredProviderCooldownOk = (input.database.expiredProviderCooldownCount ?? 0) === 0;
   const heartbeatOk = input.heartbeat.status === "fresh";
+  const retryProviderCooldownCommand =
+    `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
+    "--expired-only true --dry-run false --zcode true";
   const gates = [
     {
       name: "expected_head",
@@ -103,7 +111,14 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       ok: dbOk,
       detail:
         `${input.database.errorCount} blocking error row(s)` +
-        (input.database.providerCooldownCount ? `; ${input.database.providerCooldownCount} provider cooldown skip row(s)` : "")
+        describeProviderCooldownCounts(input.database)
+    },
+    {
+      name: "provider_cooldown_backlog",
+      ok: expiredProviderCooldownOk,
+      detail: expiredProviderCooldownOk
+        ? describeProviderCooldownBacklog(input.database)
+        : `${describeProviderCooldownBacklog(input.database)}; retry: ${retryProviderCooldownCommand}`
     },
     {
       name: "daemon_heartbeat_recent",
@@ -125,6 +140,12 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     launchd: input.launchd,
     database: input.database,
     heartbeat: input.heartbeat,
+    recommendedActions: expiredProviderCooldownOk
+      ? []
+      : [
+          retryProviderCooldownCommand,
+          `npx tsx src/cli.ts provider-cooldowns --config ${input.configPath} --expired-only true`
+        ],
     gates,
     rollback: {
       restartCommand: `launchctl kickstart -k gui/$(id -u)/${input.launchd.label}`,
@@ -148,7 +169,7 @@ export function collectReleaseStatus(input: {
     expectedHead: input.expectedHead,
     configPath,
     launchd: readLaunchdStatus(input.launchdLabel ?? "com.electricsheephq.evaos-code-review-bot"),
-    database: readDatabaseStatus(input.statePath ?? config.statePath),
+    database: readDatabaseStatus(input.statePath ?? config.statePath, now),
     heartbeat: readHeartbeatStatus(input.statePath ?? config.statePath, config.pollIntervalMs * 2, now),
     now
   });
@@ -185,7 +206,7 @@ function readLaunchdStatus(label: string): ReleaseLaunchdStatus {
   };
 }
 
-function readDatabaseStatus(statePath: string): ReleaseDatabaseStatus {
+function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus {
   if (!existsSync(statePath)) return { rowCount: 0, errorCount: 0 };
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
@@ -211,15 +232,45 @@ function readDatabaseStatus(statePath: string): ReleaseDatabaseStatus {
         providerCooldownCount?: number | null;
         errorCount?: number | null;
       };
+    const providerCooldownRows = db
+      .prepare(
+        `select error
+         from processed_reviews
+         where status = 'skipped' and error like ?`
+      )
+      .all(`${PROVIDER_COOLDOWN_ERROR_PREFIX}%`) as unknown as Array<{ error: string | null }>;
+    const providerCooldowns = providerCooldownRows
+      .map((providerRow) => parseProviderCooldownError(providerRow.error ?? undefined))
+      .filter((cooldown): cooldown is NonNullable<typeof cooldown> => Boolean(cooldown));
+    const expiredProviderCooldownCount = providerCooldowns.filter((cooldown) => {
+      const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
+      return !Number.isFinite(cooldownUntilMs) || cooldownUntilMs <= now.getTime();
+    }).length;
+    const activeProviderCooldownCount = providerCooldowns.length - expiredProviderCooldownCount;
     return {
       rowCount: row.rowCount ?? 0,
       skippedCount: row.skippedCount ?? 0,
       providerCooldownCount: row.providerCooldownCount ?? 0,
+      activeProviderCooldownCount,
+      expiredProviderCooldownCount,
       errorCount: row.errorCount ?? 0
     };
   } finally {
     db.close();
   }
+}
+
+function describeProviderCooldownCounts(database: ReleaseDatabaseStatus): string {
+  const total = database.providerCooldownCount ?? 0;
+  if (total === 0) return "";
+  return (
+    `; ${total} provider cooldown skip row(s)` +
+    ` (${database.activeProviderCooldownCount ?? 0} active, ${database.expiredProviderCooldownCount ?? 0} expired)`
+  );
+}
+
+function describeProviderCooldownBacklog(database: ReleaseDatabaseStatus): string {
+  return `${database.expiredProviderCooldownCount ?? 0} expired provider cooldown row(s); ${database.activeProviderCooldownCount ?? 0} active provider cooldown row(s)`;
 }
 
 function readHeartbeatStatus(statePath: string, maxAgeMs: number, now: Date): ReleaseHeartbeatStatus {

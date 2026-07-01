@@ -290,6 +290,78 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("skips stale expired provider-cooldown candidates and continues bulk retrying current heads", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-cooldown-stale-bulk-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const currentPull = pullSummary(1240, "head-current-provider-cooldown");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: currentPull.number,
+      headSha: "head-stale-provider-cooldown",
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2000-01-01T00:00:00.000Z; reason=provider_rate_limit"
+    });
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: currentPull.number,
+      headSha: currentPull.head.sha,
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2000-01-01T00:00:00.000Z; reason=provider_rate_limit"
+    });
+    let attempts = 0;
+
+    const result = await retryProviderCooldownsWithDeps({
+      config,
+      github: retryGithub(currentPull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        dryRun: true,
+        expiredOnly: true
+      },
+      reviewPullImpl: async ({ state: retryState, repo, pull: retryPull }) => {
+        attempts += 1;
+        retryState.recordProcessed({
+          repo,
+          pullNumber: retryPull.number,
+          headSha: retryPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.summary).toMatchObject({
+      skippedStaleHead: 1,
+      dryRun: 1,
+      failed: 0
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        headSha: "head-stale-provider-cooldown",
+        status: "skipped_stale_head"
+      }),
+      expect.objectContaining({
+        headSha: "head-current-provider-cooldown",
+        status: "dry_run"
+      })
+    ]));
+    expect(attempts).toBe(1);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", currentPull.number, "head-stale-provider-cooldown")).toMatchObject({
+      status: "skipped",
+      error: expect.stringContaining("retry_did_not_review=skipped_stale_head")
+    });
+    expect(state.getProcessedReview("electricsheephq/WorldOS", currentPull.number, currentPull.head.sha)).toMatchObject({
+      status: "skipped",
+      error: expect.stringContaining("retry_dry_run")
+    });
+    state.close();
+  });
+
   it("records a renewed provider cooldown when an expired bulk retry is still rate-limited", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-cooldown-renewed-bulk-"));
     roots.push(root);
