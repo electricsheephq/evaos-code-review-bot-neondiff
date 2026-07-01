@@ -128,12 +128,12 @@ const DEFAULT_CONFIG: BotConfig = {
   providerCooldown: {
     enabled: true,
     durationMs: 15 * 60_000,
-    requestRateLimitDurationMs: 5 * 60_000,
+    requestRateLimitDurationMs: 90_000,
     overloadDurationMs: 2 * 60_000,
     quotaDurationMs: 30 * 60_000,
-    transientRetryAttempts: 2,
-    transientRetryBaseDelayMs: 1_000,
-    transientRetryMaxDelayMs: 5_000
+    transientRetryAttempts: 4,
+    transientRetryBaseDelayMs: 2_000,
+    transientRetryMaxDelayMs: 20_000
   },
   walkthrough: {
     enabled: true,
