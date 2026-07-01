@@ -442,55 +442,68 @@ export class ReviewStateStore {
     now?: Date;
   }): ReviewReadinessRecord {
     validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, undefined, input.commandCommentId);
-    const existing = this.getReviewReadiness(input.repo, input.pullNumber, input.headSha);
-    const reason = input.reason ? redactSecrets(input.reason).trim().slice(0, 500) : undefined;
-    const event = input.event ?? existing?.event;
-    const reviewUrl = input.reviewUrl ? redactSecrets(input.reviewUrl).trim().slice(0, 500) : existing?.reviewUrl;
-    const commandAction = input.commandAction ?? existing?.commandAction;
-    const commandCommentId = input.commandCommentId ?? existing?.commandCommentId;
+    this.db.exec("begin immediate");
+    try {
+      const existing = this.getReviewReadiness(input.repo, input.pullNumber, input.headSha);
+      const reason = input.reason ? redactSecrets(input.reason).trim().slice(0, 500) : undefined;
+      const event = input.event ?? existing?.event;
+      const reviewUrl = input.reviewUrl ? redactSecrets(input.reviewUrl).trim().slice(0, 500) : existing?.reviewUrl;
+      const commandAction = input.commandAction ?? existing?.commandAction;
+      const commandCommentId = input.commandCommentId ?? existing?.commandCommentId;
 
-    if (
-      existing &&
-      existing.state === input.state &&
-      existing.reason === reason &&
-      existing.event === event &&
-      existing.reviewUrl === reviewUrl &&
-      existing.commandAction === commandAction &&
-      existing.commandCommentId === commandCommentId
-    ) {
-      return existing;
+      if (
+        existing &&
+        existing.state === input.state &&
+        existing.reason === reason &&
+        existing.event === event &&
+        existing.reviewUrl === reviewUrl &&
+        existing.commandAction === commandAction &&
+        existing.commandCommentId === commandCommentId
+      ) {
+        this.db.exec("commit");
+        return existing;
+      }
+
+      const nowIso = (input.now ?? new Date()).toISOString();
+      this.db
+        .prepare(
+          `insert into review_readiness
+            (repo, pull_number, head_sha, state, reason, event, review_url,
+             command_action, command_comment_id, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           on conflict(repo, pull_number, head_sha) do update set
+             state = excluded.state,
+             reason = excluded.reason,
+             event = excluded.event,
+             review_url = excluded.review_url,
+             command_action = excluded.command_action,
+             command_comment_id = excluded.command_comment_id,
+             updated_at = excluded.updated_at`
+        )
+        .run(
+          input.repo,
+          input.pullNumber,
+          input.headSha,
+          input.state,
+          reason ?? null,
+          event ?? null,
+          reviewUrl ?? null,
+          commandAction ?? null,
+          commandCommentId ?? null,
+          existing?.createdAt ?? nowIso,
+          nowIso
+        );
+      const readiness = this.getReviewReadiness(input.repo, input.pullNumber, input.headSha)!;
+      this.db.exec("commit");
+      return readiness;
+    } catch (error) {
+      try {
+        this.db.exec("rollback");
+      } catch {
+        // Ignore rollback failures so the original SQLite error remains visible.
+      }
+      throw error;
     }
-
-    const nowIso = (input.now ?? new Date()).toISOString();
-    this.db
-      .prepare(
-        `insert into review_readiness
-          (repo, pull_number, head_sha, state, reason, event, review_url,
-           command_action, command_comment_id, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         on conflict(repo, pull_number, head_sha) do update set
-           state = excluded.state,
-           reason = excluded.reason,
-           event = excluded.event,
-           review_url = excluded.review_url,
-           command_action = excluded.command_action,
-           command_comment_id = excluded.command_comment_id,
-           updated_at = excluded.updated_at`
-      )
-      .run(
-        input.repo,
-        input.pullNumber,
-        input.headSha,
-        input.state,
-        reason ?? null,
-        event ?? null,
-        reviewUrl ?? null,
-        commandAction ?? null,
-        commandCommentId ?? null,
-        existing?.createdAt ?? nowIso,
-        nowIso
-      );
-    return this.getReviewReadiness(input.repo, input.pullNumber, input.headSha)!;
   }
 
   listReviewReadiness(input: {

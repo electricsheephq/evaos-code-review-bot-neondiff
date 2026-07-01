@@ -407,9 +407,17 @@ function markSupersededReadinessRowsForPull(
   pull: PullRequestSummary,
   now: Date
 ): void {
-  for (const readiness of state.listReviewReadiness({ repo, pullNumber: pull.number })) {
+  const supersedableStates: ReviewReadinessState[] = [
+    "queued",
+    "reviewing",
+    "needs_fix",
+    "awaiting_re_review",
+    "ready_for_human",
+    "provider_deferred",
+    "command_recorded"
+  ];
+  for (const readiness of state.listReviewReadiness({ repo, pullNumber: pull.number, states: supersedableStates })) {
     if (readiness.headSha === pull.head.sha) continue;
-    if (readiness.state === "stale" || readiness.state === "closed") continue;
     state.recordReviewReadiness({
       repo,
       pullNumber: pull.number,
@@ -601,10 +609,11 @@ async function runLeasedQueueJob(input: {
   try {
     pull = await input.github.getPull(input.job.repo, input.job.pullNumber);
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "failed",
-      lastError: error instanceof Error ? error.message : String(error),
+      lastError: errorMessage,
       now
     });
     recordReadinessTransition({
@@ -612,7 +621,7 @@ async function runLeasedQueueJob(input: {
       repo: input.job.repo,
       pull: pullForQueueJobWithoutLive(input.job),
       readinessState: "failed",
-      reason: "github_refetch_failed",
+      reason: `github_refetch_failed: ${errorMessage}`,
       now
     });
     updateReviewerSessionJobFromQueueStatus(input, "failed", "failed");
@@ -813,17 +822,18 @@ async function runLeasedQueueJob(input: {
       pull,
       error
     });
+    const errorMessage = error instanceof Error ? error.message : String(error);
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "failed",
-      lastError: error instanceof Error ? error.message : String(error)
+      lastError: errorMessage
     });
     recordReadinessTransition({
       state: input.state,
       repo: input.job.repo,
       pull,
       readinessState: "failed",
-      reason: "review_failed",
+      reason: `review_failed: ${errorMessage}`,
       now
     });
     await syncReviewStatusComment({
@@ -984,7 +994,7 @@ function backfillReadinessFromProcessedHead(
 }
 
 function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobRecord): boolean {
-  if (job.source === "manual_command") return false;
+  if (job.source !== "manual_command") return true;
   const existing = state.getReviewReadiness(job.repo, job.pullNumber, job.headSha);
   return existing?.commandAction !== "stop" && existing?.commandAction !== "explain";
 }

@@ -376,6 +376,10 @@ describe("provider-aware review scheduler", () => {
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "provider_deferred"]);
     expect(statusCalls.at(-1)?.body).toContain("temporarily unavailable");
     expect(statusCalls.at(-1)?.body).not.toContain("ProviderBusinessError");
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "provider_deferred",
+      reason: "provider_rate_limit_cooldown"
+    });
     state.close();
   });
 
@@ -409,6 +413,10 @@ describe("provider-aware review scheduler", () => {
     expect(statusCalls[0]?.body).toContain("GitHub refetch failed; see bot evidence");
     expect(statusCalls[0]?.body).not.toContain("internal host detail");
     expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "failed",
+      reason: expect.stringContaining("github_refetch_failed: GitHub API fetch failed")
+    });
     state.close();
   });
 
@@ -825,6 +833,10 @@ describe("provider-aware review scheduler", () => {
     expect(state.listReviewQueueJobs({ state: "failed" })).toEqual([
       expect.objectContaining({ lastError: "synthetic review failure after in-progress status" })
     ]);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "failed",
+      reason: "review_failed: synthetic review failure after in-progress status"
+    });
 
     const second = await runScheduledCycleWithDeps({
       config,
@@ -1319,7 +1331,7 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.reviewed).toBe(1);
     expect(result.commandReviewRequested).toBe(1);
-    expect(readinessObservedDuringCommandReview).toEqual(["awaiting_re_review:trusted_re_review_command"]);
+    expect(readinessObservedDuringCommandReview).toEqual(["reviewing:queue_job_running"]);
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "completed"]);
     expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
       state: "ready_for_human",

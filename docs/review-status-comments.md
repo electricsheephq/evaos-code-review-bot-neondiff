@@ -63,8 +63,8 @@ Readiness states:
 - `blocked_on_proof`: reserved for future evidence/proof-gated readiness.
 - `ready_for_human`: the head has a non-blocking bot review or dry-run result.
 - `provider_deferred`: capacity or provider cooldown deferred the head.
-- `stale`: the queued head was superseded or the base/head changed before
-  review.
+- `stale`: an older head was superseded by a newer PR head, or the queued
+  head's base/head changed before review.
 - `closed`: the PR closed or merged before review work completed.
 - `command_recorded`: a trusted non-review command such as `explain` was
   recorded.
