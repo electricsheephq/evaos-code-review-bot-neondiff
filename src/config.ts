@@ -15,6 +15,10 @@ export interface BotConfig {
     maxActiveRuns: number;
     leaseTtlMs: number;
   };
+  providerCooldown: {
+    enabled: boolean;
+    durationMs: number;
+  };
   walkthrough: {
     enabled: boolean;
     postIssueComment: boolean;
@@ -115,6 +119,10 @@ const DEFAULT_CONFIG: BotConfig = {
     maxActiveRuns: 5,
     leaseTtlMs: 15 * 60_000
   },
+  providerCooldown: {
+    enabled: true,
+    durationMs: 15 * 60_000
+  },
   walkthrough: {
     enabled: true,
     postIssueComment: false
@@ -173,6 +181,8 @@ function validateConfig(config: BotConfig): void {
   validateBoolean(config.activation.reviewExistingOpenPrsOnActivation, "config.activation.reviewExistingOpenPrsOnActivation");
   validatePositiveInteger(config.reviewConcurrency.maxActiveRuns, "config.reviewConcurrency.maxActiveRuns");
   validatePositiveInteger(config.reviewConcurrency.leaseTtlMs, "config.reviewConcurrency.leaseTtlMs");
+  validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
+  validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validateBoolean(config.walkthrough.enabled, "config.walkthrough.enabled");
   validateBoolean(config.walkthrough.postIssueComment, "config.walkthrough.postIssueComment");
   validateBoolean(config.commands.enabled, "config.commands.enabled");

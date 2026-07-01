@@ -149,6 +149,34 @@ describe("beta release status", () => {
     expect(status.database.skippedCount).toBe(16);
   });
 
+  it("reports provider cooldown skips without treating them as blocking DB errors", () => {
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false
+      },
+      database: { rowCount: 21, errorCount: 0, skippedCount: 16, providerCooldownCount: 1 },
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.gates).toContainEqual({
+      name: "live_db_no_errors",
+      ok: true,
+      detail: "0 blocking error row(s); 1 provider cooldown skip row(s)"
+    });
+  });
+
   it("fails closed when the daemon heartbeat is missing", () => {
     const status = buildReleaseStatus({
       repo: {

@@ -12,6 +12,7 @@ import {
   localDateFolder,
   prepareFailedHeadRetry,
   recordFailedReview,
+  recordProviderRateLimitCooldownIfNeeded,
   restoreFailedRetryRowIfNeeded,
   retryFailedHeadWithDeps,
   reviewPull
@@ -46,6 +47,33 @@ describe("worker review failures", () => {
     );
     expect(evidence).toContain("ETIMEDOUT");
     expect(evidence).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    state.close();
+  });
+
+  it("records provider rate limits as cooldown skips instead of hard failures", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-cooldown-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1234, "head-rate-limit");
+
+    const handled = recordProviderRateLimitCooldownIfNeeded({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("ProviderBusinessError: [1302][Rate limit reached for requests]"),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(handled).toBe(true);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", 1234, "head-rate-limit")).toMatchObject({
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:15:00.000Z; reason=provider_rate_limit"
+    });
+    expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:10:00.000Z"))).toMatchObject({
+      reason: "provider_rate_limit"
+    });
     state.close();
   });
 
@@ -134,7 +162,32 @@ describe("worker review failures", () => {
       pullNumber: 1225,
       headSha: "head-posted",
       livePull: pullSummary(1225, "head-posted")
-    })).toThrow("status is posted, not failed");
+    })).toThrow("status is posted, not failed/provider-cooldown");
+    state.close();
+  });
+
+  it("allows retry for provider-cooldown skipped heads", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-cooldown-retry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1235,
+      headSha: "head-provider-cooldown",
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:15:00.000Z; reason=provider_rate_limit"
+    });
+
+    expect(prepareFailedHeadRetry({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1235,
+      headSha: "head-provider-cooldown",
+      livePull: pullSummary(1235, "head-provider-cooldown")
+    })).toMatchObject({
+      previousError: "provider_rate_limit_cooldown_until=2026-07-01T00:15:00.000Z; reason=provider_rate_limit"
+    });
     state.close();
   });
 
@@ -472,6 +525,7 @@ describe("worker review failures", () => {
     expect(isSuccessfulRetryStatus("skipped_processed")).toBe(true);
     expect(isSuccessfulRetryStatus("failed")).toBe(false);
     expect(isSuccessfulRetryStatus("skipped_capacity")).toBe(false);
+    expect(isSuccessfulRetryStatus("skipped_provider_cooldown")).toBe(false);
     expect(isSuccessfulRetryStatus("skipped_stale_head")).toBe(false);
   });
 });
@@ -490,6 +544,10 @@ function minimalConfig(root: string): BotConfig {
     reviewConcurrency: {
       maxActiveRuns: 1,
       leaseTtlMs: 60_000
+    },
+    providerCooldown: {
+      enabled: true,
+      durationMs: 15 * 60_000
     },
     walkthrough: {
       enabled: false,

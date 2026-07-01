@@ -35,6 +35,13 @@ export interface ReviewRunLease {
   expiresAt: string;
 }
 
+export interface RepoProviderCooldownRecord {
+  repo: string;
+  cooldownUntil: string;
+  reason: string;
+  updatedAt: string;
+}
+
 export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_complete" | "daemon_cycle_failed";
 
 export interface DaemonHeartbeatRecord {
@@ -95,6 +102,13 @@ export class ReviewStateStore {
         lease_id text primary key,
         started_at text not null,
         expires_at text not null
+      );
+
+      create table if not exists repo_provider_cooldowns (
+        repo text primary key,
+        cooldown_until text not null,
+        reason text not null,
+        updated_at text not null default (datetime('now'))
       );
 
       create table if not exists daemon_heartbeat (
@@ -242,6 +256,40 @@ export class ReviewStateStore {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
   }
 
+  recordRepoProviderCooldown(input: { repo: string; cooldownUntil: Date; reason: string }): RepoProviderCooldownRecord {
+    this.db
+      .prepare(
+        `insert into repo_provider_cooldowns (repo, cooldown_until, reason, updated_at)
+         values (?, ?, ?, datetime('now'))
+         on conflict(repo) do update set
+           cooldown_until = excluded.cooldown_until,
+           reason = excluded.reason,
+           updated_at = datetime('now')`
+      )
+      .run(input.repo, input.cooldownUntil.toISOString(), redactSecrets(input.reason));
+    return this.getRepoProviderCooldown(input.repo)!;
+  }
+
+  getRepoProviderCooldown(repo: string): RepoProviderCooldownRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select repo, cooldown_until, reason, updated_at
+         from repo_provider_cooldowns
+         where repo = ?
+         limit 1`
+      )
+      .get(repo) as RepoProviderCooldownRow | undefined;
+    return row ? mapRepoProviderCooldownRow(row) : undefined;
+  }
+
+  getActiveRepoProviderCooldown(repo: string, now = new Date()): RepoProviderCooldownRecord | undefined {
+    const cooldown = this.getRepoProviderCooldown(repo);
+    if (!cooldown) return undefined;
+    const cooldownUntil = Date.parse(cooldown.cooldownUntil);
+    if (!Number.isFinite(cooldownUntil) || cooldownUntil <= now.getTime()) return undefined;
+    return cooldown;
+  }
+
   recordDaemonHeartbeat(record: DaemonHeartbeatRecord): void {
     if (record.event === "daemon_cycle_start") {
       this.db
@@ -369,6 +417,13 @@ interface DaemonHeartbeatRow {
   started_at: string | null;
 }
 
+interface RepoProviderCooldownRow {
+  repo: string;
+  cooldown_until: string;
+  reason: string;
+  updated_at: string;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -379,6 +434,15 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),
     createdAt: row.created_at
+  };
+}
+
+function mapRepoProviderCooldownRow(row: RepoProviderCooldownRow): RepoProviderCooldownRecord {
+  return {
+    repo: row.repo,
+    cooldownUntil: row.cooldown_until,
+    reason: row.reason,
+    updatedAt: row.updated_at
   };
 }
 
