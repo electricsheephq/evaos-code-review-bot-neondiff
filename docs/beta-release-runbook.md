@@ -95,10 +95,13 @@ banner to stdout.
   launchd dry-run mode, state DB row count, and error count.
 - launchd emits a fresh heartbeat after restart.
 - live DB has no unexpected error rows.
-- provider cooldown rows are allowed only when they are explicit
-  `provider_rate_limit_cooldown_until=...` skips with a follow-up retry issue or
-  retry plan. They prove provider degradation was contained; they do not prove
-  the affected PR head was reviewed.
+- active provider cooldown rows are allowed only when they are explicit
+  `provider_rate_limit_cooldown_until=...` skips with a named affected PR head
+  and cooldown expiry. They prove provider degradation was contained; they do
+  not prove the affected PR head was reviewed.
+- expired provider cooldown rows must be retried or closed/stale-skipped before
+  the release packet is considered clean. `release:status` should report these
+  as `provider_cooldown_backlog` with a retry command.
 - `coverage-audit` has zero unprocessed eligible heads unless every miss is
   explained in the release packet.
 - GitHub tracker issue records source SHA, config path, launchd proof, DB proof,
@@ -141,7 +144,23 @@ Provider cooldown rows are not failed rows. They mean the provider was
 rate-limited before ZCode produced a review. Keep them visible in
 `release:status`, then retry after the cooldown expires or resolve the ZCode
 provider entitlement/rate-limit source. A release may be green with provider
-cooldown rows only when the packet names the affected PR head and follow-up.
+cooldown rows only when all provider cooldown rows are still active and the
+packet names the affected PR head and follow-up.
+
+Expired cooldown rows are actionable backlog. Run:
+
+```bash
+npx tsx src/cli.ts retry-provider-cooldowns \
+  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --expired-only true \
+  --dry-run false \
+  --zcode true
+```
+
+Then re-run `release:status`, `provider-cooldowns --expired-only true`, and
+`coverage-audit`. If the retry produces a fresh provider cooldown, record the
+new expiry and keep monitoring; if the PR closed or the head is stale, confirm
+that the retry recorded `skipped_closed` or `skipped_stale_head`.
 
 ## Rollback
 
@@ -179,8 +198,8 @@ For each beta promotion, record:
 - `coverage-audit` summary.
 - launchd stdout heartbeat lines after restart.
 - live DB row/error count.
-- provider cooldown rows, if any, with affected repo, PR, head SHA, and
-  cooldown expiry.
+- provider cooldown rows, if any, with affected repo, PR, head SHA, cooldown
+  expiry, active/expired count, retry command, and retry result.
 - rollback SHA and command.
 - next monitoring action or heartbeat.
 
