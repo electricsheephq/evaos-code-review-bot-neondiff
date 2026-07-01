@@ -139,6 +139,55 @@ describe("daemon cycle resilience", () => {
     expect(events).toEqual(["false:1:true"]);
   });
 
+  it("skips the legacy provider cooldown retry lane when scheduler owns queue retries", async () => {
+    const stdout: string[] = [];
+    let retryCalled = false;
+
+    const result = await runDaemonCycle({
+      cycle: 5,
+      dryRun: false,
+      pilotRepos: ["electricsheephq/WorldOS"],
+      monitoredRepos: ["electricsheephq/WorldOS"],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      runOnceImpl: async () => ({
+        reposScanned: 1,
+        pullsSeen: 1,
+        reviewed: 0,
+        failed: 0,
+        skippedDraft: 0,
+        skippedCanary: 0,
+        skippedPolicy: 0,
+        skippedCommandStop: 0,
+        skippedCommandExplain: 0,
+        commandReviewRequested: 0,
+        skippedProcessed: 1,
+        skippedCapacity: 0,
+        skippedProviderCooldown: 0,
+        skippedStaleHead: 0,
+        baselinedExisting: 0,
+        policySkips: []
+      }),
+      retryProviderCooldownsImpl: async () => {
+        retryCalled = true;
+        throw new Error("legacy retry should not run");
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    expect(result.ok).toBe(true);
+    expect(retryCalled).toBe(false);
+    expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: "daemon_provider_cooldown_retry_skipped",
+        reason: "review_scheduler_enabled"
+      })
+    ]));
+  });
+
   it("records a failed heartbeat with the failure message", async () => {
     const heartbeats: Array<{ event: string; error?: string }> = [];
 

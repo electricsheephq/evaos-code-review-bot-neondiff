@@ -182,7 +182,7 @@ async function main(): Promise<void> {
       state: parseReviewQueueJobState(args.state),
       limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
     });
-    const output = { ok: queue.ok, coverage: queue, durableQueue };
+    const output = { ...queue, ok: queue.ok, coverage: queue, durableQueue };
     console.log(JSON.stringify(output, null, 2));
     if (!output.ok) process.exitCode = 1;
     return;

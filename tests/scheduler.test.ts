@@ -205,6 +205,42 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("uses head-only stale detection for legacy queue jobs without a base SHA", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-missing-base-"));
+    roots.push(root);
+    const config = schedulerConfig(root, []);
+    const state = new ReviewStateStore(config.statePath);
+    const job = state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: "head-a" }).job;
+    let attempts = 0;
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "head-a", "new-base")]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        attempts += 1;
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: `https://github.com/${repo}/pull/${reviewPull.number}#pullrequestreview-3`
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(attempts).toBe(1);
+    expect(result.skippedStaleHead).toBe(0);
+    expect(state.getReviewQueueJob(job.jobId)).toMatchObject({ state: "posted" });
+    state.close();
+  });
+
   it("reserves provider capacity for trusted manual-command queue jobs", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-manual-reserve-"));
     roots.push(root);

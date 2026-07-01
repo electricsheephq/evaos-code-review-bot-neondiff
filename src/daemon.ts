@@ -33,7 +33,7 @@ export interface RunDaemonCycleOptions {
 export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<DaemonCycleResult> {
   const stdout = input.stdout ?? console.log;
   const stderr = input.stderr ?? console.error;
-  const schedulerEnabled = input.runOnceImpl ? false : input.reviewSchedulerEnabled === true;
+  const schedulerEnabled = input.reviewSchedulerEnabled === true;
   const runOnceImpl = input.runOnceImpl ?? (schedulerEnabled ? runScheduledCycle : runOnce);
   const retryProviderCooldownsImpl = input.retryProviderCooldownsImpl ?? retryProviderCooldowns;
   const recordHeartbeat = input.recordHeartbeatImpl ?? ((event: DaemonHeartbeatEvent, error?: string) => {
@@ -61,19 +61,28 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   try {
     const result = await runOnceImpl({ configPath: input.configPath, dryRun: input.dryRun });
     try {
-      const providerCooldownRetry = await retryProviderCooldownsImpl({
-        configPath: input.configPath,
-        dryRun: input.dryRun,
-        expiredOnly: true,
-        limit: 1,
-        useZCode: true
-      });
-      stdout(formatDaemonLog({
-        event: "daemon_provider_cooldown_retry",
-        cycle: input.cycle,
-        dryRun: input.dryRun,
-        result: providerCooldownRetry
-      }));
+      if (schedulerEnabled) {
+        stdout(formatDaemonLog({
+          event: "daemon_provider_cooldown_retry_skipped",
+          cycle: input.cycle,
+          dryRun: input.dryRun,
+          reason: "review_scheduler_enabled"
+        }));
+      } else {
+        const providerCooldownRetry = await retryProviderCooldownsImpl({
+          configPath: input.configPath,
+          dryRun: input.dryRun,
+          expiredOnly: true,
+          limit: 1,
+          useZCode: true
+        });
+        stdout(formatDaemonLog({
+          event: "daemon_provider_cooldown_retry",
+          cycle: input.cycle,
+          dryRun: input.dryRun,
+          result: providerCooldownRetry
+        }));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       stderr(formatDaemonLog({

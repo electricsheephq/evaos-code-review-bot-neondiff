@@ -761,6 +761,7 @@ export class ReviewStateStore {
       const providerActive = countBy(active, (job) => job.providerId ?? "default");
       const orgActive = countBy(active, (job) => job.org);
       const repoActive = countBy(active, (job) => job.repo);
+      const hasManualAfter = buildManualEligibilitySuffix(eligible);
 
       for (const [index, job] of eligible.entries()) {
         if (leased.length >= limit) break;
@@ -769,10 +770,9 @@ export class ReviewStateStore {
         if (providerCount >= input.maxProviderActive) continue;
         if ((orgActive.get(job.org) ?? 0) >= input.maxOrgActive) continue;
         if ((repoActive.get(job.repo) ?? 0) >= input.maxRepoActive) continue;
-        const manualEligibleAfterThisJob = eligible.slice(index + 1).some((candidate) => candidate.lane === "manual");
         if (
           job.lane === "background" &&
-          manualEligibleAfterThisJob &&
+          hasManualAfter[index] &&
           manualCommandReserve > 0 &&
           providerCount >= input.maxProviderActive - manualCommandReserve
         ) {
@@ -1343,6 +1343,16 @@ function compareQueueJobsForLease(left: ReviewQueueJobRecord, right: ReviewQueue
   const leftCreated = Date.parse(left.createdAt);
   const rightCreated = Date.parse(right.createdAt);
   return leftCreated - rightCreated;
+}
+
+function buildManualEligibilitySuffix(jobs: ReviewQueueJobRecord[]): boolean[] {
+  const hasManualAfter = new Array<boolean>(jobs.length).fill(false);
+  let seenManual = false;
+  for (let index = jobs.length - 1; index >= 0; index -= 1) {
+    hasManualAfter[index] = seenManual;
+    if (jobs[index]?.lane === "manual") seenManual = true;
+  }
+  return hasManualAfter;
 }
 
 function countBy<T>(items: T[], key: (item: T) => string): Map<string, number> {

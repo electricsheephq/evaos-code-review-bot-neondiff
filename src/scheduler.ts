@@ -12,7 +12,9 @@ import {
   activateRepoForNewOnlyReview,
   isCanaryAllowed,
   recordFailedReview,
+  classifyProviderError,
   recordProviderRateLimitCooldownIfNeeded,
+  providerCooldownDurationMs,
   reviewPull,
   type ReviewPullInput,
   type ReviewPullResult,
@@ -115,6 +117,7 @@ export async function runScheduledCycleWithDeps(input: {
     maxOrgActive: scheduler.maxOrgActive,
     maxRepoActive: scheduler.maxRepoActive,
     manualCommandReserve: scheduler.manualCommandReserve,
+    // Provider capacity is the global API throttle; org/repo caps only decide which jobs can spend that budget.
     limit: scheduler.maxProviderActive,
     leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
     now
@@ -243,7 +246,7 @@ async function runLeasedQueueJob(input: {
     return "closed_retired";
   }
 
-  if (pull.head.sha !== input.job.headSha || pull.base.sha !== input.job.baseSha) {
+  if (pull.head.sha !== input.job.headSha || (input.job.baseSha && pull.base.sha !== input.job.baseSha)) {
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "stale_retired",
@@ -275,7 +278,7 @@ async function runLeasedQueueJob(input: {
       error,
       now
     })) {
-      markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull, now });
+      markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull, error, config: input.config, now });
       return "skipped_provider_cooldown";
     }
     recordFailedReview({
@@ -357,13 +360,18 @@ function markQueueJobProviderDeferredFromProcessed(input: {
   state: ReviewStateStore;
   job: ReviewQueueJobRecord;
   pull: PullRequestSummary;
+  error?: unknown;
+  config?: BotConfig;
   now?: Date;
 }): void {
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+  const directCooldown = input.error && input.config
+    ? providerCooldownFromError(input.config, input.error, input.now ?? new Date())
+    : undefined;
   const parsed = parseProviderCooldownError(processed?.error);
   const repoCooldown = input.state.getActiveRepoProviderCooldown(input.job.repo, input.now);
-  const cooldownUntil = parsed?.cooldownUntil ?? repoCooldown?.cooldownUntil;
-  const reason = parsed?.reason ?? repoCooldown?.reason;
+  const cooldownUntil = directCooldown?.cooldownUntil ?? parsed?.cooldownUntil ?? repoCooldown?.cooldownUntil;
+  const reason = directCooldown?.reason ?? parsed?.reason ?? repoCooldown?.reason;
   input.state.updateReviewQueueJobState({
     jobId: input.job.jobId,
     state: "provider_deferred",
@@ -371,6 +379,15 @@ function markQueueJobProviderDeferredFromProcessed(input: {
     lastError: processed?.error ??
       (cooldownUntil ? `repo_provider_cooldown_until=${cooldownUntil}; reason=${reason ?? "provider_cooldown"}` : "provider_deferred_without_cooldown")
   });
+}
+
+function providerCooldownFromError(config: BotConfig, error: unknown, now: Date): { cooldownUntil: string; reason: string } | undefined {
+  const classification = classifyProviderError(error);
+  if (!classification.cooldown) return undefined;
+  return {
+    cooldownUntil: new Date(now.getTime() + providerCooldownDurationMs(config, classification)).toISOString(),
+    reason: classification.reason
+  };
 }
 
 function hasActiveQueueJobForHead(
