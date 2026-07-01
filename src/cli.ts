@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { loadConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
@@ -5,6 +6,15 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
+import {
+  buildOperatorQueue,
+  buildOperatorStatus,
+  collectOperatorLeases,
+  collectOperatorProviderCooldowns,
+  collectOperatorRepoProviderCooldowns,
+  explainPullStatus,
+  summarizeAgentInventory
+} from "./operator-cli.js";
 import { collectReleaseStatus } from "./release-status.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { ReviewStateStore } from "./state.js";
@@ -14,6 +24,11 @@ import { resolveZCodeProviderEnv } from "./zcode-env.js";
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
+
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    console.log(JSON.stringify(buildHelp(), null, 2));
+    return;
+  }
 
   if (command === "doctor") {
     const config = loadConfig(args.config);
@@ -99,6 +114,144 @@ async function main(): Promise<void> {
     } finally {
       state.close();
     }
+    return;
+  }
+
+  if (command === "status") {
+    const config = loadConfig(args.config);
+    const release = collectReleaseStatus({
+      cwd: process.cwd(),
+      configPath: args.config,
+      expectedHead: args["expected-head"],
+      launchdLabel: args["launchd-label"],
+      statePath: args["state-path"]
+    });
+    const coverage = await collectCoverageReport(args, config);
+    const agents = summarizeAgentInventory({
+      launchd: release.launchd,
+      heartbeat: release.heartbeat,
+      leases: collectOperatorLeases(args["state-path"] ?? config.statePath)
+    });
+    const providerCooldowns = collectOperatorProviderCooldowns(args["state-path"] ?? config.statePath, {
+      repo: args.repo,
+      expiredOnly: false,
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+    });
+    const status = buildOperatorStatus({
+      release,
+      coverage,
+      agents,
+      providerCooldowns
+    });
+    console.log(JSON.stringify(status, null, 2));
+    if (!status.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "agents") {
+    const config = loadConfig(args.config);
+    const release = collectReleaseStatus({
+      cwd: process.cwd(),
+      configPath: args.config,
+      expectedHead: args["expected-head"],
+      launchdLabel: args["launchd-label"],
+      statePath: args["state-path"]
+    });
+    const inventory = summarizeAgentInventory({
+      launchd: release.launchd,
+      heartbeat: release.heartbeat,
+      leases: collectOperatorLeases(args["state-path"] ?? config.statePath)
+    });
+    console.log(JSON.stringify(inventory, null, 2));
+    if (!inventory.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "queue") {
+    const config = loadConfig(args.config);
+    const report = await collectCoverageReport(args, config);
+    const queue = buildOperatorQueue(report);
+    console.log(JSON.stringify(queue, null, 2));
+    if (!queue.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "coverage") {
+    const config = loadConfig(args.config);
+    const report = await collectCoverageReport(args, config);
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "cooldowns") {
+    const config = loadConfig(args.config);
+    const now = new Date();
+    const statePath = args["state-path"] ?? config.statePath;
+    const providerRows = collectOperatorProviderCooldowns(statePath, {
+      repo: args.repo,
+      expiredOnly: args["expired-only"] === "true",
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined,
+      now
+    });
+    const repoCooldowns = collectOperatorRepoProviderCooldowns(statePath, {
+      repo: args.repo,
+      activeOnly: args["active-only"] === "true",
+      now
+    });
+    const report = {
+      ok: providerRows.every((row) => !row.expired),
+      checkedAt: now.toISOString(),
+      filters: {
+        ...(args.repo ? { repo: args.repo } : {}),
+        expiredOnly: args["expired-only"] === "true",
+        activeOnly: args["active-only"] === "true"
+      },
+      summary: {
+        providerRows: providerRows.length,
+        expiredProviderRows: providerRows.filter((row) => row.expired).length,
+        activeProviderRows: providerRows.filter((row) => !row.expired).length,
+        repoCooldowns: repoCooldowns.length
+      },
+      providerRows,
+      repoCooldowns,
+      recommendedActions: providerRows.some((row) => row.expired)
+        ? [
+            `npx tsx src/cli.ts retry-provider-cooldowns --config ${args.config ?? "(default config)"} --expired-only true --dry-run false${args.repo ? ` --repo ${args.repo}` : ""}`
+          ]
+        : []
+    };
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "why") {
+    if (!args.repo) throw new Error("--repo is required for why");
+    if (!args.pr) throw new Error("--pr is required for why");
+    const config = loadConfig(args.config);
+    const report = await collectCoverageReport(args, config, true);
+    const repoWideReport = await collectCoverageReport({ ...args, pr: undefined }, config, true);
+    const repoWideExplanation = explainPullStatus(repoWideReport, args.repo, Number(args.pr));
+    const explanation = repoWideExplanation.state === "unknown"
+      ? explainPullStatus(report, args.repo, Number(args.pr))
+      : repoWideExplanation;
+    console.log(JSON.stringify({
+      ok: !["read_failure", "unknown"].includes(explanation.state),
+      checkedAt: report.checkedAt,
+      explanation,
+      scopedCoverage: {
+        summary: report.summary,
+        staleHeads: report.staleHeads,
+        readFailures: report.readFailures
+      },
+      repoCoverage: {
+        summary: repoWideReport.summary,
+        staleHeads: repoWideReport.staleHeads,
+        readFailures: repoWideReport.readFailures
+      }
+    }, null, 2));
+    if (["read_failure", "unknown"].includes(explanation.state)) process.exitCode = 1;
     return;
   }
 
@@ -272,6 +425,59 @@ async function main(): Promise<void> {
   throw new Error(`Unknown command: ${command ?? "(missing)"}`);
 }
 
+async function collectCoverageReport(args: ParsedArgs, config = loadConfig(args.config), forceScoped = false) {
+  const github = new GitHubApi(config.github);
+  const state = CoverageStateReader.open(args["state-path"] ?? config.statePath);
+  try {
+    return await collectCoverageAudit({
+      config,
+      github,
+      state,
+      repo: args.repo,
+      pullNumber: args.pr ? Number(args.pr) : undefined,
+      verifyCurrentHeads: forceScoped ? true : args["verify-current-heads"] !== "false"
+    });
+  } finally {
+    state.close();
+  }
+}
+
+function buildHelp() {
+  return {
+    ok: true,
+    commands: {
+      operator: [
+        "status",
+        "agents",
+        "queue",
+        "coverage",
+        "cooldowns",
+        "why"
+      ],
+      existing: [
+        "doctor",
+        "release-status",
+        "coverage-audit",
+        "provider-cooldowns",
+        "retry-provider-cooldowns",
+        "retry-failed",
+        "retire-failed",
+        "run-once",
+        "daemon",
+        "eval-offline",
+        "eval-suite"
+      ]
+    },
+    examples: [
+      "npx tsx src/cli.ts status --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
+      "npx tsx src/cli.ts agents --config /path/to/live.json",
+      "npx tsx src/cli.ts queue --config /path/to/live.json",
+      "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
+      "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
+    ]
+  };
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = { _: [] };
   for (let index = 0; index < argv.length; index += 1) {
@@ -338,6 +544,8 @@ interface ParsedArgs {
   "output-root"?: string;
   limit?: string;
   zcode?: string;
+  "active-only"?: string;
+  "verify-current-heads"?: string;
   [key: string]: string | string[] | undefined;
 }
 
