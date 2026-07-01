@@ -52,6 +52,7 @@ async function main(): Promise<void> {
       repoProfilesEnabled: Boolean(config.repoProfiles),
       activation: config.activation,
       reviewConcurrency: config.reviewConcurrency,
+      reviewerSessions: config.reviewerSessions,
       commandsEnabled: config.commands.enabled,
       statePath: config.statePath,
       workRoot: config.workRoot,

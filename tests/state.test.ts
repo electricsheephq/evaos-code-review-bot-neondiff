@@ -155,6 +155,204 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("assigns repo-sticky reviewer session jobs and reuses active sessions for the same repo", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const first = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "head-a",
+      ttlMs: 60_000,
+      headCountLimit: 3,
+      now: new Date("2026-07-01T00:00:00.000Z"),
+      model: "GLM-5.2",
+      provider: "builtin:zai-coding-plan"
+    });
+    const second = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 498,
+      headSha: "head-b",
+      ttlMs: 60_000,
+      headCountLimit: 3,
+      now: new Date("2026-07-01T00:00:10.000Z")
+    });
+
+    expect(first).toMatchObject({
+      assigned: true,
+      assignmentReason: "new_session",
+      job: { jobState: "assigned" }
+    });
+    expect(second).toMatchObject({
+      assigned: true,
+      assignmentReason: "same_repo_active_session"
+    });
+    expect(first.assigned && second.assigned && second.session.sessionId).toBe(first.assigned && first.session.sessionId);
+    expect(store.listReviewerSessions({ repo: "100yenadmin/evaOS-GUI" })).toEqual([
+      expect.objectContaining({
+        repo: "100yenadmin/evaOS-GUI",
+        state: "active",
+        headCountUsed: 2,
+        headCountLimit: 3,
+        model: "GLM-5.2",
+        provider: "builtin:zai-coding-plan"
+      })
+    ]);
+    store.close();
+  });
+
+  it("keeps repo-sticky reviewer sessions isolated by repo", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-repo-isolation-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const gui = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "gui-head",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const lco = store.assignReviewerSessionJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 253,
+      headSha: "lco-head",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+
+    expect(gui.assigned && lco.assigned && gui.session.sessionId).not.toBe(lco.assigned && lco.session.sessionId);
+    expect(store.listReviewerSessions()).toHaveLength(2);
+    store.close();
+  });
+
+  it("does not create session jobs for already processed or already assigned heads", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-dedupe-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordProcessed({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "processed-head",
+      status: "posted",
+      event: "COMMENT"
+    });
+
+    expect(store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "processed-head",
+      ttlMs: 60_000,
+      headCountLimit: 10
+    })).toEqual({ assigned: false, reason: "already_processed" });
+
+    const first = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "new-head",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const duplicate = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "new-head",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+
+    expect(first).toMatchObject({ assigned: true });
+    expect(duplicate).toMatchObject({
+      assigned: false,
+      reason: "already_assigned",
+      job: expect.objectContaining({ headSha: "new-head" })
+    });
+    store.close();
+  });
+
+  it("expires reviewer sessions by TTL or head-count limit before new assignments", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-expiry-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const first = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "head-a",
+      ttlMs: 1_000,
+      headCountLimit: 1,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const second = store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 498,
+      headSha: "head-b",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:02.000Z")
+    });
+
+    expect(first).toMatchObject({
+      assigned: true,
+      session: expect.objectContaining({ state: "expired", headCountUsed: 1, headCountLimit: 1 })
+    });
+    expect(second).toMatchObject({ assigned: true, assignmentReason: "session_expired_new_session" });
+    expect(first.assigned && second.assigned && first.session.sessionId).not.toBe(second.assigned && second.session.sessionId);
+    expect(store.listReviewerSessions({ state: "expired" })).toHaveLength(1);
+    expect(store.listReviewerSessions({ activeOnly: true, now: new Date("2026-07-01T00:00:02.000Z") })).toHaveLength(1);
+    store.close();
+  });
+
+  it("tracks reviewer session job lifecycle without calling ZCode", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-jobs-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.assignReviewerSessionJob({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "head-a",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      assignmentReason: "manual_command_priority",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const running = store.updateReviewerSessionJobState({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "head-a",
+      jobState: "running",
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+    const completed = store.updateReviewerSessionJobState({
+      repo: "100yenadmin/evaOS-GUI",
+      pullNumber: 497,
+      headSha: "head-a",
+      jobState: "completed",
+      processedReviewStatus: "posted",
+      now: new Date("2026-07-01T00:00:10.000Z")
+    });
+
+    expect(running).toMatchObject({
+      jobState: "running",
+      assignmentReason: "manual_command_priority",
+      startedAt: "2026-07-01T00:00:01.000Z"
+    });
+    expect(completed).toMatchObject({
+      jobState: "completed",
+      processedReviewStatus: "posted",
+      startedAt: "2026-07-01T00:00:01.000Z",
+      finishedAt: "2026-07-01T00:00:10.000Z"
+    });
+    store.close();
+  });
+
   it("stores the latest daemon heartbeat as a singleton", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-"));
     roots.push(root);

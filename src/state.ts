@@ -8,6 +8,13 @@ import type { ReviewEvent } from "./types.js";
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
 export type ProcessedCommandAction = "review" | "re-review" | "explain" | "stop";
 export type ProcessedCommandStatus = "triggered" | "explained" | "stopped" | "ignored";
+export type ReviewerSessionState = "warming" | "active" | "draining" | "expired" | "failed";
+export type ReviewerSessionJobState = "assigned" | "running" | "completed" | "skipped" | "failed";
+export type ReviewerSessionAssignmentReason =
+  | "same_repo_active_session"
+  | "new_session"
+  | "session_expired_new_session"
+  | "manual_command_priority";
 
 export interface ProcessedReviewRecord {
   repo: string;
@@ -35,6 +42,52 @@ export interface ReviewRunLease {
   expiresAt: string;
   ownerPid: number;
 }
+
+export interface ReviewerSessionRecord {
+  sessionId: string;
+  repo: string;
+  repoFamily?: string;
+  state: ReviewerSessionState;
+  startedAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+  headCountUsed: number;
+  headCountLimit: number;
+  workerPid?: number;
+  model?: string;
+  provider?: string;
+  zcodeCliVersion?: string;
+  memoryPacketSha?: string;
+  gitnexusPacketSha?: string;
+  lastError?: string;
+}
+
+export interface ReviewerSessionJobRecord {
+  sessionId: string;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  jobState: ReviewerSessionJobState;
+  assignmentReason: ReviewerSessionAssignmentReason;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  processedReviewStatus?: ProcessedStatus;
+}
+
+export type ReviewerSessionAssignResult =
+  | {
+      assigned: true;
+      session: ReviewerSessionRecord;
+      job: ReviewerSessionJobRecord;
+      assignmentReason: ReviewerSessionAssignmentReason;
+    }
+  | {
+      assigned: false;
+      reason: "already_processed" | "already_assigned";
+      session?: ReviewerSessionRecord;
+      job?: ReviewerSessionJobRecord;
+    };
 
 export interface RepoProviderCooldownRecord {
   repo: string;
@@ -133,6 +186,40 @@ export class ReviewStateStore {
         dry_run integer,
         recorded_at text,
         error text
+      );
+
+      create table if not exists reviewer_sessions (
+        session_id text primary key,
+        repo text not null,
+        repo_family text,
+        state text not null,
+        started_at text not null,
+        last_used_at text not null,
+        expires_at text not null,
+        head_count_used integer not null,
+        head_count_limit integer not null,
+        worker_pid integer,
+        model text,
+        provider text,
+        zcode_cli_version text,
+        memory_packet_sha text,
+        gitnexus_packet_sha text,
+        last_error text
+      );
+
+      create table if not exists reviewer_session_jobs (
+        session_id text not null,
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        job_state text not null,
+        assignment_reason text not null,
+        created_at text not null,
+        started_at text,
+        finished_at text,
+        processed_review_status text,
+        primary key (repo, pull_number, head_sha),
+        foreign key (session_id) references reviewer_sessions(session_id)
       );
     `);
     this.ensureDaemonHeartbeatColumns();
@@ -279,6 +366,209 @@ export class ReviewStateStore {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
   }
 
+  assignReviewerSessionJob(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    ttlMs: number;
+    headCountLimit: number;
+    now?: Date;
+    workerPid?: number;
+    model?: string;
+    provider?: string;
+    zcodeCliVersion?: string;
+    repoFamily?: string;
+    assignmentReason?: ReviewerSessionAssignmentReason;
+  }): ReviewerSessionAssignResult {
+    validateReviewerSessionInput(input.ttlMs, input.headCountLimit, input.workerPid);
+
+    if (this.hasProcessed(input.repo, input.pullNumber, input.headSha)) {
+      return { assigned: false, reason: "already_processed" };
+    }
+
+    const existingJob = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha);
+    if (existingJob) {
+      return {
+        assigned: false,
+        reason: "already_assigned",
+        session: this.getReviewerSession(existingJob.sessionId),
+        job: existingJob
+      };
+    }
+
+    const now = input.now ?? new Date();
+    const nowIso = now.toISOString();
+    const expiresAt = new Date(now.getTime() + input.ttlMs).toISOString();
+    const workerPid = input.workerPid ?? process.pid;
+    let assignmentReason = input.assignmentReason;
+    const hadPreviousRepoSession = this.listReviewerSessions({ repo: input.repo }).length > 0;
+    let session = this.getReusableReviewerSession(input.repo, now);
+
+    this.db.exec("begin immediate");
+    try {
+      this.expireReviewerSessions(now);
+      session = this.getReusableReviewerSession(input.repo, now);
+      if (!session) {
+        session = this.createReviewerSession({
+          repo: input.repo,
+          repoFamily: input.repoFamily,
+          state: "active",
+          startedAt: nowIso,
+          lastUsedAt: nowIso,
+          expiresAt,
+          headCountUsed: 0,
+          headCountLimit: input.headCountLimit,
+          workerPid,
+          model: input.model,
+          provider: input.provider,
+          zcodeCliVersion: input.zcodeCliVersion
+        });
+        assignmentReason = assignmentReason ?? (hadPreviousRepoSession ? "session_expired_new_session" : "new_session");
+      } else {
+        assignmentReason = assignmentReason ?? "same_repo_active_session";
+      }
+
+      this.db
+        .prepare(
+          `insert into reviewer_session_jobs
+            (session_id, repo, pull_number, head_sha, job_state, assignment_reason, created_at)
+           values (?, ?, ?, ?, 'assigned', ?, ?)`
+        )
+        .run(session.sessionId, input.repo, input.pullNumber, input.headSha, assignmentReason, nowIso);
+
+      const nextHeadCount = session.headCountUsed + 1;
+      const nextState: ReviewerSessionState = nextHeadCount >= session.headCountLimit ? "expired" : "active";
+      this.db
+        .prepare(
+          `update reviewer_sessions
+           set head_count_used = ?, last_used_at = ?, state = ?
+           where session_id = ?`
+        )
+        .run(nextHeadCount, nowIso, nextState, session.sessionId);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+
+    const job = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha)!;
+    return {
+      assigned: true,
+      session: this.getReviewerSession(job.sessionId)!,
+      job,
+      assignmentReason: job.assignmentReason
+    };
+  }
+
+  getReviewerSession(sessionId: string): ReviewerSessionRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select session_id, repo, repo_family, state, started_at, last_used_at, expires_at,
+                head_count_used, head_count_limit, worker_pid, model, provider, zcode_cli_version,
+                memory_packet_sha, gitnexus_packet_sha, last_error
+         from reviewer_sessions
+         where session_id = ?
+         limit 1`
+      )
+      .get(sessionId) as ReviewerSessionRow | undefined;
+    return row ? mapReviewerSessionRow(row) : undefined;
+  }
+
+  getReviewerSessionJob(repo: string, pullNumber: number, headSha: string): ReviewerSessionJobRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select session_id, repo, pull_number, head_sha, job_state, assignment_reason,
+                created_at, started_at, finished_at, processed_review_status
+         from reviewer_session_jobs
+         where repo = ? and pull_number = ? and head_sha = ?
+         limit 1`
+      )
+      .get(repo, pullNumber, headSha) as ReviewerSessionJobRow | undefined;
+    return row ? mapReviewerSessionJobRow(row) : undefined;
+  }
+
+  listReviewerSessions(input: {
+    repo?: string;
+    state?: ReviewerSessionState;
+    activeOnly?: boolean;
+    now?: Date;
+  } = {}): ReviewerSessionRecord[] {
+    if (input.activeOnly) this.expireReviewerSessions(input.now ?? new Date());
+    const rows = (input.repo
+      ? this.db
+          .prepare(
+            `select session_id, repo, repo_family, state, started_at, last_used_at, expires_at,
+                    head_count_used, head_count_limit, worker_pid, model, provider, zcode_cli_version,
+                    memory_packet_sha, gitnexus_packet_sha, last_error
+             from reviewer_sessions
+             where repo = ?
+             order by datetime(last_used_at) desc`
+          )
+          .all(input.repo)
+      : this.db
+          .prepare(
+            `select session_id, repo, repo_family, state, started_at, last_used_at, expires_at,
+                    head_count_used, head_count_limit, worker_pid, model, provider, zcode_cli_version,
+                    memory_packet_sha, gitnexus_packet_sha, last_error
+             from reviewer_sessions
+             order by datetime(last_used_at) desc`
+          )
+          .all()) as unknown as ReviewerSessionRow[];
+    return rows
+      .map(mapReviewerSessionRow)
+      .filter((session) => !input.state || session.state === input.state)
+      .filter((session) => !input.activeOnly || session.state === "active" || session.state === "warming");
+  }
+
+  updateReviewerSessionJobState(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    jobState: ReviewerSessionJobState;
+    processedReviewStatus?: ProcessedStatus;
+    now?: Date;
+  }): ReviewerSessionJobRecord {
+    const existing = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha);
+    if (!existing) {
+      throw new Error(`No reviewer session job for ${input.repo}#${input.pullNumber}@${input.headSha}`);
+    }
+    const timestamp = (input.now ?? new Date()).toISOString();
+    this.db
+      .prepare(
+        `update reviewer_session_jobs
+         set job_state = ?,
+             started_at = case when ? = 'running' and started_at is null then ? else started_at end,
+             finished_at = case when ? in ('completed', 'skipped', 'failed') then ? else finished_at end,
+             processed_review_status = coalesce(?, processed_review_status)
+         where repo = ? and pull_number = ? and head_sha = ?`
+      )
+      .run(
+        input.jobState,
+        input.jobState,
+        timestamp,
+        input.jobState,
+        timestamp,
+        input.processedReviewStatus ?? null,
+        input.repo,
+        input.pullNumber,
+        input.headSha
+      );
+    return this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha)!;
+  }
+
+  expireReviewerSessions(now = new Date()): number {
+    const nowIso = now.toISOString();
+    const result = this.db
+      .prepare(
+        `update reviewer_sessions
+         set state = 'expired'
+         where state in ('warming', 'active')
+           and (expires_at <= ? or head_count_used >= head_count_limit)`
+      )
+      .run(nowIso);
+    return Number(result.changes);
+  }
+
   private pruneInactiveReviewRunLeases(): void {
     const rows = this.db
       .prepare("select lease_id, owner_pid from review_run_leases")
@@ -288,6 +578,65 @@ export class ReviewStateStore {
         this.db.prepare("delete from review_run_leases where lease_id = ?").run(row.lease_id);
       }
     }
+  }
+
+  private createReviewerSession(input: {
+    repo: string;
+    repoFamily?: string;
+    state: ReviewerSessionState;
+    startedAt: string;
+    lastUsedAt: string;
+    expiresAt: string;
+    headCountUsed: number;
+    headCountLimit: number;
+    workerPid?: number;
+    model?: string;
+    provider?: string;
+    zcodeCliVersion?: string;
+  }): ReviewerSessionRecord {
+    const sessionId = randomUUID();
+    this.db
+      .prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, repo_family, state, started_at, last_used_at, expires_at,
+           head_count_used, head_count_limit, worker_pid, model, provider, zcode_cli_version)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        sessionId,
+        input.repo,
+        input.repoFamily ?? null,
+        input.state,
+        input.startedAt,
+        input.lastUsedAt,
+        input.expiresAt,
+        input.headCountUsed,
+        input.headCountLimit,
+        input.workerPid ?? null,
+        input.model ?? null,
+        input.provider ?? null,
+        input.zcodeCliVersion ?? null
+      );
+    return this.getReviewerSession(sessionId)!;
+  }
+
+  private getReusableReviewerSession(repo: string, now = new Date()): ReviewerSessionRecord | undefined {
+    const nowIso = now.toISOString();
+    const row = this.db
+      .prepare(
+        `select session_id, repo, repo_family, state, started_at, last_used_at, expires_at,
+                head_count_used, head_count_limit, worker_pid, model, provider, zcode_cli_version,
+                memory_packet_sha, gitnexus_packet_sha, last_error
+         from reviewer_sessions
+         where repo = ?
+           and state in ('warming', 'active')
+           and expires_at > ?
+           and head_count_used < head_count_limit
+         order by datetime(last_used_at) desc
+         limit 1`
+      )
+      .get(repo, nowIso) as ReviewerSessionRow | undefined;
+    return row ? mapReviewerSessionRow(row) : undefined;
   }
 
   recordRepoProviderCooldown(input: { repo: string; cooldownUntil: Date; reason: string }): RepoProviderCooldownRecord {
@@ -519,6 +868,16 @@ function normalizeRetirementReason(reason: string): string {
   return normalized || "operator_acknowledged";
 }
 
+function validateReviewerSessionInput(ttlMs: number, headCountLimit: number, workerPid?: number): void {
+  if (!Number.isInteger(ttlMs)) throw new Error("ttlMs must be an integer");
+  if (ttlMs < 1) throw new Error("ttlMs must be at least 1");
+  if (!Number.isInteger(headCountLimit)) throw new Error("headCountLimit must be an integer");
+  if (headCountLimit < 1) throw new Error("headCountLimit must be at least 1");
+  if (workerPid !== undefined && (!Number.isInteger(workerPid) || workerPid < 1)) {
+    throw new Error("workerPid must be a positive integer");
+  }
+}
+
 export function parseProviderCooldownError(error?: string): ParsedProviderCooldownError | undefined {
   if (!error?.startsWith(PROVIDER_COOLDOWN_ERROR_PREFIX)) return undefined;
   const [cooldownPart, ...rest] = error.split(";");
@@ -560,6 +919,38 @@ interface RepoProviderCooldownRow {
   updated_at: string;
 }
 
+interface ReviewerSessionRow {
+  session_id: string;
+  repo: string;
+  repo_family: string | null;
+  state: ReviewerSessionState;
+  started_at: string;
+  last_used_at: string;
+  expires_at: string;
+  head_count_used: number;
+  head_count_limit: number;
+  worker_pid: number | null;
+  model: string | null;
+  provider: string | null;
+  zcode_cli_version: string | null;
+  memory_packet_sha: string | null;
+  gitnexus_packet_sha: string | null;
+  last_error: string | null;
+}
+
+interface ReviewerSessionJobRow {
+  session_id: string;
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  job_state: ReviewerSessionJobState;
+  assignment_reason: ReviewerSessionAssignmentReason;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  processed_review_status: ProcessedStatus | null;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -579,6 +970,42 @@ function mapRepoProviderCooldownRow(row: RepoProviderCooldownRow): RepoProviderC
     cooldownUntil: row.cooldown_until,
     reason: row.reason,
     updatedAt: row.updated_at
+  };
+}
+
+function mapReviewerSessionRow(row: ReviewerSessionRow): ReviewerSessionRecord {
+  return {
+    sessionId: row.session_id,
+    repo: row.repo,
+    ...(row.repo_family ? { repoFamily: row.repo_family } : {}),
+    state: row.state,
+    startedAt: row.started_at,
+    lastUsedAt: row.last_used_at,
+    expiresAt: row.expires_at,
+    headCountUsed: row.head_count_used,
+    headCountLimit: row.head_count_limit,
+    ...(row.worker_pid ? { workerPid: row.worker_pid } : {}),
+    ...(row.model ? { model: row.model } : {}),
+    ...(row.provider ? { provider: row.provider } : {}),
+    ...(row.zcode_cli_version ? { zcodeCliVersion: row.zcode_cli_version } : {}),
+    ...(row.memory_packet_sha ? { memoryPacketSha: row.memory_packet_sha } : {}),
+    ...(row.gitnexus_packet_sha ? { gitnexusPacketSha: row.gitnexus_packet_sha } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {})
+  };
+}
+
+function mapReviewerSessionJobRow(row: ReviewerSessionJobRow): ReviewerSessionJobRecord {
+  return {
+    sessionId: row.session_id,
+    repo: row.repo,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    jobState: row.job_state,
+    assignmentReason: row.assignment_reason,
+    createdAt: row.created_at,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
+    ...(row.processed_review_status ? { processedReviewStatus: row.processed_review_status } : {})
   };
 }
 

@@ -22,6 +22,9 @@ export interface ReleaseDatabaseStatus {
   rowCount: number;
   errorCount: number;
   skippedCount?: number;
+  reviewerSessionCount?: number;
+  activeReviewerSessionCount?: number;
+  expiredReviewerSessionCount?: number;
   providerCooldownCount?: number;
   activeProviderCooldownCount?: number;
   expiredProviderCooldownCount?: number;
@@ -171,10 +174,11 @@ export function collectReleaseStatus(input: {
   expectedHead?: string;
   launchdLabel?: string;
   statePath?: string;
+  now?: Date;
 }): ReleaseStatus {
   const config = loadConfig(input.configPath);
   const configPath = input.configPath ?? "(default config)";
-  const now = new Date();
+  const now = input.now ?? new Date();
   return buildReleaseStatus({
     repo: readRepoStatus(input.cwd),
     expectedHead: input.expectedHead,
@@ -271,9 +275,13 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
       : retryableExpiredProviderCooldownCount > 0
         ? "expired_retryable"
         : "none";
+    const reviewerSessions = readReviewerSessionCounts(db, now);
     return {
       rowCount: row.rowCount ?? 0,
       skippedCount: row.skippedCount ?? 0,
+      reviewerSessionCount: reviewerSessions.total,
+      activeReviewerSessionCount: reviewerSessions.active,
+      expiredReviewerSessionCount: reviewerSessions.expired,
       providerCooldownCount: row.providerCooldownCount ?? 0,
       activeProviderCooldownCount,
       expiredProviderCooldownCount,
@@ -286,6 +294,35 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
   } finally {
     db.close();
   }
+}
+
+function readReviewerSessionCounts(db: DatabaseSync, now: Date): { total: number; active: number; expired: number } {
+  const hasTable = db
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'reviewer_sessions' limit 1")
+    .get();
+  if (!hasTable) return { total: 0, active: 0, expired: 0 };
+  const rows = db
+    .prepare("select state, expires_at, head_count_used, head_count_limit from reviewer_sessions")
+    .all() as unknown as Array<{
+      state: string;
+      expires_at: string;
+      head_count_used: number;
+      head_count_limit: number;
+    }>;
+  const active = rows.filter((row) => {
+    const expiresAtMs = Date.parse(row.expires_at);
+    return (
+      (row.state === "active" || row.state === "warming") &&
+      Number.isFinite(expiresAtMs) &&
+      expiresAtMs > now.getTime() &&
+      row.head_count_used < row.head_count_limit
+    );
+  }).length;
+  const expired = rows.filter((row) => {
+    const expiresAtMs = Date.parse(row.expires_at);
+    return row.state === "expired" || !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime();
+  }).length;
+  return { total: rows.length, active, expired };
 }
 
 function readActiveGlobalProviderCooldowns(db: DatabaseSync, now: Date): Array<{ repo: string; cooldownUntil: string }> {
