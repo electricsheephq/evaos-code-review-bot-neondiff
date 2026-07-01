@@ -725,17 +725,19 @@ export class ReviewStateStore {
     const limit = input.limit ?? input.maxProviderActive;
     validatePositiveQueueLimit(limit, "limit");
     const nowIso = (input.now ?? new Date()).toISOString();
-    const eligible = this.listReviewQueueJobs()
-      .filter((job) => isQueueJobEligible(job, nowIso))
-      .sort(compareQueueJobsForLease);
-    const active = this.listReviewQueueJobs().filter((job) => job.state === "leased" || job.state === "running");
-    const providerActive = countBy(active, (job) => job.providerId ?? "default");
-    const orgActive = countBy(active, (job) => job.org);
-    const repoActive = countBy(active, (job) => job.repo);
     const leased: ReviewQueueJobRecord[] = [];
 
     this.db.exec("begin immediate");
     try {
+      const jobs = this.listReviewQueueJobs();
+      const eligible = jobs
+        .filter((job) => isQueueJobEligible(job, nowIso))
+        .sort(compareQueueJobsForLease);
+      const active = jobs.filter((job) => job.state === "leased" || job.state === "running");
+      const providerActive = countBy(active, (job) => job.providerId ?? "default");
+      const orgActive = countBy(active, (job) => job.org);
+      const repoActive = countBy(active, (job) => job.repo);
+
       for (const [index, job] of eligible.entries()) {
         if (leased.length >= limit) break;
         const provider = job.providerId ?? "default";

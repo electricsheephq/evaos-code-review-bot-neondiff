@@ -124,14 +124,6 @@ export interface ReviewSchedulerConfig {
   maxQueuedPerRepo: number;
   manualCommandReserve: number;
   backgroundPriority: number;
-  manualPriority: number;
-  providerThrottleBackoff: {
-    requestRateLimitBaseMs: number;
-    requestRateLimitMaxMs: number;
-    overloadBaseMs: number;
-    overloadMaxMs: number;
-    quotaBaseMs: number;
-  };
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -161,15 +153,7 @@ const DEFAULT_CONFIG: BotConfig = {
     maxRepoActive: 1,
     maxQueuedPerRepo: 10,
     manualCommandReserve: 1,
-    backgroundPriority: 50,
-    manualPriority: 10,
-    providerThrottleBackoff: {
-      requestRateLimitBaseMs: 30_000,
-      requestRateLimitMaxMs: 180_000,
-      overloadBaseMs: 60_000,
-      overloadMaxMs: 300_000,
-      quotaBaseMs: 30 * 60_000
-    }
+    backgroundPriority: 50
   },
   providerCooldown: {
     enabled: true,
@@ -354,28 +338,10 @@ function validateReviewSchedulerConfig(value: unknown, label: string): void {
   validatePositiveInteger(value.maxQueuedPerRepo, `${label}.maxQueuedPerRepo`);
   validateNonNegativeInteger(value.manualCommandReserve, `${label}.manualCommandReserve`);
   validateNonNegativeInteger(value.backgroundPriority, `${label}.backgroundPriority`);
-  validateNonNegativeInteger(value.manualPriority, `${label}.manualPriority`);
   const maxProviderActive = Number(value.maxProviderActive);
   const manualCommandReserve = Number(value.manualCommandReserve);
   if (manualCommandReserve > maxProviderActive) {
     throw new Error(`${label}.manualCommandReserve must be <= ${label}.maxProviderActive`);
-  }
-  const backoff = value.providerThrottleBackoff;
-  if (!isRecord(backoff)) throw new Error(`${label}.providerThrottleBackoff must be an object`);
-  validatePositiveInteger(backoff.requestRateLimitBaseMs, `${label}.providerThrottleBackoff.requestRateLimitBaseMs`);
-  validatePositiveInteger(backoff.requestRateLimitMaxMs, `${label}.providerThrottleBackoff.requestRateLimitMaxMs`);
-  validatePositiveInteger(backoff.overloadBaseMs, `${label}.providerThrottleBackoff.overloadBaseMs`);
-  validatePositiveInteger(backoff.overloadMaxMs, `${label}.providerThrottleBackoff.overloadMaxMs`);
-  validatePositiveInteger(backoff.quotaBaseMs, `${label}.providerThrottleBackoff.quotaBaseMs`);
-  const requestRateLimitBaseMs = Number(backoff.requestRateLimitBaseMs);
-  const requestRateLimitMaxMs = Number(backoff.requestRateLimitMaxMs);
-  const overloadBaseMs = Number(backoff.overloadBaseMs);
-  const overloadMaxMs = Number(backoff.overloadMaxMs);
-  if (requestRateLimitBaseMs > requestRateLimitMaxMs) {
-    throw new Error(`${label}.providerThrottleBackoff.requestRateLimitBaseMs must be <= requestRateLimitMaxMs`);
-  }
-  if (overloadBaseMs > overloadMaxMs) {
-    throw new Error(`${label}.providerThrottleBackoff.overloadBaseMs must be <= overloadMaxMs`);
   }
 }
 

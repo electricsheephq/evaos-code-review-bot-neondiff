@@ -51,12 +51,14 @@ describe("provider-aware review scheduler", () => {
       enqueued: 10,
       leased: 2,
       completed: 2,
-      remainingQueued: 8
+      remainingQueued: 10
     });
     expect(reviewed).toHaveLength(2);
     expect(new Set(reviewed.map((entry) => entry.split("#")[0]))).toHaveLength(2);
-    expect(state.listReviewQueueJobs({ state: "posted" })).toHaveLength(2);
-    expect(state.listReviewQueueJobs({ state: "queued" })).toHaveLength(8);
+    expect(state.listReviewQueueJobs({ state: "posted" })).toHaveLength(0);
+    expect(state.listReviewQueueJobs({ state: "queued" })).toHaveLength(10);
+    expect(state.listReviewQueueJobs({ state: "queued" })
+      .filter((job) => job.lastError === "dry_run_completed_not_posted")).toHaveLength(2);
     state.close();
   });
 
@@ -157,7 +159,7 @@ describe("provider-aware review scheduler", () => {
       source: "manual_command",
       lane: "manual",
       commentId: 123,
-      priority: config.reviewScheduler!.manualPriority
+      priority: 10
     });
     const reviewed: string[] = [];
 
@@ -169,7 +171,7 @@ describe("provider-aware review scheduler", () => {
         ["org/repo-c", [pull("org/repo-c", 1, "c1")]]
       ])),
       state,
-      options: { dryRun: true, useZCode: false },
+      options: { dryRun: false, useZCode: false },
       reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
         reviewed.push(`${repo}#${reviewPull.number}`);
         reviewState.recordProcessed({
@@ -189,6 +191,41 @@ describe("provider-aware review scheduler", () => {
     expect(state.listReviewQueueJobs({ state: "posted" })).toEqual(expect.arrayContaining([
       expect.objectContaining({ repo: "org/repo-c", lane: "manual", commentId: 123 })
     ]));
+    state.close();
+  });
+
+  it("honors per-repo queue capacity before active provider cooldown enqueue", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-cooldown-capacity-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewScheduler!.maxQueuedPerRepo = 1;
+    const state = new ReviewStateStore(config.statePath);
+    state.recordRepoProviderCooldown({
+      repo: "org/repo-a",
+      cooldownUntil: new Date("2026-07-01T00:05:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1"), pull("org/repo-a", 2, "a2")]]
+      ])),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async () => "reviewed",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.skippedProviderCooldown).toBe(1);
+    expect(result.skippedCapacity).toBe(1);
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({
+        pullNumber: 1,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-01T00:05:00.000Z"
+      })
+    ]);
     state.close();
   });
 });
@@ -220,15 +257,7 @@ function schedulerConfig(root: string, repos: string[]): BotConfig {
       maxRepoActive: 1,
       maxQueuedPerRepo: 10,
       manualCommandReserve: 1,
-      backgroundPriority: 50,
-      manualPriority: 10,
-      providerThrottleBackoff: {
-        requestRateLimitBaseMs: 30_000,
-        requestRateLimitMaxMs: 180_000,
-        overloadBaseMs: 60_000,
-        overloadMaxMs: 300_000,
-        quotaBaseMs: 30 * 60_000
-      }
+      backgroundPriority: 50
     },
     providerCooldown: {
       enabled: true,

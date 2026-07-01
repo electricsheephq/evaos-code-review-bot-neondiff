@@ -212,6 +212,17 @@ describe("operator CLI summaries", () => {
       expect.objectContaining({ repo: "owner/repo", total: 3, queued: 1, running: 1, retryableProviderDeferred: 1 })
     ]);
     expect(collectOperatorReviewQueue(statePath, { repo: "owner/repo" }).jobs).toHaveLength(3);
+
+    const limited = collectOperatorReviewQueue(statePath, {
+      now: new Date("2026-07-01T00:05:00.000Z"),
+      limit: 2
+    });
+    expect(limited.jobs).toHaveLength(2);
+    expect(limited.summary.total).toBe(5);
+    expect(limited.byRepo).toEqual([
+      expect.objectContaining({ repo: "owner/other", total: 2, failed: 1 }),
+      expect.objectContaining({ repo: "owner/repo", total: 3, queued: 1 })
+    ]);
   });
 
   it("builds queue buckets from coverage audit output", () => {

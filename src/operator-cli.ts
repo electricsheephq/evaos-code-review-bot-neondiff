@@ -443,7 +443,7 @@ export function collectOperatorReviewQueue(
     const jobs = rows
       .map(mapReviewQueueJobRow)
       .filter((job) => !input.state || job.state === input.state);
-    return buildDurableQueueSnapshot(input.limit ? jobs.slice(0, input.limit) : jobs, now);
+    return buildDurableQueueSnapshot(jobs, now, input.limit ? jobs.slice(0, input.limit) : jobs);
   } finally {
     db.close();
   }
@@ -632,14 +632,18 @@ function emptyDurableQueue(now: Date): OperatorDurableQueueSnapshot {
   return buildDurableQueueSnapshot([], now);
 }
 
-function buildDurableQueueSnapshot(jobs: ReviewQueueJobRecord[], now: Date): OperatorDurableQueueSnapshot {
+function buildDurableQueueSnapshot(
+  jobs: ReviewQueueJobRecord[],
+  now: Date,
+  visibleJobs: ReviewQueueJobRecord[] = jobs
+): OperatorDurableQueueSnapshot {
   const summary = summarizeDurableQueueJobs(jobs, now);
   const repos = [...new Set(jobs.map((job) => job.repo))].sort();
   return {
     ok: summary.failed === 0 && summary.retryableProviderDeferred === 0,
     checkedAt: now.toISOString(),
     summary,
-    jobs,
+    jobs: visibleJobs,
     byRepo: repos.map((repo) => ({
       repo,
       ...summarizeDurableQueueJobs(jobs.filter((job) => job.repo === repo), now)

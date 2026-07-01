@@ -21,15 +21,7 @@ describe("review scheduler config", () => {
       maxRepoActive: 1,
       maxQueuedPerRepo: 10,
       manualCommandReserve: 1,
-      backgroundPriority: 50,
-      manualPriority: 10,
-      providerThrottleBackoff: {
-        requestRateLimitBaseMs: 30_000,
-        requestRateLimitMaxMs: 180_000,
-        overloadBaseMs: 60_000,
-        overloadMaxMs: 300_000,
-        quotaBaseMs: 30 * 60_000
-      }
+      backgroundPriority: 50
     });
   });
 

@@ -163,6 +163,9 @@ function enqueuePullIfEligible(input: {
   if (!isCanaryAllowed(input.config, input.repo, input.pull.number)) return "skipped_canary";
   if (input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) return "skipped_processed";
   if (hasActiveQueueJobForHead(input.state, input.repo, input.pull.number, input.pull.head.sha)) return "already_queued";
+  if (!hasRepoQueueCapacity(input.state, input.repo, input.config.reviewScheduler?.maxQueuedPerRepo ?? 10)) {
+    return "skipped_capacity";
+  }
 
   const activeRepoCooldown = input.state.getActiveRepoProviderCooldown(input.repo, input.now);
   if (activeRepoCooldown) {
@@ -175,10 +178,6 @@ function enqueuePullIfEligible(input: {
       now: input.now
     });
     return "provider_deferred";
-  }
-
-  if (!hasRepoQueueCapacity(input.state, input.repo, input.config.reviewScheduler?.maxQueuedPerRepo ?? 10)) {
-    return "skipped_capacity";
   }
 
   const enqueued = enqueueReviewJob(input);
@@ -263,7 +262,7 @@ async function runLeasedQueueJob(input: {
       useZCode: input.useZCode,
       budget: input.budget
     });
-    updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status });
+    updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun });
     return status;
   } catch (error) {
     if (recordProviderRateLimitCooldownIfNeeded({
@@ -274,7 +273,7 @@ async function runLeasedQueueJob(input: {
       error,
       now
     })) {
-      markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull });
+      markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull, now });
       return "skipped_provider_cooldown";
     }
     recordFailedReview({
@@ -298,6 +297,7 @@ function updateQueueJobAfterReviewStatus(input: {
   job: ReviewQueueJobRecord;
   pull: PullRequestSummary;
   status: ReviewPullResult;
+  dryRun: boolean;
 }): void {
   switch (input.status) {
     case "reviewed":
@@ -305,9 +305,9 @@ function updateQueueJobAfterReviewStatus(input: {
       const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: "posted",
+        state: input.dryRun ? "queued" : "posted",
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-        lastError: input.status
+        lastError: input.dryRun ? "dry_run_completed_not_posted" : input.status
       });
       return;
     }
@@ -355,14 +355,19 @@ function markQueueJobProviderDeferredFromProcessed(input: {
   state: ReviewStateStore;
   job: ReviewQueueJobRecord;
   pull: PullRequestSummary;
+  now?: Date;
 }): void {
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
   const parsed = parseProviderCooldownError(processed?.error);
+  const repoCooldown = input.state.getActiveRepoProviderCooldown(input.job.repo, input.now);
+  const cooldownUntil = parsed?.cooldownUntil ?? repoCooldown?.cooldownUntil;
+  const reason = parsed?.reason ?? repoCooldown?.reason;
   input.state.updateReviewQueueJobState({
     jobId: input.job.jobId,
     state: "provider_deferred",
-    ...(parsed?.cooldownUntil ? { nextEligibleAt: parsed.cooldownUntil } : {}),
-    lastError: processed?.error ?? "provider_deferred_without_processed_row"
+    ...(cooldownUntil ? { nextEligibleAt: cooldownUntil } : {}),
+    lastError: processed?.error ??
+      (cooldownUntil ? `repo_provider_cooldown_until=${cooldownUntil}; reason=${reason ?? "provider_cooldown"}` : "provider_deferred_without_cooldown")
   });
 }
 
