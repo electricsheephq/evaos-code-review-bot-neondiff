@@ -87,6 +87,48 @@ describe("changed-surface validation selector", () => {
     expect(proof.status).toBe("missing");
     expect(proof.detectedEvidence).toEqual([]);
   });
+
+  it("does not count negated Unity visual proof as evidence", () => {
+    const pullWithNegatedProof = pull({
+      body: "No screenshot or recording was captured."
+    });
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/WorldOS",
+      pull: pullWithNegatedProof,
+      files: [{ filename: "Assets/Scenes/Main.unity", additions: 1, deletions: 0 }]
+    });
+    const proof = evaluateProofRequirements({ pull: pullWithNegatedProof, validation });
+
+    expect(proof.status).toBe("missing");
+    expect(proof.detectedEvidence).toEqual([]);
+  });
+
+  it("matches nested package and TypeScript config paths", () => {
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/electric-sheep-website-dashboard-6158a244",
+      pull: pull({ body: "" }),
+      files: [
+        { filename: "packages/ui/package.json", additions: 1, deletions: 1 },
+        { filename: "packages/ui/tsconfig.json", additions: 1, deletions: 0 }
+      ]
+    });
+
+    expect(validation.recommendations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "typescript_build", status: "required" })])
+    );
+  });
+
+  it("does not treat ordinary release-named source files as release surfaces", () => {
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/electric-sheep-website-dashboard-6158a244",
+      pull: pull({ body: "" }),
+      files: [{ filename: "components/ReleaseBanner.tsx", additions: 1, deletions: 0 }]
+    });
+
+    expect(validation.recommendations).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "ci_release_smoke" })])
+    );
+  });
 });
 
 function pull(input: { body: string }): PullRequestSummary {

@@ -1,5 +1,5 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
-import { isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory } from "./regression-taxonomy.js";
+import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory } from "./regression-taxonomy.js";
 import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -130,8 +130,9 @@ export function decideReviewEvent(findings: Pick<ReviewComment, "severity" | "ca
 }
 
 export function formatReviewComment(finding: Finding): string {
+  const category = finding.category ? `\n\nCategory: ${categoryLabel(finding.category)}` : "";
   const why = finding.why_this_matters ? `\n\nWhy this matters: ${finding.why_this_matters}` : "";
-  return `**${finding.severity}: ${finding.title}**\n\n${finding.body}${why}`;
+  return `**${finding.severity}: ${finding.title}**\n\n${finding.body}${category}${why}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

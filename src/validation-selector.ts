@@ -134,7 +134,7 @@ function dedupeRecommendations(recommendations: ValidationRecommendation[]): Val
 
 function hasEvidenceForRecommendation(recommendation: ValidationRecommendation, text: string): boolean {
   const normalized = text.toLowerCase();
-  if (recommendation.id === "unity_editor_smoke") return /play\s*mode|playmode|unity editor|scene smoke|prefab smoke|recording|screenshot/.test(normalized);
+  if (recommendation.id === "unity_editor_smoke") return hasUnityEvidence(normalized);
   if (recommendation.id === "typescript_build") return hasBuildEvidence(normalized) || hasTestEvidence(normalized) || hasCiEvidence(normalized);
   if (recommendation.id === "ci_release_smoke") return hasReleaseEvidence(normalized) || hasCiEvidence(normalized);
   if (recommendation.id === "bot_focused_tests") return hasBuildEvidence(normalized) || hasTestEvidence(normalized) || hasReleaseEvidence(normalized);
@@ -144,8 +144,8 @@ function hasEvidenceForRecommendation(recommendation: ValidationRecommendation, 
 function detectEvidenceMentions(text: string): string[] {
   const normalized = text.toLowerCase();
   const evidence = new Set<string>();
-  if (/play\s*mode|playmode|unity editor/.test(normalized)) evidence.add("Unity smoke");
-  if (/screenshot|recording/.test(normalized)) evidence.add("visual proof");
+  if (hasUnityEvidence(normalized)) evidence.add("Unity smoke");
+  if (hasVisualEvidence(normalized)) evidence.add("visual proof");
   if (hasBuildEvidence(normalized)) evidence.add("build/typecheck");
   if (hasTestEvidence(normalized)) evidence.add("tests");
   if (hasCiEvidence(normalized)) evidence.add("CI checks");
@@ -154,22 +154,55 @@ function detectEvidenceMentions(text: string): string[] {
 }
 
 function hasBuildEvidence(text: string): boolean {
-  return /\b(npm run build|pnpm build|yarn build|bun run build|typecheck|tsc --noemit|tsc -p)\b/.test(text);
+  if (hasNegatedOrHistoricalProof(text, ["build", "validation", "typecheck", "tsc"])) return false;
+  return (
+    /\b(npm run build|pnpm build|yarn build|bun run build|typecheck|tsc --noemit|tsc -p)\b/.test(text) ||
+    /\b(build|tsc)\b.{0,48}\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b/.test(text) ||
+    /\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b.{0,48}\b(build|tsc)\b/.test(text)
+  );
 }
 
 function hasTestEvidence(text: string): boolean {
+  if (hasNegatedOrHistoricalProof(text, ["validation", "test", "tests", "vitest", "jest", "npm test"])) return false;
   return (
-    /\b(focused\s+)?(vitest|jest)\b.{0,48}\b(pass(?:ed)?|green|ok)\b/.test(text) ||
-    /\b(pass(?:ed)?|green|ok)\b.{0,48}\b(focused\s+)?(vitest|jest)\b/.test(text)
+    /\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b.{0,48}\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b/.test(text) ||
+    /\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b.{0,48}\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b/.test(text)
   );
 }
 
 function hasCiEvidence(text: string): boolean {
+  if (hasNegatedOrHistoricalProof(text, ["validation", "ci", "check", "checks"])) return false;
   return /\b(checks? green|ci passed|github actions green|github checks passed)\b/.test(text);
 }
 
 function hasReleaseEvidence(text: string): boolean {
+  if (hasNegatedOrHistoricalProof(text, ["validation", "release:status", "coverage-audit", "provider-cooldown", "rollback"])) return false;
   return /\b(release:status|coverage-audit|provider-cooldowns?|rollback note)\b/.test(text);
+}
+
+function hasUnityEvidence(text: string): boolean {
+  if (hasNegatedOrHistoricalProof(text, ["validation", "play mode", "playmode", "unity", "scene smoke", "prefab smoke"])) return false;
+  return (
+    /\b(play\s*mode|playmode|unity editor|scene smoke|prefab smoke)\b.{0,48}\b(pass(?:ed|es)?|green|ok|smoke(?:d)?|verified)\b/.test(text) ||
+    hasVisualEvidence(text)
+  );
+}
+
+function hasVisualEvidence(text: string): boolean {
+  if (hasNegatedOrHistoricalProof(text, ["screenshot", "recording", "video", "visual proof"])) return false;
+  return (
+    /\b(screenshot|recording|video)\b.{0,48}\b(attached|captured|included|provided|uploaded)\b/.test(text) ||
+    /\b(attached|captured|included|provided|uploaded)\b.{0,48}\b(screenshot|recording|video)\b/.test(text)
+  );
+}
+
+function hasNegatedOrHistoricalProof(text: string, evidenceWords: string[]): boolean {
+  const evidencePattern = evidenceWords.map(escapeRegExp).join("|");
+  return new RegExp(`\\b(no|not|without|missing|previous|prior|reverted)\\b.{0,48}\\b(${evidencePattern})\\b`).test(text);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isDocsPath(path: string): boolean {
@@ -191,6 +224,7 @@ function isUnityPath(path: string): boolean {
 
 function isTypeScriptOrWebPath(path: string): boolean {
   const lower = path.toLowerCase();
+  const basename = lower.split("/").pop() ?? lower;
   return (
     lower.startsWith("src/") ||
     lower.startsWith("app/") ||
@@ -200,11 +234,13 @@ function isTypeScriptOrWebPath(path: string): boolean {
     lower.endsWith(".tsx") ||
     lower.endsWith(".js") ||
     lower.endsWith(".jsx") ||
-    lower === "package.json" ||
-    lower === "package-lock.json" ||
-    lower === "pnpm-lock.yaml" ||
-    lower === "tsconfig.json" ||
-    lower.startsWith("tsconfig.")
+    basename === "package.json" ||
+    basename === "package-lock.json" ||
+    basename === "pnpm-lock.yaml" ||
+    basename === "yarn.lock" ||
+    basename === "bun.lock" ||
+    basename === "tsconfig.json" ||
+    basename.startsWith("tsconfig.")
   );
 }
 
@@ -213,8 +249,9 @@ function isWorkflowOrReleasePath(path: string): boolean {
   return (
     lower.startsWith(".github/workflows/") ||
     lower.startsWith("docs/releases/") ||
-    lower.includes("launchd") ||
-    lower.includes("release") ||
+    lower.startsWith("launchd/") ||
+    lower.startsWith("config/launchd/") ||
+    lower.endsWith(".plist") ||
     lower === "package.json"
   );
 }

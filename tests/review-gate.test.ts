@@ -48,7 +48,7 @@ describe("deterministic review gate", () => {
     });
   });
 
-  it("keeps proof gaps comment-only even when the model marks them P1", () => {
+  it("keeps high-severity proof gaps blocking because severity is authoritative", () => {
     const gate = applyDeterministicReviewGate({
       files,
       findings: [
@@ -64,7 +64,32 @@ describe("deterministic review gate", () => {
       ]
     });
 
-    expect(gate.event).toBe("COMMENT");
-    expect(gate.summary.requestChangesEligible).toBe(0);
+    expect(gate.event).toBe("REQUEST_CHANGES");
+    expect(gate.summary.requestChangesEligible).toBe(1);
+  });
+
+  it("does not let docs-only category demote high-severity findings", () => {
+    const gate = applyDeterministicReviewGate({
+      files: [
+        {
+          filename: "docs/operator-cli.md",
+          patch: "@@ -1,1 +1,2 @@\n Run rollback.\n+Run unsafe rollback."
+        }
+      ],
+      findings: [
+        {
+          severity: "P0",
+          category: "docs_only",
+          path: "docs/operator-cli.md",
+          line: 2,
+          title: "Unsafe rollback command",
+          body: "The documented rollback command points at the wrong live config.",
+          confidence: 0.95
+        }
+      ]
+    });
+
+    expect(gate.event).toBe("REQUEST_CHANGES");
+    expect(gate.summary.categoryCounts).toEqual({ docs_only: 1 });
   });
 });

@@ -19,6 +19,7 @@ describe("finding normalization and review policy", () => {
     expect(result.comments).toHaveLength(25);
     expect(result.comments[0]?.severity).toBe("P0");
     expect(result.comments[0]?.category).toBe("data_loss");
+    expect(result.comments[0]?.body).toContain("Category: Data loss");
     expect(result.dropped.filter((drop) => drop.reason === "comment_cap_exceeded")).toHaveLength(5);
   });
 
@@ -62,8 +63,8 @@ describe("finding normalization and review policy", () => {
 
   it("requests changes only for P0 or P1 findings in eligible regression categories", () => {
     expect(decideReviewEvent([{ severity: "P2", category: "data_loss" }, { severity: "P3", category: "auth" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "docs_only" }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap" }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P1", category: "docs_only" }])).toBe("REQUEST_CHANGES");
     expect(decideReviewEvent([{ severity: "P1", category: "unknown" }])).toBe("REQUEST_CHANGES");
     expect(decideReviewEvent([{ severity: "P1", category: "data_loss" }])).toBe("REQUEST_CHANGES");
     expect(decideReviewEvent([{ severity: "P0", category: "security_boundary" }])).toBe("REQUEST_CHANGES");
