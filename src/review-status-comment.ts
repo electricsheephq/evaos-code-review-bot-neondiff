@@ -140,7 +140,11 @@ function sanitizePublicText(value: string | undefined): string {
 }
 
 function formatInlinePublicText(value: string | undefined): string {
-  return sanitizePublicText(value).replace(/\s+/g, " ").trim();
+  return sanitizePublicText(value)
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^#{1,6}\s+/, "")
+    .slice(0, 200);
 }
 
 function statusMessage(input: BuildReviewStatusCommentInput): string {
@@ -152,7 +156,7 @@ function statusMessage(input: BuildReviewStatusCommentInput): string {
     case "completed":
       return "evaOS review completed for this PR head.";
     case "provider_deferred":
-      return "evaOS review is deferred because the model provider is temporarily unavailable or rate-limited. The worker will retry according to cooldown policy.";
+      return "evaOS review is deferred because the model provider or worker capacity is temporarily unavailable. The worker will retry according to cooldown policy.";
     case "stale_head":
       return "evaOS review stopped because this queued head is no longer the live PR head.";
     case "closed_or_merged_before_review":

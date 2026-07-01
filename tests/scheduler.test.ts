@@ -129,7 +129,7 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.skippedProviderCooldown).toBe(1);
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "provider_deferred"]);
-    expect(statusCalls.at(-1)?.body).toContain("temporarily unavailable or rate-limited");
+    expect(statusCalls.at(-1)?.body).toContain("temporarily unavailable");
     expect(statusCalls.at(-1)?.body).not.toContain("ProviderBusinessError");
     state.close();
   });
@@ -422,7 +422,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("does not regress an in-progress status back to queued when legacy capacity is busy", async () => {
+  it("moves in-progress status to provider_deferred when legacy capacity is busy", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-capacity-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/repo-a"]);
@@ -442,7 +442,7 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(result.skippedCapacity).toBe(1);
-    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress"]);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "provider_deferred"]);
     expect(state.listReviewQueueJobs({ state: "queued" })).toEqual([
       expect.objectContaining({ lastError: "legacy_review_capacity_busy" })
     ]);

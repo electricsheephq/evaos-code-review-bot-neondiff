@@ -129,6 +129,19 @@ describe("review status comment", () => {
     expect(comment.body).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
   });
 
+  it("strips heading markers from PR titles before rendering bot-authored text", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "queued",
+      pullTitle: "## Merge me"
+    });
+
+    expect(comment.body).toContain("PR: owner/repo#1 - Merge me");
+    expect(comment.body).not.toContain(" - ## Merge me");
+  });
+
   it("strips hidden comment markers from user-controlled public text", () => {
     const comment = buildReviewStatusComment({
       repo: "owner/repo",

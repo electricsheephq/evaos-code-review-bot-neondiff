@@ -449,6 +449,13 @@ async function runLeasedQueueJob(input: {
   try {
     pull = await input.github.getPull(input.job.repo, input.job.pullNumber);
   } catch (error) {
+    input.state.updateReviewQueueJobState({
+      jobId: input.job.jobId,
+      state: "failed",
+      lastError: error instanceof Error ? error.message : String(error),
+      now
+    });
+    updateReviewerSessionJobFromQueueStatus(input, "failed", "failed");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -460,12 +467,6 @@ async function runLeasedQueueJob(input: {
       onStatusCommentFailure: input.onStatusCommentFailure,
       now
     });
-    input.state.updateReviewQueueJobState({
-      jobId: input.job.jobId,
-      state: "failed",
-      lastError: error instanceof Error ? error.message : String(error)
-    });
-    updateReviewerSessionJobFromQueueStatus(input, "failed", "failed");
     return "failed";
   }
 
@@ -693,7 +694,7 @@ function reviewResultStatusCommentState(status: ReviewPullResult): ReviewStatusC
     case "skipped_stale_head":
       return "stale_head";
     case "skipped_capacity":
-      return undefined;
+      return "provider_deferred";
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":

@@ -32,8 +32,9 @@ Supported states:
 - `skipped`
 - `failed`
 
-`provider_deferred` is not a settled state. It means the provider cooldown lane
-still intends to retry later; agents should keep waiting or inspect bot status.
+`provider_deferred` is not a settled state. It means provider availability,
+provider cooldown, or worker capacity still intends to retry later; agents
+should keep waiting or inspect bot status.
 
 The marker is head-specific so a stale worker for an older head cannot overwrite
 the live head's queued or in-progress status. This intentionally follows the
