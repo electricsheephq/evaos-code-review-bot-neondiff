@@ -676,6 +676,75 @@ describe("provider-aware review scheduler", () => {
     }
   });
 
+  it("reconciles historical failed queue rows for already-skipped processed heads", async () => {
+    const cooldownError = "provider_rate_limit_cooldown_until=2026-07-02T00:10:00.000Z; reason=provider_overloaded";
+    const scenarios = [
+      {
+        name: "ordinary-skip",
+        headSha: HEAD_A,
+        expectedState: "stale_retired",
+        expectedLastError: "processed_head_already_skipped_reconciled"
+      },
+      {
+        name: "provider-cooldown",
+        headSha: HEAD_B,
+        error: cooldownError,
+        expectedState: "provider_deferred",
+        expectedLastError: cooldownError
+      }
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-reconcile-processed-skip-${scenario.name}-`));
+      roots.push(root);
+      const config = schedulerConfig(root, ["org/repo-a"]);
+      const state = new ReviewStateStore(config.statePath);
+      state.recordProcessed({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: scenario.headSha,
+        status: "skipped",
+        ...("error" in scenario ? { error: scenario.error } : {})
+      });
+      const job = state.enqueueReviewQueueJob({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: scenario.headSha,
+        baseSha: "base"
+      }).job;
+      state.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "failed",
+        lastError: "processed_head_already_skipped",
+        now: new Date("2026-07-02T00:00:00.000Z")
+      });
+
+      const result = await runScheduledCycleWithDeps({
+        config,
+        github: githubFromMap(new Map([
+          ["org/repo-a", [pull("org/repo-a", 1, scenario.headSha)]]
+        ])),
+        state,
+        options: { dryRun: false, useZCode: false },
+        reviewPullImpl: async () => {
+          throw new Error("reconciled historical failed rows should not call reviewPull");
+        },
+        now: new Date("2026-07-02T00:01:00.000Z")
+      });
+
+      expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+        state: scenario.expectedState,
+        lastError: scenario.expectedLastError
+      });
+      if (scenario.expectedState === "provider_deferred") {
+        expect(result.queue.providerDeferred).toBe(1);
+      } else {
+        expect(result.queue.staleRetired).toBe(1);
+      }
+      state.close();
+    }
+  });
+
   it("retires superseded queued status comments when a newer head is enqueued", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-superseded-head-"));
     roots.push(root);

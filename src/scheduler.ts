@@ -146,6 +146,10 @@ export async function runScheduledCycleWithDeps(input: {
     }
   }
 
+  const reconciled = reconcileProcessedSkippedFailedQueueJobs(input.state, now);
+  result.queue.providerDeferred += reconciled.providerDeferred;
+  result.queue.staleRetired += reconciled.staleRetired;
+
   result.queue.budget = buildReviewBudgetStatus({
     config,
     jobs: input.state.listReviewQueueJobs(),
@@ -1359,6 +1363,38 @@ function updateQueueJobAfterReviewStatus(input: {
     default:
       assertNever(input.status);
   }
+}
+
+function reconcileProcessedSkippedFailedQueueJobs(
+  state: ReviewStateStore,
+  now: Date
+): { providerDeferred: number; staleRetired: number } {
+  const result = { providerDeferred: 0, staleRetired: 0 };
+  for (const job of state.listReviewQueueJobs({ state: "failed" })) {
+    if (job.lastError !== "processed_head_already_skipped") continue;
+    const processed = state.getProcessedReview(job.repo, job.pullNumber, job.headSha);
+    if (processed?.status !== "skipped") continue;
+    const providerCooldown = parseProviderCooldownError(processed.error);
+    if (providerCooldown) {
+      state.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: providerCooldown.cooldownUntil,
+        lastError: processed.error,
+        now
+      });
+      result.providerDeferred += 1;
+      continue;
+    }
+    state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "stale_retired",
+      lastError: "processed_head_already_skipped_reconciled",
+      now
+    });
+    result.staleRetired += 1;
+  }
+  return result;
 }
 
 function reviewStatusCommentStateForProcessedStatus(
