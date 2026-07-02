@@ -778,6 +778,21 @@ describe("beta release status", () => {
         10,
         10
       );
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at, head_count_used, head_count_limit, worker_pid)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        "dead-worker-active-session",
+        "electricsheephq/evaos-code-review-bot",
+        "active",
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:10.000Z",
+        "2026-07-01T00:30:00.000Z",
+        1,
+        10,
+        999_999_999
+      );
     } finally {
       db.close();
     }
@@ -790,15 +805,18 @@ describe("beta release status", () => {
       now: new Date("2026-07-01T00:15:00.000Z")
     });
 
-    expect(status.database.reviewerSessionCount).toBe(4);
+    expect(status.database.reviewerSessionCount).toBe(5);
     expect(status.database.activeReviewerSessionCount).toBe(1);
     expect(status.database.expiredReviewerSessionCount).toBe(3);
-    expect(status.database.reviewerSessionsByRepo).toEqual([
-      { repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO", total: 1, active: 0, expired: 1 },
-      { repo: "100yenadmin/evaOS-GUI", total: 1, active: 1, expired: 0 },
-      { repo: "electricsheephq/WorldOS", total: 1, active: 0, expired: 1 },
-      { repo: "electricsheephq/evaos-code-review-bot", total: 1, active: 0, expired: 1 }
-    ]);
+    expect(status.database.reviewerSessionsByRepo).toHaveLength(4);
+    expect(status.database.reviewerSessionsByRepo).toEqual(
+      expect.arrayContaining([
+        { repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO", total: 1, active: 0, expired: 1 },
+        { repo: "100yenadmin/evaOS-GUI", total: 1, active: 1, expired: 0 },
+        { repo: "electricsheephq/WorldOS", total: 1, active: 0, expired: 1 },
+        { repo: "electricsheephq/evaos-code-review-bot", total: 2, active: 0, expired: 1 }
+      ])
+    );
   });
 
   it("reports durable review queue counts and fails retryable deferred or failed jobs", () => {

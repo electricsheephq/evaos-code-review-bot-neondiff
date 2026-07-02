@@ -1280,6 +1280,38 @@ export class ReviewStateStore {
     return Number(result.changes);
   }
 
+  reconcileReviewerSessions(now = new Date(), repo?: string): { expired: number; failedDeadWorkers: number } {
+    const expired = this.expireReviewerSessions(now, repo);
+    const rows = (repo
+      ? this.db
+          .prepare(
+            `select session_id, worker_pid
+             from reviewer_sessions
+             where repo = ?
+               and state in ('warming', 'active', 'draining')
+               and worker_pid is not null`
+          )
+          .all(repo)
+      : this.db
+          .prepare(
+            `select session_id, worker_pid
+             from reviewer_sessions
+             where state in ('warming', 'active', 'draining')
+               and worker_pid is not null`
+          )
+          .all()) as unknown as Array<{ session_id: string; worker_pid: number | null }>;
+
+    let failedDeadWorkers = 0;
+    for (const row of rows) {
+      if (row.worker_pid === null || isProcessAlive(row.worker_pid)) continue;
+      const result = this.db
+        .prepare("update reviewer_sessions set state = 'failed', last_error = ? where session_id = ?")
+        .run(`owner_pid_not_alive:${row.worker_pid}`, row.session_id);
+      failedDeadWorkers += Number(result.changes);
+    }
+    return { expired, failedDeadWorkers };
+  }
+
   private pruneInactiveReviewRunLeases(): void {
     const rows = this.db
       .prepare("select lease_id, owner_pid from review_run_leases")

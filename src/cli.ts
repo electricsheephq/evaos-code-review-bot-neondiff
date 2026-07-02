@@ -307,6 +307,7 @@ async function main(): Promise<void> {
         ...(args.status ?? args.state ? { status: args.status ?? args.state } : {}),
         ...(args.priority ? { priority: parseNonNegativeInteger(args.priority, "--priority") } : {}),
         ...(args["stale-head-reason"] ? { staleHeadReason: args["stale-head-reason"] } : {}),
+        ...(args["include-history"] === "true" ? { includeHistory: true } : {}),
         ...(args.limit ? { limit: parsePositiveInteger(args.limit, "--limit") } : {})
       }
     });

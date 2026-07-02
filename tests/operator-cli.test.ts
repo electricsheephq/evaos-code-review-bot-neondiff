@@ -314,6 +314,67 @@ describe("operator CLI summaries", () => {
     expect(JSON.stringify(dashboard)).not.toMatch(/ghp_123456789012345678901234/);
   });
 
+  it("hides historical stale-only dashboard rows by default while preserving explicit history filters", () => {
+    const input = {
+      coverage: coverageReport({
+        ok: true,
+        processed: [processedEntry(1, "head-current", "posted")]
+      }),
+      durableQueue: durableQueueSnapshot({
+        jobs: [
+          durableJob({
+            repo: "owner/repo",
+            pullNumber: 2,
+            headSha: "old-head",
+            state: "stale_retired",
+            lastError: "superseded_by_head=new-head"
+          })
+        ],
+        summary: { total: 1, queued: 0, failed: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
+      }),
+      readiness: [{
+        repo: "owner/repo",
+        pullNumber: 2,
+        headSha: "old-head",
+        state: "stale" as const,
+        reason: "superseded_by_head=new-head",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:01:00.000Z"
+      }],
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    };
+
+    const currentDashboard = buildOperatorDashboard(input);
+    expect(currentDashboard.ok).toBe(true);
+    expect(currentDashboard.summary).toMatchObject({
+      totalItems: 1,
+      blockedItems: 0,
+      staleHeads: 0,
+      hiddenHistoricalStale: 1
+    });
+    expect(currentDashboard.items.map((item) => `${item.repo}#${item.pullNumber}:${item.status}`)).toEqual([
+      "owner/repo#1:processed"
+    ]);
+
+    const historicalDashboard = buildOperatorDashboard({
+      ...input,
+      filters: { includeHistory: true, status: "stale" }
+    });
+    expect(historicalDashboard.ok).toBe(false);
+    expect(historicalDashboard.summary).toMatchObject({
+      totalItems: 1,
+      blockedItems: 1,
+      staleHeads: 1,
+      hiddenHistoricalStale: 0
+    });
+    expect(historicalDashboard.items[0]).toMatchObject({
+      repo: "owner/repo",
+      pullNumber: 2,
+      status: "stale",
+      readinessState: "stale"
+    });
+  });
+
   it("filters dashboard rows by repo, status, priority, and stale-head reason", () => {
     const input = {
       coverage: coverageReport({
@@ -662,6 +723,32 @@ describe("operator CLI summaries", () => {
       expect.objectContaining({ leaseId: "expired", staleReason: "expired" }),
       expect.objectContaining({ leaseId: "dead-owner", staleReason: "owner_not_running" })
     ]);
+  });
+
+  it("treats a bounded active heartbeat as healthy for live agent inventory", () => {
+    const inventory = summarizeAgentInventory({
+      launchd: { label: "com.electricsheephq.evaos-code-review-bot", state: "running", pid: 1234, dryRun: false },
+      heartbeat: {
+        status: "active",
+        maxAgeMs: 120_000,
+        activeMaxAgeMs: 660_000,
+        latestAt: "2026-07-01T00:00:10.000Z",
+        ageMs: 180_000,
+        cycle: 42,
+        event: "daemon_cycle_complete",
+        dryRun: false,
+        activeCycle: 43,
+        activeStartedAt: "2026-07-01T00:02:00.000Z",
+        activeAgeMs: 60_000
+      },
+      leases: [
+        lease("active", "2026-07-01T00:02:00.000Z", "2026-07-01T00:17:00.000Z", 1234, true)
+      ],
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(inventory.ok).toBe(true);
+    expect(inventory.summary).toMatchObject({ activeLeases: 1, staleLeases: 0 });
   });
 
   it("prefers dead-owner lease diagnostics over expiry when both are true", () => {

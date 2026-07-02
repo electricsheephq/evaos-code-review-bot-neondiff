@@ -563,54 +563,47 @@ function readReviewerSessionCounts(
     .prepare("select 1 from sqlite_master where type = 'table' and name = 'reviewer_sessions' limit 1")
     .get();
   if (!hasTable) return { total: 0, active: 0, expired: 0, byRepo: [] };
-  const activeSql = `
-    state in ('active', 'warming')
-    and datetime(expires_at) > datetime(?)
-    and head_count_used < head_count_limit
-  `;
-  const expiredSql = `
-    state = 'expired'
-    or datetime(expires_at) is null
-    or datetime(expires_at) <= datetime(?)
-    or head_count_used >= head_count_limit
-  `;
-  const row = db
+  const rows = db
     .prepare(
-      `select
-         count(*) as total,
-         sum(case when ${activeSql} then 1 else 0 end) as active,
-         sum(case when ${expiredSql} then 1 else 0 end) as expired
+      `select repo, state, expires_at, head_count_used, head_count_limit, worker_pid
        from reviewer_sessions`
     )
-    .get(now.toISOString(), now.toISOString()) as { total?: number; active?: number | null; expired?: number | null };
-  const byRepoRows = db
-    .prepare(
-      `select
-         repo,
-         count(*) as total,
-         sum(case when ${activeSql} then 1 else 0 end) as active,
-         sum(case when ${expiredSql} then 1 else 0 end) as expired
-       from reviewer_sessions
-       group by repo
-       order by repo`
-    )
-    .all(now.toISOString(), now.toISOString()) as unknown as Array<{
-      repo: string;
-      total?: number;
-      active?: number | null;
-      expired?: number | null;
-    }>;
+    .all() as unknown as ReviewerSessionCountRow[];
+  const byRepo = new Map<string, ReviewerSessionRepoStatus>();
+  for (const row of rows) {
+    const repoStatus = byRepo.get(row.repo) ?? { repo: row.repo, total: 0, active: 0, expired: 0 };
+    repoStatus.total += 1;
+    if (isReviewerSessionActiveForStatus(row, now)) repoStatus.active += 1;
+    if (isReviewerSessionExpiredForStatus(row, now)) repoStatus.expired += 1;
+    byRepo.set(row.repo, repoStatus);
+  }
   return {
-    total: row.total ?? 0,
-    active: row.active ?? 0,
-    expired: row.expired ?? 0,
-    byRepo: byRepoRows.map((repoRow) => ({
-      repo: repoRow.repo,
-      total: repoRow.total ?? 0,
-      active: repoRow.active ?? 0,
-      expired: repoRow.expired ?? 0
-    }))
+    total: rows.length,
+    active: rows.filter((row) => isReviewerSessionActiveForStatus(row, now)).length,
+    expired: rows.filter((row) => isReviewerSessionExpiredForStatus(row, now)).length,
+    byRepo: [...byRepo.values()].sort((left, right) => left.repo.localeCompare(right.repo))
   };
+}
+
+interface ReviewerSessionCountRow {
+  repo: string;
+  state: string;
+  expires_at: string | null;
+  head_count_used: number;
+  head_count_limit: number;
+  worker_pid: number | null;
+}
+
+function isReviewerSessionActiveForStatus(row: ReviewerSessionCountRow, now: Date): boolean {
+  if (row.state !== "active" && row.state !== "warming") return false;
+  if (row.worker_pid !== null && !isProcessAlive(row.worker_pid)) return false;
+  const expiresAtMs = row.expires_at ? Date.parse(row.expires_at) : Number.NaN;
+  return Number.isFinite(expiresAtMs) && expiresAtMs > now.getTime() && row.head_count_used < row.head_count_limit;
+}
+
+function isReviewerSessionExpiredForStatus(row: ReviewerSessionCountRow, now: Date): boolean {
+  const expiresAtMs = row.expires_at ? Date.parse(row.expires_at) : Number.NaN;
+  return row.state === "expired" || !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime() || row.head_count_used >= row.head_count_limit;
 }
 
 interface ProviderCooldownCandidate {
@@ -848,6 +841,18 @@ function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+    return code === "EPERM";
+  }
 }
 
 interface QueueCountRow {

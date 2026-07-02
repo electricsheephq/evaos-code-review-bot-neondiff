@@ -59,7 +59,7 @@
           "baseBranches": ["main"],
           "labels": ["!wip", "!do-not-review"]
         },
-        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "extensions/**", "qa/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
+        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "extensions/**", "qa/**", "servers/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
         "pathInstructions": {
           "Assets/**": ["Prioritize scene, prefab, save-state, asset-reference, and gameplay regressions."],
           "ProjectSettings/**": ["Treat build, platform, input, graphics, and release behavior changes as high risk."]
@@ -515,7 +515,7 @@
           "baseBranches": ["main"],
           "labels": ["!wip", "!do-not-review"]
         },
-        "pathFilters": ["src/**", "scripts/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
+        "pathFilters": ["packages/**", "src/**", "scripts/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
         "riskyPaths": ["src/**", "scripts/**"],
         "proofExpectations": ["Look for focused sanitizer, signature, orchestration, or fixture proof."],
         "validationHints": ["Call out evidence leakage, replay/collision risks, duplicate side effects, and brittle sanitizer logic."],
