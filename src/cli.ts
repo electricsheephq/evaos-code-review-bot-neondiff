@@ -4,7 +4,7 @@ import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
-import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
+import { assertEvalOutputDirSafe, buildEvalPromotionDecisionMarkdown, REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
@@ -731,6 +731,7 @@ async function main(): Promise<void> {
   if (command === "eval-suite") {
     if (!args["input-dir"]) throw new Error("--input-dir is required for eval-suite");
     if (!args["output-root"]) throw new Error("--output-root is required for eval-suite");
+    const outputRoot = assertEvalOutputDirSafe(args["output-root"]);
     const scenarioFiles = listJsonFiles(args["input-dir"]);
     const seenRunIds = new Map<string, string>();
     const results = scenarioFiles.map((scenarioPath) => {
@@ -744,7 +745,7 @@ async function main(): Promise<void> {
         return {
           scenarioPath,
           ...runOfflineEval(input, {
-            outputDir: join(args["output-root"]!, runId)
+            outputDir: join(outputRoot, runId)
           })
         };
       } catch (error) {
@@ -764,6 +765,15 @@ async function main(): Promise<void> {
       missingSuites,
       results
     };
+    mkdirSync(outputRoot, { recursive: true });
+    writeFileSync(join(outputRoot, "suite-summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    const scorecards = results.flatMap((result) => "scorecard" in result ? [result.scorecard] : []);
+    writeFileSync(join(outputRoot, "promotion-decision.md"), buildEvalPromotionDecisionMarkdown({
+      ok: summary.ok,
+      scenarioCount: summary.scenarioCount,
+      missingSuites,
+      scorecards
+    }));
     console.log(JSON.stringify(summary, null, 2));
     if (!summary.ok) process.exitCode = 1;
     return;

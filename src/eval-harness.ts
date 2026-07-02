@@ -122,14 +122,59 @@ export interface EvalScorecard {
     inlinePreviews: number;
     ciMetadata: number;
     mergedFixes: number;
+    p0p1Labels: number;
   };
   metrics: {
     precision: number;
     recall: number;
     seededRecall: number;
+    maxWilsonLowerBound: number;
   };
   thresholds: EvalThresholds;
   gates: Array<{ name: string; ok: boolean; detail: string }>;
+}
+
+export interface EvalCalibrationReport {
+  claim: "uncalibrated" | "calibrated";
+  bins: Array<{
+    minConfidence: number;
+    maxConfidence: number;
+    findings: number;
+    matched: number;
+    empiricalPrecision: number;
+    wilsonLowerBound: number;
+    publicLabel: "uncalibrated" | "calibrated";
+  }>;
+  publicDisplayPolicy: EvalPublicDisplayPolicy;
+  promotion: {
+    eligible: boolean;
+    reason: EvalPromotionReason;
+  };
+  note: string;
+}
+
+export interface EvalPublicDisplayPolicy {
+  defaultLabel: "uncalibrated";
+  minWilsonLowerBound: number;
+  minLabeledFindings: number;
+  minP0P1Labels: number;
+  minNegativeControlScenarios: number;
+}
+
+export type EvalPromotionReason =
+  | "eligible"
+  | "insufficient_labeled_findings"
+  | "insufficient_p0_p1_labels"
+  | "insufficient_negative_controls"
+  | "wilson_lower_bound_below_threshold"
+  | "suite_failed"
+  | "missing_required_suites";
+
+export interface EvalSuitePromotionInput {
+  ok: boolean;
+  scenarioCount: number;
+  missingSuites: EvalSuiteName[];
+  scorecards: EvalScorecard[];
 }
 
 interface NormalizedEvalFinding extends Finding {
@@ -150,6 +195,14 @@ const DEFAULT_THRESHOLDS: EvalThresholds = {
   minSeededRecall: 1,
   maxSecretFindings: 0,
   maxDuplicateFindings: 0
+};
+
+export const PUBLIC_CONFIDENCE_POLICY: EvalPublicDisplayPolicy = {
+  defaultLabel: "uncalibrated",
+  minWilsonLowerBound: 0.95,
+  minLabeledFindings: 100,
+  minP0P1Labels: 30,
+  minNegativeControlScenarios: 10
 };
 
 export const REQUIRED_SUITES: EvalSuiteName[] = [
@@ -224,7 +277,7 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   writeJson(artifacts["duplicate-report.json"]!, duplicateReport);
   writeFileSync(artifacts["comparison.csv"]!, buildComparisonCsv(botFindings, labels, matches));
   writeJson(artifacts["labels.json"]!, labels);
-  writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, matches));
+  writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, labels, matches));
   writeJson(artifacts["scorecard.json"]!, scorecard);
   writeJson(artifacts["manifest.json"]!, {
     evalName,
@@ -283,6 +336,8 @@ function buildScorecard(input: {
   const precision = input.botFindings.length === 0 ? (input.labels.length === 0 ? 1 : 0) : truePositive / input.botFindings.length;
   const recall = input.labels.length === 0 ? 1 : truePositive / input.labels.length;
   const seededRecall = seededLabels.length === 0 ? 1 : matchedSeeded / seededLabels.length;
+  const p0p1Labels = input.labels.filter((label) => label.severity === "P0" || label.severity === "P1").length;
+  const maxWilsonLowerBound = maxRawWilsonLowerBound(input.botFindings, input.matches);
   const exactLineMatches = input.matches.filter((match) => match.kind === "exact_line").length;
   const nearbyLineMatches = input.matches.filter((match) => match.kind === "nearby_line").length;
   const semanticMatches = input.matches.filter((match) => match.kind === "semantic").length;
@@ -315,12 +370,14 @@ function buildScorecard(input: {
       duplicateFindings: input.duplicateCount,
       inlinePreviews: input.inlinePreviewCount,
       ciMetadata: input.ciMetadataCount,
-      mergedFixes: input.mergedFixCount
+      mergedFixes: input.mergedFixCount,
+      p0p1Labels
     },
     metrics: {
       precision: roundMetric(precision),
       recall: roundMetric(recall),
-      seededRecall: roundMetric(seededRecall)
+      seededRecall: roundMetric(seededRecall),
+      maxWilsonLowerBound
     },
     thresholds: input.thresholds,
     gates: [
@@ -586,32 +643,130 @@ function buildComparisonCsv(
   return `${rows.join("\n")}\n`;
 }
 
-function buildCalibrationReport(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): {
-  claim: "uncalibrated";
-  bins: Array<{ minConfidence: number; maxConfidence: number; findings: number; matched: number; empiricalPrecision: number }>;
-  note: string;
-} {
+function buildCalibrationReport(
+  botFindings: NormalizedEvalFinding[],
+  labels: NormalizedEvalFinding[],
+  matches: EvalMatch[]
+): EvalCalibrationReport {
+  const bins = confidenceBins(botFindings, matches);
+  const promotionReason = choosePromotionReason({
+    labeledFindings: labels.length,
+    p0p1Labels: labels.filter((label) => label.severity === "P0" || label.severity === "P1").length,
+    negativeControlScenarios: labels.length === 0 ? 1 : 0,
+    bestWilsonLowerBound: maxRawWilsonLowerBound(botFindings, matches)
+  });
+  return {
+    claim: "uncalibrated",
+    bins,
+    publicDisplayPolicy: PUBLIC_CONFIDENCE_POLICY,
+    promotion: {
+      eligible: promotionReason === "eligible",
+      reason: promotionReason
+    },
+    note: "Model confidence is treated as an input feature only until enough labeled findings exist for measured reliability bins. Public comments must show uncalibrated unless the promotion policy passes."
+  };
+}
+
+function confidenceBins(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): EvalCalibrationReport["bins"] {
   const matchedBotIds = new Set(matches.map((match) => match.botFindingId));
-  const bins = [
+  return [
     { minConfidence: 0, maxConfidence: 0.5 },
     { minConfidence: 0.5, maxConfidence: 0.8 },
     { minConfidence: 0.8, maxConfidence: 1.01 }
   ].map((bin) => {
     const findings = botFindings.filter((finding) => finding.confidence >= bin.minConfidence && finding.confidence < bin.maxConfidence);
     const matched = findings.filter((finding) => matchedBotIds.has(finding.id)).length;
+    const wilsonLowerBound = wilsonLowerBound95(matched, findings.length);
     return {
       minConfidence: bin.minConfidence,
       maxConfidence: bin.maxConfidence === 1.01 ? 1 : bin.maxConfidence,
       findings: findings.length,
       matched,
-      empiricalPrecision: roundMetric(findings.length === 0 ? 0 : matched / findings.length)
+      empiricalPrecision: roundMetric(findings.length === 0 ? 0 : matched / findings.length),
+      wilsonLowerBound: roundMetric(wilsonLowerBound),
+      publicLabel: "uncalibrated" as const
     };
   });
-  return {
-    claim: "uncalibrated",
-    bins,
-    note: "Model confidence is treated as an input feature only until enough labeled findings exist for calibrated public claims."
-  };
+}
+
+function maxRawWilsonLowerBound(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): number {
+  const matchedBotIds = new Set(matches.map((match) => match.botFindingId));
+  return Math.max(0, ...[
+    { minConfidence: 0, maxConfidence: 0.5 },
+    { minConfidence: 0.5, maxConfidence: 0.8 },
+    { minConfidence: 0.8, maxConfidence: 1.01 }
+  ].map((bin) => {
+    const findings = botFindings.filter((finding) => finding.confidence >= bin.minConfidence && finding.confidence < bin.maxConfidence);
+    const matched = findings.filter((finding) => matchedBotIds.has(finding.id)).length;
+    return wilsonLowerBound95(matched, findings.length);
+  }));
+}
+
+export function buildEvalPromotionDecisionMarkdown(input: EvalSuitePromotionInput): string {
+  const labeledFindings = input.scorecards.reduce((sum, scorecard) => sum + scorecard.counts.labels, 0);
+  const p0p1Labels = input.scorecards.reduce((sum, scorecard) => sum + scorecard.counts.p0p1Labels, 0);
+  const negativeControlScenarios = input.scorecards.filter((scorecard) => scorecard.counts.labels === 0).length;
+  const maxWilsonLowerBound = input.scorecards.reduce((max, scorecard) => Math.max(max, scorecard.metrics.maxWilsonLowerBound), 0);
+  const reason = !input.ok
+    ? input.missingSuites.length > 0
+      ? "missing_required_suites"
+      : "suite_failed"
+    : choosePromotionReason({
+      labeledFindings,
+      p0p1Labels,
+      negativeControlScenarios,
+      bestWilsonLowerBound: maxWilsonLowerBound
+    });
+  const eligible = reason === "eligible";
+  const decision = eligible ? "advisory promotion eligible" : "not enough evidence";
+
+  return [
+    "# Eval Promotion Decision",
+    "",
+    `Decision: ${decision}`,
+    `Calibrated public confidence: ${eligible ? "eligible for explicit review" : "disabled"}`,
+    "",
+    "## Evidence Counts",
+    "",
+    `- Scenario count: ${input.scenarioCount}`,
+    `- Required suites missing: ${input.missingSuites.length ? input.missingSuites.join(", ") : "none"}`,
+    `- Labeled findings: ${labeledFindings} / ${PUBLIC_CONFIDENCE_POLICY.minLabeledFindings}`,
+    `- P0/P1 labels: ${p0p1Labels} / ${PUBLIC_CONFIDENCE_POLICY.minP0P1Labels}`,
+    `- Negative-control scenarios: ${negativeControlScenarios} / ${PUBLIC_CONFIDENCE_POLICY.minNegativeControlScenarios}`,
+    `- Best Wilson lower bound: ${roundMetric(maxWilsonLowerBound)} / ${PUBLIC_CONFIDENCE_POLICY.minWilsonLowerBound}`,
+    "",
+    "## Reason",
+    "",
+    `- ${reason}`,
+    "",
+    "## Proof Boundary",
+    "",
+    "This packet is an offline eval artifact. It does not enable public calibrated percentages, change live review posting, or prove broad CodeRabbit parity.",
+    ""
+  ].join("\n");
+}
+
+function choosePromotionReason(input: {
+  labeledFindings: number;
+  p0p1Labels: number;
+  negativeControlScenarios: number;
+  bestWilsonLowerBound: number;
+}): EvalPromotionReason {
+  if (input.labeledFindings < PUBLIC_CONFIDENCE_POLICY.minLabeledFindings) return "insufficient_labeled_findings";
+  if (input.p0p1Labels < PUBLIC_CONFIDENCE_POLICY.minP0P1Labels) return "insufficient_p0_p1_labels";
+  if (input.negativeControlScenarios < PUBLIC_CONFIDENCE_POLICY.minNegativeControlScenarios) return "insufficient_negative_controls";
+  if (input.bestWilsonLowerBound < PUBLIC_CONFIDENCE_POLICY.minWilsonLowerBound) return "wilson_lower_bound_below_threshold";
+  return "eligible";
+}
+
+function wilsonLowerBound95(successes: number, total: number): number {
+  if (total <= 0) return 0;
+  const z = 1.96;
+  const p = successes / total;
+  const denominator = 1 + z ** 2 / total;
+  const centre = p + z ** 2 / (2 * total);
+  const margin = z * Math.sqrt((p * (1 - p) + z ** 2 / (4 * total)) / total);
+  return Math.max(0, (centre - margin) / denominator);
 }
 
 function buildInlinePreviews(
@@ -713,16 +868,21 @@ function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function guardOutputDir(outputDir: string): void {
+export function assertEvalOutputDirSafe(outputDir: string): string {
   const resolvedOutput = resolve(outputDir);
   const gitRoot = findGitRoot(process.cwd());
-  if (!gitRoot) return;
+  if (!gitRoot) return resolvedOutput;
   const realOutput = resolveRealPathForPotentialOutput(resolvedOutput);
   const realGitRoot = realpathSync(gitRoot);
   const relation = relative(realGitRoot, realOutput);
   if (relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))) {
     throw new Error("outputDir must not be inside the current git checkout; write eval packets under /Volumes/LEXAR/Codex/evals or a temp directory");
   }
+  return resolvedOutput;
+}
+
+function guardOutputDir(outputDir: string): void {
+  assertEvalOutputDirSafe(outputDir);
 }
 
 function resolveRealPathForPotentialOutput(path: string): string {

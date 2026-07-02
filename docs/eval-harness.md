@@ -138,7 +138,21 @@ Each packet includes:
 - `calibration-report.json`
 - `scorecard.json`
 
-`scorecard.json` is the gate artifact. Thresholds are explicit and fail closed. The calibration report is intentionally marked `uncalibrated`; do not present public 95% confidence claims from these packets until enough labeled findings exist for measured reliability bins.
+`scorecard.json` is the scenario gate artifact. Thresholds are explicit and fail
+closed. The calibration report is intentionally marked `uncalibrated`; do not
+present public 95% confidence claims from these packets until enough labeled
+findings exist for measured reliability bins. Calibration bins include empirical
+precision and Wilson lower bounds, but public display remains `uncalibrated`
+until the public-display policy is satisfied.
+
+`eval-suite` also writes two root artifacts under `--output-root`:
+
+- `suite-summary.json`
+- `promotion-decision.md`
+
+`promotion-decision.md` is the human-readable proof boundary for #8/#26/#85. It
+must say whether calibrated public confidence remains disabled, why, and what
+evidence is missing before any stronger confidence display can be considered.
 
 `manifest.json` records the effective thresholds, scenario mode, optional
 scenario source, artifact inventory with SHA-256 digests, metadata counts, and
