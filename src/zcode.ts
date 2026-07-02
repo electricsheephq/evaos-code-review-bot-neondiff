@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFindings } from "./findings.js";
+import type { GitNexusContextPacket } from "./gitnexus-context.js";
 import type { RepoMemoryPacket } from "./repo-memory.js";
 import { buildRepoProfilePromptSection, type ResolvedRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
@@ -20,6 +21,7 @@ export function buildReviewPrompt(input: {
   files: PullFilePatch[];
   repoProfile?: ResolvedRepoProfile;
   repoMemoryPacket?: Pick<RepoMemoryPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
+  gitnexusContextPacket?: Pick<GitNexusContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown" | "gitnexus">;
   maxPatchBytes?: number;
 }): string {
   const fileList = input.files.map((file) => `- ${file.filename}`).join("\n");
@@ -50,11 +52,25 @@ export function buildReviewPrompt(input: {
     "",
     ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile), ""] : []),
     ...(input.repoMemoryPacket ? [buildRepoMemoryPromptSection(input.repoMemoryPacket), ""] : []),
+    ...(input.gitnexusContextPacket ? [buildGitNexusContextPromptSection(input.gitnexusContextPacket), ""] : []),
     "Files:",
     fileList,
     "",
     "Diff:",
     patches
+  ].join("\n");
+}
+
+function buildGitNexusContextPromptSection(
+  packet: Pick<GitNexusContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown" | "gitnexus">
+): string {
+  return [
+    "GitNexus context packet (advisory; feature-flagged context):",
+    `Packet SHA-256: ${packet.sha256}`,
+    `Packet budget: ${packet.byteEstimate} bytes; approx ${packet.tokenEstimate} tokens`,
+    `GitNexus freshness: ${packet.gitnexus.freshness}; degraded=${packet.gitnexus.degradedMode ? "true" : "false"}`,
+    "",
+    packet.markdown.trim()
   ].join("\n");
 }
 

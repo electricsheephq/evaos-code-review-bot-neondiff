@@ -9,6 +9,11 @@ import {
 } from "./commands.js";
 import { loadConfig, type BotConfig } from "./config.js";
 import { assertGitClean, preparePullWorktree } from "./git.js";
+import {
+  buildGitNexusContextPacket,
+  type GitNexusCommandRunner,
+  type GitNexusContextPacket
+} from "./gitnexus-context.js";
 import { GitHubApi } from "./github.js";
 import {
   buildPullFileFilterImpact,
@@ -25,7 +30,7 @@ import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
-import type { PullRequestSummary, ReviewPlan } from "./types.js";
+import type { PullFilePatch, PullRequestSummary, ReviewPlan } from "./types.js";
 
 export interface RunOnceOptions {
   configPath?: string;
@@ -650,6 +655,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       evidenceDir
     });
+    const gitnexusContext = buildGitNexusContext({
+      config,
+      repo,
+      pull,
+      files: reviewFiles,
+      evidenceDir
+    });
 
     const prompt = buildReviewPrompt({
       repo,
@@ -657,6 +669,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       files: reviewFiles,
       repoProfile: repoPolicy.profile,
       ...(repoMemory.packet ? { repoMemoryPacket: repoMemory.packet } : {}),
+      ...(gitnexusContext.packet ? { gitnexusContextPacket: gitnexusContext.packet } : {}),
       maxPatchBytes: config.zcode.maxPatchBytes
     });
     writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
@@ -923,6 +936,44 @@ function isRepoMemoryNoteExpired(note: { expiresAt?: string }, now: Date): boole
   if (!note.expiresAt) return false;
   const expiresAtMs = Date.parse(note.expiresAt);
   return !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime();
+}
+
+export function buildGitNexusContext(input: {
+  config: BotConfig;
+  repo: string;
+  pull: PullRequestSummary;
+  files: PullFilePatch[];
+  evidenceDir: string;
+  commandRunner?: GitNexusCommandRunner;
+  gitnexusListText?: string;
+}): { packet?: GitNexusContextPacket } {
+  const gitnexusConfig = input.config.gitnexusContext;
+  if (!gitnexusConfig?.enabled) return {};
+
+  const packetResult = buildGitNexusContextPacket({
+    repo: input.repo,
+    pull: input.pull,
+    files: input.files,
+    config: gitnexusConfig,
+    ...(input.commandRunner ? { commandRunner: input.commandRunner } : {}),
+    ...(input.gitnexusListText !== undefined ? { gitnexusListText: input.gitnexusListText } : {})
+  });
+
+  if (!packetResult.ok) {
+    writeRedactedJson(join(input.evidenceDir, "gitnexus-context-packet-error.json"), packetResult);
+    if (isGitNexusContextBudgetFailure(packetResult)) return {};
+    throw new Error(`GitNexus context packet failed closed: ${packetResult.error}`);
+  }
+
+  writeRedactedJson(join(input.evidenceDir, "gitnexus-context-packet.json"), packetResult);
+  writeFileSync(join(input.evidenceDir, "gitnexus-context-packet.md"), packetResult.packet.markdown);
+  return { packet: packetResult.packet };
+}
+
+function isGitNexusContextBudgetFailure(packetResult: ReturnType<typeof buildGitNexusContextPacket>): boolean {
+  return !packetResult.ok &&
+    packetResult.redactionReport.ok &&
+    packetResult.omittedContext.some((source) => source.reason === "budget_exceeded");
 }
 
 function recordStaleHeadSkip(input: {

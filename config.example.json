@@ -19,6 +19,21 @@
     "trustedAuthors": ["100yenadmin"],
     "acknowledge": false
   },
+  "gitnexusContext": {
+    "enabled": false,
+    "packetVersion": "gitnexus-context-packet-v0.1",
+    "maxPacketBytes": 40000,
+    "maxRelatedItems": 8,
+    "queryLimit": 3,
+    "commandTimeoutMs": 10000,
+    "maxCommandOutputBytes": 8000,
+    "includeStaleContext": false,
+    "repoAliases": {
+      "electricsheephq/WorldOS": "worldos",
+      "100yenadmin/evaOS-GUI": "evaos-gui"
+    },
+    "generatedPathPatterns": ["dist/**", "build/**", "coverage/**", "Library/**", "Temp/**", "**/*.min.js", "**/*.bundle.js", "**/*.lock"]
+  },
   "repoProfiles": {
     "enableOrgFallbacks": false,
     "repos": {
