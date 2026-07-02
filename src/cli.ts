@@ -694,7 +694,7 @@ async function main(): Promise<void> {
       canPostAsApp: github.canPostAsApp(),
       ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {}),
       includeExisting: args["include-existing"] === "true",
-      ...(args.since ? { since: parseSingleArg(args.since, "--since") } : {})
+      ...(args.since ? { since: parseCanonicalIsoTimestamp(parseSingleArg(args.since, "--since"), "--since").toISOString() } : {})
     });
     if (args["output-dir"]) {
       const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);

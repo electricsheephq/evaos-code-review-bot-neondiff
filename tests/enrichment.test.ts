@@ -522,7 +522,88 @@ describe("sticky enrichment comments", () => {
       expect(scan.items.find((item) => item.issueNumber === 11)).toMatchObject({ action: "skipped", reason: "stale_issue_closed" });
       expect(scan.items.find((item) => item.issueNumber === 12)).toMatchObject({ action: "skipped", reason: "issue_is_pull_request" });
       expect(scan.items.find((item) => item.issueNumber === 13)).toMatchObject({ action: "deferred", reason: "repo_max_comments_per_cycle" });
+      expect(scan.items.find((item) => item.issueNumber === 13)).toMatchObject({
+        nextEligibleAt: "2026-07-03T01:00:00.000Z"
+      });
       expect(JSON.stringify(scan)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not call the reader for explicit repos outside the issue-enrichment allowlist", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-outside-allowlist-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: false,
+          postIssueComment: false,
+          allowlist: ["owner/allowed-repo"]
+        }
+      })}\n`);
+      let readerCalls = 0;
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        repo: "owner/not-allowed",
+        reader: {
+          listIssuesForEnrichment: async () => {
+            readerCalls += 1;
+            return [];
+          }
+        }
+      });
+
+      expect(readerCalls).toBe(0);
+      expect(scan.summary).toMatchObject({ reposScanned: 0, reposSkipped: 1 });
+      expect(scan.repos[0]).toMatchObject({
+        repo: "owner/not-allowed",
+        allowed: false,
+        skipReason: "not_issue_enrichment_allowlisted"
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not call the reader for a disabled per-repo issue-enrichment override", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-disabled-repo-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: false,
+          postIssueComment: false,
+          allowlist: ["owner/disabled-repo"],
+          repos: {
+            "owner/disabled-repo": {
+              enabled: false
+            }
+          }
+        }
+      })}\n`);
+      let readerCalls = 0;
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        reader: {
+          listIssuesForEnrichment: async () => {
+            readerCalls += 1;
+            return [];
+          }
+        }
+      });
+
+      expect(readerCalls).toBe(0);
+      expect(scan.summary).toMatchObject({ reposScanned: 0, reposSkipped: 1 });
+      expect(scan.repos[0]).toMatchObject({
+        repo: "owner/disabled-repo",
+        allowed: false,
+        skipReason: "issue_enrichment_repo_disabled"
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -566,6 +647,49 @@ describe("sticky enrichment comments", () => {
         deferred: 3
       });
       expect(scan.items.every((item) => item.action === "deferred" && item.reason === "burst_threshold_exceeded")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the burst window and enough pages to prove configured burst thresholds", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-burst-window-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 25,
+          maxCommentsPerCycle: 0,
+          cooldownMs: 600_000,
+          burstWindowMs: 3_600_000,
+          maxIssuesPerBurst: 150,
+          lookbackMs: 300_000,
+          processExistingOpenIssuesOnActivation: false
+        }
+      })}\n`);
+      const calls: Array<{ repo: string; since?: string; pageLimit?: number }> = [];
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        checkedAt: "2026-07-03T12:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo, options) => {
+            calls.push({ repo, since: options?.since, pageLimit: options?.pageLimit });
+            return [];
+          }
+        }
+      });
+
+      expect(scan.ok).toBe(true);
+      expect(calls).toEqual([{
+        repo: "owner/issue-repo",
+        since: "2026-07-03T11:00:00.000Z",
+        pageLimit: 2
+      }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
