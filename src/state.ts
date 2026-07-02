@@ -63,6 +63,12 @@ export interface StoredProcessedReviewRecord extends ProcessedReviewRecord {
   createdAt: string;
 }
 
+export interface RepoActivationRecord {
+  repo: string;
+  activatedAt: string;
+  createdAt: string;
+}
+
 export const ACTIVATION_BASELINE_EXISTING_HEAD_ERROR = "activation_baseline_existing_head";
 
 export function isActivationBaselineProcessedReview(
@@ -671,8 +677,19 @@ export class ReviewStateStore {
   }
 
   hasRepoActivation(repo: string): boolean {
-    const row = this.db.prepare("select 1 from repo_activation_watermarks where repo = ? limit 1").get(repo);
-    return Boolean(row);
+    return Boolean(this.getRepoActivation(repo));
+  }
+
+  getRepoActivation(repo: string): RepoActivationRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select repo, activated_at, created_at
+         from repo_activation_watermarks
+         where repo = ?
+         limit 1`
+      )
+      .get(repo) as RepoActivationRow | undefined;
+    return row ? mapRepoActivationRow(row) : undefined;
   }
 
   recordRepoActivation(repo: string, activatedAt = new Date().toISOString()): void {
@@ -1996,6 +2013,12 @@ interface ProcessedReviewRow {
   created_at: string;
 }
 
+interface RepoActivationRow {
+  repo: string;
+  activated_at: string;
+  created_at: string;
+}
+
 interface DaemonHeartbeatRow {
   cycle: number | null;
   event: DaemonHeartbeatEvent | null;
@@ -2146,6 +2169,14 @@ function mapRepoProviderCooldownRow(row: RepoProviderCooldownRow): RepoProviderC
     cooldownUntil: row.cooldown_until,
     reason: row.reason,
     updatedAt: row.updated_at
+  };
+}
+
+function mapRepoActivationRow(row: RepoActivationRow): RepoActivationRecord {
+  return {
+    repo: row.repo,
+    activatedAt: row.activated_at,
+    createdAt: row.created_at
   };
 }
 

@@ -1138,6 +1138,59 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("skips pre-activation PRs with new heads before fetching commands", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-preactivation-command-skip-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1231, "new-head-on-old-pr", "base", { createdAt: "2026-06-30T05:34:43Z" });
+    state.recordRepoActivation("electricsheephq/WorldOS", "2026-07-02T16:58:09.555Z");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: "old-baselined-head",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    let issueCommentReads = 0;
+
+    const result = await reviewPull({
+      config,
+      github: {
+        listIssueComments: async () => {
+          issueCommentReads += 1;
+          throw new Error("pre-activation PR heads should not read issue comments");
+        },
+        listPullFiles: async () => {
+          throw new Error("pre-activation PR heads should not fetch files");
+        }
+      } as unknown as GitHubApi,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: false
+    });
+
+    expect(result).toBe("skipped_processed");
+    expect(issueCommentReads).toBe(0);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      state: "skipped",
+      reason: "activation_baseline_existing_head"
+    });
+    state.close();
+  });
+
   it("restores a failed row after a retry dry-run records dry_run", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-dry-run-"));
     roots.push(root);
@@ -1497,7 +1550,7 @@ function pullSummary(
   number: number,
   headSha: string,
   baseSha = "base",
-  options: { state?: string; mergedAt?: string | null; body?: string | null } = {}
+  options: { state?: string; mergedAt?: string | null; body?: string | null; createdAt?: string } = {}
 ): PullRequestSummary {
   return {
     number,
@@ -1505,6 +1558,7 @@ function pullSummary(
     draft: false,
     ...(options.body !== undefined ? { body: options.body } : {}),
     ...(options.state ? { state: options.state } : {}),
+    ...(options.createdAt ? { created_at: options.createdAt } : {}),
     ...(options.mergedAt !== undefined ? { merged_at: options.mergedAt } : {}),
     head: {
       sha: headSha,

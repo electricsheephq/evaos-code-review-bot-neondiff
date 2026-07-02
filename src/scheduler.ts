@@ -1,3 +1,4 @@
+import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig } from "./config.js";
 import { collectTrustedReviewCommands, decideCommandAction, type CommandDecision } from "./commands.js";
 import { GitHubApi } from "./github.js";
@@ -15,6 +16,7 @@ import {
   type ReviewQueueDelayReason
 } from "./review-budget.js";
 import {
+  ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
@@ -253,7 +255,23 @@ async function enqueuePullIfEligible(input: {
   }
 
   const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  if (
+    !input.allowActivationBaselineCommandLookup &&
+    !processed &&
+    isPreActivationExistingPull({
+      config: input.config,
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull
+    })
+  ) {
+    await retireSupersededQueueJobsForPull(input);
+    recordActivationBaselineExistingHead(input.state, input.repo, input.pull);
+    backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
+    return "skipped_processed";
+  }
   if (!input.allowActivationBaselineCommandLookup && isActivationBaselineProcessedReview(processed)) {
+    await retireSupersededQueueJobsForPull(input);
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }
@@ -365,6 +383,17 @@ async function enqueuePullIfEligible(input: {
     });
   }
   return enqueued.enqueued ? "enqueued" : "already_queued";
+}
+
+function recordActivationBaselineExistingHead(state: ReviewStateStore, repo: string, pull: PullRequestSummary): void {
+  if (state.hasProcessed(repo, pull.number, pull.head.sha)) return;
+  state.recordProcessed({
+    repo,
+    pullNumber: pull.number,
+    headSha: pull.head.sha,
+    status: "skipped",
+    error: ACTIVATION_BASELINE_EXISTING_HEAD_ERROR
+  });
 }
 
 function enqueueReviewJob(input: {
@@ -1133,6 +1162,9 @@ function readinessStateForProcessedStatus(
 function readinessReasonForProcessedHead(processed: { status: ProcessedStatus; error?: string }): string {
   const providerCooldown = parseProviderCooldownError(processed.error);
   if (providerCooldown) return `processed_head_provider_deferred: ${providerCooldown.reason ?? "provider_cooldown"}`;
+  if (processed.status === "skipped" && processed.error === ACTIVATION_BASELINE_EXISTING_HEAD_ERROR) {
+    return ACTIVATION_BASELINE_EXISTING_HEAD_ERROR;
+  }
   return `processed_head_already_${processed.status}`;
 }
 

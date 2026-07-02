@@ -49,6 +49,7 @@ export interface PullRequestSummary {
   title: string;
   draft: boolean;
   state?: string;
+  created_at?: string | null;
   merged_at?: string | null;
   body?: string | null;
   head: {
