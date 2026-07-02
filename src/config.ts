@@ -3,6 +3,7 @@ import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
+import { assertPathOutsideProtectedRoot, getInstalledPackageRoot } from "./path-safety.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
 export interface BotConfig {
@@ -156,7 +157,7 @@ const DEFAULT_CONFIG: BotConfig = {
   pilotRepos: ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
   pollIntervalMs: 90_000,
   skipDrafts: true,
-  workRoot: "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
+  workRoot: "/Volumes/LEXAR/repos/evaos-code-review-bot-runtime",
   statePath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   evidenceDir: "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
   canaryPulls: undefined,
@@ -298,6 +299,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function validateConfig(config: BotConfig): void {
   validateStringArray(config.pilotRepos, "config.pilotRepos");
   for (const repo of config.pilotRepos) validateRepoName(repo, "config.pilotRepos");
+  validateNonEmptyString(config.workRoot, "config.workRoot");
+  validateWorkRootIsolation(config);
   if (config.canaryPulls !== undefined) {
     validateStringArray(config.canaryPulls, "config.canaryPulls");
     for (const canary of config.canaryPulls) validateCanaryPull(canary, "config.canaryPulls");
@@ -607,6 +610,15 @@ function validateReviewSchedulerConfig(value: unknown, label: string): void {
   }
 }
 
+function validateWorkRootIsolation(config: BotConfig): void {
+  assertPathOutsideProtectedRoot({
+    path: config.workRoot,
+    protectedRoot: getInstalledPackageRoot(),
+    pathLabel: "config.workRoot",
+    protectedRootLabel: "the current repository checkout"
+  });
+}
+
 function validatePathInstructions(value: unknown, label: string): void {
   if (value === undefined) return;
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
@@ -614,6 +626,10 @@ function validatePathInstructions(value: unknown, label: string): void {
     if (!pathPattern.trim()) throw new Error(`${label} keys must be non-empty path patterns`);
     validateStringArray(instructions, `${label}.${pathPattern}`);
   }
+}
+
+function validateNonEmptyString(value: unknown, label: string): void {
+  if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} must be a non-empty string`);
 }
 
 function validateOptionalString(value: unknown, label: string): void {
