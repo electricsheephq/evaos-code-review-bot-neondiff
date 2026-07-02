@@ -90,7 +90,6 @@ export type IssueEnrichmentBlocker =
   | "issue_enrichment_disabled"
   | "issue_enrichment_allowlist_empty"
   | "issue_enrichment_live_posting_disabled"
-  | "issue_enrichment_worker_busy"
   | "github_app_credentials_required_for_live_issue_comments";
 
 export interface IssueEnrichmentReader {
