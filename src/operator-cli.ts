@@ -18,6 +18,7 @@ import { redactSecrets } from "./secrets.js";
 import {
   parseProviderCooldownError,
   PROVIDER_COOLDOWN_ERROR_PREFIX,
+  type IssueEnrichmentRecordStatus,
   type ProcessedCommandAction,
   type ProviderCooldownReviewRecord,
   type ReviewReadinessRecord,
@@ -50,6 +51,7 @@ export interface OperatorStatus {
     budgetWouldLeaseJobs: number;
     budgetDelayedJobs: number;
     issueEnrichmentState?: IssueEnrichmentStatus["state"];
+    issueEnrichmentRuntimeState?: OperatorIssueEnrichmentRuntimeState;
   };
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   recommendedActions: string[];
@@ -60,6 +62,7 @@ export interface OperatorStatus {
   providerCooldowns: ProviderCooldownReviewRecord[];
   durableQueue?: OperatorDurableQueueSnapshot;
   issueEnrichment?: IssueEnrichmentStatus;
+  issueEnrichmentRuntime?: OperatorIssueEnrichmentRuntime;
 }
 
 export interface RuntimeInventory {
@@ -94,6 +97,7 @@ export interface RuntimeInventory {
     activeRepoCooldowns: number;
     botProcesses: number;
     issueEnrichmentState?: IssueEnrichmentStatus["state"];
+    issueEnrichmentRuntimeState?: OperatorIssueEnrichmentRuntimeState;
   };
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   recommendedActions: string[];
@@ -108,9 +112,41 @@ export interface RuntimeInventory {
   providerCooldowns: ProviderCooldownReviewRecord[];
   repoProviderCooldowns: RepoProviderCooldownRecord[];
   issueEnrichment?: IssueEnrichmentStatus;
+  issueEnrichmentRuntime?: OperatorIssueEnrichmentRuntime;
 }
 
 export type RuntimeClassification = "healthy_idle" | "healthy_active" | "blocked";
+export type OperatorIssueEnrichmentRuntimeState = "disabled" | "idle" | "deferred" | "error";
+
+export interface OperatorIssueEnrichmentRuntimeRecord {
+  repo: string;
+  issueNumber: number;
+  status: IssueEnrichmentRecordStatus;
+  issueUpdatedAt?: string;
+  reason?: string;
+  commentUrl?: string;
+  error?: string;
+  nextEligibleAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  retryable: boolean;
+}
+
+export interface OperatorIssueEnrichmentRuntime {
+  ok: boolean;
+  checkedAt: string;
+  state: OperatorIssueEnrichmentRuntimeState;
+  summary: {
+    total: number;
+    dryRun: number;
+    posted: number;
+    skipped: number;
+    deferred: number;
+    retryableDeferred: number;
+    failed: number;
+  };
+  records: OperatorIssueEnrichmentRuntimeRecord[];
+}
 
 export interface RuntimeProcessRow {
   pid: number;
@@ -308,6 +344,7 @@ export function buildOperatorStatus(input: {
   providerCooldowns?: ProviderCooldownReviewRecord[];
   durableQueue?: OperatorDurableQueueSnapshot;
   issueEnrichment?: IssueEnrichmentStatus;
+  issueEnrichmentRuntime?: OperatorIssueEnrichmentRuntime;
   checkedAt?: string;
 }): OperatorStatus {
   const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
@@ -324,6 +361,10 @@ export function buildOperatorStatus(input: {
   const retryableProviderDeferredJobs = durableQueue?.summary.retryableProviderDeferred ?? 0;
   const budget = input.release.budget;
   const issueEnrichment = input.issueEnrichment;
+  const issueEnrichmentRuntime = input.issueEnrichmentRuntime;
+  const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
+  const issueEnrichmentRuntimeFailed = issueEnrichmentRuntime?.summary.failed ?? 0;
+  const issueEnrichmentRuntimeRetryableDeferred = issueEnrichmentRuntime?.summary.retryableDeferred ?? 0;
 
   const gates = [
     ...input.release.gates,
@@ -367,6 +408,20 @@ export function buildOperatorStatus(input: {
             ? `${issueEnrichment.state}; allowlist=${issueEnrichment.allowlist.length}; liveComments=${issueEnrichment.postIssueComment}`
             : `${issueEnrichment.state}: ${issueEnrichment.blockers.join(", ")}`
         }]
+      : []),
+    ...(issueEnrichmentRuntime
+      ? [
+          {
+            name: "issue_enrichment_runtime_no_failed_records",
+            ok: issueEnrichmentRuntimeFailed === 0,
+            detail: `${issueEnrichmentRuntimeFailed} failed issue-enrichment record(s)`
+          },
+          {
+            name: "issue_enrichment_runtime_no_retryable_deferred_records",
+            ok: issueEnrichmentRuntimeRetryableDeferred === 0,
+            detail: `${issueEnrichmentRuntimeRetryableDeferred} retryable deferred issue-enrichment record(s)`
+          }
+        ]
       : [])
   ];
 
@@ -378,7 +433,9 @@ export function buildOperatorStatus(input: {
     ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : []),
     ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
-    ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : [])
+    ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : []),
+    ...(issueEnrichmentRuntimeFailed > 0 ? ["inspect failed issue-enrichment records before promotion"] : []),
+    ...(issueEnrichmentRuntimeRetryableDeferred > 0 ? ["retry or inspect deferred issue-enrichment records"] : [])
   ]);
 
   return {
@@ -403,7 +460,8 @@ export function buildOperatorStatus(input: {
       failedQueueJobs,
       budgetWouldLeaseJobs: budget?.wouldLeaseCount ?? 0,
       budgetDelayedJobs: budget?.delayedCount ?? 0,
-      ...(issueEnrichment ? { issueEnrichmentState: issueEnrichment.state } : {})
+      ...(issueEnrichment ? { issueEnrichmentState: issueEnrichment.state } : {}),
+      ...(issueEnrichmentRuntimeState ? { issueEnrichmentRuntimeState } : {})
     },
     gates,
     recommendedActions,
@@ -413,7 +471,8 @@ export function buildOperatorStatus(input: {
     agents: input.agents,
     providerCooldowns,
     ...(durableQueue ? { durableQueue } : {}),
-    ...(issueEnrichment ? { issueEnrichment } : {})
+    ...(issueEnrichment ? { issueEnrichment } : {}),
+    ...(issueEnrichmentRuntime ? { issueEnrichmentRuntime } : {})
   };
 }
 
@@ -426,6 +485,7 @@ export function buildRuntimeInventory(input: {
   repoProviderCooldowns?: RepoProviderCooldownRecord[];
   durableQueue?: OperatorDurableQueueSnapshot;
   issueEnrichment?: IssueEnrichmentStatus;
+  issueEnrichmentRuntime?: OperatorIssueEnrichmentRuntime;
   checkedAt?: string;
 }): RuntimeInventory {
   const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
@@ -461,6 +521,10 @@ export function buildRuntimeInventory(input: {
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
   const budget = input.release.budget;
   const issueEnrichment = input.issueEnrichment;
+  const issueEnrichmentRuntime = input.issueEnrichmentRuntime;
+  const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
+  const issueEnrichmentRuntimeFailed = issueEnrichmentRuntime?.summary.failed ?? 0;
+  const issueEnrichmentRuntimeRetryableDeferred = issueEnrichmentRuntime?.summary.retryableDeferred ?? 0;
 
   const gates = [
     ...input.release.gates,
@@ -521,6 +585,20 @@ export function buildRuntimeInventory(input: {
             ? `${issueEnrichment.state}; allowlist=${issueEnrichment.allowlist.length}; liveComments=${issueEnrichment.postIssueComment}`
             : `${issueEnrichment.state}: ${issueEnrichment.blockers.join(", ")}`
         }]
+      : []),
+    ...(issueEnrichmentRuntime
+      ? [
+          {
+            name: "runtime_issue_enrichment_no_failed_records",
+            ok: issueEnrichmentRuntimeFailed === 0,
+            detail: `${issueEnrichmentRuntimeFailed} failed issue-enrichment record(s)`
+          },
+          {
+            name: "runtime_issue_enrichment_no_retryable_deferred_records",
+            ok: issueEnrichmentRuntimeRetryableDeferred === 0,
+            detail: `${issueEnrichmentRuntimeRetryableDeferred} retryable deferred issue-enrichment record(s)`
+          }
+        ]
       : [])
   ];
 
@@ -540,7 +618,9 @@ export function buildRuntimeInventory(input: {
     ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
     ...(retryableExpiredProviderCooldowns > 0 ? ["retry expired provider cooldowns or inspect provider health"] : []),
-    ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : [])
+    ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : []),
+    ...(issueEnrichmentRuntimeFailed > 0 ? ["inspect failed issue-enrichment records before promotion"] : []),
+    ...(issueEnrichmentRuntimeRetryableDeferred > 0 ? ["retry or inspect deferred issue-enrichment records"] : [])
   ]);
 
   return {
@@ -574,7 +654,8 @@ export function buildRuntimeInventory(input: {
       repoCooldowns: repoProviderCooldowns.length,
       activeRepoCooldowns,
       botProcesses: input.processes?.summary.total ?? 0,
-      ...(issueEnrichment ? { issueEnrichmentState: issueEnrichment.state } : {})
+      ...(issueEnrichment ? { issueEnrichmentState: issueEnrichment.state } : {}),
+      ...(issueEnrichmentRuntimeState ? { issueEnrichmentRuntimeState } : {})
     },
     gates,
     recommendedActions,
@@ -588,7 +669,8 @@ export function buildRuntimeInventory(input: {
     ...(queue ? { coverage: queue } : {}),
     providerCooldowns,
     repoProviderCooldowns,
-    ...(issueEnrichment ? { issueEnrichment } : {})
+    ...(issueEnrichment ? { issueEnrichment } : {}),
+    ...(issueEnrichmentRuntime ? { issueEnrichmentRuntime } : {})
   };
 }
 
@@ -668,6 +750,10 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
       ` retryable=${inventory.summary.retryableExpiredProviderCooldowns}` +
       ` covered=${inventory.summary.coveredExpiredProviderCooldowns}` +
       ` activeRepo=${inventory.summary.activeRepoCooldowns}`,
+    `issueEnrichment: config=${inventory.summary.issueEnrichmentState ?? "unknown"}` +
+      ` runtime=${inventory.summary.issueEnrichmentRuntimeState ?? "unknown"}` +
+      ` failed=${inventory.issueEnrichmentRuntime?.summary.failed ?? 0}` +
+      ` deferred=${inventory.issueEnrichmentRuntime?.summary.deferred ?? 0}`,
     `processes: botOwned=${inventory.summary.botProcesses}`,
     `leases: active=${inventory.summary.activeLeases} stale=${inventory.summary.staleLeases}`
   ];
@@ -806,6 +892,64 @@ export function collectOperatorProviderCooldowns(
       if (!input.expiredOnly || record.expired) mapped.push(record);
     }
     return input.limit ? mapped.slice(0, input.limit) : mapped;
+  } finally {
+    db.close();
+  }
+}
+
+export function collectOperatorIssueEnrichmentRuntime(
+  statePath: string,
+  input: { repo?: string; now?: Date; limit?: number } = {}
+): OperatorIssueEnrichmentRuntime {
+  const checkedAt = (input.now ?? new Date()).toISOString();
+  if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
+    throw new Error("limit must be a positive integer");
+  }
+  if (!existsSync(statePath)) return emptyIssueEnrichmentRuntime(checkedAt);
+  const db = new DatabaseSync(statePath, { readOnly: true });
+  try {
+    if (!hasTable(db, "issue_enrichment_records")) return emptyIssueEnrichmentRuntime(checkedAt);
+    const rows = (input.repo
+      ? db
+          .prepare(
+            `select repo, issue_number, issue_updated_at, status, reason, comment_url, error,
+                    next_eligible_at, created_at, updated_at
+             from issue_enrichment_records
+             where repo = ?
+             order by datetime(updated_at) desc`
+          )
+          .all(input.repo)
+      : db
+          .prepare(
+            `select repo, issue_number, issue_updated_at, status, reason, comment_url, error,
+                    next_eligible_at, created_at, updated_at
+             from issue_enrichment_records
+             order by datetime(updated_at) desc`
+          )
+          .all()) as unknown as IssueEnrichmentRecordRow[];
+    const allRecords = rows.map((row) => mapIssueEnrichmentRuntimeRow(row, checkedAt));
+    const records = input.limit ? allRecords.slice(0, input.limit) : allRecords;
+    const summary = {
+      total: allRecords.length,
+      dryRun: allRecords.filter((record) => record.status === "dry_run").length,
+      posted: allRecords.filter((record) => record.status === "posted").length,
+      skipped: allRecords.filter((record) => record.status === "skipped").length,
+      deferred: allRecords.filter((record) => record.status === "deferred").length,
+      retryableDeferred: allRecords.filter((record) => record.status === "deferred" && record.retryable).length,
+      failed: allRecords.filter((record) => record.status === "failed").length
+    };
+    const state: OperatorIssueEnrichmentRuntimeState = summary.failed > 0
+      ? "error"
+      : summary.deferred > 0
+        ? "deferred"
+        : "idle";
+    return {
+      ok: summary.failed === 0 && summary.retryableDeferred === 0,
+      checkedAt,
+      state,
+      summary,
+      records
+    };
   } finally {
     db.close();
   }
@@ -1407,6 +1551,59 @@ function isRetryableQueueJob(job: ReviewQueueJobRecord, now: Date): boolean {
   return !Number.isFinite(nextEligibleAtMs) || nextEligibleAtMs <= now.getTime();
 }
 
+function emptyIssueEnrichmentRuntime(checkedAt: string): OperatorIssueEnrichmentRuntime {
+  return {
+    ok: true,
+    checkedAt,
+    state: "idle",
+    summary: {
+      total: 0,
+      dryRun: 0,
+      posted: 0,
+      skipped: 0,
+      deferred: 0,
+      retryableDeferred: 0,
+      failed: 0
+    },
+    records: []
+  };
+}
+
+function displayIssueEnrichmentRuntimeState(
+  issueEnrichment: IssueEnrichmentStatus | undefined,
+  runtime: OperatorIssueEnrichmentRuntime | undefined
+): OperatorIssueEnrichmentRuntimeState | undefined {
+  if (!runtime) return issueEnrichment?.enabled === false ? "disabled" : undefined;
+  if (issueEnrichment?.enabled === false && runtime.summary.total === 0) return "disabled";
+  return runtime.state;
+}
+
+function mapIssueEnrichmentRuntimeRow(
+  row: IssueEnrichmentRecordRow,
+  checkedAt: string
+): OperatorIssueEnrichmentRuntimeRecord {
+  const nextEligibleAtMs = row.next_eligible_at ? Date.parse(row.next_eligible_at) : Number.NaN;
+  const checkedAtMs = Date.parse(checkedAt);
+  const retryable =
+    row.status === "deferred" &&
+    (!row.next_eligible_at ||
+      !Number.isFinite(nextEligibleAtMs) ||
+      (Number.isFinite(checkedAtMs) && nextEligibleAtMs <= checkedAtMs));
+  return {
+    repo: row.repo,
+    issueNumber: row.issue_number,
+    status: row.status,
+    ...(row.issue_updated_at ? { issueUpdatedAt: row.issue_updated_at } : {}),
+    ...(row.reason ? { reason: redactSecrets(row.reason) } : {}),
+    ...(row.comment_url ? { commentUrl: redactSecrets(row.comment_url) } : {}),
+    ...(row.error ? { error: redactSecrets(row.error) } : {}),
+    ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    retryable
+  };
+}
+
 function sameHead(job: ReviewQueueJobRecord, pending: OperatorQueueEntry): boolean {
   return job.repo === pending.repo && job.pullNumber === pending.pullNumber && job.headSha === pending.headSha;
 }
@@ -1806,6 +2003,19 @@ interface RepoProviderCooldownRow {
   repo: string;
   cooldown_until: string;
   reason: string;
+  updated_at: string;
+}
+
+interface IssueEnrichmentRecordRow {
+  repo: string;
+  issue_number: number;
+  issue_updated_at: string | null;
+  status: IssueEnrichmentRecordStatus;
+  reason: string | null;
+  comment_url: string | null;
+  error: string | null;
+  next_eligible_at: string | null;
+  created_at: string;
   updated_at: string;
 }
 

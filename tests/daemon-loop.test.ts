@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runDaemonCycle } from "../src/daemon.js";
+import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
 
 describe("daemon cycle resilience", () => {
   it("logs runtime cycle failures without throwing out of the daemon loop", async () => {
@@ -233,4 +234,145 @@ describe("daemon cycle resilience", () => {
       { event: "daemon_cycle_failed", error: "second timeout" }
     ]);
   });
+
+  it("runs and logs the issue enrichment cycle when the default-off lane is enabled", async () => {
+    const stdout: string[] = [];
+    let issueCycleCalled = false;
+
+    const result = await runDaemonCycle({
+      cycle: 9,
+      dryRun: false,
+      pilotRepos: ["electricsheephq/WorldOS"],
+      monitoredRepos: ["electricsheephq/WorldOS"],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => successfulRunOnceResult(),
+      issueEnrichmentCycleImpl: async (options) => {
+        issueCycleCalled = options.dryRun === false;
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    expect(result.ok).toBe(true);
+    expect(issueCycleCalled).toBe(true);
+    expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: "daemon_issue_enrichment",
+        cycle: 9,
+        result: expect.objectContaining({
+          summary: expect.objectContaining({
+            reposScanned: 1,
+            dryRunRecorded: 1
+          })
+        })
+      })
+    ]));
+  });
+
+  it("keeps the daemon cycle healthy when issue enrichment fails", async () => {
+    const stderr: string[] = [];
+
+    const result = await runDaemonCycle({
+      cycle: 10,
+      dryRun: false,
+      pilotRepos: ["electricsheephq/WorldOS"],
+      monitoredRepos: ["electricsheephq/WorldOS"],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => successfulRunOnceResult(),
+      issueEnrichmentCycleImpl: async () => {
+        throw new Error("issue enrichment failed with ghp_1234567890abcdefghijklmnopqrstuvwx");
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: () => undefined,
+      stderr: (line) => stderr.push(line)
+    });
+
+    expect(result.ok).toBe(true);
+    expect(stderr).toHaveLength(1);
+    const failure = JSON.parse(stderr[0]!);
+    expect(failure).toMatchObject({
+      event: "daemon_issue_enrichment_failed",
+      level: "error",
+      cycle: 10
+    });
+    expect(failure.error).toContain("issue enrichment failed");
+    expect(failure.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+  });
 });
+
+function successfulRunOnceResult() {
+  return {
+    reposScanned: 1,
+    pullsSeen: 1,
+    reviewed: 0,
+    failed: 0,
+    skippedDraft: 0,
+    skippedCanary: 0,
+    skippedPolicy: 0,
+    skippedCommandStop: 0,
+    skippedCommandExplain: 0,
+    commandReviewRequested: 0,
+    skippedProcessed: 1,
+    skippedCapacity: 0,
+    skippedProviderCooldown: 0,
+    skippedStaleHead: 0,
+    baselinedExisting: 0,
+    policySkips: []
+  };
+}
+
+function successfulIssueEnrichmentCycleResult(): IssueEnrichmentCycleResult {
+  return {
+    ok: true,
+    checkedAt: "2026-07-03T04:00:00.000Z",
+    dryRun: false,
+    status: {
+      ok: true,
+      checkedAt: "2026-07-03T04:00:00.000Z",
+      state: "dry_run_only",
+      enabled: true,
+      postIssueComment: false,
+      separateAllowlist: true,
+      allowlist: ["owner/repo"],
+      throttleDefaults: {
+        maxIssuesPerCycle: 5,
+        maxCommentsPerCycle: 0,
+        cooldownMs: 3_600_000,
+        burstWindowMs: 3_600_000,
+        maxIssuesPerBurst: 10,
+        lookbackMs: 600_000,
+        processExistingOpenIssuesOnActivation: false
+      },
+      repoOverrides: [],
+      blockers: ["issue_enrichment_live_posting_disabled"]
+    },
+    summary: {
+      reposScanned: 1,
+      reposSkipped: 0,
+      readFailures: 0,
+      issuesSeen: 1,
+      eligible: 1,
+      skipped: 0,
+      wouldEnrich: 1,
+      wouldComment: 0,
+      deferred: 0,
+      posted: 0,
+      dryRunRecorded: 1,
+      skippedRecorded: 0,
+      deferredRecorded: 0,
+      alreadyProcessed: 0,
+      failed: 0
+    },
+    repos: [],
+    items: [],
+    recommendedActions: []
+  };
+}

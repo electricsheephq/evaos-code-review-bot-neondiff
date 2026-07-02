@@ -16,6 +16,7 @@ import {
   buildOperatorQueue,
   buildOperatorStatus,
   collectBotProcessInventory,
+  collectOperatorIssueEnrichmentRuntime,
   collectOperatorLeases,
   collectOperatorProviderCooldowns,
   collectOperatorRepoProviderCooldowns,
@@ -197,6 +198,10 @@ async function main(): Promise<void> {
       repo: args.repo,
       limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
     });
+    const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(args["state-path"] ?? config.statePath, {
+      repo: args.repo,
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+    });
     const github = new GitHubApi(config.github);
     const status = buildOperatorStatus({
       release,
@@ -208,7 +213,8 @@ async function main(): Promise<void> {
         config,
         canPostAsApp: github.canPostAsApp(),
         checkedAt: release.checkedAt
-      })
+      }),
+      issueEnrichmentRuntime
     });
     console.log(JSON.stringify(status, null, 2));
     if (!status.ok) process.exitCode = 1;
@@ -247,6 +253,10 @@ async function main(): Promise<void> {
       repo: args.repo,
       now
     });
+    const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(statePath, {
+      repo: args.repo,
+      now
+    });
     const github = new GitHubApi(config.github);
     const processes = collectBotProcessInventory({
       repoPath: process.cwd(),
@@ -267,6 +277,7 @@ async function main(): Promise<void> {
         canPostAsApp: github.canPostAsApp(),
         checkedAt: now.toISOString()
       }),
+      issueEnrichmentRuntime,
       checkedAt: now.toISOString()
     });
     console.log(args.human === "true" ? formatRuntimeInventoryHuman(inventory) : JSON.stringify(inventory, null, 2));
@@ -875,6 +886,7 @@ async function main(): Promise<void> {
         canaryPulls: config.canaryPulls ?? [],
         commandsEnabled: config.commands.enabled,
         reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
+        issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
         configPath: args.config
       });
       await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));

@@ -14,7 +14,8 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
-import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan } from "../src/issue-enrichment.js";
+import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, runIssueEnrichmentCycle } from "../src/issue-enrichment.js";
+import { ReviewStateStore } from "../src/state.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 
 const HEAD_A = "a".repeat(40);
@@ -690,6 +691,292 @@ describe("sticky enrichment comments", () => {
         since: "2026-07-03T11:00:00.000Z",
         pageLimit: 2
       }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records dry-run-only issue enrichment once per unchanged issue update", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-dry-run-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 0,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const issue: GitHubRelatedIssueOrPull = {
+          number: 31,
+          title: "Add issue enrichment scheduler",
+          state: "open",
+          updated_at: "2026-07-03T01:00:00.000Z",
+          body: "Acceptance criteria and owner present."
+        };
+        const reader = { listIssuesForEnrichment: async () => [issue] };
+
+        const first = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            ...reader,
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post in dry-run-only mode");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T01:05:00.000Z"
+        });
+        const second = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            ...reader,
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post in dry-run-only mode");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T01:06:00.000Z"
+        });
+
+        expect(first.summary).toMatchObject({ dryRunRecorded: 1, alreadyProcessed: 0, posted: 0, failed: 0 });
+        expect(second.summary).toMatchObject({ dryRunRecorded: 0, alreadyProcessed: 1, posted: 0, failed: 0 });
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 31)).toMatchObject({
+          status: "dry_run",
+          issueUpdatedAt: "2026-07-03T01:00:00.000Z",
+          reason: "dry_run_only"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("posts sticky issue enrichment when live comments are explicitly enabled and skips unchanged reruns", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-post-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 2,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      const posts: Array<{ issueNumber: number; marker: string; body: string }> = [];
+      try {
+        const issue: GitHubRelatedIssueOrPull = {
+          number: 41,
+          title: "Route issue enrichment #10",
+          state: "open",
+          updated_at: "2026-07-03T02:00:00.000Z",
+          html_url: "https://github.test/owner/issue-repo/issues/41",
+          body: "Acceptance criteria and owner present."
+        };
+        const github = {
+          listIssuesForEnrichment: async () => [issue],
+          canPostAsApp: () => true,
+          upsertIssueComment: async (input: { issueNumber: number; marker: string; body: string }) => {
+            posts.push(input);
+            return { action: "created" as const, id: 4100, html_url: `https://github.test/comment/${posts.length}` };
+          }
+        };
+
+        const first = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T02:05:00.000Z"
+        });
+        const second = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T02:06:00.000Z"
+        });
+
+        expect(first.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
+        expect(second.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+        expect(posts).toHaveLength(1);
+        expect(posts[0]!.marker).toContain("issue=41");
+        expect(posts[0]!.body).toContain("## evaOS issue enrichment");
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 41)).toMatchObject({
+          status: "posted",
+          issueUpdatedAt: "2026-07-03T02:00:00.000Z",
+          commentUrl: "https://github.test/comment/1"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed without scanning or posting when live issue comments lack App credentials", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-missing-app-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 2,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => {
+              throw new Error("should not scan when live issue comments are blocked");
+            },
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post without App credentials");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T02:10:00.000Z"
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.status.state).toBe("blocked");
+        expect(result.status.blockers).toContain("github_app_credentials_required_for_live_issue_comments");
+        expect(result.summary).toMatchObject({
+          reposScanned: 0,
+          issuesSeen: 0,
+          posted: 0,
+          failed: 0
+        });
+        expect(result.items).toEqual([]);
+        expect(state.listIssueEnrichmentRecords()).toEqual([]);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records redacted issue-enrichment posting failures without leaking provider tokens", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-post-fail-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 2,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const issue: GitHubRelatedIssueOrPull = {
+          number: 61,
+          title: "Handle post failure",
+          state: "open",
+          updated_at: "2026-07-03T02:20:00.000Z",
+          body: "Acceptance criteria and owner present."
+        };
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => [issue],
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              throw new Error("GitHub rejected comment with ghp_1234567890abcdefghijklmnopqrstuvwx");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T02:25:00.000Z"
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.summary).toMatchObject({ posted: 0, failed: 1 });
+        expect(result.items[0]).toMatchObject({ recordStatus: "failed" });
+        expect(result.items[0]!.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+        const record = state.getIssueEnrichmentRecord("owner/issue-repo", 61);
+        expect(record).toMatchObject({
+          status: "failed",
+          reason: "post_failed"
+        });
+        expect(record?.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps disabled issue enrichment as a no-op with no state writes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-disabled-"));
+    try {
+      const statePath = join(root, "state.sqlite");
+      const state = new ReviewStateStore(statePath);
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => {
+              throw new Error("disabled issue enrichment should not scan");
+            },
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("disabled issue enrichment should not post");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T03:00:00.000Z"
+        });
+
+        expect(result.summary).toMatchObject({
+          reposScanned: 0,
+          issuesSeen: 0,
+          posted: 0,
+          dryRunRecorded: 0,
+          failed: 0
+        });
+        expect(state.listIssueEnrichmentRecords()).toEqual([]);
+      } finally {
+        state.close();
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

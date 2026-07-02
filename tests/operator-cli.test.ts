@@ -9,6 +9,7 @@ import {
   buildRuntimeInventory,
   buildOperatorQueue,
   buildOperatorStatus,
+  collectOperatorIssueEnrichmentRuntime,
   collectOperatorLeases,
   collectOperatorRepoProviderCooldowns,
   collectOperatorReviewReadiness,
@@ -172,6 +173,188 @@ describe("operator CLI summaries", () => {
       ok: false,
       detail: "blocked: github_app_credentials_required_for_live_issue_comments"
     });
+  });
+
+  it("reports issue enrichment runtime records separately from PR queue health", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec(`
+        create table issue_enrichment_records (
+          repo text not null,
+          issue_number integer not null,
+          issue_updated_at text,
+          status text not null,
+          reason text,
+          comment_url text,
+          error text,
+          next_eligible_at text,
+          created_at text not null,
+          updated_at text not null,
+          primary key (repo, issue_number)
+        )
+      `);
+      db
+        .prepare(
+          `insert into issue_enrichment_records
+            (repo, issue_number, issue_updated_at, status, reason, next_eligible_at, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "owner/issue-repo",
+          51,
+          "2026-07-03T04:00:00.000Z",
+          "deferred",
+          "repo_max_comments_per_cycle",
+          "2026-07-03T05:00:00.000Z",
+          "2026-07-03T04:05:00.000Z",
+          "2026-07-03T04:05:00.000Z"
+        );
+      db
+        .prepare(
+          `insert into issue_enrichment_records
+            (repo, issue_number, issue_updated_at, status, error, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "owner/issue-repo",
+          52,
+          "2026-07-03T04:10:00.000Z",
+          "failed",
+          "comment failed with [REDACTED_TOKEN]",
+          "2026-07-03T04:11:00.000Z",
+          "2026-07-03T04:11:00.000Z"
+        );
+    } finally {
+      db.close();
+    }
+
+    const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(statePath, {
+      now: new Date("2026-07-03T04:30:00.000Z")
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({ ok: true }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
+      issueEnrichment: issueEnrichmentStatus({ state: "dry_run_only", ok: true }),
+      issueEnrichmentRuntime,
+      checkedAt: "2026-07-03T04:30:00.000Z"
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.summary).toMatchObject({
+      issueEnrichmentState: "dry_run_only",
+      issueEnrichmentRuntimeState: "error"
+    });
+    expect(status.issueEnrichmentRuntime?.summary).toMatchObject({
+      total: 2,
+      deferred: 1,
+      failed: 1,
+      retryableDeferred: 0
+    });
+    expect(status.gates).toContainEqual({
+      name: "issue_enrichment_runtime_no_failed_records",
+      ok: false,
+      detail: "1 failed issue-enrichment record(s)"
+    });
+    expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("reports default-off issue enrichment runtime as disabled when there are no issue records", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(statePath, {
+      now: new Date("2026-07-03T04:30:00.000Z")
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({ ok: true }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
+      issueEnrichment: issueEnrichmentStatus({
+        state: "disabled",
+        enabled: false,
+        ok: true
+      }),
+      issueEnrichmentRuntime,
+      checkedAt: "2026-07-03T04:30:00.000Z"
+    });
+
+    expect(status.summary).toMatchObject({
+      issueEnrichmentState: "disabled",
+      issueEnrichmentRuntimeState: "disabled"
+    });
+    expect(status.issueEnrichmentRuntime?.summary.total).toBe(0);
+  });
+
+  it("keeps issue enrichment runtime health totals independent of displayed record limits", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec(`
+        create table issue_enrichment_records (
+          repo text not null,
+          issue_number integer not null,
+          issue_updated_at text,
+          status text not null,
+          reason text,
+          comment_url text,
+          error text,
+          next_eligible_at text,
+          created_at text not null,
+          updated_at text not null,
+          primary key (repo, issue_number)
+        )
+      `);
+      db
+        .prepare(
+          `insert into issue_enrichment_records
+            (repo, issue_number, issue_updated_at, status, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "owner/issue-repo",
+          71,
+          "2026-07-03T05:00:00.000Z",
+          "posted",
+          "2026-07-03T05:10:00.000Z",
+          "2026-07-03T05:10:00.000Z"
+        );
+      db
+        .prepare(
+          `insert into issue_enrichment_records
+            (repo, issue_number, issue_updated_at, status, error, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "owner/issue-repo",
+          72,
+          "2026-07-03T04:00:00.000Z",
+          "failed",
+          "older failure",
+          "2026-07-03T04:10:00.000Z",
+          "2026-07-03T04:10:00.000Z"
+        );
+    } finally {
+      db.close();
+    }
+
+    const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(statePath, {
+      now: new Date("2026-07-03T05:30:00.000Z"),
+      limit: 1
+    });
+
+    expect(issueEnrichmentRuntime.records).toHaveLength(1);
+    expect(issueEnrichmentRuntime.records[0]).toMatchObject({ issueNumber: 71, status: "posted" });
+    expect(issueEnrichmentRuntime.summary).toMatchObject({
+      total: 2,
+      posted: 1,
+      failed: 1
+    });
+    expect(issueEnrichmentRuntime.ok).toBe(false);
+    expect(issueEnrichmentRuntime.state).toBe("error");
   });
 
   it("treats pending heads covered by durable queue work as healthy active runtime", () => {
@@ -1435,6 +1618,29 @@ function agentInventory(input: Partial<OperatorAgentInventory>): OperatorAgentIn
     },
     activeLeases: input.activeLeases ?? [],
     staleLeases: input.staleLeases ?? []
+  };
+}
+
+function issueEnrichmentStatus(input: Partial<IssueEnrichmentStatus> = {}): IssueEnrichmentStatus {
+  return {
+    ok: input.ok ?? true,
+    checkedAt: input.checkedAt ?? "2026-07-03T04:30:00.000Z",
+    state: input.state ?? "dry_run_only",
+    enabled: input.enabled ?? true,
+    postIssueComment: input.postIssueComment ?? false,
+    separateAllowlist: true,
+    allowlist: input.allowlist ?? ["owner/issue-repo"],
+    throttleDefaults: input.throttleDefaults ?? {
+      maxIssuesPerCycle: 5,
+      maxCommentsPerCycle: 0,
+      cooldownMs: 3_600_000,
+      burstWindowMs: 3_600_000,
+      maxIssuesPerBurst: 10,
+      lookbackMs: 600_000,
+      processExistingOpenIssuesOnActivation: false
+    },
+    repoOverrides: input.repoOverrides ?? [],
+    blockers: input.blockers ?? []
   };
 }
 
