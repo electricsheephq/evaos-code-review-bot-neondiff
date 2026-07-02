@@ -91,6 +91,7 @@ export async function runScheduledCycleWithDeps(input: {
   options: RunOnceOptions;
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
   now?: Date;
+  clock?: () => Date;
 }): Promise<ScheduledRunResult> {
   const config = input.config;
   const scheduler = config.reviewScheduler;
@@ -99,6 +100,7 @@ export async function runScheduledCycleWithDeps(input: {
   }
   const result = emptyScheduledRunResult();
   const now = input.now ?? new Date();
+  const eventClock = input.clock ?? (() => input.now ?? new Date());
   const repos = input.options.repo ? [input.options.repo] : listReposToScan(config);
   const providerId = config.zcode.providerId ?? config.zcode.model ?? "zcode";
 
@@ -184,7 +186,8 @@ export async function runScheduledCycleWithDeps(input: {
       onStatusCommentFailure: () => {
         result.statusCommentFailures += 1;
       },
-      now
+      now,
+      clock: eventClock
     });
     applyReviewStatus(result, status);
   }
@@ -596,6 +599,7 @@ async function runLeasedQueueJob(input: {
   budget: ReviewRunBudget;
   onStatusCommentFailure?: () => void;
   now?: Date;
+  clock?: () => Date;
 }): Promise<ReviewPullResult | "failed" | "closed_retired" | "stale_retired"> {
   const now = input.now ?? new Date();
   input.state.updateReviewQueueJobState({
@@ -793,22 +797,23 @@ async function runLeasedQueueJob(input: {
     });
     return status;
   } catch (error) {
+    const failureNow = input.clock?.() ?? now;
     if (recordProviderRateLimitCooldownIfNeeded({
       config: input.config,
       state: input.state,
       repo: input.job.repo,
       pull,
       error,
-      now
+      now: failureNow
     })) {
-      markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull, error, config: input.config, now });
+      markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull, error, config: input.config, now: failureNow });
       recordReadinessTransition({
         state: input.state,
         repo: input.job.repo,
         pull,
         readinessState: "provider_deferred",
         reason: "provider_rate_limit_cooldown",
-        now
+        now: failureNow
       });
       await syncReviewStatusComment({
         config: input.config,
@@ -819,7 +824,7 @@ async function runLeasedQueueJob(input: {
         state: "provider_deferred",
         details: "Provider cooldown recorded; see bot evidence for operator-only details.",
         onStatusCommentFailure: input.onStatusCommentFailure,
-        now
+        now: failureNow
       });
       updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "assigned");
       return "skipped_provider_cooldown";
