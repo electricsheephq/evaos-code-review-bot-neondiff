@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { isPreActivationExistingPull } from "./activation-policy.js";
 import type { BotConfig } from "./config.js";
 import { listReposToScan, resolveRepoProfile, type RepoProfileSkipReason } from "./repo-policy.js";
 import {
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
+  type RepoActivationRecord,
   type ReviewQueueJobState,
   type RepoProviderCooldownRecord,
   type StoredProcessedReviewRecord
@@ -12,7 +14,7 @@ import {
 import { isCanaryAllowed } from "./worker.js";
 import type { PullRequestSummary } from "./types.js";
 
-export type CoverageSkipReason = RepoProfileSkipReason | "draft" | "closed" | "canary";
+export type CoverageSkipReason = RepoProfileSkipReason | "draft" | "closed" | "canary" | "activation_baseline_existing_pr";
 
 export interface CoverageAuditSummary {
   reposScanned: number;
@@ -112,6 +114,7 @@ export interface CoverageGitHubApi {
 export interface CoverageStateLookup {
   getProcessedReview(repo: string, pullNumber: number, headSha: string): StoredProcessedReviewRecord | undefined;
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[];
+  getRepoActivation?(repo: string): RepoActivationRecord | undefined;
   getActiveReviewQueueJob?(
     repo: string,
     pullNumber: number,
@@ -156,6 +159,20 @@ export class CoverageStateReader implements CoverageStateLookup {
       )
       .all(repo, pullNumber) as unknown as ProcessedReviewRow[];
     return rows.map(mapProcessedReviewRow);
+  }
+
+  getRepoActivation(repo: string): RepoActivationRecord | undefined {
+    if (!this.db) return undefined;
+    if (!this.hasRepoActivationWatermarksTable()) return undefined;
+    const row = this.db
+      .prepare(
+        `select repo, activated_at, created_at
+         from repo_activation_watermarks
+         where repo = ?
+         limit 1`
+      )
+      .get(repo) as RepoActivationRow | undefined;
+    return row ? mapRepoActivationRow(row) : undefined;
   }
 
   getActiveReviewQueueJob(
@@ -246,6 +263,15 @@ export class CoverageStateReader implements CoverageStateLookup {
     );
   }
 
+  private hasRepoActivationWatermarksTable(): boolean {
+    if (!this.db) return false;
+    return Boolean(
+      this.db
+        .prepare("select 1 from sqlite_master where type = 'table' and name = 'repo_activation_watermarks' limit 1")
+        .get()
+    );
+  }
+
   private hasReviewQueueJobsColumn(name: string): boolean {
     if (!this.db) return false;
     const columns = this.db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
@@ -328,6 +354,13 @@ export async function collectCoverageAudit(input: {
       }
       if (!isCanaryAllowed(input.config, repo, pull.number)) {
         pushSkipped(report, repo, pull, "canary");
+        continue;
+      }
+      if (
+        !input.state.getProcessedReview(repo, pull.number, pull.head.sha) &&
+        isPreActivationExistingPull({ config: input.config, state: input.state, repo, pull })
+      ) {
+        pushSkipped(report, repo, pull, "activation_baseline_existing_pr");
         continue;
       }
 
@@ -593,6 +626,12 @@ interface RepoProviderCooldownRow {
   updated_at: string;
 }
 
+interface RepoActivationRow {
+  repo: string;
+  activated_at: string;
+  created_at: string;
+}
+
 interface ReviewQueueJobCoverageRow {
   repo: string;
   pull_number: number;
@@ -629,6 +668,14 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     ...(row.event ? { event: row.event } : {}),
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),
+    createdAt: row.created_at
+  };
+}
+
+function mapRepoActivationRow(row: RepoActivationRow): RepoActivationRecord {
+  return {
+    repo: row.repo,
+    activatedAt: row.activated_at,
     createdAt: row.created_at
   };
 }

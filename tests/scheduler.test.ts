@@ -2338,6 +2338,55 @@ describe("provider-aware review scheduler", () => {
     ]);
     state.close();
   });
+
+  it("skips pre-activation PRs when their head changes after repo activation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-preactivation-head-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.activation.reviewExistingOpenPrsOnActivation = false;
+    const state = new ReviewStateStore(config.statePath);
+    state.recordRepoActivation("org/repo-a", "2026-07-02T16:58:09.555Z");
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 950,
+      headSha: "old-baselined-head",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    const reviewed: string[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        [
+          "org/repo-a",
+          [
+            pull("org/repo-a", 950, "new-head-on-old-pr", "base", { createdAt: "2026-06-30T05:34:43Z" }),
+            pull("org/repo-a", 960, "new-head-on-new-pr", "base", { createdAt: "2026-07-02T17:39:37Z" })
+          ]
+        ]
+      ])),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ repo, pull: reviewPull }) => {
+        reviewed.push(`${repo}#${reviewPull.number}`);
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T17:45:00.000Z")
+    });
+
+    expect(result.skippedProcessed).toBe(1);
+    expect(result.queue.enqueued).toBe(1);
+    expect(state.getProcessedReview("org/repo-a", 950, "new-head-on-old-pr")).toMatchObject({
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({ pullNumber: 960, headSha: "new-head-on-new-pr", state: "queued" })
+    ]);
+    expect(reviewed).toEqual(["org/repo-a#960"]);
+    state.close();
+  });
 });
 
 function schedulerConfig(root: string, repos: string[]): BotConfig {
@@ -2448,13 +2497,14 @@ function pull(
   number: number,
   headSha: string,
   baseSha = "base",
-  options: { state?: string; mergedAt?: string | null } = {}
+  options: { state?: string; mergedAt?: string | null; createdAt?: string } = {}
 ): PullRequestSummary {
   return {
     number,
     title: `${repo} PR ${number}`,
     draft: false,
     ...(options.state ? { state: options.state } : {}),
+    ...(options.createdAt ? { created_at: options.createdAt } : {}),
     ...(options.mergedAt !== undefined ? { merged_at: options.mergedAt } : {}),
     head: {
       sha: headSha,

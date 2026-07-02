@@ -841,6 +841,51 @@ describe("coverage audit", () => {
     state.close();
   });
 
+  it("skips new heads on PRs created before repo activation", async () => {
+    const { root, state } = createState();
+    state.recordRepoActivation("owner/allowed", "2026-07-02T16:58:09.555Z");
+    state.recordProcessed({
+      repo: "owner/allowed",
+      pullNumber: 23,
+      headSha: "old-baselined-head",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [
+          pull(23, "new-head-on-old-pr", { createdAt: "2026-06-30T05:34:43Z" }),
+          pull(24, "new-head-on-new-pr", { createdAt: "2026-07-02T17:39:37Z" })
+        ]
+      } as unknown as GitHubApi,
+      state
+    });
+
+    expect(audit.ok).toBe(false);
+    expect(audit.summary).toMatchObject({
+      skipped: 1,
+      unprocessed: 1
+    });
+    expect(audit.skipped).toEqual([
+      expect.objectContaining({
+        repo: "owner/allowed",
+        pullNumber: 23,
+        headSha: "new-head-on-old-pr",
+        reason: "activation_baseline_existing_pr"
+      })
+    ]);
+    expect(audit.unprocessed).toEqual([
+      expect.objectContaining({
+        repo: "owner/allowed",
+        pullNumber: 24,
+        headSha: "new-head-on-new-pr"
+      })
+    ]);
+    state.close();
+  });
+
   it("still re-reads non-baseline processed heads during current-head verification", async () => {
     const { root, state } = createState();
     state.recordProcessed({
@@ -1049,13 +1094,14 @@ function minimalConfig(root: string): BotConfig {
 function pull(
   number: number,
   headSha: string,
-  options: { draft?: boolean; state?: string; baseSha?: string } = {}
+  options: { draft?: boolean; state?: string; baseSha?: string; createdAt?: string } = {}
 ): PullRequestSummary {
   return {
     number,
     title: `PR ${number}`,
     draft: options.draft ?? false,
     state: options.state ?? "open",
+    ...(options.createdAt ? { created_at: options.createdAt } : {}),
     head: {
       sha: headSha,
       ref: `pr-${number}`,
