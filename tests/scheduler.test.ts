@@ -440,6 +440,42 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("records scheduled provider cooldowns from failure handling time", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-cooldown-completion-time-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: true },
+      reviewPullImpl: async () => {
+        throw new Error("ProviderBusinessError: [1302][Rate limit reached for requests]");
+      },
+      now: new Date("2026-07-02T00:00:00.000Z"),
+      clock: () => new Date("2026-07-02T00:03:00.000Z")
+    });
+
+    expect(result.skippedProviderCooldown).toBe(1);
+    expect(state.listReviewQueueJobs({ state: "provider_deferred" })).toEqual([
+      expect.objectContaining({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        nextEligibleAt: "2026-07-02T00:04:30.000Z",
+        lastError: expect.stringContaining("provider_rate_limit_cooldown_until=2026-07-02T00:04:30.000Z")
+      })
+    ]);
+    expect(state.getProcessedReview("org/repo-a", 1, HEAD_A)).toMatchObject({
+      status: "skipped",
+      error: expect.stringContaining("provider_rate_limit_cooldown_until=2026-07-02T00:04:30.000Z")
+    });
+    state.close();
+  });
+
   it("marks a queued status failed when refetching the leased pull fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-refetch-failed-"));
     roots.push(root);
