@@ -597,6 +597,9 @@ describe("sticky enrichment comments", () => {
       expect(scan.recommendedActions).toContain(
         "standalone issue-enrichment scans are stateless; live cycles exclude already-processed issue rows from cap accounting"
       );
+      expect(scan.recommendedActions).toContain(
+        "summary.eligible includes cap- and burst-deferred issues; use wouldEnrich/wouldComment for current-cycle throughput"
+      );
       expect(JSON.stringify(scan)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1789,6 +1792,61 @@ describe("sticky enrichment comments", () => {
           dryRunRecorded: 0,
           failed: 0
         });
+        expect(state.listIssueEnrichmentRecords()).toEqual([]);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases live issue enrichment leases when the issue reader fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-reader-failure-lease-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 1,
+          globalMaxIssuesPerCycle: 5,
+          globalMaxCommentsPerCycle: 1,
+          maxActiveRuns: 1,
+          leaseTtlMs: 1_200_000,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => {
+              throw new Error("GitHub read failed");
+            },
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              throw new Error("reader failure test must not post");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T05:00:00.000Z"
+        });
+        const afterFailure = state.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T05:01:00.000Z"));
+
+        expect(result.ok).toBe(false);
+        expect(result.summary).toMatchObject({
+          readFailures: 1,
+          posted: 0,
+          failed: 0
+        });
+        expect(afterFailure).toBeDefined();
         expect(state.listIssueEnrichmentRecords()).toEqual([]);
       } finally {
         state.close();

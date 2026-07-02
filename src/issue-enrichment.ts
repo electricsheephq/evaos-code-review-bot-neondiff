@@ -936,6 +936,9 @@ function buildScanRecommendedActions(status: IssueEnrichmentStatus, summary: Iss
   const actions = [];
   if (status.state === "blocked") actions.push("resolve issue-enrichment blockers before live issue comments");
   if (summary.deferred > 0) actions.push("inspect deferred issue-enrichment rows and adjust per-repo throttles only after dry-run review");
+  if (summary.deferred > 0) {
+    actions.push("summary.eligible includes cap- and burst-deferred issues; use wouldEnrich/wouldComment for current-cycle throughput");
+  }
   if (summary.truncatedRepos > 0) actions.push("inspect truncated issue-enrichment scans before advancing repo watermarks");
   if (summary.readFailures > 0) actions.push("run doctor and inspect GitHub App Issues permissions");
   return actions;

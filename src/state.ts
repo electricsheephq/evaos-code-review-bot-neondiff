@@ -1000,14 +1000,21 @@ export class ReviewStateStore {
     const dryRun = input.dryRun ?? true;
     const params: [string] | [] = expiredOnly ? [checkedAt] : [];
     const whereClause = expiredOnly ? " where expires_at <= ?" : "";
-    const row = this.db
-      .prepare(`select count(*) as count from issue_enrichment_run_leases${whereClause}`)
-      .get(...params) as { count: number };
-    const matched = row.count;
-    const deleted = dryRun
-      ? 0
-      : Number(this.db.prepare(`delete from issue_enrichment_run_leases${whereClause}`).run(...params).changes);
-    return { checkedAt, expiredOnly, dryRun, matched, deleted };
+    this.db.exec("begin immediate");
+    try {
+      const row = this.db
+        .prepare(`select count(*) as count from issue_enrichment_run_leases${whereClause}`)
+        .get(...params) as { count: number };
+      const matched = row.count;
+      const deleted = dryRun
+        ? 0
+        : Number(this.db.prepare(`delete from issue_enrichment_run_leases${whereClause}`).run(...params).changes);
+      this.db.exec("commit");
+      return { checkedAt, expiredOnly, dryRun, matched, deleted };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   assignReviewerSessionJob(input: {
