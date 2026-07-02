@@ -34,6 +34,7 @@ export interface ReleaseDatabaseStatus {
   expiredProviderCooldownCount?: number;
   activeGlobalProviderCooldownCount?: number;
   coveredExpiredProviderCooldownCount?: number;
+  coveredByActiveQueueRetryProviderCooldownCount?: number;
   retryableExpiredProviderCooldownCount?: number;
   providerThrottleState?: "none" | "active" | "expired_retryable";
   reviewQueueJobCount?: number;
@@ -241,7 +242,7 @@ export function collectReleaseStatus(input: {
     expectedHead: input.expectedHead,
     configPath,
     launchd: readLaunchdStatus(input.launchdLabel ?? "com.electricsheephq.evaos-code-review-bot"),
-    database: readDatabaseStatus(statePath, now),
+    database: readDatabaseStatus(statePath, now, config.reviewConcurrency.leaseTtlMs),
     heartbeat: readHeartbeatStatus(
       statePath,
       config.pollIntervalMs * 2,
@@ -382,7 +383,7 @@ function readReviewQueueBudgetJobs(
   };
 }
 
-function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus {
+function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_000): ReleaseDatabaseStatus {
   if (!existsSync(statePath)) return { rowCount: 0, errorCount: 0 };
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
@@ -410,26 +411,42 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
       };
     const providerCooldownRows = db
       .prepare(
-        `select repo, error
+        `select repo, pull_number, head_sha, error
          from processed_reviews
          where status = 'skipped' and error like ?`
       )
-      .all(`${PROVIDER_COOLDOWN_ERROR_PREFIX}%`) as unknown as Array<{ repo: string; error: string | null }>;
+      .all(`${PROVIDER_COOLDOWN_ERROR_PREFIX}%`) as unknown as Array<{
+        repo: string;
+        pull_number: number;
+        head_sha: string;
+        error: string | null;
+      }>;
     const providerCooldowns = providerCooldownRows
       .map((providerRow) => {
         const parsed = parseProviderCooldownError(providerRow.error ?? undefined);
-        return parsed ? { repo: providerRow.repo, ...parsed } : undefined;
+        return parsed
+          ? {
+              repo: providerRow.repo,
+              pullNumber: providerRow.pull_number,
+              headSha: providerRow.head_sha,
+              ...parsed
+            }
+          : undefined;
       })
-      .filter((cooldown): cooldown is { repo: string; cooldownUntil: string; reason?: string } => Boolean(cooldown));
+      .filter((cooldown): cooldown is ProviderCooldownCandidate => Boolean(cooldown));
     const activeGlobalProviderCooldowns = readActiveGlobalProviderCooldowns(db, now);
-    const expiredProviderCooldownCount = providerCooldowns.filter((cooldown) => {
+    const expiredProviderCooldowns = providerCooldowns.filter((cooldown) => {
       const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
       return !Number.isFinite(cooldownUntilMs) || cooldownUntilMs <= now.getTime();
-    }).length;
+    });
+    const expiredProviderCooldownCount = expiredProviderCooldowns.length;
     const activeProviderCooldownCount = providerCooldowns.length - expiredProviderCooldownCount;
+    const coveredByActiveQueueRetryProviderCooldownCount = activeGlobalProviderCooldowns.length > 0
+      ? 0
+      : countExpiredProviderCooldownsCoveredByActiveQueueRetry(db, expiredProviderCooldowns, now, leaseTtlMs);
     const coveredExpiredProviderCooldownCount = activeGlobalProviderCooldowns.length > 0
       ? expiredProviderCooldownCount
-      : 0;
+      : coveredByActiveQueueRetryProviderCooldownCount;
     const retryableExpiredProviderCooldownCount = expiredProviderCooldownCount - coveredExpiredProviderCooldownCount;
     const providerThrottleState = activeGlobalProviderCooldowns.length > 0 || activeProviderCooldownCount > 0
       ? "active"
@@ -450,6 +467,7 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
       expiredProviderCooldownCount,
       activeGlobalProviderCooldownCount: activeGlobalProviderCooldowns.length,
       coveredExpiredProviderCooldownCount,
+      coveredByActiveQueueRetryProviderCooldownCount,
       retryableExpiredProviderCooldownCount,
       providerThrottleState,
       reviewQueueJobCount: reviewQueue.total,
@@ -595,6 +613,67 @@ function readReviewerSessionCounts(
   };
 }
 
+interface ProviderCooldownCandidate {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  cooldownUntil: string;
+  reason?: string;
+}
+
+function countExpiredProviderCooldownsCoveredByActiveQueueRetry(
+  db: DatabaseSync,
+  cooldowns: ProviderCooldownCandidate[],
+  now: Date,
+  leaseTtlMs: number
+): number {
+  if (cooldowns.length === 0) return 0;
+  const hasTable = db
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_queue_jobs' limit 1")
+    .get();
+  if (!hasTable) return 0;
+  const columns = new Set(
+    (db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>)
+      .map((column) => column.name)
+  );
+  if (
+    !columns.has("repo") ||
+    !columns.has("pull_number") ||
+    !columns.has("head_sha") ||
+    !columns.has("state") ||
+    !columns.has("updated_at")
+  ) {
+    return 0;
+  }
+  const hasLeaseExpiresAt = columns.has("lease_expires_at");
+  const leaseClause = hasLeaseExpiresAt
+    ? `and (
+         (lease_expires_at is not null and datetime(lease_expires_at) > datetime(?))
+         or (lease_expires_at is null and datetime(updated_at) > datetime(?))
+       )`
+    : "and datetime(updated_at) > datetime(?)";
+  const query = db.prepare(
+    `select 1
+     from review_queue_jobs
+     where repo = ?
+       and pull_number = ?
+       and head_sha = ?
+       and state in ('leased', 'running')
+       ${leaseClause}
+     limit 1`
+  );
+  const nowIso = now.toISOString();
+  const legacyLeaseCutoffIso = new Date(now.getTime() - leaseTtlMs).toISOString();
+  return cooldowns.filter((cooldown) => {
+    const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
+    if (!Number.isFinite(cooldownUntilMs) || cooldownUntilMs > now.getTime()) return false;
+    const row = hasLeaseExpiresAt
+      ? query.get(cooldown.repo, cooldown.pullNumber, cooldown.headSha, nowIso, legacyLeaseCutoffIso)
+      : query.get(cooldown.repo, cooldown.pullNumber, cooldown.headSha, legacyLeaseCutoffIso);
+    return Boolean(row);
+  }).length;
+}
+
 function readActiveGlobalProviderCooldowns(db: DatabaseSync, now: Date): Array<{ repo: string; cooldownUntil: string }> {
   const hasTable = db
     .prepare("select 1 from sqlite_master where type = 'table' and name = 'repo_provider_cooldowns' limit 1")
@@ -614,9 +693,11 @@ function readActiveGlobalProviderCooldowns(db: DatabaseSync, now: Date): Array<{
 function describeProviderCooldownCounts(database: ReleaseDatabaseStatus): string {
   const total = database.providerCooldownCount ?? 0;
   if (total === 0) return "";
+  const covered = database.coveredExpiredProviderCooldownCount ?? 0;
   return (
     `; ${total} provider cooldown skip row(s)` +
-    ` (${database.activeProviderCooldownCount ?? 0} active, ${database.expiredProviderCooldownCount ?? 0} expired)`
+    ` (${database.activeProviderCooldownCount ?? 0} active, ${database.expiredProviderCooldownCount ?? 0} expired` +
+    `${covered > 0 ? `, ${covered} covered` : ""})`
   );
 }
 
@@ -624,10 +705,20 @@ function describeProviderCooldownBacklog(
   database: ReleaseDatabaseStatus,
   providerThrottleState = inferProviderThrottleState(database)
 ): string {
-  if (providerThrottleState === "active" && (database.coveredExpiredProviderCooldownCount ?? 0) > 0) {
+  const queueCovered = database.coveredByActiveQueueRetryProviderCooldownCount ?? 0;
+  const globallyCovered = Math.max(0, (database.coveredExpiredProviderCooldownCount ?? 0) - queueCovered);
+  if (providerThrottleState === "active" && globallyCovered > 0) {
     return (
-      `provider throttle active; ${database.coveredExpiredProviderCooldownCount} expired provider cooldown row(s) ` +
+      `provider throttle active; ${globallyCovered} expired provider cooldown row(s) ` +
       "deferred by active provider cooldown"
+    );
+  }
+  if (queueCovered > 0) {
+    const retryable = database.retryableExpiredProviderCooldownCount ?? 0;
+    return (
+      `${queueCovered} expired provider cooldown row(s) covered by active queue retry; ` +
+      `${retryable} retryable expired provider cooldown row(s); ` +
+      `${database.activeProviderCooldownCount ?? 0} active provider cooldown row(s)`
     );
   }
   return `${database.expiredProviderCooldownCount ?? 0} expired provider cooldown row(s); ${database.activeProviderCooldownCount ?? 0} active provider cooldown row(s)`;
