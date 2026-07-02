@@ -2449,6 +2449,10 @@ describe("provider-aware review scheduler", () => {
       status: "skipped",
       error: "activation_baseline_existing_head"
     });
+    expect(state.getReviewReadiness("org/repo-a", 950, "new-head-on-old-pr")).toMatchObject({
+      state: "skipped",
+      reason: "activation_baseline_existing_head"
+    });
     expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
       expect.objectContaining({ pullNumber: 960, headSha: "new-head-on-new-pr", state: "queued" })
     ]);

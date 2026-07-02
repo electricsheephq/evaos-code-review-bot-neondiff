@@ -1162,6 +1162,9 @@ function readinessStateForProcessedStatus(
 function readinessReasonForProcessedHead(processed: { status: ProcessedStatus; error?: string }): string {
   const providerCooldown = parseProviderCooldownError(processed.error);
   if (providerCooldown) return `processed_head_provider_deferred: ${providerCooldown.reason ?? "provider_cooldown"}`;
+  if (processed.status === "skipped" && processed.error === ACTIVATION_BASELINE_EXISTING_HEAD_ERROR) {
+    return ACTIVATION_BASELINE_EXISTING_HEAD_ERROR;
+  }
   return `processed_head_already_${processed.status}`;
 }
 
