@@ -432,7 +432,7 @@ export async function runIssueEnrichmentCycle(input: {
     if (!lease) {
       const summary = { ...emptyCycleSummary(), workerSkipped: 1 };
       return {
-        ok: true,
+        ok: false,
         checkedAt,
         dryRun: input.dryRun,
         status,
@@ -514,12 +514,12 @@ export async function runIssueEnrichmentCycle(input: {
           dryRun: input.dryRun,
           repos: reposToScan,
           includeExisting: input.includeExisting,
-        since: input.since,
-        sinceByRepo,
-        canPostAsApp: input.github.canPostAsApp(),
-        checkedAt,
-        applyGlobalCaps: false
-      })
+          since: input.since,
+          sinceByRepo,
+          canPostAsApp: input.github.canPostAsApp(),
+          checkedAt,
+          applyGlobalCaps: false
+        })
       : {
           ok: true,
           checkedAt,
@@ -529,20 +529,20 @@ export async function runIssueEnrichmentCycle(input: {
           repos: [],
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
-      };
-  applyGlobalIssueEnrichmentCaps({
-    items: scanned.items,
-    repoScans: scanned.repos,
-    config,
-    checkedAt,
-    shouldCountItem: (item) => {
-      const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
-      const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
-      const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
-    }
-  });
-  const combinedRepos = [...baselineRepos, ...scanned.repos];
+        };
+    applyGlobalIssueEnrichmentCaps({
+      items: scanned.items,
+      repoScans: scanned.repos,
+      config,
+      checkedAt,
+      shouldCountItem: (item) => {
+        const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
+        const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
+        const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
+        return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
+      }
+    });
+    const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
     const scan: IssueEnrichmentScanResult = {
       ...scanned,
@@ -809,6 +809,20 @@ function nextEligibleAt(input: { checkedAt: string; throttle: IssueEnrichmentThr
   return new Date(baseMs + input.throttle.cooldownMs).toISOString();
 }
 
+function globalNextEligibleAt(input: {
+  checkedAt: string;
+  config: IssueEnrichmentConfig;
+  throttle: IssueEnrichmentThrottlePolicy;
+}): string {
+  return nextEligibleAt({
+    checkedAt: input.checkedAt,
+    throttle: {
+      ...input.throttle,
+      cooldownMs: Math.max(input.config.cooldownMs, input.throttle.cooldownMs)
+    }
+  });
+}
+
 function applyGlobalIssueEnrichmentCaps(input: {
   items: IssueEnrichmentScanItem[];
   repoScans: IssueEnrichmentRepoScan[];
@@ -831,7 +845,7 @@ function applyGlobalIssueEnrichmentCaps(input: {
         "deferred",
         "global_max_issues_per_cycle",
         item.url,
-        nextEligibleAt({ checkedAt: input.checkedAt, throttle: policy.throttle })
+        globalNextEligibleAt({ checkedAt: input.checkedAt, config: input.config, throttle: policy.throttle })
       );
       continue;
     }
@@ -845,7 +859,7 @@ function applyGlobalIssueEnrichmentCaps(input: {
           "deferred",
           "global_max_comments_per_cycle",
           item.url,
-          nextEligibleAt({ checkedAt: input.checkedAt, throttle: policy.throttle })
+          globalNextEligibleAt({ checkedAt: input.checkedAt, config: input.config, throttle: policy.throttle })
         );
         continue;
       }

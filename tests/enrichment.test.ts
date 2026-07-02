@@ -976,6 +976,63 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("uses the global cooldown floor for issue-enrichment global deferrals", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-global-cooldown-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/repo-a", "owner/repo-b"],
+          maxIssuesPerCycle: 10,
+          maxCommentsPerCycle: 10,
+          globalMaxIssuesPerCycle: 1,
+          globalMaxCommentsPerCycle: 1,
+          cooldownMs: 600_000,
+          maxIssuesPerBurst: 10,
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/repo-a": {
+              cooldownMs: 60_000
+            }
+          }
+        }
+      })}\n`);
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        includeExisting: true,
+        checkedAt: "2026-07-03T04:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo) => [
+            { number: repo.endsWith("repo-a") ? 101 : 201, title: "Issue one", state: "open", body: "Acceptance criteria and owner present." },
+            { number: repo.endsWith("repo-a") ? 102 : 202, title: "Issue two", state: "open", body: "Acceptance criteria and owner present." }
+          ]
+        }
+      });
+
+      expect(scan.ok).toBe(true);
+      expect(scan.items.find((item) => item.repo === "owner/repo-a" && item.issueNumber === 101)).toMatchObject({
+        action: "would_comment",
+        reason: "eligible"
+      });
+      expect(scan.items.find((item) => item.repo === "owner/repo-a" && item.issueNumber === 102)).toMatchObject({
+        action: "deferred",
+        reason: "global_max_issues_per_cycle",
+        nextEligibleAt: "2026-07-03T04:10:00.000Z"
+      });
+      expect(scan.items.find((item) => item.repo === "owner/repo-b" && item.issueNumber === 201)).toMatchObject({
+        action: "deferred",
+        reason: "global_max_issues_per_cycle",
+        nextEligibleAt: "2026-07-03T04:10:00.000Z"
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("records dry-run-only issue enrichment once per unchanged issue update", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-dry-run-"));
     try {
@@ -1715,7 +1772,7 @@ describe("sticky enrichment comments", () => {
 
         expect(readerCalls).toBe(0);
         expect(postCalls).toBe(0);
-        expect(result.ok).toBe(true);
+        expect(result.ok).toBe(false);
         expect(result.summary).toMatchObject({
           reposScanned: 0,
           issuesSeen: 0,
