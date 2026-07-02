@@ -147,9 +147,9 @@ export function buildIssueEnrichmentComment(input: {
   const state = eligibility.state;
   const marker = buildIssueEnrichmentMarker({ repo: input.repo, issueNumber: input.issue.number });
   const relatedRefs = extractRelatedRefs(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`).slice(0, input.maxRelatedRefs ?? 8);
-  const existingLabels = unique(normalizeIssueLabels(input.issue.labels));
+  const existingLabels = uniqueCaseInsensitive(normalizeIssueLabels(input.issue.labels));
   const existingLabelKeys = new Set(existingLabels.map(normalizedSuggestionKey));
-  const suggestedLabels = unique([
+  const suggestedLabels = uniqueCaseInsensitive([
     ...(input.suggestedLabels ?? []),
     ...suggestLabelsFromIssue(input.issue)
   ]).filter((label) => !existingLabelKeys.has(normalizedSuggestionKey(label))).slice(0, input.maxSuggestions ?? 8);
@@ -369,6 +369,10 @@ function formatPublicText(value: string | undefined): string {
 }
 
 function unique(values: string[]): string[] {
+  return [...new Set(values.map((value) => formatPublicText(value)).filter(Boolean))];
+}
+
+function uniqueCaseInsensitive(values: string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const value of values) {
