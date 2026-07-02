@@ -696,6 +696,155 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("omits issue scan since only for explicit backfill modes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-backfill-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/default-repo", "owner/backfill-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 0,
+          lookbackMs: 600_000,
+          burstWindowMs: 3_600_000,
+          processExistingOpenIssuesOnActivation: false,
+          repos: {
+            "owner/backfill-repo": {
+              processExistingOpenIssuesOnActivation: true
+            }
+          }
+        }
+      })}\n`);
+      const calls: Array<{ repo: string; since?: string }> = [];
+
+      const normal = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        repo: "owner/default-repo",
+        checkedAt: "2026-07-03T12:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo, options) => {
+            calls.push({ repo, since: options?.since });
+            return [];
+          }
+        }
+      });
+      const explicitBackfill = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        repo: "owner/default-repo",
+        includeExisting: true,
+        checkedAt: "2026-07-03T12:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo, options) => {
+            calls.push({ repo, since: options?.since });
+            return [];
+          }
+        }
+      });
+      const overrideBackfill = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        repo: "owner/backfill-repo",
+        checkedAt: "2026-07-03T12:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo, options) => {
+            calls.push({ repo, since: options?.since });
+            return [];
+          }
+        }
+      });
+
+      expect(normal.ok).toBe(true);
+      expect(explicitBackfill.ok).toBe(true);
+      expect(overrideBackfill.ok).toBe(true);
+      expect(calls).toEqual([
+        { repo: "owner/default-repo", since: "2026-07-03T11:00:00.000Z" },
+        { repo: "owner/default-repo", since: undefined },
+        { repo: "owner/backfill-repo", since: undefined }
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("applies per-repo issue-enrichment throttles to defer bursts and comments", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-repo-throttle-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/comment-capped-repo", "owner/burst-capped-repo"],
+          maxIssuesPerCycle: 10,
+          maxCommentsPerCycle: 10,
+          maxIssuesPerBurst: 10,
+          cooldownMs: 3_600_000,
+          repos: {
+            "owner/comment-capped-repo": {
+              maxIssuesPerCycle: 2,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 120_000
+            },
+            "owner/burst-capped-repo": {
+              maxIssuesPerBurst: 1,
+              cooldownMs: 300_000
+            }
+          }
+        }
+      })}\n`);
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        includeExisting: true,
+        checkedAt: "2026-07-03T12:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo) => [
+            { number: repo.endsWith("comment-capped-repo") ? 101 : 201, title: "Issue one", state: "open", body: "Acceptance criteria and owner present." },
+            { number: repo.endsWith("comment-capped-repo") ? 102 : 202, title: "Issue two", state: "open", body: "Acceptance criteria and owner present." }
+          ]
+        }
+      });
+
+      expect(scan.ok).toBe(true);
+      expect(scan.repos.find((repo) => repo.repo === "owner/comment-capped-repo")?.throttle).toMatchObject({
+        maxIssuesPerCycle: 2,
+        maxCommentsPerCycle: 1,
+        cooldownMs: 120_000
+      });
+      expect(scan.items.find((item) => item.issueNumber === 101)).toMatchObject({ action: "would_comment", reason: "eligible" });
+      expect(scan.items.find((item) => item.issueNumber === 102)).toMatchObject({
+        action: "deferred",
+        reason: "repo_max_comments_per_cycle",
+        nextEligibleAt: "2026-07-03T12:02:00.000Z"
+      });
+      expect(scan.repos.find((repo) => repo.repo === "owner/burst-capped-repo")?.throttle).toMatchObject({
+        maxIssuesPerBurst: 1,
+        cooldownMs: 300_000
+      });
+      expect(scan.items.filter((item) => item.repo === "owner/burst-capped-repo")).toEqual([
+        expect.objectContaining({
+          issueNumber: 201,
+          action: "deferred",
+          reason: "burst_threshold_exceeded",
+          nextEligibleAt: "2026-07-03T12:05:00.000Z"
+        }),
+        expect.objectContaining({
+          issueNumber: 202,
+          action: "deferred",
+          reason: "burst_threshold_exceeded",
+          nextEligibleAt: "2026-07-03T12:05:00.000Z"
+        })
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("records dry-run-only issue enrichment once per unchanged issue update", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-dry-run-"));
     try {
@@ -757,6 +906,342 @@ describe("sticky enrichment comments", () => {
           issueUpdatedAt: "2026-07-03T01:00:00.000Z",
           reason: "dry_run_only"
         });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("baselines a newly allowlisted repo before scanning issue history", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-baseline-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 0,
+          processExistingOpenIssuesOnActivation: false
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      const calls: Array<{ since?: string }> = [];
+      try {
+        const first = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => {
+              throw new Error("newly allowlisted repo should baseline before scanning old issues");
+            },
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post in dry-run-only mode");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T04:00:00.000Z"
+        });
+
+        const second = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async (_repo, options) => {
+              calls.push({ since: options?.since });
+              return [
+                {
+                  number: 71,
+                  title: "New issue after activation",
+                  state: "open",
+                  updated_at: "2026-07-03T04:01:00.000Z",
+                  body: "Acceptance criteria and owner present."
+                }
+              ];
+            },
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post in dry-run-only mode");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T04:02:00.000Z"
+        });
+
+        expect(first.summary).toMatchObject({
+          reposScanned: 0,
+          issuesSeen: 0,
+          baselinedRepos: 1,
+          dryRunRecorded: 0,
+          failed: 0
+        });
+        expect(first.repos[0]).toMatchObject({
+          repo: "owner/issue-repo",
+          allowed: true,
+          baselined: true,
+          since: "2026-07-03T04:00:00.000Z"
+        });
+        expect(calls).toEqual([{ since: "2026-07-03T04:00:00.000Z" }]);
+        expect(second.summary).toMatchObject({ reposScanned: 1, issuesSeen: 1, dryRunRecorded: 1, failed: 0 });
+        expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toMatchObject({
+          activatedAt: "2026-07-03T04:00:00.000Z",
+          lastCheckedAt: "2026-07-03T04:02:00.000Z"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses explicit existing-issue activation backfill only once after a clean scan", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-backfill-once-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 0,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      const calls: Array<{ since?: string }> = [];
+      try {
+        const first = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async (_repo, options) => {
+              calls.push({ since: options?.since });
+              return [
+                {
+                  number: 81,
+                  title: "Existing issue",
+                  state: "open",
+                  updated_at: "2026-07-03T03:00:00.000Z",
+                  body: "Acceptance criteria and owner present."
+                }
+              ];
+            },
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post in dry-run-only mode");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T04:00:00.000Z"
+        });
+        const second = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async (_repo, options) => {
+              calls.push({ since: options?.since });
+              return [];
+            },
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post in dry-run-only mode");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T04:05:00.000Z"
+        });
+
+        expect(first.summary).toMatchObject({ reposScanned: 1, dryRunRecorded: 1, failed: 0 });
+        expect(second.summary).toMatchObject({ reposScanned: 1, issuesSeen: 0, failed: 0 });
+        expect(calls).toEqual([{ since: undefined }, { since: "2026-07-03T04:00:00.000Z" }]);
+        expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toMatchObject({
+          activatedAt: "2026-07-03T04:00:00.000Z",
+          lastCheckedAt: "2026-07-03T04:05:00.000Z"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advance issue enrichment watermarks past deferred or failed issue work", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-hold-watermark-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/deferred-repo", "owner/failed-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 0,
+          cooldownMs: 60_000,
+          repos: {
+            "owner/failed-repo": {
+              maxCommentsPerCycle: 1
+            }
+          }
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      state.recordIssueEnrichmentRepoWatermark({
+        repo: "owner/deferred-repo",
+        activatedAt: "2026-07-03T04:00:00.000Z",
+        lastCheckedAt: "2026-07-03T04:00:00.000Z",
+        now: new Date("2026-07-03T04:00:00.000Z")
+      });
+      state.recordIssueEnrichmentRepoWatermark({
+        repo: "owner/failed-repo",
+        activatedAt: "2026-07-03T04:00:00.000Z",
+        lastCheckedAt: "2026-07-03T04:00:00.000Z",
+        now: new Date("2026-07-03T04:00:00.000Z")
+      });
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async (repo) => [
+              {
+                number: repo.endsWith("deferred-repo") ? 91 : 92,
+                title: "Needs enrichment",
+                state: "open",
+                updated_at: "2026-07-03T04:01:00.000Z",
+                body: "Acceptance criteria and owner present."
+              }
+            ],
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              throw new Error("GitHub post failed");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T04:05:00.000Z"
+        });
+
+        expect(result.summary).toMatchObject({ deferredRecorded: 1, failed: 1 });
+        expect(state.getIssueEnrichmentRecord("owner/deferred-repo", 91)).toMatchObject({ status: "deferred" });
+        expect(state.getIssueEnrichmentRecord("owner/failed-repo", 92)).toMatchObject({ status: "failed" });
+        expect(state.getIssueEnrichmentRepoWatermark("owner/deferred-repo")).toMatchObject({
+          lastCheckedAt: "2026-07-03T04:00:00.000Z"
+        });
+        expect(state.getIssueEnrichmentRepoWatermark("owner/failed-repo")).toMatchObject({
+          lastCheckedAt: "2026-07-03T04:00:00.000Z"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advance issue enrichment watermarks after saturated page-limited scans", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-truncated-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 1,
+          maxIssuesPerBurst: 1,
+          processExistingOpenIssuesOnActivation: false
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      state.recordIssueEnrichmentRepoWatermark({
+        repo: "owner/issue-repo",
+        activatedAt: "2026-07-03T04:00:00.000Z",
+        lastCheckedAt: "2026-07-03T04:00:00.000Z",
+        now: new Date("2026-07-03T04:00:00.000Z")
+      });
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () =>
+              Array.from({ length: 100 }, (_, index) => ({
+                number: 200 + index,
+                title: `Closed issue ${index}`,
+                state: "closed",
+                updated_at: "2026-07-03T04:01:00.000Z",
+                body: "Closed."
+              })),
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post in dry-run-only mode");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T04:05:00.000Z"
+        });
+
+        expect(result.summary).toMatchObject({ reposScanned: 1, truncatedRepos: 1, skippedRecorded: 100 });
+        expect(result.repos[0]).toMatchObject({ truncated: true });
+        expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toMatchObject({
+          lastCheckedAt: "2026-07-03T04:00:00.000Z"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mutate issue enrichment watermarks during dry-run cycles", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-baseline-dry-run-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          processExistingOpenIssuesOnActivation: false
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => {
+              throw new Error("dry-run baseline should not scan old issues");
+            },
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("dry-run baseline should not post");
+            }
+          },
+          dryRun: true,
+          checkedAt: "2026-07-03T04:30:00.000Z"
+        });
+
+        expect(result.summary).toMatchObject({ reposScanned: 0, issuesSeen: 0, baselinedRepos: 1 });
+        expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toBeUndefined();
       } finally {
         state.close();
       }

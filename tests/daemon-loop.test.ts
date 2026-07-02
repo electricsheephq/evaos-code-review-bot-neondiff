@@ -364,6 +364,8 @@ function successfulIssueEnrichmentCycleResult(): IssueEnrichmentCycleResult {
       wouldEnrich: 1,
       wouldComment: 0,
       deferred: 0,
+      baselinedRepos: 0,
+      truncatedRepos: 0,
       posted: 0,
       dryRunRecorded: 1,
       skippedRecorded: 0,

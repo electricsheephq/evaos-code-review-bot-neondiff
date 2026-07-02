@@ -272,6 +272,14 @@ export interface IssueEnrichmentRecord {
   updatedAt: string;
 }
 
+export interface IssueEnrichmentRepoWatermark {
+  repo: string;
+  activatedAt: string;
+  lastCheckedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RecordIssueEnrichmentInput {
   repo: string;
   issueNumber: number;
@@ -281,6 +289,13 @@ export interface RecordIssueEnrichmentInput {
   commentUrl?: string;
   error?: string;
   nextEligibleAt?: string;
+  now?: Date;
+}
+
+export interface RecordIssueEnrichmentRepoWatermarkInput {
+  repo: string;
+  activatedAt: string;
+  lastCheckedAt: string;
   now?: Date;
 }
 
@@ -496,6 +511,14 @@ export class ReviewStateStore {
         on issue_enrichment_records (status, updated_at);
       create index if not exists idx_issue_enrichment_records_repo_status
         on issue_enrichment_records (repo, status);
+
+      create table if not exists issue_enrichment_repo_watermarks (
+        repo text primary key,
+        activated_at text not null,
+        last_checked_at text not null,
+        created_at text not null,
+        updated_at text not null
+      );
     `);
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
@@ -786,6 +809,42 @@ export class ReviewStateStore {
       )
       .all(...params) as unknown as IssueEnrichmentRecordRow[];
     return rows.map(mapIssueEnrichmentRecordRow);
+  }
+
+  recordIssueEnrichmentRepoWatermark(input: RecordIssueEnrichmentRepoWatermarkInput): IssueEnrichmentRepoWatermark {
+    validateIssueEnrichmentRepoWatermarkInput(input);
+    const existing = this.getIssueEnrichmentRepoWatermark(input.repo);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    this.db
+      .prepare(
+        `insert into issue_enrichment_repo_watermarks
+          (repo, activated_at, last_checked_at, created_at, updated_at)
+         values (?, ?, ?, ?, ?)
+         on conflict(repo) do update set
+           last_checked_at = excluded.last_checked_at,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        input.repo,
+        existing?.activatedAt ?? input.activatedAt,
+        input.lastCheckedAt,
+        existing?.createdAt ?? nowIso,
+        nowIso
+      );
+    return this.getIssueEnrichmentRepoWatermark(input.repo)!;
+  }
+
+  getIssueEnrichmentRepoWatermark(repo: string): IssueEnrichmentRepoWatermark | undefined {
+    validateRepoName(repo, "repo");
+    const row = this.db
+      .prepare(
+        `select repo, activated_at, last_checked_at, created_at, updated_at
+         from issue_enrichment_repo_watermarks
+         where repo = ?
+         limit 1`
+      )
+      .get(repo) as IssueEnrichmentRepoWatermarkRow | undefined;
+    return row ? mapIssueEnrichmentRepoWatermarkRow(row) : undefined;
   }
 
   retireFailedReview(input: RetireFailedReviewInput): StoredProcessedReviewRecord {
@@ -2026,6 +2085,19 @@ function validateIssueEnrichmentInput(input: RecordIssueEnrichmentInput): void {
   }
 }
 
+function validateIssueEnrichmentRepoWatermarkInput(input: RecordIssueEnrichmentRepoWatermarkInput): void {
+  validateRepoName(input.repo, "repo");
+  if (!isCanonicalIsoTimestamp(input.activatedAt)) {
+    throw new Error("activatedAt must be a canonical ISO timestamp");
+  }
+  if (!isCanonicalIsoTimestamp(input.lastCheckedAt)) {
+    throw new Error("lastCheckedAt must be a canonical ISO timestamp");
+  }
+  if (input.now !== undefined && !Number.isFinite(input.now.getTime())) {
+    throw new Error("now must be a valid Date");
+  }
+}
+
 function validateIssueEnrichmentStatus(status: IssueEnrichmentRecordStatus): void {
   if (!["dry_run", "posted", "skipped", "deferred", "failed"].includes(status)) {
     throw new Error("status must be a valid issue enrichment status");
@@ -2319,6 +2391,14 @@ interface IssueEnrichmentRecordRow {
   updated_at: string;
 }
 
+interface IssueEnrichmentRepoWatermarkRow {
+  repo: string;
+  activated_at: string;
+  last_checked_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -2358,6 +2438,16 @@ function mapIssueEnrichmentRecordRow(row: IssueEnrichmentRecordRow): IssueEnrich
     ...(row.comment_url ? { commentUrl: row.comment_url } : {}),
     ...(row.error ? { error: row.error } : {}),
     ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapIssueEnrichmentRepoWatermarkRow(row: IssueEnrichmentRepoWatermarkRow): IssueEnrichmentRepoWatermark {
+  return {
+    repo: row.repo,
+    activatedAt: row.activated_at,
+    lastCheckedAt: row.last_checked_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

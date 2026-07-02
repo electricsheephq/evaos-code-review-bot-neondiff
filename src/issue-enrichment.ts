@@ -103,6 +103,8 @@ export interface IssueEnrichmentScanResult {
     wouldEnrich: number;
     wouldComment: number;
     deferred: number;
+    baselinedRepos: number;
+    truncatedRepos: number;
   };
   repos: IssueEnrichmentRepoScan[];
   items: IssueEnrichmentScanItem[];
@@ -142,6 +144,8 @@ export interface IssueEnrichmentRepoScan {
   wouldEnrich: number;
   wouldComment: number;
   deferred: number;
+  baselined?: boolean;
+  truncated?: boolean;
   readFailure?: string;
   skipReason?: "not_issue_enrichment_allowlisted" | "issue_enrichment_repo_disabled";
 }
@@ -223,9 +227,11 @@ export async function collectIssueEnrichmentScan(input: {
   config: { issueEnrichment?: IssueEnrichmentConfig };
   reader: IssueEnrichmentReader;
   dryRun: boolean;
+  repos?: string[];
   repo?: string;
   includeExisting?: boolean;
   since?: string;
+  sinceByRepo?: Record<string, string>;
   canPostAsApp?: boolean;
   checkedAt?: string;
 }): Promise<IssueEnrichmentScanResult> {
@@ -236,7 +242,7 @@ export async function collectIssueEnrichmentScan(input: {
     canPostAsApp: input.canPostAsApp ?? false,
     checkedAt
   });
-  const repos = input.repo ? [input.repo] : config.allowlist;
+  const repos = input.repo ? [input.repo] : input.repos ?? config.allowlist;
   const repoScans: IssueEnrichmentRepoScan[] = [];
   const items: IssueEnrichmentScanItem[] = [];
 
@@ -261,17 +267,19 @@ export async function collectIssueEnrichmentScan(input: {
       continue;
     }
 
-    const since = input.since ?? buildIssueScanSince({
+    const since = input.since ?? input.sinceByRepo?.[repo] ?? buildIssueScanSince({
       checkedAt,
       includeExisting: input.includeExisting === true || policy.throttle.processExistingOpenIssuesOnActivation,
       lookbackMs: policy.throttle.lookbackMs,
       burstWindowMs: policy.throttle.burstWindowMs
     });
+    const pageLimit = buildIssueScanPageLimit(policy.throttle);
+    const perPage = DEFAULT_REPO_SCAN_OPTIONS.perPage;
     let issues: GitHubRelatedIssueOrPull[] = [];
     try {
       issues = await input.reader.listIssuesForEnrichment(repo, {
         ...DEFAULT_REPO_SCAN_OPTIONS,
-        pageLimit: buildIssueScanPageLimit(policy.throttle),
+        pageLimit,
         ...(since ? { since } : {})
       });
     } catch (error) {
@@ -315,7 +323,8 @@ export async function collectIssueEnrichmentScan(input: {
       skipped: issueItems.filter((item) => item.action === "skipped").length,
       wouldEnrich: issueItems.filter((item) => item.action === "would_enrich" || item.action === "would_comment").length,
       wouldComment: issueItems.filter((item) => item.action === "would_comment").length,
-      deferred: issueItems.filter((item) => item.action === "deferred").length
+      deferred: issueItems.filter((item) => item.action === "deferred").length,
+      truncated: issues.length >= pageLimit * perPage
     });
   }
 
@@ -334,7 +343,13 @@ export async function collectIssueEnrichmentScan(input: {
 
 export async function runIssueEnrichmentCycle(input: {
   config: { issueEnrichment?: IssueEnrichmentConfig };
-  state: Pick<ReviewStateStore, "getIssueEnrichmentRecord" | "recordIssueEnrichment">;
+  state: Pick<
+    ReviewStateStore,
+    "getIssueEnrichmentRecord" |
+    "recordIssueEnrichment" |
+    "getIssueEnrichmentRepoWatermark" |
+    "recordIssueEnrichmentRepoWatermark"
+  >;
   github: IssueEnrichmentCycleGithub;
   dryRun: boolean;
   repo?: string;
@@ -375,23 +390,95 @@ export async function runIssueEnrichmentCycle(input: {
     };
   }
 
+  const baselineRepos: IssueEnrichmentRepoScan[] = [];
+  const reposToScan: string[] = [];
+  const sinceByRepo: Record<string, string> = {};
+  const candidateRepos = input.repo ? [input.repo] : config.allowlist;
+  const canUseActivationWatermark = input.includeExisting !== true && input.since === undefined;
+  for (const repo of candidateRepos) {
+    const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
+    if (!policy.allowed) {
+      reposToScan.push(repo);
+      continue;
+    }
+    if (!canUseActivationWatermark) {
+      reposToScan.push(repo);
+      continue;
+    }
+    const existingWatermark = input.state.getIssueEnrichmentRepoWatermark(repo);
+    if (existingWatermark) {
+      sinceByRepo[repo] = existingWatermark.lastCheckedAt;
+      reposToScan.push(repo);
+      continue;
+    }
+    if (policy.throttle.processExistingOpenIssuesOnActivation) {
+      reposToScan.push(repo);
+      continue;
+    }
+    if (!input.dryRun) {
+      input.state.recordIssueEnrichmentRepoWatermark({
+        repo,
+        activatedAt: checkedAt,
+        lastCheckedAt: checkedAt,
+        now: new Date(checkedAt)
+      });
+    }
+    baselineRepos.push({
+      repo,
+      ok: true,
+      allowed: true,
+      enabled: config.enabled,
+      postIssueComment: config.postIssueComment,
+      since: checkedAt,
+      throttle: policy.throttle,
+      issuesSeen: 0,
+      eligible: 0,
+      skipped: 0,
+      wouldEnrich: 0,
+      wouldComment: 0,
+      deferred: 0,
+      baselined: true,
+      truncated: false
+    });
+  }
+
   const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
-  const scan = await collectIssueEnrichmentScan({
-    config: input.config,
-    reader: {
-      listIssuesForEnrichment: async (repo, options) => {
-        const issues = await input.github.listIssuesForEnrichment(repo, options);
-        for (const issue of issues) issuesByKey.set(issueKey(repo, issue.number), issue);
-        return issues;
-      }
-    },
-    dryRun: input.dryRun,
-    repo: input.repo,
-    includeExisting: input.includeExisting,
-    since: input.since,
-    canPostAsApp: input.github.canPostAsApp(),
-    checkedAt
-  });
+  const scanned = reposToScan.length
+    ? await collectIssueEnrichmentScan({
+        config: input.config,
+        reader: {
+          listIssuesForEnrichment: async (repo, options) => {
+            const issues = await input.github.listIssuesForEnrichment(repo, options);
+            for (const issue of issues) issuesByKey.set(issueKey(repo, issue.number), issue);
+            return issues;
+          }
+        },
+        dryRun: input.dryRun,
+        repos: reposToScan,
+        includeExisting: input.includeExisting,
+        since: input.since,
+        sinceByRepo,
+        canPostAsApp: input.github.canPostAsApp(),
+        checkedAt
+      })
+    : {
+        ok: true,
+        checkedAt,
+        dryRun: input.dryRun,
+        status,
+        summary: summarizeScan([]),
+        repos: [],
+        items: [],
+        recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
+      };
+  const combinedRepos = [...baselineRepos, ...scanned.repos];
+  const combinedSummary = summarizeScan(combinedRepos);
+  const scan: IssueEnrichmentScanResult = {
+    ...scanned,
+    summary: combinedSummary,
+    repos: combinedRepos,
+    recommendedActions: buildScanRecommendedActions(status, combinedSummary)
+  };
   const summary = {
     ...scan.summary,
     posted: 0,
@@ -500,6 +587,21 @@ export async function runIssueEnrichmentCycle(input: {
       });
       summary.failed += 1;
       items.push({ ...item, recordStatus: "failed", error: message });
+    }
+  }
+
+  if (!input.dryRun) {
+    for (const repo of scanned.repos) {
+      if (!repo.allowed || !repo.ok || repo.baselined) continue;
+      const repoItems = items.filter((item) => item.repo === repo.repo);
+      if (repo.truncated || repoItems.some((item) => item.recordStatus === "deferred" || item.recordStatus === "failed")) continue;
+      const existingWatermark = input.state.getIssueEnrichmentRepoWatermark(repo.repo);
+      input.state.recordIssueEnrichmentRepoWatermark({
+        repo: repo.repo,
+        activatedAt: existingWatermark?.activatedAt ?? checkedAt,
+        lastCheckedAt: checkedAt,
+        now: new Date(checkedAt)
+      });
     }
   }
 
@@ -635,7 +737,7 @@ function nextEligibleAt(input: { checkedAt: string; throttle: IssueEnrichmentThr
 
 function summarizeScan(repoScans: IssueEnrichmentRepoScan[]): IssueEnrichmentScanResult["summary"] {
   return {
-    reposScanned: repoScans.filter((repo) => repo.allowed).length,
+    reposScanned: repoScans.filter((repo) => repo.allowed && repo.baselined !== true).length,
     reposSkipped: repoScans.filter((repo) => !repo.allowed).length,
     readFailures: repoScans.filter((repo) => !repo.ok).length,
     issuesSeen: sum(repoScans, "issuesSeen"),
@@ -643,7 +745,9 @@ function summarizeScan(repoScans: IssueEnrichmentRepoScan[]): IssueEnrichmentSca
     skipped: sum(repoScans, "skipped"),
     wouldEnrich: sum(repoScans, "wouldEnrich"),
     wouldComment: sum(repoScans, "wouldComment"),
-    deferred: sum(repoScans, "deferred")
+    deferred: sum(repoScans, "deferred"),
+    baselinedRepos: repoScans.filter((repo) => repo.baselined === true).length,
+    truncatedRepos: repoScans.filter((repo) => repo.truncated === true).length
   };
 }
 
@@ -651,6 +755,7 @@ function buildScanRecommendedActions(status: IssueEnrichmentStatus, summary: Iss
   const actions = [];
   if (status.state === "blocked") actions.push("resolve issue-enrichment blockers before live issue comments");
   if (summary.deferred > 0) actions.push("inspect deferred issue-enrichment rows and adjust per-repo throttles only after dry-run review");
+  if (summary.truncatedRepos > 0) actions.push("inspect truncated issue-enrichment scans before advancing repo watermarks");
   if (summary.readFailures > 0) actions.push("run doctor and inspect GitHub App Issues permissions");
   return actions;
 }
@@ -676,6 +781,8 @@ function emptyCycleSummary(): IssueEnrichmentCycleResult["summary"] {
     wouldEnrich: 0,
     wouldComment: 0,
     deferred: 0,
+    baselinedRepos: 0,
+    truncatedRepos: 0,
     posted: 0,
     dryRunRecorded: 0,
     skippedRecorded: 0,
