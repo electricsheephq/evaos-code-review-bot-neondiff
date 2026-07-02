@@ -2,9 +2,15 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,
   /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/gi,
+  /https?:\/\/[^/\s:@]+:[^/\s@]{8,}@[^/\s]+/gi,
+  /[?&](?:access[_-]?token|auth[_-]?token|api[_-]?key|token|secret|session|cookie)=[A-Za-z0-9._~+/=-]{16,}/gi,
+  /\bCookie\s*:\s*[^;\n]*(?:session|token|auth|secret|cookie)[^;\n]*=[^;\n]{16,}/gi,
+  /\b(?:customer|client|account|user)[_-]?(?:id|phone|ssn)\b\s*[:=]\s*["']?[A-Za-z0-9+(). _-]{8,}/gi,
+  /\b\d{3}-\d{2}-\d{4}\b/g,
   /\b(?:api[_-]?key|token|secret|password|cookie|session)\b\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{16,}/gi,
   /\b[A-Za-z0-9]{3,}[-_](?:secret|token|password|cookie)[-_][A-Za-z0-9_-]{3,}\b/gi,
   /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/g
 ];
 

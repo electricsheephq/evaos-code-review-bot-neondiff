@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyDeterministicReviewGate } from "../src/review-gate.js";
+import { applyDeterministicReviewGate, buildFindingFingerprint } from "../src/review-gate.js";
 import type { Finding, PullFilePatch } from "../src/types.js";
 
 describe("deterministic review gate", () => {
@@ -91,5 +91,50 @@ describe("deterministic review gate", () => {
 
     expect(gate.event).toBe("REQUEST_CHANGES");
     expect(gate.summary.categoryCounts).toEqual({ release_regression: 1 });
+  });
+
+  it("suppresses only low-severity findings with exact repo-memory false-positive fingerprints", () => {
+    const lowSeverityFinding: Finding = {
+      severity: "P3",
+      category: "proof_gap",
+      path: "src/save.ts",
+      line: 2,
+      title: "Generated marker missing docs",
+      body: "This low-value marker guidance was previously labeled a false positive.",
+      confidence: 0.8
+    };
+    const highSeverityFinding: Finding = {
+      ...lowSeverityFinding,
+      severity: "P1",
+      title: "Missing release-blocking proof"
+    };
+    const changedBodyFinding: Finding = {
+      ...lowSeverityFinding,
+      body: "This is a materially different current-diff concern and must not be hidden by old memory."
+    };
+    const matchingFingerprint = buildFindingFingerprint(lowSeverityFinding);
+
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [lowSeverityFinding, highSeverityFinding, changedBodyFinding],
+      repoMemoryFalsePositiveFingerprints: [matchingFingerprint]
+    });
+
+    expect(gate.event).toBe("REQUEST_CHANGES");
+    expect(gate.comments).toHaveLength(2);
+    expect(gate.comments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "P1", title: "Missing release-blocking proof" }),
+        expect.objectContaining({ severity: "P3", title: "Generated marker missing docs" })
+      ])
+    );
+    expect(gate.dropped).toContainEqual(
+      expect.objectContaining({
+        title: "Generated marker missing docs",
+        reason: "repo_memory_false_positive_match",
+        fingerprint: matchingFingerprint
+      })
+    );
+    expect(gate.summary.dropReasonCounts).toMatchObject({ repo_memory_false_positive_match: 1 });
   });
 });

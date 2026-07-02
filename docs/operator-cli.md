@@ -53,6 +53,13 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
 - `why --repo <owner/name> --pr <number>`: scoped explanation for why one PR
   head is processed, pending, provider-deferred, skipped, blocked by a read
   failure, or unknown.
+- `build-memory-packet --repo <owner/name>`: compiles a durable repo-memory
+  packet from `/Volumes/LEXAR/Codex/evaos-code-review-bot/memory/<owner>/<repo>/repo-memory.md`
+  plus safe SQLite memory notes. It emits JSON with an embedded Markdown packet,
+  SHA-256, byte/token estimates, source IDs, dropped-source reasons, and a
+  redaction report. Use `--output-dir <path>` to write
+  `repo-memory-packet.json` and `repo-memory-packet.md` evidence. This command
+  does not call GitHub or ZCode and does not enable prompt memory by itself.
 - `doctor`: auth/config readiness. Use this for GitHub App/ZCode readiness, not
   runtime health.
 
@@ -134,6 +141,16 @@ Inspect provider cooldowns:
 npx tsx src/cli.ts cooldowns --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --expired-only true
 ```
 
+Build a repo-memory packet for dry-run evidence:
+
+```bash
+npx tsx src/cli.ts build-memory-packet --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --repo electricsheephq/evaos-code-review-bot --output-dir /Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/$(date +%F)/repo-memory-packets/evaos-code-review-bot
+```
+
+Use `--fingerprint <finding-fingerprint>` to include exact-match false-positive
+notes, `--format markdown` for Markdown-only output, or `--record-build true`
+when the packet SHA should be recorded in SQLite provenance.
+
 ## Safety Boundaries
 
 Default operator commands are read-only. They can return nonzero when a gate is
@@ -150,6 +167,7 @@ Mutating commands remain explicit:
 - `retry-provider-cooldowns --dry-run false`
 - `retry-failed --dry-run false`
 - `retire-failed`
+- `build-memory-packet --record-build true`
 - `run-once --dry-run false`
 - `daemon --dry-run false`
 

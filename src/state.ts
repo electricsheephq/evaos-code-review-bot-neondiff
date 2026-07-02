@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { redactSecrets } from "./secrets.js";
+import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { ReviewEvent } from "./types.js";
 
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
@@ -41,6 +41,12 @@ export type ReviewReadinessState =
   | "command_recorded"
   | "skipped"
   | "failed";
+export type RepoMemoryNoteKind =
+  | "policy_note"
+  | "machine_fact"
+  | "false_positive"
+  | "review_outcome"
+  | "proof_preference";
 
 export interface ProcessedReviewRecord {
   repo: string;
@@ -210,6 +216,45 @@ export interface ProcessedCommandRecord {
   url?: string;
 }
 
+export interface RepoMemoryNoteRecord {
+  noteId: string;
+  repo: string;
+  kind: RepoMemoryNoteKind;
+  title: string;
+  body: string;
+  source: string;
+  confidence?: number;
+  fingerprint?: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
+}
+
+export interface RecordRepoMemoryNoteInput {
+  noteId: string;
+  repo: string;
+  kind: RepoMemoryNoteKind;
+  title: string;
+  body: string;
+  source: string;
+  confidence?: number;
+  fingerprint?: string;
+  expiresAt?: string;
+  now?: Date;
+}
+
+export interface RepoMemoryPacketBuildRecord {
+  packetSha: string;
+  repo: string;
+  packetVersion: string;
+  generatedAt: string;
+  byteEstimate: number;
+  tokenEstimate: number;
+  includedNoteIds: string[];
+  redactionStatus: string;
+  memoryRoot?: string;
+}
+
 export class ReviewStateStore {
   private readonly db: DatabaseSync;
 
@@ -347,6 +392,40 @@ export class ReviewStateStore {
         on review_readiness (state, updated_at);
       create index if not exists idx_review_readiness_repo_pull
         on review_readiness (repo, pull_number, updated_at);
+
+      create table if not exists repo_memory_notes (
+        note_id text primary key,
+        repo text not null,
+        kind text not null,
+        title text not null,
+        body text not null,
+        source text not null,
+        confidence real,
+        fingerprint text,
+        created_at text not null,
+        updated_at text not null,
+        expires_at text
+      );
+
+      create index if not exists idx_repo_memory_notes_repo_updated
+        on repo_memory_notes (repo, updated_at);
+      create index if not exists idx_repo_memory_notes_repo_fingerprint
+        on repo_memory_notes (repo, fingerprint);
+
+      create table if not exists repo_memory_packet_builds (
+        packet_sha text primary key,
+        repo text not null,
+        packet_version text not null,
+        generated_at text not null,
+        byte_estimate integer not null,
+        token_estimate integer not null,
+        included_note_ids text not null,
+        redaction_status text not null,
+        memory_root text
+      );
+
+      create index if not exists idx_repo_memory_packet_builds_repo_generated
+        on repo_memory_packet_builds (repo, generated_at);
     `);
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
@@ -1472,6 +1551,138 @@ export class ReviewStateStore {
       );
   }
 
+  recordRepoMemoryNote(input: RecordRepoMemoryNoteInput): RepoMemoryNoteRecord {
+    validateRepoMemoryNoteInput(input);
+    const rawText = [input.noteId, input.title, input.body, input.source, input.fingerprint ?? ""].join("\n");
+    if (containsSecretLikeText(rawText)) {
+      throw new Error(`Refusing to store repo memory note ${redactSecrets(input.noteId)}: secret-like text detected`);
+    }
+    const existing = this.getRepoMemoryNote(input.noteId);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    this.db
+      .prepare(
+        `insert into repo_memory_notes
+          (note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict(note_id) do update set
+           repo = excluded.repo,
+           kind = excluded.kind,
+           title = excluded.title,
+           body = excluded.body,
+           source = excluded.source,
+           confidence = excluded.confidence,
+           fingerprint = excluded.fingerprint,
+           updated_at = excluded.updated_at,
+           expires_at = excluded.expires_at`
+      )
+      .run(
+        input.noteId,
+        input.repo,
+        input.kind,
+        redactSecrets(input.title).trim(),
+        redactSecrets(input.body).trim(),
+        redactSecrets(input.source).trim(),
+        input.confidence ?? null,
+        input.fingerprint ? redactSecrets(input.fingerprint).trim() : null,
+        existing?.createdAt ?? nowIso,
+        nowIso,
+        input.expiresAt ?? null
+      );
+    return this.getRepoMemoryNote(input.noteId)!;
+  }
+
+  getRepoMemoryNote(noteId: string): RepoMemoryNoteRecord | undefined {
+    if (!noteId.trim()) throw new Error("noteId must be non-empty");
+    const row = this.db
+      .prepare(
+        `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
+         from repo_memory_notes
+         where note_id = ?
+         limit 1`
+      )
+      .get(noteId) as RepoMemoryNoteRow | undefined;
+    return row ? mapRepoMemoryNoteRow(row) : undefined;
+  }
+
+  listRepoMemoryNotes(input: {
+    repo: string;
+    includeExpired?: boolean;
+    now?: Date;
+    limit?: number;
+  }): RepoMemoryNoteRecord[] {
+    validateRepoName(input.repo, "repo");
+    if (input.limit !== undefined) validatePositiveQueueLimit(input.limit, "limit");
+    const params: Array<string | number> = [input.repo];
+    const predicates = ["repo = ?"];
+    if (input.includeExpired !== true) {
+      predicates.push("(expires_at is null or expires_at > ?)");
+      params.push((input.now ?? new Date()).toISOString());
+    }
+    const limit = input.limit ? " limit ?" : "";
+    if (input.limit) params.push(input.limit);
+    const rows = this.db
+      .prepare(
+        `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
+         from repo_memory_notes
+         where ${predicates.join(" and ")}
+         order by datetime(updated_at) desc, note_id asc
+         ${limit}`
+      )
+      .all(...params) as unknown as RepoMemoryNoteRow[];
+    return rows.map(mapRepoMemoryNoteRow);
+  }
+
+  recordRepoMemoryPacketBuild(record: RepoMemoryPacketBuildRecord): void {
+    validateRepoName(record.repo, "repo");
+    if (!/^[a-f0-9]{64}$/.test(record.packetSha)) throw new Error("packetSha must be a SHA-256 hex digest");
+    if (!record.packetVersion.trim()) throw new Error("packetVersion must be non-empty");
+    if (!Number.isInteger(record.byteEstimate) || record.byteEstimate < 1) throw new Error("byteEstimate must be a positive integer");
+    if (!Number.isInteger(record.tokenEstimate) || record.tokenEstimate < 1) throw new Error("tokenEstimate must be a positive integer");
+    const metadataText = [
+      record.packetSha,
+      record.repo,
+      record.packetVersion,
+      record.redactionStatus,
+      record.memoryRoot ?? "",
+      ...record.includedNoteIds
+    ].join("\n");
+    if (containsSecretLikeText(metadataText)) {
+      throw new Error(`Refusing to store repo memory packet ${record.packetSha}: secret-like metadata detected`);
+    }
+    this.db
+      .prepare(
+        `insert or replace into repo_memory_packet_builds
+          (packet_sha, repo, packet_version, generated_at, byte_estimate, token_estimate,
+           included_note_ids, redaction_status, memory_root)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.packetSha,
+        record.repo,
+        record.packetVersion,
+        record.generatedAt,
+        record.byteEstimate,
+        record.tokenEstimate,
+        JSON.stringify(record.includedNoteIds),
+        record.redactionStatus,
+        record.memoryRoot ? redactSecrets(record.memoryRoot) : null
+      );
+  }
+
+  getRepoMemoryPacketBuild(packetSha: string): RepoMemoryPacketBuildRecord | undefined {
+    if (!/^[a-f0-9]{64}$/.test(packetSha)) throw new Error("packetSha must be a SHA-256 hex digest");
+    const row = this.db
+      .prepare(
+        `select packet_sha, repo, packet_version, generated_at, byte_estimate, token_estimate,
+                included_note_ids, redaction_status, memory_root
+         from repo_memory_packet_builds
+         where packet_sha = ?
+         limit 1`
+      )
+      .get(packetSha) as RepoMemoryPacketBuildRow | undefined;
+    return row ? mapRepoMemoryPacketBuildRow(row) : undefined;
+  }
+
   close(): void {
     this.db.close();
   }
@@ -1551,6 +1762,41 @@ function validateReviewQueueInput(
   }
   if (commentId !== undefined && (!Number.isInteger(commentId) || commentId < 1)) {
     throw new Error("commentId must be a positive integer");
+  }
+}
+
+function validateRepoMemoryNoteInput(input: RecordRepoMemoryNoteInput): void {
+  if (!input.noteId.trim()) throw new Error("noteId must be non-empty");
+  validateRepoName(input.repo, "repo");
+  if (!["policy_note", "machine_fact", "false_positive", "review_outcome", "proof_preference"].includes(input.kind)) {
+    throw new Error("kind must be a valid repo memory note kind");
+  }
+  if (!input.title.trim()) throw new Error("title must be non-empty");
+  if (!input.body.trim()) throw new Error("body must be non-empty");
+  if (!input.source.trim()) throw new Error("source must be non-empty");
+  if (input.confidence !== undefined && (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1)) {
+    throw new Error("confidence must be a number from 0 to 1");
+  }
+  if (input.kind === "false_positive" && !input.fingerprint?.trim()) {
+    throw new Error("false_positive repo memory notes require a fingerprint");
+  }
+  if (input.expiresAt !== undefined && !Number.isFinite(Date.parse(input.expiresAt))) {
+    throw new Error("expiresAt must be an ISO timestamp");
+  }
+}
+
+function validateRepoName(repo: string, label: string): void {
+  const [owner, name, extra] = repo.split("/");
+  if (extra !== undefined || !owner || !name) throw new Error(`${label} must be an owner/repo name`);
+  if (
+    owner === "." ||
+    owner === ".." ||
+    name === "." ||
+    name === ".." ||
+    !/^[A-Za-z0-9_.-]+$/.test(owner) ||
+    !/^[A-Za-z0-9_.-]+$/.test(name)
+  ) {
+    throw new Error(`${label} must be an owner/repo name`);
   }
 }
 
@@ -1732,6 +1978,32 @@ interface ReviewReadinessRow {
   updated_at: string;
 }
 
+interface RepoMemoryNoteRow {
+  note_id: string;
+  repo: string;
+  kind: RepoMemoryNoteKind;
+  title: string;
+  body: string;
+  source: string;
+  confidence: number | null;
+  fingerprint: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string | null;
+}
+
+interface RepoMemoryPacketBuildRow {
+  packet_sha: string;
+  repo: string;
+  packet_version: string;
+  generated_at: string;
+  byte_estimate: number;
+  token_estimate: number;
+  included_note_ids: string;
+  redaction_status: string;
+  memory_root: string | null;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -1844,4 +2116,43 @@ function mapDaemonHeartbeatRow(row: DaemonHeartbeatRow): StoredDaemonHeartbeatRe
     ...(row.started_cycle !== null ? { startedCycle: row.started_cycle } : {}),
     ...(row.started_at ? { startedAt: row.started_at } : {})
   };
+}
+
+function mapRepoMemoryNoteRow(row: RepoMemoryNoteRow): RepoMemoryNoteRecord {
+  return {
+    noteId: row.note_id,
+    repo: row.repo,
+    kind: row.kind,
+    title: row.title,
+    body: row.body,
+    source: row.source,
+    ...(row.confidence !== null ? { confidence: row.confidence } : {}),
+    ...(row.fingerprint ? { fingerprint: row.fingerprint } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.expires_at ? { expiresAt: row.expires_at } : {})
+  };
+}
+
+function mapRepoMemoryPacketBuildRow(row: RepoMemoryPacketBuildRow): RepoMemoryPacketBuildRecord {
+  return {
+    packetSha: row.packet_sha,
+    repo: row.repo,
+    packetVersion: row.packet_version,
+    generatedAt: row.generated_at,
+    byteEstimate: row.byte_estimate,
+    tokenEstimate: row.token_estimate,
+    includedNoteIds: parseIncludedNoteIds(row.included_note_ids),
+    redactionStatus: row.redaction_status,
+    ...(row.memory_root ? { memoryRoot: row.memory_root } : {})
+  };
+}
+
+function parseIncludedNoteIds(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
 }

@@ -1,0 +1,476 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { loadConfig } from "../src/config.js";
+import {
+  buildRepoMemoryPacket,
+  formatRepoMemoryPacketMarkdown,
+  readRepoMemoryMarkdown,
+  type RepoMemoryNote
+} from "../src/repo-memory.js";
+import { ReviewStateStore } from "../src/state.js";
+import { buildReviewPrompt } from "../src/zcode.js";
+import type { PullRequestSummary } from "../src/types.js";
+
+describe("repo memory packets", () => {
+  const roots: string[] = [];
+  const repo = "electricsheephq/evaos-code-review-bot";
+  const generatedAt = "2026-07-02T00:00:00.000Z";
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("builds a bounded reproducible packet from human memory and matching machine notes", () => {
+    const humanMarkdown = [
+      "# evaOS Code Review Bot Memory",
+      "",
+      "## Repository Purpose",
+      "Local GitHub App reviewer backed by ZCode.",
+      "",
+      "## Preferred Proof",
+      "Prefer release-status, coverage-audit, provider-cooldown audit, and runtime-inventory proof.",
+      "",
+      "## Security / Privacy Boundaries",
+      "Never include secrets, raw customer data, or private keys in comments."
+    ].join("\n");
+    const stateNotes: RepoMemoryNote[] = [
+      note({
+        noteId: "note-policy",
+        kind: "policy_note",
+        title: "Release proof",
+        body: "Release notes must link release-status and rollback evidence.",
+        source: "issue#78"
+      }),
+      note({
+        noteId: "note-fp-match",
+        kind: "false_positive",
+        title: "Generated walkthrough marker",
+        body: "Do not repeat low-value guidance about hidden bot markers when the marker fingerprint matches.",
+        source: "review#101",
+        fingerprint: "fp:hidden-marker"
+      }),
+      note({
+        noteId: "note-fp-miss",
+        kind: "false_positive",
+        title: "Unrelated false positive",
+        body: "This should not be included without a current matching finding fingerprint.",
+        source: "review#100",
+        fingerprint: "fp:unrelated"
+      }),
+      note({
+        noteId: "note-stale",
+        kind: "review_outcome",
+        title: "Old package script",
+        body: "Use the previous release script shape.",
+        source: "review#50",
+        expiresAt: "2026-07-01T00:00:00.000Z"
+      })
+    ];
+
+    const result = buildRepoMemoryPacket({
+      repo,
+      humanMarkdown,
+      stateNotes,
+      findingFingerprints: ["fp:hidden-marker"],
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+    const repeated = buildRepoMemoryPacket({
+      repo,
+      humanMarkdown,
+      stateNotes,
+      findingFingerprints: ["fp:hidden-marker"],
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !repeated.ok) throw new Error("expected packet build to pass");
+    expect(result.packet.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(repeated.packet.sha256).toBe(result.packet.sha256);
+    expect(result.packet.byteEstimate).toBe(Buffer.byteLength(formatRepoMemoryPacketMarkdown(result.packet), "utf8"));
+    expect(result.packet.tokenEstimate).toBeGreaterThan(0);
+    expect(result.packet.markdown).toContain("This memory is advisory. Current PR diff and current repository files override memory.");
+    expect(result.packet.markdown).toContain("Repository Purpose");
+    expect(result.packet.markdown).toContain("Release notes must link release-status");
+    expect(result.packet.markdown).toContain("Generated walkthrough marker");
+    expect(result.packet.markdown).not.toContain("Unrelated false positive");
+    expect(result.packet.markdown).not.toContain("Old package script");
+    expect(result.packet.sources.map((source) => source.id)).toEqual([
+      "human:repo-memory.md",
+      "note-policy",
+      "note-fp-match"
+    ]);
+    expect(result.excluded).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "note-fp-miss", reason: "false_positive_fingerprint_mismatch" }),
+        expect.objectContaining({ id: "note-stale", reason: "stale" })
+      ])
+    );
+  });
+
+  it("fails closed and redacts the report when memory text contains secret-like content", () => {
+    const result = buildRepoMemoryPacket({
+      repo,
+      humanMarkdown: "## Security\nDo not leak token: ghp_123456789012345678901234",
+      stateNotes: [],
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected packet build to fail closed");
+    expect(result.error).toContain("secret-like");
+    expect(JSON.stringify(result)).not.toContain("ghp_123456789012345678901234");
+    expect(JSON.stringify(result)).toContain("[redacted-secret]");
+  });
+
+  it("fails closed when note identifiers contain secret-like content", () => {
+    const fixtureToken = "ghp_123456789012345678901234";
+    const result = buildRepoMemoryPacket({
+      repo,
+      humanMarkdown: "## Preferred Proof\nKeep proof bounded.",
+      stateNotes: [
+        note({
+          noteId: fixtureToken,
+          kind: "review_outcome",
+          title: "Expired note",
+          body: "This note is stale but its identifier must still be scanned before exclusion.",
+          source: "review#1",
+          expiresAt: "2026-07-01T00:00:00.000Z"
+        })
+      ],
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(fixtureToken);
+    expect(JSON.stringify(result)).toContain("[redacted-secret]");
+  });
+
+  it("stores safe repo memory notes and packet build evidence in SQLite", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-state-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordRepoMemoryNote({
+      noteId: "memory-note-1",
+      repo,
+      kind: "policy_note",
+      title: "Preferred release proof",
+      body: "Require release-status, coverage-audit, cooldown, and runtime-inventory proof.",
+      source: "operator",
+      confidence: 0.9,
+      now: new Date(generatedAt)
+    });
+    store.recordRepoMemoryNote({
+      noteId: "memory-note-2",
+      repo,
+      kind: "false_positive",
+      title: "Generated docs-only churn",
+      body: "Suppress repeated generated-doc comments only on an exact finding fingerprint match.",
+      source: "review#90",
+      confidence: 0.7,
+      fingerprint: "fp:generated-docs",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      now: new Date("2026-07-02T00:30:00.000Z")
+    });
+    expect(() =>
+      store.recordRepoMemoryNote({
+        noteId: "bad-secret-note",
+        repo,
+        kind: "policy_note",
+        title: "Bad",
+        body: "api_key=12345678901234567890",
+        source: "operator",
+        now: new Date(generatedAt)
+      })
+    ).toThrow(/secret-like/);
+    const badId = "ghp_123456789012345678901234";
+    expect(() =>
+      store.recordRepoMemoryNote({
+        noteId: badId,
+        repo,
+        kind: "policy_note",
+        title: "Bad identifier",
+        body: "Identifiers are emitted in evidence and must be safe.",
+        source: "operator",
+        now: new Date(generatedAt)
+      })
+    ).toThrow(/secret-like/);
+    try {
+      store.recordRepoMemoryNote({
+        noteId: badId,
+        repo,
+        kind: "policy_note",
+        title: "Bad identifier",
+        body: "Identifiers are emitted in evidence and must be safe.",
+        source: "operator",
+        now: new Date(generatedAt)
+      });
+      throw new Error("expected secret-like note ID to be rejected");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).not.toContain(badId);
+      expect((error as Error).message).toContain("[redacted-secret]");
+    }
+
+    const notes = store.listRepoMemoryNotes({ repo, now: new Date(generatedAt) });
+    expect(notes).toHaveLength(2);
+    expect(notes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          noteId: "memory-note-2",
+          kind: "false_positive",
+          fingerprint: "fp:generated-docs"
+        })
+      ])
+    );
+
+    store.recordRepoMemoryNote({
+      noteId: "memory-note-3-newest",
+      repo,
+      kind: "policy_note",
+      title: "Newest correction",
+      body: "Newest memory should survive note limits.",
+      source: "operator",
+      now: new Date("2026-07-02T01:00:00.000Z")
+    });
+    const limited = store.listRepoMemoryNotes({ repo, now: new Date(generatedAt), limit: 2 });
+    expect(limited.map((entry) => entry.noteId)).toEqual([
+      "memory-note-3-newest",
+      "memory-note-2"
+    ]);
+    expect(limited[1]).toMatchObject({
+      noteId: "memory-note-2",
+      kind: "false_positive",
+      fingerprint: "fp:generated-docs"
+    });
+
+    store.recordRepoMemoryPacketBuild({
+      packetSha: "a".repeat(64),
+      repo,
+      packetVersion: "repo-memory-packet-v0.1",
+      generatedAt,
+      byteEstimate: 512,
+      tokenEstimate: 128,
+      includedNoteIds: ["memory-note-1", "memory-note-2"],
+      redactionStatus: "passed",
+      memoryRoot: "/Volumes/LEXAR/Codex/evaos-code-review-bot/memory"
+    });
+    expect(store.getRepoMemoryPacketBuild("a".repeat(64))).toMatchObject({
+      packetSha: "a".repeat(64),
+      repo,
+      byteEstimate: 512,
+      includedNoteIds: ["memory-note-1", "memory-note-2"],
+      redactionStatus: "passed"
+    });
+    store.close();
+  });
+
+  it("reads human repo-memory.md outside the target checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-root-"));
+    roots.push(root);
+    const memoryDir = join(root, "electricsheephq", "evaos-code-review-bot");
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "repo-memory.md"), "## Repository Purpose\nReview bot memory.\n");
+
+    expect(readRepoMemoryMarkdown(root, repo)).toContain("Review bot memory");
+    expect(readRepoMemoryMarkdown(root, "owner/missing")).toBeUndefined();
+    expect(() => readRepoMemoryMarkdown(root, "../repo")).toThrow(/owner\/repo/);
+    expect(() => readRepoMemoryMarkdown(root, "owner/.")).toThrow(/owner\/repo/);
+    expect(() => readRepoMemoryMarkdown(root, "owner/../repo")).toThrow(/owner\/repo/);
+  });
+
+  it("keeps prompt memory integration feature-flagged and default-off", () => {
+    const defaultConfig = loadConfig(writeConfig({}));
+    expect(defaultConfig.repoMemory).toMatchObject({
+      enabled: false,
+      maxPacketBytes: 12_000
+    });
+
+    expect(() => loadConfig(writeConfig({ repoMemory: { enabled: "yes" } }))).toThrow(/repoMemory\.enabled/);
+
+    const packetResult = buildRepoMemoryPacket({
+      repo,
+      humanMarkdown: "## Repository Purpose\nReview bot memory.",
+      stateNotes: [],
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+    if (!packetResult.ok) throw new Error("expected packet build to pass");
+
+    const withoutMemory = buildReviewPrompt({
+      repo,
+      pull,
+      files: [{ filename: "src/state.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "+state" }]
+    });
+    const withMemory = buildReviewPrompt({
+      repo,
+      pull,
+      files: [{ filename: "src/state.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "+state" }],
+      repoMemoryPacket: packetResult.packet
+    });
+
+    expect(withoutMemory).not.toContain("Durable repo memory packet");
+    expect(withMemory).toContain("Durable repo memory packet");
+    expect(withMemory).toContain(packetResult.packet.sha256);
+    expect(withMemory).toContain("This memory is advisory");
+  });
+
+  it("emits JSON and Markdown packets from the build-memory-packet CLI", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-"));
+    roots.push(root);
+    const memoryRoot = join(root, "memory");
+    const evidenceDir = join(root, "evidence");
+    const outputDir = join(evidenceDir, "packet-output");
+    const memoryDir = join(memoryRoot, "electricsheephq", "evaos-code-review-bot");
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "repo-memory.md"), "## Preferred Proof\nCLI memory proof.\n");
+    const statePath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(statePath);
+    store.recordRepoMemoryNote({
+      noteId: "cli-note",
+      repo,
+      kind: "policy_note",
+      title: "CLI note",
+      body: "CLI includes SQLite state notes.",
+      source: "test",
+      now: new Date(generatedAt)
+    });
+    store.close();
+    const configPath = writeConfig({
+      statePath,
+      evidenceDir,
+      repoMemory: {
+        enabled: false,
+        memoryRoot,
+        maxPacketBytes: 12_000
+      }
+    });
+
+    const stdout = execFileSync(process.execPath, [
+      "./node_modules/.bin/tsx",
+      "src/cli.ts",
+      "build-memory-packet",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--output-dir",
+      outputDir,
+      "--generated-at",
+      generatedAt
+    ], { cwd: process.cwd(), encoding: "utf8" });
+    const parsed = JSON.parse(stdout);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.packet.markdown).toContain("CLI memory proof");
+    expect(parsed.packet.markdown).toContain("CLI includes SQLite state notes.");
+    expect(readFileSync(join(outputDir, "repo-memory-packet.md"), "utf8")).toContain("CLI memory proof");
+    expect(JSON.parse(readFileSync(join(outputDir, "repo-memory-packet.json"), "utf8")).packet.sha256).toBe(parsed.packet.sha256);
+  });
+
+  it("refuses to write memory packet output inside the current repository checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-unsafe-"));
+    roots.push(root);
+    const evidenceDir = join(process.cwd(), "repo-memory-output");
+    const configPath = writeConfig({
+      statePath: join(root, "state.sqlite"),
+      evidenceDir,
+      repoMemory: {
+        enabled: false,
+        memoryRoot: join(root, "memory"),
+        maxPacketBytes: 12_000
+      }
+    });
+
+    expect(() =>
+      execFileSync(process.execPath, [
+        "./node_modules/.bin/tsx",
+        "src/cli.ts",
+        "build-memory-packet",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--output-dir",
+        evidenceDir
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+    ).toThrow(/must not be inside the repository checkout/);
+  });
+
+  it("refuses to write memory packet output inside any Lexar repo checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-target-checkout-"));
+    roots.push(root);
+    const fakeReposRoot = join(root, "repos");
+    const fakeTargetCheckout = join(fakeReposRoot, "target-repo");
+    const outputDir = join(fakeTargetCheckout, "memory-packet");
+    mkdirSync(join(fakeTargetCheckout, ".git"), { recursive: true });
+    const configPath = writeConfig({
+      statePath: join(root, "state.sqlite"),
+      workRoot: join(fakeReposRoot, "review-bot-runtime"),
+      evidenceDir: fakeReposRoot,
+      repoMemory: {
+        enabled: false,
+        memoryRoot: join(root, "memory"),
+        maxPacketBytes: 12_000
+      }
+    });
+
+    expect(() =>
+      execFileSync(process.execPath, [
+        "./node_modules/.bin/tsx",
+        "src/cli.ts",
+        "build-memory-packet",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--output-dir",
+        outputDir
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+    ).toThrow(/repository checkout/);
+  });
+
+  function writeConfig(config: unknown): string {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-config-"));
+    roots.push(root);
+    const path = join(root, "config.json");
+    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+    return path;
+  }
+});
+
+function note(overrides: Partial<RepoMemoryNote> & Pick<RepoMemoryNote, "noteId" | "kind" | "title" | "body" | "source">): RepoMemoryNote {
+  return {
+    repo: "electricsheephq/evaos-code-review-bot",
+    confidence: 0.8,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    ...overrides
+  };
+}
+
+const pull: PullRequestSummary = {
+  number: 81,
+  title: "Add repo memory packets",
+  draft: false,
+  body: "Closes #81",
+  head: {
+    sha: "memory-head",
+    ref: "issue-81-repo-memory",
+    repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+  },
+  base: {
+    sha: "memory-base",
+    ref: "main",
+    repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+  },
+  html_url: "https://github.com/electricsheephq/evaos-code-review-bot/pull/102",
+  requested_reviewers: []
+};

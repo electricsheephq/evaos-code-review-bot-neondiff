@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFindings } from "./findings.js";
+import type { RepoMemoryPacket } from "./repo-memory.js";
 import { buildRepoProfilePromptSection, type ResolvedRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
 import { buildZCodeRuntimeEnv, resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -18,6 +19,7 @@ export function buildReviewPrompt(input: {
   pull: PullRequestSummary;
   files: PullFilePatch[];
   repoProfile?: ResolvedRepoProfile;
+  repoMemoryPacket?: Pick<RepoMemoryPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
   maxPatchBytes?: number;
 }): string {
   const fileList = input.files.map((file) => `- ${file.filename}`).join("\n");
@@ -47,11 +49,22 @@ export function buildReviewPrompt(input: {
     `Head SHA: ${input.pull.head.sha}`,
     "",
     ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile), ""] : []),
+    ...(input.repoMemoryPacket ? [buildRepoMemoryPromptSection(input.repoMemoryPacket), ""] : []),
     "Files:",
     fileList,
     "",
     "Diff:",
     patches
+  ].join("\n");
+}
+
+function buildRepoMemoryPromptSection(packet: Pick<RepoMemoryPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">): string {
+  return [
+    "Durable repo memory packet (advisory; feature-flagged context):",
+    `Packet SHA-256: ${packet.sha256}`,
+    `Packet budget: ${packet.byteEstimate} bytes; approx ${packet.tokenEstimate} tokens`,
+    "",
+    packet.markdown.trim()
   ].join("\n");
 }
 
