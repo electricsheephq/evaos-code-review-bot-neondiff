@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import {
+  buildRepoMemoryContext,
   classifyProviderError,
   isSuccessfulRetryStatus,
   localDateFolder,
@@ -78,6 +79,54 @@ describe("worker review failures", () => {
     expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:01:00.000Z"))).toMatchObject({
       reason: "provider_request_rate_limit"
     });
+    state.close();
+  });
+
+  it("degrades oversized repo-memory packets to no-memory context", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-repo-memory-budget-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const evidenceDir = join(root, "evidence");
+    mkdirSync(evidenceDir, { recursive: true });
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      repoMemory: {
+        enabled: true,
+        memoryRoot: join(root, "memory"),
+        packetVersion: "repo-memory-packet-v0.1",
+        maxPacketBytes: 10,
+        maxStateNotes: 10,
+        includeStaleNotes: false
+      }
+    };
+    state.recordRepoMemoryNote({
+      noteId: "fp-large",
+      repo: "electricsheephq/WorldOS",
+      kind: "false_positive",
+      title: "Large false positive",
+      body: "An oversized advisory memory packet must not abort the review.",
+      source: "test",
+      fingerprint: "fp:large",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    const context = buildRepoMemoryContext({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      evidenceDir
+    });
+
+    expect(context.packet).toBeUndefined();
+    expect(context.falsePositiveFingerprints).toEqual([]);
+    const error = JSON.parse(readFileSync(join(evidenceDir, "repo-memory-packet-error.json"), "utf8"));
+    expect(error).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("maxPacketBytes")
+    });
+    expect(error.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "packet:markdown", reason: "budget_exceeded" })
+    ]));
     state.close();
   });
 

@@ -286,10 +286,15 @@ function compareNotes(left: RepoMemoryNote, right: RepoMemoryNote): number {
   const leftPriority = notePriority(left.kind);
   const rightPriority = notePriority(right.kind);
   if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-  const leftUpdated = Date.parse(left.updatedAt);
-  const rightUpdated = Date.parse(right.updatedAt);
+  const leftUpdated = sortableTimestamp(left.updatedAt);
+  const rightUpdated = sortableTimestamp(right.updatedAt);
   if (leftUpdated !== rightUpdated) return leftUpdated - rightUpdated;
   return left.noteId.localeCompare(right.noteId);
+}
+
+function sortableTimestamp(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
 function notePriority(kind: RepoMemoryNoteKind): number {

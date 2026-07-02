@@ -149,6 +149,54 @@ describe("repo memory packets", () => {
     expect(result.packet.markdown.indexOf("B policy")).toBeLessThan(result.packet.markdown.indexOf("Proof note"));
   });
 
+  it("keeps ordering deterministic when a legacy note has malformed updatedAt", () => {
+    const stateNotes: RepoMemoryNote[] = [
+      note({
+        noteId: "policy-valid",
+        kind: "policy_note",
+        title: "Valid timestamp",
+        body: "Valid timestamps sort after malformed legacy timestamps.",
+        source: "test",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }),
+      note({
+        noteId: "policy-b",
+        kind: "policy_note",
+        title: "Malformed B",
+        body: "Malformed legacy timestamp B.",
+        source: "test",
+        updatedAt: "not-an-iso-date"
+      }),
+      note({
+        noteId: "policy-a",
+        kind: "policy_note",
+        title: "Malformed A",
+        body: "Malformed legacy timestamp A.",
+        source: "test",
+        updatedAt: ""
+      })
+    ];
+
+    const result = buildRepoMemoryPacket({
+      repo,
+      stateNotes,
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+    const repeated = buildRepoMemoryPacket({
+      repo,
+      stateNotes,
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+
+    expect(result.ok).toBe(true);
+    expect(repeated.ok).toBe(true);
+    if (!result.ok || !repeated.ok) throw new Error("expected packet build to pass");
+    expect(repeated.packet.sha256).toBe(result.packet.sha256);
+    expect(result.packet.sources.map((source) => source.id)).toEqual(["policy-a", "policy-b", "policy-valid"]);
+  });
+
   it("fails closed and redacts the report when memory text contains secret-like content", () => {
     const result = buildRepoMemoryPacket({
       repo,
@@ -255,6 +303,17 @@ describe("repo memory packets", () => {
       expect((error as Error).message).not.toContain(badId);
       expect((error as Error).message).toContain("[redacted-secret]");
     }
+    expect(() =>
+      store.recordRepoMemoryNote({
+        noteId: "bad-timestamp",
+        repo,
+        kind: "policy_note",
+        title: "Bad timestamp",
+        body: "Invalid Date should never become created_at or updated_at.",
+        source: "operator",
+        now: new Date("not-a-date")
+      })
+    ).toThrow(/now must be a valid Date/);
 
     const notes = store.listRepoMemoryNotes({ repo, now: new Date(generatedAt) });
     expect(notes).toHaveLength(2);

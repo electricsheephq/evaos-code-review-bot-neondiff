@@ -851,7 +851,7 @@ function buildEvidenceDir(
   return commandDecision.shouldReview ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
 }
 
-function buildRepoMemoryContext(input: {
+export function buildRepoMemoryContext(input: {
   config: BotConfig;
   state: ReviewStateStore;
   repo: string;
@@ -884,6 +884,9 @@ function buildRepoMemoryContext(input: {
 
   if (!packetResult.ok) {
     writeRedactedJson(join(input.evidenceDir, "repo-memory-packet-error.json"), packetResult);
+    if (isRepoMemoryBudgetFailure(packetResult)) {
+      return { falsePositiveFingerprints: [] };
+    }
     throw new Error(`Repo memory packet failed closed: ${packetResult.error}`);
   }
 
@@ -901,6 +904,12 @@ function buildRepoMemoryContext(input: {
     memoryRoot: repoMemoryConfig.memoryRoot
   });
   return { packet: packetResult.packet, falsePositiveFingerprints };
+}
+
+function isRepoMemoryBudgetFailure(packetResult: ReturnType<typeof buildRepoMemoryPacket>): boolean {
+  return !packetResult.ok &&
+    packetResult.redactionReport.ok &&
+    packetResult.excluded.some((source) => source.reason === "budget_exceeded");
 }
 
 function isRepoMemoryNoteExpired(note: { expiresAt?: string }, now: Date): boolean {

@@ -1781,6 +1781,9 @@ function validateRepoMemoryNoteInput(input: RecordRepoMemoryNoteInput): void {
   if (input.kind === "false_positive" && !input.fingerprint?.trim()) {
     throw new Error("false_positive repo memory notes require a fingerprint");
   }
+  if (input.now !== undefined && !Number.isFinite(input.now.getTime())) {
+    throw new Error("now must be a valid Date");
+  }
   if (input.expiresAt !== undefined && !Number.isFinite(Date.parse(input.expiresAt))) {
     throw new Error("expiresAt must be an ISO timestamp");
   }

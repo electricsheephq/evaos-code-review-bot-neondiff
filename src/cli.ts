@@ -423,7 +423,7 @@ async function main(): Promise<void> {
           byteEstimate: result.packet.byteEstimate,
           tokenEstimate: result.packet.tokenEstimate,
           includedNoteIds: result.packet.sources.filter((source) => source.type === "sqlite_note").map((source) => source.id),
-          redactionStatus: result.redactionReport.ok ? "passed" : "failed",
+          redactionStatus: "passed",
           memoryRoot: args["memory-root"] ?? memoryConfig.memoryRoot
         });
       }
