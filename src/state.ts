@@ -47,6 +47,7 @@ export type RepoMemoryNoteKind =
   | "false_positive"
   | "review_outcome"
   | "proof_preference";
+const REPO_MEMORY_NOTE_KINDS: RepoMemoryNoteKind[] = ["policy_note", "machine_fact", "false_positive", "review_outcome", "proof_preference"];
 
 export interface ProcessedReviewRecord {
   repo: string;
@@ -1610,11 +1611,24 @@ export class ReviewStateStore {
     includeExpired?: boolean;
     now?: Date;
     limit?: number;
+    kind?: RepoMemoryNoteKind;
+    excludeKind?: RepoMemoryNoteKind;
   }): RepoMemoryNoteRecord[] {
     validateRepoName(input.repo, "repo");
     if (input.limit !== undefined) validatePositiveQueueLimit(input.limit, "limit");
+    if (input.kind && input.excludeKind) throw new Error("kind and excludeKind cannot both be set");
+    if (input.kind) validateRepoMemoryNoteKind(input.kind, "kind");
+    if (input.excludeKind) validateRepoMemoryNoteKind(input.excludeKind, "excludeKind");
     const params: Array<string | number> = [input.repo];
     const predicates = ["repo = ?"];
+    if (input.kind) {
+      predicates.push("kind = ?");
+      params.push(input.kind);
+    }
+    if (input.excludeKind) {
+      predicates.push("kind != ?");
+      params.push(input.excludeKind);
+    }
     if (input.includeExpired !== true) {
       predicates.push("(expires_at is null or datetime(expires_at) > datetime(?))");
       params.push((input.now ?? new Date()).toISOString());
@@ -1769,9 +1783,7 @@ function validateReviewQueueInput(
 function validateRepoMemoryNoteInput(input: RecordRepoMemoryNoteInput): void {
   if (!input.noteId.trim()) throw new Error("noteId must be non-empty");
   validateRepoName(input.repo, "repo");
-  if (!["policy_note", "machine_fact", "false_positive", "review_outcome", "proof_preference"].includes(input.kind)) {
-    throw new Error("kind must be a valid repo memory note kind");
-  }
+  validateRepoMemoryNoteKind(input.kind, "kind");
   if (!input.title.trim()) throw new Error("title must be non-empty");
   if (!input.body.trim()) throw new Error("body must be non-empty");
   if (!input.source.trim()) throw new Error("source must be non-empty");
@@ -1798,6 +1810,12 @@ function validateRepoMemoryNoteInput(input: RecordRepoMemoryNoteInput): void {
     if (expiresAtMs - nowMs > 90 * 24 * 60 * 60_000) {
       throw new Error("false_positive repo memory notes must expire within 90 days");
     }
+  }
+}
+
+function validateRepoMemoryNoteKind(kind: RepoMemoryNoteKind, label: string): void {
+  if (!REPO_MEMORY_NOTE_KINDS.includes(kind)) {
+    throw new Error(`${label} must be a valid repo memory note kind`);
   }
 }
 

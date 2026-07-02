@@ -132,6 +132,58 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("keeps false-positive suppression notes from starving prompt memory notes", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-repo-memory-split-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const evidenceDir = join(root, "evidence");
+    const fingerprint = `finding:${"c".repeat(64)}`;
+    mkdirSync(evidenceDir, { recursive: true });
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      repoMemory: {
+        enabled: true,
+        memoryRoot: join(root, "memory"),
+        packetVersion: "repo-memory-packet-v0.1",
+        maxPacketBytes: 12_000,
+        maxStateNotes: 1,
+        includeStaleNotes: false
+      }
+    };
+    state.recordRepoMemoryNote({
+      noteId: "policy-survives",
+      repo: "electricsheephq/WorldOS",
+      kind: "policy_note",
+      title: "Policy survives",
+      body: "Prompt memory should still include current policy notes.",
+      source: "test",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    state.recordRepoMemoryNote({
+      noteId: "fp-newer",
+      repo: "electricsheephq/WorldOS",
+      kind: "false_positive",
+      title: "Newer false positive",
+      body: "Suppression notes use a separate read budget.",
+      source: "test",
+      fingerprint,
+      expiresAt: "2026-07-09T00:00:00.000Z",
+      now: new Date("2026-07-02T00:01:00.000Z")
+    });
+
+    const context = buildRepoMemoryContext({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      evidenceDir
+    });
+
+    expect(context.falsePositiveFingerprints).toEqual([fingerprint]);
+    expect(context.packet?.sources.map((source) => source.id)).toContain("policy-survives");
+    expect(context.packet?.markdown).toContain("Prompt memory should still include current policy notes.");
+    state.close();
+  });
+
   it("classifies provider throttle, overload, and true quota separately", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-classify-"));
     roots.push(root);

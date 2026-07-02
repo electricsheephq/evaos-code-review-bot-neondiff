@@ -862,16 +862,23 @@ export function buildRepoMemoryContext(input: {
 
   const generatedAt = new Date().toISOString();
   const generatedAtDate = new Date(generatedAt);
-  const notes = input.state.listRepoMemoryNotes({
+  const promptNotes = input.state.listRepoMemoryNotes({
     repo: input.repo,
     includeExpired: repoMemoryConfig.includeStaleNotes,
     now: generatedAtDate,
-    limit: repoMemoryConfig.maxStateNotes
+    limit: repoMemoryConfig.maxStateNotes,
+    excludeKind: "false_positive"
   });
-  const falsePositiveFingerprints = notes
+  const falsePositiveNotes = input.state.listRepoMemoryNotes({
+    repo: input.repo,
+    includeExpired: repoMemoryConfig.includeStaleNotes,
+    now: generatedAtDate,
+    limit: repoMemoryConfig.maxStateNotes,
+    kind: "false_positive"
+  });
+  const falsePositiveFingerprints = falsePositiveNotes
     .filter((note) => note.kind === "false_positive" && note.fingerprint && !isRepoMemoryNoteExpired(note, generatedAtDate))
     .map((note) => note.fingerprint!);
-  const promptNotes = notes.filter((note) => note.kind !== "false_positive");
   const packetResult = buildRepoMemoryPacket({
     repo: input.repo,
     humanMarkdown: readRepoMemoryMarkdown(repoMemoryConfig.memoryRoot, input.repo),
