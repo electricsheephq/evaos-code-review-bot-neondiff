@@ -367,6 +367,12 @@ export async function collectIssueEnrichmentScan(input: {
     });
   }
   const summary = summarizeScan(repoScans);
+  const recommendedActions = buildScanRecommendedActions(status, summary);
+  if (input.shouldCountItem === undefined && input.applyGlobalCaps !== false) {
+    recommendedActions.push(
+      "standalone issue-enrichment scans are stateless; live cycles exclude already-processed issue rows from cap accounting"
+    );
+  }
   return {
     ok: summary.readFailures === 0,
     checkedAt,
@@ -375,7 +381,7 @@ export async function collectIssueEnrichmentScan(input: {
     summary,
     repos: repoScans,
     items,
-    recommendedActions: buildScanRecommendedActions(status, summary)
+    recommendedActions
   };
 }
 

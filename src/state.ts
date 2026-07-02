@@ -97,6 +97,14 @@ export interface IssueEnrichmentRunLease {
   ownerPid: number;
 }
 
+export interface ClearIssueEnrichmentRunLeasesResult {
+  checkedAt: string;
+  expiredOnly: boolean;
+  dryRun: boolean;
+  matched: number;
+  deleted: number;
+}
+
 export interface ReviewerSessionRecord {
   sessionId: string;
   repo: string;
@@ -984,6 +992,22 @@ export class ReviewStateStore {
 
   releaseIssueEnrichmentRunLease(leaseId: string): void {
     this.db.prepare("delete from issue_enrichment_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  clearIssueEnrichmentRunLeases(input: { now?: Date; expiredOnly?: boolean; dryRun?: boolean } = {}): ClearIssueEnrichmentRunLeasesResult {
+    const checkedAt = (input.now ?? new Date()).toISOString();
+    const expiredOnly = input.expiredOnly ?? false;
+    const dryRun = input.dryRun ?? true;
+    const params: [string] | [] = expiredOnly ? [checkedAt] : [];
+    const whereClause = expiredOnly ? " where expires_at <= ?" : "";
+    const row = this.db
+      .prepare(`select count(*) as count from issue_enrichment_run_leases${whereClause}`)
+      .get(...params) as { count: number };
+    const matched = row.count;
+    const deleted = dryRun
+      ? 0
+      : Number(this.db.prepare(`delete from issue_enrichment_run_leases${whereClause}`).run(...params).changes);
+    return { checkedAt, expiredOnly, dryRun, matched, deleted };
   }
 
   assignReviewerSessionJob(input: {

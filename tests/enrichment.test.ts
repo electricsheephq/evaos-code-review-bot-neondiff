@@ -594,6 +594,9 @@ describe("sticky enrichment comments", () => {
       expect(scan.items.find((item) => item.issueNumber === 13)).toMatchObject({
         nextEligibleAt: "2026-07-03T01:00:00.000Z"
       });
+      expect(scan.recommendedActions).toContain(
+        "standalone issue-enrichment scans are stateless; live cycles exclude already-processed issue rows from cap accounting"
+      );
       expect(JSON.stringify(scan)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
     } finally {
       rmSync(root, { recursive: true, force: true });

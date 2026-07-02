@@ -717,6 +717,27 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "clear-issue-enrichment-leases") {
+    const config = loadConfig(args.config);
+    const dryRun = args["dry-run"] !== "false";
+    if (!dryRun && args.confirm !== "true") {
+      throw new Error("clear-issue-enrichment-leases requires --confirm true when --dry-run false");
+    }
+    const statePath = args["state-path"] ?? config.statePath;
+    const state = new ReviewStateStore(statePath);
+    try {
+      const expiredOnly = args["expired-only"] === "true";
+      const result = state.clearIssueEnrichmentRunLeases({ expiredOnly, dryRun });
+      const recommendedActions = dryRun && result.matched > 0
+        ? [`rerun with --dry-run false --confirm true${expiredOnly ? " --expired-only true" : ""} to clear the matched issue-enrichment worker lease(s)`]
+        : [];
+      console.log(redactSecrets(JSON.stringify({ ok: true, statePath, ...result, recommendedActions }, null, 2)));
+    } finally {
+      state.close();
+    }
+    return;
+  }
+
   if (command === "eval-offline") {
     if (!args.input) throw new Error("--input is required for eval-offline");
     const input = JSON.parse(readFileSync(args.input, "utf8"));
@@ -959,6 +980,7 @@ function buildHelp() {
         "build-skill-pack",
         "build-enrichment-comment",
         "issue-enrichment-scan",
+        "clear-issue-enrichment-leases",
         "provider-cooldowns",
         "retry-provider-cooldowns",
         "retry-failed",
@@ -987,6 +1009,7 @@ function buildHelp() {
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --issue 456 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts issue-enrichment-scan --config /path/to/live.json --dry-run true --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts clear-issue-enrichment-leases --config /path/to/live.json --dry-run true",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };
@@ -1136,6 +1159,7 @@ interface ParsedArgs {
   "state-path"?: string;
   "dry-run"?: string;
   "expired-only"?: string;
+  confirm?: string;
   "head-sha"?: string;
   input?: string;
   "input-dir"?: string;
