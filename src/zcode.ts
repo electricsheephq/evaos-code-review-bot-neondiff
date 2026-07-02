@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, statSync, write
 import { join } from "node:path";
 import { parseFindings } from "./findings.js";
 import type { GitNexusContextPacket } from "./gitnexus-context.js";
+import type { GitHubRelatedContextPacket } from "./github-related-context.js";
 import type { RepoMemoryPacket } from "./repo-memory.js";
 import { buildRepoProfilePromptSection, type ResolvedRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
@@ -22,6 +23,7 @@ export function buildReviewPrompt(input: {
   repoProfile?: ResolvedRepoProfile;
   repoMemoryPacket?: Pick<RepoMemoryPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
   gitnexusContextPacket?: Pick<GitNexusContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown" | "gitnexus">;
+  githubRelatedContextPacket?: Pick<GitHubRelatedContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
   maxPatchBytes?: number;
 }): string {
   const fileList = input.files.map((file) => `- ${file.filename}`).join("\n");
@@ -53,11 +55,24 @@ export function buildReviewPrompt(input: {
     ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile), ""] : []),
     ...(input.repoMemoryPacket ? [buildRepoMemoryPromptSection(input.repoMemoryPacket), ""] : []),
     ...(input.gitnexusContextPacket ? [buildGitNexusContextPromptSection(input.gitnexusContextPacket), ""] : []),
+    ...(input.githubRelatedContextPacket ? [buildGitHubRelatedContextPromptSection(input.githubRelatedContextPacket), ""] : []),
     "Files:",
     fileList,
     "",
     "Diff:",
     patches
+  ].join("\n");
+}
+
+function buildGitHubRelatedContextPromptSection(
+  packet: Pick<GitHubRelatedContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">
+): string {
+  return [
+    "GitHub related-context packet (advisory; feature-flagged context):",
+    `Packet SHA-256: ${packet.sha256}`,
+    `Packet budget: ${packet.byteEstimate} bytes; approx ${packet.tokenEstimate} tokens`,
+    "",
+    packet.markdown.trim()
   ].join("\n");
 }
 

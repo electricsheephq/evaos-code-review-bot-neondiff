@@ -7,6 +7,7 @@ import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
+import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
 import {
   buildOperatorDashboard,
   buildRuntimeInventory,
@@ -451,12 +452,13 @@ async function main(): Promise<void> {
       writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), result.packet.markdown);
     }
     const format = args.format ?? "json";
+    const jsonOutput = redactSecrets(JSON.stringify(result, null, 2));
     if (format === "markdown") {
-      console.log(result.ok ? result.packet.markdown : JSON.stringify(result, null, 2));
+      console.log(result.ok ? result.packet.markdown : jsonOutput);
     } else if (format === "both" && result.ok) {
-      console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
+      console.log(`${jsonOutput}\n\n${result.packet.markdown}`);
     } else {
-      console.log(JSON.stringify(result, null, 2));
+      console.log(jsonOutput);
     }
     if (!result.ok) process.exitCode = 1;
     return;
@@ -495,6 +497,55 @@ async function main(): Promise<void> {
       const jsonName = result.ok ? "gitnexus-context-packet.json" : "gitnexus-context-packet-error.json";
       writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
       if (result.ok) writeFileSync(join(safeOutputDir, "gitnexus-context-packet.md"), result.packet.markdown);
+    }
+    const format = args.format ?? "json";
+    if (format === "markdown") {
+      console.log(result.ok ? result.packet.markdown : JSON.stringify(result, null, 2));
+    } else if (format === "both" && result.ok) {
+      console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "build-github-related-context-packet") {
+    if (!args.repo) throw new Error("--repo is required for build-github-related-context-packet");
+    if (!args.pr) throw new Error("--pr is required for build-github-related-context-packet");
+    const repo = parseSingleArg(args.repo, "--repo");
+    const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
+    const config = loadConfig(args.config);
+    const generatedAt = args["generated-at"] ?? new Date().toISOString();
+    parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
+    const relatedConfig = config.githubRelatedContext!;
+    const github = new GitHubApi({
+      ...config.github,
+      requestTimeoutMs: relatedConfig.requestTimeoutMs
+    });
+    const pull = await github.getPull(repo, pullNumber);
+    const result = await buildGitHubRelatedContextPacket({
+      repo,
+      pull,
+      config: {
+        ...relatedConfig,
+        enabled: true,
+        ...(args["max-bytes"] ? { maxPacketBytes: parsePositiveInteger(parseSingleArg(args["max-bytes"], "--max-bytes"), "--max-bytes") } : {}),
+        ...(args["max-related-items"]
+          ? { maxRelatedItems: parsePositiveInteger(parseSingleArg(args["max-related-items"], "--max-related-items"), "--max-related-items") }
+          : {}),
+        ...(args["max-body-bytes"] ? { maxBodyBytes: parseNonNegativeInteger(parseSingleArg(args["max-body-bytes"], "--max-body-bytes"), "--max-body-bytes") } : {}),
+        ...(args["include-cross-repo-refs"] ? { includeCrossRepoRefs: parseBooleanArg(args["include-cross-repo-refs"], "--include-cross-repo-refs") } : {})
+      },
+      reader: github,
+      generatedAt
+    });
+    if (args["output-dir"]) {
+      const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+      mkdirSync(safeOutputDir, { recursive: true });
+      const jsonName = result.ok ? "github-related-context-packet.json" : "github-related-context-packet-error.json";
+      writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
+      if (result.ok) writeFileSync(join(safeOutputDir, "github-related-context-packet.md"), result.packet.markdown);
     }
     const format = args.format ?? "json";
     if (format === "markdown") {
@@ -738,6 +789,7 @@ function buildHelp() {
         "coverage-audit",
         "build-memory-packet",
         "build-gitnexus-context-packet",
+        "build-github-related-context-packet",
         "provider-cooldowns",
         "retry-provider-cooldowns",
         "retry-failed",
@@ -761,6 +813,7 @@ function buildHelp() {
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
       "npx tsx src/cli.ts build-memory-packet --config /path/to/live.json --repo owner/repo --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-gitnexus-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts build-github-related-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };
@@ -796,6 +849,13 @@ function parseNonNegativeInteger(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
   return parsed;
+}
+
+function parseBooleanArg(value: string | string[], label: string): boolean {
+  const parsed = parseSingleArg(value, label);
+  if (parsed === "true") return true;
+  if (parsed === "false") return false;
+  throw new Error(`${label} must be true or false`);
 }
 
 function parseSingleArg(value: string | string[], label: string): string {

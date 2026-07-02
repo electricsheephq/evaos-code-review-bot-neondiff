@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
+import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 
 export interface BotConfig {
   pilotRepos: string[];
@@ -41,6 +42,7 @@ export interface BotConfig {
   };
   repoMemory?: RepoMemoryConfig;
   gitnexusContext?: GitNexusContextConfig;
+  githubRelatedContext?: GitHubRelatedContextConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -216,6 +218,16 @@ const DEFAULT_CONFIG: BotConfig = {
       "**/*.lock"
     ]
   },
+  githubRelatedContext: {
+    enabled: false,
+    packetVersion: "github-related-context-packet-v0.1",
+    maxRelatedItems: 6,
+    maxTitleChars: 160,
+    maxBodyBytes: 1_200,
+    maxPacketBytes: 12_000,
+    requestTimeoutMs: 5_000,
+    includeCrossRepoRefs: false
+  },
   commands: {
     enabled: false,
     botMentions: ["@evaos-code-review-bot"],
@@ -297,6 +309,9 @@ function validateConfig(config: BotConfig): void {
   const gitnexusContext = config.gitnexusContext ?? DEFAULT_CONFIG.gitnexusContext!;
   config.gitnexusContext = gitnexusContext;
   validateGitNexusContextConfig(gitnexusContext, "config.gitnexusContext");
+  const githubRelatedContext = config.githubRelatedContext ?? DEFAULT_CONFIG.githubRelatedContext!;
+  config.githubRelatedContext = githubRelatedContext;
+  validateGitHubRelatedContextConfig(githubRelatedContext, "config.githubRelatedContext");
   validateBoolean(config.commands.enabled, "config.commands.enabled");
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
@@ -355,6 +370,27 @@ function validateGitNexusContextConfig(value: unknown, label: string): void {
         throw new Error(`${label}.repoAliases.${repo} must be a non-empty string`);
       }
     }
+  }
+}
+
+function validateGitHubRelatedContextConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.packetVersion, `${label}.packetVersion`);
+  if (typeof value.packetVersion !== "string" || value.packetVersion.trim().length === 0) {
+    throw new Error(`${label}.packetVersion must be a non-empty string`);
+  }
+  validatePositiveInteger(value.maxPacketBytes, `${label}.maxPacketBytes`);
+  validatePositiveInteger(value.maxRelatedItems, `${label}.maxRelatedItems`);
+  validatePositiveInteger(value.maxTitleChars, `${label}.maxTitleChars`);
+  validateNonNegativeInteger(value.maxBodyBytes, `${label}.maxBodyBytes`);
+  validatePositiveInteger(value.requestTimeoutMs, `${label}.requestTimeoutMs`);
+  validateBoolean(value.includeCrossRepoRefs, `${label}.includeCrossRepoRefs`);
+  if (typeof value.maxPacketBytes === "number" && value.maxPacketBytes < 500) {
+    throw new Error(`${label}.maxPacketBytes must be at least 500`);
+  }
+  if (typeof value.maxTitleChars === "number" && value.maxTitleChars < 20) {
+    throw new Error(`${label}.maxTitleChars must be at least 20`);
   }
 }
 

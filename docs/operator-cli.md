@@ -69,6 +69,15 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   `--output-dir <path>` to write `gitnexus-context-packet.json` and
   `gitnexus-context-packet.md` evidence. This command never posts comments,
   calls ZCode, runs tests, or indexes repositories.
+- `build-github-related-context-packet --repo <owner/name> --pr <number>`:
+  compiles a read-only GitHub related-context packet for one PR. It extracts
+  explicit issue/PR references from the PR title/body, fetches capped issue/PR
+  metadata with App read credentials, and emits JSON/Markdown with packet SHA,
+  byte/token estimates, omitted references, and a redaction report. Use
+  `--output-dir <path>` to write `github-related-context-packet.json` and
+  `github-related-context-packet.md` evidence. This command never posts
+  comments, calls ZCode, auto-applies labels/reviewers, or searches GitHub
+  beyond explicit references.
 - `doctor`: auth/config readiness. Use this for GitHub App/ZCode readiness, not
   runtime health.
 
@@ -169,6 +178,16 @@ npx tsx src/cli.ts build-gitnexus-context-packet --config <config.json> --repo e
 Missing or stale GitNexus indexes produce `degradedMode: true` packets and do
 not block baseline review. Secret-like GitNexus output fails closed and writes a
 redacted `gitnexus-context-packet-error.json` evidence file.
+
+Build a GitHub related-context packet for dry-run evidence:
+
+```bash
+npx tsx src/cli.ts build-github-related-context-packet --config <config.json> --repo electricsheephq/evaos-code-review-bot --pr 102 --output-dir <configured-evidence-dir>/github-related-context/evaos-code-review-bot-pr-102
+```
+
+The packet is advisory only. It cannot justify posted findings without
+current-diff RIGHT-side evidence, and cross-repo references stay disabled unless
+explicitly enabled for that dry run or config.
 
 ## Safety Boundaries
 
