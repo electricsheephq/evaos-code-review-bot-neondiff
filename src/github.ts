@@ -236,7 +236,7 @@ function isIssueLookupMissingOrUnreadable(message: string, path: string): boolea
   if (!/\bGitHub API 403\b/.test(message)) return false;
   if (/\b(rate limit|abuse|secondary rate limit)\b/i.test(message)) return false;
   const responseBody = message.slice(markerIndex + marker.length);
-  return /\b(Resource not accessible by integration|Not Found)\b/i.test(responseBody);
+  return /\bResource not accessible by integration\b/i.test(responseBody);
 }
 
 interface IssueCommentSummary {

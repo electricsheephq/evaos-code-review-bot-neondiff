@@ -1,12 +1,15 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+const tsxCliPath = require.resolve("tsx/cli");
 
 describe("build-enrichment-comment issue CLI", () => {
   const roots: string[] = [];
@@ -131,7 +134,7 @@ describe("build-enrichment-comment issue CLI", () => {
 });
 
 async function runCli(args: string[]) {
-  return execFileAsync(process.execPath, ["./node_modules/.bin/tsx", "src/cli.ts", ...args], {
+  return execFileAsync(process.execPath, [tsxCliPath, "src/cli.ts", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {

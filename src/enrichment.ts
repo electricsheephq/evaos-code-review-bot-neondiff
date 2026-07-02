@@ -148,11 +148,11 @@ export function buildIssueEnrichmentComment(input: {
   const marker = buildIssueEnrichmentMarker({ repo: input.repo, issueNumber: input.issue.number });
   const relatedRefs = extractRelatedRefs(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`).slice(0, input.maxRelatedRefs ?? 8);
   const existingLabels = unique(normalizeIssueLabels(input.issue.labels));
-  const existingLabelKeys = new Set(existingLabels.map((label) => label.toLowerCase()));
+  const existingLabelKeys = new Set(existingLabels.map(normalizedSuggestionKey));
   const suggestedLabels = unique([
     ...(input.suggestedLabels ?? []),
     ...suggestLabelsFromIssue(input.issue)
-  ]).filter((label) => !existingLabelKeys.has(label.toLowerCase())).slice(0, input.maxSuggestions ?? 8);
+  ]).filter((label) => !existingLabelKeys.has(normalizedSuggestionKey(label))).slice(0, input.maxSuggestions ?? 8);
   const owners = unique(input.suggestedOwners ?? []).slice(0, input.maxSuggestions ?? 8);
   const validationSuggestions = unique(input.validationSuggestions ?? []).slice(0, input.maxSuggestions ?? 8);
   const gaps = inferIssueAcceptanceGaps(input.issue);
@@ -374,12 +374,16 @@ function unique(values: string[]): string[] {
   for (const value of values) {
     const formatted = formatPublicText(value);
     if (!formatted) continue;
-    const key = formatted.toLowerCase();
+    const key = normalizedSuggestionKey(formatted);
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(formatted);
   }
   return result;
+}
+
+function normalizedSuggestionKey(value: string): string {
+  return formatPublicText(value).toLowerCase();
 }
 
 function hashBody(value: string): string {
