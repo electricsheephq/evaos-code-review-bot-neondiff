@@ -894,11 +894,12 @@ function applyGlobalIssueEnrichmentCaps(input: {
   for (const scan of input.repoScans) {
     if (!scan.allowed || !scan.ok) continue;
     const repoItems = input.items.filter((item) => item.repo === scan.repo);
-    scan.eligible = repoItems.filter(isEligibleIssueEnrichmentItem).length;
-    scan.skipped = repoItems.filter((item) => item.action === "skipped").length;
-    scan.wouldEnrich = repoItems.filter((item) => item.action === "would_enrich" || item.action === "would_comment").length;
-    scan.wouldComment = repoItems.filter((item) => item.action === "would_comment").length;
-    scan.deferred = repoItems.filter((item) => item.action === "deferred").length;
+    const countedRepoItems = input.shouldCountItem ? repoItems.filter(input.shouldCountItem) : repoItems;
+    scan.eligible = countedRepoItems.filter(isEligibleIssueEnrichmentItem).length;
+    scan.skipped = countedRepoItems.filter((item) => item.action === "skipped").length;
+    scan.wouldEnrich = countedRepoItems.filter((item) => item.action === "would_enrich" || item.action === "would_comment").length;
+    scan.wouldComment = countedRepoItems.filter((item) => item.action === "would_comment").length;
+    scan.deferred = countedRepoItems.filter((item) => item.action === "deferred").length;
   }
 }
 
@@ -931,9 +932,8 @@ function summarizeScan(repoScans: IssueEnrichmentRepoScan[]): IssueEnrichmentSca
 function buildScanRecommendedActions(status: IssueEnrichmentStatus, summary: IssueEnrichmentScanResult["summary"]): string[] {
   const actions = [];
   if (status.state === "blocked") actions.push("resolve issue-enrichment blockers before live issue comments");
-  if (summary.deferred > 0) actions.push("inspect deferred issue-enrichment rows and adjust per-repo throttles only after dry-run review");
   if (summary.deferred > 0) {
-    actions.push("summary.eligible includes cap- and burst-deferred issues; use wouldEnrich/wouldComment for current-cycle throughput");
+    actions.push("inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap- and burst-deferred issues, while wouldEnrich/wouldComment show current-cycle throughput");
   }
   if (summary.truncatedRepos > 0) actions.push("inspect truncated issue-enrichment scans before advancing repo watermarks");
   if (summary.readFailures > 0) actions.push("run doctor and inspect GitHub App Issues permissions");

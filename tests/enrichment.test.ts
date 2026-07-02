@@ -598,7 +598,7 @@ describe("sticky enrichment comments", () => {
         "standalone issue-enrichment scans are stateless; live cycles exclude already-processed issue rows from cap accounting"
       );
       expect(scan.recommendedActions).toContain(
-        "summary.eligible includes cap- and burst-deferred issues; use wouldEnrich/wouldComment for current-cycle throughput"
+        "inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap- and burst-deferred issues, while wouldEnrich/wouldComment show current-cycle throughput"
       );
       expect(JSON.stringify(scan)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
     } finally {
@@ -1700,9 +1700,10 @@ describe("sticky enrichment comments", () => {
           checkedAt: "2026-07-03T02:06:00.000Z"
         });
 
-        expect(first.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
-        expect(second.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
-        expect(posts).toHaveLength(1);
+      expect(first.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
+      expect(second.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+      expect(second.repos[0]).toMatchObject({ eligible: 0, wouldEnrich: 0, wouldComment: 0, deferred: 0 });
+      expect(posts).toHaveLength(1);
         expect(posts[0]!.marker).toContain("issue=41");
         expect(posts[0]!.body).toContain("## evaOS issue enrichment");
         expect(state.getIssueEnrichmentRecord("owner/issue-repo", 41)).toMatchObject({
