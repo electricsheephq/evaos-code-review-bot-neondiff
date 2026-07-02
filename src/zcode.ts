@@ -7,6 +7,7 @@ import type { GitHubRelatedContextPacket } from "./github-related-context.js";
 import type { RepoMemoryPacket } from "./repo-memory.js";
 import { buildRepoProfilePromptSection, type ResolvedRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
+import type { SkillPackContextPacket } from "./skill-packs.js";
 import { buildZCodeRuntimeEnv, resolveZCodeProviderEnv } from "./zcode-env.js";
 import type { Finding, PullFilePatch, PullRequestSummary } from "./types.js";
 
@@ -24,6 +25,7 @@ export function buildReviewPrompt(input: {
   repoMemoryPacket?: Pick<RepoMemoryPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
   gitnexusContextPacket?: Pick<GitNexusContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown" | "gitnexus">;
   githubRelatedContextPacket?: Pick<GitHubRelatedContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
+  skillPackContextPacket?: Pick<SkillPackContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
   maxPatchBytes?: number;
 }): string {
   const fileList = input.files.map((file) => `- ${file.filename}`).join("\n");
@@ -53,6 +55,7 @@ export function buildReviewPrompt(input: {
     `Head SHA: ${input.pull.head.sha}`,
     "",
     ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile), ""] : []),
+    ...(input.skillPackContextPacket ? [buildSkillPackContextPromptSection(input.skillPackContextPacket), ""] : []),
     ...(input.repoMemoryPacket ? [buildRepoMemoryPromptSection(input.repoMemoryPacket), ""] : []),
     ...(input.gitnexusContextPacket ? [buildGitNexusContextPromptSection(input.gitnexusContextPacket), ""] : []),
     ...(input.githubRelatedContextPacket ? [buildGitHubRelatedContextPromptSection(input.githubRelatedContextPacket), ""] : []),
@@ -61,6 +64,19 @@ export function buildReviewPrompt(input: {
     "",
     "Diff:",
     patches
+  ].join("\n");
+}
+
+function buildSkillPackContextPromptSection(
+  packet: Pick<SkillPackContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">
+): string {
+  return [
+    "Read-only skill-pack context (advisory; feature-flagged context):",
+    `Packet SHA-256: ${packet.sha256}`,
+    `Packet budget: ${packet.byteEstimate} bytes; approx ${packet.tokenEstimate} tokens`,
+    "Native ZCode skills, tools, MCP, web, shell, memory, and writes remain disabled.",
+    "",
+    packet.markdown.trim()
   ].join("\n");
 }
 

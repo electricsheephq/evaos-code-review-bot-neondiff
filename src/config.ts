@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
+import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
+import type { SkillPackContextConfig } from "./skill-packs.js";
 
 export interface BotConfig {
   pilotRepos: string[];
@@ -43,6 +45,8 @@ export interface BotConfig {
   repoMemory?: RepoMemoryConfig;
   gitnexusContext?: GitNexusContextConfig;
   githubRelatedContext?: GitHubRelatedContextConfig;
+  skillPacks?: SkillPackContextConfig;
+  enrichment?: EnrichmentConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -228,6 +232,21 @@ const DEFAULT_CONFIG: BotConfig = {
     requestTimeoutMs: 5_000,
     includeCrossRepoRefs: false
   },
+  skillPacks: {
+    enabled: false,
+    packetVersion: "skill-pack-context-packet-v0.1",
+    skillRoot: "/Volumes/LEXAR/Codex/evaos-code-review-bot/skills",
+    allowlist: [],
+    maxSkillBytes: 8_000,
+    maxPacketBytes: 16_000
+  },
+  enrichment: {
+    enabled: false,
+    postIssueComment: false,
+    packetVersion: "enrichment-comment-v0.1",
+    maxRelatedRefs: 8,
+    maxSuggestions: 8
+  },
   commands: {
     enabled: false,
     botMentions: ["@evaos-code-review-bot"],
@@ -312,6 +331,12 @@ function validateConfig(config: BotConfig): void {
   const githubRelatedContext = config.githubRelatedContext ?? DEFAULT_CONFIG.githubRelatedContext!;
   config.githubRelatedContext = githubRelatedContext;
   validateGitHubRelatedContextConfig(githubRelatedContext, "config.githubRelatedContext");
+  const skillPacks = config.skillPacks ?? DEFAULT_CONFIG.skillPacks!;
+  config.skillPacks = skillPacks;
+  validateSkillPacksConfig(skillPacks, "config.skillPacks");
+  const enrichment = config.enrichment ?? DEFAULT_CONFIG.enrichment!;
+  config.enrichment = enrichment;
+  validateEnrichmentConfig(enrichment, "config.enrichment");
   validateBoolean(config.commands.enabled, "config.commands.enabled");
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
@@ -392,6 +417,48 @@ function validateGitHubRelatedContextConfig(value: unknown, label: string): void
   if (typeof value.maxTitleChars === "number" && value.maxTitleChars < 20) {
     throw new Error(`${label}.maxTitleChars must be at least 20`);
   }
+}
+
+function validateSkillPacksConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.packetVersion, `${label}.packetVersion`);
+  if (typeof value.packetVersion !== "string" || value.packetVersion.trim().length === 0) {
+    throw new Error(`${label}.packetVersion must be a non-empty string`);
+  }
+  validateOptionalString(value.skillRoot, `${label}.skillRoot`);
+  if (typeof value.skillRoot !== "string" || value.skillRoot.trim().length === 0) {
+    throw new Error(`${label}.skillRoot must be a non-empty string`);
+  }
+  if (!Array.isArray(value.allowlist)) throw new Error(`${label}.allowlist must be an array`);
+  for (const [index, entry] of value.allowlist.entries()) {
+    if (!isRecord(entry)) throw new Error(`${label}.allowlist.${index} must be an object`);
+    validateOptionalString(entry.id, `${label}.allowlist.${index}.id`);
+    validateOptionalString(entry.path, `${label}.allowlist.${index}.path`);
+    if (typeof entry.id !== "string" || !/^[A-Za-z0-9_.-]+$/.test(entry.id)) {
+      throw new Error(`${label}.allowlist.${index}.id must be a stable identifier`);
+    }
+    if (typeof entry.path !== "string" || entry.path.trim().length === 0) {
+      throw new Error(`${label}.allowlist.${index}.path must be a non-empty string`);
+    }
+  }
+  validatePositiveInteger(value.maxSkillBytes, `${label}.maxSkillBytes`);
+  validatePositiveInteger(value.maxPacketBytes, `${label}.maxPacketBytes`);
+  if (typeof value.maxPacketBytes === "number" && value.maxPacketBytes < 500) {
+    throw new Error(`${label}.maxPacketBytes must be at least 500`);
+  }
+}
+
+function validateEnrichmentConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateBoolean(value.postIssueComment, `${label}.postIssueComment`);
+  validateOptionalString(value.packetVersion, `${label}.packetVersion`);
+  if (typeof value.packetVersion !== "string" || value.packetVersion.trim().length === 0) {
+    throw new Error(`${label}.packetVersion must be a non-empty string`);
+  }
+  validatePositiveInteger(value.maxRelatedRefs, `${label}.maxRelatedRefs`);
+  validatePositiveInteger(value.maxSuggestions, `${label}.maxSuggestions`);
 }
 
 function validateProfileRecord(record: Record<string, RepoProfileConfig> | undefined, label: string): void {

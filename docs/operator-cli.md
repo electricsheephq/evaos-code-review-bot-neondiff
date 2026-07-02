@@ -78,6 +78,18 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   `github-related-context-packet.md` evidence. This command never posts
   comments, calls ZCode, auto-applies labels/reviewers, or searches GitHub
   beyond explicit references.
+- `build-skill-pack`: compiles configured read-only skill-pack files into an
+  advisory prompt packet. It emits JSON/Markdown with packet SHA, byte/token
+  estimates, source provenance, omitted-source reasons, and a redaction report.
+  Use `--output-dir <path>` to write `skill-pack-context-packet.json` and
+  `skill-pack-context-packet.md` evidence. This command never enables native
+  ZCode skills, MCP, tools, shell, web, memory, agents, or writes.
+- `build-enrichment-comment --repo <owner/name> --pr <number>`: builds the
+  sticky PR enrichment comment body for dry-run inspection. It reads GitHub PR
+  metadata/files, current policy, changed-surface validation, and proof
+  requirements, then emits JSON/Markdown with the bot-owned marker and rendered
+  comment. This command never posts comments, auto-applies labels, assigns
+  reviewers, calls ZCode, or mutates GitHub state.
 - `doctor`: auth/config readiness. Use this for GitHub App/ZCode readiness, not
   runtime health.
 
@@ -189,6 +201,25 @@ The packet is advisory only. It cannot justify posted findings without
 current-diff RIGHT-side evidence, and cross-repo references stay disabled unless
 explicitly enabled for that dry run or config.
 
+Build a read-only skill-pack packet for dry-run evidence:
+
+```bash
+npx tsx src/cli.ts build-skill-pack --config <config.json> --output-dir <configured-evidence-dir>/skill-packs/default-config
+```
+
+The packet is advisory prompt context only. Native ZCode `skill: true`, MCP,
+tools, shell, web, memory, agents, and writes remain disabled even when the
+packet is enabled by config.
+
+Build a sticky enrichment comment for dry-run evidence:
+
+```bash
+npx tsx src/cli.ts build-enrichment-comment --config <config.json> --repo electricsheephq/evaos-code-review-bot --pr 102 --output-dir <configured-evidence-dir>/enrichment/evaos-code-review-bot-pr-102
+```
+
+The dry-run output includes the hidden sticky marker used for future update
+behavior, but it does not post the comment or apply suggested labels/reviewers.
+
 ## Safety Boundaries
 
 Default operator commands are read-only. They can return nonzero when a gate is
@@ -208,6 +239,12 @@ Mutating commands remain explicit:
 - `build-memory-packet --record-build true`
 - `run-once --dry-run false`
 - `daemon --dry-run false`
+
+`build-skill-pack` and `build-enrichment-comment` are dry-run/evidence builders.
+They remain read-only. Live `run-once` and `daemon` can consume skill-pack
+prompt packets only when `skillPacks.enabled` is true, and can post enrichment
+comments only when `enrichment.enabled`, `enrichment.postIssueComment`, App
+credentials, and non-dry-run mode are all present.
 
 The CLI intentionally does not implement a global pause-all policy,
 one-at-a-time global queue policy, process killing, or Z.ai peak-hour blackout.

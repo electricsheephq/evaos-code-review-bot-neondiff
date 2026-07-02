@@ -12,6 +12,7 @@ import {
   buildRepoMemoryContext,
   buildGitNexusContext,
   buildGitHubRelatedContext,
+  buildSkillPackContext,
   classifyProviderError,
   createGitHubRelatedContextReader,
   isSuccessfulRetryStatus,
@@ -170,6 +171,38 @@ describe("worker review failures", () => {
     expect(error).toContain("[redacted-secret]");
     expect(error).not.toContain(secretValue);
     state.close();
+  });
+
+  it("fails closed and redacts evidence when skill-pack packet metadata contains secrets", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-skill-pack-secret-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    const skillRoot = join(root, "skills");
+    const secretValue = "ghp_123456789012345678901234";
+    mkdirSync(evidenceDir, { recursive: true });
+    mkdirSync(skillRoot, { recursive: true });
+    writeFileSync(join(skillRoot, "review.md"), "Prefer current diff evidence.");
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      skillPacks: {
+        enabled: true,
+        packetVersion: `skill-pack-context-packet-v0.1-${secretValue}`,
+        skillRoot,
+        allowlist: [{ id: "review", path: "review.md" }],
+        maxSkillBytes: 4_000,
+        maxPacketBytes: 12_000
+      }
+    };
+
+    expect(() =>
+      buildSkillPackContext({
+        config,
+        evidenceDir
+      })
+    ).toThrow(/Skill-pack context packet failed closed/);
+    const error = readFileSync(join(evidenceDir, "skill-pack-context-packet-error.json"), "utf8");
+    expect(error).toContain("[redacted-secret]");
+    expect(error).not.toContain(secretValue);
   });
 
   it("keeps false-positive suppression notes from starving prompt memory notes", () => {

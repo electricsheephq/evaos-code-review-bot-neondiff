@@ -69,6 +69,27 @@ describe("daemon cycle resilience", () => {
         baselinedExisting: 0,
         policySkips: []
       }),
+      retryProviderCooldownsImpl: async () => ({
+        ok: true,
+        checkedAt: "2026-07-01T00:00:00.000Z",
+        dryRun: false,
+        expiredOnly: true,
+        limit: 1,
+        candidates: 0,
+        attempted: 0,
+        results: [],
+        summary: {
+          reviewed: 0,
+          dryRun: 0,
+          remainedCooldown: 0,
+          failed: 0,
+          skippedStaleHead: 0,
+          skippedProcessed: 0,
+          skippedClosed: 0,
+          skippedCapacity: 0,
+          other: 0
+        }
+      }),
       recordHeartbeatImpl: (event) => heartbeats.push(event),
       stdout: () => undefined,
       stderr: () => undefined
