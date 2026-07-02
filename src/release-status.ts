@@ -242,7 +242,7 @@ export function collectReleaseStatus(input: {
     expectedHead: input.expectedHead,
     configPath,
     launchd: readLaunchdStatus(input.launchdLabel ?? "com.electricsheephq.evaos-code-review-bot"),
-    database: readDatabaseStatus(statePath, now),
+    database: readDatabaseStatus(statePath, now, config.reviewConcurrency.leaseTtlMs),
     heartbeat: readHeartbeatStatus(
       statePath,
       config.pollIntervalMs * 2,
@@ -383,7 +383,7 @@ function readReviewQueueBudgetJobs(
   };
 }
 
-function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus {
+function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_000): ReleaseDatabaseStatus {
   if (!existsSync(statePath)) return { rowCount: 0, errorCount: 0 };
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
@@ -443,7 +443,7 @@ function readDatabaseStatus(statePath: string, now: Date): ReleaseDatabaseStatus
     const activeProviderCooldownCount = providerCooldowns.length - expiredProviderCooldownCount;
     const coveredByActiveQueueRetryProviderCooldownCount = activeGlobalProviderCooldowns.length > 0
       ? 0
-      : countExpiredProviderCooldownsCoveredByActiveQueueRetry(db, expiredProviderCooldowns, now);
+      : countExpiredProviderCooldownsCoveredByActiveQueueRetry(db, expiredProviderCooldowns, now, leaseTtlMs);
     const coveredExpiredProviderCooldownCount = activeGlobalProviderCooldowns.length > 0
       ? expiredProviderCooldownCount
       : coveredByActiveQueueRetryProviderCooldownCount;
@@ -624,7 +624,8 @@ interface ProviderCooldownCandidate {
 function countExpiredProviderCooldownsCoveredByActiveQueueRetry(
   db: DatabaseSync,
   cooldowns: ProviderCooldownCandidate[],
-  now: Date
+  now: Date,
+  leaseTtlMs: number
 ): number {
   if (cooldowns.length === 0) return 0;
   const hasTable = db
@@ -635,13 +636,22 @@ function countExpiredProviderCooldownsCoveredByActiveQueueRetry(
     (db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>)
       .map((column) => column.name)
   );
-  if (!columns.has("repo") || !columns.has("pull_number") || !columns.has("head_sha") || !columns.has("state")) {
+  if (
+    !columns.has("repo") ||
+    !columns.has("pull_number") ||
+    !columns.has("head_sha") ||
+    !columns.has("state") ||
+    !columns.has("updated_at")
+  ) {
     return 0;
   }
   const hasLeaseExpiresAt = columns.has("lease_expires_at");
   const leaseClause = hasLeaseExpiresAt
-    ? "and (lease_expires_at is null or datetime(lease_expires_at) > datetime(?))"
-    : "";
+    ? `and (
+         (lease_expires_at is not null and datetime(lease_expires_at) > datetime(?))
+         or (lease_expires_at is null and datetime(updated_at) > datetime(?))
+       )`
+    : "and datetime(updated_at) > datetime(?)";
   const query = db.prepare(
     `select 1
      from review_queue_jobs
@@ -653,12 +663,13 @@ function countExpiredProviderCooldownsCoveredByActiveQueueRetry(
      limit 1`
   );
   const nowIso = now.toISOString();
+  const legacyLeaseCutoffIso = new Date(now.getTime() - leaseTtlMs).toISOString();
   return cooldowns.filter((cooldown) => {
     const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
     if (!Number.isFinite(cooldownUntilMs) || cooldownUntilMs > now.getTime()) return false;
     const row = hasLeaseExpiresAt
-      ? query.get(cooldown.repo, cooldown.pullNumber, cooldown.headSha, nowIso)
-      : query.get(cooldown.repo, cooldown.pullNumber, cooldown.headSha);
+      ? query.get(cooldown.repo, cooldown.pullNumber, cooldown.headSha, nowIso, legacyLeaseCutoffIso)
+      : query.get(cooldown.repo, cooldown.pullNumber, cooldown.headSha, legacyLeaseCutoffIso);
     return Boolean(row);
   }).length;
 }

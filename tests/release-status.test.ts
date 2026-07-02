@@ -595,6 +595,95 @@ describe("beta release status", () => {
     expect(status.gates.some((gate) => gate.name === "provider_cooldown_backlog" && !gate.ok)).toBe(true);
   });
 
+  it("does not cover expired provider cooldown rows with stale null queue leases", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-stale-null-lease-cooldown-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          lease_expires_at text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare(
+        `insert into processed_reviews (repo, pull_number, head_sha, status, error)
+         values (?, ?, ?, 'skipped', ?)`
+      ).run(
+        "electricsheephq/WorldOS",
+        1127,
+        "stale-null-lease-head",
+        "provider_rate_limit_cooldown_until=2026-07-01T00:01:00.000Z; reason=provider_overloaded"
+      );
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, lease_id, lease_expires_at, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'running', ?, null, ?, ?)`
+      ).run(
+        "running-stale-null-lease-head",
+        "automatic:electricsheephq/WorldOS#1127@stale-null-lease-head",
+        "electricsheephq/WorldOS",
+        "electricsheephq",
+        1127,
+        "stale-null-lease-head",
+        "lease-without-expiry",
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:00.000Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-01T00:20:00.000Z")
+    });
+
+    expect(status.database.expiredProviderCooldownCount).toBe(1);
+    expect(status.database.coveredExpiredProviderCooldownCount).toBe(0);
+    expect(status.database.coveredByActiveQueueRetryProviderCooldownCount).toBe(0);
+    expect(status.database.retryableExpiredProviderCooldownCount).toBe(1);
+    expect(status.gates.some((gate) => gate.name === "provider_cooldown_backlog" && !gate.ok)).toBe(true);
+  });
+
   it("reports reviewer session counts from the live state database", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-reviewer-sessions-"));
     roots.push(root);
