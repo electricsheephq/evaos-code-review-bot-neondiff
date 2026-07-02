@@ -314,9 +314,20 @@ describe("repo memory packets", () => {
         now: new Date("not-a-date")
       })
     ).toThrow(/now must be a valid Date/);
+    store.recordRepoMemoryNote({
+      noteId: "expired-offset-note",
+      repo,
+      kind: "policy_note",
+      title: "Expired offset timestamp",
+      body: "Offset timestamps should be normalized before filtering and limiting.",
+      source: "operator",
+      expiresAt: "2026-07-02T00:30:00+01:00",
+      now: new Date(generatedAt)
+    });
 
     const notes = store.listRepoMemoryNotes({ repo, now: new Date(generatedAt) });
     expect(notes).toHaveLength(2);
+    expect(notes.map((entry) => entry.noteId)).not.toContain("expired-offset-note");
     expect(notes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

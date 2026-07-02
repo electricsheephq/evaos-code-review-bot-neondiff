@@ -22,13 +22,15 @@ describe("secret redaction", () => {
     const cookieHeader = "Cookie: session=123456789012345678901234";
     const queryToken = "https://example.com/callback?token=123456789012345678901234";
     const privateKey = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----";
+    const truncatedPrivateKey = "-----BEGIN PRIVATE KEY-----\nsensitive-key-material-without-footer";
 
     expect(containsSecretLikeText(credentialUrl)).toBe(true);
     expect(containsSecretLikeText(cookieHeader)).toBe(true);
     expect(containsSecretLikeText(queryToken)).toBe(true);
     expect(containsSecretLikeText(privateKey)).toBe(true);
-    expect(redactSecrets(`${credentialUrl}\n${cookieHeader}\n${queryToken}\n${privateKey}`)).not.toMatch(
-      /password1234567890|123456789012345678901234|BEGIN PRIVATE KEY/
+    expect(containsSecretLikeText(truncatedPrivateKey)).toBe(true);
+    expect(redactSecrets(`${credentialUrl}\n${cookieHeader}\n${queryToken}\n${privateKey}\n${truncatedPrivateKey}`)).not.toMatch(
+      /password1234567890|123456789012345678901234|BEGIN PRIVATE KEY|sensitive-key-material/
     );
   });
 

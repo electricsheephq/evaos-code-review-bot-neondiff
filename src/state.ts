@@ -1616,7 +1616,7 @@ export class ReviewStateStore {
     const params: Array<string | number> = [input.repo];
     const predicates = ["repo = ?"];
     if (input.includeExpired !== true) {
-      predicates.push("(expires_at is null or expires_at > ?)");
+      predicates.push("(expires_at is null or datetime(expires_at) > datetime(?))");
       params.push((input.now ?? new Date()).toISOString());
     }
     const limit = input.limit ? " limit ?" : "";

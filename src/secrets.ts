@@ -12,7 +12,7 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Za-z0-9]{3,}[-_](?:secret|token|password|cookie)[-_][A-Za-z0-9_-]{3,}\b/gi,
   /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*/g
 ];
 
 export function containsSecretLikeText(input: string): boolean {
