@@ -38,6 +38,7 @@ export interface BotConfig {
   reviewStatusComment?: {
     enabled: boolean;
   };
+  repoMemory?: RepoMemoryConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -129,6 +130,15 @@ export interface ReviewSchedulerConfig {
   backgroundPriority: number;
 }
 
+export interface RepoMemoryConfig {
+  enabled: boolean;
+  memoryRoot: string;
+  packetVersion: string;
+  maxPacketBytes: number;
+  maxStateNotes: number;
+  includeStaleNotes: boolean;
+}
+
 const DEFAULT_CONFIG: BotConfig = {
   pilotRepos: ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
   pollIntervalMs: 90_000,
@@ -174,6 +184,14 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   reviewStatusComment: {
     enabled: false
+  },
+  repoMemory: {
+    enabled: false,
+    memoryRoot: ".evaos/repo-memory",
+    packetVersion: "repo-memory-packet-v0.1",
+    maxPacketBytes: 12_000,
+    maxStateNotes: 20,
+    includeStaleNotes: false
   },
   commands: {
     enabled: false,
@@ -250,6 +268,9 @@ function validateConfig(config: BotConfig): void {
   const reviewStatusComment = config.reviewStatusComment ?? DEFAULT_CONFIG.reviewStatusComment!;
   config.reviewStatusComment = reviewStatusComment;
   validateBoolean(reviewStatusComment.enabled, "config.reviewStatusComment.enabled");
+  const repoMemory = config.repoMemory ?? DEFAULT_CONFIG.repoMemory!;
+  config.repoMemory = repoMemory;
+  validateRepoMemoryConfig(repoMemory, "config.repoMemory");
   validateBoolean(config.commands.enabled, "config.commands.enabled");
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
@@ -265,6 +286,22 @@ function validateConfig(config: BotConfig): void {
   }
   validateProfileRecord(config.repoProfiles.repos, "repoProfiles.repos");
   validateProfileRecord(config.repoProfiles.orgFallbacks, "repoProfiles.orgFallbacks");
+}
+
+function validateRepoMemoryConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.memoryRoot, `${label}.memoryRoot`);
+  validateOptionalString(value.packetVersion, `${label}.packetVersion`);
+  if (typeof value.memoryRoot !== "string" || value.memoryRoot.trim().length === 0) {
+    throw new Error(`${label}.memoryRoot must be a non-empty string`);
+  }
+  if (typeof value.packetVersion !== "string" || value.packetVersion.trim().length === 0) {
+    throw new Error(`${label}.packetVersion must be a non-empty string`);
+  }
+  validatePositiveInteger(value.maxPacketBytes, `${label}.maxPacketBytes`);
+  validatePositiveInteger(value.maxStateNotes, `${label}.maxStateNotes`);
+  validateBoolean(value.includeStaleNotes, `${label}.includeStaleNotes`);
 }
 
 function validateProfileRecord(record: Record<string, RepoProfileConfig> | undefined, label: string): void {
@@ -404,6 +441,7 @@ function validateRepoName(value: string, label: string): void {
 }
 
 function validateOwnerName(value: string, label: string): void {
+  if (value === "." || value === "..") throw new Error(`${label} must contain only GitHub name characters`);
   if (!/^[A-Za-z0-9_.-]+$/.test(value)) throw new Error(`${label} must contain only GitHub name characters`);
 }
 

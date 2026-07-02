@@ -31,6 +31,7 @@ export interface Finding {
 
 export interface DroppedFinding extends Partial<Finding> {
   reason: string;
+  fingerprint?: string;
 }
 
 export interface PullFilePatch {

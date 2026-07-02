@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import {
+  buildRepoMemoryContext,
   classifyProviderError,
   isSuccessfulRetryStatus,
   localDateFolder,
@@ -78,6 +79,144 @@ describe("worker review failures", () => {
     expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:01:00.000Z"))).toMatchObject({
       reason: "provider_request_rate_limit"
     });
+    state.close();
+  });
+
+  it("degrades oversized repo-memory packets to no-memory context", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-repo-memory-budget-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const evidenceDir = join(root, "evidence");
+    const fingerprint = `finding:${"b".repeat(64)}`;
+    mkdirSync(evidenceDir, { recursive: true });
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      repoMemory: {
+        enabled: true,
+        memoryRoot: join(root, "memory"),
+        packetVersion: "repo-memory-packet-v0.1",
+        maxPacketBytes: 10,
+        maxStateNotes: 10,
+        includeStaleNotes: false
+      }
+    };
+    state.recordRepoMemoryNote({
+      noteId: "fp-large",
+      repo: "electricsheephq/WorldOS",
+      kind: "false_positive",
+      title: "Large false positive",
+      body: "An oversized advisory memory packet must not abort the review.",
+      source: "test",
+      fingerprint,
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    const context = buildRepoMemoryContext({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      evidenceDir
+    });
+
+    expect(context.packet).toBeUndefined();
+    expect(context.falsePositiveFingerprints).toEqual([fingerprint]);
+    const error = JSON.parse(readFileSync(join(evidenceDir, "repo-memory-packet-error.json"), "utf8"));
+    expect(error).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("maxPacketBytes")
+    });
+    expect(error.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "packet:markdown", reason: "budget_exceeded" })
+    ]));
+    state.close();
+  });
+
+  it("fails closed and redacts evidence when repo-memory sources contain secrets", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-repo-memory-secret-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const evidenceDir = join(root, "evidence");
+    const memoryDir = join(root, "memory", "electricsheephq", "WorldOS");
+    const secretValue = ["123456789012", "345678901234"].join("");
+    mkdirSync(evidenceDir, { recursive: true });
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "repo-memory.md"), `## Bad Memory\napi_key=${secretValue}\n`);
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      repoMemory: {
+        enabled: true,
+        memoryRoot: join(root, "memory"),
+        packetVersion: "repo-memory-packet-v0.1",
+        maxPacketBytes: 12_000,
+        maxStateNotes: 10,
+        includeStaleNotes: false
+      }
+    };
+
+    expect(() =>
+      buildRepoMemoryContext({
+        config,
+        state,
+        repo: "electricsheephq/WorldOS",
+        evidenceDir
+      })
+    ).toThrow(/Repo memory packet failed closed/);
+    const error = readFileSync(join(evidenceDir, "repo-memory-packet-error.json"), "utf8");
+    expect(error).toContain("[redacted-secret]");
+    expect(error).not.toContain(secretValue);
+    state.close();
+  });
+
+  it("keeps false-positive suppression notes from starving prompt memory notes", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-repo-memory-split-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const evidenceDir = join(root, "evidence");
+    const fingerprint = `finding:${"c".repeat(64)}`;
+    mkdirSync(evidenceDir, { recursive: true });
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      repoMemory: {
+        enabled: true,
+        memoryRoot: join(root, "memory"),
+        packetVersion: "repo-memory-packet-v0.1",
+        maxPacketBytes: 12_000,
+        maxStateNotes: 1,
+        includeStaleNotes: false
+      }
+    };
+    state.recordRepoMemoryNote({
+      noteId: "policy-survives",
+      repo: "electricsheephq/WorldOS",
+      kind: "policy_note",
+      title: "Policy survives",
+      body: "Prompt memory should still include current policy notes.",
+      source: "test",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    state.recordRepoMemoryNote({
+      noteId: "fp-newer",
+      repo: "electricsheephq/WorldOS",
+      kind: "false_positive",
+      title: "Newer false positive",
+      body: "Suppression notes use a separate read budget.",
+      source: "test",
+      fingerprint,
+      expiresAt: "2026-07-09T00:00:00.000Z",
+      now: new Date("2026-07-02T00:01:00.000Z")
+    });
+
+    const context = buildRepoMemoryContext({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      evidenceDir
+    });
+
+    expect(context.falsePositiveFingerprints).toEqual([fingerprint]);
+    expect(context.packet?.sources.map((source) => source.id)).toContain("policy-survives");
+    expect(context.packet?.markdown).toContain("Prompt memory should still include current policy notes.");
     state.close();
   });
 

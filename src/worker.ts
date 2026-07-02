@@ -17,6 +17,7 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate } from "./review-gate.js";
+import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { redactSecrets } from "./secrets.js";
 import { parseProviderCooldownError, ReviewStateStore, type ReviewRunLease } from "./state.js";
@@ -643,12 +644,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       expectedHeadSha: pull.head.sha,
       workRoot: config.workRoot
     });
+    const repoMemory = buildRepoMemoryContext({
+      config,
+      state,
+      repo,
+      evidenceDir
+    });
 
     const prompt = buildReviewPrompt({
       repo,
       pull,
       files: reviewFiles,
       repoProfile: repoPolicy.profile,
+      ...(repoMemory.packet ? { repoMemoryPacket: repoMemory.packet } : {}),
       maxPatchBytes: config.zcode.maxPatchBytes
     });
     writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
@@ -682,7 +690,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       findings: zcodeResult.findings,
       files: reviewFiles,
       droppedFromSchema: zcodeResult.droppedFromSchema,
-      maxInlineComments: 25
+      maxInlineComments: 25,
+      repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints
     });
     const comments = gate.comments;
     const dropped = sanitizeDroppedFindings(gate.dropped);
@@ -840,6 +849,80 @@ function buildEvidenceDir(
 ): string {
   const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
   return commandDecision.shouldReview ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+}
+
+export function buildRepoMemoryContext(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  evidenceDir: string;
+}): { packet?: RepoMemoryPacket; falsePositiveFingerprints: string[] } {
+  const repoMemoryConfig = input.config.repoMemory;
+  if (!repoMemoryConfig?.enabled) return { falsePositiveFingerprints: [] };
+
+  const generatedAt = new Date().toISOString();
+  const generatedAtDate = new Date(generatedAt);
+  const promptNotes = input.state.listRepoMemoryNotes({
+    repo: input.repo,
+    includeExpired: repoMemoryConfig.includeStaleNotes,
+    now: generatedAtDate,
+    limit: repoMemoryConfig.maxStateNotes,
+    excludeKind: "false_positive"
+  });
+  const falsePositiveNotes = input.state.listRepoMemoryNotes({
+    repo: input.repo,
+    includeExpired: repoMemoryConfig.includeStaleNotes,
+    now: generatedAtDate,
+    limit: repoMemoryConfig.maxStateNotes,
+    kind: "false_positive"
+  });
+  const falsePositiveFingerprints = falsePositiveNotes
+    .filter((note) => note.kind === "false_positive" && note.fingerprint && !isRepoMemoryNoteExpired(note, generatedAtDate))
+    .map((note) => note.fingerprint!);
+  const packetResult = buildRepoMemoryPacket({
+    repo: input.repo,
+    humanMarkdown: readRepoMemoryMarkdown(repoMemoryConfig.memoryRoot, input.repo),
+    stateNotes: promptNotes,
+    generatedAt,
+    packetVersion: repoMemoryConfig.packetVersion,
+    maxPacketBytes: repoMemoryConfig.maxPacketBytes,
+    includeStaleNotes: repoMemoryConfig.includeStaleNotes
+  });
+
+  if (!packetResult.ok) {
+    writeRedactedJson(join(input.evidenceDir, "repo-memory-packet-error.json"), packetResult);
+    if (isRepoMemoryBudgetFailure(packetResult)) {
+      return { falsePositiveFingerprints };
+    }
+    throw new Error(`Repo memory packet failed closed: ${packetResult.error}`);
+  }
+
+  writeRedactedJson(join(input.evidenceDir, "repo-memory-packet.json"), packetResult);
+  writeFileSync(join(input.evidenceDir, "repo-memory-packet.md"), packetResult.packet.markdown);
+  input.state.recordRepoMemoryPacketBuild({
+    packetSha: packetResult.packet.sha256,
+    repo: packetResult.packet.repo,
+    packetVersion: packetResult.packet.packetVersion,
+    generatedAt: packetResult.packet.generatedAt,
+    byteEstimate: packetResult.packet.byteEstimate,
+    tokenEstimate: packetResult.packet.tokenEstimate,
+    includedNoteIds: packetResult.packet.sources.filter((source) => source.type === "sqlite_note").map((source) => source.id),
+    redactionStatus: packetResult.redactionReport.ok ? "passed" : "failed",
+    memoryRoot: repoMemoryConfig.memoryRoot
+  });
+  return { packet: packetResult.packet, falsePositiveFingerprints };
+}
+
+function isRepoMemoryBudgetFailure(packetResult: ReturnType<typeof buildRepoMemoryPacket>): boolean {
+  return !packetResult.ok &&
+    packetResult.redactionReport.ok &&
+    packetResult.excluded.some((source) => source.reason === "budget_exceeded");
+}
+
+function isRepoMemoryNoteExpired(note: { expiresAt?: string }, now: Date): boolean {
+  if (!note.expiresAt) return false;
+  const expiresAtMs = Date.parse(note.expiresAt);
+  return !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime();
 }
 
 function recordStaleHeadSkip(input: {

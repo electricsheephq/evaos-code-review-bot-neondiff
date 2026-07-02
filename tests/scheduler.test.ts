@@ -619,15 +619,23 @@ describe("provider-aware review scheduler", () => {
   });
 
   it("maps duplicate processed-head status comments from the stored processed outcome", async () => {
+    const cooldownError = "provider_rate_limit_cooldown_until=2026-07-02T00:10:00.000Z; reason=provider_overloaded";
     const scenarios = [
       { processedStatus: "posted", expectedStatus: "completed", expectedQueueState: "posted" },
       { processedStatus: "dry_run", expectedStatus: "completed", expectedQueueState: "queued" },
       { processedStatus: "failed", expectedStatus: "failed", expectedQueueState: "failed" },
-      { processedStatus: "skipped", expectedStatus: "skipped", expectedQueueState: "failed" }
+      { processedStatus: "skipped", expectedStatus: "skipped", expectedQueueState: "stale_retired" },
+      {
+        processedStatus: "skipped",
+        error: cooldownError,
+        expectedStatus: "provider_deferred",
+        expectedQueueState: "provider_deferred",
+        expectedLastError: cooldownError
+      }
     ] as const;
 
-    for (const scenario of scenarios) {
-      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-status-processed-${scenario.processedStatus}-`));
+    for (const [index, scenario] of scenarios.entries()) {
+      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-status-processed-${scenario.processedStatus}-${index}-`));
       roots.push(root);
       const config = schedulerConfig(root, ["org/repo-a"]);
       config.reviewStatusComment!.enabled = true;
@@ -637,6 +645,7 @@ describe("provider-aware review scheduler", () => {
         pullNumber: 1,
         headSha: HEAD_A,
         status: scenario.processedStatus,
+        ...("error" in scenario ? { error: scenario.error } : {}),
         ...(scenario.processedStatus === "posted"
           ? { event: "COMMENT" as const, reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-existing" }
           : {})
@@ -658,10 +667,79 @@ describe("provider-aware review scheduler", () => {
       expect(statusCalls.map(statusFromBody)).toEqual(["in_progress", scenario.expectedStatus]);
       expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
         state: scenario.expectedQueueState,
-        lastError: `processed_head_already_${scenario.processedStatus}`
+        lastError: "expectedLastError" in scenario ? scenario.expectedLastError : `processed_head_already_${scenario.processedStatus}`
       });
       if (scenario.processedStatus === "posted") {
         expect(statusCalls.at(-1)?.body).toContain("https://github.com/org/repo-a/pull/1#pullrequestreview-existing");
+      }
+      state.close();
+    }
+  });
+
+  it("reconciles historical failed queue rows for already-skipped processed heads", async () => {
+    const cooldownError = "provider_rate_limit_cooldown_until=2026-07-02T00:10:00.000Z; reason=provider_overloaded";
+    const scenarios = [
+      {
+        name: "ordinary-skip",
+        headSha: HEAD_A,
+        expectedState: "stale_retired",
+        expectedLastError: "processed_head_already_skipped_reconciled"
+      },
+      {
+        name: "provider-cooldown",
+        headSha: HEAD_B,
+        error: cooldownError,
+        expectedState: "provider_deferred",
+        expectedLastError: cooldownError
+      }
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-reconcile-processed-skip-${scenario.name}-`));
+      roots.push(root);
+      const config = schedulerConfig(root, ["org/repo-a"]);
+      const state = new ReviewStateStore(config.statePath);
+      state.recordProcessed({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: scenario.headSha,
+        status: "skipped",
+        ...("error" in scenario ? { error: scenario.error } : {})
+      });
+      const job = state.enqueueReviewQueueJob({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: scenario.headSha,
+        baseSha: "base"
+      }).job;
+      state.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "failed",
+        lastError: "processed_head_already_skipped",
+        now: new Date("2026-07-02T00:00:00.000Z")
+      });
+
+      const result = await runScheduledCycleWithDeps({
+        config,
+        github: githubFromMap(new Map([
+          ["org/repo-a", [pull("org/repo-a", 1, scenario.headSha)]]
+        ])),
+        state,
+        options: { dryRun: false, useZCode: false },
+        reviewPullImpl: async () => {
+          throw new Error("reconciled historical failed rows should not call reviewPull");
+        },
+        now: new Date("2026-07-02T00:01:00.000Z")
+      });
+
+      expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+        state: scenario.expectedState,
+        lastError: scenario.expectedLastError
+      });
+      if (scenario.expectedState === "provider_deferred") {
+        expect(result.queue.providerDeferred).toBe(1);
+      } else {
+        expect(result.queue.staleRetired).toBe(1);
       }
       state.close();
     }

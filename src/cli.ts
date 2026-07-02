@@ -2,8 +2,8 @@
 import { loadConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
 import {
@@ -23,9 +23,10 @@ import {
   summarizeAgentInventory
 } from "./operator-cli.js";
 import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
+import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
-import { ReviewStateStore, type ReviewQueueJobState } from "./state.js";
+import { listRepoMemoryNotesReadOnly, ReviewStateStore, type ReviewQueueJobState } from "./state.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
@@ -76,6 +77,7 @@ async function main(): Promise<void> {
       activation: config.activation,
       reviewConcurrency: config.reviewConcurrency,
       reviewerSessions: config.reviewerSessions,
+      repoMemory: config.repoMemory,
       commandsEnabled: config.commands.enabled,
       statePath: config.statePath,
       workRoot: config.workRoot,
@@ -387,6 +389,78 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "build-memory-packet") {
+    if (!args.repo) throw new Error("--repo is required for build-memory-packet");
+    const config = loadConfig(args.config);
+    const generatedAt = args["generated-at"] ?? new Date().toISOString();
+    const generatedAtDate = parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
+    const memoryConfig = config.repoMemory!;
+    const statePath = args["state-path"] ?? config.statePath;
+    if (args["state-path"] && realPathPreservingMissing(args["state-path"]) !== realPathPreservingMissing(config.statePath)) {
+      throw new Error("--state-path for build-memory-packet must match the configured statePath");
+    }
+    const includeExpired = args["include-stale"] === "true" || memoryConfig.includeStaleNotes;
+    const noteLimit = args["note-limit"] ? parsePositiveInteger(args["note-limit"], "--note-limit") : memoryConfig.maxStateNotes;
+    const promptNotes = listRepoMemoryNotesReadOnly(statePath, {
+      repo: args.repo,
+      includeExpired,
+      now: generatedAtDate,
+      limit: noteLimit,
+      excludeKind: "false_positive"
+    });
+    const falsePositiveNotes = listRepoMemoryNotesReadOnly(statePath, {
+      repo: args.repo,
+      includeExpired,
+      now: generatedAtDate,
+      limit: noteLimit,
+      kind: "false_positive"
+    });
+    const result = buildRepoMemoryPacket({
+      repo: args.repo,
+      humanMarkdown: readRepoMemoryMarkdown(args["memory-root"] ?? memoryConfig.memoryRoot, args.repo),
+      stateNotes: [...promptNotes, ...falsePositiveNotes],
+      findingFingerprints: parseCsv(args.fingerprint),
+      generatedAt,
+      packetVersion: memoryConfig.packetVersion,
+      maxPacketBytes: args["max-bytes"] ? parsePositiveInteger(args["max-bytes"], "--max-bytes") : memoryConfig.maxPacketBytes,
+      includeStaleNotes: includeExpired
+    });
+    if (result.ok && args["record-build"] === "true") {
+      const state = new ReviewStateStore(statePath);
+      try {
+        state.recordRepoMemoryPacketBuild({
+          packetSha: result.packet.sha256,
+          repo: result.packet.repo,
+          packetVersion: result.packet.packetVersion,
+          generatedAt: result.packet.generatedAt,
+          byteEstimate: result.packet.byteEstimate,
+          tokenEstimate: result.packet.tokenEstimate,
+          includedNoteIds: result.packet.sources.filter((source) => source.type === "sqlite_note").map((source) => source.id),
+          redactionStatus: result.redactionReport.ok ? "passed" : "failed",
+          memoryRoot: args["memory-root"] ?? memoryConfig.memoryRoot
+        });
+      } finally {
+        state.close();
+      }
+    }
+    if (result.ok && args["output-dir"]) {
+      const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+      mkdirSync(safeOutputDir, { recursive: true });
+      writeFileSync(join(safeOutputDir, "repo-memory-packet.json"), `${JSON.stringify(result, null, 2)}\n`);
+      writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), result.packet.markdown);
+    }
+    const format = args.format ?? "json";
+    if (format === "markdown") {
+      console.log(result.ok ? result.packet.markdown : JSON.stringify(result, null, 2));
+    } else if (format === "both" && result.ok) {
+      console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
   if (command === "eval-offline") {
     if (!args.input) throw new Error("--input is required for eval-offline");
     const input = JSON.parse(readFileSync(args.input, "utf8"));
@@ -615,6 +689,7 @@ function buildHelp() {
         "doctor",
         "release-status",
         "coverage-audit",
+        "build-memory-packet",
         "provider-cooldowns",
         "retry-provider-cooldowns",
         "retry-failed",
@@ -636,6 +711,7 @@ function buildHelp() {
       "npx tsx src/cli.ts dashboard --config /path/to/live.json --human",
       "npx tsx src/cli.ts budget-status --config /path/to/live.json",
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
+      "npx tsx src/cli.ts build-memory-packet --config /path/to/live.json --repo owner/repo --output-dir /path/to/evidence",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };
@@ -671,6 +747,59 @@ function parseNonNegativeInteger(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
   return parsed;
+}
+
+function parseCanonicalIsoTimestamp(value: string, label: string): Date {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
+    throw new Error(`${label} must be a canonical ISO timestamp`);
+  }
+  return new Date(parsed);
+}
+
+function parseCsv(value?: string | string[]): string[] {
+  if (value === undefined) return [];
+  const values = Array.isArray(value) ? value : [value];
+  return values.flatMap((entry) => entry.split(",")).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function assertMemoryPacketOutputDirSafe(outputDir: string, evidenceDir: string): string {
+  const evidenceRoot = realPathPreservingMissing(evidenceDir);
+  const target = realPathPreservingMissing(outputDir);
+  if (!isPathInsideOrEqual(target, evidenceRoot)) {
+    throw new Error("--output-dir must be inside the configured evidenceDir");
+  }
+  if (isInsideGitCheckout(target)) {
+    throw new Error("--output-dir must not be inside the repository checkout or another repository checkout");
+  }
+  return target;
+}
+
+function isPathInsideOrEqual(target: string, root: string): boolean {
+  return target === root || target.startsWith(`${root}${sep}`);
+}
+
+function isInsideGitCheckout(target: string): boolean {
+  let cursor = target;
+  const root = parsePath(cursor).root;
+  for (;;) {
+    if (existsSync(join(cursor, ".git"))) return true;
+    if (cursor === root) return false;
+    cursor = dirname(cursor);
+  }
+}
+
+function realPathPreservingMissing(inputPath: string): string {
+  const resolved = resolve(inputPath);
+  const missingSegments: string[] = [];
+  let cursor = resolved;
+  const root = parsePath(cursor).root;
+  while (!existsSync(cursor)) {
+    if (cursor === root) throw new Error(`Path does not have an existing parent: ${inputPath}`);
+    missingSegments.unshift(basename(cursor));
+    cursor = dirname(cursor);
+  }
+  return join(realpathSync.native(cursor), ...missingSegments);
 }
 
 const REVIEW_QUEUE_JOB_STATES: ReviewQueueJobState[] = [
@@ -731,6 +860,14 @@ interface ParsedArgs {
   "input-dir"?: string;
   "output-dir"?: string;
   "output-root"?: string;
+  "memory-root"?: string;
+  "generated-at"?: string;
+  "include-stale"?: string;
+  "note-limit"?: string;
+  "max-bytes"?: string;
+  "record-build"?: string;
+  fingerprint?: string;
+  format?: string;
   limit?: string;
   "budget-detail-limit"?: string;
   "budget-job-limit"?: string;
