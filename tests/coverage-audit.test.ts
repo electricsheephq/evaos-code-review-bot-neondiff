@@ -196,6 +196,472 @@ describe("coverage audit", () => {
     state.close();
   });
 
+  it("reports queued current heads separately from unprocessed misses", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 15,
+      headSha: "head-queued",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background",
+      providerId: "GLM-5.2",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+    state.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(15, "head-queued")]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:02:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      queued: 1,
+      unprocessed: 0
+    });
+    expect(audit.queued).toEqual([
+      expect.objectContaining({
+        repo: "owner/allowed",
+        pullNumber: 15,
+        headSha: "head-queued",
+        queueState: "queued",
+        source: "automatic",
+        lane: "background",
+        priority: 50,
+        createdAt: "2026-07-01T00:01:00.000Z"
+      })
+    ]);
+    reader.close();
+  });
+
+  it("covers legacy automatic queue rows without a base sha", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 21,
+      headSha: "head-legacy-queued",
+      source: "automatic",
+      lane: "background",
+      providerId: "GLM-5.2",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+    state.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(21, "head-legacy-queued", { baseSha: "new-base" })]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:02:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      queued: 1,
+      unprocessed: 0
+    });
+    expect(audit.queued[0]).toMatchObject({
+      pullNumber: 21,
+      headSha: "head-legacy-queued",
+      queueState: "queued",
+      source: "automatic"
+    });
+    reader.close();
+  });
+
+  it("reports provider-deferred queue rows in the provider-deferred bucket", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 22,
+      headSha: "head-provider-deferred",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background",
+      providerId: "GLM-5.2",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+    state.close();
+    const db = new DatabaseSync(join(root, "state.sqlite"));
+    db.prepare(
+      `update review_queue_jobs
+       set state = 'provider_deferred',
+           next_eligible_at = ?,
+           last_error = ?,
+           updated_at = ?
+       where repo = ? and pull_number = ?`
+    ).run(
+      "2026-07-01T00:05:00.000Z",
+      "repo_provider_cooldown_until=2026-07-01T00:05:00.000Z; reason=provider_overloaded",
+      "2026-07-01T00:02:00.000Z",
+      "owner/allowed",
+      22
+    );
+    db.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(22, "head-provider-deferred")]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      providerDeferred: 1,
+      queued: 0,
+      unprocessed: 0
+    });
+    expect(audit.providerDeferred[0]).toMatchObject({
+      pullNumber: 22,
+      headSha: "head-provider-deferred",
+      status: "skipped",
+      createdAt: "2026-07-01T00:01:00.000Z",
+      updatedAt: "2026-07-01T00:02:00.000Z",
+      cooldownUntil: "2026-07-01T00:05:00.000Z",
+      reason: "provider_overloaded"
+    });
+    reader.close();
+  });
+
+  it("falls back to a stable reason for provider-deferred queue rows with raw errors", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 23,
+      headSha: "head-provider-error",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background",
+      providerId: "GLM-5.2",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+    state.close();
+    const db = new DatabaseSync(join(root, "state.sqlite"));
+    db.prepare(
+      `update review_queue_jobs
+       set state = 'provider_deferred',
+           next_eligible_at = ?,
+           last_error = ?,
+           updated_at = ?
+       where repo = ? and pull_number = ?`
+    ).run(
+      "2026-07-01T00:05:00.000Z",
+      "HTTP 503 from provider",
+      "2026-07-01T00:02:00.000Z",
+      "owner/allowed",
+      23
+    );
+    db.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(23, "head-provider-error")]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(audit.providerDeferred[0]).toMatchObject({
+      pullNumber: 23,
+      headSha: "head-provider-error",
+      cooldownUntil: "2026-07-01T00:05:00.000Z",
+      reason: "provider_error",
+      error: "HTTP 503 from provider"
+    });
+    reader.close();
+  });
+
+  it("surfaces durable provider-deferred retries before provider-cooldown processed rows", async () => {
+    const { root, state } = createState();
+    state.recordProcessed({
+      repo: "owner/allowed",
+      pullNumber: 24,
+      headSha: "head-retry",
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:02:00.000Z; reason=provider_request_rate_limit"
+    });
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 24,
+      headSha: "head-retry",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background",
+      providerId: "GLM-5.2",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+    state.close();
+    const db = new DatabaseSync(join(root, "state.sqlite"));
+    db.prepare(
+      `update review_queue_jobs
+       set state = 'provider_deferred',
+           next_eligible_at = ?,
+           last_error = ?,
+           updated_at = ?
+       where repo = ? and pull_number = ?`
+    ).run(
+      "2026-07-01T00:05:00.000Z",
+      "repo_provider_cooldown_until=2026-07-01T00:05:00.000Z; reason=provider_overloaded",
+      "2026-07-01T00:02:00.000Z",
+      "owner/allowed",
+      24
+    );
+    db.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(24, "head-retry")]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(audit.summary).toMatchObject({
+      processed: 0,
+      providerDeferred: 1,
+      queued: 0,
+      unprocessed: 0
+    });
+    expect(audit.providerDeferred[0]).toMatchObject({
+      pullNumber: 24,
+      headSha: "head-retry",
+      createdAt: "2026-07-01T00:01:00.000Z",
+      updatedAt: "2026-07-01T00:02:00.000Z",
+      cooldownUntil: "2026-07-01T00:05:00.000Z",
+      reason: "provider_overloaded"
+    });
+    reader.close();
+  });
+
+  it("does not cover current heads with stale or terminal queue rows", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 16,
+      headSha: "old-head",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background"
+    });
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 17,
+      headSha: "head-terminal",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background"
+    });
+    state.close();
+    const db = new DatabaseSync(join(root, "state.sqlite"));
+    db.prepare("update review_queue_jobs set state = 'posted' where repo = ? and pull_number = ?")
+      .run("owner/allowed", 17);
+    db.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(16, "new-head"), pull(17, "head-terminal")]
+      } as unknown as GitHubApi,
+      state: reader
+    });
+
+    expect(audit.ok).toBe(false);
+    expect(audit.summary).toMatchObject({
+      queued: 0,
+      unprocessed: 2
+    });
+    expect(audit.unprocessed.map((entry) => `${entry.pullNumber}@${entry.headSha}`)).toEqual([
+      "16@new-head",
+      "17@head-terminal"
+    ]);
+    reader.close();
+  });
+
+  it("does not cover automatic queue rows from a different base sha", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 18,
+      headSha: "head-same",
+      baseSha: "old-base",
+      source: "automatic",
+      lane: "background"
+    });
+    state.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(18, "head-same", { baseSha: "base" })]
+      } as unknown as GitHubApi,
+      state: reader
+    });
+
+    expect(audit.ok).toBe(false);
+    expect(audit.summary).toMatchObject({
+      queued: 0,
+      unprocessed: 1
+    });
+    expect(audit.unprocessed[0]).toMatchObject({ pullNumber: 18, headSha: "head-same" });
+    reader.close();
+  });
+
+  it("does not cover expired leased queue rows", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 19,
+      headSha: "head-expired-lease",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    state.close();
+    const db = new DatabaseSync(join(root, "state.sqlite"));
+    db.prepare(
+      `update review_queue_jobs
+       set state = 'leased',
+           lease_expires_at = ?,
+           updated_at = ?
+       where repo = ? and pull_number = ?`
+    ).run(
+      "2026-07-01T00:02:00.000Z",
+      "2026-07-01T00:01:00.000Z",
+      "owner/allowed",
+      19
+    );
+    db.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(19, "head-expired-lease")]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(audit.ok).toBe(false);
+    expect(audit.summary).toMatchObject({
+      queued: 0,
+      unprocessed: 1
+    });
+    expect(audit.unprocessed[0]).toMatchObject({ pullNumber: 19, headSha: "head-expired-lease" });
+    reader.close();
+  });
+
+  it("covers leased queue rows while their lease is still active", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 20,
+      headSha: "head-active-lease",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    state.close();
+    const db = new DatabaseSync(join(root, "state.sqlite"));
+    db.prepare(
+      `update review_queue_jobs
+       set state = 'leased',
+           lease_expires_at = ?,
+           updated_at = ?
+       where repo = ? and pull_number = ?`
+    ).run(
+      "2026-07-01T00:04:00.000Z",
+      "2026-07-01T00:01:00.000Z",
+      "owner/allowed",
+      20
+    );
+    db.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(20, "head-active-lease")]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      queued: 1,
+      unprocessed: 0
+    });
+    expect(audit.queued[0]).toMatchObject({ pullNumber: 20, headSha: "head-active-lease", queueState: "leased" });
+    reader.close();
+  });
+
+  it("covers running queue rows while their lease is still active", async () => {
+    const { root, state } = createState();
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 25,
+      headSha: "head-running",
+      baseSha: "base",
+      source: "automatic",
+      lane: "background",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    state.close();
+    const db = new DatabaseSync(join(root, "state.sqlite"));
+    db.prepare(
+      `update review_queue_jobs
+       set state = 'running',
+           lease_expires_at = ?,
+           updated_at = ?
+       where repo = ? and pull_number = ?`
+    ).run(
+      "2026-07-01T00:04:00.000Z",
+      "2026-07-01T00:01:00.000Z",
+      "owner/allowed",
+      25
+    );
+    db.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(25, "head-running")]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      queued: 1,
+      unprocessed: 0
+    });
+    expect(audit.queued[0]).toMatchObject({ pullNumber: 25, headSha: "head-running", queueState: "running" });
+    reader.close();
+  });
+
   it("supports canary and single-PR scoping without marking closed PRs as misses", async () => {
     const { root, state } = createState();
     let getPullCount = 0;
@@ -498,7 +964,7 @@ function minimalConfig(root: string): BotConfig {
 function pull(
   number: number,
   headSha: string,
-  options: { draft?: boolean; state?: string } = {}
+  options: { draft?: boolean; state?: string; baseSha?: string } = {}
 ): PullRequestSummary {
   return {
     number,
@@ -511,7 +977,7 @@ function pull(
       repo: { full_name: "owner/allowed" }
     },
     base: {
-      sha: "base",
+      sha: options.baseSha ?? "base",
       ref: "main",
       repo: { full_name: "owner/allowed" }
     },
