@@ -37,11 +37,14 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
 - `dashboard`: read-only PR review dashboard over coverage, durable queue,
   readiness lifecycle rows, GitHub PR links, and local evidence-path hints.
   Filter with `--repo`, `--status`, `--priority`, `--stale-head-reason`, and
-  `--limit`. Use `--job-limit` to cap durable-queue/readiness rows read from
-  SQLite before merging; `--limit` caps the final merged item list. JSON is the
-  default; use `--human` for a compact operator view. The command exits nonzero
-  when visible rows are blocked; healthy active rows are counted but do not fail
-  the gate by themselves.
+  `--limit`. By default the dashboard hides stale-only historical rows so the
+  operator gate reflects current-head health; use `--include-history true` or an
+  explicit stale status filter when investigating historical rows. Use
+  `--job-limit` to cap durable-queue/readiness rows read from SQLite before
+  merging; `--limit` caps the final merged item list. JSON is the default; use
+  `--human` for a compact operator view. The command exits nonzero when visible
+  rows are blocked; healthy active rows are counted but do not fail the gate by
+  themselves.
 - `budget-status`: read-only scheduler budget projection. Shows active counts,
   queued counts, would-lease jobs, delayed jobs, and deterministic delay reasons
   such as `provider_cooldown`, `provider_capacity`, `org_capacity`,
@@ -141,6 +144,12 @@ Show dashboard rows blocked on proof:
 
 ```bash
 npx tsx src/cli.ts dashboard --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --status blocked_on_proof
+```
+
+Include stale-only historical rows when diagnosing old heads:
+
+```bash
+npx tsx src/cli.ts dashboard --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --include-history true
 ```
 
 Show one repo as a short human dashboard:

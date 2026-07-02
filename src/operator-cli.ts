@@ -197,6 +197,7 @@ export interface OperatorDashboardFilters {
   status?: string;
   priority?: number;
   staleHeadReason?: string;
+  includeHistory?: boolean;
   limit?: number;
 }
 
@@ -241,6 +242,7 @@ export interface OperatorDashboard {
     checkBlocks: number;
     failed: number;
     providerDeferred: number;
+    hiddenHistoricalStale: number;
   };
   items: OperatorDashboardItem[];
 }
@@ -673,7 +675,7 @@ export function summarizeAgentInventory(input: {
   }
 
   return {
-    ok: input.launchd.state === "running" && input.heartbeat.status === "fresh" && staleLeases.length === 0,
+    ok: input.launchd.state === "running" && isHealthyAgentHeartbeat(input.heartbeat) && staleLeases.length === 0,
     checkedAt: input.checkedAt ?? now.toISOString(),
     launchd: input.launchd,
     heartbeat: input.heartbeat,
@@ -1113,13 +1115,19 @@ export function buildOperatorDashboard(input: {
   const filtered = withEvidence
     .filter((item) => dashboardItemMatches(item, filters))
     .sort(compareDashboardItems);
-  const visible = filters.limit ? filtered.slice(0, filters.limit) : filtered;
+  const includeHistory = filters.includeHistory === true || Boolean(filters.status || filters.staleHeadReason);
+  const hiddenHistoricalStale = includeHistory ? 0 : filtered.filter(isHistoricalStaleDashboardItem).length;
+  const currentItems = includeHistory ? filtered : filtered.filter((item) => !isHistoricalStaleDashboardItem(item));
+  const visible = filters.limit ? currentItems.slice(0, filters.limit) : currentItems;
 
   return {
     ok: visible.every((item) => !isDashboardItemBlocked(item)),
     checkedAt,
     filters,
-    summary: summarizeDashboardItems(visible),
+    summary: {
+      ...summarizeDashboardItems(visible),
+      hiddenHistoricalStale
+    },
     items: visible
   };
 }
@@ -1446,6 +1454,7 @@ function compactDashboardFilters(filters: OperatorDashboardFilters): OperatorDas
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.priority !== undefined ? { priority: filters.priority } : {}),
     ...(filters.staleHeadReason ? { staleHeadReason: filters.staleHeadReason } : {}),
+    ...(filters.includeHistory === true ? { includeHistory: true } : {}),
     ...(filters.limit !== undefined ? { limit: filters.limit } : {})
   };
 }
@@ -1494,8 +1503,15 @@ function summarizeDashboardItems(items: OperatorDashboardItem[]): OperatorDashbo
     proofGaps: items.filter((item) => item.proofStatus === "blocked_on_proof").length,
     checkBlocks: items.filter((item) => item.checkStatus === "blocked_on_checks").length,
     failed: items.filter((item) => dashboardStatuses(item).includes("failed")).length,
-    providerDeferred: items.filter((item) => dashboardStatuses(item).includes("provider_deferred")).length
+    providerDeferred: items.filter((item) => dashboardStatuses(item).includes("provider_deferred")).length,
+    hiddenHistoricalStale: 0
   };
+}
+
+function isHistoricalStaleDashboardItem(item: OperatorDashboardItem): boolean {
+  if (item.coverageState === "stale_head") return false;
+  const statuses = dashboardStatuses(item);
+  return statuses.length > 0 && statuses.every((status) => status === "stale" || status === "stale_head" || status === "stale_retired");
 }
 
 function isDashboardItemBlocked(item: OperatorDashboardItem): boolean {
@@ -1515,6 +1531,10 @@ function isDashboardItemBlocked(item: OperatorDashboardItem): boolean {
 function dashboardStatuses(item: OperatorDashboardItem): string[] {
   return [item.status, item.coverageState, item.queueState, item.readinessState]
     .filter((status): status is string => Boolean(status));
+}
+
+function isHealthyAgentHeartbeat(heartbeat: ReleaseHeartbeatStatus): boolean {
+  return heartbeat.status === "fresh" || heartbeat.status === "active";
 }
 
 function isActiveDashboardStatus(status: string): boolean {

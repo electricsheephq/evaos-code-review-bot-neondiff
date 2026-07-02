@@ -413,7 +413,22 @@ describe("repo profile registry", () => {
     const cases = [
       {
         repo: "electricsheephq/WorldOS",
-        files: ["extensions/renderers/shared/room_recipes.json", "qa/export_scene_grid.py", "qa/seed_gfx_crypt_2room.py"]
+        files: [
+          "extensions/renderers/shared/room_recipes.json",
+          "qa/export_scene_grid.py",
+          "qa/seed_gfx_crypt_2room.py",
+          "servers/engine/combat_grid.py",
+          "servers/engine/server.py",
+          "servers/engine/tests/test_grid_los.py"
+        ]
+      },
+      {
+        repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+        files: [
+          "packages/runtime/src/review-runner.ts",
+          "packages/runtime/tests/review-runner.test.ts",
+          "src/index.ts"
+        ]
       },
       {
         repo: "100yenadmin/evaOS-GUI",

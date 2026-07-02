@@ -103,6 +103,9 @@ export async function runScheduledCycleWithDeps(input: {
   const eventClock = input.clock ?? (() => input.now ?? new Date());
   const repos = input.options.repo ? [input.options.repo] : listReposToScan(config);
   const providerId = config.zcode.providerId ?? config.zcode.model ?? "zcode";
+  if (config.reviewerSessions?.enabled) {
+    input.state.reconcileReviewerSessions(now, input.options.repo);
+  }
 
   for (const repo of repos) {
     result.reposScanned += 1;

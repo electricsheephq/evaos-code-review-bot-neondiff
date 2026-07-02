@@ -1774,6 +1774,61 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("reconciles expired and dead reviewer sessions at scheduler cycle boundaries", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-reconcile-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const expired = state.assignReviewerSessionJob({
+      repo: "org/repo-expired",
+      pullNumber: 1,
+      headSha: "expired-head",
+      ttlMs: 1_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const deadWorker = state.assignReviewerSessionJob({
+      repo: "org/repo-dead",
+      pullNumber: 2,
+      headSha: "dead-head",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      workerPid: 999_999_999,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const healthy = state.assignReviewerSessionJob({
+      repo: "org/repo-healthy",
+      pullNumber: 3,
+      headSha: "healthy-head",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    if (!expired.assigned || !deadWorker.assigned || !healthy.assigned) throw new Error("expected assignments");
+
+    await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/repo-a", []]])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: reviewPull,
+      now: new Date("2026-07-01T00:00:02.000Z")
+    });
+
+    expect(state.getReviewerSession(expired.session.sessionId)).toMatchObject({ state: "expired" });
+    expect(state.getReviewerSession(deadWorker.session.sessionId)).toMatchObject({
+      state: "failed",
+      lastError: "owner_pid_not_alive:999999999"
+    });
+    expect(state.getReviewerSession(healthy.session.sessionId)).toMatchObject({ state: "active" });
+    state.close();
+  });
+
   it("does not consume RepoSticky session head budget for stop or explain commands", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-command-non-review-"));
     roots.push(root);

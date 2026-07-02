@@ -467,6 +467,51 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("globally reconciles expired and dead-worker reviewer sessions without same-repo assignment", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-reconcile-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const expired = store.assignReviewerSessionJob({
+      repo: "org/repo-expired",
+      pullNumber: 1,
+      headSha: "expired-head",
+      ttlMs: 1_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const deadWorker = store.assignReviewerSessionJob({
+      repo: "org/repo-dead",
+      pullNumber: 2,
+      headSha: "dead-head",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      workerPid: 999_999_999,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const healthy = store.assignReviewerSessionJob({
+      repo: "org/repo-healthy",
+      pullNumber: 3,
+      headSha: "healthy-head",
+      ttlMs: 60_000,
+      headCountLimit: 10,
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    if (!expired.assigned || !deadWorker.assigned || !healthy.assigned) throw new Error("expected assignments");
+
+    expect(store.reconcileReviewerSessions(new Date("2026-07-01T00:00:02.000Z"))).toEqual({
+      expired: 1,
+      failedDeadWorkers: 1
+    });
+    expect(store.getReviewerSession(expired.session.sessionId)).toMatchObject({ state: "expired" });
+    expect(store.getReviewerSession(deadWorker.session.sessionId)).toMatchObject({
+      state: "failed",
+      lastError: "owner_pid_not_alive:999999999"
+    });
+    expect(store.getReviewerSession(healthy.session.sessionId)).toMatchObject({ state: "active" });
+    store.close();
+  });
+
   it("tracks reviewer session job lifecycle without calling ZCode", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-reviewer-session-jobs-"));
     roots.push(root);
