@@ -259,6 +259,7 @@ export async function collectIssueEnrichmentScan(input: {
   sinceByRepo?: Record<string, string>;
   canPostAsApp?: boolean;
   checkedAt?: string;
+  applyGlobalCaps?: boolean;
 }): Promise<IssueEnrichmentScanResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
@@ -353,12 +354,14 @@ export async function collectIssueEnrichmentScan(input: {
     });
   }
 
-  applyGlobalIssueEnrichmentCaps({
-    items,
-    repoScans,
-    config,
-    checkedAt
-  });
+  if (input.applyGlobalCaps !== false) {
+    applyGlobalIssueEnrichmentCaps({
+      items,
+      repoScans,
+      config,
+      checkedAt
+    });
+  }
   const summary = summarizeScan(repoScans);
   return {
     ok: summary.readFailures === 0,
@@ -511,11 +514,12 @@ export async function runIssueEnrichmentCycle(input: {
           dryRun: input.dryRun,
           repos: reposToScan,
           includeExisting: input.includeExisting,
-          since: input.since,
-          sinceByRepo,
-          canPostAsApp: input.github.canPostAsApp(),
-          checkedAt
-        })
+        since: input.since,
+        sinceByRepo,
+        canPostAsApp: input.github.canPostAsApp(),
+        checkedAt,
+        applyGlobalCaps: false
+      })
       : {
           ok: true,
           checkedAt,
@@ -525,8 +529,20 @@ export async function runIssueEnrichmentCycle(input: {
           repos: [],
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
-        };
-    const combinedRepos = [...baselineRepos, ...scanned.repos];
+      };
+  applyGlobalIssueEnrichmentCaps({
+    items: scanned.items,
+    repoScans: scanned.repos,
+    config,
+    checkedAt,
+    shouldCountItem: (item) => {
+      const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
+      const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
+      const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
+      return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
+    }
+  });
+  const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
     const scan: IssueEnrichmentScanResult = {
       ...scanned,
@@ -798,12 +814,14 @@ function applyGlobalIssueEnrichmentCaps(input: {
   repoScans: IssueEnrichmentRepoScan[];
   config: IssueEnrichmentConfig;
   checkedAt: string;
+  shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
 }): void {
   let issuesConsidered = 0;
   let commentsConsidered = 0;
   for (let index = 0; index < input.items.length; index += 1) {
     const item = input.items[index]!;
     if (item.action !== "would_enrich" && item.action !== "would_comment") continue;
+    if (input.shouldCountItem && !input.shouldCountItem(item)) continue;
     const policy = resolveIssueEnrichmentRepoPolicy(input.config, item.repo);
     if (issuesConsidered >= input.config.globalMaxIssuesPerCycle) {
       input.items[index] = issueScanItem(

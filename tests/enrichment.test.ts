@@ -107,6 +107,38 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("backfills issue enrichment global caps for legacy partial configs", () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-legacy-config-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: false,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 2,
+          maxCommentsPerCycle: 0,
+          cooldownMs: 3_600_000,
+          burstWindowMs: 3_600_000,
+          maxIssuesPerBurst: 8,
+          lookbackMs: 600_000,
+          processExistingOpenIssuesOnActivation: false
+        }
+      })}\n`);
+
+      expect(loadConfig(configPath).issueEnrichment).toMatchObject({
+        maxIssuesPerCycle: 2,
+        maxCommentsPerCycle: 0,
+        globalMaxIssuesPerCycle: 5,
+        globalMaxCommentsPerCycle: 1,
+        maxActiveRuns: 1,
+        leaseTtlMs: 1_200_000
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects issue enrichment global caps that could post more comments than processed issues", () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-invalid-global-caps-"));
     try {
@@ -1005,6 +1037,72 @@ describe("sticky enrichment comments", () => {
           issueUpdatedAt: "2026-07-03T01:00:00.000Z",
           reason: "dry_run_only"
         });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let already processed issues consume live global caps forever", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-global-cap-progress-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 10,
+          maxCommentsPerCycle: 1,
+          globalMaxIssuesPerCycle: 2,
+          globalMaxCommentsPerCycle: 1,
+          cooldownMs: 60_000,
+          maxIssuesPerBurst: 10,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const issues: GitHubRelatedIssueOrPull[] = [1, 2, 3, 4].map((number) => ({
+          number,
+          title: `Issue ${number}`,
+          state: "open",
+          updated_at: "2026-07-03T06:00:00.000Z",
+          body: "Acceptance criteria and owner present."
+        }));
+        const github = {
+          listIssuesForEnrichment: async () => issues,
+          canPostAsApp: () => false,
+          upsertIssueComment: async () => {
+            throw new Error("should not post in dry-run-only mode");
+          }
+        };
+
+        const first = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T06:01:00.000Z"
+        });
+        const second = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T06:03:00.000Z"
+        });
+
+        expect(first.summary).toMatchObject({ dryRunRecorded: 2, deferredRecorded: 2, alreadyProcessed: 0 });
+        expect(second.summary).toMatchObject({ dryRunRecorded: 2, deferredRecorded: 0, alreadyProcessed: 2 });
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 1)).toMatchObject({ status: "dry_run" });
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 2)).toMatchObject({ status: "dry_run" });
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 3)).toMatchObject({ status: "dry_run" });
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 4)).toMatchObject({ status: "dry_run" });
       } finally {
         state.close();
       }
