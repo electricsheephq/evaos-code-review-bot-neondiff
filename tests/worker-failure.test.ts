@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -129,6 +129,42 @@ describe("worker review failures", () => {
     expect(error.excluded).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "packet:markdown", reason: "budget_exceeded" })
     ]));
+    state.close();
+  });
+
+  it("fails closed and redacts evidence when repo-memory sources contain secrets", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-repo-memory-secret-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const evidenceDir = join(root, "evidence");
+    const memoryDir = join(root, "memory", "electricsheephq", "WorldOS");
+    const secretValue = ["123456789012", "345678901234"].join("");
+    mkdirSync(evidenceDir, { recursive: true });
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "repo-memory.md"), `## Bad Memory\napi_key=${secretValue}\n`);
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      repoMemory: {
+        enabled: true,
+        memoryRoot: join(root, "memory"),
+        packetVersion: "repo-memory-packet-v0.1",
+        maxPacketBytes: 12_000,
+        maxStateNotes: 10,
+        includeStaleNotes: false
+      }
+    };
+
+    expect(() =>
+      buildRepoMemoryContext({
+        config,
+        state,
+        repo: "electricsheephq/WorldOS",
+        evidenceDir
+      })
+    ).toThrow(/Repo memory packet failed closed/);
+    const error = readFileSync(join(evidenceDir, "repo-memory-packet-error.json"), "utf8");
+    expect(error).toContain("[redacted-secret]");
+    expect(error).not.toContain(secretValue);
     state.close();
   });
 

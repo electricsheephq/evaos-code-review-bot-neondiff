@@ -241,7 +241,18 @@ function buildSources(humanMarkdown: string | undefined, includedNotes: Included
     sources.push({
       id: note.noteId,
       type: "sqlite_note",
-      sha256: sha256(`${note.kind}\n${note.title}\n${note.body}\n${note.source}\n${note.fingerprint ?? ""}`),
+      sha256: sha256(JSON.stringify({
+        noteId: note.noteId,
+        kind: note.kind,
+        title: note.title,
+        body: note.body,
+        source: note.source,
+        confidence: note.confidence ?? null,
+        fingerprint: note.fingerprint ?? null,
+        updatedAt: note.updatedAt,
+        expiresAt: note.expiresAt ?? null,
+        stale
+      })),
       stale
     });
   }

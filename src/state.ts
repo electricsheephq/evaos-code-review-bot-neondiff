@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -242,6 +242,15 @@ export interface RecordRepoMemoryNoteInput {
   fingerprint?: string;
   expiresAt?: string;
   now?: Date;
+}
+
+export interface ListRepoMemoryNotesInput {
+  repo: string;
+  includeExpired?: boolean;
+  now?: Date;
+  limit?: number;
+  kind?: RepoMemoryNoteKind;
+  excludeKind?: RepoMemoryNoteKind;
 }
 
 export interface RepoMemoryPacketBuildRecord {
@@ -1606,53 +1615,25 @@ export class ReviewStateStore {
     return row ? mapRepoMemoryNoteRow(row) : undefined;
   }
 
-  listRepoMemoryNotes(input: {
-    repo: string;
-    includeExpired?: boolean;
-    now?: Date;
-    limit?: number;
-    kind?: RepoMemoryNoteKind;
-    excludeKind?: RepoMemoryNoteKind;
-  }): RepoMemoryNoteRecord[] {
-    validateRepoName(input.repo, "repo");
-    if (input.limit !== undefined) validatePositiveQueueLimit(input.limit, "limit");
-    if (input.kind && input.excludeKind) throw new Error("kind and excludeKind cannot both be set");
-    if (input.kind) validateRepoMemoryNoteKind(input.kind, "kind");
-    if (input.excludeKind) validateRepoMemoryNoteKind(input.excludeKind, "excludeKind");
-    const params: Array<string | number> = [input.repo];
-    const predicates = ["repo = ?"];
-    if (input.kind) {
-      predicates.push("kind = ?");
-      params.push(input.kind);
-    }
-    if (input.excludeKind) {
-      predicates.push("kind != ?");
-      params.push(input.excludeKind);
-    }
-    if (input.includeExpired !== true) {
-      predicates.push("(expires_at is null or datetime(expires_at) > datetime(?))");
-      params.push((input.now ?? new Date()).toISOString());
-    }
-    const limit = input.limit ? " limit ?" : "";
-    if (input.limit) params.push(input.limit);
-    const rows = this.db
-      .prepare(
-        `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
-         from repo_memory_notes
-         where ${predicates.join(" and ")}
-         order by datetime(updated_at) desc, note_id asc
-         ${limit}`
-      )
-      .all(...params) as unknown as RepoMemoryNoteRow[];
-    return rows.map(mapRepoMemoryNoteRow);
+  listRepoMemoryNotes(input: ListRepoMemoryNotesInput): RepoMemoryNoteRecord[] {
+    return listRepoMemoryNotesFromDb(this.db, input);
   }
 
   recordRepoMemoryPacketBuild(record: RepoMemoryPacketBuildRecord): void {
     validateRepoName(record.repo, "repo");
     if (!/^[a-f0-9]{64}$/.test(record.packetSha)) throw new Error("packetSha must be a SHA-256 hex digest");
     if (!record.packetVersion.trim()) throw new Error("packetVersion must be non-empty");
+    if (!isCanonicalIsoTimestamp(record.generatedAt)) throw new Error("generatedAt must be a canonical ISO timestamp");
     if (!Number.isInteger(record.byteEstimate) || record.byteEstimate < 1) throw new Error("byteEstimate must be a positive integer");
     if (!Number.isInteger(record.tokenEstimate) || record.tokenEstimate < 1) throw new Error("tokenEstimate must be a positive integer");
+    if (!Array.isArray(record.includedNoteIds)) throw new Error("includedNoteIds must be an array");
+    for (const noteId of record.includedNoteIds) {
+      if (typeof noteId !== "string" || !noteId.trim()) throw new Error("includedNoteIds must contain non-empty strings");
+      if (/[\r\n]/.test(noteId)) throw new Error("includedNoteIds must not contain newlines");
+    }
+    if (record.redactionStatus !== "passed" && record.redactionStatus !== "failed") {
+      throw new Error("redactionStatus must be passed or failed");
+    }
     const metadataText = [
       record.packetSha,
       record.repo,
@@ -1728,6 +1709,53 @@ export class ReviewStateStore {
       this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
     }
   }
+}
+
+export function listRepoMemoryNotesReadOnly(dbPath: string, input: ListRepoMemoryNotesInput): RepoMemoryNoteRecord[] {
+  if (!existsSync(dbPath)) return [];
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const table = db
+      .prepare("select name from sqlite_master where type = 'table' and name = 'repo_memory_notes'")
+      .get() as { name: string } | undefined;
+    return table ? listRepoMemoryNotesFromDb(db, input) : [];
+  } finally {
+    db.close();
+  }
+}
+
+function listRepoMemoryNotesFromDb(db: DatabaseSync, input: ListRepoMemoryNotesInput): RepoMemoryNoteRecord[] {
+  validateRepoName(input.repo, "repo");
+  if (input.limit !== undefined) validatePositiveQueueLimit(input.limit, "limit");
+  if (input.kind && input.excludeKind) throw new Error("kind and excludeKind cannot both be set");
+  if (input.kind) validateRepoMemoryNoteKind(input.kind, "kind");
+  if (input.excludeKind) validateRepoMemoryNoteKind(input.excludeKind, "excludeKind");
+  const params: Array<string | number> = [input.repo];
+  const predicates = ["repo = ?"];
+  if (input.kind) {
+    predicates.push("kind = ?");
+    params.push(input.kind);
+  }
+  if (input.excludeKind) {
+    predicates.push("kind != ?");
+    params.push(input.excludeKind);
+  }
+  if (input.includeExpired !== true) {
+    predicates.push("(expires_at is null or datetime(expires_at) > datetime(?))");
+    params.push((input.now ?? new Date()).toISOString());
+  }
+  const limit = input.limit ? " limit ?" : "";
+  if (input.limit) params.push(input.limit);
+  const rows = db
+    .prepare(
+      `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
+       from repo_memory_notes
+       where ${predicates.join(" and ")}
+       order by datetime(updated_at) desc, note_id asc
+       ${limit}`
+    )
+    .all(...params) as unknown as RepoMemoryNoteRow[];
+  return rows.map(mapRepoMemoryNoteRow);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1817,6 +1845,11 @@ function validateRepoMemoryNoteKind(kind: RepoMemoryNoteKind, label: string): vo
   if (!REPO_MEMORY_NOTE_KINDS.includes(kind)) {
     throw new Error(`${label} must be a valid repo memory note kind`);
   }
+}
+
+function isCanonicalIsoTimestamp(value: string): boolean {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
 function validateRepoName(repo: string, label: string): void {

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -147,6 +147,33 @@ describe("repo memory packets", () => {
     expect(result.packet.sources.map((source) => source.id)).toEqual(["policy-a", "policy-b", "proof-a"]);
     expect(result.packet.markdown.indexOf("A policy")).toBeLessThan(result.packet.markdown.indexOf("B policy"));
     expect(result.packet.markdown.indexOf("B policy")).toBeLessThan(result.packet.markdown.indexOf("Proof note"));
+  });
+
+  it("hashes rendered note metadata into sqlite note source provenance", () => {
+    const baseNote = note({
+      noteId: "note-hash",
+      kind: "policy_note",
+      title: "Hash metadata",
+      body: "Rendered metadata changes should alter source provenance.",
+      source: "test",
+      confidence: 0.8,
+      updatedAt: "2026-07-01T00:00:00.000Z"
+    });
+    const original = buildRepoMemoryPacket({
+      repo,
+      stateNotes: [baseNote],
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+    const changed = buildRepoMemoryPacket({
+      repo,
+      stateNotes: [{ ...baseNote, confidence: 0.9 }],
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+
+    if (!original.ok || !changed.ok) throw new Error("expected packet builds to pass");
+    expect(original.packet.sources[0]?.sha256).not.toBe(changed.packet.sources[0]?.sha256);
   });
 
   it("keeps ordering deterministic when a legacy note has malformed updatedAt", () => {
@@ -443,6 +470,42 @@ describe("repo memory packets", () => {
       includedNoteIds: ["memory-note-1", "memory-note-2"],
       memoryRoot: "/Volumes/LEXAR/Codex/evaos-code-review-bot/memory"
     });
+    expect(() =>
+      store.recordRepoMemoryPacketBuild({
+        packetSha: "b".repeat(64),
+        repo,
+        packetVersion: "repo-memory-packet-v0.1",
+        generatedAt: "July 2, 2026",
+        byteEstimate: 512,
+        tokenEstimate: 128,
+        includedNoteIds: ["memory-note-1"],
+        redactionStatus: "passed"
+      })
+    ).toThrow(/canonical ISO/);
+    expect(() =>
+      store.recordRepoMemoryPacketBuild({
+        packetSha: "c".repeat(64),
+        repo,
+        packetVersion: "repo-memory-packet-v0.1",
+        generatedAt,
+        byteEstimate: 512,
+        tokenEstimate: 128,
+        includedNoteIds: ["memory-note-1"],
+        redactionStatus: "unknown"
+      })
+    ).toThrow(/redactionStatus/);
+    expect(() =>
+      store.recordRepoMemoryPacketBuild({
+        packetSha: "d".repeat(64),
+        repo,
+        packetVersion: "repo-memory-packet-v0.1",
+        generatedAt,
+        byteEstimate: 512,
+        tokenEstimate: 128,
+        includedNoteIds: ["bad\nnote"],
+        redactionStatus: "passed"
+      })
+    ).toThrow(/includedNoteIds/);
     store.close();
   });
 
@@ -606,6 +669,70 @@ describe("repo memory packets", () => {
     expect(parsed.packet.sources.map((source: { id: string }) => source.id)).toContain("policy-survives");
     expect(parsed.packet.markdown).toContain("CLI packets must preserve prompt memory notes");
     expect(parsed.packet.markdown).not.toContain("This suppression note should not consume");
+  });
+
+  it("does not create or migrate SQLite state for non-recorded CLI packet builds", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-readonly-"));
+    roots.push(root);
+    const memoryRoot = join(root, "memory");
+    const memoryDir = join(memoryRoot, "electricsheephq", "evaos-code-review-bot");
+    const statePath = join(root, "missing", "state.sqlite");
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "repo-memory.md"), "## Preferred Proof\nRead-only packet proof.\n");
+    const configPath = writeConfig({
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      repoMemory: {
+        enabled: false,
+        memoryRoot,
+        maxPacketBytes: 12_000
+      }
+    });
+
+    const stdout = execFileSync(process.execPath, [
+      "./node_modules/.bin/tsx",
+      "src/cli.ts",
+      "build-memory-packet",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--generated-at",
+      generatedAt
+    ], { cwd: process.cwd(), encoding: "utf8" });
+    const parsed = JSON.parse(stdout);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.packet.markdown).toContain("Read-only packet proof");
+    expect(existsSync(statePath)).toBe(false);
+  });
+
+  it("requires canonical ISO --generated-at values for CLI packets", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-generated-at-"));
+    roots.push(root);
+    const configPath = writeConfig({
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      repoMemory: {
+        enabled: false,
+        memoryRoot: join(root, "memory"),
+        maxPacketBytes: 12_000
+      }
+    });
+
+    expect(() =>
+      execFileSync(process.execPath, [
+        "./node_modules/.bin/tsx",
+        "src/cli.ts",
+        "build-memory-packet",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--generated-at",
+        "July 2, 2026"
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+    ).toThrow(/canonical ISO timestamp/);
   });
 
   it("refuses to write memory packet output inside the current repository checkout", () => {

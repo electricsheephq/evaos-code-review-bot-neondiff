@@ -26,7 +26,7 @@ import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
-import { ReviewStateStore, type ReviewQueueJobState } from "./state.js";
+import { listRepoMemoryNotesReadOnly, ReviewStateStore, type ReviewQueueJobState } from "./state.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
@@ -393,42 +393,41 @@ async function main(): Promise<void> {
     if (!args.repo) throw new Error("--repo is required for build-memory-packet");
     const config = loadConfig(args.config);
     const generatedAt = args["generated-at"] ?? new Date().toISOString();
-    const generatedAtDate = new Date(generatedAt);
-    if (!Number.isFinite(generatedAtDate.getTime())) throw new Error("--generated-at must be an ISO timestamp");
+    const generatedAtDate = parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
     const memoryConfig = config.repoMemory!;
     const statePath = args["state-path"] ?? config.statePath;
     if (args["state-path"] && realPathPreservingMissing(args["state-path"]) !== realPathPreservingMissing(config.statePath)) {
       throw new Error("--state-path for build-memory-packet must match the configured statePath");
     }
-    const state = new ReviewStateStore(statePath);
-    try {
-      const includeExpired = args["include-stale"] === "true" || memoryConfig.includeStaleNotes;
-      const noteLimit = args["note-limit"] ? parsePositiveInteger(args["note-limit"], "--note-limit") : memoryConfig.maxStateNotes;
-      const promptNotes = state.listRepoMemoryNotes({
-        repo: args.repo,
-        includeExpired,
-        now: generatedAtDate,
-        limit: noteLimit,
-        excludeKind: "false_positive"
-      });
-      const falsePositiveNotes = state.listRepoMemoryNotes({
-        repo: args.repo,
-        includeExpired,
-        now: generatedAtDate,
-        limit: noteLimit,
-        kind: "false_positive"
-      });
-      const result = buildRepoMemoryPacket({
-        repo: args.repo,
-        humanMarkdown: readRepoMemoryMarkdown(args["memory-root"] ?? memoryConfig.memoryRoot, args.repo),
-        stateNotes: [...promptNotes, ...falsePositiveNotes],
-        findingFingerprints: parseCsv(args.fingerprint),
-        generatedAt,
-        packetVersion: memoryConfig.packetVersion,
-        maxPacketBytes: args["max-bytes"] ? parsePositiveInteger(args["max-bytes"], "--max-bytes") : memoryConfig.maxPacketBytes,
-        includeStaleNotes: includeExpired
-      });
-      if (result.ok && args["record-build"] === "true") {
+    const includeExpired = args["include-stale"] === "true" || memoryConfig.includeStaleNotes;
+    const noteLimit = args["note-limit"] ? parsePositiveInteger(args["note-limit"], "--note-limit") : memoryConfig.maxStateNotes;
+    const promptNotes = listRepoMemoryNotesReadOnly(statePath, {
+      repo: args.repo,
+      includeExpired,
+      now: generatedAtDate,
+      limit: noteLimit,
+      excludeKind: "false_positive"
+    });
+    const falsePositiveNotes = listRepoMemoryNotesReadOnly(statePath, {
+      repo: args.repo,
+      includeExpired,
+      now: generatedAtDate,
+      limit: noteLimit,
+      kind: "false_positive"
+    });
+    const result = buildRepoMemoryPacket({
+      repo: args.repo,
+      humanMarkdown: readRepoMemoryMarkdown(args["memory-root"] ?? memoryConfig.memoryRoot, args.repo),
+      stateNotes: [...promptNotes, ...falsePositiveNotes],
+      findingFingerprints: parseCsv(args.fingerprint),
+      generatedAt,
+      packetVersion: memoryConfig.packetVersion,
+      maxPacketBytes: args["max-bytes"] ? parsePositiveInteger(args["max-bytes"], "--max-bytes") : memoryConfig.maxPacketBytes,
+      includeStaleNotes: includeExpired
+    });
+    if (result.ok && args["record-build"] === "true") {
+      const state = new ReviewStateStore(statePath);
+      try {
         state.recordRepoMemoryPacketBuild({
           packetSha: result.packet.sha256,
           repo: result.packet.repo,
@@ -440,25 +439,25 @@ async function main(): Promise<void> {
           redactionStatus: result.redactionReport.ok ? "passed" : "failed",
           memoryRoot: args["memory-root"] ?? memoryConfig.memoryRoot
         });
+      } finally {
+        state.close();
       }
-      if (result.ok && args["output-dir"]) {
-        const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
-        mkdirSync(safeOutputDir, { recursive: true });
-        writeFileSync(join(safeOutputDir, "repo-memory-packet.json"), `${JSON.stringify(result, null, 2)}\n`);
-        writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), result.packet.markdown);
-      }
-      const format = args.format ?? "json";
-      if (format === "markdown") {
-        console.log(result.ok ? result.packet.markdown : JSON.stringify(result, null, 2));
-      } else if (format === "both" && result.ok) {
-        console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
-      } else {
-        console.log(JSON.stringify(result, null, 2));
-      }
-      if (!result.ok) process.exitCode = 1;
-    } finally {
-      state.close();
     }
+    if (result.ok && args["output-dir"]) {
+      const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+      mkdirSync(safeOutputDir, { recursive: true });
+      writeFileSync(join(safeOutputDir, "repo-memory-packet.json"), `${JSON.stringify(result, null, 2)}\n`);
+      writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), result.packet.markdown);
+    }
+    const format = args.format ?? "json";
+    if (format === "markdown") {
+      console.log(result.ok ? result.packet.markdown : JSON.stringify(result, null, 2));
+    } else if (format === "both" && result.ok) {
+      console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
+    if (!result.ok) process.exitCode = 1;
     return;
   }
 
@@ -748,6 +747,14 @@ function parseNonNegativeInteger(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
   return parsed;
+}
+
+function parseCanonicalIsoTimestamp(value: string, label: string): Date {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
+    throw new Error(`${label} must be a canonical ISO timestamp`);
+  }
+  return new Date(parsed);
 }
 
 function parseCsv(value?: string | string[]): string[] {
