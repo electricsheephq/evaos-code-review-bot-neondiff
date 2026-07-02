@@ -5,7 +5,7 @@ import { runDaemonCycle } from "./daemon.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
-import { buildEnrichmentComment } from "./enrichment.js";
+import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
@@ -588,15 +588,39 @@ async function main(): Promise<void> {
 
   if (command === "build-enrichment-comment") {
     if (!args.repo) throw new Error("--repo is required for build-enrichment-comment");
-    if (!args.pr) throw new Error("--pr is required for build-enrichment-comment");
+    if (Boolean(args.pr) === Boolean(args.issue)) throw new Error("exactly one of --pr or --issue is required for build-enrichment-comment");
     const repo = parseSingleArg(args.repo, "--repo");
-    const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
     const config = loadConfig(args.config);
     const github = new GitHubApi(config.github);
-    const pull = await github.getPull(repo, pullNumber);
-    const files = await github.listPullFiles(repo, pullNumber);
     const repoPolicy = resolveRepoProfile(config, repo);
     if (!repoPolicy.allowed) throw new Error(`Repo ${repo} is skipped by policy: ${repoPolicy.reason}`);
+    const enrichmentConfig = config.enrichment!;
+    if (args.issue) {
+      const issueNumber = parsePositiveInteger(parseSingleArg(args.issue, "--issue"), "--issue");
+      const issue = await github.getIssueOrPull(repo, issueNumber);
+      if (!issue) throw new Error(`Issue ${repo}#${issueNumber} was not found or is not readable`);
+      const output = buildIssueEnrichmentDryRunOutput({
+        repo,
+        issue,
+        suggestedLabels: repoPolicy.profile.suggestedLabels,
+        suggestedOwners: repoPolicy.profile.suggestedReviewers,
+        validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
+        maxRelatedRefs: enrichmentConfig.maxRelatedRefs,
+        maxSuggestions: enrichmentConfig.maxSuggestions
+      });
+      if (args["output-dir"]) {
+        const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+        mkdirSync(safeOutputDir, { recursive: true });
+        writeFileSync(join(safeOutputDir, "enrichment-comment.json"), `${redactSecrets(JSON.stringify(output, null, 2))}\n`);
+        if (!output.skipped) writeFileSync(join(safeOutputDir, "enrichment.md"), output.body);
+      }
+      console.log(redactSecrets(JSON.stringify(output, null, 2)));
+      return;
+    }
+    const prArg = parseSingleArg(args.pr ?? [], "--pr");
+    const pullNumber = parsePositiveInteger(prArg, "--pr");
+    const pull = await github.getPull(repo, pullNumber);
+    const files = await github.listPullFiles(repo, pullNumber);
     const validation = buildChangedSurfaceValidationReport({
       repo,
       pull,
@@ -604,7 +628,6 @@ async function main(): Promise<void> {
       profile: repoPolicy.profile
     });
     const proof = evaluateProofRequirements({ pull, validation });
-    const enrichmentConfig = config.enrichment!;
     const enrichment = buildEnrichmentComment({
       repo,
       pull,
@@ -896,6 +919,7 @@ function buildHelp() {
       "npx tsx src/cli.ts build-github-related-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-skill-pack --config /path/to/live.json --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --issue 456 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };

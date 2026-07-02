@@ -76,10 +76,17 @@ export class GitHubApi {
     }
   }
 
-  async getIssueOrPull(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull> {
-    return this.request<GitHubRelatedIssueOrPull>(`/repos/${repo}/issues/${issueNumber}`, {
-      token: await this.getReadToken(repo)
-    });
+  async getIssueOrPull(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull | undefined> {
+    const path = `/repos/${repo}/issues/${issueNumber}`;
+    try {
+      return await this.request<GitHubRelatedIssueOrPull>(path, {
+        token: await this.getReadToken(repo)
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes(`for ${path}:`) && /\bGitHub API (403|404)\b/.test(message)) return undefined;
+      throw error;
+    }
   }
 
   async createReview(input: {

@@ -84,12 +84,15 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   Use `--output-dir <path>` to write `skill-pack-context-packet.json` and
   `skill-pack-context-packet.md` evidence. This command never enables native
   ZCode skills, MCP, tools, shell, web, memory, agents, or writes.
-- `build-enrichment-comment --repo <owner/name> --pr <number>`: builds the
-  sticky PR enrichment comment body for dry-run inspection. It reads GitHub PR
-  metadata/files, current policy, changed-surface validation, and proof
-  requirements, then emits JSON/Markdown with the bot-owned marker and rendered
-  comment. This command never posts comments, auto-applies labels, assigns
-  reviewers, calls ZCode, or mutates GitHub state.
+- `build-enrichment-comment --repo <owner/name> --pr <number>` or
+  `--issue <number>`: builds the sticky PR or issue enrichment comment body for
+  dry-run inspection. PR mode reads GitHub PR metadata/files, current policy,
+  changed-surface validation, and proof requirements. Issue mode reads GitHub
+  issue metadata, skips closed issues as `stale_issue_closed`, and skips
+  PR-shaped issue records as `issue_is_pull_request`. Both modes emit
+  JSON/Markdown with the bot-owned marker and rendered comment when not skipped.
+  This command never posts comments, auto-applies labels, assigns reviewers,
+  calls ZCode, or mutates GitHub state.
 - `doctor`: auth/config readiness. Use this for GitHub App/ZCode readiness, not
   runtime health.
 
@@ -219,6 +222,20 @@ npx tsx src/cli.ts build-enrichment-comment --config <config.json> --repo electr
 
 The dry-run output includes the hidden sticky marker used for future update
 behavior, but it does not post the comment or apply suggested labels/reviewers.
+
+Build a sticky issue enrichment comment for dry-run evidence:
+
+```bash
+npx tsx src/cli.ts build-enrichment-comment --config <config.json> --repo electricsheephq/evaos-code-review-bot --issue 10 --output-dir <configured-evidence-dir>/enrichment/evaos-code-review-bot-issue-10
+```
+
+Closed issues are reported as `skipped: true` with reason
+`stale_issue_closed`. PR-shaped issue records are reported as `skipped: true`
+with reason `issue_is_pull_request`. No Markdown body is written for skipped
+issues.
+Issue mode requires an authenticated token or GitHub App installation with
+Issues read access. Live App-authored issue comments require Issues write
+permission and must not be enabled until that permission expansion is tracked.
 
 ## Safety Boundaries
 
