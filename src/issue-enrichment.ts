@@ -370,7 +370,7 @@ export async function collectIssueEnrichmentScan(input: {
   }
   const summary = summarizeScan(repoScans);
   const recommendedActions = buildScanRecommendedActions(status, summary);
-  if (input.shouldCountItem === undefined && input.applyGlobalCaps !== false) {
+  if (summary.deferred > 0 && input.shouldCountItem === undefined && input.applyGlobalCaps !== false) {
     recommendedActions.push(
       "standalone issue-enrichment scans are stateless; live cycles exclude already-processed issue rows from cap accounting"
     );
@@ -884,6 +884,7 @@ function applyGlobalIssueEnrichmentCaps(input: {
           item.url,
           globalNextEligibleAt({ checkedAt: input.checkedAt, config: input.config, throttle: policy.throttle })
         );
+        issuesConsidered += 1;
         continue;
       }
       commentsConsidered += 1;

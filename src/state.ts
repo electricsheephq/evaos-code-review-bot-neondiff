@@ -973,6 +973,8 @@ export class ReviewStateStore {
     const expiresAt = new Date(now.getTime() + leaseTtlMs).toISOString();
     this.db.exec("begin immediate");
     try {
+      // Issue-enrichment leases intentionally use TTL-only lazy cleanup: expired rows are swept on the next acquire
+      // or by the confirm-gated clear-issue-enrichment-leases operator command.
       this.db.prepare("delete from issue_enrichment_run_leases where expires_at <= ?").run(startedAt);
       const row = this.db.prepare("select count(*) as count from issue_enrichment_run_leases").get() as { count: number };
       if (row.count >= maxActiveRuns) {
