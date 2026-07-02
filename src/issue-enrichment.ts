@@ -137,6 +137,7 @@ export interface IssueEnrichmentScanItem {
   action: IssueEnrichmentScanAction;
   reason: IssueEnrichmentScanReason;
   url?: string;
+  nextEligibleAt?: string;
 }
 
 const DEFAULT_REPO_SCAN_OPTIONS = {
@@ -238,12 +239,14 @@ export async function collectIssueEnrichmentScan(input: {
     const since = input.since ?? buildIssueScanSince({
       checkedAt,
       includeExisting: input.includeExisting === true || policy.throttle.processExistingOpenIssuesOnActivation,
-      lookbackMs: policy.throttle.lookbackMs
+      lookbackMs: policy.throttle.lookbackMs,
+      burstWindowMs: policy.throttle.burstWindowMs
     });
     let issues: GitHubRelatedIssueOrPull[] = [];
     try {
       issues = await input.reader.listIssuesForEnrichment(repo, {
         ...DEFAULT_REPO_SCAN_OPTIONS,
+        pageLimit: buildIssueScanPageLimit(policy.throttle),
         ...(since ? { since } : {})
       });
     } catch (error) {
@@ -270,7 +273,8 @@ export async function collectIssueEnrichmentScan(input: {
       repo,
       issues,
       throttle: policy.throttle,
-      postIssueComment: config.postIssueComment
+      postIssueComment: config.postIssueComment,
+      checkedAt
     });
     items.push(...issueItems);
     repoScans.push({
@@ -332,6 +336,7 @@ function planRepoIssueScan(input: {
   issues: GitHubRelatedIssueOrPull[];
   throttle: IssueEnrichmentThrottlePolicy;
   postIssueComment: boolean;
+  checkedAt: string;
 }): IssueEnrichmentScanItem[] {
   const eligible = input.issues
     .map((issue) => buildIssueEnrichmentDryRunOutput({
@@ -363,15 +368,15 @@ function planRepoIssueScan(input: {
       };
     }
     if (burstExceeded) {
-      return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "burst_threshold_exceeded", output.url);
+      return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "burst_threshold_exceeded", output.url, nextEligibleAt(input));
     }
     if (enriched >= input.throttle.maxIssuesPerCycle) {
-      return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "repo_max_issues_per_cycle", output.url);
+      return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "repo_max_issues_per_cycle", output.url, nextEligibleAt(input));
     }
     enriched += 1;
     if (input.postIssueComment) {
       if (comments >= input.throttle.maxCommentsPerCycle) {
-        return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "repo_max_comments_per_cycle", output.url);
+        return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "repo_max_comments_per_cycle", output.url, nextEligibleAt(input));
       }
       comments += 1;
       return issueScanItem(input.repo, output.issueNumber, output.state, "would_comment", "eligible", output.url);
@@ -386,7 +391,8 @@ function issueScanItem(
   state: string,
   action: IssueEnrichmentScanAction,
   reason: IssueEnrichmentScanReason,
-  url?: string
+  url?: string,
+  nextEligibleAtValue?: string
 ): IssueEnrichmentScanItem {
   return {
     repo,
@@ -394,7 +400,8 @@ function issueScanItem(
     state,
     action,
     reason,
-    ...(url ? { url } : {})
+    ...(url ? { url } : {}),
+    ...(nextEligibleAtValue ? { nextEligibleAt: nextEligibleAtValue } : {})
   };
 }
 
@@ -402,11 +409,23 @@ function buildIssueScanSince(input: {
   checkedAt: string;
   includeExisting: boolean;
   lookbackMs: number;
+  burstWindowMs: number;
 }): string | undefined {
   if (input.includeExisting) return undefined;
   const checkedAtMs = Date.parse(input.checkedAt);
   const baseMs = Number.isFinite(checkedAtMs) ? checkedAtMs : Date.now();
-  return new Date(baseMs - input.lookbackMs).toISOString();
+  return new Date(baseMs - Math.max(input.lookbackMs, input.burstWindowMs)).toISOString();
+}
+
+function buildIssueScanPageLimit(throttle: IssueEnrichmentThrottlePolicy): number {
+  const threshold = Math.max(throttle.maxIssuesPerCycle, throttle.maxIssuesPerBurst) + 1;
+  return Math.max(1, Math.min(10, Math.ceil(threshold / DEFAULT_REPO_SCAN_OPTIONS.perPage)));
+}
+
+function nextEligibleAt(input: { checkedAt: string; throttle: IssueEnrichmentThrottlePolicy }): string {
+  const checkedAtMs = Date.parse(input.checkedAt);
+  const baseMs = Number.isFinite(checkedAtMs) ? checkedAtMs : Date.now();
+  return new Date(baseMs + input.throttle.cooldownMs).toISOString();
 }
 
 function summarizeScan(repoScans: IssueEnrichmentRepoScan[]): IssueEnrichmentScanResult["summary"] {

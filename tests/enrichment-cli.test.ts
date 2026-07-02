@@ -182,6 +182,26 @@ describe("build-enrichment-comment issue CLI", () => {
       expect(requests.some((request) => request.path.startsWith("/repos/owner/pr-review-repo/issues?"))).toBe(false);
     });
   });
+
+  it("rejects invalid issue-enrichment scan since timestamps before calling GitHub", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueScanConfig(root, apiBaseUrl);
+
+      await expect(runCli([
+        "issue-enrichment-scan",
+        "--config",
+        configPath,
+        "--dry-run",
+        "true",
+        "--since",
+        "not-a-date"
+      ])).rejects.toMatchObject({
+        stderr: expect.stringContaining("--since must be a canonical ISO timestamp")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
 });
 
 async function runCli(args: string[]) {

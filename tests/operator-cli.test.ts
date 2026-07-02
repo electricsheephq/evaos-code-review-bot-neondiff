@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -22,9 +22,11 @@ import {
   type OperatorDurableQueueSnapshot
 } from "../src/operator-cli.js";
 import type { IssueEnrichmentStatus } from "../src/issue-enrichment.js";
+import { buildIssueEnrichmentStatus } from "../src/issue-enrichment.js";
 import type { ReviewBudgetStatus } from "../src/review-budget.js";
 import type { ReleaseStatus } from "../src/release-status.js";
 import type { RepoProviderCooldownRecord } from "../src/state.js";
+import { loadConfig } from "../src/config.js";
 
 describe("operator CLI summaries", () => {
   const tempDirs: string[] = [];
@@ -135,6 +137,41 @@ describe("operator CLI summaries", () => {
       detail: "blocked: github_app_credentials_required_for_live_issue_comments"
     });
     expect(status.recommendedActions).toContain("resolve issue-enrichment blockers before enabling live issue comments");
+  });
+
+  it("surfaces issue enrichment blockers from a real config and App credential state", () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-status-config-"));
+    tempDirs.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      issueEnrichment: {
+        enabled: true,
+        postIssueComment: true,
+        allowlist: ["owner/issue-repo"]
+      }
+    })}\n`);
+
+    const status = buildOperatorStatus({
+      release: releaseStatus({ ok: true }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
+      issueEnrichment: buildIssueEnrichmentStatus({
+        config: loadConfig(configPath),
+        canPostAsApp: false,
+        checkedAt: "2026-07-03T00:00:00.000Z"
+      }),
+      checkedAt: "2026-07-03T00:00:00.000Z"
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.summary.issueEnrichmentState).toBe("blocked");
+    expect(status.gates).toContainEqual({
+      name: "issue_enrichment_ready",
+      ok: false,
+      detail: "blocked: github_app_credentials_required_for_live_issue_comments"
+    });
   });
 
   it("treats pending heads covered by durable queue work as healthy active runtime", () => {
