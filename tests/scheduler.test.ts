@@ -2455,6 +2455,62 @@ describe("provider-aware review scheduler", () => {
     expect(reviewed).toEqual(["org/repo-a#960"]);
     state.close();
   });
+
+  it("retires stale queued heads before skipping changed pre-activation PRs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-preactivation-retire-stale-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.activation.reviewExistingOpenPrsOnActivation = false;
+    const state = new ReviewStateStore(config.statePath);
+    state.recordRepoActivation("org/repo-a", "2026-07-02T16:58:09.555Z");
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 950,
+      headSha: "old-baselined-head",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 950,
+      headSha: "old-queued-head",
+      baseSha: "base",
+      source: "manual_command",
+      lane: "manual",
+      commentId: 777
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        [
+          "org/repo-a",
+          [pull("org/repo-a", 950, "new-head-on-old-pr", "base", { createdAt: "2026-06-30T05:34:43Z" })]
+        ]
+      ])),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("pre-activation skipped heads should not run review work");
+      },
+      now: new Date("2026-07-02T17:45:00.000Z")
+    });
+
+    expect(result.skippedProcessed).toBe(1);
+    expect(state.listReviewQueueJobs({ state: "stale_retired" })).toEqual([
+      expect.objectContaining({
+        repo: "org/repo-a",
+        pullNumber: 950,
+        headSha: "old-queued-head",
+        lastError: "superseded_by_head=new-head-on-old-pr"
+      })
+    ]);
+    expect(state.getReviewReadiness("org/repo-a", 950, "old-queued-head")).toMatchObject({
+      state: "stale",
+      reason: "superseded_by_head=new-head-on-old-pr"
+    });
+    state.close();
+  });
 });
 
 function schedulerConfig(root: string, repos: string[]): BotConfig {

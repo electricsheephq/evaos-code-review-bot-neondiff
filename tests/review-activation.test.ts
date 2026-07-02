@@ -132,7 +132,7 @@ describe("pre-activation pull detection", () => {
   it("treats reviewExistingOpenPrsOnActivation=true as an explicit override", () => {
     expect(isPreActivationExistingPull({
       config: newOnlyConfig({ reviewExistingOpenPrsOnActivation: true }),
-      state: { getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }) },
+      state: baselinedState("2026-07-02T16:58:09.555Z"),
       repo: "Martian-Engineering/lossless-claw",
       pull: pull(950, "new-head", false, "2026-06-30T05:34:43Z")
     })).toBe(false);
@@ -150,7 +150,7 @@ describe("pre-activation pull detection", () => {
     })).toBe(false);
     expect(isPreActivationExistingPull({
       config,
-      state: { getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }) },
+      state: baselinedState("2026-07-02T16:58:09.555Z"),
       repo,
       pull: pull(950, "new-head")
     })).toBe(false);
@@ -162,16 +162,28 @@ describe("pre-activation pull detection", () => {
     })).toBe(false);
     expect(isPreActivationExistingPull({
       config,
-      state: { getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }) },
+      state: baselinedState("2026-07-02T16:58:09.555Z"),
       repo,
       pull: pull(950, "new-head", false, "not-a-date")
+    })).toBe(false);
+  });
+
+  it("fails open when no activation-baseline row proves the pull existed at activation", () => {
+    expect(isPreActivationExistingPull({
+      config: newOnlyConfig({ reviewExistingOpenPrsOnActivation: false }),
+      state: {
+        getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }),
+        listProcessedReviewsForPull: () => []
+      },
+      repo: "Martian-Engineering/lossless-claw",
+      pull: pull(960, "new-head", false, "2026-07-02T16:58:08.000Z")
     })).toBe(false);
   });
 
   it("detects PRs created before activation when new-only review is active", () => {
     expect(isPreActivationExistingPull({
       config: newOnlyConfig({ reviewExistingOpenPrsOnActivation: false }),
-      state: { getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }) },
+      state: baselinedState("2026-07-02T16:58:09.555Z"),
       repo: "Martian-Engineering/lossless-claw",
       pull: pull(950, "new-head", false, "2026-06-30T05:34:43Z")
     })).toBe(true);
@@ -194,6 +206,18 @@ function newOnlyConfig(overrides: {
     activation: {
       reviewExistingOpenPrsOnActivation: overrides.reviewExistingOpenPrsOnActivation ?? false
     }
+  };
+}
+
+function baselinedState(activatedAt: string) {
+  return {
+    getRepoActivation: () => ({ activatedAt }),
+    listProcessedReviewsForPull: () => [
+      {
+        status: "skipped",
+        error: "activation_baseline_existing_head"
+      }
+    ]
   };
 }
 

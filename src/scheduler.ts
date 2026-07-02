@@ -265,11 +265,13 @@ async function enqueuePullIfEligible(input: {
       pull: input.pull
     })
   ) {
+    await retireSupersededQueueJobsForPull(input);
     recordActivationBaselineExistingHead(input.state, input.repo, input.pull);
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }
   if (!input.allowActivationBaselineCommandLookup && isActivationBaselineProcessedReview(processed)) {
+    await retireSupersededQueueJobsForPull(input);
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }

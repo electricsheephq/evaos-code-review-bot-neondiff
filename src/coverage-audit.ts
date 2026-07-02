@@ -356,6 +356,19 @@ export async function collectCoverageAudit(input: {
         pushSkipped(report, repo, pull, "canary");
         continue;
       }
+      const now = input.now ?? new Date();
+      const queued = input.state.getActiveReviewQueueJob?.(
+        repo,
+        pull.number,
+        pull.head.sha,
+        pull.base.sha,
+        now,
+        input.config.reviewConcurrency.leaseTtlMs
+      );
+      if (queued) {
+        pushQueuedCoverage(report, repo, pull, queued);
+        continue;
+      }
       if (
         !input.state.getProcessedReview(repo, pull.number, pull.head.sha) &&
         isPreActivationExistingPull({ config: input.config, state: input.state, repo, pull })
@@ -364,7 +377,6 @@ export async function collectCoverageAudit(input: {
         continue;
       }
 
-      const now = input.now ?? new Date();
       if (
         input.verifyCurrentHeads &&
         input.pullNumber === undefined &&

@@ -886,6 +886,57 @@ describe("coverage audit", () => {
     state.close();
   });
 
+  it("reports queued manual review jobs before activation-baseline skips", async () => {
+    const { root, state } = createState();
+    state.recordRepoActivation("owner/allowed", "2026-07-02T16:58:09.555Z");
+    state.recordProcessed({
+      repo: "owner/allowed",
+      pullNumber: 23,
+      headSha: "old-baselined-head",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    state.enqueueReviewQueueJob({
+      repo: "owner/allowed",
+      pullNumber: 23,
+      headSha: "new-head-on-old-pr",
+      baseSha: "base",
+      source: "manual_command",
+      lane: "manual",
+      commentId: 555
+    });
+    state.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [
+          pull(23, "new-head-on-old-pr", { createdAt: "2026-06-30T05:34:43Z" })
+        ]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-02T17:45:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      queued: 1,
+      skipped: 0,
+      unprocessed: 0
+    });
+    expect(audit.queued).toEqual([
+      expect.objectContaining({
+        repo: "owner/allowed",
+        pullNumber: 23,
+        headSha: "new-head-on-old-pr",
+        queueState: "queued"
+      })
+    ]);
+    expect(audit.skipped).toEqual([]);
+    reader.close();
+  });
+
   it("still re-reads non-baseline processed heads during current-head verification", async () => {
     const { root, state } = createState();
     state.recordProcessed({
