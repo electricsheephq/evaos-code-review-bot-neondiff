@@ -34,6 +34,24 @@ describe("review scheduler config", () => {
     }))).toThrow("config.reviewScheduler.manualCommandReserve must be <= config.reviewScheduler.maxProviderActive");
   });
 
+  it("validates optional GitHub API client settings", () => {
+    expect(loadConfig(writeConfig({
+      github: {
+        apiBaseUrl: "https://api.github.test",
+        botLogin: "evaos-code-review-bot[bot]",
+        requestTimeoutMs: 1_000
+      }
+    })).github).toMatchObject({
+      apiBaseUrl: "https://api.github.test",
+      botLogin: "evaos-code-review-bot[bot]",
+      requestTimeoutMs: 1_000
+    });
+
+    expect(() => loadConfig(writeConfig({ github: { apiBaseUrl: 42 } }))).toThrow(/config\.github\.apiBaseUrl/);
+    expect(() => loadConfig(writeConfig({ github: { botLogin: 42 } }))).toThrow(/config\.github\.botLogin/);
+    expect(() => loadConfig(writeConfig({ github: { requestTimeoutMs: 0 } }))).toThrow(/config\.github\.requestTimeoutMs/);
+  });
+
   function writeConfig(overlay: Record<string, unknown>): string {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-scheduler-config-"));
     roots.push(root);
