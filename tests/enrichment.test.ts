@@ -1040,6 +1040,70 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("applies global issue caps to dry-run enrichment records without comment posting", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-global-issue-cap-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/repo-a", "owner/repo-b"],
+          maxIssuesPerCycle: 10,
+          maxCommentsPerCycle: 0,
+          globalMaxIssuesPerCycle: 2,
+          globalMaxCommentsPerCycle: 0,
+          cooldownMs: 300_000,
+          maxIssuesPerBurst: 10,
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/repo-b": {
+              cooldownMs: 60_000
+            }
+          }
+        }
+      })}\n`);
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        includeExisting: true,
+        checkedAt: "2026-07-03T04:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo) => [
+            { number: repo.endsWith("repo-a") ? 101 : 201, title: "Issue one", state: "open", body: "Acceptance criteria and owner present." },
+            { number: repo.endsWith("repo-a") ? 102 : 202, title: "Issue two", state: "open", body: "Acceptance criteria and owner present." }
+          ]
+        }
+      });
+
+      expect(scan.ok).toBe(true);
+      expect(scan.summary).toMatchObject({
+        issuesSeen: 4,
+        eligible: 4,
+        wouldEnrich: 2,
+        wouldComment: 0,
+        deferred: 2
+      });
+      expect(scan.items.filter((item) => item.action === "would_enrich")).toEqual([
+        expect.objectContaining({ repo: "owner/repo-a", issueNumber: 101, reason: "eligible" }),
+        expect.objectContaining({ repo: "owner/repo-a", issueNumber: 102, reason: "eligible" })
+      ]);
+      expect(scan.items.find((item) => item.issueNumber === 201)).toMatchObject({
+        action: "deferred",
+        reason: "global_max_issues_per_cycle",
+        nextEligibleAt: "2026-07-03T04:05:00.000Z"
+      });
+      expect(scan.items.find((item) => item.issueNumber === 202)).toMatchObject({
+        action: "deferred",
+        reason: "global_max_issues_per_cycle",
+        nextEligibleAt: "2026-07-03T04:05:00.000Z"
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("records dry-run-only issue enrichment once per unchanged issue update", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-dry-run-"));
     try {
@@ -1908,11 +1972,11 @@ describe("sticky enrichment comments", () => {
 
         expect(readerCalls).toBe(0);
         expect(postCalls).toBe(0);
-        expect(result.ok).toBe(false);
+        expect(result.ok).toBe(true);
         expect(result.status).toMatchObject({
-          ok: false,
-          state: "blocked",
-          blockers: expect.arrayContaining(["issue_enrichment_worker_busy"])
+          ok: true,
+          state: "ready",
+          blockers: []
         });
         expect(result.summary).toMatchObject({
           reposScanned: 0,

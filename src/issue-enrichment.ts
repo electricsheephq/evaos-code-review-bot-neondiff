@@ -115,6 +115,7 @@ export interface IssueEnrichmentScanResult {
     reposSkipped: number;
     readFailures: number;
     issuesSeen: number;
+    /** Counts issues considered eligible for enrichment, including cap- and burst-deferred issues. Use wouldEnrich/wouldComment for current-cycle throughput. */
     eligible: number;
     skipped: number;
     wouldEnrich: number;
@@ -157,6 +158,7 @@ export interface IssueEnrichmentRepoScan {
   since?: string;
   throttle: IssueEnrichmentThrottlePolicy;
   issuesSeen: number;
+  /** Counts issues considered eligible for enrichment, including cap- and burst-deferred issues. Use wouldEnrich/wouldComment for current-cycle throughput. */
   eligible: number;
   skipped: number;
   wouldEnrich: number;
@@ -441,17 +443,11 @@ export async function runIssueEnrichmentCycle(input: {
     lease = input.state.tryAcquireIssueEnrichmentRunLease(config.maxActiveRuns, config.leaseTtlMs, new Date(checkedAt));
     if (!lease) {
       const summary = { ...emptyCycleSummary(), workerSkipped: 1 };
-      const busyStatus: IssueEnrichmentStatus = {
-        ...status,
-        ok: false,
-        state: "blocked",
-        blockers: [...new Set([...status.blockers, "issue_enrichment_worker_busy" as const])]
-      };
       return {
-        ok: false,
+        ok: status.ok,
         checkedAt,
         dryRun: input.dryRun,
-        status: busyStatus,
+        status,
         summary,
         repos: [],
         items: [],

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { ReviewStateStore } from "../src/state.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -200,6 +201,48 @@ describe("build-enrichment-comment issue CLI", () => {
         stderr: expect.stringContaining("--since must be a canonical ISO timestamp")
       });
       expect(requests).toHaveLength(0);
+    });
+  });
+
+  it("parses issue-enrichment lease clear booleans consistently", async () => {
+    await withMockGitHub(async ({ apiBaseUrl }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueScanConfig(root, apiBaseUrl);
+      const statePath = join(root, "state.sqlite");
+      const state = new ReviewStateStore(statePath);
+      try {
+        state.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T04:00:00.000Z"));
+      } finally {
+        state.close();
+      }
+
+      const dryRun = await runCli([
+        "clear-issue-enrichment-leases",
+        "--config",
+        configPath,
+        "--dry-run",
+        "--expired-only",
+        "false"
+      ]);
+      expect(JSON.parse(dryRun.stdout)).toMatchObject({
+        ok: true,
+        dryRun: true,
+        expiredOnly: false,
+        matched: 1,
+        deleted: 0
+      });
+
+      await expect(runCli([
+        "clear-issue-enrichment-leases",
+        "--config",
+        configPath,
+        "--dry-run",
+        "false",
+        "--confirm",
+        "maybe"
+      ])).rejects.toMatchObject({
+        stderr: expect.stringContaining("--confirm must be true or false")
+      });
     });
   });
 });

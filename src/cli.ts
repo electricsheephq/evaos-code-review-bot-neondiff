@@ -719,14 +719,15 @@ async function main(): Promise<void> {
 
   if (command === "clear-issue-enrichment-leases") {
     const config = loadConfig(args.config);
-    const dryRun = args["dry-run"] !== "false";
-    if (!dryRun && args.confirm !== "true") {
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    const confirm = args.confirm === undefined ? false : parseBooleanArg(args.confirm, "--confirm");
+    if (!dryRun && !confirm) {
       throw new Error("clear-issue-enrichment-leases requires --confirm true when --dry-run false");
     }
     const statePath = args["state-path"] ?? config.statePath;
     const state = new ReviewStateStore(statePath);
     try {
-      const expiredOnly = args["expired-only"] === "true";
+      const expiredOnly = args["expired-only"] === undefined ? false : parseBooleanArg(args["expired-only"], "--expired-only");
       const result = state.clearIssueEnrichmentRunLeases({ expiredOnly, dryRun });
       const recommendedActions = dryRun && result.matched > 0
         ? [`rerun with --dry-run false --confirm true${expiredOnly ? " --expired-only true" : ""} to clear the matched issue-enrichment worker lease(s)`]
