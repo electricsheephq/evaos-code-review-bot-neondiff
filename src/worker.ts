@@ -19,6 +19,7 @@ import {
   type GitHubRelatedContextPacket,
   type GitHubRelatedContextReader
 } from "./github-related-context.js";
+import { buildEnrichmentComment, postEnrichmentComment } from "./enrichment.js";
 import { GitHubApi } from "./github.js";
 import {
   buildPullFileFilterImpact,
@@ -30,6 +31,7 @@ import { applyDeterministicReviewGate } from "./review-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { redactSecrets } from "./secrets.js";
+import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skill-packs.js";
 import { parseProviderCooldownError, ReviewStateStore, type ReviewRunLease } from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
@@ -660,6 +662,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       evidenceDir
     });
+    const skillPackContext = buildSkillPackContext({
+      config,
+      evidenceDir
+    });
     const gitnexusContext = buildGitNexusContext({
       config,
       repo,
@@ -680,6 +686,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pull,
       files: reviewFiles,
       repoProfile: repoPolicy.profile,
+      ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
       ...(repoMemory.packet ? { repoMemoryPacket: repoMemory.packet } : {}),
       ...(gitnexusContext.packet ? { gitnexusContextPacket: gitnexusContext.packet } : {}),
       ...(githubRelatedContext.packet ? { githubRelatedContextPacket: githubRelatedContext.packet } : {}),
@@ -744,6 +751,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           postIssueComment: config.walkthrough.postIssueComment
         })
       : undefined;
+    const enrichment = config.enrichment?.enabled
+      ? buildEnrichmentComment({
+          repo,
+          pull,
+          files: reviewFiles,
+          suggestedLabels: repoPolicy.profile.suggestedLabels,
+          suggestedReviewers: repoPolicy.profile.suggestedReviewers,
+          validationSuggestions: validation.recommendations.map((recommendation) => `${recommendation.title}: ${recommendation.reason}`),
+          maxRelatedRefs: config.enrichment.maxRelatedRefs,
+          maxSuggestions: config.enrichment.maxSuggestions,
+          postIssueComment: config.enrichment.postIssueComment
+        })
+      : undefined;
     const plan: ReviewPlan = {
       event,
       comments,
@@ -752,10 +772,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       deterministicGate: gate.summary,
       validation,
       proof,
-      ...(walkthrough ? { walkthrough } : {})
+      ...(walkthrough ? { walkthrough } : {}),
+      ...(enrichment ? { enrichment } : {})
     };
 
     if (walkthrough) writeFileSync(join(evidenceDir, "walkthrough.md"), walkthrough.body);
+    if (enrichment) writeFileSync(join(evidenceDir, "enrichment.md"), enrichment.body);
     writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
 
     if (input.dryRun) {
@@ -777,6 +799,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       evidenceDir,
       walkthrough: plan.walkthrough
+    });
+    plan.enrichmentComment = await postEnrichmentComment({
+      enabled: config.enrichment?.enabled === true,
+      dryRun: input.dryRun,
+      github: reviewGithub,
+      repo,
+      pullNumber: pull.number,
+      enrichment: plan.enrichment,
+      evidenceDir
     });
     writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
     const review = await reviewGithub.createReview({
@@ -987,6 +1018,27 @@ function isGitNexusContextBudgetFailure(packetResult: ReturnType<typeof buildGit
   return !packetResult.ok &&
     packetResult.redactionReport.ok &&
     packetResult.omittedContext.some((source) => source.reason === "budget_exceeded");
+}
+
+export function buildSkillPackContext(input: {
+  config: BotConfig;
+  evidenceDir: string;
+}): { packet?: SkillPackContextPacket } {
+  const skillConfig = input.config.skillPacks;
+  if (!skillConfig?.enabled) return {};
+
+  const packetResult = buildSkillPackContextPacket({
+    config: skillConfig
+  });
+
+  if (!packetResult.ok) {
+    writeRedactedJson(join(input.evidenceDir, "skill-pack-context-packet-error.json"), packetResult);
+    throw new Error(`Skill-pack context packet failed closed: ${packetResult.error}`);
+  }
+
+  writeRedactedJson(join(input.evidenceDir, "skill-pack-context-packet.json"), packetResult);
+  writeFileSync(join(input.evidenceDir, "skill-pack-context-packet.md"), packetResult.packet.markdown);
+  return { packet: packetResult.packet };
 }
 
 export async function buildGitHubRelatedContext(input: {

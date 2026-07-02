@@ -5,6 +5,7 @@ import { runDaemonCycle } from "./daemon.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
+import { buildEnrichmentComment } from "./enrichment.js";
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
@@ -28,7 +29,9 @@ import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
+import { buildSkillPackContextPacket } from "./skill-packs.js";
 import { listRepoMemoryNotesReadOnly, ReviewStateStore, type ReviewQueueJobState } from "./state.js";
+import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, runOnce } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
@@ -559,6 +562,81 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "build-skill-pack") {
+    const config = loadConfig(args.config);
+    const generatedAt = args["generated-at"] ?? new Date().toISOString();
+    parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
+    const result = buildSkillPackContextPacket({
+      config: {
+        ...config.skillPacks!,
+        enabled: true
+      },
+      generatedAt
+    });
+    if (args["output-dir"]) {
+      const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+      mkdirSync(safeOutputDir, { recursive: true });
+      const jsonName = result.ok ? "skill-pack-context-packet.json" : "skill-pack-context-packet-error.json";
+      writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
+      if (result.ok) writeFileSync(join(safeOutputDir, "skill-pack-context-packet.md"), result.packet.markdown);
+    }
+    const jsonOutput = redactSecrets(JSON.stringify(result, null, 2));
+    console.log(jsonOutput);
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "build-enrichment-comment") {
+    if (!args.repo) throw new Error("--repo is required for build-enrichment-comment");
+    if (!args.pr) throw new Error("--pr is required for build-enrichment-comment");
+    const repo = parseSingleArg(args.repo, "--repo");
+    const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
+    const config = loadConfig(args.config);
+    const github = new GitHubApi(config.github);
+    const pull = await github.getPull(repo, pullNumber);
+    const files = await github.listPullFiles(repo, pullNumber);
+    const repoPolicy = resolveRepoProfile(config, repo);
+    if (!repoPolicy.allowed) throw new Error(`Repo ${repo} is skipped by policy: ${repoPolicy.reason}`);
+    const validation = buildChangedSurfaceValidationReport({
+      repo,
+      pull,
+      files,
+      profile: repoPolicy.profile
+    });
+    const proof = evaluateProofRequirements({ pull, validation });
+    const enrichmentConfig = config.enrichment!;
+    const enrichment = buildEnrichmentComment({
+      repo,
+      pull,
+      files,
+      suggestedLabels: repoPolicy.profile.suggestedLabels,
+      suggestedReviewers: repoPolicy.profile.suggestedReviewers,
+      validationSuggestions: [
+        ...validation.recommendations.map((recommendation) => `${recommendation.title}: ${recommendation.reason}`),
+        `Proof status: ${proof.status} - ${proof.summary}`
+      ],
+      maxRelatedRefs: enrichmentConfig.maxRelatedRefs,
+      maxSuggestions: enrichmentConfig.maxSuggestions,
+      postIssueComment: false
+    });
+    const output = {
+      ok: true,
+      repo,
+      pullNumber,
+      headSha: pull.head.sha,
+      marker: enrichment.marker,
+      body: enrichment.body
+    };
+    if (args["output-dir"]) {
+      const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+      mkdirSync(safeOutputDir, { recursive: true });
+      writeFileSync(join(safeOutputDir, "enrichment-comment.json"), `${redactSecrets(JSON.stringify(output, null, 2))}\n`);
+      writeFileSync(join(safeOutputDir, "enrichment.md"), enrichment.body);
+    }
+    console.log(redactSecrets(JSON.stringify(output, null, 2)));
+    return;
+  }
+
   if (command === "eval-offline") {
     if (!args.input) throw new Error("--input is required for eval-offline");
     const input = JSON.parse(readFileSync(args.input, "utf8"));
@@ -790,6 +868,8 @@ function buildHelp() {
         "build-memory-packet",
         "build-gitnexus-context-packet",
         "build-github-related-context-packet",
+        "build-skill-pack",
+        "build-enrichment-comment",
         "provider-cooldowns",
         "retry-provider-cooldowns",
         "retry-failed",
@@ -814,6 +894,8 @@ function buildHelp() {
       "npx tsx src/cli.ts build-memory-packet --config /path/to/live.json --repo owner/repo --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-gitnexus-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-github-related-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts build-skill-pack --config /path/to/live.json --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };

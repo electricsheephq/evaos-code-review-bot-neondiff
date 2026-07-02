@@ -92,6 +92,8 @@ export interface ReviewPlan {
   proof?: ProofRequirementReport;
   walkthrough?: WalkthroughComment;
   walkthroughComment?: WalkthroughCommentPostResult;
+  enrichment?: EnrichmentComment;
+  enrichmentComment?: EnrichmentCommentPostResult;
 }
 
 export interface DeterministicReviewGateSummary {
@@ -140,3 +142,13 @@ export interface WalkthroughComment {
 export type WalkthroughCommentPostResult =
   | { posted: true; action: "created" | "updated"; html_url?: string; id: number }
   | { posted: false; reason: "disabled" | "missing_app_credentials" | "upsert_failed" };
+
+export interface EnrichmentComment {
+  marker: string;
+  body: string;
+  postIssueComment: boolean;
+}
+
+export type EnrichmentCommentPostResult =
+  | { posted: true; action: "created" | "updated"; html_url?: string; id: number }
+  | { posted: false; reason: "disabled" | "dry_run" | "missing_app_credentials" | "upsert_failed"; error?: string };
