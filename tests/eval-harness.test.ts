@@ -130,6 +130,30 @@ describe("offline eval harness", () => {
     const labels = JSON.parse(readFileSync(join(root, "labels.json"), "utf8"));
     expect(labels[1].evidence).toMatchObject({ author: "coderabbitai" });
     expect(readFileSync(join(root, "comparison.csv"), "utf8")).toContain("true_positive,exact_line");
+    const calibration = JSON.parse(readFileSync(join(root, "calibration-report.json"), "utf8"));
+    expect(calibration).toMatchObject({
+      claim: "uncalibrated",
+      publicDisplayPolicy: {
+        defaultLabel: "uncalibrated",
+        minWilsonLowerBound: 0.95,
+        minLabeledFindings: 100,
+        minP0P1Labels: 30,
+        minNegativeControlScenarios: 10
+      },
+      promotion: {
+        eligible: false,
+        reason: "insufficient_labeled_findings"
+      }
+    });
+    expect(calibration.bins[2]).toMatchObject({
+      minConfidence: 0.8,
+      maxConfidence: 1,
+      findings: 1,
+      matched: 1,
+      empiricalPrecision: 1,
+      publicLabel: "uncalibrated"
+    });
+    expect(calibration.bins[2].wilsonLowerBound).toBeLessThan(0.95);
   });
 
   it("fails closed on duplicate findings and secret-like raw output", () => {
@@ -661,6 +685,99 @@ describe("offline eval harness", () => {
 
     expect(result.ok).toBe(false);
     expect(result.scorecard.gates.find((gate) => gate.name === "suite_requirements")).toMatchObject({ ok: false });
+  });
+
+  it("keeps raw Wilson lower bounds for promotion gating instead of rounded display values", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-eval-harness-wilson-boundary-"));
+    roots.push(root);
+    const botFindings = Array.from({ length: 109 }, (_, index) => ({
+      severity: "P1" as const,
+      path: "src/calibration.ts",
+      line: (index + 1) * 10,
+      title: `Boundary finding ${index + 1}`,
+      body: `Boundary regression finding ${index + 1} should preserve raw Wilson math.`,
+      confidence: 0.9
+    }));
+    const labels = botFindings.slice(0, 108).map((finding, index) => ({
+      source: "human" as const,
+      severity: finding.severity,
+      path: finding.path,
+      line: finding.line,
+      title: finding.title,
+      body: finding.body,
+      sourceId: `label-${index + 1}`
+    }));
+
+    const result = runOfflineEval({
+      runId: "wilson-boundary",
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 8,
+      headSha: "boundary",
+      suite: "canary_shadow",
+      botFindings: { findings: botFindings },
+      labels,
+      thresholds: {
+        minPrecision: 0.8,
+        minRecall: 0.6
+      }
+    }, { outputDir: root });
+
+    expect(result.ok).toBe(true);
+    expect(result.scorecard.metrics.maxWilsonLowerBound).toBeLessThan(0.95);
+    expect(result.scorecard.metrics.maxWilsonLowerBound).toBeGreaterThan(0.949);
+    const calibration = JSON.parse(readFileSync(join(root, "calibration-report.json"), "utf8"));
+    expect(calibration.bins[2].wilsonLowerBound).toBe(0.95);
+  });
+
+  it("writes suite-level summary and promotion decision artifacts for eval-suite", () => {
+    const fixtureDir = join(process.cwd(), "tests/fixtures/eval-suite-scenarios");
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-eval-suite-success-output-"));
+    roots.push(outputRoot);
+
+    const output = execFileSync("npx", [
+      "tsx",
+      "src/cli.ts",
+      "eval-suite",
+      "--input-dir",
+      fixtureDir,
+      "--output-root",
+      outputRoot
+    ], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+    const summary = JSON.parse(output);
+    expect(summary.ok).toBe(true);
+    expect(existsSync(join(outputRoot, "suite-summary.json"))).toBe(true);
+    expect(readFileSync(join(outputRoot, "suite-summary.json"), "utf8")).toContain("missingSuites");
+    const promotionDecision = readFileSync(join(outputRoot, "promotion-decision.md"), "utf8");
+    expect(promotionDecision).toContain("# Eval Promotion Decision");
+    expect(promotionDecision).toContain("Decision: not enough evidence");
+    expect(promotionDecision).toContain("Calibrated public confidence: disabled");
+  });
+
+  it("rejects eval-suite output roots inside the checkout before writing root artifacts", () => {
+    const fixtureDir = join(process.cwd(), "tests/fixtures/eval-suite-scenarios");
+    const outputRoot = join(process.cwd(), ".tmp-eval-suite-output-inside-checkout");
+    roots.push(outputRoot);
+    rmSync(outputRoot, { recursive: true, force: true });
+
+    let stderr = "";
+    try {
+      execFileSync("npx", [
+        "tsx",
+        "src/cli.ts",
+        "eval-suite",
+        "--input-dir",
+        fixtureDir,
+        "--output-root",
+        outputRoot
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      stderr = String((error as { stderr?: string }).stderr ?? "");
+    }
+
+    expect(stderr).toContain("outputDir must not be inside the current git checkout");
+    expect(existsSync(join(outputRoot, "suite-summary.json"))).toBe(false);
+    expect(existsSync(join(outputRoot, "promotion-decision.md"))).toBe(false);
   });
 
   it("reports duplicate runIds as structured eval-suite failures", () => {
