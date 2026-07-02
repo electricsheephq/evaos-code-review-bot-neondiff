@@ -402,21 +402,31 @@ async function main(): Promise<void> {
     }
     const state = new ReviewStateStore(statePath);
     try {
-      const notes = state.listRepoMemoryNotes({
+      const includeExpired = args["include-stale"] === "true" || memoryConfig.includeStaleNotes;
+      const noteLimit = args["note-limit"] ? parsePositiveInteger(args["note-limit"], "--note-limit") : memoryConfig.maxStateNotes;
+      const promptNotes = state.listRepoMemoryNotes({
         repo: args.repo,
-        includeExpired: args["include-stale"] === "true" || memoryConfig.includeStaleNotes,
+        includeExpired,
         now: generatedAtDate,
-        limit: args["note-limit"] ? parsePositiveInteger(args["note-limit"], "--note-limit") : memoryConfig.maxStateNotes
+        limit: noteLimit,
+        excludeKind: "false_positive"
+      });
+      const falsePositiveNotes = state.listRepoMemoryNotes({
+        repo: args.repo,
+        includeExpired,
+        now: generatedAtDate,
+        limit: noteLimit,
+        kind: "false_positive"
       });
       const result = buildRepoMemoryPacket({
         repo: args.repo,
         humanMarkdown: readRepoMemoryMarkdown(args["memory-root"] ?? memoryConfig.memoryRoot, args.repo),
-        stateNotes: notes,
+        stateNotes: [...promptNotes, ...falsePositiveNotes],
         findingFingerprints: parseCsv(args.fingerprint),
         generatedAt,
         packetVersion: memoryConfig.packetVersion,
         maxPacketBytes: args["max-bytes"] ? parsePositiveInteger(args["max-bytes"], "--max-bytes") : memoryConfig.maxPacketBytes,
-        includeStaleNotes: args["include-stale"] === "true" || memoryConfig.includeStaleNotes
+        includeStaleNotes: includeExpired
       });
       if (result.ok && args["record-build"] === "true") {
         state.recordRepoMemoryPacketBuild({

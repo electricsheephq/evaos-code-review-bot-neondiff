@@ -550,6 +550,64 @@ describe("repo memory packets", () => {
     expect(JSON.parse(readFileSync(join(outputDir, "repo-memory-packet.json"), "utf8")).packet.sha256).toBe(parsed.packet.sha256);
   });
 
+  it("keeps CLI false-positive notes from starving prompt memory notes", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-note-limit-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(statePath);
+    store.recordRepoMemoryNote({
+      noteId: "policy-survives",
+      repo,
+      kind: "policy_note",
+      title: "Policy survives",
+      body: "CLI packets must preserve prompt memory notes even when suppression notes are newer.",
+      source: "test",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    store.recordRepoMemoryNote({
+      noteId: "newer-suppression",
+      repo,
+      kind: "false_positive",
+      title: "Newer suppression",
+      body: "This suppression note should not consume the prompt note limit.",
+      source: "test",
+      fingerprint: `finding:${"a".repeat(64)}`,
+      expiresAt: "2026-07-03T00:00:00.000Z",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    store.close();
+    const configPath = writeConfig({
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      repoMemory: {
+        enabled: false,
+        memoryRoot: join(root, "memory"),
+        maxPacketBytes: 12_000,
+        maxStateNotes: 1
+      }
+    });
+
+    const stdout = execFileSync(process.execPath, [
+      "./node_modules/.bin/tsx",
+      "src/cli.ts",
+      "build-memory-packet",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--note-limit",
+      "1",
+      "--generated-at",
+      generatedAt
+    ], { cwd: process.cwd(), encoding: "utf8" });
+    const parsed = JSON.parse(stdout);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.packet.sources.map((source: { id: string }) => source.id)).toContain("policy-survives");
+    expect(parsed.packet.markdown).toContain("CLI packets must preserve prompt memory notes");
+    expect(parsed.packet.markdown).not.toContain("This suppression note should not consume");
+  });
+
   it("refuses to write memory packet output inside the current repository checkout", () => {
     const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-unsafe-"));
     roots.push(root);
