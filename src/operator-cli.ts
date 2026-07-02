@@ -6,6 +6,7 @@ import type {
   CoverageAuditReport,
   CoverageProcessedEntry,
   CoverageProviderDeferredEntry,
+  CoverageQueuedEntry,
   CoverageSkippedEntry,
   CoverageStaleHead,
   CoverageUnprocessedEntry
@@ -176,6 +177,7 @@ export interface OperatorQueueSnapshot {
   summary: {
     processed: number;
     providerDeferred: number;
+    queued: number;
     pending: number;
     skipped: number;
     staleHeads: number;
@@ -183,6 +185,7 @@ export interface OperatorQueueSnapshot {
   };
   processed: OperatorQueueEntry[];
   providerDeferred: OperatorQueueEntry[];
+  queued: OperatorQueueEntry[];
   pending: OperatorQueueEntry[];
   skipped: OperatorQueueEntry[];
   staleHeads: OperatorQueueEntry[];
@@ -281,7 +284,14 @@ export interface PullStatusExplanation {
   reason?: string;
   reviewUrl?: string;
   error?: string;
-  nextAction: "none" | "wait_or_retry_provider_cooldown" | "run_or_wait_for_daemon" | "inspect_github_read_failure" | "run_scoped_coverage_audit";
+  nextEligibleAt?: string;
+  nextAction:
+    | "none"
+    | "wait_or_retry_provider_cooldown"
+    | "run_or_wait_for_daemon"
+    | "wait_for_durable_queue_worker"
+    | "inspect_github_read_failure"
+    | "run_scoped_coverage_audit";
 }
 
 export function buildOperatorStatus(input: {
@@ -849,6 +859,7 @@ export function buildOperatorQueue(report: CoverageAuditReport): OperatorQueueSn
     summary: {
       processed: report.processed.length,
       providerDeferred: report.providerDeferred.length,
+      queued: report.queued.length,
       pending: report.unprocessed.length,
       skipped: report.skipped.length,
       staleHeads: report.staleHeads.length,
@@ -856,6 +867,7 @@ export function buildOperatorQueue(report: CoverageAuditReport): OperatorQueueSn
     },
     processed: report.processed.map(processedQueueEntry),
     providerDeferred: report.providerDeferred.map(providerDeferredQueueEntry),
+    queued: report.queued.map(queuedQueueEntry),
     pending: report.unprocessed.map(pendingQueueEntry),
     skipped: report.skipped.map(skippedQueueEntry),
     staleHeads: report.staleHeads.map(staleHeadQueueEntry),
@@ -961,8 +973,30 @@ export function buildOperatorDashboard(input: {
       proofStatus: "pending_review",
       checkStatus: "not_collected",
       reason: redactSecrets(entry.reason ?? entry.error ?? "provider cooldown"),
-      updatedAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
       nextAction: "wait for cooldown expiry or run retry-provider-cooldowns when expired"
+    });
+  }
+
+  for (const entry of input.coverage.queued) {
+    upsertDashboardItem(items, dashboardKey(entry.repo, entry.pullNumber, entry.headSha), {
+      repo: entry.repo,
+      pullNumber: entry.pullNumber,
+      headSha: entry.headSha,
+      title: entry.title,
+      url: entry.url,
+      status: "pending_review",
+      coverageState: "pending_review",
+      queueState: entry.queueState,
+      queueSource: entry.source as ReviewQueueJobRecord["source"],
+      queueLane: entry.lane as ReviewQueueJobRecord["lane"],
+      priority: entry.priority,
+      latestVerdict: entry.queueState,
+      proofStatus: "pending_review",
+      checkStatus: "not_collected",
+      ...(entry.nextEligibleAt ? { reason: `next eligible at ${entry.nextEligibleAt}` } : {}),
+      updatedAt: entry.updatedAt,
+      nextAction: "wait for durable queue worker to review this head"
     });
   }
 
@@ -1149,6 +1183,19 @@ export function explainPullStatus(
     };
   }
 
+  const queued = report.queued.find((entry) => entry.repo === repo && entry.pullNumber === pullNumber);
+  if (queued) {
+    return {
+      repo,
+      pullNumber,
+      state: "pending_review",
+      headSha: queued.headSha,
+      reason: `durable queue state ${queued.queueState}`,
+      ...(queued.nextEligibleAt ? { nextEligibleAt: queued.nextEligibleAt } : {}),
+      nextAction: "wait_for_durable_queue_worker"
+    };
+  }
+
   const pending = report.unprocessed.find((entry) => entry.repo === repo && entry.pullNumber === pullNumber);
   if (pending) {
     return {
@@ -1216,6 +1263,20 @@ function providerDeferredQueueEntry(entry: CoverageProviderDeferredEntry): Opera
     status: entry.status,
     reason: entry.reason ?? entry.error ?? "provider cooldown",
     nextAction: "wait for cooldown expiry or run retry-provider-cooldowns when expired"
+  };
+}
+
+function queuedQueueEntry(entry: CoverageQueuedEntry): OperatorQueueEntry {
+  return {
+    state: "pending_review",
+    repo: entry.repo,
+    pullNumber: entry.pullNumber,
+    headSha: entry.headSha,
+    title: entry.title,
+    url: entry.url,
+    status: entry.queueState,
+    ...(entry.nextEligibleAt ? { reason: `next eligible at ${entry.nextEligibleAt}` } : {}),
+    nextAction: "wait for durable queue worker to review this head"
   };
 }
 

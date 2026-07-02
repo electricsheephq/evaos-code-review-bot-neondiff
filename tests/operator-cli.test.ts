@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CoverageAuditReport } from "../src/coverage-audit.js";
+import type { CoverageAuditReport, CoverageQueuedEntry } from "../src/coverage-audit.js";
 import {
   buildOperatorDashboard,
   buildRuntimeInventory,
@@ -397,6 +397,70 @@ describe("operator CLI summaries", () => {
     });
   });
 
+  it("maps coverage queued rows into dashboard metadata without losing cooldown timing", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({
+        ok: true,
+        queued: [
+          queuedEntry(6, "head-queued", {
+            queueState: "running",
+            source: "manual_command",
+            lane: "manual",
+            priority: 7,
+            nextEligibleAt: "2026-07-01T00:05:00.000Z",
+            updatedAt: "2026-07-01T00:02:00.000Z"
+          })
+        ]
+      }),
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(dashboard.ok).toBe(true);
+    expect(dashboard.items).toEqual([
+      expect.objectContaining({
+        repo: "owner/repo",
+        pullNumber: 6,
+        headSha: "head-queued",
+        status: "pending_review",
+        coverageState: "pending_review",
+        queueState: "running",
+        queueSource: "manual_command",
+        queueLane: "manual",
+        priority: 7,
+        latestVerdict: "running",
+        proofStatus: "pending_review",
+        reason: "next eligible at 2026-07-01T00:05:00.000Z",
+        updatedAt: "2026-07-01T00:02:00.000Z",
+        nextAction: "wait for durable queue worker to review this head"
+      })
+    ]);
+  });
+
+  it("uses provider-deferred coverage updatedAt for dashboard freshness", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({
+        ok: true,
+        providerDeferred: [
+          providerDeferredEntry(7, "head-provider", {
+            createdAt: "2026-07-01T00:01:00.000Z",
+            updatedAt: "2026-07-01T00:02:00.000Z"
+          })
+        ]
+      }),
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(dashboard.items).toEqual([
+      expect.objectContaining({
+        repo: "owner/repo",
+        pullNumber: 7,
+        status: "provider_deferred",
+        reason: "provider_request_rate_limit",
+        updatedAt: "2026-07-01T00:02:00.000Z"
+      })
+    ]);
+  });
+
   it("preserves the strongest blocked dashboard source when later sources are benign", () => {
     const dashboard = buildOperatorDashboard({
       coverage: coverageReport({ ok: true, processed: [processedEntry(7, "head-failed", "posted")] }),
@@ -715,6 +779,7 @@ describe("operator CLI summaries", () => {
     const queue = buildOperatorQueue(coverageReport({
       processed: [processedEntry(1, "head-posted", "posted")],
       providerDeferred: [providerDeferredEntry(2, "head-provider")],
+      queued: [queuedEntry(6, "head-queued")],
       unprocessed: [pullEntry(3, "head-pending")],
       skipped: [{ repo: "owner/repo", pullNumber: 4, headSha: "head-draft", reason: "draft" }],
       staleHeads: [{
@@ -731,12 +796,14 @@ describe("operator CLI summaries", () => {
     expect(queue.summary).toMatchObject({
       processed: 1,
       providerDeferred: 1,
+      queued: 1,
       pending: 1,
       skipped: 1,
       staleHeads: 1
     });
     expect(queue.pending[0]).toMatchObject({ pullNumber: 3, state: "pending_review" });
     expect(queue.providerDeferred[0]).toMatchObject({ pullNumber: 2, state: "provider_deferred" });
+    expect(queue.queued[0]).toMatchObject({ pullNumber: 6, state: "pending_review", status: "queued" });
   });
 
   it("reads review readiness rows from SQLite without creating or mutating state", () => {
@@ -772,6 +839,12 @@ describe("operator CLI summaries", () => {
     const report = coverageReport({
       processed: [processedEntry(1, "head-posted", "posted")],
       providerDeferred: [providerDeferredEntry(2, "head-cooldown")],
+      queued: [
+        queuedEntry(6, "head-queued", {
+          queueState: "running",
+          nextEligibleAt: "2026-07-01T00:05:00.000Z"
+        })
+      ],
       unprocessed: [pullEntry(3, "head-pending")],
       skipped: [{ repo: "owner/repo", pullNumber: 4, headSha: "head-draft", reason: "draft" }],
       readFailures: [{ repo: "owner/read-fail", error: "GitHub API failed" }]
@@ -788,6 +861,12 @@ describe("operator CLI summaries", () => {
     expect(explainPullStatus(report, "owner/repo", 3)).toMatchObject({
       state: "pending_review",
       nextAction: "run_or_wait_for_daemon"
+    });
+    expect(explainPullStatus(report, "owner/repo", 6)).toMatchObject({
+      state: "pending_review",
+      reason: "durable queue state running",
+      nextEligibleAt: "2026-07-01T00:05:00.000Z",
+      nextAction: "wait_for_durable_queue_worker"
     });
     expect(explainPullStatus(report, "owner/repo", 4)).toMatchObject({
       state: "skipped",
@@ -980,6 +1059,7 @@ function coverageReport(input: Partial<CoverageAuditReport>): CoverageAuditRepor
       pullsSeen: 0,
       processed: input.processed?.length ?? 0,
       providerDeferred: input.providerDeferred?.length ?? 0,
+      queued: input.queued?.length ?? 0,
       unprocessed: input.unprocessed?.length ?? 0,
       skipped: input.skipped?.length ?? 0,
       staleHeads: input.staleHeads?.length ?? 0,
@@ -987,6 +1067,7 @@ function coverageReport(input: Partial<CoverageAuditReport>): CoverageAuditRepor
     },
     processed: input.processed ?? [],
     providerDeferred: input.providerDeferred ?? [],
+    queued: input.queued ?? [],
     unprocessed: input.unprocessed ?? [],
     skipped: input.skipped ?? [],
     staleHeads: input.staleHeads ?? [],
@@ -995,6 +1076,7 @@ function coverageReport(input: Partial<CoverageAuditReport>): CoverageAuditRepor
   report.summary.pullsSeen =
     report.summary.processed +
     report.summary.providerDeferred +
+    report.summary.queued +
     report.summary.unprocessed +
     report.summary.skipped +
     report.summary.staleHeads;
@@ -1023,11 +1105,34 @@ function processedEntry(pullNumber: number, headSha: string, status: "posted" | 
   };
 }
 
-function providerDeferredEntry(pullNumber: number, headSha: string) {
+function providerDeferredEntry(
+  pullNumber: number,
+  headSha: string,
+  overrides: Partial<CoverageAuditReport["providerDeferred"][number]> = {}
+) {
   return {
     ...processedEntry(pullNumber, headSha, "skipped"),
     cooldownUntil: "2026-07-01T00:05:00.000Z",
-    reason: "provider_request_rate_limit"
+    reason: "provider_request_rate_limit",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    ...overrides
+  };
+}
+
+function queuedEntry(
+  pullNumber: number,
+  headSha: string,
+  overrides: Partial<CoverageQueuedEntry> = {}
+): CoverageQueuedEntry {
+  return {
+    ...pullEntry(pullNumber, headSha),
+    queueState: "queued" as const,
+    source: "automatic",
+    lane: "background",
+    priority: 50,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    ...overrides
   };
 }
 

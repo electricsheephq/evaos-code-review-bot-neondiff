@@ -4,6 +4,7 @@ import type { BotConfig } from "./config.js";
 import { listReposToScan, resolveRepoProfile, type RepoProfileSkipReason } from "./repo-policy.js";
 import {
   parseProviderCooldownError,
+  type ReviewQueueJobState,
   type RepoProviderCooldownRecord,
   type StoredProcessedReviewRecord
 } from "./state.js";
@@ -17,6 +18,7 @@ export interface CoverageAuditSummary {
   pullsSeen: number;
   processed: number;
   providerDeferred: number;
+  queued: number;
   unprocessed: number;
   skipped: number;
   staleHeads: number;
@@ -48,6 +50,17 @@ export interface CoverageUnprocessedEntry extends CoverageAuditPullEntry {
 export interface CoverageProviderDeferredEntry extends CoverageProcessedEntry {
   cooldownUntil: string;
   reason?: string;
+  updatedAt: string;
+}
+
+export interface CoverageQueuedEntry extends CoverageAuditPullEntry {
+  queueState: ReviewQueueJobState;
+  source: string;
+  lane: string;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+  nextEligibleAt?: string;
 }
 
 export interface CoverageSkippedEntry {
@@ -83,6 +96,7 @@ export interface CoverageAuditReport {
   summary: CoverageAuditSummary;
   processed: CoverageProcessedEntry[];
   providerDeferred: CoverageProviderDeferredEntry[];
+  queued: CoverageQueuedEntry[];
   unprocessed: CoverageUnprocessedEntry[];
   skipped: CoverageSkippedEntry[];
   staleHeads: CoverageStaleHead[];
@@ -97,6 +111,14 @@ export interface CoverageGitHubApi {
 export interface CoverageStateLookup {
   getProcessedReview(repo: string, pullNumber: number, headSha: string): StoredProcessedReviewRecord | undefined;
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[];
+  getActiveReviewQueueJob?(
+    repo: string,
+    pullNumber: number,
+    headSha: string,
+    baseSha: string,
+    now: Date,
+    leaseTtlMs: number
+  ): CoverageQueueJobCoverage | undefined;
   getActiveRepoProviderCooldown?(repo: string, now?: Date): RepoProviderCooldownRecord | undefined;
   getActiveProviderCooldown?(now?: Date): RepoProviderCooldownRecord | undefined;
 }
@@ -133,6 +155,36 @@ export class CoverageStateReader implements CoverageStateLookup {
       )
       .all(repo, pullNumber) as unknown as ProcessedReviewRow[];
     return rows.map(mapProcessedReviewRow);
+  }
+
+  getActiveReviewQueueJob(
+    repo: string,
+    pullNumber: number,
+    headSha: string,
+    baseSha: string,
+    now: Date,
+    leaseTtlMs: number
+  ): CoverageQueueJobCoverage | undefined {
+    if (!this.db) return undefined;
+    if (!this.hasReviewQueueJobsTable()) return undefined;
+    const hasBaseSha = this.hasReviewQueueJobsColumn("base_sha");
+    const hasLeaseExpiresAt = this.hasReviewQueueJobsColumn("lease_expires_at");
+    const rows = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, source, lane, priority, state, next_eligible_at, last_error,
+                ${hasBaseSha ? "base_sha" : "null as base_sha"},
+                ${hasLeaseExpiresAt ? "lease_expires_at" : "null as lease_expires_at"},
+                created_at, updated_at
+         from review_queue_jobs
+         where repo = ?
+           and pull_number = ?
+           and head_sha = ?
+           and state in ('queued', 'leased', 'running', 'provider_deferred')
+         order by priority asc, datetime(created_at) asc`
+      )
+      .all(repo, pullNumber, headSha) as unknown as ReviewQueueJobCoverageRow[];
+    const row = rows.find((candidate) => isCoverageQueueJobCurrent(candidate, baseSha, now, leaseTtlMs));
+    return row ? mapReviewQueueJobCoverageRow(row) : undefined;
   }
 
   getActiveRepoProviderCooldown(repo: string, now = new Date()): RepoProviderCooldownRecord | undefined {
@@ -183,6 +235,21 @@ export class CoverageStateReader implements CoverageStateLookup {
         .get()
     );
   }
+
+  private hasReviewQueueJobsTable(): boolean {
+    if (!this.db) return false;
+    return Boolean(
+      this.db
+        .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_queue_jobs' limit 1")
+        .get()
+    );
+  }
+
+  private hasReviewQueueJobsColumn(name: string): boolean {
+    if (!this.db) return false;
+    const columns = this.db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
+    return columns.some((column) => column.name === name);
+  }
 }
 
 export async function collectCoverageAudit(input: {
@@ -204,6 +271,7 @@ export async function collectCoverageAudit(input: {
       pullsSeen: 0,
       processed: 0,
       providerDeferred: 0,
+      queued: 0,
       unprocessed: 0,
       skipped: 0,
       staleHeads: 0,
@@ -211,6 +279,7 @@ export async function collectCoverageAudit(input: {
     },
     processed: [],
     providerDeferred: [],
+    queued: [],
     unprocessed: [],
     skipped: [],
     staleHeads: [],
@@ -290,12 +359,26 @@ export async function collectCoverageAudit(input: {
             pushSkipped(report, repo, livePull, "draft");
             continue;
           }
-          pushProcessedOrUnprocessed(report, input.state, repo, livePull, input.now ?? new Date());
+          pushProcessedOrUnprocessed(
+            report,
+            input.state,
+            repo,
+            livePull,
+            input.now ?? new Date(),
+            input.config.reviewConcurrency.leaseTtlMs
+          );
           continue;
         }
       }
 
-      pushProcessedOrUnprocessed(report, input.state, repo, pull, input.now ?? new Date());
+      pushProcessedOrUnprocessed(
+        report,
+        input.state,
+        repo,
+        pull,
+        input.now ?? new Date(),
+        input.config.reviewConcurrency.leaseTtlMs
+      );
     }
   }
 
@@ -308,10 +391,17 @@ function pushProcessedOrUnprocessed(
   state: CoverageStateLookup,
   repo: string,
   pull: PullRequestSummary,
-  now: Date
+  now: Date,
+  leaseTtlMs: number
 ): void {
   const processed = state.getProcessedReview(repo, pull.number, pull.head.sha);
+  const queued = state.getActiveReviewQueueJob?.(repo, pull.number, pull.head.sha, pull.base.sha, now, leaseTtlMs);
   if (processed) {
+    if (queued && isProcessedProviderCooldownSkip(processed)) {
+      pushQueuedCoverage(report, repo, pull, queued);
+      return;
+    }
+
     const entry: CoverageProcessedEntry = {
       ...pullEntry(repo, pull),
       status: processed.status,
@@ -327,10 +417,16 @@ function pushProcessedOrUnprocessed(
       report.providerDeferred.push({
         ...entry,
         cooldownUntil: providerCooldown.cooldownUntil,
-        ...(providerCooldown.reason ? { reason: providerCooldown.reason } : {})
+        ...(providerCooldown.reason ? { reason: providerCooldown.reason } : {}),
+        updatedAt: processed.createdAt
       });
       report.summary.providerDeferred += 1;
     }
+    return;
+  }
+
+  if (queued) {
+    pushQueuedCoverage(report, repo, pull, queued);
     return;
   }
 
@@ -341,6 +437,7 @@ function pushProcessedOrUnprocessed(
       status: "skipped",
       error: `repo_provider_cooldown_until=${repoCooldown.cooldownUntil}; reason=${repoCooldown.reason}`,
       createdAt: repoCooldown.updatedAt,
+      updatedAt: repoCooldown.updatedAt,
       cooldownUntil: repoCooldown.cooldownUntil,
       reason: repoCooldown.reason
     });
@@ -355,6 +452,7 @@ function pushProcessedOrUnprocessed(
       status: "skipped",
       error: `provider_cooldown_until=${providerCooldown.cooldownUntil}; reason=${providerCooldown.reason}`,
       createdAt: providerCooldown.updatedAt,
+      updatedAt: providerCooldown.updatedAt,
       cooldownUntil: providerCooldown.cooldownUntil,
       reason: providerCooldown.reason
     });
@@ -372,6 +470,39 @@ function pushProcessedOrUnprocessed(
   report.summary.unprocessed += 1;
 }
 
+function pushQueuedCoverage(
+  report: CoverageAuditReport,
+  repo: string,
+  pull: PullRequestSummary,
+  queued: CoverageQueueJobCoverage
+): void {
+  if (queued.queueState === "provider_deferred") {
+    report.providerDeferred.push({
+      ...pullEntry(repo, pull),
+      status: "skipped",
+      ...(queued.lastError ? { error: queued.lastError } : {}),
+      createdAt: queued.createdAt,
+      updatedAt: queued.updatedAt,
+      cooldownUntil: queued.nextEligibleAt ?? queued.updatedAt,
+      ...(queued.lastError ? extractProviderDeferredReason(queued.lastError) : {})
+    });
+    report.summary.providerDeferred += 1;
+    return;
+  }
+
+  report.queued.push({
+    ...pullEntry(repo, pull),
+    queueState: queued.queueState,
+    source: queued.source,
+    lane: queued.lane,
+    priority: queued.priority,
+    createdAt: queued.createdAt,
+    updatedAt: queued.updatedAt,
+    ...(queued.nextEligibleAt ? { nextEligibleAt: queued.nextEligibleAt } : {})
+  });
+  report.summary.queued += 1;
+}
+
 function activeProviderCooldown(
   processed: StoredProcessedReviewRecord,
   now: Date
@@ -385,6 +516,10 @@ function activeProviderCooldown(
     cooldownUntil: parsed.cooldownUntil,
     ...(parsed.reason ? { reason: parsed.reason } : {})
   };
+}
+
+function isProcessedProviderCooldownSkip(processed: StoredProcessedReviewRecord): boolean {
+  return processed.status === "skipped" && Boolean(processed.error && parseProviderCooldownError(processed.error));
 }
 
 function pushSkipped(
@@ -438,6 +573,33 @@ interface RepoProviderCooldownRow {
   updated_at: string;
 }
 
+interface ReviewQueueJobCoverageRow {
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  source: string;
+  lane: string;
+  priority: number;
+  state: ReviewQueueJobState;
+  next_eligible_at: string | null;
+  last_error: string | null;
+  base_sha: string | null;
+  lease_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CoverageQueueJobCoverage {
+  queueState: ReviewQueueJobState;
+  source: string;
+  lane: string;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+  nextEligibleAt?: string;
+  lastError?: string;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -449,6 +611,47 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     ...(row.error ? { error: row.error } : {}),
     createdAt: row.created_at
   };
+}
+
+function mapReviewQueueJobCoverageRow(row: ReviewQueueJobCoverageRow): CoverageQueueJobCoverage {
+  return {
+    queueState: row.state,
+    source: row.source,
+    lane: row.lane,
+    priority: row.priority,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {})
+  };
+}
+
+function isCoverageQueueJobCurrent(
+  row: ReviewQueueJobCoverageRow,
+  baseSha: string,
+  now: Date,
+  leaseTtlMs: number
+): boolean {
+  if (row.source === "automatic" && row.base_sha !== null && row.base_sha !== baseSha) return false;
+  if (row.state !== "leased" && row.state !== "running") return true;
+
+  if (row.lease_expires_at) {
+    const leaseExpiresAtMs = Date.parse(row.lease_expires_at);
+    return Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs > now.getTime();
+  }
+
+  const updatedAtMs = Date.parse(row.updated_at);
+  return Number.isFinite(updatedAtMs) && updatedAtMs > now.getTime() - leaseTtlMs;
+}
+
+function extractProviderDeferredReason(error: string): { reason?: string } {
+  const reason = error
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith("reason="))
+    ?.slice("reason=".length)
+    .trim();
+  return { reason: reason || "provider_error" };
 }
 
 function mapRepoProviderCooldownRow(row: RepoProviderCooldownRow): RepoProviderCooldownRecord {
