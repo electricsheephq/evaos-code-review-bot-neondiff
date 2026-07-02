@@ -44,6 +44,40 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("stores issue enrichment activation separately from PR review activation", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-watermark-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    expect(store.getIssueEnrichmentRepoWatermark("electricsheephq/WorldOS")).toBeUndefined();
+
+    const first = store.recordIssueEnrichmentRepoWatermark({
+      repo: "electricsheephq/WorldOS",
+      activatedAt: "2026-07-03T00:00:00.000Z",
+      lastCheckedAt: "2026-07-03T00:00:00.000Z",
+      now: new Date("2026-07-03T00:00:01.000Z")
+    });
+    const advanced = store.recordIssueEnrichmentRepoWatermark({
+      repo: "electricsheephq/WorldOS",
+      activatedAt: "2026-07-03T01:00:00.000Z",
+      lastCheckedAt: "2026-07-03T00:05:00.000Z",
+      now: new Date("2026-07-03T00:05:01.000Z")
+    });
+
+    expect(first).toMatchObject({
+      repo: "electricsheephq/WorldOS",
+      activatedAt: "2026-07-03T00:00:00.000Z",
+      lastCheckedAt: "2026-07-03T00:00:00.000Z"
+    });
+    expect(advanced).toMatchObject({
+      repo: "electricsheephq/WorldOS",
+      activatedAt: "2026-07-03T00:00:00.000Z",
+      lastCheckedAt: "2026-07-03T00:05:00.000Z"
+    });
+    expect(store.hasRepoActivation("electricsheephq/WorldOS")).toBe(false);
+    store.close();
+  });
+
   it("persists review readiness transitions without touching updatedAt on no-op repeats", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-readiness-"));
     roots.push(root);

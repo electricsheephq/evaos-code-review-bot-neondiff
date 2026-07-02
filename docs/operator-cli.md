@@ -280,6 +280,14 @@ include `nextEligibleAt` based on the configured cooldown. Per-repo throttles li
 `issueEnrichment.repos.<owner/name>` and can cap `maxIssuesPerCycle`,
 `maxCommentsPerCycle`, burst thresholds, cooldown, and backlog behavior.
 
+When the daemon first sees a newly allowlisted issue-enrichment repo with
+`processExistingOpenIssuesOnActivation: false`, it records a per-repo activation
+watermark and does not scan existing open issues on that cycle. Later cycles use
+that watermark as the repo-specific `since` boundary and advance it only after a
+successful non-truncated scan with no deferred or failed issue-enrichment rows.
+Explicit dry-run/backfill commands can still opt into existing issues with
+`includeExisting` / `--include-existing` style controls.
+
 ## Safety Boundaries
 
 Default operator commands are read-only. They can return nonzero when a gate is
