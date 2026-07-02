@@ -31,6 +31,24 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("leases issue enrichment live workers separately from PR review runs", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-lease-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const first = store.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T05:00:00.000Z"), process.pid);
+    const second = store.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T05:01:00.000Z"), process.pid);
+
+    expect(first).toBeDefined();
+    expect(second).toBeUndefined();
+    expect(store.tryAcquireReviewRunLease(1, 1_200_000, new Date("2026-07-03T05:01:00.000Z"), process.pid)).toBeDefined();
+
+    store.releaseIssueEnrichmentRunLease(first!.leaseId);
+    const afterRelease = store.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T05:02:00.000Z"), process.pid);
+    expect(afterRelease).toBeDefined();
+    store.close();
+  });
+
   it("stores one activation watermark per repository", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
     roots.push(root);

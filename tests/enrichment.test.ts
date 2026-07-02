@@ -45,7 +45,11 @@ describe("sticky enrichment comments", () => {
       postIssueComment: false,
       allowlist: [],
       maxIssuesPerCycle: 5,
-      maxCommentsPerCycle: 0,
+      maxCommentsPerCycle: 1,
+      globalMaxIssuesPerCycle: 5,
+      globalMaxCommentsPerCycle: 1,
+      maxActiveRuns: 1,
+      leaseTtlMs: 1_200_000,
       maxIssuesPerBurst: 10,
       processExistingOpenIssuesOnActivation: false
     });
@@ -63,6 +67,10 @@ describe("sticky enrichment comments", () => {
           allowlist: ["owner/issue-repo"],
           maxIssuesPerCycle: 2,
           maxCommentsPerCycle: 1,
+          globalMaxIssuesPerCycle: 4,
+          globalMaxCommentsPerCycle: 1,
+          maxActiveRuns: 1,
+          leaseTtlMs: 1_200_000,
           cooldownMs: 3_600_000,
           burstWindowMs: 3_600_000,
           maxIssuesPerBurst: 8,
@@ -84,10 +92,38 @@ describe("sticky enrichment comments", () => {
       expect(config.pilotRepos).toEqual(["owner/pr-review-repo"]);
       expect(issueConfig?.allowlist).toEqual(["owner/issue-repo"]);
       expect(issueConfig?.allowlist).not.toContain("owner/pr-review-repo");
+      expect(issueConfig).toMatchObject({
+        globalMaxIssuesPerCycle: 4,
+        globalMaxCommentsPerCycle: 1,
+        maxActiveRuns: 1,
+        leaseTtlMs: 1_200_000
+      });
       expect(issueConfig?.repos?.["owner/issue-repo"]).toMatchObject({
         maxIssuesPerCycle: 3,
         maxCommentsPerCycle: 2
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects issue enrichment global caps that could post more comments than processed issues", () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-invalid-global-caps-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: false,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 2,
+          maxCommentsPerCycle: 1,
+          globalMaxIssuesPerCycle: 1,
+          globalMaxCommentsPerCycle: 2
+        }
+      })}\n`);
+
+      expect(() => loadConfig(configPath)).toThrow(/globalMaxCommentsPerCycle must be <= .*globalMaxIssuesPerCycle/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -845,6 +881,69 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("applies global issue-enrichment caps across allowlisted repos", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-global-caps-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/repo-a", "owner/repo-b", "owner/repo-c"],
+          maxIssuesPerCycle: 10,
+          maxCommentsPerCycle: 10,
+          globalMaxIssuesPerCycle: 3,
+          globalMaxCommentsPerCycle: 1,
+          cooldownMs: 120_000,
+          maxIssuesPerBurst: 10,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        includeExisting: true,
+        checkedAt: "2026-07-03T04:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo) => [
+            { number: repo.endsWith("repo-a") ? 101 : repo.endsWith("repo-b") ? 201 : 301, title: "Issue one", state: "open", body: "Acceptance criteria and owner present." },
+            { number: repo.endsWith("repo-a") ? 102 : repo.endsWith("repo-b") ? 202 : 302, title: "Issue two", state: "open", body: "Acceptance criteria and owner present." }
+          ]
+        }
+      });
+
+      expect(scan.ok).toBe(true);
+      expect(scan.status.globalLimits).toMatchObject({
+        globalMaxIssuesPerCycle: 3,
+        globalMaxCommentsPerCycle: 1,
+        maxActiveRuns: 1,
+        leaseTtlMs: 1_200_000
+      });
+      expect(scan.summary).toMatchObject({
+        issuesSeen: 6,
+        eligible: 6,
+        wouldComment: 1,
+        deferred: 5
+      });
+      expect(scan.items.filter((item) => item.action === "would_comment")).toEqual([
+        expect.objectContaining({ repo: "owner/repo-a", issueNumber: 101, reason: "eligible" })
+      ]);
+      expect(scan.items.find((item) => item.issueNumber === 102)).toMatchObject({
+        action: "deferred",
+        reason: "global_max_comments_per_cycle",
+        nextEligibleAt: "2026-07-03T04:02:00.000Z"
+      });
+      expect(scan.items.find((item) => item.issueNumber === 202)).toMatchObject({
+        action: "deferred",
+        reason: "global_max_issues_per_cycle",
+        nextEligibleAt: "2026-07-03T04:02:00.000Z"
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("records dry-run-only issue enrichment once per unchanged issue update", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-dry-run-"));
     try {
@@ -1458,6 +1557,75 @@ describe("sticky enrichment comments", () => {
           dryRunRecorded: 0,
           failed: 0
         });
+        expect(state.listIssueEnrichmentRecords()).toEqual([]);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips live issue enrichment when the one-worker lease is already held", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-worker-lease-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 1,
+          globalMaxIssuesPerCycle: 5,
+          globalMaxCommentsPerCycle: 1,
+          maxActiveRuns: 1,
+          leaseTtlMs: 1_200_000,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const held = state.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T05:00:00.000Z"));
+        expect(held).toBeDefined();
+        let readerCalls = 0;
+        let postCalls = 0;
+
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => {
+              readerCalls += 1;
+              return [{ number: 71, title: "New issue", state: "open", body: "Acceptance criteria and owner present." }];
+            },
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              postCalls += 1;
+              return {
+                action: "created",
+                id: 1,
+                html_url: "https://github.test/owner/issue-repo/issues/71#issuecomment-1"
+              };
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T05:01:00.000Z"
+        });
+
+        expect(readerCalls).toBe(0);
+        expect(postCalls).toBe(0);
+        expect(result.ok).toBe(true);
+        expect(result.summary).toMatchObject({
+          reposScanned: 0,
+          issuesSeen: 0,
+          workerSkipped: 1,
+          posted: 0,
+          failed: 0
+        });
+        expect(result.recommendedActions).toContain("issue enrichment worker is busy; retry after the active lease expires");
         expect(state.listIssueEnrichmentRecords()).toEqual([]);
       } finally {
         state.close();

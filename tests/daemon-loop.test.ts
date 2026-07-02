@@ -351,6 +351,12 @@ function successfulIssueEnrichmentCycleResult(): IssueEnrichmentCycleResult {
         lookbackMs: 600_000,
         processExistingOpenIssuesOnActivation: false
       },
+      globalLimits: {
+        globalMaxIssuesPerCycle: 5,
+        globalMaxCommentsPerCycle: 1,
+        maxActiveRuns: 1,
+        leaseTtlMs: 1_200_000
+      },
       repoOverrides: [],
       blockers: ["issue_enrichment_live_posting_disabled"]
     },
@@ -366,6 +372,7 @@ function successfulIssueEnrichmentCycleResult(): IssueEnrichmentCycleResult {
       deferred: 0,
       baselinedRepos: 0,
       truncatedRepos: 0,
+      workerSkipped: 0,
       posted: 0,
       dryRunRecorded: 1,
       skippedRecorded: 0,

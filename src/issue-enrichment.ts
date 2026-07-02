@@ -14,6 +14,10 @@ export interface IssueEnrichmentConfig {
   allowlist: string[];
   maxIssuesPerCycle: number;
   maxCommentsPerCycle: number;
+  globalMaxIssuesPerCycle: number;
+  globalMaxCommentsPerCycle: number;
+  maxActiveRuns: number;
+  leaseTtlMs: number;
   cooldownMs: number;
   burstWindowMs: number;
   maxIssuesPerBurst: number;
@@ -27,7 +31,11 @@ export const DEFAULT_ISSUE_ENRICHMENT_CONFIG: IssueEnrichmentConfig = {
   postIssueComment: false,
   allowlist: [],
   maxIssuesPerCycle: 5,
-  maxCommentsPerCycle: 0,
+  maxCommentsPerCycle: 1,
+  globalMaxIssuesPerCycle: 5,
+  globalMaxCommentsPerCycle: 1,
+  maxActiveRuns: 1,
+  leaseTtlMs: 20 * 60_000,
   cooldownMs: 60 * 60_000,
   burstWindowMs: 60 * 60_000,
   maxIssuesPerBurst: 10,
@@ -56,6 +64,7 @@ export interface IssueEnrichmentStatus {
   separateAllowlist: true;
   allowlist: string[];
   throttleDefaults: IssueEnrichmentThrottlePolicy;
+  globalLimits: IssueEnrichmentGlobalLimits;
   repoOverrides: Array<{ repo: string } & IssueEnrichmentRepoOverride>;
   blockers: IssueEnrichmentBlocker[];
 }
@@ -68,6 +77,13 @@ export interface IssueEnrichmentThrottlePolicy {
   maxIssuesPerBurst: number;
   lookbackMs: number;
   processExistingOpenIssuesOnActivation: boolean;
+}
+
+export interface IssueEnrichmentGlobalLimits {
+  globalMaxIssuesPerCycle: number;
+  globalMaxCommentsPerCycle: number;
+  maxActiveRuns: number;
+  leaseTtlMs: number;
 }
 
 export type IssueEnrichmentBlocker =
@@ -105,6 +121,7 @@ export interface IssueEnrichmentScanResult {
     deferred: number;
     baselinedRepos: number;
     truncatedRepos: number;
+    workerSkipped: number;
   };
   repos: IssueEnrichmentRepoScan[];
   items: IssueEnrichmentScanItem[];
@@ -157,6 +174,8 @@ export type IssueEnrichmentScanReason =
   | "issue_is_pull_request"
   | "repo_max_issues_per_cycle"
   | "repo_max_comments_per_cycle"
+  | "global_max_issues_per_cycle"
+  | "global_max_comments_per_cycle"
   | "burst_threshold_exceeded";
 
 export interface IssueEnrichmentScanItem {
@@ -217,6 +236,12 @@ export function buildIssueEnrichmentStatus(input: {
       maxIssuesPerBurst: config.maxIssuesPerBurst,
       lookbackMs: config.lookbackMs,
       processExistingOpenIssuesOnActivation: config.processExistingOpenIssuesOnActivation
+    },
+    globalLimits: {
+      globalMaxIssuesPerCycle: config.globalMaxIssuesPerCycle,
+      globalMaxCommentsPerCycle: config.globalMaxCommentsPerCycle,
+      maxActiveRuns: config.maxActiveRuns,
+      leaseTtlMs: config.leaseTtlMs
     },
     repoOverrides: Object.entries(config.repos ?? {}).map(([repo, override]) => ({ repo, ...override })),
     blockers
@@ -328,6 +353,12 @@ export async function collectIssueEnrichmentScan(input: {
     });
   }
 
+  applyGlobalIssueEnrichmentCaps({
+    items,
+    repoScans,
+    config,
+    checkedAt
+  });
   const summary = summarizeScan(repoScans);
   return {
     ok: summary.readFailures === 0,
@@ -348,7 +379,9 @@ export async function runIssueEnrichmentCycle(input: {
     "getIssueEnrichmentRecord" |
     "recordIssueEnrichment" |
     "getIssueEnrichmentRepoWatermark" |
-    "recordIssueEnrichmentRepoWatermark"
+    "recordIssueEnrichmentRepoWatermark" |
+    "tryAcquireIssueEnrichmentRunLease" |
+    "releaseIssueEnrichmentRunLease"
   >;
   github: IssueEnrichmentCycleGithub;
   dryRun: boolean;
@@ -390,6 +423,28 @@ export async function runIssueEnrichmentCycle(input: {
     };
   }
 
+  let lease: { leaseId: string } | undefined;
+  if (!input.dryRun) {
+    lease = input.state.tryAcquireIssueEnrichmentRunLease(config.maxActiveRuns, config.leaseTtlMs, new Date(checkedAt));
+    if (!lease) {
+      const summary = { ...emptyCycleSummary(), workerSkipped: 1 };
+      return {
+        ok: true,
+        checkedAt,
+        dryRun: input.dryRun,
+        status,
+        summary,
+        repos: [],
+        items: [],
+        recommendedActions: buildCycleRecommendedActions(
+          ["issue enrichment worker is busy; retry after the active lease expires"],
+          summary
+        )
+      };
+    }
+  }
+
+  try {
   const baselineRepos: IssueEnrichmentRepoScan[] = [];
   const reposToScan: string[] = [];
   const sinceByRepo: Record<string, string> = {};
@@ -612,6 +667,9 @@ export async function runIssueEnrichmentCycle(input: {
     items,
     recommendedActions: buildCycleRecommendedActions(scan.recommendedActions, summary)
   };
+  } finally {
+    if (lease) input.state.releaseIssueEnrichmentRunLease(lease.leaseId);
+  }
 }
 
 export function resolveIssueEnrichmentRepoPolicy(
@@ -735,6 +793,68 @@ function nextEligibleAt(input: { checkedAt: string; throttle: IssueEnrichmentThr
   return new Date(baseMs + input.throttle.cooldownMs).toISOString();
 }
 
+function applyGlobalIssueEnrichmentCaps(input: {
+  items: IssueEnrichmentScanItem[];
+  repoScans: IssueEnrichmentRepoScan[];
+  config: IssueEnrichmentConfig;
+  checkedAt: string;
+}): void {
+  let issuesConsidered = 0;
+  let commentsConsidered = 0;
+  for (let index = 0; index < input.items.length; index += 1) {
+    const item = input.items[index]!;
+    if (item.action !== "would_enrich" && item.action !== "would_comment") continue;
+    const policy = resolveIssueEnrichmentRepoPolicy(input.config, item.repo);
+    if (issuesConsidered >= input.config.globalMaxIssuesPerCycle) {
+      input.items[index] = issueScanItem(
+        item.repo,
+        item.issueNumber,
+        item.state,
+        "deferred",
+        "global_max_issues_per_cycle",
+        item.url,
+        nextEligibleAt({ checkedAt: input.checkedAt, throttle: policy.throttle })
+      );
+      continue;
+    }
+    issuesConsidered += 1;
+    if (item.action === "would_comment") {
+      if (commentsConsidered >= input.config.globalMaxCommentsPerCycle) {
+        input.items[index] = issueScanItem(
+          item.repo,
+          item.issueNumber,
+          item.state,
+          "deferred",
+          "global_max_comments_per_cycle",
+          item.url,
+          nextEligibleAt({ checkedAt: input.checkedAt, throttle: policy.throttle })
+        );
+        continue;
+      }
+      commentsConsidered += 1;
+    }
+  }
+
+  for (const scan of input.repoScans) {
+    if (!scan.allowed || !scan.ok) continue;
+    const repoItems = input.items.filter((item) => item.repo === scan.repo);
+    scan.eligible = repoItems.filter(isEligibleIssueEnrichmentItem).length;
+    scan.skipped = repoItems.filter((item) => item.action === "skipped").length;
+    scan.wouldEnrich = repoItems.filter((item) => item.action === "would_enrich" || item.action === "would_comment").length;
+    scan.wouldComment = repoItems.filter((item) => item.action === "would_comment").length;
+    scan.deferred = repoItems.filter((item) => item.action === "deferred").length;
+  }
+}
+
+function isEligibleIssueEnrichmentItem(item: IssueEnrichmentScanItem): boolean {
+  return item.reason === "eligible" ||
+    item.reason === "burst_threshold_exceeded" ||
+    item.reason === "repo_max_issues_per_cycle" ||
+    item.reason === "repo_max_comments_per_cycle" ||
+    item.reason === "global_max_issues_per_cycle" ||
+    item.reason === "global_max_comments_per_cycle";
+}
+
 function summarizeScan(repoScans: IssueEnrichmentRepoScan[]): IssueEnrichmentScanResult["summary"] {
   return {
     reposScanned: repoScans.filter((repo) => repo.allowed && repo.baselined !== true).length,
@@ -747,7 +867,8 @@ function summarizeScan(repoScans: IssueEnrichmentRepoScan[]): IssueEnrichmentSca
     wouldComment: sum(repoScans, "wouldComment"),
     deferred: sum(repoScans, "deferred"),
     baselinedRepos: repoScans.filter((repo) => repo.baselined === true).length,
-    truncatedRepos: repoScans.filter((repo) => repo.truncated === true).length
+    truncatedRepos: repoScans.filter((repo) => repo.truncated === true).length,
+    workerSkipped: 0
   };
 }
 
@@ -783,6 +904,7 @@ function emptyCycleSummary(): IssueEnrichmentCycleResult["summary"] {
     deferred: 0,
     baselinedRepos: 0,
     truncatedRepos: 0,
+    workerSkipped: 0,
     posted: 0,
     dryRunRecorded: 0,
     skippedRecorded: 0,

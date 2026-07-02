@@ -91,6 +91,12 @@ export interface ReviewRunLease {
   ownerPid: number;
 }
 
+export interface IssueEnrichmentRunLease {
+  leaseId: string;
+  expiresAt: string;
+  ownerPid: number;
+}
+
 export interface ReviewerSessionRecord {
   sessionId: string;
   repo: string;
@@ -519,6 +525,13 @@ export class ReviewStateStore {
         created_at text not null,
         updated_at text not null
       );
+
+      create table if not exists issue_enrichment_run_leases (
+        lease_id text primary key,
+        started_at text not null,
+        expires_at text not null,
+        owner_pid integer
+      );
     `);
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
@@ -933,6 +946,45 @@ export class ReviewStateStore {
 
   releaseReviewRunLease(leaseId: string): void {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  tryAcquireIssueEnrichmentRunLease(
+    maxActiveRuns: number,
+    leaseTtlMs: number,
+    now = new Date(),
+    ownerPid = process.pid
+  ): IssueEnrichmentRunLease | undefined {
+    if (!Number.isInteger(maxActiveRuns)) throw new Error("maxActiveRuns must be an integer");
+    if (maxActiveRuns < 1) throw new Error("maxActiveRuns must be at least 1");
+    if (!Number.isInteger(leaseTtlMs)) throw new Error("leaseTtlMs must be an integer");
+    if (leaseTtlMs < 1) throw new Error("leaseTtlMs must be at least 1");
+    if (!Number.isInteger(ownerPid) || ownerPid < 1) throw new Error("ownerPid must be a positive integer");
+
+    const leaseId = randomUUID();
+    const startedAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + leaseTtlMs).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      this.db.prepare("delete from issue_enrichment_run_leases where expires_at <= ?").run(startedAt);
+      this.pruneInactiveIssueEnrichmentRunLeases();
+      const row = this.db.prepare("select count(*) as count from issue_enrichment_run_leases").get() as { count: number };
+      if (row.count >= maxActiveRuns) {
+        this.db.exec("commit");
+        return undefined;
+      }
+      this.db
+        .prepare("insert into issue_enrichment_run_leases (lease_id, started_at, expires_at, owner_pid) values (?, ?, ?, ?)")
+        .run(leaseId, startedAt, expiresAt, ownerPid);
+      this.db.exec("commit");
+      return { leaseId, expiresAt, ownerPid };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  releaseIssueEnrichmentRunLease(leaseId: string): void {
+    this.db.prepare("delete from issue_enrichment_run_leases where lease_id = ?").run(leaseId);
   }
 
   assignReviewerSessionJob(input: {
@@ -1538,6 +1590,17 @@ export class ReviewStateStore {
     for (const row of rows) {
       if (row.owner_pid === null || !isProcessAlive(row.owner_pid)) {
         this.db.prepare("delete from review_run_leases where lease_id = ?").run(row.lease_id);
+      }
+    }
+  }
+
+  private pruneInactiveIssueEnrichmentRunLeases(): void {
+    const rows = this.db
+      .prepare("select lease_id, owner_pid from issue_enrichment_run_leases")
+      .all() as unknown as Array<{ lease_id: string; owner_pid: number | null }>;
+    for (const row of rows) {
+      if (row.owner_pid === null || !isProcessAlive(row.owner_pid)) {
+        this.db.prepare("delete from issue_enrichment_run_leases where lease_id = ?").run(row.lease_id);
       }
     }
   }
