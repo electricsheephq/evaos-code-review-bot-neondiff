@@ -328,19 +328,39 @@ describe("operator CLI summaries", () => {
             headSha: "old-head",
             state: "stale_retired",
             lastError: "superseded_by_head=new-head"
+          }),
+          durableJob({
+            repo: "owner/repo",
+            pullNumber: 3,
+            headSha: "posted-old-head",
+            state: "posted",
+            lastError: "reviewed"
           })
         ],
-        summary: { total: 1, queued: 0, failed: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
+        summary: { total: 2, queued: 0, failed: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
       }),
-      readiness: [{
-        repo: "owner/repo",
-        pullNumber: 2,
-        headSha: "old-head",
-        state: "stale" as const,
-        reason: "superseded_by_head=new-head",
-        createdAt: "2026-07-01T00:00:00.000Z",
-        updatedAt: "2026-07-01T00:01:00.000Z"
-      }],
+      readiness: [
+        {
+          repo: "owner/repo",
+          pullNumber: 2,
+          headSha: "old-head",
+          state: "stale" as const,
+          reason: "superseded_by_head=new-head",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          updatedAt: "2026-07-01T00:01:00.000Z"
+        },
+        {
+          repo: "owner/repo",
+          pullNumber: 3,
+          headSha: "posted-old-head",
+          state: "stale" as const,
+          reason: "superseded_by_head=posted-new-head",
+          event: "COMMENT" as const,
+          reviewUrl: "https://github.com/owner/repo/pull/3#pullrequestreview-1",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          updatedAt: "2026-07-01T00:02:00.000Z"
+        }
+      ],
       checkedAt: "2026-07-02T00:00:00.000Z"
     };
 
@@ -350,7 +370,7 @@ describe("operator CLI summaries", () => {
       totalItems: 1,
       blockedItems: 0,
       staleHeads: 0,
-      hiddenHistoricalStale: 1
+      hiddenHistoricalStale: 2
     });
     expect(currentDashboard.items.map((item) => `${item.repo}#${item.pullNumber}:${item.status}`)).toEqual([
       "owner/repo#1:processed"
@@ -362,17 +382,15 @@ describe("operator CLI summaries", () => {
     });
     expect(historicalDashboard.ok).toBe(false);
     expect(historicalDashboard.summary).toMatchObject({
-      totalItems: 1,
-      blockedItems: 1,
-      staleHeads: 1,
+      totalItems: 2,
+      blockedItems: 2,
+      staleHeads: 2,
       hiddenHistoricalStale: 0
     });
-    expect(historicalDashboard.items[0]).toMatchObject({
-      repo: "owner/repo",
-      pullNumber: 2,
-      status: "stale",
-      readinessState: "stale"
-    });
+    expect(historicalDashboard.items.map((item) => `${item.repo}#${item.pullNumber}:${item.headSha}:${item.status}`)).toEqual([
+      "owner/repo#2:old-head:stale",
+      "owner/repo#3:posted-old-head:stale"
+    ]);
   });
 
   it("filters dashboard rows by repo, status, priority, and stale-head reason", () => {
