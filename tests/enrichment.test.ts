@@ -204,6 +204,7 @@ describe("sticky enrichment comments", () => {
     expect(comment.marker).toBe(buildIssueEnrichmentMarker({ repo: "electricsheephq/evaos-code-review-bot", issueNumber: 88 }));
     expect(comment.body).toContain(`${ENRICHMENT_MARKER_PREFIX} repo=electricsheephq/evaos-code-review-bot issue=88 -->`);
     expect(comment.body).toContain(`${ENRICHMENT_STATE_MARKER_PREFIX} version=1 repo=electricsheephq/evaos-code-review-bot issue=88 state=open`);
+    expect(comment.body).toMatch(/^<!-- evaos-code-review-bot:enrichment repo=electricsheephq\/evaos-code-review-bot issue=88 -->\n<!-- evaos-code-review-bot:enrichment-state version=1 repo=electricsheephq\/evaos-code-review-bot issue=88 state=open hash=[0-9a-f]{64} -->\n## evaOS issue enrichment/);
     expect(comment.body).toContain("Issue: electricsheephq/evaos-code-review-bot#88 - Triage support escalation #22");
     expect(comment.body).toContain("Related issues/PRs: #22");
     expect(comment.body).toContain("Existing labels: support");
