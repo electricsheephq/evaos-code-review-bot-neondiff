@@ -274,9 +274,22 @@ describe("repo memory packets", () => {
         body: "False-positive fingerprints must match the review gate fingerprint format.",
         source: "operator",
         fingerprint: "fp:generated-docs",
+        expiresAt: "2026-08-01T00:00:00.000Z",
         now: new Date(generatedAt)
       })
     ).toThrow(/finding:<64-hex>/);
+    expect(() =>
+      store.recordRepoMemoryNote({
+        noteId: "permanent-false-positive-note",
+        repo,
+        kind: "false_positive",
+        title: "Permanent false positive",
+        body: "False-positive suppressions must be bounded.",
+        source: "operator",
+        fingerprint: generatedDocsFingerprint,
+        now: new Date(generatedAt)
+      })
+    ).toThrow(/require expiresAt/);
     expect(() =>
       store.recordRepoMemoryNote({
         noteId: "bad-secret-note",
@@ -414,6 +427,22 @@ describe("repo memory packets", () => {
       includedNoteIds: ["memory-note-1", "memory-note-2"],
       redactionStatus: "passed"
     });
+    store.recordRepoMemoryPacketBuild({
+      packetSha: "a".repeat(64),
+      repo,
+      packetVersion: "repo-memory-packet-v0.1",
+      generatedAt,
+      byteEstimate: 1024,
+      tokenEstimate: 256,
+      includedNoteIds: ["different-note"],
+      redactionStatus: "passed",
+      memoryRoot: "/different/root"
+    });
+    expect(store.getRepoMemoryPacketBuild("a".repeat(64))).toMatchObject({
+      byteEstimate: 512,
+      includedNoteIds: ["memory-note-1", "memory-note-2"],
+      memoryRoot: "/Volumes/LEXAR/Codex/evaos-code-review-bot/memory"
+    });
     store.close();
   });
 
@@ -548,6 +577,34 @@ describe("repo memory packets", () => {
         evidenceDir
       ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
     ).toThrow(/must not be inside the repository checkout/);
+  });
+
+  it("refuses build-memory-packet state-path overrides outside the configured state path", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-state-path-"));
+    roots.push(root);
+    const configPath = writeConfig({
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      repoMemory: {
+        enabled: false,
+        memoryRoot: join(root, "memory"),
+        maxPacketBytes: 12_000
+      }
+    });
+
+    expect(() =>
+      execFileSync(process.execPath, [
+        "./node_modules/.bin/tsx",
+        "src/cli.ts",
+        "build-memory-packet",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--state-path",
+        join(root, "other.sqlite")
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+    ).toThrow(/must match the configured statePath/);
   });
 
   it("refuses to write memory packet output inside any Lexar repo checkout", () => {

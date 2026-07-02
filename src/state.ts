@@ -1652,7 +1652,7 @@ export class ReviewStateStore {
     }
     this.db
       .prepare(
-        `insert or replace into repo_memory_packet_builds
+        `insert or ignore into repo_memory_packet_builds
           (packet_sha, repo, packet_version, generated_at, byte_estimate, token_estimate,
            included_note_ids, redaction_status, memory_root)
          values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -1787,8 +1787,17 @@ function validateRepoMemoryNoteInput(input: RecordRepoMemoryNoteInput): void {
   if (input.now !== undefined && !Number.isFinite(input.now.getTime())) {
     throw new Error("now must be a valid Date");
   }
-  if (input.expiresAt !== undefined && !Number.isFinite(Date.parse(input.expiresAt))) {
+  const nowMs = input.now?.getTime() ?? Date.now();
+  const expiresAtMs = input.expiresAt === undefined ? undefined : Date.parse(input.expiresAt);
+  if (input.expiresAt !== undefined && !Number.isFinite(expiresAtMs)) {
     throw new Error("expiresAt must be an ISO timestamp");
+  }
+  if (input.kind === "false_positive") {
+    if (expiresAtMs === undefined) throw new Error("false_positive repo memory notes require expiresAt");
+    if (expiresAtMs <= nowMs) throw new Error("false_positive repo memory notes require a future expiresAt");
+    if (expiresAtMs - nowMs > 90 * 24 * 60 * 60_000) {
+      throw new Error("false_positive repo memory notes must expire within 90 days");
+    }
   }
 }
 

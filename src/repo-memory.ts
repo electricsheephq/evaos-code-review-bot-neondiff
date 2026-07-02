@@ -148,12 +148,13 @@ export function buildRepoMemoryPacket(input: BuildRepoMemoryPacketInput): RepoMe
     includedNotes
   });
   const postRenderRedaction = buildRedactionReport([{ id: "packet:markdown", text: markdown }]);
+  const finalRedactionReport = mergeRedactionReports(redactionReport, postRenderRedaction);
   if (!postRenderRedaction.ok) {
     return {
       ok: false,
       error: "Repo memory packet blocked: secret-like text survived packet rendering.",
       excluded,
-      redactionReport: mergeRedactionReports(redactionReport, postRenderRedaction)
+      redactionReport: finalRedactionReport
     };
   }
   const byteEstimate = Buffer.byteLength(markdown, "utf8");
@@ -166,7 +167,7 @@ export function buildRepoMemoryPacket(input: BuildRepoMemoryPacketInput): RepoMe
     };
   }
 
-  const redactionReportSha256 = sha256(JSON.stringify(redactionReport));
+  const redactionReportSha256 = sha256(JSON.stringify(finalRedactionReport));
   const packet: RepoMemoryPacket = {
     repo: input.repo,
     packetVersion,
@@ -179,7 +180,7 @@ export function buildRepoMemoryPacket(input: BuildRepoMemoryPacketInput): RepoMe
     markdown,
     redactionReportSha256
   };
-  return { ok: true, packet, excluded, redactionReport };
+  return { ok: true, packet, excluded, redactionReport: finalRedactionReport };
 }
 
 export function formatRepoMemoryPacketMarkdown(packet: RepoMemoryPacket): string {

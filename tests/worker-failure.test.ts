@@ -108,6 +108,7 @@ describe("worker review failures", () => {
       body: "An oversized advisory memory packet must not abort the review.",
       source: "test",
       fingerprint,
+      expiresAt: "2026-08-01T00:00:00.000Z",
       now: new Date("2026-07-02T00:00:00.000Z")
     });
 

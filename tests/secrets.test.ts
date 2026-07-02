@@ -19,18 +19,36 @@ describe("secret redaction", () => {
 
   it("detects credential URLs, cookie headers, query tokens, and private key bodies", () => {
     const credentialUrl = "https://user:password1234567890@example.com/path";
+    const shortCredentialUrl = "https://deploy:Pa55@host";
+    const encodedUserinfoUrl = "https://deploy%40example.com:Pa55@host";
+    const awsAccessKey = "AKIA1234567890ABCDEF";
+    const slackToken = "xoxb-123456789012-abcdefSECRET";
     const cookieHeader = "Cookie: session=123456789012345678901234";
     const queryToken = "https://example.com/callback?token=123456789012345678901234";
     const privateKey = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----";
     const truncatedPrivateKey = "-----BEGIN PRIVATE KEY-----\nsensitive-key-material-without-footer";
 
     expect(containsSecretLikeText(credentialUrl)).toBe(true);
+    expect(containsSecretLikeText(shortCredentialUrl)).toBe(true);
+    expect(containsSecretLikeText(encodedUserinfoUrl)).toBe(true);
+    expect(containsSecretLikeText(awsAccessKey)).toBe(true);
+    expect(containsSecretLikeText(slackToken)).toBe(true);
     expect(containsSecretLikeText(cookieHeader)).toBe(true);
     expect(containsSecretLikeText(queryToken)).toBe(true);
     expect(containsSecretLikeText(privateKey)).toBe(true);
     expect(containsSecretLikeText(truncatedPrivateKey)).toBe(true);
-    expect(redactSecrets(`${credentialUrl}\n${cookieHeader}\n${queryToken}\n${privateKey}\n${truncatedPrivateKey}`)).not.toMatch(
-      /password1234567890|123456789012345678901234|BEGIN PRIVATE KEY|sensitive-key-material/
+    expect(redactSecrets([
+      credentialUrl,
+      shortCredentialUrl,
+      encodedUserinfoUrl,
+      awsAccessKey,
+      slackToken,
+      cookieHeader,
+      queryToken,
+      privateKey,
+      truncatedPrivateKey
+    ].join("\n"))).not.toMatch(
+      /password1234567890|Pa55|AKIA1234567890ABCDEF|xoxb-|123456789012345678901234|BEGIN PRIVATE KEY|sensitive-key-material/
     );
   });
 

@@ -396,7 +396,11 @@ async function main(): Promise<void> {
     const generatedAtDate = new Date(generatedAt);
     if (!Number.isFinite(generatedAtDate.getTime())) throw new Error("--generated-at must be an ISO timestamp");
     const memoryConfig = config.repoMemory!;
-    const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
+    const statePath = args["state-path"] ?? config.statePath;
+    if (args["state-path"] && realPathPreservingMissing(args["state-path"]) !== realPathPreservingMissing(config.statePath)) {
+      throw new Error("--state-path for build-memory-packet must match the configured statePath");
+    }
+    const state = new ReviewStateStore(statePath);
     try {
       const notes = state.listRepoMemoryNotes({
         repo: args.repo,
@@ -423,7 +427,7 @@ async function main(): Promise<void> {
           byteEstimate: result.packet.byteEstimate,
           tokenEstimate: result.packet.tokenEstimate,
           includedNoteIds: result.packet.sources.filter((source) => source.type === "sqlite_note").map((source) => source.id),
-          redactionStatus: "passed",
+          redactionStatus: result.redactionReport.ok ? "passed" : "failed",
           memoryRoot: args["memory-root"] ?? memoryConfig.memoryRoot
         });
       }

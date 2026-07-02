@@ -26,6 +26,7 @@ export function applyDeterministicReviewGate(input: {
   repoMemoryFalsePositiveFingerprints?: string[];
 }): DeterministicReviewGateResult {
   const located = validateFindingLocations(input.findings, input.files);
+  // Memory suppression intentionally precedes normalization; dropReasonCounts reflects that ordering.
   const repoMemoryFiltered = applyRepoMemoryFalsePositiveSuppressions(
     located.valid,
     input.repoMemoryFalsePositiveFingerprints ?? []
