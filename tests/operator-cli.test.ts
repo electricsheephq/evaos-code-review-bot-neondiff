@@ -442,6 +442,67 @@ describe("operator CLI summaries", () => {
     ]);
   });
 
+  it("keeps blocked-on-proof readiness above processed coverage for the same head", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({ ok: true, processed: [processedEntry(8, "head-proof", "posted")] }),
+      readiness: [{
+        repo: "owner/repo",
+        pullNumber: 8,
+        headSha: "head-proof",
+        state: "blocked_on_proof",
+        reason: "missing proof",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:06:00.000Z"
+      }],
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(dashboard.ok).toBe(false);
+    expect(dashboard.items).toEqual([
+      expect.objectContaining({
+        repo: "owner/repo",
+        pullNumber: 8,
+        status: "blocked_on_proof",
+        coverageState: "processed",
+        readinessState: "blocked_on_proof",
+        proofStatus: "blocked_on_proof",
+        nextAction: "collect required proof before merge-ready claim"
+      })
+    ]);
+  });
+
+  it("surfaces failed processed coverage rows as blocked dashboard failures", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({
+        ok: true,
+        processed: [{
+          ...processedEntry(10, "head-failed", "failed"),
+          error: "ZCode failed ghp_123456789012345678901234"
+        }]
+      }),
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(dashboard.ok).toBe(false);
+    expect(dashboard.summary).toMatchObject({
+      totalItems: 1,
+      blockedItems: 1,
+      failed: 1
+    });
+    expect(dashboard.items).toEqual([
+      expect.objectContaining({
+        repo: "owner/repo",
+        pullNumber: 10,
+        status: "failed",
+        coverageState: "processed",
+        proofStatus: "failed",
+        lastError: "ZCode failed [redacted-secret]",
+        nextAction: "inspect failure evidence and retry or retire the head"
+      })
+    ]);
+    expect(JSON.stringify(dashboard)).not.toMatch(/ghp_123456789012345678901234/);
+  });
+
   it("renders every dashboard row in the human formatter", () => {
     const dashboard = buildOperatorDashboard({
       coverage: coverageReport({
@@ -953,7 +1014,7 @@ function pullEntry(pullNumber: number, headSha: string) {
   };
 }
 
-function processedEntry(pullNumber: number, headSha: string, status: "posted" | "skipped") {
+function processedEntry(pullNumber: number, headSha: string, status: "posted" | "skipped" | "failed") {
   return {
     ...pullEntry(pullNumber, headSha),
     status,

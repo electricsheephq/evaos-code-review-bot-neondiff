@@ -928,21 +928,23 @@ export function buildOperatorDashboard(input: {
   const items = new Map<string, OperatorDashboardItem>();
 
   for (const entry of input.coverage.processed) {
+    const processedFailed = entry.status === "failed";
+    const processedError = entry.error ? redactSecrets(entry.error) : undefined;
     upsertDashboardItem(items, dashboardKey(entry.repo, entry.pullNumber, entry.headSha), {
       repo: entry.repo,
       pullNumber: entry.pullNumber,
       headSha: entry.headSha,
       title: entry.title,
       url: entry.url,
-      status: "processed",
+      status: processedFailed ? "failed" : "processed",
       coverageState: "processed",
       latestVerdict: entry.event ?? entry.status,
-      proofStatus: entry.reviewUrl ? "covered_by_review" : "processed_without_review_url",
+      proofStatus: processedFailed ? "failed" : entry.reviewUrl ? "covered_by_review" : "processed_without_review_url",
       checkStatus: "not_collected",
       ...(entry.reviewUrl ? { reviewUrl: entry.reviewUrl } : {}),
-      ...(entry.error ? { reason: redactSecrets(entry.error) } : {}),
+      ...(processedError ? { reason: processedError, lastError: processedError } : {}),
       updatedAt: entry.createdAt,
-      nextAction: "none"
+      nextAction: processedFailed ? "inspect failure evidence and retry or retire the head" : "none"
     });
   }
 
