@@ -79,6 +79,38 @@ describe("GitHub App read authentication", () => {
     expect(calls.some((url) => url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=2"))).toBe(true);
   });
 
+  it("uses installation tokens for related issue reads", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-related-issue-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    const calls: Array<{ url: string; authorization?: string }> = [];
+    globalThis.fetch = vi.fn(async (url, init) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
+      calls.push({ url: String(url), authorization });
+      if (String(url).endsWith("/repos/owner/repo/installation")) {
+        return jsonResponse({ id: 123 });
+      }
+      if (String(url).endsWith("/app/installations/123/access_tokens")) {
+        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (String(url).endsWith("/repos/owner/repo/issues/17")) {
+        return jsonResponse({ number: 17, title: "Linked issue", state: "open", html_url: "https://github.test/owner/repo/issues/17" });
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
+    const issue = await github.getIssueOrPull("owner/repo", 17);
+
+    expect(issue.title).toBe("Linked issue");
+    const readCall = calls.find((call) => call.url.endsWith("/repos/owner/repo/issues/17"));
+    expect(readCall?.authorization).toBe("Bearer installation-token");
+    expect(readCall?.authorization).not.toBe("Bearer fallback-token");
+  });
+
   it("updates an existing marked PR walkthrough comment with the App token", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-comment-"));
     roots.push(root);

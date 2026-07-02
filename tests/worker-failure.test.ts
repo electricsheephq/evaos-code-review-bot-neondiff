@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
 import type { GitNexusCommandRunner } from "../src/gitnexus-context.js";
 import type { GitHubApi } from "../src/github.js";
@@ -11,7 +11,9 @@ import type { PullRequestSummary } from "../src/types.js";
 import {
   buildRepoMemoryContext,
   buildGitNexusContext,
+  buildGitHubRelatedContext,
   classifyProviderError,
+  createGitHubRelatedContextReader,
   isSuccessfulRetryStatus,
   localDateFolder,
   prepareFailedHeadRetry,
@@ -349,6 +351,114 @@ describe("worker review failures", () => {
     const error = readFileSync(join(evidenceDir, "gitnexus-context-packet-error.json"), "utf8");
     expect(error).toContain("[redacted-secret]");
     expect(error).not.toContain(secretValue);
+  });
+
+  it("skips GitHub related context evidence when disabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-github-related-disabled-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    mkdirSync(evidenceDir, { recursive: true });
+
+    const context = await buildGitHubRelatedContext({
+      config: minimalConfig(root),
+      github: githubRelatedReader({
+        "electricsheephq/WorldOS#12": { number: 12, title: "Should not be read", state: "open", html_url: "https://github.test/WorldOS/issues/12" }
+      }),
+      repo: "electricsheephq/WorldOS",
+      pull: pullSummary(1128, "head", "base", { body: "Closes #12" }),
+      evidenceDir
+    });
+
+    expect(context.packet).toBeUndefined();
+    expect(() => readFileSync(join(evidenceDir, "github-related-context-packet.json"), "utf8")).toThrow();
+  });
+
+  it("writes GitHub related context packet evidence when enabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-github-related-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    const secretValue = "ghp_123456789012345678901234";
+    mkdirSync(evidenceDir, { recursive: true });
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      githubRelatedContext: {
+        enabled: true,
+        packetVersion: "github-related-context-packet-v0.1",
+        maxRelatedItems: 4,
+        maxTitleChars: 120,
+        maxBodyBytes: 200,
+        maxPacketBytes: 12_000,
+        requestTimeoutMs: 1_000,
+        includeCrossRepoRefs: false
+      }
+    };
+
+    const context = await buildGitHubRelatedContext({
+      config,
+      github: githubRelatedReader({
+        "electricsheephq/WorldOS#12": {
+          number: 12,
+          title: `Linked issue ${secretValue}`,
+          state: "closed",
+          html_url: "https://github.test/electricsheephq/WorldOS/issues/12",
+          labels: [{ name: "regression" }],
+          body: "Prior failure context for the current diff."
+        }
+      }),
+      repo: "electricsheephq/WorldOS",
+      pull: pullSummary(1128, "head", "base", { body: "Closes #12" }),
+      evidenceDir
+    });
+
+    expect(context.packet).toBeDefined();
+    expect(context.packet?.references[0]).toMatchObject({
+      repo: "electricsheephq/WorldOS",
+      number: 12,
+      labels: ["regression"]
+    });
+    const json = readFileSync(join(evidenceDir, "github-related-context-packet.json"), "utf8");
+    const markdown = readFileSync(join(evidenceDir, "github-related-context-packet.md"), "utf8");
+    expect(json).toContain("[redacted-secret]");
+    expect(markdown).toContain("[redacted-secret]");
+    expect(json).not.toContain(secretValue);
+    expect(markdown).not.toContain(secretValue);
+    expect(markdown).toContain("Do not post findings solely because related GitHub context suggests risk.");
+  });
+
+  it("uses an aborting GitHub client for runtime related-context reads", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-github-related-timeout-"));
+    roots.push(root);
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      github: {
+        token: "fallback-token"
+      },
+      githubRelatedContext: {
+        enabled: true,
+        packetVersion: "github-related-context-packet-v0.1",
+        maxRelatedItems: 4,
+        maxTitleChars: 120,
+        maxBodyBytes: 200,
+        maxPacketBytes: 12_000,
+        requestTimeoutMs: 5,
+        includeCrossRepoRefs: false
+      }
+    };
+
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(init.signal?.reason instanceof Error ? init.signal.reason : new Error("aborted"));
+      });
+    })) as typeof fetch;
+    try {
+      const reader = createGitHubRelatedContextReader(config, githubRelatedReader({}));
+      const startedAt = Date.now();
+      await expect(reader.getIssueOrPull("owner/repo", 12)).rejects.toThrow(/timed out|aborted/i);
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
   });
 
   it("classifies provider throttle, overload, and true quota separately", () => {
@@ -1310,12 +1420,13 @@ function pullSummary(
   number: number,
   headSha: string,
   baseSha = "base",
-  options: { state?: string; mergedAt?: string | null } = {}
+  options: { state?: string; mergedAt?: string | null; body?: string | null } = {}
 ): PullRequestSummary {
   return {
     number,
     title: `PR ${number}`,
     draft: false,
+    ...(options.body !== undefined ? { body: options.body } : {}),
     ...(options.state ? { state: options.state } : {}),
     ...(options.mergedAt !== undefined ? { merged_at: options.mergedAt } : {}),
     head: {
@@ -1329,6 +1440,22 @@ function pullSummary(
       repo: { full_name: "electricsheephq/WorldOS" }
     },
     html_url: `https://github.com/electricsheephq/WorldOS/pull/${number}`
+  };
+}
+
+function githubRelatedReader(items: Record<string, {
+  number: number;
+  title?: string | null;
+  state?: string | null;
+  html_url?: string | null;
+  pull_request?: unknown;
+  body?: string | null;
+  labels?: Array<{ name?: string | null } | string>;
+}>) {
+  return {
+    async getIssueOrPull(repo: string, number: number) {
+      return items[`${repo}#${number}`];
+    }
   };
 }
 

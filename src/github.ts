@@ -1,6 +1,7 @@
 import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IssueCommentCommandSource } from "./commands.js";
+import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import type { PullFilePatch, PullRequestSummary, ReviewComment, ReviewEvent } from "./types.js";
 
 export interface GitHubApiOptions {
@@ -9,6 +10,7 @@ export interface GitHubApiOptions {
   token?: string;
   apiBaseUrl?: string;
   botLogin?: string;
+  requestTimeoutMs?: number;
 }
 
 export class GitHubApi {
@@ -17,6 +19,7 @@ export class GitHubApi {
   private readonly token?: string;
   private readonly apiBaseUrl: string;
   private readonly botLogin: string;
+  private readonly requestTimeoutMs?: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(options: GitHubApiOptions) {
@@ -25,6 +28,7 @@ export class GitHubApi {
     this.token = options.token;
     this.apiBaseUrl = options.apiBaseUrl ?? "https://api.github.com";
     this.botLogin = options.botLogin ?? "evaos-code-review-bot[bot]";
+    this.requestTimeoutMs = options.requestTimeoutMs;
   }
 
   canPostAsApp(): boolean {
@@ -70,6 +74,12 @@ export class GitHubApi {
       comments.push(...chunk);
       if (chunk.length < 100) return comments;
     }
+  }
+
+  async getIssueOrPull(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull> {
+    return this.request<GitHubRelatedIssueOrPull>(`/repos/${repo}/issues/${issueNumber}`, {
+      token: await this.getReadToken(repo)
+    });
   }
 
   async createReview(input: {
@@ -176,9 +186,14 @@ export class GitHubApi {
   ): Promise<T> {
     const token = options.token ?? this.token;
     let response: Response;
+    const controller = this.requestTimeoutMs ? new AbortController() : undefined;
+    const timeout = controller
+      ? setTimeout(() => controller.abort(new Error(`GitHub API request timed out after ${this.requestTimeoutMs}ms for ${path}`)), this.requestTimeoutMs)
+      : undefined;
     try {
       response = await fetch(`${this.apiBaseUrl}${path}`, {
         method: options.method ?? "GET",
+        signal: controller?.signal,
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
@@ -189,6 +204,8 @@ export class GitHubApi {
       });
     } catch (error) {
       throw new Error(`GitHub API fetch failed for ${path}: ${describeFetchError(error)}`);
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
 
     if (!response.ok) {

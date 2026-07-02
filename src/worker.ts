@@ -14,6 +14,11 @@ import {
   type GitNexusCommandRunner,
   type GitNexusContextPacket
 } from "./gitnexus-context.js";
+import {
+  buildGitHubRelatedContextPacket,
+  type GitHubRelatedContextPacket,
+  type GitHubRelatedContextReader
+} from "./github-related-context.js";
 import { GitHubApi } from "./github.js";
 import {
   buildPullFileFilterImpact,
@@ -662,6 +667,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       files: reviewFiles,
       evidenceDir
     });
+    const githubRelatedContext = await buildGitHubRelatedContext({
+      config,
+      github: createGitHubRelatedContextReader(config, github),
+      repo,
+      pull,
+      evidenceDir
+    });
 
     const prompt = buildReviewPrompt({
       repo,
@@ -670,6 +682,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repoProfile: repoPolicy.profile,
       ...(repoMemory.packet ? { repoMemoryPacket: repoMemory.packet } : {}),
       ...(gitnexusContext.packet ? { gitnexusContextPacket: gitnexusContext.packet } : {}),
+      ...(githubRelatedContext.packet ? { githubRelatedContextPacket: githubRelatedContext.packet } : {}),
       maxPatchBytes: config.zcode.maxPatchBytes
     });
     writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
@@ -974,6 +987,42 @@ function isGitNexusContextBudgetFailure(packetResult: ReturnType<typeof buildGit
   return !packetResult.ok &&
     packetResult.redactionReport.ok &&
     packetResult.omittedContext.some((source) => source.reason === "budget_exceeded");
+}
+
+export async function buildGitHubRelatedContext(input: {
+  config: BotConfig;
+  github: GitHubRelatedContextReader;
+  repo: string;
+  pull: PullRequestSummary;
+  evidenceDir: string;
+}): Promise<{ packet?: GitHubRelatedContextPacket }> {
+  const relatedConfig = input.config.githubRelatedContext;
+  if (!relatedConfig?.enabled) return {};
+
+  const packetResult = await buildGitHubRelatedContextPacket({
+    repo: input.repo,
+    pull: input.pull,
+    config: relatedConfig,
+    reader: input.github
+  });
+
+  if (!packetResult.ok) {
+    writeRedactedJson(join(input.evidenceDir, "github-related-context-packet-error.json"), packetResult);
+    return {};
+  }
+
+  writeRedactedJson(join(input.evidenceDir, "github-related-context-packet.json"), packetResult);
+  writeFileSync(join(input.evidenceDir, "github-related-context-packet.md"), packetResult.packet.markdown);
+  return { packet: packetResult.packet };
+}
+
+export function createGitHubRelatedContextReader(config: BotConfig, fallback: GitHubRelatedContextReader): GitHubRelatedContextReader {
+  const relatedConfig = config.githubRelatedContext;
+  if (!relatedConfig?.enabled) return fallback;
+  return new GitHubApi({
+    ...config.github,
+    requestTimeoutMs: relatedConfig.requestTimeoutMs
+  });
 }
 
 function recordStaleHeadSkip(input: {
