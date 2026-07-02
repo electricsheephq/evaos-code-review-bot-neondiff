@@ -885,7 +885,7 @@ export function buildRepoMemoryContext(input: {
   if (!packetResult.ok) {
     writeRedactedJson(join(input.evidenceDir, "repo-memory-packet-error.json"), packetResult);
     if (isRepoMemoryBudgetFailure(packetResult)) {
-      return { falsePositiveFingerprints: [] };
+      return { falsePositiveFingerprints };
     }
     throw new Error(`Repo memory packet failed closed: ${packetResult.error}`);
   }

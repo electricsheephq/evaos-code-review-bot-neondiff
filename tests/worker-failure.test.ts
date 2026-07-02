@@ -87,6 +87,7 @@ describe("worker review failures", () => {
     roots.push(root);
     const state = new ReviewStateStore(join(root, "state.sqlite"));
     const evidenceDir = join(root, "evidence");
+    const fingerprint = `finding:${"b".repeat(64)}`;
     mkdirSync(evidenceDir, { recursive: true });
     const config: BotConfig = {
       ...minimalConfig(root),
@@ -106,7 +107,7 @@ describe("worker review failures", () => {
       title: "Large false positive",
       body: "An oversized advisory memory packet must not abort the review.",
       source: "test",
-      fingerprint: "fp:large",
+      fingerprint,
       now: new Date("2026-07-02T00:00:00.000Z")
     });
 
@@ -118,7 +119,7 @@ describe("worker review failures", () => {
     });
 
     expect(context.packet).toBeUndefined();
-    expect(context.falsePositiveFingerprints).toEqual([]);
+    expect(context.falsePositiveFingerprints).toEqual([fingerprint]);
     const error = JSON.parse(readFileSync(join(evidenceDir, "repo-memory-packet-error.json"), "utf8"));
     expect(error).toMatchObject({
       ok: false,

@@ -241,6 +241,7 @@ describe("repo memory packets", () => {
     const root = mkdtempSync(join(tmpdir(), "repo-memory-state-"));
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const generatedDocsFingerprint = `finding:${"a".repeat(64)}`;
 
     store.recordRepoMemoryNote({
       noteId: "memory-note-1",
@@ -260,10 +261,22 @@ describe("repo memory packets", () => {
       body: "Suppress repeated generated-doc comments only on an exact finding fingerprint match.",
       source: "review#90",
       confidence: 0.7,
-      fingerprint: "fp:generated-docs",
+      fingerprint: generatedDocsFingerprint,
       expiresAt: "2026-08-01T00:00:00.000Z",
       now: new Date("2026-07-02T00:30:00.000Z")
     });
+    expect(() =>
+      store.recordRepoMemoryNote({
+        noteId: "bad-fingerprint-note",
+        repo,
+        kind: "false_positive",
+        title: "Bad fingerprint",
+        body: "False-positive fingerprints must match the review gate fingerprint format.",
+        source: "operator",
+        fingerprint: "fp:generated-docs",
+        now: new Date(generatedAt)
+      })
+    ).toThrow(/finding:<64-hex>/);
     expect(() =>
       store.recordRepoMemoryNote({
         noteId: "bad-secret-note",
@@ -333,7 +346,7 @@ describe("repo memory packets", () => {
         expect.objectContaining({
           noteId: "memory-note-2",
           kind: "false_positive",
-          fingerprint: "fp:generated-docs"
+          fingerprint: generatedDocsFingerprint
         })
       ])
     );
@@ -355,7 +368,7 @@ describe("repo memory packets", () => {
     expect(limited[1]).toMatchObject({
       noteId: "memory-note-2",
       kind: "false_positive",
-      fingerprint: "fp:generated-docs"
+      fingerprint: generatedDocsFingerprint
     });
     store.recordRepoMemoryNote({
       noteId: "memory-note-1",
@@ -422,6 +435,7 @@ describe("repo memory packets", () => {
     const defaultConfig = loadConfig(writeConfig({}));
     expect(defaultConfig.repoMemory).toMatchObject({
       enabled: false,
+      memoryRoot: ".evaos/repo-memory",
       maxPacketBytes: 12_000
     });
 

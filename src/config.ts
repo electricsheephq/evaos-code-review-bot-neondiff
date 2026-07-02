@@ -187,7 +187,7 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   repoMemory: {
     enabled: false,
-    memoryRoot: "/Volumes/LEXAR/Codex/evaos-code-review-bot/memory",
+    memoryRoot: ".evaos/repo-memory",
     packetVersion: "repo-memory-packet-v0.1",
     maxPacketBytes: 12_000,
     maxStateNotes: 20,

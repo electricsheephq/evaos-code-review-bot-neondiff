@@ -428,10 +428,10 @@ async function main(): Promise<void> {
         });
       }
       if (result.ok && args["output-dir"]) {
-        assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
-        mkdirSync(args["output-dir"], { recursive: true });
-        writeFileSync(join(args["output-dir"], "repo-memory-packet.json"), `${JSON.stringify(result, null, 2)}\n`);
-        writeFileSync(join(args["output-dir"], "repo-memory-packet.md"), result.packet.markdown);
+        const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+        mkdirSync(safeOutputDir, { recursive: true });
+        writeFileSync(join(safeOutputDir, "repo-memory-packet.json"), `${JSON.stringify(result, null, 2)}\n`);
+        writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), result.packet.markdown);
       }
       const format = args.format ?? "json";
       if (format === "markdown") {
@@ -742,7 +742,7 @@ function parseCsv(value?: string | string[]): string[] {
   return values.flatMap((entry) => entry.split(",")).map((entry) => entry.trim()).filter(Boolean);
 }
 
-function assertMemoryPacketOutputDirSafe(outputDir: string, evidenceDir: string): void {
+function assertMemoryPacketOutputDirSafe(outputDir: string, evidenceDir: string): string {
   const evidenceRoot = realPathPreservingMissing(evidenceDir);
   const target = realPathPreservingMissing(outputDir);
   if (!isPathInsideOrEqual(target, evidenceRoot)) {
@@ -751,6 +751,7 @@ function assertMemoryPacketOutputDirSafe(outputDir: string, evidenceDir: string)
   if (isInsideGitCheckout(target)) {
     throw new Error("--output-dir must not be inside the repository checkout or another repository checkout");
   }
+  return target;
 }
 
 function isPathInsideOrEqual(target: string, root: string): boolean {
