@@ -28,12 +28,13 @@ export interface EnrichmentConfig {
 
 export type EnrichmentComment = PlanEnrichmentComment;
 export type EnrichmentCommentPostResult = PlanEnrichmentCommentPostResult;
+type IssueEnrichmentSkipReason = "stale_issue_closed" | "issue_is_pull_request";
 
 export type IssueEnrichmentDryRunOutput =
   | {
       ok: true;
       skipped: true;
-      reason: "stale_issue_closed" | "issue_is_pull_request";
+      reason: IssueEnrichmentSkipReason;
       repo: string;
       issueNumber: number;
       state: string;
@@ -141,9 +142,9 @@ export function buildIssueEnrichmentComment(input: {
   postIssueComment?: boolean;
 }): EnrichmentComment {
   validateRepoIssue({ repo: input.repo, issueNumber: input.issue.number });
-  const skip = classifyIssueEnrichmentSkip(input.issue);
-  if (skip) throw new Error(`Cannot build issue enrichment for ${input.repo}#${input.issue.number}: ${skip.reason}`);
-  const state = normalizeIssueState(input.issue);
+  const eligibility = getIssueEnrichmentEligibility(input.issue);
+  if (eligibility.skip) throw new Error(`Cannot build issue enrichment for ${input.repo}#${input.issue.number}: ${eligibility.skip.reason}`);
+  const state = eligibility.state;
   const marker = buildIssueEnrichmentMarker({ repo: input.repo, issueNumber: input.issue.number });
   const relatedRefs = extractRelatedRefs(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`).slice(0, input.maxRelatedRefs ?? 8);
   const existingLabels = unique(normalizeIssueLabels(input.issue.labels));
@@ -201,8 +202,9 @@ export function buildIssueEnrichmentDryRunOutput(input: {
   maxSuggestions?: number;
 }): IssueEnrichmentDryRunOutput {
   validateRepoIssue({ repo: input.repo, issueNumber: input.issue.number });
-  const state = normalizeIssueState(input.issue);
-  const skip = classifyIssueEnrichmentSkip(input.issue);
+  const eligibility = getIssueEnrichmentEligibility(input.issue);
+  const state = eligibility.state;
+  const skip = eligibility.skip;
   if (skip) {
     return {
       ok: true,
@@ -321,14 +323,20 @@ function normalizeIssueLabels(labels: GitHubRelatedIssueOrPull["labels"]): strin
   return (labels ?? []).map((label) => typeof label === "string" ? label : label.name ?? "").filter(Boolean);
 }
 
-function classifyIssueEnrichmentSkip(issue: GitHubRelatedIssueOrPull): { reason: "stale_issue_closed" | "issue_is_pull_request" } | undefined {
-  if (issue.pull_request) return { reason: "issue_is_pull_request" };
-  if (normalizeIssueState(issue).toLowerCase() !== "open") return { reason: "stale_issue_closed" };
-  return undefined;
+function getIssueEnrichmentEligibility(issue: GitHubRelatedIssueOrPull): {
+  state: string;
+  skip?: { reason: IssueEnrichmentSkipReason };
+} {
+  const state = normalizeIssueState(issue);
+  if (issue.pull_request) return { state, skip: { reason: "issue_is_pull_request" } };
+  if (state === "closed") return { state, skip: { reason: "stale_issue_closed" } };
+  return { state };
 }
 
 function normalizeIssueState(issue: Pick<GitHubRelatedIssueOrPull, "state" | "number">): string {
-  return formatInlinePublicText(issue.state ?? "unknown") || "unknown";
+  const normalized = formatInlinePublicText(issue.state ?? "unknown").toLowerCase() || "unknown";
+  if (normalized === "open" || normalized === "closed") return normalized;
+  return normalized;
 }
 
 function inferAcceptanceGaps(pull: PullRequestSummary): string[] {

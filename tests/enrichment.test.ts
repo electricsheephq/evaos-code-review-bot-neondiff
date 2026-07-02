@@ -312,6 +312,65 @@ describe("sticky enrichment comments", () => {
     });
     expect(JSON.stringify(output)).not.toContain("body");
   });
+
+  it("normalizes issue state casing without treating unknown states as closed", () => {
+    const uppercaseOpen: GitHubRelatedIssueOrPull = {
+      number: 94,
+      title: "Uppercase open issue",
+      state: "OPEN",
+      body: "Acceptance criteria present."
+    };
+    const unknownState: GitHubRelatedIssueOrPull = {
+      number: 95,
+      title: "Unknown state issue",
+      state: "needs-triage",
+      body: "Acceptance criteria present."
+    };
+
+    const openOutput = buildIssueEnrichmentDryRunOutput({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue: uppercaseOpen,
+      maxRelatedRefs: 8,
+      maxSuggestions: 8
+    });
+    const unknownOutput = buildIssueEnrichmentDryRunOutput({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue: unknownState,
+      maxRelatedRefs: 8,
+      maxSuggestions: 8
+    });
+
+    expect(openOutput).toMatchObject({ skipped: false, state: "open" });
+    expect(unknownOutput).toMatchObject({ skipped: false, state: "needs-triage" });
+  });
+
+  it("caps issue enrichment related refs, labels, and owners", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 96,
+      title: "Runtime regression #1 #2 #3",
+      state: "open",
+      body: "Bug docs test support references #4 #5 #6.",
+      labels: [{ name: "bug" }]
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedLabels: ["Bug", "runtime", "docs", "tests"],
+      suggestedOwners: ["owner-a", "owner-b", "owner-c"],
+      maxRelatedRefs: 2,
+      maxSuggestions: 2
+    });
+
+    const relatedRefsLine = comment.body.split("\n").find((line) => line.startsWith("Related issues/PRs:"));
+    expect(relatedRefsLine).toBe("Related issues/PRs: #1, #2.");
+    expect(relatedRefsLine).not.toContain("#3");
+    expect(comment.body).toContain("Existing labels: bug.");
+    expect(comment.body).toContain("Suggested labels: runtime, docs.");
+    expect(comment.body).not.toContain("Suggested labels: Bug");
+    expect(comment.body).toContain("Suggested owners: owner-a, owner-b.");
+    expect(comment.body).not.toContain("owner-c");
+  });
 });
 
 function extractStateHash(body: string): string {

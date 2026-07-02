@@ -84,7 +84,7 @@ export class GitHubApi {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes(`for ${path}:`) && /\bGitHub API (403|404)\b/.test(message)) return undefined;
+      if (isIssueLookupMissingOrUnreadable(message, path)) return undefined;
       throw error;
     }
   }
@@ -222,6 +222,14 @@ export class GitHubApi {
 
     return (await response.json()) as T;
   }
+}
+
+function isIssueLookupMissingOrUnreadable(message: string, path: string): boolean {
+  if (!message.includes(`for ${path}:`)) return false;
+  if (/\bGitHub API 404\b/.test(message)) return true;
+  if (!/\bGitHub API 403\b/.test(message)) return false;
+  if (/\b(rate limit|abuse|secondary rate limit)\b/i.test(message)) return false;
+  return /\b(Resource not accessible by integration|Not Found|Forbidden)\b/i.test(message);
 }
 
 interface IssueCommentSummary {
