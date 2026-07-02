@@ -83,4 +83,18 @@ describe("secret redaction", () => {
     expect(containsSecretLikeText(benignCustomerLabel)).toBe(false);
     expect(redactSecrets(`${customerId}\n${ssn}`)).not.toMatch(/cus_12345678901234567890|123-45-6789/);
   });
+
+  it("keeps already-stringified JSON parseable after redaction", () => {
+    const output = redactSecrets(JSON.stringify({
+      ok: true,
+      token: "abcdefghijklmnop",
+      message: "status payload"
+    }, null, 2));
+
+    const parsed = JSON.parse(output);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.message).toBe("status payload");
+    expect(typeof parsed.token).toBe("string");
+  });
 });

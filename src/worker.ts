@@ -72,6 +72,13 @@ export interface RunOnceResult {
   skippedStaleHead: number;
   baselinedExisting: number;
   policySkips: { repo: string; reason: string }[];
+  scopedPull?: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    title: string;
+    url: string;
+  };
 }
 
 export interface RetryFailedHeadResult {
@@ -196,6 +203,15 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
       const pulls = options.pullNumber
         ? [await github.getPull(repo, options.pullNumber)]
         : await github.listOpenPulls(repo);
+      if (options.pullNumber && pulls[0]) {
+        result.scopedPull = {
+          repo,
+          pullNumber: pulls[0].number,
+          headSha: pulls[0].head.sha,
+          title: pulls[0].title,
+          url: pulls[0].html_url
+        };
+      }
       result.pullsSeen += pulls.length;
       const activation = activateRepoForNewOnlyReview({
         config,
