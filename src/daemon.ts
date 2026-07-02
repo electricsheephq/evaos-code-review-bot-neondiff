@@ -1,5 +1,7 @@
 import { formatDaemonLog } from "./daemon-log.js";
 import { loadConfig } from "./config.js";
+import { GitHubApi } from "./github.js";
+import { runIssueEnrichmentCycle, type IssueEnrichmentCycleResult } from "./issue-enrichment.js";
 import { runScheduledCycle } from "./scheduler.js";
 import { ReviewStateStore, type DaemonHeartbeatEvent } from "./state.js";
 import { retryProviderCooldowns, runOnce, type RetryProviderCooldownsResult, type RunOnceResult } from "./worker.js";
@@ -17,6 +19,7 @@ export interface RunDaemonCycleOptions {
   canaryPulls: string[];
   commandsEnabled: boolean;
   reviewSchedulerEnabled?: boolean;
+  issueEnrichmentEnabled?: boolean;
   runOnceImpl?: (options: { configPath?: string; dryRun: boolean }) => Promise<RunOnceResult>;
   retryProviderCooldownsImpl?: (options: {
     configPath?: string;
@@ -25,6 +28,7 @@ export interface RunDaemonCycleOptions {
     dryRun: boolean;
     useZCode?: boolean;
   }) => Promise<RetryProviderCooldownsResult>;
+  issueEnrichmentCycleImpl?: (options: { configPath?: string; dryRun: boolean }) => Promise<IssueEnrichmentCycleResult>;
   recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string) => void;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -93,6 +97,30 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
         error: message
       }));
     }
+    if (input.issueEnrichmentEnabled === true) {
+      const issueEnrichmentCycleImpl = input.issueEnrichmentCycleImpl ?? runIssueEnrichmentCycleFromConfig;
+      try {
+        const issueEnrichment = await issueEnrichmentCycleImpl({
+          configPath: input.configPath,
+          dryRun: input.dryRun
+        });
+        stdout(formatDaemonLog({
+          event: "daemon_issue_enrichment",
+          cycle: input.cycle,
+          dryRun: input.dryRun,
+          result: issueEnrichment
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(formatDaemonLog({
+          event: "daemon_issue_enrichment_failed",
+          level: "error",
+          cycle: input.cycle,
+          dryRun: input.dryRun,
+          error: message
+        }));
+      }
+    }
     stdout(formatDaemonLog({
       event: "daemon_cycle_complete",
       cycle: input.cycle,
@@ -112,6 +140,21 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     }));
     recordHeartbeat("daemon_cycle_failed", message);
     return { ok: false, error: message };
+  }
+}
+
+async function runIssueEnrichmentCycleFromConfig(input: { configPath?: string; dryRun: boolean }): Promise<IssueEnrichmentCycleResult> {
+  const config = loadConfig(input.configPath);
+  const state = new ReviewStateStore(config.statePath);
+  try {
+    return await runIssueEnrichmentCycle({
+      config,
+      state,
+      github: new GitHubApi(config.github),
+      dryRun: input.dryRun
+    });
+  } finally {
+    state.close();
   }
 }
 

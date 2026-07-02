@@ -1,6 +1,12 @@
-import { buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
+import {
+  buildIssueEnrichmentComment,
+  buildIssueEnrichmentDryRunOutput,
+  postEnrichmentComment,
+  type EnrichmentCommentGithub
+} from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import { redactSecrets } from "./secrets.js";
+import type { IssueEnrichmentRecord, IssueEnrichmentRecordStatus, ReviewStateStore } from "./state.js";
 
 export interface IssueEnrichmentConfig {
   enabled: boolean;
@@ -102,6 +108,25 @@ export interface IssueEnrichmentScanResult {
   items: IssueEnrichmentScanItem[];
   recommendedActions: string[];
 }
+
+export interface IssueEnrichmentCycleResult extends Omit<IssueEnrichmentScanResult, "summary" | "items"> {
+  summary: IssueEnrichmentScanResult["summary"] & {
+    posted: number;
+    dryRunRecorded: number;
+    skippedRecorded: number;
+    deferredRecorded: number;
+    alreadyProcessed: number;
+    failed: number;
+  };
+  items: Array<IssueEnrichmentScanItem & {
+    recordStatus?: IssueEnrichmentRecordStatus;
+    commentUrl?: string;
+    error?: string;
+    skippedExisting?: boolean;
+  }>;
+}
+
+export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub;
 
 export interface IssueEnrichmentRepoScan {
   repo: string;
@@ -307,6 +332,186 @@ export async function collectIssueEnrichmentScan(input: {
   };
 }
 
+export async function runIssueEnrichmentCycle(input: {
+  config: { issueEnrichment?: IssueEnrichmentConfig };
+  state: Pick<ReviewStateStore, "getIssueEnrichmentRecord" | "recordIssueEnrichment">;
+  github: IssueEnrichmentCycleGithub;
+  dryRun: boolean;
+  repo?: string;
+  includeExisting?: boolean;
+  since?: string;
+  checkedAt?: string;
+}): Promise<IssueEnrichmentCycleResult> {
+  const checkedAt = input.checkedAt ?? new Date().toISOString();
+  const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const status = buildIssueEnrichmentStatus({
+    config: input.config,
+    canPostAsApp: input.github.canPostAsApp(),
+    checkedAt
+  });
+  if (!config.enabled) {
+    return {
+      ok: true,
+      checkedAt,
+      dryRun: input.dryRun,
+      status,
+      summary: emptyCycleSummary(),
+      repos: [],
+      items: [],
+      recommendedActions: buildScanRecommendedActions(status, emptyCycleSummary())
+    };
+  }
+  if (status.state === "blocked") {
+    const summary = emptyCycleSummary();
+    return {
+      ok: false,
+      checkedAt,
+      dryRun: input.dryRun,
+      status,
+      summary,
+      repos: [],
+      items: [],
+      recommendedActions: buildScanRecommendedActions(status, summary)
+    };
+  }
+
+  const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
+  const scan = await collectIssueEnrichmentScan({
+    config: input.config,
+    reader: {
+      listIssuesForEnrichment: async (repo, options) => {
+        const issues = await input.github.listIssuesForEnrichment(repo, options);
+        for (const issue of issues) issuesByKey.set(issueKey(repo, issue.number), issue);
+        return issues;
+      }
+    },
+    dryRun: input.dryRun,
+    repo: input.repo,
+    includeExisting: input.includeExisting,
+    since: input.since,
+    canPostAsApp: input.github.canPostAsApp(),
+    checkedAt
+  });
+  const summary = {
+    ...scan.summary,
+    posted: 0,
+    dryRunRecorded: 0,
+    skippedRecorded: 0,
+    deferredRecorded: 0,
+    alreadyProcessed: 0,
+    failed: 0
+  };
+  const items: IssueEnrichmentCycleResult["items"] = [];
+
+  for (const item of scan.items) {
+    const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
+    const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
+    const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
+    if (existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt)) {
+      summary.alreadyProcessed += 1;
+      items.push({ ...item, skippedExisting: true, recordStatus: existing.status });
+      continue;
+    }
+    if (input.dryRun) {
+      items.push({ ...item });
+      continue;
+    }
+
+    if (item.action === "skipped") {
+      input.state.recordIssueEnrichment({
+        repo: item.repo,
+        issueNumber: item.issueNumber,
+        issueUpdatedAt,
+        status: "skipped",
+        reason: item.reason,
+        now: new Date(checkedAt)
+      });
+      summary.skippedRecorded += 1;
+      items.push({ ...item, recordStatus: "skipped" });
+      continue;
+    }
+
+    if (item.action === "deferred") {
+      input.state.recordIssueEnrichment({
+        repo: item.repo,
+        issueNumber: item.issueNumber,
+        issueUpdatedAt,
+        status: "deferred",
+        reason: item.reason,
+        nextEligibleAt: item.nextEligibleAt,
+        now: new Date(checkedAt)
+      });
+      summary.deferredRecorded += 1;
+      items.push({ ...item, recordStatus: "deferred" });
+      continue;
+    }
+
+    if (!config.postIssueComment || item.action === "would_enrich") {
+      input.state.recordIssueEnrichment({
+        repo: item.repo,
+        issueNumber: item.issueNumber,
+        issueUpdatedAt,
+        status: "dry_run",
+        reason: "dry_run_only",
+        now: new Date(checkedAt)
+      });
+      summary.dryRunRecorded += 1;
+      items.push({ ...item, recordStatus: "dry_run" });
+      continue;
+    }
+
+    try {
+      if (!issue) throw new Error(`Issue metadata missing for ${item.repo}#${item.issueNumber}`);
+      const enrichment = buildIssueEnrichmentComment({
+        repo: item.repo,
+        issue,
+        postIssueComment: true
+      });
+      const post = await postEnrichmentComment({
+        enabled: true,
+        dryRun: false,
+        github: input.github,
+        repo: item.repo,
+        pullNumber: item.issueNumber,
+        enrichment
+      });
+      if (!post.posted) throw new Error(`issue enrichment comment not posted: ${post.reason}`);
+      const commentUrl = post.html_url ? redactSecrets(post.html_url) : undefined;
+      input.state.recordIssueEnrichment({
+        repo: item.repo,
+        issueNumber: item.issueNumber,
+        issueUpdatedAt,
+        status: "posted",
+        ...(commentUrl ? { commentUrl } : {}),
+        now: new Date(checkedAt)
+      });
+      summary.posted += 1;
+      items.push({ ...item, recordStatus: "posted", ...(commentUrl ? { commentUrl } : {}) });
+    } catch (error) {
+      const message = redactSecrets(error instanceof Error ? error.message : String(error));
+      input.state.recordIssueEnrichment({
+        repo: item.repo,
+        issueNumber: item.issueNumber,
+        issueUpdatedAt,
+        status: "failed",
+        reason: "post_failed",
+        error: message,
+        now: new Date(checkedAt)
+      });
+      summary.failed += 1;
+      items.push({ ...item, recordStatus: "failed", error: message });
+    }
+  }
+
+  return {
+    ...scan,
+    ok: scan.ok && summary.failed === 0,
+    summary,
+    items,
+    recommendedActions: buildCycleRecommendedActions(scan.recommendedActions, summary)
+  };
+}
+
 export function resolveIssueEnrichmentRepoPolicy(
   config: IssueEnrichmentConfig,
   repo: string
@@ -448,6 +653,61 @@ function buildScanRecommendedActions(status: IssueEnrichmentStatus, summary: Iss
   if (summary.deferred > 0) actions.push("inspect deferred issue-enrichment rows and adjust per-repo throttles only after dry-run review");
   if (summary.readFailures > 0) actions.push("run doctor and inspect GitHub App Issues permissions");
   return actions;
+}
+
+function buildCycleRecommendedActions(
+  scanActions: string[],
+  summary: IssueEnrichmentCycleResult["summary"]
+): string[] {
+  const actions = [...scanActions];
+  if (summary.failed > 0) actions.push("inspect failed issue-enrichment rows before enabling live issue comments");
+  if (summary.posted > 0) actions.push("verify App-authored sticky issue comments before expanding the issue-enrichment allowlist");
+  return [...new Set(actions)];
+}
+
+function emptyCycleSummary(): IssueEnrichmentCycleResult["summary"] {
+  return {
+    reposScanned: 0,
+    reposSkipped: 0,
+    readFailures: 0,
+    issuesSeen: 0,
+    eligible: 0,
+    skipped: 0,
+    wouldEnrich: 0,
+    wouldComment: 0,
+    deferred: 0,
+    posted: 0,
+    dryRunRecorded: 0,
+    skippedRecorded: 0,
+    deferredRecorded: 0,
+    alreadyProcessed: 0,
+    failed: 0
+  };
+}
+
+function canonicalIssueUpdatedAt(issue: GitHubRelatedIssueOrPull | undefined, checkedAt: string): string {
+  const candidate = issue?.updated_at ?? checkedAt;
+  const parsed = Date.parse(candidate);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : checkedAt;
+}
+
+function shouldSkipIssueEnrichmentRecord(
+  existing: IssueEnrichmentRecord,
+  issueUpdatedAt: string,
+  checkedAt: string
+): boolean {
+  if (existing.issueUpdatedAt !== issueUpdatedAt) return false;
+  if (existing.status === "failed") return false;
+  if (existing.status === "deferred" && existing.nextEligibleAt) {
+    const nextEligibleAt = Date.parse(existing.nextEligibleAt);
+    const now = Date.parse(checkedAt);
+    if (Number.isFinite(nextEligibleAt) && Number.isFinite(now) && nextEligibleAt <= now) return false;
+  }
+  return true;
+}
+
+function issueKey(repo: string, issueNumber: number): string {
+  return `${repo}#${issueNumber}`;
 }
 
 function sum<T extends keyof Pick<IssueEnrichmentRepoScan, "issuesSeen" | "eligible" | "skipped" | "wouldEnrich" | "wouldComment" | "deferred">>(

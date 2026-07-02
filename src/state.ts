@@ -47,6 +47,7 @@ export type RepoMemoryNoteKind =
   | "false_positive"
   | "review_outcome"
   | "proof_preference";
+export type IssueEnrichmentRecordStatus = "dry_run" | "posted" | "skipped" | "deferred" | "failed";
 const REPO_MEMORY_NOTE_KINDS: RepoMemoryNoteKind[] = ["policy_note", "machine_fact", "false_positive", "review_outcome", "proof_preference"];
 
 export interface ProcessedReviewRecord {
@@ -258,6 +259,31 @@ export interface RecordRepoMemoryNoteInput {
   now?: Date;
 }
 
+export interface IssueEnrichmentRecord {
+  repo: string;
+  issueNumber: number;
+  issueUpdatedAt?: string;
+  status: IssueEnrichmentRecordStatus;
+  reason?: string;
+  commentUrl?: string;
+  error?: string;
+  nextEligibleAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecordIssueEnrichmentInput {
+  repo: string;
+  issueNumber: number;
+  issueUpdatedAt?: string;
+  status: IssueEnrichmentRecordStatus;
+  reason?: string;
+  commentUrl?: string;
+  error?: string;
+  nextEligibleAt?: string;
+  now?: Date;
+}
+
 export interface ListRepoMemoryNotesInput {
   repo: string;
   includeExpired?: boolean;
@@ -451,6 +477,25 @@ export class ReviewStateStore {
 
       create index if not exists idx_repo_memory_packet_builds_repo_generated
         on repo_memory_packet_builds (repo, generated_at);
+
+      create table if not exists issue_enrichment_records (
+        repo text not null,
+        issue_number integer not null,
+        issue_updated_at text,
+        status text not null,
+        reason text,
+        comment_url text,
+        error text,
+        next_eligible_at text,
+        created_at text not null,
+        updated_at text not null,
+        primary key (repo, issue_number)
+      );
+
+      create index if not exists idx_issue_enrichment_records_status
+        on issue_enrichment_records (status, updated_at);
+      create index if not exists idx_issue_enrichment_records_repo_status
+        on issue_enrichment_records (repo, status);
     `);
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
@@ -651,6 +696,96 @@ export class ReviewStateStore {
       )
       .all(...params) as unknown as ReviewReadinessRow[];
     return rows.map(mapReviewReadinessRow);
+  }
+
+  recordIssueEnrichment(input: RecordIssueEnrichmentInput): IssueEnrichmentRecord {
+    validateIssueEnrichmentInput(input);
+    const existing = this.getIssueEnrichmentRecord(input.repo, input.issueNumber);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const reason = input.reason ? redactSecrets(input.reason).trim().slice(0, 500) : undefined;
+    const commentUrl = input.commentUrl ? redactSecrets(input.commentUrl).trim().slice(0, 500) : undefined;
+    const error = input.error ? redactSecrets(input.error).trim().slice(0, 1_000) : undefined;
+    const nextEligibleAt = input.nextEligibleAt ? new Date(Date.parse(input.nextEligibleAt)).toISOString() : undefined;
+    this.db
+      .prepare(
+        `insert into issue_enrichment_records
+          (repo, issue_number, issue_updated_at, status, reason, comment_url, error,
+           next_eligible_at, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict(repo, issue_number) do update set
+           issue_updated_at = excluded.issue_updated_at,
+           status = excluded.status,
+           reason = excluded.reason,
+           comment_url = excluded.comment_url,
+           error = excluded.error,
+           next_eligible_at = excluded.next_eligible_at,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        input.repo,
+        input.issueNumber,
+        input.issueUpdatedAt ?? null,
+        input.status,
+        reason ?? null,
+        commentUrl ?? null,
+        error ?? null,
+        nextEligibleAt ?? null,
+        existing?.createdAt ?? nowIso,
+        nowIso
+      );
+    return this.getIssueEnrichmentRecord(input.repo, input.issueNumber)!;
+  }
+
+  getIssueEnrichmentRecord(repo: string, issueNumber: number): IssueEnrichmentRecord | undefined {
+    validateRepoIssue(repo, issueNumber);
+    const row = this.db
+      .prepare(
+        `select repo, issue_number, issue_updated_at, status, reason, comment_url, error,
+                next_eligible_at, created_at, updated_at
+         from issue_enrichment_records
+         where repo = ? and issue_number = ?
+         limit 1`
+      )
+      .get(repo, issueNumber) as IssueEnrichmentRecordRow | undefined;
+    return row ? mapIssueEnrichmentRecordRow(row) : undefined;
+  }
+
+  listIssueEnrichmentRecords(input: {
+    repo?: string;
+    status?: IssueEnrichmentRecordStatus;
+    statuses?: IssueEnrichmentRecordStatus[];
+    limit?: number;
+  } = {}): IssueEnrichmentRecord[] {
+    if (input.repo) validateRepoName(input.repo, "repo");
+    if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
+      throw new Error("limit must be a positive integer");
+    }
+    const statuses = input.statuses ?? (input.status ? [input.status] : undefined);
+    if (statuses?.length) statuses.forEach((status) => validateIssueEnrichmentStatus(status));
+    const predicates: string[] = [];
+    const params: Array<string | number> = [];
+    if (input.repo) {
+      predicates.push("repo = ?");
+      params.push(input.repo);
+    }
+    if (statuses?.length) {
+      predicates.push(`status in (${statuses.map(() => "?").join(", ")})`);
+      params.push(...statuses);
+    }
+    const where = predicates.length ? `where ${predicates.join(" and ")}` : "";
+    const limit = input.limit ? " limit ?" : "";
+    if (input.limit) params.push(input.limit);
+    const rows = this.db
+      .prepare(
+        `select repo, issue_number, issue_updated_at, status, reason, comment_url, error,
+                next_eligible_at, created_at, updated_at
+         from issue_enrichment_records
+         ${where}
+         order by datetime(updated_at) desc
+         ${limit}`
+      )
+      .all(...params) as unknown as IssueEnrichmentRecordRow[];
+    return rows.map(mapIssueEnrichmentRecordRow);
   }
 
   retireFailedReview(input: RetireFailedReviewInput): StoredProcessedReviewRecord {
@@ -1865,6 +2000,43 @@ function validateReviewQueueInput(
   }
 }
 
+function validateIssueEnrichmentInput(input: RecordIssueEnrichmentInput): void {
+  validateRepoIssue(input.repo, input.issueNumber);
+  validateIssueEnrichmentStatus(input.status);
+  if (input.issueUpdatedAt !== undefined && !isCanonicalIsoTimestamp(input.issueUpdatedAt)) {
+    throw new Error("issueUpdatedAt must be a canonical ISO timestamp");
+  }
+  if (input.nextEligibleAt !== undefined && !Number.isFinite(Date.parse(input.nextEligibleAt))) {
+    throw new Error("nextEligibleAt must be an ISO timestamp");
+  }
+  if (input.now !== undefined && !Number.isFinite(input.now.getTime())) {
+    throw new Error("now must be a valid Date");
+  }
+  const metadataText = [
+    input.repo,
+    String(input.issueNumber),
+    input.issueUpdatedAt ?? "",
+    input.reason ?? "",
+    input.commentUrl ?? "",
+    input.error ?? "",
+    input.nextEligibleAt ?? ""
+  ].join("\n");
+  if (containsSecretLikeText(metadataText)) {
+    throw new Error(`Refusing to store issue enrichment metadata for ${input.repo}#${input.issueNumber}: secret-like metadata detected`);
+  }
+}
+
+function validateIssueEnrichmentStatus(status: IssueEnrichmentRecordStatus): void {
+  if (!["dry_run", "posted", "skipped", "deferred", "failed"].includes(status)) {
+    throw new Error("status must be a valid issue enrichment status");
+  }
+}
+
+function validateRepoIssue(repo: string, issueNumber: number): void {
+  validateRepoName(repo, "repo");
+  if (!Number.isInteger(issueNumber) || issueNumber < 1) throw new Error("issueNumber must be a positive integer");
+}
+
 function validateRepoMemoryNoteInput(input: RecordRepoMemoryNoteInput): void {
   if (!input.noteId.trim()) throw new Error("noteId must be non-empty");
   validateRepoName(input.repo, "repo");
@@ -2134,6 +2306,19 @@ interface RepoMemoryPacketBuildRow {
   memory_root: string | null;
 }
 
+interface IssueEnrichmentRecordRow {
+  repo: string;
+  issue_number: number;
+  issue_updated_at: string | null;
+  status: IssueEnrichmentRecordStatus;
+  reason: string | null;
+  comment_url: string | null;
+  error: string | null;
+  next_eligible_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -2158,6 +2343,21 @@ function mapReviewReadinessRow(row: ReviewReadinessRow): ReviewReadinessRecord {
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.command_action ? { commandAction: row.command_action } : {}),
     ...(row.command_comment_id ? { commandCommentId: row.command_comment_id } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapIssueEnrichmentRecordRow(row: IssueEnrichmentRecordRow): IssueEnrichmentRecord {
+  return {
+    repo: row.repo,
+    issueNumber: row.issue_number,
+    ...(row.issue_updated_at ? { issueUpdatedAt: row.issue_updated_at } : {}),
+    status: row.status,
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.comment_url ? { commentUrl: row.comment_url } : {}),
+    ...(row.error ? { error: row.error } : {}),
+    ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
