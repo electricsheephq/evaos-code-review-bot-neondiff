@@ -1510,6 +1510,7 @@ function summarizeDashboardItems(items: OperatorDashboardItem[]): OperatorDashbo
 
 function isHistoricalStaleDashboardItem(item: OperatorDashboardItem): boolean {
   if (item.coverageState === "stale_head") return false;
+  if (item.queueState === "closed_retired" || item.queueState === "stale_retired") return true;
   const statuses = dashboardStatuses(item).filter((status) => status !== "posted");
   return statuses.length > 0 && statuses.every(isHistoricalStaleStatus);
 }

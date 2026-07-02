@@ -393,6 +393,70 @@ describe("operator CLI summaries", () => {
     ]);
   });
 
+  it("hides terminal retired dashboard rows by default while preserving explicit history filters", () => {
+    const input = {
+      coverage: coverageReport({
+        ok: true,
+        processed: [processedEntry(1, "head-current", "posted")]
+      }),
+      durableQueue: durableQueueSnapshot({
+        jobs: [
+          durableJob({
+            repo: "owner/repo",
+            pullNumber: 4,
+            headSha: "closed-provider-head",
+            state: "closed_retired",
+            lastError: "operator_retired_closed_pr_after_release_gate; previous_error=repo_provider_cooldown_until=2026-07-02T09:33:32.245Z"
+          })
+        ],
+        summary: { total: 1, queued: 0, failed: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
+      }),
+      readiness: [
+        {
+          repo: "owner/repo",
+          pullNumber: 4,
+          headSha: "closed-provider-head",
+          state: "provider_deferred" as const,
+          reason: "active_queue_job_provider_deferred: repo_provider_cooldown_until=2026-07-02T09:33:32.245Z",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          updatedAt: "2026-07-01T00:02:00.000Z"
+        }
+      ],
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    };
+
+    const currentDashboard = buildOperatorDashboard(input);
+    expect(currentDashboard.ok).toBe(true);
+    expect(currentDashboard.summary).toMatchObject({
+      totalItems: 1,
+      blockedItems: 0,
+      providerDeferred: 0,
+      hiddenHistoricalStale: 1
+    });
+    expect(currentDashboard.items.map((item) => `${item.repo}#${item.pullNumber}:${item.status}`)).toEqual([
+      "owner/repo#1:processed"
+    ]);
+
+    const historicalDashboard = buildOperatorDashboard({
+      ...input,
+      filters: { includeHistory: true, status: "provider_deferred" }
+    });
+    expect(historicalDashboard.ok).toBe(false);
+    expect(historicalDashboard.summary).toMatchObject({
+      totalItems: 1,
+      blockedItems: 1,
+      providerDeferred: 1,
+      hiddenHistoricalStale: 0
+    });
+    expect(historicalDashboard.items[0]).toMatchObject({
+      repo: "owner/repo",
+      pullNumber: 4,
+      headSha: "closed-provider-head",
+      status: "provider_deferred",
+      queueState: "closed_retired"
+    });
+  });
+
   it("filters dashboard rows by repo, status, priority, and stale-head reason", () => {
     const input = {
       coverage: coverageReport({
