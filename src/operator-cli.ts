@@ -1510,8 +1510,12 @@ function summarizeDashboardItems(items: OperatorDashboardItem[]): OperatorDashbo
 
 function isHistoricalStaleDashboardItem(item: OperatorDashboardItem): boolean {
   if (item.coverageState === "stale_head") return false;
-  const statuses = dashboardStatuses(item);
-  return statuses.length > 0 && statuses.every((status) => status === "stale" || status === "stale_head" || status === "stale_retired");
+  const statuses = dashboardStatuses(item).filter((status) => status !== "posted");
+  return statuses.length > 0 && statuses.every(isHistoricalStaleStatus);
+}
+
+function isHistoricalStaleStatus(status: string): boolean {
+  return status === "stale" || status === "stale_head" || status === "stale_retired";
 }
 
 function isDashboardItemBlocked(item: OperatorDashboardItem): boolean {
