@@ -2,6 +2,7 @@ import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, ReviewComment, ReviewEvent } from "./types.js";
 
 export interface GitHubApiOptions {
@@ -76,10 +77,21 @@ export class GitHubApi {
     }
   }
 
-  async getIssueOrPull(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull> {
-    return this.request<GitHubRelatedIssueOrPull>(`/repos/${repo}/issues/${issueNumber}`, {
-      token: await this.getReadToken(repo)
-    });
+  async getIssueOrPull(
+    repo: string,
+    issueNumber: number,
+    options: { tolerateUnreadable?: boolean } = {}
+  ): Promise<GitHubRelatedIssueOrPull | undefined> {
+    const path = `/repos/${repo}/issues/${issueNumber}`;
+    try {
+      return await this.request<GitHubRelatedIssueOrPull>(path, {
+        token: await this.getReadToken(repo)
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (options.tolerateUnreadable && isIssueLookupMissingOrUnreadable(message, path)) return undefined;
+      throw error;
+    }
   }
 
   async createReview(input: {
@@ -210,11 +222,22 @@ export class GitHubApi {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`GitHub API ${response.status} ${response.statusText} for ${path}: ${text.slice(0, 400)}`);
+      throw new Error(`GitHub API ${response.status} ${response.statusText} for ${path}: ${redactSecrets(text).slice(0, 400)}`);
     }
 
     return (await response.json()) as T;
   }
+}
+
+function isIssueLookupMissingOrUnreadable(message: string, path: string): boolean {
+  const marker = `for ${path}:`;
+  const markerIndex = message.indexOf(marker);
+  if (markerIndex === -1) return false;
+  if (/\bGitHub API 404\b/.test(message)) return true;
+  if (!/\bGitHub API 403\b/.test(message)) return false;
+  if (/\b(rate limit|abuse|secondary rate limit)\b/i.test(message)) return false;
+  const responseBody = message.slice(markerIndex + marker.length);
+  return /\bResource not accessible by integration\b/i.test(responseBody);
 }
 
 interface IssueCommentSummary {

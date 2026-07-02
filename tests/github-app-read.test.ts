@@ -105,10 +105,121 @@ describe("GitHub App read authentication", () => {
     const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
     const issue = await github.getIssueOrPull("owner/repo", 17);
 
-    expect(issue.title).toBe("Linked issue");
+    expect(issue?.title).toBe("Linked issue");
     const readCall = calls.find((call) => call.url.endsWith("/repos/owner/repo/issues/17"));
     expect(readCall?.authorization).toBe("Bearer installation-token");
     expect(readCall?.authorization).not.toBe("Bearer fallback-token");
+  });
+
+  it("returns undefined for unreadable issue lookups", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-issue-missing-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      if (String(url).endsWith("/repos/owner/repo/issues/404")) return jsonResponse({ message: "Resource not accessible by integration" }, 403);
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
+    await expect(github.getIssueOrPull("owner/repo", 404, { tolerateUnreadable: true })).resolves.toBeUndefined();
+    await expect(github.getIssueOrPull("owner/repo", 404)).rejects.toThrow(/Resource not accessible by integration/);
+  });
+
+  it("does not hide rate-limited issue lookups as unreadable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-issue-rate-limit-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: "API rate limit exceeded for installation" }, 403);
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
+    await expect(github.getIssueOrPull("owner/repo", 403)).rejects.toThrow(/rate limit/i);
+  });
+
+  it("rethrows non-allowlisted 403 issue lookup errors even when unreadable lookups are tolerated", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-issue-forbidden-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: "SAML enforcement blocks this installation" }, 403);
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
+    await expect(github.getIssueOrPull("owner/repo", 403, { tolerateUnreadable: true })).rejects.toThrow(/SAML enforcement/);
+  });
+
+  it("does not treat the 403 reason phrase as an unreadable issue body", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-issue-status-text-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: "SAML enforcement blocks this installation" }, 403, "Forbidden");
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
+    await expect(github.getIssueOrPull("owner/repo", 403, { tolerateUnreadable: true })).rejects.toThrow(/SAML enforcement/);
+  });
+
+  it("does not treat incidental Not Found text in a 403 body as an unreadable issue", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-issue-403-not-found-text-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: "SAML enforcement blocks this installation; nested error: Not Found" }, 403, "Forbidden");
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
+    await expect(github.getIssueOrPull("owner/repo", 403, { tolerateUnreadable: true })).rejects.toThrow(/SAML enforcement/);
+  });
+
+  it("redacts secret-like text from rethrown GitHub response bodies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-issue-redacted-error-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const leakedToken = "ghp_123456789012345678901234567890123456";
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: `SAML enforcement ${leakedToken}` }, 403, "Forbidden");
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
+    await expect(github.getIssueOrPull("owner/repo", 403, { tolerateUnreadable: true })).rejects.toThrow("[redacted-secret]");
+    await expect(github.getIssueOrPull("owner/repo", 403, { tolerateUnreadable: true })).rejects.not.toThrow(leakedToken);
   });
 
   it("updates an existing marked PR walkthrough comment with the App token", async () => {
@@ -223,9 +334,10 @@ describe("GitHub App read authentication", () => {
   });
 });
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
   return new Response(JSON.stringify(body), {
     status,
+    statusText,
     headers: { "Content-Type": "application/json" }
   });
 }

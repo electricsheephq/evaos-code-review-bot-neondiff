@@ -6,10 +6,14 @@ import { loadConfig } from "../src/config.js";
 import {
   buildEnrichmentComment,
   buildEnrichmentMarker,
+  buildIssueEnrichmentComment,
+  buildIssueEnrichmentDryRunOutput,
+  buildIssueEnrichmentMarker,
   ENRICHMENT_MARKER_PREFIX,
   ENRICHMENT_STATE_MARKER_PREFIX,
   postEnrichmentComment
 } from "../src/enrichment.js";
+import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 
 const HEAD_A = "a".repeat(40);
@@ -174,6 +178,208 @@ describe("sticky enrichment comments", () => {
     } finally {
       rmSync(evidenceDir, { recursive: true, force: true });
     }
+  });
+
+  it("renders sticky issue enrichment with suggestion-only text and redaction", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 88,
+      title: "Triage support escalation #22",
+      state: "open",
+      html_url: "https://github.test/electricsheephq/evaos-code-review-bot/issues/88",
+      body: "Customer path missing validation evidence. ghp_123456789012345678901234",
+      user: { login: "issue-author" },
+      labels: [{ name: "support" }],
+      milestone: { title: "v0.2" }
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedLabels: ["triage", "support"],
+      suggestedOwners: ["runtime-owner"],
+      validationSuggestions: ["Confirm owner and acceptance criteria before implementation."],
+      postIssueComment: true
+    });
+
+    expect(comment.marker).toBe(buildIssueEnrichmentMarker({ repo: "electricsheephq/evaos-code-review-bot", issueNumber: 88 }));
+    expect(comment.body).toContain(`${ENRICHMENT_MARKER_PREFIX} repo=electricsheephq/evaos-code-review-bot issue=88 -->`);
+    expect(comment.body).toContain(`${ENRICHMENT_STATE_MARKER_PREFIX} version=1 repo=electricsheephq/evaos-code-review-bot issue=88 state=open`);
+    expect(comment.body).toMatch(/^<!-- evaos-code-review-bot:enrichment repo=electricsheephq\/evaos-code-review-bot issue=88 -->\n<!-- evaos-code-review-bot:enrichment-state version=1 repo=electricsheephq\/evaos-code-review-bot issue=88 state=open hash=[0-9a-f]{64} -->\n## evaOS issue enrichment/);
+    expect(comment.body).toContain("Issue: electricsheephq/evaos-code-review-bot#88 - Triage support escalation #22");
+    expect(comment.body).toContain("Related issues/PRs: #22");
+    expect(comment.body).toContain("Existing labels: support");
+    expect(comment.body).toContain("Suggested labels: triage");
+    expect(comment.body).toContain("Suggested owners: runtime-owner");
+    expect(comment.body).toContain("No labels, owners, reviewers, or roadmap fields were changed by this bot.");
+    expect(comment.body).not.toContain("ghp_123456789012345678901234");
+  });
+
+  it("rejects stale or pull-request-shaped issues at the comment builder boundary", () => {
+    const closedIssue: GitHubRelatedIssueOrPull = {
+      number: 90,
+      title: "Closed",
+      state: "closed",
+      body: "Done"
+    };
+    const pullRequestIssue: GitHubRelatedIssueOrPull = {
+      number: 91,
+      title: "PR shaped issue",
+      state: "open",
+      pull_request: {},
+      body: "This is a pull request record."
+    };
+    const closedPullRequestIssue: GitHubRelatedIssueOrPull = {
+      number: 92,
+      title: "Closed PR shaped issue",
+      state: "closed",
+      pull_request: {},
+      body: "This is a closed pull request record."
+    };
+
+    expect(() => buildIssueEnrichmentComment({ repo: "electricsheephq/evaos-code-review-bot", issue: closedIssue })).toThrow("stale_issue_closed");
+    expect(() => buildIssueEnrichmentComment({ repo: "electricsheephq/evaos-code-review-bot", issue: pullRequestIssue })).toThrow("issue_is_pull_request");
+    expect(() => buildIssueEnrichmentComment({ repo: "electricsheephq/evaos-code-review-bot", issue: closedPullRequestIssue })).toThrow("issue_is_pull_request");
+  });
+
+  it("includes issue URL on successful issue enrichment dry runs", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 92,
+      title: "Open issue",
+      state: "open",
+      html_url: "https://github.test/electricsheephq/evaos-code-review-bot/issues/92",
+      body: "Acceptance criteria present."
+    };
+
+    const output = buildIssueEnrichmentDryRunOutput({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      maxRelatedRefs: 8,
+      maxSuggestions: 8
+    });
+
+    expect(output).toMatchObject({
+      ok: true,
+      skipped: false,
+      repo: "electricsheephq/evaos-code-review-bot",
+      issueNumber: 92,
+      state: "open",
+      url: "https://github.test/electricsheephq/evaos-code-review-bot/issues/92"
+    });
+  });
+
+  it("skips stale closed issues for issue enrichment dry runs", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 89,
+      title: "Already handled",
+      state: "closed",
+      html_url: "https://github.test/electricsheephq/evaos-code-review-bot/issues/89",
+      body: "Done"
+    };
+
+    const output = buildIssueEnrichmentDryRunOutput({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      maxRelatedRefs: 8,
+      maxSuggestions: 8
+    });
+
+    expect(output).toMatchObject({
+      ok: true,
+      skipped: true,
+      reason: "stale_issue_closed",
+      repo: "electricsheephq/evaos-code-review-bot",
+      issueNumber: 89,
+      state: "closed"
+    });
+    expect(JSON.stringify(output)).not.toContain("body");
+  });
+
+  it("skips pull-request-shaped issues for issue enrichment dry runs", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 93,
+      title: "Actually a pull request",
+      state: "open",
+      html_url: "https://github.test/electricsheephq/evaos-code-review-bot/pull/93",
+      pull_request: {},
+      body: "PR payload"
+    };
+
+    const output = buildIssueEnrichmentDryRunOutput({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      maxRelatedRefs: 8,
+      maxSuggestions: 8
+    });
+
+    expect(output).toMatchObject({
+      ok: true,
+      skipped: true,
+      reason: "issue_is_pull_request",
+      repo: "electricsheephq/evaos-code-review-bot",
+      issueNumber: 93,
+      state: "open"
+    });
+    expect(JSON.stringify(output)).not.toContain("body");
+  });
+
+  it("normalizes issue state casing without treating unknown states as closed", () => {
+    const uppercaseOpen: GitHubRelatedIssueOrPull = {
+      number: 94,
+      title: "Uppercase open issue",
+      state: "OPEN",
+      body: "Acceptance criteria present."
+    };
+    const unknownState: GitHubRelatedIssueOrPull = {
+      number: 95,
+      title: "Unknown state issue",
+      state: "needs-triage",
+      body: "Acceptance criteria present."
+    };
+
+    const openOutput = buildIssueEnrichmentDryRunOutput({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue: uppercaseOpen,
+      maxRelatedRefs: 8,
+      maxSuggestions: 8
+    });
+    const unknownOutput = buildIssueEnrichmentDryRunOutput({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue: unknownState,
+      maxRelatedRefs: 8,
+      maxSuggestions: 8
+    });
+
+    expect(openOutput).toMatchObject({ skipped: false, state: "open" });
+    expect(unknownOutput).toMatchObject({ skipped: false, state: "unknown" });
+  });
+
+  it("caps issue enrichment related refs, labels, and owners", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 96,
+      title: "Runtime regression #1 #2 #3",
+      state: "open",
+      body: "Bug docs test support references #4 #5 #6.",
+      labels: [{ name: "bug" }]
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedLabels: ["Bug", "runtime", "Runtime", "docs", "tests"],
+      suggestedOwners: ["owner-a", "owner-b", "owner-c", "owner-d"],
+      maxRelatedRefs: 2,
+      maxSuggestions: 3
+    });
+
+    const relatedRefsLine = comment.body.split("\n").find((line) => line.startsWith("Related issues/PRs:"));
+    expect(relatedRefsLine).toBe("Related issues/PRs: #1, #2.");
+    expect(relatedRefsLine).not.toContain("#3");
+    expect(comment.body).toContain("Existing labels: bug.");
+    expect(comment.body).toContain("Suggested labels: runtime, docs, tests.");
+    expect(comment.body).not.toContain("Suggested labels: runtime, Runtime");
+    expect(comment.body).not.toContain("Suggested labels: Bug");
+    expect(comment.body).toContain("Suggested owners: owner-a, owner-b, owner-c.");
+    expect(comment.body).not.toContain("owner-d");
   });
 });
 
