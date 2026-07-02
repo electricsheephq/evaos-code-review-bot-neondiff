@@ -20,14 +20,17 @@ export interface PullWorktreeInput {
   expectedHeadSha: string;
   workRoot: string;
   protectedCheckoutRoot?: string;
+  protectedCheckoutRoots?: string[];
 }
 
 export function planPullWorktreePaths(input: PullWorktreeInput): PullWorktreePathPlan {
-  assertWorkRootOutsideProtectedCheckout(input.workRoot, input.protectedCheckoutRoot);
   const safeRepo = input.repo.replace(/[^A-Za-z0-9_.-]+/g, "__");
   const mirrorPath = join(input.workRoot, "mirrors", `${safeRepo}.git`);
   const worktreePath = join(input.workRoot, "worktrees", `${safeRepo}__pr-${input.pullNumber}__${input.expectedHeadSha.slice(0, 12)}`);
   const repoUrl = `https://github.com/${input.repo}.git`;
+  assertReviewPathOutsideProtectedCheckout("workRoot", input.workRoot, input);
+  assertReviewPathOutsideProtectedCheckout("mirrorPath", mirrorPath, input);
+  assertReviewPathOutsideProtectedCheckout("worktreePath", worktreePath, input);
 
   return { mirrorPath, worktreePath, repoUrl };
 }
@@ -74,11 +77,12 @@ export function preparePullWorktree(input: PullWorktreeInput): PreparedWorktree 
   return { path: worktreePath, headSha: actualHeadSha };
 }
 
-function assertWorkRootOutsideProtectedCheckout(workRoot: string, protectedCheckoutRoot: string | undefined): void {
+function assertReviewPathOutsideProtectedCheckout(pathLabel: string, path: string, input: PullWorktreeInput): void {
   assertPathOutsideProtectedRoot({
-    path: workRoot,
-    protectedRoot: protectedCheckoutRoot,
-    pathLabel: "workRoot",
+    path,
+    protectedRoot: input.protectedCheckoutRoot,
+    protectedRoots: input.protectedCheckoutRoots,
+    pathLabel,
     protectedRootLabel: "the protected live checkout"
   });
 }

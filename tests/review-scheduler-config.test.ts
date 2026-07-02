@@ -69,6 +69,26 @@ describe("review scheduler config", () => {
     }))).toThrow(/config\.workRoot must be outside the current repository checkout/);
   });
 
+  it("rejects a review workRoot inside an explicit protected checkout root", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-scheduler-protected-"));
+    roots.push(root);
+    const protectedRoot = join(root, "operator-checkout");
+    const oldProtectedRoot = process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT;
+    process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT = protectedRoot;
+
+    try {
+      expect(() => loadConfig(writeConfig({
+        workRoot: join(protectedRoot, "runtime")
+      }))).toThrow(/config\.workRoot must be outside the current repository checkout/);
+    } finally {
+      if (oldProtectedRoot === undefined) {
+        delete process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT;
+      } else {
+        process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT = oldProtectedRoot;
+      }
+    }
+  });
+
   it("allows reviews when workRoot is outside the live repository checkout", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-scheduler-runtime-"));
     roots.push(root);

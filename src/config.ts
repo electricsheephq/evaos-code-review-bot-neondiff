@@ -3,7 +3,7 @@ import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
-import { assertPathOutsideProtectedRoot, getInstalledPackageRoot } from "./path-safety.js";
+import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
 export interface BotConfig {
@@ -613,7 +613,8 @@ function validateReviewSchedulerConfig(value: unknown, label: string): void {
 function validateWorkRootIsolation(config: BotConfig): void {
   assertPathOutsideProtectedRoot({
     path: config.workRoot,
-    protectedRoot: getInstalledPackageRoot(),
+    protectedRoot: undefined,
+    protectedRoots: getProtectedCheckoutRoots(),
     pathLabel: "config.workRoot",
     protectedRootLabel: "the current repository checkout"
   });
