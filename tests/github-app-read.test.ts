@@ -202,6 +202,26 @@ describe("GitHub App read authentication", () => {
     await expect(github.getIssueOrPull("owner/repo", 403, { tolerateUnreadable: true })).rejects.toThrow(/SAML enforcement/);
   });
 
+  it("redacts secret-like text from rethrown GitHub response bodies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-issue-redacted-error-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const leakedToken = "ghp_123456789012345678901234567890123456";
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: `SAML enforcement ${leakedToken}` }, 403, "Forbidden");
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
+    await expect(github.getIssueOrPull("owner/repo", 403, { tolerateUnreadable: true })).rejects.toThrow("[redacted-secret]");
+    await expect(github.getIssueOrPull("owner/repo", 403, { tolerateUnreadable: true })).rejects.not.toThrow(leakedToken);
+  });
+
   it("updates an existing marked PR walkthrough comment with the App token", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-comment-"));
     roots.push(root);

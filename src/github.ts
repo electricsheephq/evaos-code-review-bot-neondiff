@@ -2,6 +2,7 @@ import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, ReviewComment, ReviewEvent } from "./types.js";
 
 export interface GitHubApiOptions {
@@ -221,7 +222,7 @@ export class GitHubApi {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`GitHub API ${response.status} ${response.statusText} for ${path}: ${text.slice(0, 400)}`);
+      throw new Error(`GitHub API ${response.status} ${response.statusText} for ${path}: ${redactSecrets(text).slice(0, 400)}`);
     }
 
     return (await response.json()) as T;
