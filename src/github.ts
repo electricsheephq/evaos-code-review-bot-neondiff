@@ -229,11 +229,14 @@ export class GitHubApi {
 }
 
 function isIssueLookupMissingOrUnreadable(message: string, path: string): boolean {
-  if (!message.includes(`for ${path}:`)) return false;
+  const marker = `for ${path}:`;
+  const markerIndex = message.indexOf(marker);
+  if (markerIndex === -1) return false;
   if (/\bGitHub API 404\b/.test(message)) return true;
   if (!/\bGitHub API 403\b/.test(message)) return false;
   if (/\b(rate limit|abuse|secondary rate limit)\b/i.test(message)) return false;
-  return /\b(Resource not accessible by integration|Not Found|Forbidden)\b/i.test(message);
+  const responseBody = message.slice(markerIndex + marker.length);
+  return /\b(Resource not accessible by integration|Not Found)\b/i.test(responseBody);
 }
 
 interface IssueCommentSummary {
