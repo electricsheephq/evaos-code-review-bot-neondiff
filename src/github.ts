@@ -76,7 +76,11 @@ export class GitHubApi {
     }
   }
 
-  async getIssueOrPull(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull | undefined> {
+  async getIssueOrPull(
+    repo: string,
+    issueNumber: number,
+    options: { tolerateUnreadable?: boolean } = {}
+  ): Promise<GitHubRelatedIssueOrPull | undefined> {
     const path = `/repos/${repo}/issues/${issueNumber}`;
     try {
       return await this.request<GitHubRelatedIssueOrPull>(path, {
@@ -84,7 +88,7 @@ export class GitHubApi {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (isIssueLookupMissingOrUnreadable(message, path)) return undefined;
+      if (options.tolerateUnreadable && isIssueLookupMissingOrUnreadable(message, path)) return undefined;
       throw error;
     }
   }

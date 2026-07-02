@@ -597,7 +597,7 @@ async function main(): Promise<void> {
     const enrichmentConfig = config.enrichment!;
     if (args.issue) {
       const issueNumber = parsePositiveInteger(parseSingleArg(args.issue, "--issue"), "--issue");
-      const issue = await github.getIssueOrPull(repo, issueNumber);
+      const issue = await github.getIssueOrPull(repo, issueNumber, { tolerateUnreadable: true });
       if (!issue) throw new Error(`Issue ${repo}#${issueNumber} was not found or is not readable`);
       const output = buildIssueEnrichmentDryRunOutput({
         repo,

@@ -126,7 +126,8 @@ describe("GitHub App read authentication", () => {
     }) as typeof fetch;
 
     const github = new GitHubApi({ appId: "4184532", privateKeyPath, token: "fallback-token" });
-    await expect(github.getIssueOrPull("owner/repo", 404)).resolves.toBeUndefined();
+    await expect(github.getIssueOrPull("owner/repo", 404, { tolerateUnreadable: true })).resolves.toBeUndefined();
+    await expect(github.getIssueOrPull("owner/repo", 404)).rejects.toThrow(/Resource not accessible by integration/);
   });
 
   it("does not hide rate-limited issue lookups as unreadable", async () => {

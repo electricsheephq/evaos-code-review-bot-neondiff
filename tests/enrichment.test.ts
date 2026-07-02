@@ -341,7 +341,7 @@ describe("sticky enrichment comments", () => {
     });
 
     expect(openOutput).toMatchObject({ skipped: false, state: "open" });
-    expect(unknownOutput).toMatchObject({ skipped: false, state: "needs-triage" });
+    expect(unknownOutput).toMatchObject({ skipped: false, state: "unknown" });
   });
 
   it("caps issue enrichment related refs, labels, and owners", () => {

@@ -336,7 +336,7 @@ function getIssueEnrichmentEligibility(issue: GitHubRelatedIssueOrPull): {
 function normalizeIssueState(issue: Pick<GitHubRelatedIssueOrPull, "state" | "number">): string {
   const normalized = formatInlinePublicText(issue.state ?? "unknown").toLowerCase() || "unknown";
   if (normalized === "open" || normalized === "closed") return normalized;
-  return normalized;
+  return "unknown";
 }
 
 function inferAcceptanceGaps(pull: PullRequestSummary): string[] {

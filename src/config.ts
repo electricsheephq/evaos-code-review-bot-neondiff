@@ -62,6 +62,9 @@ export interface BotConfig {
     appId?: string;
     privateKeyPath?: string;
     token?: string;
+    apiBaseUrl?: string;
+    botLogin?: string;
+    requestTimeoutMs?: number;
   };
 }
 
@@ -344,6 +347,9 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(config.zcode.timeoutMs, "config.zcode.timeoutMs");
   validatePositiveInteger(config.zcode.maxPatchBytes, "config.zcode.maxPatchBytes");
   validateNonNegativeInteger(config.zcode.retryMaxRetries, "config.zcode.retryMaxRetries");
+  validateOptionalString(config.github.apiBaseUrl, "config.github.apiBaseUrl");
+  validateOptionalString(config.github.botLogin, "config.github.botLogin");
+  if (config.github.requestTimeoutMs !== undefined) validatePositiveInteger(config.github.requestTimeoutMs, "config.github.requestTimeoutMs");
 
   if (!config.repoProfiles) return;
 
