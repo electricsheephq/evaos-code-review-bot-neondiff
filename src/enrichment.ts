@@ -369,7 +369,17 @@ function formatPublicText(value: string | undefined): string {
 }
 
 function unique(values: string[]): string[] {
-  return [...new Set(values.map((value) => formatPublicText(value)).filter(Boolean))];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const formatted = formatPublicText(value);
+    if (!formatted) continue;
+    const key = formatted.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(formatted);
+  }
+  return result;
 }
 
 function hashBody(value: string): string {

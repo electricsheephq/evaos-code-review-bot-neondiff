@@ -228,9 +228,17 @@ describe("sticky enrichment comments", () => {
       pull_request: {},
       body: "This is a pull request record."
     };
+    const closedPullRequestIssue: GitHubRelatedIssueOrPull = {
+      number: 92,
+      title: "Closed PR shaped issue",
+      state: "closed",
+      pull_request: {},
+      body: "This is a closed pull request record."
+    };
 
     expect(() => buildIssueEnrichmentComment({ repo: "electricsheephq/evaos-code-review-bot", issue: closedIssue })).toThrow("stale_issue_closed");
     expect(() => buildIssueEnrichmentComment({ repo: "electricsheephq/evaos-code-review-bot", issue: pullRequestIssue })).toThrow("issue_is_pull_request");
+    expect(() => buildIssueEnrichmentComment({ repo: "electricsheephq/evaos-code-review-bot", issue: closedPullRequestIssue })).toThrow("issue_is_pull_request");
   });
 
   it("includes issue URL on successful issue enrichment dry runs", () => {
@@ -357,20 +365,21 @@ describe("sticky enrichment comments", () => {
     const comment = buildIssueEnrichmentComment({
       repo: "electricsheephq/evaos-code-review-bot",
       issue,
-      suggestedLabels: ["Bug", "runtime", "docs", "tests"],
-      suggestedOwners: ["owner-a", "owner-b", "owner-c"],
+      suggestedLabels: ["Bug", "runtime", "Runtime", "docs", "tests"],
+      suggestedOwners: ["owner-a", "owner-b", "owner-c", "owner-d"],
       maxRelatedRefs: 2,
-      maxSuggestions: 2
+      maxSuggestions: 3
     });
 
     const relatedRefsLine = comment.body.split("\n").find((line) => line.startsWith("Related issues/PRs:"));
     expect(relatedRefsLine).toBe("Related issues/PRs: #1, #2.");
     expect(relatedRefsLine).not.toContain("#3");
     expect(comment.body).toContain("Existing labels: bug.");
-    expect(comment.body).toContain("Suggested labels: runtime, docs.");
+    expect(comment.body).toContain("Suggested labels: runtime, docs, tests.");
+    expect(comment.body).not.toContain("Suggested labels: runtime, Runtime");
     expect(comment.body).not.toContain("Suggested labels: Bug");
-    expect(comment.body).toContain("Suggested owners: owner-a, owner-b.");
-    expect(comment.body).not.toContain("owner-c");
+    expect(comment.body).toContain("Suggested owners: owner-a, owner-b, owner-c.");
+    expect(comment.body).not.toContain("owner-d");
   });
 });
 
