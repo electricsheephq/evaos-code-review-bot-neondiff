@@ -5,14 +5,17 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CoverageAuditReport } from "../src/coverage-audit.js";
 import {
+  buildOperatorDashboard,
   buildRuntimeInventory,
   buildOperatorQueue,
   buildOperatorStatus,
   collectOperatorLeases,
   collectOperatorRepoProviderCooldowns,
+  collectOperatorReviewReadiness,
   collectOperatorReviewQueue,
   explainPullStatus,
   filterBotProcessRows,
+  formatOperatorDashboardHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorAgentInventory,
@@ -229,6 +232,172 @@ describe("operator CLI summaries", () => {
     expect(output).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
 
+  it("builds a read-only dashboard over coverage, durable queue, readiness, and evidence links", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({
+        ok: false,
+        processed: [processedEntry(1, "head-posted", "posted")],
+        unprocessed: [pullEntry(2, "head-pending")],
+        staleHeads: [{
+          repo: "owner/repo",
+          pullNumber: 3,
+          expectedHeadSha: "old-head",
+          liveHeadSha: "new-head",
+          title: "stale",
+          url: "https://github.com/owner/repo/pull/3"
+        }]
+      }),
+      durableQueue: durableQueueSnapshot({
+        jobs: [
+          durableJob({ repo: "owner/repo", pullNumber: 2, headSha: "head-pending", state: "queued", priority: 5, source: "manual_command", lane: "manual" }),
+          durableJob({ repo: "owner/other", pullNumber: 4, headSha: "head-failed", state: "failed", priority: 10, lastError: "ZCode failed ghp_123456789012345678901234" })
+        ],
+        summary: { total: 2, queued: 1, failed: 1, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
+      }),
+      readiness: [{
+        repo: "owner/repo",
+        pullNumber: 2,
+        headSha: "head-pending",
+        state: "command_recorded",
+        reason: "trusted command requested re-review",
+        commandAction: "re-review",
+        commandCommentId: 12345,
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:01:00.000Z"
+      }, {
+        repo: "owner/other",
+        pullNumber: 5,
+        headSha: "head-proof",
+        state: "blocked_on_proof",
+        reason: "missing proof artifact",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:02:00.000Z"
+      }],
+      evidenceDir: "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(dashboard.ok).toBe(false);
+    expect(dashboard.summary).toMatchObject({
+      totalItems: 5,
+      blockedItems: 4,
+      commandTriggered: 1,
+      staleHeads: 1,
+      proofGaps: 1
+    });
+    expect(dashboard.items.map((item) => `${item.repo}#${item.pullNumber}:${item.status}`)).toEqual([
+      "owner/repo#2:command_recorded",
+      "owner/other#4:failed",
+      "owner/other#5:blocked_on_proof",
+      "owner/repo#3:stale_head",
+      "owner/repo#1:processed"
+    ]);
+    expect(dashboard.items[0]).toMatchObject({
+      repo: "owner/repo",
+      pullNumber: 2,
+      headSha: "head-pending",
+      priority: 5,
+      queueState: "queued",
+      queueSource: "manual_command",
+      readinessState: "command_recorded",
+      lastCommand: "re-review",
+      proofStatus: "pending_review",
+      nextAction: "wait for daemon cycle or inspect command-triggered run"
+    });
+    expect(dashboard.items[0].url).toBe("https://github.com/owner/repo/pull/2");
+    expect(dashboard.items[0].evidencePath).toBe(
+      "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/2026-07-02/owner__repo/pr-2/head-pending"
+    );
+    expect(dashboard.items[1].lastError).toBe("ZCode failed [redacted-secret]");
+    expect(formatOperatorDashboardHuman(dashboard)).toContain("dashboard: blocked total=5");
+    expect(JSON.stringify(dashboard)).not.toMatch(/ghp_123456789012345678901234/);
+  });
+
+  it("filters dashboard rows by repo, status, priority, and stale-head reason", () => {
+    const input = {
+      coverage: coverageReport({
+        ok: false,
+        processed: [processedEntry(1, "head-posted", "posted")],
+        unprocessed: [pullEntry(2, "head-pending")],
+        staleHeads: [{
+          repo: "owner/repo",
+          pullNumber: 3,
+          expectedHeadSha: "old-head",
+          liveHeadSha: "new-head",
+          title: "stale",
+          url: "https://github.com/owner/repo/pull/3"
+        }]
+      }),
+      durableQueue: durableQueueSnapshot({
+        jobs: [
+          durableJob({ repo: "owner/repo", pullNumber: 2, headSha: "head-pending", state: "queued", priority: 5 }),
+          durableJob({ repo: "owner/other", pullNumber: 4, headSha: "head-failed", state: "failed", priority: 10 })
+        ],
+        summary: { total: 2, queued: 1, failed: 1, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
+      }),
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    };
+    const staleDashboard = buildOperatorDashboard({
+      ...input,
+      filters: {
+        repo: "owner/repo",
+        status: "stale_head",
+        staleHeadReason: "live new-head"
+      }
+    });
+
+    expect(staleDashboard.items).toEqual([
+      expect.objectContaining({
+        repo: "owner/repo",
+        pullNumber: 3,
+        status: "stale_head",
+        staleHeadReason: "expected old-head, live new-head"
+      })
+    ]);
+    expect(staleDashboard.filters).toEqual({
+      repo: "owner/repo",
+      status: "stale_head",
+      staleHeadReason: "live new-head"
+    });
+
+    const priorityDashboard = buildOperatorDashboard({
+      ...input,
+      filters: { priority: 5 }
+    });
+    expect(priorityDashboard.items).toEqual([
+      expect.objectContaining({
+        repo: "owner/repo",
+        pullNumber: 2,
+        priority: 5
+      })
+    ]);
+  });
+
+  it("gives needs-fix dashboard rows a concrete next action", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({ ok: true }),
+      readiness: [{
+        repo: "owner/repo",
+        pullNumber: 9,
+        headSha: "head-needs-fix",
+        state: "needs_fix",
+        reason: "REQUEST_CHANGES review posted",
+        event: "REQUEST_CHANGES",
+        reviewUrl: "https://github.com/owner/repo/pull/9#pullrequestreview-2",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:06:00.000Z"
+      }],
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(dashboard.ok).toBe(false);
+    expect(dashboard.items[0]).toMatchObject({
+      status: "needs_fix",
+      latestVerdict: "REQUEST_CHANGES",
+      nextAction: "wait for author fixes or review the requested changes"
+    });
+  });
+
   it("filters runtime processes to bot-owned rows and redacts command text", () => {
     const rows = [
       { pid: 10, ppid: 1, command: "node /Volumes/LEXAR/repos/evaos-code-review-bot/dist/cli.js daemon --config live.json --token=ghp_123456789012345678901234" },
@@ -424,6 +593,35 @@ describe("operator CLI summaries", () => {
     });
     expect(queue.pending[0]).toMatchObject({ pullNumber: 3, state: "pending_review" });
     expect(queue.providerDeferred[0]).toMatchObject({ pullNumber: 2, state: "provider_deferred" });
+  });
+
+  it("reads review readiness rows from SQLite without creating or mutating state", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table review_readiness (repo text not null, pull_number integer not null, head_sha text not null, state text not null, reason text, event text, review_url text, command_action text, command_comment_id integer, created_at text not null, updated_at text not null, primary key (repo, pull_number, head_sha))");
+      db.prepare("insert into review_readiness (repo, pull_number, head_sha, state, reason, event, review_url, command_action, command_comment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run("owner/repo", 7, "head-ready", "ready_for_human", "review posted", "COMMENT", "https://github.com/owner/repo/pull/7#pullrequestreview-1", null, null, "2026-07-01T00:00:00.000Z", "2026-07-01T00:05:00.000Z");
+      db.prepare("insert into review_readiness (repo, pull_number, head_sha, state, reason, event, review_url, command_action, command_comment_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run("owner/other", 8, "head-command", "command_recorded", "manual review requested", null, null, "review", 999, "2026-07-01T00:00:00.000Z", "2026-07-01T00:04:00.000Z");
+    } finally {
+      db.close();
+    }
+
+    expect(collectOperatorReviewReadiness(statePath, { repo: "owner/repo" })).toEqual([
+      {
+        repo: "owner/repo",
+        pullNumber: 7,
+        headSha: "head-ready",
+        state: "ready_for_human",
+        reason: "review posted",
+        event: "COMMENT",
+        reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-1",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:05:00.000Z"
+      }
+    ]);
+    expect(collectOperatorReviewReadiness(join(tmpdir(), "missing-evaos-state.sqlite"))).toEqual([]);
   });
 
   it("explains why a PR head is or is not reviewed", () => {
@@ -780,6 +978,32 @@ function cleanDurableQueueSummary(): Partial<OperatorDurableQueueSnapshot["summa
     posted: 0,
     failed: 0,
     retired: 0
+  };
+}
+
+function durableJob(input: Partial<OperatorDurableQueueSnapshot["jobs"][number]> & {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  state: OperatorDurableQueueSnapshot["jobs"][number]["state"];
+}): OperatorDurableQueueSnapshot["jobs"][number] {
+  return {
+    jobId: `${input.state}-${input.headSha}`,
+    attemptId: `${input.state}:${input.repo}#${input.pullNumber}@${input.headSha}`,
+    source: input.source ?? "automatic",
+    lane: input.lane ?? "background",
+    repo: input.repo,
+    org: input.repo.split("/")[0]!,
+    pullNumber: input.pullNumber,
+    headSha: input.headSha,
+    providerId: input.providerId ?? "zai",
+    priority: input.priority ?? 50,
+    state: input.state,
+    ...(input.nextEligibleAt ? { nextEligibleAt: input.nextEligibleAt } : {}),
+    ...(input.reviewUrl ? { reviewUrl: input.reviewUrl } : {}),
+    ...(input.lastError ? { lastError: input.lastError } : {}),
+    createdAt: input.createdAt ?? "2026-07-01T00:00:00.000Z",
+    updatedAt: input.updatedAt ?? "2026-07-01T00:00:00.000Z"
   };
 }
 

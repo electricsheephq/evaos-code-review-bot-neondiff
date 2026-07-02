@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
 import {
+  buildOperatorDashboard,
   buildRuntimeInventory,
   buildOperatorQueue,
   buildOperatorStatus,
@@ -14,8 +15,10 @@ import {
   collectOperatorLeases,
   collectOperatorProviderCooldowns,
   collectOperatorRepoProviderCooldowns,
+  collectOperatorReviewReadiness,
   collectOperatorReviewQueue,
   explainPullStatus,
+  formatOperatorDashboardHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory
 } from "./operator-cli.js";
@@ -274,6 +277,34 @@ async function main(): Promise<void> {
     const output = { ...queue, ok: queue.ok, coverage: queue, durableQueue, ...collectQueueBudget(args) };
     console.log(JSON.stringify(output, null, 2));
     if (!output.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "dashboard") {
+    const config = loadConfig(args.config);
+    const report = await collectCoverageReport(args, config);
+    const statePath = args["state-path"] ?? config.statePath;
+    const dashboard = buildOperatorDashboard({
+      coverage: report,
+      durableQueue: collectOperatorReviewQueue(statePath, {
+        repo: args.repo,
+        limit: args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : undefined
+      }),
+      readiness: collectOperatorReviewReadiness(statePath, {
+        repo: args.repo,
+        limit: args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : undefined
+      }),
+      evidenceDir: config.evidenceDir,
+      filters: {
+        ...(args.repo ? { repo: args.repo } : {}),
+        ...(args.status ?? args.state ? { status: args.status ?? args.state } : {}),
+        ...(args.priority ? { priority: parsePositiveInteger(args.priority, "--priority") } : {}),
+        ...(args["stale-head-reason"] ? { staleHeadReason: args["stale-head-reason"] } : {}),
+        ...(args.limit ? { limit: parsePositiveInteger(args.limit, "--limit") } : {})
+      }
+    });
+    console.log(args.human === "true" ? formatOperatorDashboardHuman(dashboard) : JSON.stringify(dashboard, null, 2));
+    if (!dashboard.ok) process.exitCode = 1;
     return;
   }
 
@@ -574,6 +605,7 @@ function buildHelp() {
         "runtime-inventory",
         "agents",
         "queue",
+        "dashboard",
         "budget-status",
         "coverage",
         "cooldowns",
@@ -600,6 +632,8 @@ function buildHelp() {
       "npx tsx src/cli.ts agents --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json --state provider_deferred",
+      "npx tsx src/cli.ts dashboard --config /path/to/live.json --status blocked_on_proof",
+      "npx tsx src/cli.ts dashboard --config /path/to/live.json --human",
       "npx tsx src/cli.ts budget-status --config /path/to/live.json",
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
@@ -696,6 +730,9 @@ interface ParsedArgs {
   "budget-job-limit"?: string;
   "job-limit"?: string;
   state?: string;
+  status?: string;
+  priority?: string;
+  "stale-head-reason"?: string;
   zcode?: string;
   "active-only"?: string;
   human?: string;

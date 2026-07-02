@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
   CoverageAuditReport,
@@ -15,7 +16,10 @@ import { redactSecrets } from "./secrets.js";
 import {
   parseProviderCooldownError,
   PROVIDER_COOLDOWN_ERROR_PREFIX,
+  type ProcessedCommandAction,
   type ProviderCooldownReviewRecord,
+  type ReviewReadinessRecord,
+  type ReviewReadinessState,
   type ReviewQueueJobRecord,
   type ReviewQueueJobState,
   type RepoProviderCooldownRecord
@@ -183,6 +187,59 @@ export interface OperatorQueueSnapshot {
   skipped: OperatorQueueEntry[];
   staleHeads: OperatorQueueEntry[];
   readFailures: Array<{ repo: string; error: string; nextAction: string }>;
+}
+
+export interface OperatorDashboardFilters {
+  repo?: string;
+  status?: string;
+  priority?: number;
+  staleHeadReason?: string;
+  limit?: number;
+}
+
+export interface OperatorDashboardItem {
+  repo: string;
+  pullNumber?: number;
+  headSha?: string;
+  title?: string;
+  url?: string;
+  status: string;
+  coverageState?: OperatorQueueEntry["state"] | "read_failure";
+  queueState?: ReviewQueueJobState;
+  queueSource?: ReviewQueueJobRecord["source"];
+  queueLane?: ReviewQueueJobRecord["lane"];
+  readinessState?: ReviewReadinessState;
+  priority?: number;
+  latestVerdict?: string;
+  lastCommand?: ProcessedCommandAction;
+  commandCommentId?: number;
+  proofStatus: string;
+  checkStatus: string;
+  staleHeadReason?: string;
+  reviewUrl?: string;
+  evidencePath?: string;
+  reason?: string;
+  lastError?: string;
+  updatedAt?: string;
+  nextAction: string;
+}
+
+export interface OperatorDashboard {
+  ok: boolean;
+  checkedAt: string;
+  filters: OperatorDashboardFilters;
+  summary: {
+    totalItems: number;
+    blockedItems: number;
+    activeReviews: number;
+    commandTriggered: number;
+    staleHeads: number;
+    proofGaps: number;
+    checkBlocks: number;
+    failed: number;
+    providerDeferred: number;
+  };
+  items: OperatorDashboardItem[];
 }
 
 export interface OperatorDurableQueueSnapshot {
@@ -809,6 +866,244 @@ export function buildOperatorQueue(report: CoverageAuditReport): OperatorQueueSn
   };
 }
 
+export function collectOperatorReviewReadiness(
+  statePath: string,
+  input: { repo?: string; state?: ReviewReadinessState; limit?: number } = {}
+): ReviewReadinessRecord[] {
+  if (!existsSync(statePath)) return [];
+  const db = new DatabaseSync(statePath, { readOnly: true });
+  try {
+    if (!hasTable(db, "review_readiness")) return [];
+    const predicates: string[] = [];
+    const params: Array<string | number> = [];
+    if (input.repo) {
+      predicates.push("repo = ?");
+      params.push(input.repo);
+    }
+    if (input.state) {
+      predicates.push("state = ?");
+      params.push(input.state);
+    }
+    const where = predicates.length ? `where ${predicates.join(" and ")}` : "";
+    const limit = input.limit ? " limit ?" : "";
+    if (input.limit) params.push(input.limit);
+    const rows = db
+      .prepare(
+        `select repo, pull_number, head_sha, state, reason, event, review_url,
+                command_action, command_comment_id, created_at, updated_at
+         from review_readiness
+         ${where}
+         order by datetime(updated_at) desc
+         ${limit}`
+      )
+      .all(...params) as unknown as ReviewReadinessRow[];
+    return rows.map((row) => ({
+      repo: row.repo,
+      pullNumber: row.pull_number,
+      headSha: row.head_sha,
+      state: row.state,
+      ...(row.reason ? { reason: row.reason } : {}),
+      ...(row.event ? { event: row.event } : {}),
+      ...(row.review_url ? { reviewUrl: row.review_url } : {}),
+      ...(row.command_action ? { commandAction: row.command_action } : {}),
+      ...(row.command_comment_id ? { commandCommentId: row.command_comment_id } : {}),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+export function buildOperatorDashboard(input: {
+  coverage: CoverageAuditReport;
+  durableQueue?: OperatorDurableQueueSnapshot;
+  readiness?: ReviewReadinessRecord[];
+  evidenceDir?: string;
+  filters?: OperatorDashboardFilters;
+  checkedAt?: string;
+}): OperatorDashboard {
+  const checkedAt = input.checkedAt ?? input.coverage.checkedAt;
+  const filters = compactDashboardFilters(input.filters ?? {});
+  const items = new Map<string, OperatorDashboardItem>();
+
+  for (const entry of input.coverage.processed) {
+    upsertDashboardItem(items, dashboardKey(entry.repo, entry.pullNumber, entry.headSha), {
+      repo: entry.repo,
+      pullNumber: entry.pullNumber,
+      headSha: entry.headSha,
+      title: entry.title,
+      url: entry.url,
+      status: "processed",
+      coverageState: "processed",
+      latestVerdict: entry.event ?? entry.status,
+      proofStatus: entry.reviewUrl ? "covered_by_review" : "processed_without_review_url",
+      checkStatus: "not_collected",
+      ...(entry.reviewUrl ? { reviewUrl: entry.reviewUrl } : {}),
+      ...(entry.error ? { reason: redactSecrets(entry.error) } : {}),
+      updatedAt: entry.createdAt,
+      nextAction: "none"
+    });
+  }
+
+  for (const entry of input.coverage.providerDeferred) {
+    upsertDashboardItem(items, dashboardKey(entry.repo, entry.pullNumber, entry.headSha), {
+      repo: entry.repo,
+      pullNumber: entry.pullNumber,
+      headSha: entry.headSha,
+      title: entry.title,
+      url: entry.url,
+      status: "provider_deferred",
+      coverageState: "provider_deferred",
+      latestVerdict: "provider_deferred",
+      proofStatus: "pending_review",
+      checkStatus: "not_collected",
+      reason: redactSecrets(entry.reason ?? entry.error ?? "provider cooldown"),
+      updatedAt: entry.createdAt,
+      nextAction: "wait for cooldown expiry or run retry-provider-cooldowns when expired"
+    });
+  }
+
+  for (const entry of input.coverage.unprocessed) {
+    upsertDashboardItem(items, dashboardKey(entry.repo, entry.pullNumber, entry.headSha), {
+      repo: entry.repo,
+      pullNumber: entry.pullNumber,
+      headSha: entry.headSha,
+      title: entry.title,
+      url: entry.url,
+      status: "pending_review",
+      coverageState: "pending_review",
+      latestVerdict: "pending_review",
+      proofStatus: "pending_review",
+      checkStatus: "not_collected",
+      nextAction: "wait for daemon cycle or run scoped run-once"
+    });
+  }
+
+  for (const entry of input.coverage.skipped) {
+    upsertDashboardItem(items, dashboardKey(entry.repo, entry.pullNumber, entry.headSha), {
+      repo: entry.repo,
+      ...(entry.pullNumber !== undefined ? { pullNumber: entry.pullNumber } : {}),
+      ...(entry.headSha ? { headSha: entry.headSha } : {}),
+      ...(entry.title ? { title: entry.title } : {}),
+      ...(entry.url ? { url: entry.url } : {}),
+      status: "skipped",
+      coverageState: "skipped",
+      latestVerdict: "skipped",
+      proofStatus: "skipped",
+      checkStatus: "not_collected",
+      reason: redactSecrets(entry.reason),
+      nextAction: "none"
+    });
+  }
+
+  for (const entry of input.coverage.staleHeads) {
+    const reason = `expected ${entry.expectedHeadSha}, live ${entry.liveHeadSha}`;
+    upsertDashboardItem(items, dashboardKey(entry.repo, entry.pullNumber, entry.liveHeadSha), {
+      repo: entry.repo,
+      pullNumber: entry.pullNumber,
+      headSha: entry.liveHeadSha,
+      title: entry.title,
+      url: entry.url,
+      status: "stale_head",
+      coverageState: "stale_head",
+      latestVerdict: "stale_head",
+      proofStatus: "stale_head",
+      checkStatus: "not_collected",
+      staleHeadReason: reason,
+      reason,
+      nextAction: "wait for next daemon cycle or run scoped coverage audit"
+    });
+  }
+
+  for (const failure of input.coverage.readFailures) {
+    upsertDashboardItem(items, dashboardKey(failure.repo), {
+      repo: failure.repo,
+      status: "read_failure",
+      coverageState: "read_failure",
+      latestVerdict: "read_failure",
+      proofStatus: "unknown",
+      checkStatus: "unknown",
+      reason: redactSecrets(failure.error),
+      nextAction: "inspect GitHub App installation/read permissions or network failure"
+    });
+  }
+
+  for (const job of input.durableQueue?.jobs ?? []) {
+    upsertDashboardItem(items, dashboardKey(job.repo, job.pullNumber, job.headSha), {
+      repo: job.repo,
+      pullNumber: job.pullNumber,
+      headSha: job.headSha,
+      url: githubPullUrl(job.repo, job.pullNumber),
+      status: queueStatus(job),
+      queueState: job.state,
+      queueSource: job.source,
+      queueLane: job.lane,
+      priority: job.priority,
+      latestVerdict: job.state,
+      proofStatus: proofStatusForQueue(job),
+      checkStatus: "not_collected",
+      ...(job.reviewUrl ? { reviewUrl: job.reviewUrl } : {}),
+      ...(job.lastError ? { lastError: redactSecrets(job.lastError) } : {}),
+      updatedAt: job.updatedAt,
+      nextAction: nextActionForQueue(job)
+    });
+  }
+
+  for (const readiness of input.readiness ?? []) {
+    upsertDashboardItem(items, dashboardKey(readiness.repo, readiness.pullNumber, readiness.headSha), {
+      repo: readiness.repo,
+      pullNumber: readiness.pullNumber,
+      headSha: readiness.headSha,
+      url: githubPullUrl(readiness.repo, readiness.pullNumber),
+      status: readiness.state,
+      readinessState: readiness.state,
+      latestVerdict: readiness.event ?? readiness.state,
+      proofStatus: proofStatusForReadiness(readiness),
+      checkStatus: checkStatusForReadiness(readiness),
+      ...(readiness.reason ? { reason: redactSecrets(readiness.reason) } : {}),
+      ...(readiness.reviewUrl ? { reviewUrl: readiness.reviewUrl } : {}),
+      ...(readiness.commandAction ? { lastCommand: readiness.commandAction } : {}),
+      ...(readiness.commandCommentId ? { commandCommentId: readiness.commandCommentId } : {}),
+      updatedAt: readiness.updatedAt,
+      nextAction: nextActionForReadiness(readiness)
+    });
+  }
+
+  const withEvidence = [...items.values()].map((item) => ({
+    ...item,
+    ...(input.evidenceDir ? { evidencePath: evidencePathForItem(input.evidenceDir, checkedAt, item) } : {})
+  }));
+  const filtered = withEvidence
+    .filter((item) => dashboardItemMatches(item, filters))
+    .sort(compareDashboardItems);
+  const visible = filters.limit ? filtered.slice(0, filters.limit) : filtered;
+
+  return {
+    ok: visible.every((item) => !isDashboardItemBlocked(item)),
+    checkedAt,
+    filters,
+    summary: summarizeDashboardItems(visible),
+    items: visible
+  };
+}
+
+export function formatOperatorDashboardHuman(dashboard: OperatorDashboard): string {
+  const lines = [
+    `dashboard: ${dashboard.ok ? "ok" : "blocked"} total=${dashboard.summary.totalItems} active=${dashboard.summary.activeReviews} blocked=${dashboard.summary.blockedItems} stale=${dashboard.summary.staleHeads} proofGaps=${dashboard.summary.proofGaps} providerDeferred=${dashboard.summary.providerDeferred} failed=${dashboard.summary.failed}`
+  ];
+  for (const item of dashboard.items.slice(0, 20)) {
+    const pull = item.pullNumber ? `#${item.pullNumber}` : "";
+    const priority = item.priority !== undefined ? ` p=${item.priority}` : "";
+    const command = item.lastCommand ? ` command=${item.lastCommand}` : "";
+    const reason = item.reason ? ` reason=${item.reason}` : "";
+    lines.push(`${item.status}: ${item.repo}${pull}${priority}${command} next=${item.nextAction}${reason}`);
+    if (item.url) lines.push(`  pr: ${item.url}`);
+    if (item.evidencePath) lines.push(`  evidence: ${item.evidencePath}`);
+  }
+  return redactSecrets(lines.join("\n"));
+}
+
 export function explainPullStatus(
   report: CoverageAuditReport,
   repo: string,
@@ -1040,6 +1335,225 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
   };
 }
 
+function upsertDashboardItem(
+  items: Map<string, OperatorDashboardItem>,
+  key: string,
+  patch: OperatorDashboardItem
+): void {
+  const existing = items.get(key);
+  if (!existing) {
+    items.set(key, patch);
+    return;
+  }
+  items.set(key, {
+    ...existing,
+    ...patch,
+    title: patch.title ?? existing.title,
+    url: patch.url ?? existing.url,
+    coverageState: patch.coverageState ?? existing.coverageState,
+    queueState: patch.queueState ?? existing.queueState,
+    queueSource: patch.queueSource ?? existing.queueSource,
+    queueLane: patch.queueLane ?? existing.queueLane,
+    readinessState: patch.readinessState ?? existing.readinessState,
+    priority: patch.priority ?? existing.priority,
+    latestVerdict: patch.latestVerdict ?? existing.latestVerdict,
+    lastCommand: patch.lastCommand ?? existing.lastCommand,
+    commandCommentId: patch.commandCommentId ?? existing.commandCommentId,
+    staleHeadReason: patch.staleHeadReason ?? existing.staleHeadReason,
+    reviewUrl: patch.reviewUrl ?? existing.reviewUrl,
+    evidencePath: patch.evidencePath ?? existing.evidencePath,
+    reason: patch.reason ?? existing.reason,
+    lastError: patch.lastError ?? existing.lastError,
+    updatedAt: latestTimestamp(existing.updatedAt, patch.updatedAt),
+    nextAction: patch.nextAction ?? existing.nextAction
+  });
+}
+
+function dashboardKey(repo: string, pullNumber?: number, headSha?: string): string {
+  return `${repo}#${pullNumber ?? "repo"}@${headSha ?? "repo"}`;
+}
+
+function compactDashboardFilters(filters: OperatorDashboardFilters): OperatorDashboardFilters {
+  return {
+    ...(filters.repo ? { repo: filters.repo } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.priority !== undefined ? { priority: filters.priority } : {}),
+    ...(filters.staleHeadReason ? { staleHeadReason: filters.staleHeadReason } : {}),
+    ...(filters.limit !== undefined ? { limit: filters.limit } : {})
+  };
+}
+
+function dashboardItemMatches(item: OperatorDashboardItem, filters: OperatorDashboardFilters): boolean {
+  if (filters.repo && item.repo !== filters.repo) return false;
+  if (filters.status) {
+    const statuses = [item.status, item.coverageState, item.queueState, item.readinessState].filter(Boolean);
+    if (!statuses.includes(filters.status)) return false;
+  }
+  if (filters.priority !== undefined && item.priority !== filters.priority) return false;
+  if (filters.staleHeadReason && !item.staleHeadReason?.includes(filters.staleHeadReason)) return false;
+  return true;
+}
+
+function compareDashboardItems(left: OperatorDashboardItem, right: OperatorDashboardItem): number {
+  const leftPriority = left.priority ?? Number.POSITIVE_INFINITY;
+  const rightPriority = right.priority ?? Number.POSITIVE_INFINITY;
+  const priority = leftPriority === rightPriority ? 0 : leftPriority - rightPriority;
+  if (priority !== 0) return priority;
+  const severity = dashboardSeverityRank(left) - dashboardSeverityRank(right);
+  if (severity !== 0) return severity;
+  const repo = left.repo.localeCompare(right.repo);
+  if (repo !== 0) return repo;
+  return (left.pullNumber ?? 0) - (right.pullNumber ?? 0);
+}
+
+function dashboardSeverityRank(item: OperatorDashboardItem): number {
+  if (item.status === "failed") return 0;
+  if (item.status === "needs_fix" || item.status === "awaiting_re_review") return 1;
+  if (item.status === "blocked_on_proof" || item.status === "blocked_on_checks") return 1;
+  if (item.status === "provider_deferred") return 2;
+  if (item.status === "stale_head" || item.status === "stale") return 3;
+  if (isActiveDashboardStatus(item.status)) return 4;
+  if (item.status === "processed" || item.status === "ready_for_human") return 9;
+  return 5;
+}
+
+function summarizeDashboardItems(items: OperatorDashboardItem[]): OperatorDashboard["summary"] {
+  return {
+    totalItems: items.length,
+    blockedItems: items.filter(isDashboardItemBlocked).length,
+    activeReviews: items.filter((item) => isActiveDashboardStatus(item.status)).length,
+    commandTriggered: items.filter((item) => item.lastCommand || item.queueSource === "manual_command").length,
+    staleHeads: items.filter((item) => item.status === "stale_head" || item.status === "stale").length,
+    proofGaps: items.filter((item) => item.proofStatus === "blocked_on_proof").length,
+    checkBlocks: items.filter((item) => item.checkStatus === "blocked_on_checks").length,
+    failed: items.filter((item) => item.status === "failed").length,
+    providerDeferred: items.filter((item) => item.status === "provider_deferred").length
+  };
+}
+
+function isDashboardItemBlocked(item: OperatorDashboardItem): boolean {
+  return item.status === "failed" ||
+    item.status === "provider_deferred" ||
+    item.status === "stale_head" ||
+    item.status === "stale" ||
+    item.status === "read_failure" ||
+    item.status === "blocked_on_checks" ||
+    item.status === "blocked_on_proof" ||
+    item.status === "needs_fix" ||
+    item.status === "awaiting_re_review" ||
+    isActiveDashboardStatus(item.status);
+}
+
+function isActiveDashboardStatus(status: string): boolean {
+  return status === "pending_review" ||
+    status === "queued" ||
+    status === "leased" ||
+    status === "running" ||
+    status === "reviewing" ||
+    status === "command_recorded";
+}
+
+function queueStatus(job: ReviewQueueJobRecord): string {
+  if (job.state === "posted") return "processed";
+  if (job.state === "closed_retired" || job.state === "stale_retired") return "skipped";
+  return job.state;
+}
+
+function proofStatusForQueue(job: ReviewQueueJobRecord): string {
+  if (job.state === "posted") return job.reviewUrl ? "covered_by_review" : "processed_without_review_url";
+  if (job.state === "failed") return "failed";
+  if (job.state === "stale_retired") return "stale_head";
+  if (job.state === "closed_retired") return "skipped";
+  return "pending_review";
+}
+
+function proofStatusForReadiness(readiness: ReviewReadinessRecord): string {
+  if (readiness.state === "blocked_on_proof") return "blocked_on_proof";
+  if (readiness.state === "blocked_on_checks") return "pending_check";
+  if (readiness.state === "ready_for_human" || readiness.state === "needs_fix") {
+    return readiness.reviewUrl ? "covered_by_review" : "review_ready";
+  }
+  if (readiness.state === "failed") return "failed";
+  if (readiness.state === "skipped" || readiness.state === "closed") return "skipped";
+  if (readiness.state === "stale") return "stale_head";
+  return "pending_review";
+}
+
+function checkStatusForReadiness(readiness: ReviewReadinessRecord): string {
+  if (readiness.state === "blocked_on_checks") return "blocked_on_checks";
+  return "not_collected";
+}
+
+function nextActionForQueue(job: ReviewQueueJobRecord): string {
+  if (job.state === "queued" || job.state === "leased" || job.state === "running") return "wait for daemon cycle";
+  if (job.state === "provider_deferred") return "wait for cooldown expiry or retry provider-deferred queue job";
+  if (job.state === "failed") return "inspect failure evidence and retry or retire the head";
+  if (job.state === "command_recorded") return "wait for daemon cycle or inspect command-triggered run";
+  return "none";
+}
+
+function nextActionForReadiness(readiness: ReviewReadinessRecord): string {
+  if (readiness.state === "command_recorded") return "wait for daemon cycle or inspect command-triggered run";
+  if (readiness.state === "queued" || readiness.state === "reviewing") return "wait for daemon cycle";
+  if (readiness.state === "awaiting_re_review") return "wait for trusted re-review command or new head";
+  if (readiness.state === "provider_deferred") return "wait for cooldown expiry or retry provider-deferred queue job";
+  if (readiness.state === "blocked_on_proof") return "collect required proof before merge-ready claim";
+  if (readiness.state === "blocked_on_checks") return "wait for or inspect required checks";
+  if (readiness.state === "needs_fix") return "wait for author fixes or review the requested changes";
+  if (readiness.state === "failed") return "inspect failure evidence and retry or retire the head";
+  if (readiness.state === "stale") return "wait for next daemon cycle or run scoped coverage audit";
+  return "none";
+}
+
+function evidencePathForItem(evidenceDir: string, checkedAt: string, item: OperatorDashboardItem): string | undefined {
+  if (!item.pullNumber || !item.headSha) return undefined;
+  const repoKey = item.repo.replace("/", "__");
+  const pullKey = `pr-${item.pullNumber}`;
+  const matchingPath = findExistingEvidencePath(evidenceDir, repoKey, pullKey, item.headSha);
+  if (matchingPath) return matchingPath;
+  const date = checkedAt.slice(0, 10);
+  return join(evidenceDir, date, repoKey, pullKey, item.headSha);
+}
+
+function findExistingEvidencePath(
+  evidenceDir: string,
+  repoKey: string,
+  pullKey: string,
+  headSha: string
+): string | undefined {
+  try {
+    if (!existsSync(evidenceDir)) return undefined;
+    const dateDirs = readdirSync(evidenceDir)
+      .map((entry) => join(evidenceDir, entry))
+      .filter((path) => {
+        try {
+          return statSync(path).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .sort()
+      .reverse();
+    for (const dateDir of dateDirs) {
+      const candidate = join(dateDir, repoKey, pullKey, headSha);
+      if (existsSync(candidate)) return candidate;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function githubPullUrl(repo: string, pullNumber: number): string {
+  return `https://github.com/${repo}/pull/${pullNumber}`;
+}
+
+function latestTimestamp(left?: string, right?: string): string | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return Date.parse(right) > Date.parse(left) ? right : left;
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -1188,4 +1702,18 @@ interface ReviewQueueJobRow {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+interface ReviewReadinessRow {
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  state: ReviewReadinessState;
+  reason: string | null;
+  event: "COMMENT" | "REQUEST_CHANGES" | null;
+  review_url: string | null;
+  command_action: ProcessedCommandAction | null;
+  command_comment_id: number | null;
+  created_at: string;
+  updated_at: string;
 }

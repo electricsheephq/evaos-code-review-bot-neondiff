@@ -34,6 +34,11 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   pending review, skipped, stale-head, and read-failure buckets. Also includes
   durable `review_queue_jobs` rows and budget delay reasons when the state DB
   has the scheduler table.
+- `dashboard`: read-only PR review dashboard over coverage, durable queue,
+  readiness lifecycle rows, GitHub PR links, and local evidence-path hints.
+  Filter with `--repo`, `--status`, `--priority`, `--stale-head-reason`, and
+  `--limit`. JSON is the default; use `--human` for a compact operator view.
+  The command exits nonzero when visible rows are blocked or still active.
 - `budget-status`: read-only scheduler budget projection. Shows active counts,
   queued counts, would-lease jobs, delayed jobs, and deterministic delay reasons
   such as `provider_cooldown`, `provider_capacity`, `org_capacity`,
@@ -84,6 +89,24 @@ Inspect only durable provider-deferred jobs:
 
 ```bash
 npx tsx src/cli.ts queue --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --state provider_deferred
+```
+
+Show the review dashboard:
+
+```bash
+npx tsx src/cli.ts dashboard --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+```
+
+Show dashboard rows blocked on proof:
+
+```bash
+npx tsx src/cli.ts dashboard --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --status blocked_on_proof
+```
+
+Show one repo as a short human dashboard:
+
+```bash
+npx tsx src/cli.ts dashboard --human --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --repo electricsheephq/evaos-code-review-bot
 ```
 
 Inspect only the scheduler budget projection:
