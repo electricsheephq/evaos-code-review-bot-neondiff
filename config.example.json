@@ -23,7 +23,7 @@
     "_globalMaxCommentsPerCycleComment": "Beta safety default: at most one live issue-enrichment comment per daemon cycle globally. Raise only after dry-run evidence.",
     "globalMaxCommentsPerCycle": 1,
     "maxActiveRuns": 1,
-    "_leaseTtlMsComment": "Lease TTL bounds stuck-worker recovery. It may be shorter than cooldownMs, which controls per-issue deferral cadence.",
+    "_leaseTtlMsComment": "Lease TTL bounds stuck-worker recovery and is the worst-case live issue-enrichment stall after abnormal worker exit unless an operator clears leases. It may be shorter than cooldownMs, which controls per-issue deferral cadence.",
     "leaseTtlMs": 1200000,
     "cooldownMs": 3600000,
     "burstWindowMs": 3600000,
