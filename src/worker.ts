@@ -860,20 +860,23 @@ function buildRepoMemoryContext(input: {
   const repoMemoryConfig = input.config.repoMemory;
   if (!repoMemoryConfig?.enabled) return { falsePositiveFingerprints: [] };
 
+  const generatedAt = new Date().toISOString();
+  const generatedAtDate = new Date(generatedAt);
   const notes = input.state.listRepoMemoryNotes({
     repo: input.repo,
     includeExpired: repoMemoryConfig.includeStaleNotes,
+    now: generatedAtDate,
     limit: repoMemoryConfig.maxStateNotes
   });
   const falsePositiveFingerprints = notes
-    .filter((note) => note.kind === "false_positive" && note.fingerprint)
+    .filter((note) => note.kind === "false_positive" && note.fingerprint && !isRepoMemoryNoteExpired(note, generatedAtDate))
     .map((note) => note.fingerprint!);
   const promptNotes = notes.filter((note) => note.kind !== "false_positive");
   const packetResult = buildRepoMemoryPacket({
     repo: input.repo,
     humanMarkdown: readRepoMemoryMarkdown(repoMemoryConfig.memoryRoot, input.repo),
     stateNotes: promptNotes,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     packetVersion: repoMemoryConfig.packetVersion,
     maxPacketBytes: repoMemoryConfig.maxPacketBytes,
     includeStaleNotes: repoMemoryConfig.includeStaleNotes
@@ -898,6 +901,12 @@ function buildRepoMemoryContext(input: {
     memoryRoot: repoMemoryConfig.memoryRoot
   });
   return { packet: packetResult.packet, falsePositiveFingerprints };
+}
+
+function isRepoMemoryNoteExpired(note: { expiresAt?: string }, now: Date): boolean {
+  if (!note.expiresAt) return false;
+  const expiresAtMs = Date.parse(note.expiresAt);
+  return !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime();
 }
 
 function recordStaleHeadSkip(input: {

@@ -35,9 +35,11 @@ describe("secret redaction", () => {
   it("detects raw customer identifiers and SSN-shaped customer data", () => {
     const customerId = "customer_id=cus_12345678901234567890";
     const ssn = "customer_ssn=123-45-6789";
+    const benignCustomerLabel = "customer_id = acme-corporation-12345";
 
     expect(containsSecretLikeText(customerId)).toBe(true);
     expect(containsSecretLikeText(ssn)).toBe(true);
+    expect(containsSecretLikeText(benignCustomerLabel)).toBe(false);
     expect(redactSecrets(`${customerId}\n${ssn}`)).not.toMatch(/cus_12345678901234567890|123-45-6789/);
   });
 });

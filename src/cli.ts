@@ -2,8 +2,8 @@
 import { loadConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, parse as parsePath, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
 import {
@@ -743,10 +743,10 @@ function parseCsv(value?: string | string[]): string[] {
 }
 
 function assertMemoryPacketOutputDirSafe(outputDir: string, evidenceDir: string): void {
-  const evidenceRoot = resolve(evidenceDir);
-  const target = resolve(outputDir);
+  const evidenceRoot = realPathPreservingMissing(evidenceDir);
+  const target = realPathPreservingMissing(outputDir);
   if (!isPathInsideOrEqual(target, evidenceRoot)) {
-    throw new Error("--output-dir must be inside the configured evidenceDir; use a /Volumes/LEXAR/Codex evidence path");
+    throw new Error("--output-dir must be inside the configured evidenceDir");
   }
   if (isInsideGitCheckout(target)) {
     throw new Error("--output-dir must not be inside the repository checkout or another repository checkout");
@@ -765,6 +765,19 @@ function isInsideGitCheckout(target: string): boolean {
     if (cursor === root) return false;
     cursor = dirname(cursor);
   }
+}
+
+function realPathPreservingMissing(inputPath: string): string {
+  const resolved = resolve(inputPath);
+  const missingSegments: string[] = [];
+  let cursor = resolved;
+  const root = parsePath(cursor).root;
+  while (!existsSync(cursor)) {
+    if (cursor === root) throw new Error(`Path does not have an existing parent: ${inputPath}`);
+    missingSegments.unshift(basename(cursor));
+    cursor = dirname(cursor);
+  }
+  return join(realpathSync.native(cursor), ...missingSegments);
 }
 
 const REVIEW_QUEUE_JOB_STATES: ReviewQueueJobState[] = [

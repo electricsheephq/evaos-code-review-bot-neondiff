@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -110,6 +110,43 @@ describe("repo memory packets", () => {
         expect.objectContaining({ id: "note-stale", reason: "stale" })
       ])
     );
+  });
+
+  it("orders same-priority notes deterministically before hashing", () => {
+    const result = buildRepoMemoryPacket({
+      repo,
+      stateNotes: [
+        note({
+          noteId: "policy-b",
+          kind: "policy_note",
+          title: "B policy",
+          body: "Second lexicographic policy note.",
+          source: "test"
+        }),
+        note({
+          noteId: "proof-a",
+          kind: "proof_preference",
+          title: "Proof note",
+          body: "Proof preferences render after policy notes.",
+          source: "test"
+        }),
+        note({
+          noteId: "policy-a",
+          kind: "policy_note",
+          title: "A policy",
+          body: "First lexicographic policy note.",
+          source: "test"
+        })
+      ],
+      generatedAt,
+      maxPacketBytes: 12_000
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected packet build to pass");
+    expect(result.packet.sources.map((source) => source.id)).toEqual(["policy-a", "policy-b", "proof-a"]);
+    expect(result.packet.markdown.indexOf("A policy")).toBeLessThan(result.packet.markdown.indexOf("B policy"));
+    expect(result.packet.markdown.indexOf("B policy")).toBeLessThan(result.packet.markdown.indexOf("Proof note"));
   });
 
   it("fails closed and redacts the report when memory text contains secret-like content", () => {
@@ -434,7 +471,41 @@ describe("repo memory packets", () => {
         "--output-dir",
         outputDir
       ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
-    ).toThrow(/repository checkout/);
+    ).toThrow(/configured evidenceDir|repository checkout/);
+  });
+
+  it("refuses output paths that enter a checkout through an evidence-dir symlink", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-cli-symlink-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    const fakeTargetCheckout = join(root, "repos", "target-repo");
+    const symlinkedCheckout = join(evidenceDir, "linked-checkout");
+    mkdirSync(join(fakeTargetCheckout, ".git"), { recursive: true });
+    mkdirSync(evidenceDir, { recursive: true });
+    symlinkSync(fakeTargetCheckout, symlinkedCheckout);
+    const configPath = writeConfig({
+      statePath: join(root, "state.sqlite"),
+      evidenceDir,
+      repoMemory: {
+        enabled: false,
+        memoryRoot: join(root, "memory"),
+        maxPacketBytes: 12_000
+      }
+    });
+
+    expect(() =>
+      execFileSync(process.execPath, [
+        "./node_modules/.bin/tsx",
+        "src/cli.ts",
+        "build-memory-packet",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--output-dir",
+        join(symlinkedCheckout, "memory-packet")
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+    ).toThrow(/configured evidenceDir|repository checkout/);
   });
 
   function writeConfig(config: unknown): string {
