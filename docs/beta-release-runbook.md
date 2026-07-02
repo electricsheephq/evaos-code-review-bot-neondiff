@@ -13,6 +13,10 @@ The beta release unit is:
 - state DB: `/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews-live.sqlite`
 - evidence root: `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
 
+Packaged or non-source deployments must set
+`EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT` to the live operator checkout so
+review mirrors and worktrees cannot be planned inside or above that checkout.
+
 The beta release unit does not include expanding monitored repos, GitHub App
 permissions, ZCode tools, auto-merge, approvals, or repair behavior. Those need
 their own tracked issue, PR, dry-run evidence, and explicit promotion gate.

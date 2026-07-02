@@ -22,7 +22,7 @@ import {
 } from "./github-related-context.js";
 import { buildEnrichmentComment, postEnrichmentComment } from "./enrichment.js";
 import { GitHubApi } from "./github.js";
-import { getInstalledPackageRoot } from "./path-safety.js";
+import { getProtectedCheckoutRoots } from "./path-safety.js";
 import {
   buildPullFileFilterImpact,
   filterPullFilesForProfile,
@@ -701,7 +701,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       expectedHeadSha: pull.head.sha,
       workRoot: config.workRoot,
-      protectedCheckoutRoot: getInstalledPackageRoot()
+      protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
     const repoMemory = buildRepoMemoryContext({
       config,

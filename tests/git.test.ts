@@ -59,4 +59,64 @@ describe("pull worktree path planning", () => {
       protectedCheckoutRoot: liveCheckout
     })).toThrow(/workRoot must be outside the protected live checkout/);
   });
+
+  it("rejects an in-checkout workRoot whose relative segment starts with dots", () => {
+    const liveCheckout = mkdtempSync(join(tmpdir(), "evaos-live-checkout-"));
+    roots.push(liveCheckout);
+
+    expect(() => planPullWorktreePaths({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      expectedHeadSha: "a679792e7ed7517e7286507cfd7107511c2f60fb",
+      workRoot: join(liveCheckout, "..runtime"),
+      protectedCheckoutRoot: liveCheckout
+    })).toThrow(/workRoot must be outside the protected live checkout/);
+  });
+
+  it("rejects a workRoot that contains the protected live checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
+    const liveCheckout = join(root, "repos", "evaos-code-review-bot");
+    mkdirSync(liveCheckout, { recursive: true });
+    roots.push(root);
+
+    expect(() => planPullWorktreePaths({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      expectedHeadSha: "a679792e7ed7517e7286507cfd7107511c2f60fb",
+      workRoot: root,
+      protectedCheckoutRoot: liveCheckout
+    })).toThrow(/workRoot must be outside the protected live checkout/);
+  });
+
+  it("rejects a planned worktreePath that resolves through a symlink into the protected live checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
+    const liveCheckout = mkdtempSync(join(tmpdir(), "evaos-live-checkout-"));
+    roots.push(root, liveCheckout);
+    const worktreesLink = join(root, "worktrees");
+    symlinkSync(liveCheckout, worktreesLink, "dir");
+
+    expect(() => planPullWorktreePaths({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      expectedHeadSha: "a679792e7ed7517e7286507cfd7107511c2f60fb",
+      workRoot: root,
+      protectedCheckoutRoot: liveCheckout
+    })).toThrow(/worktreePath must be outside the protected live checkout/);
+  });
+
+  it("rejects a planned mirrorPath that resolves through a symlink into the protected live checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
+    const liveCheckout = mkdtempSync(join(tmpdir(), "evaos-live-checkout-"));
+    roots.push(root, liveCheckout);
+    const mirrorsLink = join(root, "mirrors");
+    symlinkSync(liveCheckout, mirrorsLink, "dir");
+
+    expect(() => planPullWorktreePaths({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      expectedHeadSha: "a679792e7ed7517e7286507cfd7107511c2f60fb",
+      workRoot: root,
+      protectedCheckoutRoot: liveCheckout
+    })).toThrow(/mirrorPath must be outside the protected live checkout/);
+  });
 });
