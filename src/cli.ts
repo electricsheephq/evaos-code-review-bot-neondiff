@@ -298,7 +298,7 @@ async function main(): Promise<void> {
       filters: {
         ...(args.repo ? { repo: args.repo } : {}),
         ...(args.status ?? args.state ? { status: args.status ?? args.state } : {}),
-        ...(args.priority ? { priority: parsePositiveInteger(args.priority, "--priority") } : {}),
+        ...(args.priority ? { priority: parseNonNegativeInteger(args.priority, "--priority") } : {}),
         ...(args["stale-head-reason"] ? { staleHeadReason: args["stale-head-reason"] } : {}),
         ...(args.limit ? { limit: parsePositiveInteger(args.limit, "--limit") } : {})
       }
@@ -664,6 +664,12 @@ function parseArgs(argv: string[]): ParsedArgs {
 function parsePositiveInteger(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string, label: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
   return parsed;
 }
 

@@ -280,7 +280,8 @@ describe("operator CLI summaries", () => {
     expect(dashboard.ok).toBe(false);
     expect(dashboard.summary).toMatchObject({
       totalItems: 5,
-      blockedItems: 4,
+      blockedItems: 3,
+      activeReviews: 1,
       commandTriggered: 1,
       staleHeads: 1,
       proofGaps: 1
@@ -331,9 +332,10 @@ describe("operator CLI summaries", () => {
       durableQueue: durableQueueSnapshot({
         jobs: [
           durableJob({ repo: "owner/repo", pullNumber: 2, headSha: "head-pending", state: "queued", priority: 5 }),
-          durableJob({ repo: "owner/other", pullNumber: 4, headSha: "head-failed", state: "failed", priority: 10 })
+          durableJob({ repo: "owner/other", pullNumber: 4, headSha: "head-failed", state: "failed", priority: 10 }),
+          durableJob({ repo: "owner/repo", pullNumber: 6, headSha: "head-zero", state: "queued", priority: 0 })
         ],
-        summary: { total: 2, queued: 1, failed: 1, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
+        summary: { total: 3, queued: 2, failed: 1, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
       }),
       checkedAt: "2026-07-02T00:00:00.000Z"
     };
@@ -362,15 +364,96 @@ describe("operator CLI summaries", () => {
 
     const priorityDashboard = buildOperatorDashboard({
       ...input,
-      filters: { priority: 5 }
+      filters: { priority: 0 }
     });
     expect(priorityDashboard.items).toEqual([
       expect.objectContaining({
         repo: "owner/repo",
-        pullNumber: 2,
-        priority: 5
+        pullNumber: 6,
+        priority: 0
       })
     ]);
+  });
+
+  it("keeps healthy active dashboard rows visible without failing the gate", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({ ok: false, unprocessed: [pullEntry(2, "head-pending")] }),
+      durableQueue: durableQueueSnapshot({
+        jobs: [durableJob({ repo: "owner/repo", pullNumber: 2, headSha: "head-pending", state: "queued", priority: 5 })],
+        summary: { total: 1, queued: 1, failed: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
+      }),
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(dashboard.ok).toBe(true);
+    expect(dashboard.summary).toMatchObject({
+      totalItems: 1,
+      activeReviews: 1,
+      blockedItems: 0
+    });
+    expect(dashboard.items[0]).toMatchObject({
+      status: "queued",
+      nextAction: "wait for daemon cycle"
+    });
+  });
+
+  it("preserves the strongest blocked dashboard source when later sources are benign", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({ ok: true, processed: [processedEntry(7, "head-failed", "posted")] }),
+      durableQueue: durableQueueSnapshot({
+        jobs: [durableJob({ repo: "owner/repo", pullNumber: 7, headSha: "head-failed", state: "failed", priority: 10 })],
+        summary: { total: 1, queued: 0, failed: 1, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
+      }),
+      readiness: [{
+        repo: "owner/repo",
+        pullNumber: 7,
+        headSha: "head-failed",
+        state: "ready_for_human",
+        reason: "review posted",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:05:00.000Z"
+      }, {
+        repo: "owner/repo",
+        pullNumber: 8,
+        headSha: "head-proof",
+        state: "blocked_on_proof",
+        reason: "missing proof",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:06:00.000Z"
+      }],
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(dashboard.ok).toBe(false);
+    expect(dashboard.items).toEqual([
+      expect.objectContaining({
+        repo: "owner/repo",
+        pullNumber: 7,
+        status: "failed",
+        queueState: "failed",
+        readinessState: "ready_for_human",
+        nextAction: "inspect failure evidence and retry or retire the head"
+      }),
+      expect.objectContaining({
+        repo: "owner/repo",
+        pullNumber: 8,
+        status: "blocked_on_proof"
+      })
+    ]);
+  });
+
+  it("renders every dashboard row in the human formatter", () => {
+    const dashboard = buildOperatorDashboard({
+      coverage: coverageReport({
+        ok: true,
+        processed: Array.from({ length: 21 }, (_, index) => processedEntry(index + 1, `head-${index + 1}`, "posted"))
+      }),
+      checkedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    const output = formatOperatorDashboardHuman(dashboard);
+
+    expect(output).toContain("owner/repo#21");
   });
 
   it("gives needs-fix dashboard rows a concrete next action", () => {

@@ -1092,7 +1092,7 @@ export function formatOperatorDashboardHuman(dashboard: OperatorDashboard): stri
   const lines = [
     `dashboard: ${dashboard.ok ? "ok" : "blocked"} total=${dashboard.summary.totalItems} active=${dashboard.summary.activeReviews} blocked=${dashboard.summary.blockedItems} stale=${dashboard.summary.staleHeads} proofGaps=${dashboard.summary.proofGaps} providerDeferred=${dashboard.summary.providerDeferred} failed=${dashboard.summary.failed}`
   ];
-  for (const item of dashboard.items.slice(0, 20)) {
+  for (const item of dashboard.items) {
     const pull = item.pullNumber ? `#${item.pullNumber}` : "";
     const priority = item.priority !== undefined ? ` p=${item.priority}` : "";
     const command = item.lastCommand ? ` command=${item.lastCommand}` : "";
@@ -1345,9 +1345,11 @@ function upsertDashboardItem(
     items.set(key, patch);
     return;
   }
+  const dominant = dashboardSeverityRank(patch) <= dashboardSeverityRank(existing) ? patch : existing;
   items.set(key, {
     ...existing,
     ...patch,
+    status: dominant.status,
     title: patch.title ?? existing.title,
     url: patch.url ?? existing.url,
     coverageState: patch.coverageState ?? existing.coverageState,
@@ -1356,16 +1358,18 @@ function upsertDashboardItem(
     queueLane: patch.queueLane ?? existing.queueLane,
     readinessState: patch.readinessState ?? existing.readinessState,
     priority: patch.priority ?? existing.priority,
-    latestVerdict: patch.latestVerdict ?? existing.latestVerdict,
+    latestVerdict: dominant.latestVerdict ?? patch.latestVerdict ?? existing.latestVerdict,
     lastCommand: patch.lastCommand ?? existing.lastCommand,
     commandCommentId: patch.commandCommentId ?? existing.commandCommentId,
     staleHeadReason: patch.staleHeadReason ?? existing.staleHeadReason,
     reviewUrl: patch.reviewUrl ?? existing.reviewUrl,
     evidencePath: patch.evidencePath ?? existing.evidencePath,
-    reason: patch.reason ?? existing.reason,
+    proofStatus: dominant.proofStatus,
+    checkStatus: dominant.checkStatus,
+    reason: dominant.reason ?? patch.reason ?? existing.reason,
     lastError: patch.lastError ?? existing.lastError,
     updatedAt: latestTimestamp(existing.updatedAt, patch.updatedAt),
-    nextAction: patch.nextAction ?? existing.nextAction
+    nextAction: dominant.nextAction
   });
 }
 
@@ -1421,27 +1425,33 @@ function summarizeDashboardItems(items: OperatorDashboardItem[]): OperatorDashbo
   return {
     totalItems: items.length,
     blockedItems: items.filter(isDashboardItemBlocked).length,
-    activeReviews: items.filter((item) => isActiveDashboardStatus(item.status)).length,
+    activeReviews: items.filter((item) => dashboardStatuses(item).some(isActiveDashboardStatus)).length,
     commandTriggered: items.filter((item) => item.lastCommand || item.queueSource === "manual_command").length,
-    staleHeads: items.filter((item) => item.status === "stale_head" || item.status === "stale").length,
+    staleHeads: items.filter((item) => dashboardStatuses(item).some((status) => status === "stale_head" || status === "stale")).length,
     proofGaps: items.filter((item) => item.proofStatus === "blocked_on_proof").length,
     checkBlocks: items.filter((item) => item.checkStatus === "blocked_on_checks").length,
-    failed: items.filter((item) => item.status === "failed").length,
-    providerDeferred: items.filter((item) => item.status === "provider_deferred").length
+    failed: items.filter((item) => dashboardStatuses(item).includes("failed")).length,
+    providerDeferred: items.filter((item) => dashboardStatuses(item).includes("provider_deferred")).length
   };
 }
 
 function isDashboardItemBlocked(item: OperatorDashboardItem): boolean {
-  return item.status === "failed" ||
-    item.status === "provider_deferred" ||
-    item.status === "stale_head" ||
-    item.status === "stale" ||
-    item.status === "read_failure" ||
-    item.status === "blocked_on_checks" ||
-    item.status === "blocked_on_proof" ||
-    item.status === "needs_fix" ||
-    item.status === "awaiting_re_review" ||
-    isActiveDashboardStatus(item.status);
+  return dashboardStatuses(item).some((status) =>
+    status === "failed" ||
+    status === "provider_deferred" ||
+    status === "stale_head" ||
+    status === "stale" ||
+    status === "read_failure" ||
+    status === "blocked_on_checks" ||
+    status === "blocked_on_proof" ||
+    status === "needs_fix" ||
+    status === "awaiting_re_review"
+  );
+}
+
+function dashboardStatuses(item: OperatorDashboardItem): string[] {
+  return [item.status, item.coverageState, item.queueState, item.readinessState]
+    .filter((status): status is string => Boolean(status));
 }
 
 function isActiveDashboardStatus(status: string): boolean {
