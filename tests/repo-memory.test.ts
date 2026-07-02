@@ -287,6 +287,31 @@ describe("repo memory packets", () => {
       kind: "false_positive",
       fingerprint: "fp:generated-docs"
     });
+    store.recordRepoMemoryNote({
+      noteId: "memory-note-1",
+      repo: "100yenadmin/evaOS-GUI",
+      kind: "policy_note",
+      title: "Same note id in another repo",
+      body: "Repo memory note IDs are scoped by repository.",
+      source: "operator",
+      now: new Date(generatedAt)
+    });
+    expect(store.listRepoMemoryNotes({ repo: "100yenadmin/evaOS-GUI", now: new Date(generatedAt) })).toEqual([
+      expect.objectContaining({
+        noteId: "memory-note-1",
+        repo: "100yenadmin/evaOS-GUI",
+        title: "Same note id in another repo"
+      })
+    ]);
+    expect(store.listRepoMemoryNotes({ repo, now: new Date(generatedAt) })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          noteId: "memory-note-1",
+          repo,
+          title: "Preferred release proof"
+        })
+      ])
+    );
 
     store.recordRepoMemoryPacketBuild({
       packetSha: "a".repeat(64),

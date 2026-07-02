@@ -394,7 +394,7 @@ export class ReviewStateStore {
         on review_readiness (repo, pull_number, updated_at);
 
       create table if not exists repo_memory_notes (
-        note_id text primary key,
+        note_id text not null,
         repo text not null,
         kind text not null,
         title text not null,
@@ -404,7 +404,8 @@ export class ReviewStateStore {
         fingerprint text,
         created_at text not null,
         updated_at text not null,
-        expires_at text
+        expires_at text,
+        primary key (repo, note_id)
       );
 
       create index if not exists idx_repo_memory_notes_repo_updated
@@ -1557,15 +1558,14 @@ export class ReviewStateStore {
     if (containsSecretLikeText(rawText)) {
       throw new Error(`Refusing to store repo memory note ${redactSecrets(input.noteId)}: secret-like text detected`);
     }
-    const existing = this.getRepoMemoryNote(input.noteId);
+    const existing = this.getRepoMemoryNote(input.repo, input.noteId);
     const nowIso = (input.now ?? new Date()).toISOString();
     this.db
       .prepare(
         `insert into repo_memory_notes
           (note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at)
          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         on conflict(note_id) do update set
-           repo = excluded.repo,
+         on conflict(repo, note_id) do update set
            kind = excluded.kind,
            title = excluded.title,
            body = excluded.body,
@@ -1588,19 +1588,20 @@ export class ReviewStateStore {
         nowIso,
         input.expiresAt ?? null
       );
-    return this.getRepoMemoryNote(input.noteId)!;
+    return this.getRepoMemoryNote(input.repo, input.noteId)!;
   }
 
-  getRepoMemoryNote(noteId: string): RepoMemoryNoteRecord | undefined {
+  getRepoMemoryNote(repo: string, noteId: string): RepoMemoryNoteRecord | undefined {
+    validateRepoName(repo, "repo");
     if (!noteId.trim()) throw new Error("noteId must be non-empty");
     const row = this.db
       .prepare(
         `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
          from repo_memory_notes
-         where note_id = ?
+         where repo = ? and note_id = ?
          limit 1`
       )
-      .get(noteId) as RepoMemoryNoteRow | undefined;
+      .get(repo, noteId) as RepoMemoryNoteRow | undefined;
     return row ? mapRepoMemoryNoteRow(row) : undefined;
   }
 
