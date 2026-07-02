@@ -619,15 +619,23 @@ describe("provider-aware review scheduler", () => {
   });
 
   it("maps duplicate processed-head status comments from the stored processed outcome", async () => {
+    const cooldownError = "provider_rate_limit_cooldown_until=2026-07-02T00:10:00.000Z; reason=provider_overloaded";
     const scenarios = [
       { processedStatus: "posted", expectedStatus: "completed", expectedQueueState: "posted" },
       { processedStatus: "dry_run", expectedStatus: "completed", expectedQueueState: "queued" },
       { processedStatus: "failed", expectedStatus: "failed", expectedQueueState: "failed" },
-      { processedStatus: "skipped", expectedStatus: "skipped", expectedQueueState: "failed" }
+      { processedStatus: "skipped", expectedStatus: "skipped", expectedQueueState: "stale_retired" },
+      {
+        processedStatus: "skipped",
+        error: cooldownError,
+        expectedStatus: "provider_deferred",
+        expectedQueueState: "provider_deferred",
+        expectedLastError: cooldownError
+      }
     ] as const;
 
-    for (const scenario of scenarios) {
-      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-status-processed-${scenario.processedStatus}-`));
+    for (const [index, scenario] of scenarios.entries()) {
+      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-status-processed-${scenario.processedStatus}-${index}-`));
       roots.push(root);
       const config = schedulerConfig(root, ["org/repo-a"]);
       config.reviewStatusComment!.enabled = true;
@@ -637,6 +645,7 @@ describe("provider-aware review scheduler", () => {
         pullNumber: 1,
         headSha: HEAD_A,
         status: scenario.processedStatus,
+        ...("error" in scenario ? { error: scenario.error } : {}),
         ...(scenario.processedStatus === "posted"
           ? { event: "COMMENT" as const, reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-existing" }
           : {})
@@ -658,7 +667,7 @@ describe("provider-aware review scheduler", () => {
       expect(statusCalls.map(statusFromBody)).toEqual(["in_progress", scenario.expectedStatus]);
       expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
         state: scenario.expectedQueueState,
-        lastError: `processed_head_already_${scenario.processedStatus}`
+        lastError: "expectedLastError" in scenario ? scenario.expectedLastError : `processed_head_already_${scenario.processedStatus}`
       });
       if (scenario.processedStatus === "posted") {
         expect(statusCalls.at(-1)?.body).toContain("https://github.com/org/repo-a/pull/1#pullrequestreview-existing");

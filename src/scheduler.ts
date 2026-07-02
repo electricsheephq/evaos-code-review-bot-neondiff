@@ -907,7 +907,7 @@ async function syncReviewStatusCommentForReviewResult(input: {
   now?: Date;
 }): Promise<void> {
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
-  const nextState = reviewResultStatusCommentState(input.status, processed?.status);
+  const nextState = reviewResultStatusCommentState(input.status, processed);
   if (!nextState) return;
   await syncReviewStatusComment({
     config: input.config,
@@ -922,13 +922,16 @@ async function syncReviewStatusCommentForReviewResult(input: {
   });
 }
 
-function reviewResultStatusCommentState(status: ReviewPullResult, processedStatus?: ProcessedStatus): ReviewStatusCommentState | undefined {
+function reviewResultStatusCommentState(
+  status: ReviewPullResult,
+  processed?: { status: ProcessedStatus; error?: string }
+): ReviewStatusCommentState | undefined {
   switch (status) {
     case "reviewed":
     case "reviewed_command":
       return "completed";
     case "skipped_processed":
-      return reviewStatusCommentStateForProcessedStatus(processedStatus);
+      return reviewStatusCommentStateForProcessedStatus(processed);
     case "skipped_provider_cooldown":
       return "provider_deferred";
     case "skipped_stale_head":
@@ -955,14 +958,14 @@ function syncReadinessForReviewResult(input: {
   now: Date;
 }): void {
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
-  const readinessState = readinessStateForReviewResult(input.status, processed?.status, processed?.event);
+  const readinessState = readinessStateForReviewResult(input.status, processed);
   if (!readinessState) return;
   recordReadinessTransition({
     state: input.state,
     repo: input.job.repo,
     pull: input.pull,
     readinessState,
-    reason: readinessReasonForReviewResult(input.status, processed?.status, processed?.event),
+    reason: readinessReasonForReviewResult(input.status, processed),
     ...(processed?.event ? { event: processed.event } : {}),
     ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
     now: input.now
@@ -1027,15 +1030,14 @@ function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobReco
 
 function readinessStateForReviewResult(
   status: ReviewPullResult,
-  processedStatus?: ProcessedStatus,
-  event?: ReviewEvent
+  processed?: { status: ProcessedStatus; event?: ReviewEvent; error?: string }
 ): ReviewReadinessState | undefined {
   switch (status) {
     case "reviewed":
     case "reviewed_command":
-      return event === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
+      return processed?.event === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
     case "skipped_processed":
-      return readinessStateForProcessedStatus(processedStatus, event);
+      return readinessStateForProcessedStatus(processed?.status, processed?.event, processed?.error);
     case "skipped_provider_cooldown":
     case "skipped_capacity":
       return "provider_deferred";
@@ -1056,15 +1058,14 @@ function readinessStateForReviewResult(
 
 function readinessReasonForReviewResult(
   status: ReviewPullResult,
-  processedStatus?: ProcessedStatus,
-  event?: ReviewEvent
+  processed?: { status: ProcessedStatus; event?: ReviewEvent; error?: string }
 ): string {
   switch (status) {
     case "reviewed":
     case "reviewed_command":
-      return event === "REQUEST_CHANGES" ? "request_changes_review_posted" : "comment_review_posted";
+      return processed?.event === "REQUEST_CHANGES" ? "request_changes_review_posted" : "comment_review_posted";
     case "skipped_processed":
-      return `processed_head_already_${processedStatus ?? "unknown"}`;
+      return processed ? readinessReasonForProcessedHead(processed) : "processed_head_already_unknown";
     case "skipped_provider_cooldown":
       return "provider_cooldown";
     case "skipped_capacity":
@@ -1244,6 +1245,10 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
       return;
     case "skipped_processed": {
       const processed = input.state.getProcessedReview(input.job.repo, input.job.pullNumber, input.job.headSha);
+      if (parseProviderCooldownError(processed?.error)) {
+        updateReviewerSessionJobFromQueueStatus(input, "assigned", processed?.status);
+        return;
+      }
       const sessionState = reviewerSessionJobStateForProcessedStatus(processed?.status);
       updateReviewerSessionJobFromQueueStatus(input, sessionState, processed?.status ?? (input.dryRun ? "dry_run" : "posted"));
       return;
@@ -1310,6 +1315,10 @@ function updateQueueJobAfterReviewStatus(input: {
       return;
     case "skipped_processed":
       const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+      if (parseProviderCooldownError(processed?.error)) {
+        markQueueJobProviderDeferredFromProcessed(input);
+        return;
+      }
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun),
@@ -1352,7 +1361,11 @@ function updateQueueJobAfterReviewStatus(input: {
   }
 }
 
-function reviewStatusCommentStateForProcessedStatus(status: ProcessedStatus | undefined): ReviewStatusCommentState {
+function reviewStatusCommentStateForProcessedStatus(
+  processed?: { status: ProcessedStatus; error?: string }
+): ReviewStatusCommentState {
+  if (parseProviderCooldownError(processed?.error)) return "provider_deferred";
+  const status = processed?.status;
   switch (status) {
     case "posted":
     case "dry_run":
@@ -1375,8 +1388,9 @@ function reviewQueueJobStateForProcessedStatus(status: ProcessedStatus | undefin
     case "dry_run":
       return "queued";
     case "failed":
-    case "skipped":
       return "failed";
+    case "skipped":
+      return "stale_retired";
     case undefined:
       return dryRun ? "queued" : "posted";
     default:
