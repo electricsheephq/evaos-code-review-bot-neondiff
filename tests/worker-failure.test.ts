@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BotConfig } from "../src/config.js";
+import type { GitNexusCommandRunner } from "../src/gitnexus-context.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import {
   buildRepoMemoryContext,
+  buildGitNexusContext,
   classifyProviderError,
   isSuccessfulRetryStatus,
   localDateFolder,
@@ -218,6 +220,135 @@ describe("worker review failures", () => {
     expect(context.packet?.sources.map((source) => source.id)).toContain("policy-survives");
     expect(context.packet?.markdown).toContain("Prompt memory should still include current policy notes.");
     state.close();
+  });
+
+  it("writes GitNexus context packet evidence when the provider degrades cleanly", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-gitnexus-context-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    mkdirSync(evidenceDir, { recursive: true });
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      gitnexusContext: {
+        enabled: true,
+        packetVersion: "gitnexus-context-packet-v0.1",
+        maxPacketBytes: 12_000,
+        maxRelatedItems: 4,
+        queryLimit: 2,
+        commandTimeoutMs: 1_000,
+        maxCommandOutputBytes: 2_000,
+        includeStaleContext: false,
+        repoAliases: {},
+        generatedPathPatterns: ["dist/**"]
+      }
+    };
+
+    const context = buildGitNexusContext({
+      config,
+      repo: "electricsheephq/WorldOS",
+      pull: pullSummary(1128, "head", "base"),
+      files: [{ filename: "src/worker.ts", status: "modified" }],
+      evidenceDir,
+      gitnexusListText: workerGitNexusList([{ alias: "evaos-code-review-bot", commit: "d239e3b" }]),
+      commandRunner: failOnGitNexusQueryRunner()
+    });
+
+    expect(context.packet).toBeDefined();
+    expect(context.packet?.gitnexus).toMatchObject({
+      freshness: "missing",
+      degradedMode: true
+    });
+    expect(readFileSync(join(evidenceDir, "gitnexus-context-packet.md"), "utf8")).toContain("Degraded mode: true");
+    const evidence = JSON.parse(readFileSync(join(evidenceDir, "gitnexus-context-packet.json"), "utf8"));
+    expect(evidence).toMatchObject({
+      ok: true,
+      packet: {
+        gitnexus: {
+          freshness: "missing",
+          degradedMode: true
+        }
+      }
+    });
+  });
+
+  it("degrades over-budget GitNexus context to no context packet", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-gitnexus-budget-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    mkdirSync(evidenceDir, { recursive: true });
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      gitnexusContext: {
+        enabled: true,
+        packetVersion: "gitnexus-context-packet-v0.1",
+        maxPacketBytes: 10,
+        maxRelatedItems: 4,
+        queryLimit: 2,
+        commandTimeoutMs: 1_000,
+        maxCommandOutputBytes: 2_000,
+        includeStaleContext: false,
+        repoAliases: {},
+        generatedPathPatterns: []
+      }
+    };
+
+    const context = buildGitNexusContext({
+      config,
+      repo: "electricsheephq/WorldOS",
+      pull: pullSummary(1128, "head", "base"),
+      files: [{ filename: "src/worker.ts", status: "modified" }],
+      evidenceDir,
+      gitnexusListText: workerGitNexusList([{ alias: "worldos", commit: "base" }]),
+      commandRunner: queryRunner({ "src/worker.ts worker": "worker context" })
+    });
+
+    expect(context.packet).toBeUndefined();
+    const error = JSON.parse(readFileSync(join(evidenceDir, "gitnexus-context-packet-error.json"), "utf8"));
+    expect(error).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("maxPacketBytes")
+    });
+    expect(error.omittedContext).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "packet:markdown", reason: "budget_exceeded" })
+    ]));
+  });
+
+  it("fails closed and redacts evidence when GitNexus context contains secrets", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-gitnexus-secret-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    const secretValue = "ghp_123456789012345678901234";
+    mkdirSync(evidenceDir, { recursive: true });
+    const config: BotConfig = {
+      ...minimalConfig(root),
+      gitnexusContext: {
+        enabled: true,
+        packetVersion: "gitnexus-context-packet-v0.1",
+        maxPacketBytes: 12_000,
+        maxRelatedItems: 4,
+        queryLimit: 2,
+        commandTimeoutMs: 1_000,
+        maxCommandOutputBytes: 2_000,
+        includeStaleContext: false,
+        repoAliases: {},
+        generatedPathPatterns: []
+      }
+    };
+
+    expect(() =>
+      buildGitNexusContext({
+        config,
+        repo: "electricsheephq/WorldOS",
+        pull: pullSummary(1128, "b".repeat(40), "a".repeat(40)),
+        files: [{ filename: "src/worker.ts", status: "modified" }],
+        evidenceDir,
+        gitnexusListText: workerGitNexusList([{ alias: "worldos", commit: "a".repeat(7) }]),
+        commandRunner: queryRunner({ "src/worker.ts worker": `Leaked ${secretValue}` })
+      })
+    ).toThrow(/GitNexus context packet failed closed/);
+    const error = readFileSync(join(evidenceDir, "gitnexus-context-packet-error.json"), "utf8");
+    expect(error).toContain("[redacted-secret]");
+    expect(error).not.toContain(secretValue);
   });
 
   it("classifies provider throttle, overload, and true quota separately", () => {
@@ -1198,6 +1329,38 @@ function pullSummary(
       repo: { full_name: "electricsheephq/WorldOS" }
     },
     html_url: `https://github.com/electricsheephq/WorldOS/pull/${number}`
+  };
+}
+
+function workerGitNexusList(records: Array<{ alias: string; commit: string }>): string {
+  return [
+    "",
+    `  Indexed Repositories (${records.length})`,
+    "",
+    ...records.flatMap((record) => [
+      `  ${record.alias}`,
+      `    Path:    /Volumes/LEXAR/repos/${record.alias}`,
+      "    Indexed: 7/2/2026, 2:29:04 PM",
+      `    Commit:  ${record.commit}`,
+      "    Stats:   10 files, 20 symbols, 30 edges",
+      "    Clusters:   4",
+      "    Processes:  5",
+      ""
+    ])
+  ].join("\n");
+}
+
+function queryRunner(outputs: Record<string, string>): GitNexusCommandRunner {
+  return (args) => {
+    if (args[0] !== "query") return { ok: true, stdout: "" };
+    return { ok: true, stdout: outputs[args[1] ?? ""] ?? "" };
+  };
+}
+
+function failOnGitNexusQueryRunner(): GitNexusCommandRunner {
+  return (args) => {
+    if (args[0] === "query") throw new Error("GitNexus query should not run in degraded mode");
+    return { ok: true, stdout: "" };
   };
 }
 

@@ -60,6 +60,15 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   and a redaction report. Use `--output-dir <path>` to write
   `repo-memory-packet.json` and `repo-memory-packet.md` evidence. This command
   does not call GitHub or ZCode and does not enable prompt memory by itself.
+- `build-gitnexus-context-packet --repo <owner/name> --pr <number>`: compiles
+  a read-only GitNexus advisory context packet for one PR. It reads GitHub PR
+  metadata/files, probes `gitnexus list`, optionally runs bounded `gitnexus
+  query` calls when a fresh matching alias is found, and emits JSON/Markdown
+  with the packet SHA, byte/token estimates, changed files, omitted context,
+  index freshness, degraded-mode reason, and redaction report. Use
+  `--output-dir <path>` to write `gitnexus-context-packet.json` and
+  `gitnexus-context-packet.md` evidence. This command never posts comments,
+  calls ZCode, runs tests, or indexes repositories.
 - `doctor`: auth/config readiness. Use this for GitHub App/ZCode readiness, not
   runtime health.
 
@@ -150,6 +159,16 @@ npx tsx src/cli.ts build-memory-packet --config <config.json> --repo electricshe
 Use `--fingerprint <finding-fingerprint>` to include exact-match false-positive
 notes, `--format markdown` for Markdown-only output, or `--record-build true`
 when the packet SHA should be recorded in SQLite provenance.
+
+Build a GitNexus context packet for dry-run evidence:
+
+```bash
+npx tsx src/cli.ts build-gitnexus-context-packet --config <config.json> --repo electricsheephq/evaos-code-review-bot --pr 102 --output-dir <configured-evidence-dir>/gitnexus-context/evaos-code-review-bot-pr-102
+```
+
+Missing or stale GitNexus indexes produce `degradedMode: true` packets and do
+not block baseline review. Secret-like GitNexus output fails closed and writes a
+redacted `gitnexus-context-packet-error.json` evidence file.
 
 ## Safety Boundaries
 

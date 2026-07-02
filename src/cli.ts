@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
 import { REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { GitHubApi } from "./github.js";
+import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import {
   buildOperatorDashboard,
   buildRuntimeInventory,
@@ -461,6 +462,52 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "build-gitnexus-context-packet") {
+    if (!args.repo) throw new Error("--repo is required for build-gitnexus-context-packet");
+    if (!args.pr) throw new Error("--pr is required for build-gitnexus-context-packet");
+    const repo = parseSingleArg(args.repo, "--repo");
+    const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
+    const config = loadConfig(args.config);
+    const generatedAt = args["generated-at"] ?? new Date().toISOString();
+    parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
+    const gitnexusConfig = config.gitnexusContext!;
+    const github = new GitHubApi(config.github);
+    const pull = await github.getPull(repo, pullNumber);
+    const files = await github.listPullFiles(repo, pullNumber);
+    const result = buildGitNexusContextPacket({
+      repo,
+      pull,
+      files,
+      config: {
+        ...gitnexusConfig,
+        enabled: true,
+        ...(args["max-bytes"] ? { maxPacketBytes: parsePositiveInteger(parseSingleArg(args["max-bytes"], "--max-bytes"), "--max-bytes") } : {}),
+        ...(args["max-related-items"]
+          ? { maxRelatedItems: parsePositiveInteger(parseSingleArg(args["max-related-items"], "--max-related-items"), "--max-related-items") }
+          : {}),
+        ...(args["query-limit"] ? { queryLimit: parsePositiveInteger(parseSingleArg(args["query-limit"], "--query-limit"), "--query-limit") } : {})
+      },
+      generatedAt
+    });
+    if (args["output-dir"]) {
+      const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+      mkdirSync(safeOutputDir, { recursive: true });
+      const jsonName = result.ok ? "gitnexus-context-packet.json" : "gitnexus-context-packet-error.json";
+      writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
+      if (result.ok) writeFileSync(join(safeOutputDir, "gitnexus-context-packet.md"), result.packet.markdown);
+    }
+    const format = args.format ?? "json";
+    if (format === "markdown") {
+      console.log(result.ok ? result.packet.markdown : JSON.stringify(result, null, 2));
+    } else if (format === "both" && result.ok) {
+      console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
   if (command === "eval-offline") {
     if (!args.input) throw new Error("--input is required for eval-offline");
     const input = JSON.parse(readFileSync(args.input, "utf8"));
@@ -690,6 +737,7 @@ function buildHelp() {
         "release-status",
         "coverage-audit",
         "build-memory-packet",
+        "build-gitnexus-context-packet",
         "provider-cooldowns",
         "retry-provider-cooldowns",
         "retry-failed",
@@ -712,6 +760,7 @@ function buildHelp() {
       "npx tsx src/cli.ts budget-status --config /path/to/live.json",
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
       "npx tsx src/cli.ts build-memory-packet --config /path/to/live.json --repo owner/repo --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts build-gitnexus-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };
@@ -747,6 +796,11 @@ function parseNonNegativeInteger(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
   return parsed;
+}
+
+function parseSingleArg(value: string | string[], label: string): string {
+  if (Array.isArray(value)) throw new Error(`${label} must be provided once`);
+  return value;
 }
 
 function parseCanonicalIsoTimestamp(value: string, label: string): Date {

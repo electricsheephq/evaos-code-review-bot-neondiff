@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import type { GitNexusContextConfig } from "./gitnexus-context.js";
 
 export interface BotConfig {
   pilotRepos: string[];
@@ -39,6 +40,7 @@ export interface BotConfig {
     enabled: boolean;
   };
   repoMemory?: RepoMemoryConfig;
+  gitnexusContext?: GitNexusContextConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -193,6 +195,27 @@ const DEFAULT_CONFIG: BotConfig = {
     maxStateNotes: 20,
     includeStaleNotes: false
   },
+  gitnexusContext: {
+    enabled: false,
+    packetVersion: "gitnexus-context-packet-v0.1",
+    maxPacketBytes: 40_000,
+    maxRelatedItems: 8,
+    queryLimit: 3,
+    commandTimeoutMs: 10_000,
+    maxCommandOutputBytes: 8_000,
+    includeStaleContext: false,
+    repoAliases: {},
+    generatedPathPatterns: [
+      "dist/**",
+      "build/**",
+      "coverage/**",
+      "Library/**",
+      "Temp/**",
+      "**/*.min.js",
+      "**/*.bundle.js",
+      "**/*.lock"
+    ]
+  },
   commands: {
     enabled: false,
     botMentions: ["@evaos-code-review-bot"],
@@ -271,6 +294,9 @@ function validateConfig(config: BotConfig): void {
   const repoMemory = config.repoMemory ?? DEFAULT_CONFIG.repoMemory!;
   config.repoMemory = repoMemory;
   validateRepoMemoryConfig(repoMemory, "config.repoMemory");
+  const gitnexusContext = config.gitnexusContext ?? DEFAULT_CONFIG.gitnexusContext!;
+  config.gitnexusContext = gitnexusContext;
+  validateGitNexusContextConfig(gitnexusContext, "config.gitnexusContext");
   validateBoolean(config.commands.enabled, "config.commands.enabled");
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
@@ -302,6 +328,34 @@ function validateRepoMemoryConfig(value: unknown, label: string): void {
   validatePositiveInteger(value.maxPacketBytes, `${label}.maxPacketBytes`);
   validatePositiveInteger(value.maxStateNotes, `${label}.maxStateNotes`);
   validateBoolean(value.includeStaleNotes, `${label}.includeStaleNotes`);
+}
+
+function validateGitNexusContextConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.packetVersion, `${label}.packetVersion`);
+  if (typeof value.packetVersion !== "string" || value.packetVersion.trim().length === 0) {
+    throw new Error(`${label}.packetVersion must be a non-empty string`);
+  }
+  validatePositiveInteger(value.maxPacketBytes, `${label}.maxPacketBytes`);
+  validatePositiveInteger(value.maxRelatedItems, `${label}.maxRelatedItems`);
+  validatePositiveInteger(value.queryLimit, `${label}.queryLimit`);
+  validatePositiveInteger(value.commandTimeoutMs, `${label}.commandTimeoutMs`);
+  validatePositiveInteger(value.maxCommandOutputBytes, `${label}.maxCommandOutputBytes`);
+  validateBoolean(value.includeStaleContext, `${label}.includeStaleContext`);
+  validateOptionalStringArray(value.generatedPathPatterns, `${label}.generatedPathPatterns`);
+  if (!Array.isArray(value.generatedPathPatterns)) {
+    throw new Error(`${label}.generatedPathPatterns must be an array of non-empty strings`);
+  }
+  if (value.repoAliases !== undefined) {
+    if (!isRecord(value.repoAliases)) throw new Error(`${label}.repoAliases must be an object`);
+    for (const [repo, alias] of Object.entries(value.repoAliases)) {
+      validateRepoName(repo, `${label}.repoAliases`);
+      if (typeof alias !== "string" || alias.trim().length === 0) {
+        throw new Error(`${label}.repoAliases.${repo} must be a non-empty string`);
+      }
+    }
+  }
 }
 
 function validateProfileRecord(record: Record<string, RepoProfileConfig> | undefined, label: string): void {
