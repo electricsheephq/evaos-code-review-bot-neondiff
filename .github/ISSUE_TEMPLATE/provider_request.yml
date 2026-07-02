@@ -1,0 +1,26 @@
+name: Provider or adapter request
+description: Request a model/provider/runtime adapter.
+title: "[provider]: "
+labels: ["provider-registry", "enhancement"]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider or runtime
+      placeholder: Ollama, OpenAI-compatible endpoint, Anthropic, Gemini...
+    validations:
+      required: true
+  - type: textarea
+    id: auth
+    attributes:
+      label: Auth and data boundary
+      description: Explain key handling, local/cloud behavior, and what code or diff data would leave the machine.
+    validations:
+      required: true
+  - type: textarea
+    id: proof
+    attributes:
+      label: Evidence available
+      description: Public-safe docs, API refs, redacted smoke output, or known failure modes. Do not paste tokens or credentials.
+    validations:
+      required: true

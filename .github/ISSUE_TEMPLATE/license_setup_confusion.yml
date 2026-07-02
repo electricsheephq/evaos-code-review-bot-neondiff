@@ -1,0 +1,26 @@
+name: License or setup confusion
+description: Ask about public/private repo licensing, install, update entitlement, or setup docs.
+title: "[license/setup]: "
+labels: ["license", "docs"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What licensing, public/private repo, install, or update behavior is unclear?
+    validations:
+      required: true
+  - type: input
+    id: doc
+    attributes:
+      label: Current doc or page
+      placeholder: README.md, docs/SETUP.md, https://www.neondiff.com/...
+    validations:
+      required: true
+  - type: textarea
+    id: safe_context
+    attributes:
+      label: Public-safe context
+      description: Redact license keys, tokens, credentials, private repo names, and customer data.
+    validations:
+      required: true

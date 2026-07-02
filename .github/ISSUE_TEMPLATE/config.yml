@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/electricsheephq/evaos-code-review-bot/security
+    about: Report vulnerabilities, secrets, credentials, or private repo data privately.
+  - name: NeonDiff roadmap
+    url: https://github.com/electricsheephq/evaos-code-review-bot/issues/103
+    about: Public product roadmap and proof boundaries.

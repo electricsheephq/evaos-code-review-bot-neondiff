@@ -1,0 +1,34 @@
+name: Bug report
+description: Report a NeonDiff product bug, bad review, crash, or wrong output.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Package version, tag, or commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Include commands, config shape, and repo/PR shape with public-safe or redacted evidence only.
+      placeholder: Do not paste tokens, private keys, private diffs, customer data, or credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Public-safe evidence
+      description: Redacted logs, JSON fields, screenshots without private data, or evidence refs.
+    validations:
+      required: true
