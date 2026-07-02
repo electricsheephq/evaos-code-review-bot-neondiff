@@ -35,6 +35,7 @@ import { listRepoMemoryNotesReadOnly, ReviewStateStore, type ReviewQueueJobState
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
+import { parsePositiveInteger } from "./cli-args.js";
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -927,12 +928,6 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed[key] = "true";
     }
   }
-  return parsed;
-}
-
-function parsePositiveInteger(value: string, label: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
   return parsed;
 }
 

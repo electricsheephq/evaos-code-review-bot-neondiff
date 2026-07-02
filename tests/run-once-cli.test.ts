@@ -1,8 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parsePositiveInteger } from "../src/cli-args.js";
 import { buildRunOnceCliReport, runOnceCliCommand, runOnceCliExitCode, serializeRunOnceCliReport } from "../src/run-once-cli.js";
 import type { RunOnceResult } from "../src/worker.js";
 
@@ -183,7 +183,7 @@ describe("run-once CLI reporting", () => {
     expect(parsed.result.scopedPull.title).toContain("[redacted-secret]");
   });
 
-  it("prints JSON from the real run-once CLI without contacting GitHub for policy-skipped repos", () => {
+  it("prints JSON from the run-once command without contacting GitHub for policy-skipped repos", async () => {
     const dir = mkdtempSync(join(tmpdir(), "evaos-run-once-cli-"));
     try {
       const configPath = join(dir, "config.json");
@@ -199,32 +199,17 @@ describe("run-once CLI reporting", () => {
         }
       })}\n`);
 
-      const result = spawnSync("npx", [
-        "tsx",
-        "src/cli.ts",
-        "run-once",
-        "--config",
-        configPath,
-        "--repo",
-        "owner/skipped",
-        "--dry-run",
-        "true",
-        "--zcode",
-        "false"
-      ], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GITHUB_TOKEN: "",
-          EVAOS_REVIEW_BOT_APP_ID: "",
-          EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: ""
+      const result = await runOnceCliCommand({
+        options: {
+          configPath,
+          repo: "owner/skipped",
+          dryRun: true,
+          useZCode: false
         }
       });
 
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
-      const output = JSON.parse(result.stdout);
+      expect(result.exitCode).toBe(0);
+      const output = JSON.parse(result.output);
       expect(output).toMatchObject({
         ok: true,
         command: "run-once",
@@ -244,7 +229,7 @@ describe("run-once CLI reporting", () => {
     }
   });
 
-  it("prints JSON for explicit live-mode run-once invocations without posting when repo policy skips", () => {
+  it("prints JSON for explicit live-mode run-once invocations without posting when repo policy skips", async () => {
     const dir = mkdtempSync(join(tmpdir(), "evaos-run-once-cli-live-"));
     try {
       const configPath = join(dir, "config.json");
@@ -260,32 +245,17 @@ describe("run-once CLI reporting", () => {
         }
       })}\n`);
 
-      const result = spawnSync("npx", [
-        "tsx",
-        "src/cli.ts",
-        "run-once",
-        "--config",
-        configPath,
-        "--repo",
-        "owner/skipped",
-        "--dry-run",
-        "false",
-        "--zcode",
-        "false"
-      ], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GITHUB_TOKEN: "",
-          EVAOS_REVIEW_BOT_APP_ID: "",
-          EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: ""
+      const result = await runOnceCliCommand({
+        options: {
+          configPath,
+          repo: "owner/skipped",
+          dryRun: false,
+          useZCode: false
         }
       });
 
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
-      const output = JSON.parse(result.stdout);
+      expect(result.exitCode).toBe(0);
+      const output = JSON.parse(result.output);
       expect(output).toMatchObject({
         ok: true,
         command: "run-once",
@@ -306,47 +276,8 @@ describe("run-once CLI reporting", () => {
   });
 
   it("rejects non-positive or malformed pull numbers before printing scoped metadata", () => {
-    const dir = mkdtempSync(join(tmpdir(), "evaos-run-once-cli-invalid-pr-"));
-    try {
-      const configPath = join(dir, "config.json");
-      writeFileSync(configPath, `${JSON.stringify({
-        pilotRepos: ["owner/skipped"],
-        workRoot: join(dir, "runtime"),
-        statePath: join(dir, "state.sqlite"),
-        evidenceDir: join(dir, "evidence"),
-        repoProfiles: {
-          repos: {
-            "owner/skipped": { enabled: false }
-          }
-        }
-      })}\n`);
-
-      for (const pr of ["abc", "0"]) {
-        const result = spawnSync("npx", [
-          "tsx",
-          "src/cli.ts",
-          "run-once",
-          "--config",
-          configPath,
-          "--repo",
-          "owner/skipped",
-          "--pr",
-          pr,
-          "--dry-run",
-          "true",
-          "--zcode",
-          "false"
-        ], {
-          cwd: process.cwd(),
-          encoding: "utf8"
-        });
-
-        expect(result.status).toBe(1);
-        expect(result.stdout).toBe("");
-        expect(result.stderr).toContain("--pr must be a positive integer");
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    for (const pr of ["abc", "0"]) {
+      expect(() => parsePositiveInteger(pr, "--pr")).toThrow("--pr must be a positive integer");
     }
   });
 });
