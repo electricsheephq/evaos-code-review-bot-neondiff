@@ -28,11 +28,12 @@ import {
 import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets } from "./secrets.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
 import { listRepoMemoryNotesReadOnly, ReviewStateStore, type ReviewQueueJobState } from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
-import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, runOnce } from "./worker.js";
+import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 
 async function main(): Promise<void> {
@@ -691,13 +692,20 @@ async function main(): Promise<void> {
   }
 
   if (command === "run-once") {
-    await runOnce({
-      configPath: args.config,
-      dryRun: args["dry-run"] !== "false",
-      repo: args.repo,
-      pullNumber: args.pr ? Number(args.pr) : undefined,
-      useZCode: args.zcode !== "false"
+    const dryRun = args["dry-run"] !== "false";
+    const useZCode = args.zcode !== "false";
+    const pullNumber = args.pr ? parsePositiveInteger(args.pr, "--pr") : undefined;
+    const result = await runOnceCliCommand({
+      options: {
+        configPath: args.config,
+        dryRun,
+        repo: args.repo,
+        pullNumber,
+        useZCode
+      }
     });
+    console.log(result.output);
+    if (result.exitCode !== 0) process.exitCode = result.exitCode;
     return;
   }
 
