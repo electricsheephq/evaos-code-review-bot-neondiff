@@ -37,7 +37,10 @@ describe("build-enrichment-comment issue CLI", () => {
 
       expect(parsed).toMatchObject({ ok: true, skipped: false, repo: "owner/repo", issueNumber: 17 });
       expect(readFileSync(join(outputDir, "enrichment-comment.json"), "utf8")).toContain("\"issueNumber\": 17");
-      expect(readFileSync(join(outputDir, "enrichment.md"), "utf8")).toContain("## evaOS issue enrichment");
+      const markdown = readFileSync(join(outputDir, "enrichment.md"), "utf8");
+      expect(markdown).toContain("## evaOS issue enrichment");
+      expect(markdown).toContain("Confirm owner, acceptance criteria, and validation evidence before implementation.");
+      expect(markdown).not.toContain("Proof status:");
       expect(requests).toContainEqual({
         method: "GET",
         path: "/repos/owner/repo/issues/17",
