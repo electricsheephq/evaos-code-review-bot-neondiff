@@ -63,6 +63,14 @@ export interface StoredProcessedReviewRecord extends ProcessedReviewRecord {
   createdAt: string;
 }
 
+export const ACTIVATION_BASELINE_EXISTING_HEAD_ERROR = "activation_baseline_existing_head";
+
+export function isActivationBaselineProcessedReview(
+  processed: Pick<StoredProcessedReviewRecord, "status" | "error"> | undefined
+): boolean {
+  return processed?.status === "skipped" && processed.error === ACTIVATION_BASELINE_EXISTING_HEAD_ERROR;
+}
+
 export interface RetireFailedReviewInput {
   repo: string;
   pullNumber: number;

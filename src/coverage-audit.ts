@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { BotConfig } from "./config.js";
 import { listReposToScan, resolveRepoProfile, type RepoProfileSkipReason } from "./repo-policy.js";
 import {
+  isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   type ReviewQueueJobState,
   type RepoProviderCooldownRecord,
@@ -330,7 +331,16 @@ export async function collectCoverageAudit(input: {
         continue;
       }
 
-      if (input.verifyCurrentHeads && input.pullNumber === undefined) {
+      const now = input.now ?? new Date();
+      if (
+        input.verifyCurrentHeads &&
+        input.pullNumber === undefined &&
+        shouldVerifyCurrentHead({
+          state: input.state,
+          repo,
+          pull
+        })
+      ) {
         let livePull: PullRequestSummary;
         try {
           livePull = await input.github.getPull(repo, pull.number);
@@ -364,7 +374,7 @@ export async function collectCoverageAudit(input: {
             input.state,
             repo,
             livePull,
-            input.now ?? new Date(),
+            now,
             input.config.reviewConcurrency.leaseTtlMs
           );
           continue;
@@ -376,7 +386,7 @@ export async function collectCoverageAudit(input: {
         input.state,
         repo,
         pull,
-        input.now ?? new Date(),
+        now,
         input.config.reviewConcurrency.leaseTtlMs
       );
     }
@@ -384,6 +394,16 @@ export async function collectCoverageAudit(input: {
 
   report.ok = report.summary.unprocessed === 0 && report.summary.readFailures === 0;
   return report;
+}
+
+function shouldVerifyCurrentHead(input: {
+  state: CoverageStateLookup;
+  repo: string;
+  pull: PullRequestSummary;
+}): boolean {
+  const { state, repo, pull } = input;
+  if (isActivationBaselineProcessedReview(state.getProcessedReview(repo, pull.number, pull.head.sha))) return false;
+  return true;
 }
 
 function pushProcessedOrUnprocessed(

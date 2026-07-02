@@ -799,14 +799,98 @@ describe("coverage audit", () => {
     state.close();
   });
 
+  it("does not re-read activation-baselined heads during current-head verification", async () => {
+    const { root, state } = createState();
+    state.recordProcessed({
+      repo: "owner/allowed",
+      pullNumber: 20,
+      headSha: "baseline-head-20",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    state.recordProcessed({
+      repo: "owner/allowed",
+      pullNumber: 21,
+      headSha: "baseline-head-21",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    let getPullCount = 0;
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(20, "baseline-head-20"), pull(21, "baseline-head-21")],
+        getPull: async () => {
+          getPullCount += 1;
+          throw new Error("baselined heads should not be re-read");
+        }
+      } as unknown as GitHubApi,
+      state,
+      verifyCurrentHeads: true
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      processed: 2,
+      unprocessed: 0,
+      readFailures: 0
+    });
+    expect(getPullCount).toBe(0);
+    expect(audit.processed.map((entry) => entry.pullNumber)).toEqual([20, 21]);
+    state.close();
+  });
+
+  it("still re-reads non-baseline processed heads during current-head verification", async () => {
+    const { root, state } = createState();
+    state.recordProcessed({
+      repo: "owner/allowed",
+      pullNumber: 22,
+      headSha: "reviewed-old-head",
+      status: "posted",
+      event: "COMMENT"
+    });
+    let getPullCount = 0;
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(22, "reviewed-old-head")],
+        getPull: async () => {
+          getPullCount += 1;
+          return pull(22, "new-unprocessed-head");
+        }
+      } as unknown as GitHubApi,
+      state,
+      verifyCurrentHeads: true
+    });
+
+    expect(audit.ok).toBe(false);
+    expect(getPullCount).toBe(1);
+    expect(audit.summary).toMatchObject({
+      staleHeads: 1,
+      unprocessed: 1
+    });
+    expect(audit.unprocessed[0]).toMatchObject({
+      pullNumber: 22,
+      headSha: "new-unprocessed-head",
+      previousProcessedHeads: ["reviewed-old-head"]
+    });
+    state.close();
+  });
+
   it("re-reads unprocessed open candidates and reports stale heads separately", async () => {
     const { root, state } = createState();
+    let getPullCount = 0;
 
     const audit = await collectCoverageAudit({
       config: minimalConfig(root),
       github: {
         listOpenPulls: async () => [pull(10, "old-head")],
-        getPull: async () => pull(10, "new-head")
+        getPull: async () => {
+          getPullCount += 1;
+          return pull(10, "new-head");
+        }
       } as unknown as GitHubApi,
       state,
       verifyCurrentHeads: true
@@ -826,6 +910,7 @@ describe("coverage audit", () => {
       })
     ]);
     expect(audit.unprocessed.map((entry) => entry.headSha)).toEqual(["new-head"]);
+    expect(getPullCount).toBe(1);
     state.close();
   });
 

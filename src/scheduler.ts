@@ -15,6 +15,7 @@ import {
   type ReviewQueueDelayReason
 } from "./review-budget.js";
 import {
+  isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
   type ProcessedStatus,
@@ -140,6 +141,7 @@ export async function runScheduledCycleWithDeps(input: {
         providerId,
         now,
         dryRun: input.options.dryRun,
+        allowActivationBaselineCommandLookup: input.options.pullNumber !== undefined,
         onStatusCommentFailure: () => {
           result.statusCommentFailures += 1;
         },
@@ -218,6 +220,7 @@ async function enqueuePullIfEligible(input: {
   providerId: string;
   now: Date;
   dryRun: boolean;
+  allowActivationBaselineCommandLookup?: boolean;
   onStatusCommentFailure?: () => void;
   onCommandFetchError?: () => void;
 }): Promise<EnqueueStatus> {
@@ -247,6 +250,12 @@ async function enqueuePullIfEligible(input: {
       now: input.now
     });
     return "skipped_canary";
+  }
+
+  const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  if (!input.allowActivationBaselineCommandLookup && isActivationBaselineProcessedReview(processed)) {
+    backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
+    return "skipped_processed";
   }
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
@@ -280,7 +289,7 @@ async function enqueuePullIfEligible(input: {
   }
 
   await retireSupersededQueueJobsForPull(input);
-  if (input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) {
+  if (processed || input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) {
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }
@@ -771,6 +780,7 @@ async function runLeasedQueueJob(input: {
       useZCode: input.useZCode,
       budget: input.budget,
       processedHeadPolicy: isProviderDeferredRetryJob(input.job) ? "retry_failed_head" : "normal",
+      allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
     updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun });
