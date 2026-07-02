@@ -1648,6 +1648,74 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("allows scoped trusted commands for new heads on pre-activation PRs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-preactivation-new-head-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.activation.reviewExistingOpenPrsOnActivation = false;
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.recordRepoActivation("org/repo-a", "2026-07-02T16:58:09.555Z");
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 950,
+      headSha: "old-baselined-head",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    const comments = new Map([
+      ["org/repo-a#950", [comment(555, "100yenadmin", "@evaos-code-review-bot review")]]
+    ]);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(
+        new Map([[
+          "org/repo-a",
+          [pull("org/repo-a", 950, "new-head-on-old-pr", "base", { createdAt: "2026-06-30T05:34:43Z" })]
+        ]]),
+        comments
+      ),
+      state,
+      options: { repo: "org/repo-a", pullNumber: 950, dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: "https://github.com/org/repo-a/pull/950#pullrequestreview-scoped"
+        });
+        return "reviewed_command";
+      },
+      now: new Date("2026-07-02T17:45:00.000Z")
+    });
+
+    expect(result.commandReviewRequested).toBe(1);
+    expect(result.reviewed).toBe(1);
+    expect(result.skippedProcessed).toBe(0);
+    expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
+      expect.objectContaining({
+        repo: "org/repo-a",
+        pullNumber: 950,
+        headSha: "new-head-on-old-pr",
+        source: "manual_command",
+        commentId: 555
+      })
+    ]);
+    expect(state.getProcessedReview("org/repo-a", 950, "new-head-on-old-pr")).toMatchObject({
+      status: "posted",
+      event: "COMMENT"
+    });
+    state.close();
+  });
+
   it("records trusted stop commands as terminal skips for the current head", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-stop-"));
     roots.push(root);

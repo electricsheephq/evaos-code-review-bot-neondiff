@@ -1184,6 +1184,10 @@ describe("worker review failures", () => {
       status: "skipped",
       error: "activation_baseline_existing_head"
     });
+    expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      state: "skipped",
+      reason: "activation_baseline_existing_head"
+    });
     state.close();
   });
 

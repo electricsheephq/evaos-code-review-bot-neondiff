@@ -592,6 +592,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     isPreActivationExistingPull({ config, state, repo, pull })
   ) {
     recordActivationBaselineExistingHead(state, repo, pull);
+    backfillActivationBaselineReadinessFromProcessedHead(state, repo, pull);
     return "skipped_processed";
   }
   if (
@@ -868,6 +869,24 @@ function recordActivationBaselineExistingHead(state: ReviewStateStore, repo: str
     headSha: pull.head.sha,
     status: "skipped",
     error: ACTIVATION_BASELINE_EXISTING_HEAD_ERROR
+  });
+}
+
+function backfillActivationBaselineReadinessFromProcessedHead(
+  state: ReviewStateStore,
+  repo: string,
+  pull: PullRequestSummary
+): void {
+  const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  if (!isActivationBaselineProcessedReview(processed)) return;
+  const existing = state.getReviewReadiness(repo, pull.number, pull.head.sha);
+  if (existing?.state === "skipped" && existing.reason === ACTIVATION_BASELINE_EXISTING_HEAD_ERROR) return;
+  state.recordReviewReadiness({
+    repo,
+    pullNumber: pull.number,
+    headSha: pull.head.sha,
+    state: "skipped",
+    reason: ACTIVATION_BASELINE_EXISTING_HEAD_ERROR
   });
 }
 

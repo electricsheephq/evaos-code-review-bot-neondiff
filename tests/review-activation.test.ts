@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { isPreActivationExistingPull } from "../src/activation-policy.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { activateRepoForNewOnlyReview } from "../src/worker.js";
@@ -127,6 +128,56 @@ describe("new-only repo activation", () => {
   });
 });
 
+describe("pre-activation pull detection", () => {
+  it("treats reviewExistingOpenPrsOnActivation=true as an explicit override", () => {
+    expect(isPreActivationExistingPull({
+      config: newOnlyConfig({ reviewExistingOpenPrsOnActivation: true }),
+      state: { getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }) },
+      repo: "Martian-Engineering/lossless-claw",
+      pull: pull(950, "new-head", false, "2026-06-30T05:34:43Z")
+    })).toBe(false);
+  });
+
+  it("fails open when activation or pull dates are unavailable or invalid", () => {
+    const config = newOnlyConfig({ reviewExistingOpenPrsOnActivation: false });
+    const repo = "Martian-Engineering/lossless-claw";
+
+    expect(isPreActivationExistingPull({
+      config,
+      state: { getRepoActivation: () => undefined },
+      repo,
+      pull: pull(950, "new-head", false, "2026-06-30T05:34:43Z")
+    })).toBe(false);
+    expect(isPreActivationExistingPull({
+      config,
+      state: { getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }) },
+      repo,
+      pull: pull(950, "new-head")
+    })).toBe(false);
+    expect(isPreActivationExistingPull({
+      config,
+      state: { getRepoActivation: () => ({ activatedAt: "not-a-date" }) },
+      repo,
+      pull: pull(950, "new-head", false, "2026-06-30T05:34:43Z")
+    })).toBe(false);
+    expect(isPreActivationExistingPull({
+      config,
+      state: { getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }) },
+      repo,
+      pull: pull(950, "new-head", false, "not-a-date")
+    })).toBe(false);
+  });
+
+  it("detects PRs created before activation when new-only review is active", () => {
+    expect(isPreActivationExistingPull({
+      config: newOnlyConfig({ reviewExistingOpenPrsOnActivation: false }),
+      state: { getRepoActivation: () => ({ activatedAt: "2026-07-02T16:58:09.555Z" }) },
+      repo: "Martian-Engineering/lossless-claw",
+      pull: pull(950, "new-head", false, "2026-06-30T05:34:43Z")
+    })).toBe(true);
+  });
+});
+
 function createStore(roots: string[]): ReviewStateStore {
   const root = mkdtempSync(join(tmpdir(), "evaos-review-activation-"));
   roots.push(root);
@@ -146,11 +197,12 @@ function newOnlyConfig(overrides: {
   };
 }
 
-function pull(number: number, sha: string, draft = false): PullRequestSummary {
+function pull(number: number, sha: string, draft = false, createdAt?: string): PullRequestSummary {
   return {
     number,
     title: `PR ${number}`,
     draft,
+    ...(createdAt ? { created_at: createdAt } : {}),
     head: {
       sha,
       ref: `pr-${number}`
