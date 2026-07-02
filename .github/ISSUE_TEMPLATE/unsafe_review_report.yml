@@ -1,0 +1,33 @@
+name: Unsafe review report
+description: Report unsafe review behavior, posting, redaction, stale-head, or permission issues.
+title: "[unsafe-review]: "
+labels: ["bug", "regression-hardening"]
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Unsafe behavior
+      description: What did NeonDiff do or nearly do?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Include repo/PR/head SHA only if public-safe or redacted. Say whether this was dry-run or live.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Redacted JSON/log/comment evidence only. Do not paste tokens, credentials, private diffs, or secrets.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Boundary check
+      options:
+        - label: I removed private keys, provider tokens, license keys, credentials, and private customer data.
+          required: true

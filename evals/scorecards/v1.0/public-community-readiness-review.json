@@ -1,0 +1,22 @@
+{
+  "id": "public-community-readiness-review",
+  "version": "v1.0",
+  "surface": "NeonDiff source-available beta repository",
+  "current_score": "pass",
+  "reviewed_at": "2026-07-03",
+  "claim_class": "pr_ready",
+  "pass_criteria": [
+    "README is NeonDiff-first and links setup, contributing, agent instructions, security, code of conduct, roadmap, and license boundary.",
+    "CONTRIBUTING gives humans and coding agents issue routing, validation, evidence, and safety boundaries.",
+    "AGENTS gives repository agents a concise first-read checklist and source-available product boundary.",
+    "Issue templates and PR template collect public-safe evidence and warn against secrets, tokens, credentials, and private data.",
+    "Setup guide documents GitHub App permissions, provider setup, config, dry-run review, daemon/status checks, and troubleshooting.",
+    "Docs avoid open-source, MIT, GA, CodeRabbit parity, enterprise-ready, and public-launch-complete claims."
+  ],
+  "proof_boundary": "This scorecard proves repo/docs public beta review readiness only. It does not prove public launch, final legal adequacy, package publishing, GitHub Release readiness, review accuracy, CodeRabbit parity, live worker promotion, or star growth.",
+  "remaining_gaps": [
+    "Final license text remains gated by issue #104.",
+    "Public CLI package and final binary name remain gated by issue #107.",
+    "Website docs and license portal remain in electricsheephq/neon-diff-agent issues #1, #2, and #3."
+  ]
+}
