@@ -13,6 +13,27 @@
   "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
   "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
+  "issueEnrichment": {
+    "enabled": false,
+    "postIssueComment": false,
+    "allowlist": [],
+    "maxIssuesPerCycle": 5,
+    "maxCommentsPerCycle": 0,
+    "cooldownMs": 3600000,
+    "burstWindowMs": 3600000,
+    "maxIssuesPerBurst": 10,
+    "lookbackMs": 600000,
+    "processExistingOpenIssuesOnActivation": false,
+    "repos": {
+      "electricsheephq/evaos-code-review-bot": {
+        "enabled": false,
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "maxIssuesPerBurst": 8,
+        "processExistingOpenIssuesOnActivation": false
+      }
+    }
+  },
   "commands": {
     "enabled": false,
     "botMentions": ["@evaos-code-review-bot"],

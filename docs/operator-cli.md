@@ -96,6 +96,12 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   JSON/Markdown with the bot-owned marker and rendered comment when not skipped.
   This command never posts comments, auto-applies labels, assigns reviewers,
   calls ZCode, or mutates GitHub state.
+- `issue-enrichment-scan`: dry-run scans only `issueEnrichment.allowlist`, not
+  the PR monitor allowlist. It lists recently updated issues by default, skips
+  closed issues and PR-shaped issue records, applies per-repo throttles, and
+  reports would-comment/deferred rows without posting comments. Use
+  `--include-existing true` only for an explicit scoped audit; do not use it as
+  the default live posture for repos with large historic issue backlogs.
 - `doctor`: auth/config readiness. Use this for GitHub App/ZCode readiness, not
   runtime health.
 
@@ -261,6 +267,17 @@ issues.
 Issue mode requires an authenticated token or GitHub App installation with
 Issues read access. Live App-authored issue comments require Issues write
 permission and must not be enabled until that permission expansion is tracked.
+
+Dry-run scan issue enrichment against the separate issue allowlist:
+
+```bash
+npx tsx src/cli.ts issue-enrichment-scan --config <config.json> --dry-run true --output-dir <configured-evidence-dir>/issue-enrichment/scan
+```
+
+The scan does not use `pilotRepos`, does not post comments, and defaults to the
+configured recent-update lookback. Per-repo throttles live under
+`issueEnrichment.repos.<owner/name>` and can cap `maxIssuesPerCycle`,
+`maxCommentsPerCycle`, burst thresholds, cooldown, and backlog behavior.
 
 ## Safety Boundaries
 

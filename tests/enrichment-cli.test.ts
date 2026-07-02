@@ -131,6 +131,57 @@ describe("build-enrichment-comment issue CLI", () => {
       });
     });
   });
+
+  it("dry-run scans only the separate issue-enrichment allowlist with throttled output", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const outputDir = join(root, "evidence", "issue-scan");
+      const configPath = writeIssueScanConfig(root, apiBaseUrl);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-scan",
+        "--config",
+        configPath,
+        "--dry-run",
+        "true",
+        "--include-existing",
+        "true",
+        "--output-dir",
+        outputDir
+      ]);
+      const parsed = JSON.parse(stdout);
+
+      expect(parsed.summary).toMatchObject({
+        reposScanned: 1,
+        issuesSeen: 4,
+        eligible: 2,
+        skipped: 2,
+        wouldComment: 1,
+        deferred: 1
+      });
+      expect(parsed.items).toContainEqual(expect.objectContaining({
+        repo: "owner/issue-repo",
+        issueNumber: 18,
+        action: "skipped",
+        reason: "stale_issue_closed"
+      }));
+      expect(parsed.items).toContainEqual(expect.objectContaining({
+        repo: "owner/issue-repo",
+        issueNumber: 19,
+        action: "skipped",
+        reason: "issue_is_pull_request"
+      }));
+      expect(parsed.items).toContainEqual(expect.objectContaining({
+        repo: "owner/issue-repo",
+        issueNumber: 20,
+        action: "deferred",
+        reason: "repo_max_comments_per_cycle"
+      }));
+      expect(readFileSync(join(outputDir, "issue-enrichment-scan.json"), "utf8")).toContain("\"repo\": \"owner/issue-repo\"");
+      expect(requests.some((request) => request.path.startsWith("/repos/owner/issue-repo/issues?"))).toBe(true);
+      expect(requests.some((request) => request.path.startsWith("/repos/owner/pr-review-repo/issues?"))).toBe(false);
+    });
+  });
 });
 
 async function runCli(args: string[]) {
@@ -178,6 +229,32 @@ function writeConfig(root: string, apiBaseUrl: string): string {
           suggestedReviewers: ["owner-a"]
         }
       }
+    }
+  }, null, 2)}\n`);
+  return path;
+}
+
+function writeIssueScanConfig(root: string, apiBaseUrl: string): string {
+  const path = join(root, "config.json");
+  writeFileSync(path, `${JSON.stringify({
+    pilotRepos: ["owner/pr-review-repo"],
+    statePath: join(root, "state.sqlite"),
+    evidenceDir: join(root, "evidence"),
+    github: {
+      token: "test-token",
+      apiBaseUrl
+    },
+    issueEnrichment: {
+      enabled: false,
+      postIssueComment: true,
+      allowlist: ["owner/issue-repo"],
+      maxIssuesPerCycle: 3,
+      maxCommentsPerCycle: 1,
+      cooldownMs: 3_600_000,
+      burstWindowMs: 3_600_000,
+      maxIssuesPerBurst: 10,
+      lookbackMs: 600_000,
+      processExistingOpenIssuesOnActivation: false
     }
   }, null, 2)}\n`);
   return path;
@@ -231,6 +308,41 @@ function routeMockGitHub(request: IncomingMessage, response: ServerResponse): vo
   }
   if (request.url === "/repos/owner/repo/issues/404") {
     respondJson(response, 404, { message: "Not Found" });
+    return;
+  }
+  const parsed = new URL(request.url ?? "/", "https://github.test");
+  if (parsed.pathname === "/repos/owner/issue-repo/issues") {
+    respondJson(response, 200, [
+      {
+        number: 17,
+        title: "Open issue",
+        state: "open",
+        html_url: "https://github.test/owner/issue-repo/issues/17",
+        body: "Acceptance criteria and owner are present."
+      },
+      {
+        number: 18,
+        title: "Closed issue",
+        state: "closed",
+        html_url: "https://github.test/owner/issue-repo/issues/18",
+        body: "Done."
+      },
+      {
+        number: 19,
+        title: "PR shaped issue",
+        state: "open",
+        html_url: "https://github.test/owner/issue-repo/pull/19",
+        pull_request: {},
+        body: "Pull request record."
+      },
+      {
+        number: 20,
+        title: "Another open issue",
+        state: "open",
+        html_url: "https://github.test/owner/issue-repo/issues/20",
+        body: "Acceptance criteria and owner are present."
+      }
+    ]);
     return;
   }
   respondJson(response, 404, { message: `unexpected path ${request.url}` });

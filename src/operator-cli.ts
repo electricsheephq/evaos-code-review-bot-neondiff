@@ -11,6 +11,7 @@ import type {
   CoverageStaleHead,
   CoverageUnprocessedEntry
 } from "./coverage-audit.js";
+import type { IssueEnrichmentStatus } from "./issue-enrichment.js";
 import type { ReviewBudgetStatus } from "./review-budget.js";
 import type { ReleaseHeartbeatStatus, ReleaseLaunchdStatus, ReleaseStatus } from "./release-status.js";
 import { redactSecrets } from "./secrets.js";
@@ -48,6 +49,7 @@ export interface OperatorStatus {
     failedQueueJobs: number;
     budgetWouldLeaseJobs: number;
     budgetDelayedJobs: number;
+    issueEnrichmentState?: IssueEnrichmentStatus["state"];
   };
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   recommendedActions: string[];
@@ -57,6 +59,7 @@ export interface OperatorStatus {
   agents: OperatorAgentInventory;
   providerCooldowns: ProviderCooldownReviewRecord[];
   durableQueue?: OperatorDurableQueueSnapshot;
+  issueEnrichment?: IssueEnrichmentStatus;
 }
 
 export interface RuntimeInventory {
@@ -90,6 +93,7 @@ export interface RuntimeInventory {
     repoCooldowns: number;
     activeRepoCooldowns: number;
     botProcesses: number;
+    issueEnrichmentState?: IssueEnrichmentStatus["state"];
   };
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   recommendedActions: string[];
@@ -103,6 +107,7 @@ export interface RuntimeInventory {
   coverage?: OperatorQueueSnapshot;
   providerCooldowns: ProviderCooldownReviewRecord[];
   repoProviderCooldowns: RepoProviderCooldownRecord[];
+  issueEnrichment?: IssueEnrichmentStatus;
 }
 
 export type RuntimeClassification = "healthy_idle" | "healthy_active" | "blocked";
@@ -302,6 +307,7 @@ export function buildOperatorStatus(input: {
   agents: OperatorAgentInventory;
   providerCooldowns?: ProviderCooldownReviewRecord[];
   durableQueue?: OperatorDurableQueueSnapshot;
+  issueEnrichment?: IssueEnrichmentStatus;
   checkedAt?: string;
 }): OperatorStatus {
   const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
@@ -317,6 +323,7 @@ export function buildOperatorStatus(input: {
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
   const retryableProviderDeferredJobs = durableQueue?.summary.retryableProviderDeferred ?? 0;
   const budget = input.release.budget;
+  const issueEnrichment = input.issueEnrichment;
 
   const gates = [
     ...input.release.gates,
@@ -351,7 +358,16 @@ export function buildOperatorStatus(input: {
       name: "durable_queue_no_retryable_provider_deferred_jobs",
       ok: retryableProviderDeferredJobs === 0,
       detail: `${retryableProviderDeferredJobs} retryable provider-deferred durable queue job(s)`
-    }
+    },
+    ...(issueEnrichment
+      ? [{
+          name: "issue_enrichment_ready",
+          ok: issueEnrichment.ok,
+          detail: issueEnrichment.ok
+            ? `${issueEnrichment.state}; allowlist=${issueEnrichment.allowlist.length}; liveComments=${issueEnrichment.postIssueComment}`
+            : `${issueEnrichment.state}: ${issueEnrichment.blockers.join(", ")}`
+        }]
+      : [])
   ];
 
   const recommendedActions = uniqueStrings([
@@ -361,7 +377,8 @@ export function buildOperatorStatus(input: {
     ...(staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : []),
     ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
-    ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : [])
+    ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
+    ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : [])
   ]);
 
   return {
@@ -385,7 +402,8 @@ export function buildOperatorStatus(input: {
       providerDeferredJobs: durableQueue?.summary.providerDeferred ?? 0,
       failedQueueJobs,
       budgetWouldLeaseJobs: budget?.wouldLeaseCount ?? 0,
-      budgetDelayedJobs: budget?.delayedCount ?? 0
+      budgetDelayedJobs: budget?.delayedCount ?? 0,
+      ...(issueEnrichment ? { issueEnrichmentState: issueEnrichment.state } : {})
     },
     gates,
     recommendedActions,
@@ -394,7 +412,8 @@ export function buildOperatorStatus(input: {
     ...(queue ? { coverage: queue } : {}),
     agents: input.agents,
     providerCooldowns,
-    ...(durableQueue ? { durableQueue } : {})
+    ...(durableQueue ? { durableQueue } : {}),
+    ...(issueEnrichment ? { issueEnrichment } : {})
   };
 }
 
@@ -406,6 +425,7 @@ export function buildRuntimeInventory(input: {
   providerCooldowns?: ProviderCooldownReviewRecord[];
   repoProviderCooldowns?: RepoProviderCooldownRecord[];
   durableQueue?: OperatorDurableQueueSnapshot;
+  issueEnrichment?: IssueEnrichmentStatus;
   checkedAt?: string;
 }): RuntimeInventory {
   const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
@@ -440,6 +460,7 @@ export function buildRuntimeInventory(input: {
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
   const budget = input.release.budget;
+  const issueEnrichment = input.issueEnrichment;
 
   const gates = [
     ...input.release.gates,
@@ -491,7 +512,16 @@ export function buildRuntimeInventory(input: {
       detail: input.processes
         ? `${input.processes.summary.total} bot-owned process(es), ${input.processes.summary.errors} process inventory error(s)`
         : "not collected"
-    }
+    },
+    ...(issueEnrichment
+      ? [{
+          name: "runtime_issue_enrichment_ready",
+          ok: issueEnrichment.ok,
+          detail: issueEnrichment.ok
+            ? `${issueEnrichment.state}; allowlist=${issueEnrichment.allowlist.length}; liveComments=${issueEnrichment.postIssueComment}`
+            : `${issueEnrichment.state}: ${issueEnrichment.blockers.join(", ")}`
+        }]
+      : [])
   ];
 
   const ok = gates.every((gate) => gate.ok);
@@ -509,7 +539,8 @@ export function buildRuntimeInventory(input: {
     ...(input.agents.summary.staleLeases > 0 ? ["inspect stale leases before restarting launchd"] : []),
     ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
-    ...(retryableExpiredProviderCooldowns > 0 ? ["retry expired provider cooldowns or inspect provider health"] : [])
+    ...(retryableExpiredProviderCooldowns > 0 ? ["retry expired provider cooldowns or inspect provider health"] : []),
+    ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : [])
   ]);
 
   return {
@@ -542,7 +573,8 @@ export function buildRuntimeInventory(input: {
       activeProviderCooldowns,
       repoCooldowns: repoProviderCooldowns.length,
       activeRepoCooldowns,
-      botProcesses: input.processes?.summary.total ?? 0
+      botProcesses: input.processes?.summary.total ?? 0,
+      ...(issueEnrichment ? { issueEnrichmentState: issueEnrichment.state } : {})
     },
     gates,
     recommendedActions,
@@ -555,7 +587,8 @@ export function buildRuntimeInventory(input: {
     ...(durableQueue ? { durableQueue } : {}),
     ...(queue ? { coverage: queue } : {}),
     providerCooldowns,
-    repoProviderCooldowns
+    repoProviderCooldowns,
+    ...(issueEnrichment ? { issueEnrichment } : {})
   };
 }
 
