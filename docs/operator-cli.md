@@ -128,6 +128,21 @@ Find open PR heads that still need review work:
 npx tsx src/cli.ts queue --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
 ```
 
+Run one scoped review pass and inspect the structured result:
+
+```bash
+npx tsx src/cli.ts run-once --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --repo electricsheephq/evaos-code-review-bot --pr 142 --dry-run true --zcode false
+```
+
+`run-once` always prints a JSON report on stdout before returning. Treat that
+report as the operator source of truth for `reviewed`, `failed`,
+`skippedProcessed`, `skippedCapacity`, `skippedProviderCooldown`,
+`skippedStaleHead`, and scoped PR metadata such as `headSha` and `url`.
+A nonzero exit means one or more review attempts failed, including partial
+per-PR failures; it does not by itself mean the command failed to scan or that
+all other reviews failed. Check the JSON `result` and evidence paths before
+promoting, retrying, or treating the run as a total outage.
+
 Inspect only durable provider-deferred jobs:
 
 ```bash
