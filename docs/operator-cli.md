@@ -233,6 +233,7 @@ Closed issues are reported as `skipped: true` with reason
 `stale_issue_closed`. PR-shaped issue records are reported as `skipped: true`
 with reason `issue_is_pull_request`. No Markdown body is written for skipped
 issues.
+
 Issue mode requires an authenticated token or GitHub App installation with
 Issues read access. Live App-authored issue comments require Issues write
 permission and must not be enabled until that permission expansion is tracked.
