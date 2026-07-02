@@ -37,7 +37,8 @@ import {
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
-  type ReviewRunLease
+  type ReviewRunLease,
+  type StoredProcessedReviewRecord
 } from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
@@ -582,7 +583,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
 
-  const processed = state.getProcessedReview(repo, pull.number, pull.head.sha);
+  const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !input.allowActivationBaselineCommandLookup &&
@@ -847,6 +848,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (lease) state.releaseReviewRunLease(lease.leaseId);
     budget.finish();
   }
+}
+
+function getProcessedReviewIfAvailable(
+  state: ReviewStateStore,
+  repo: string,
+  pullNumber: number,
+  headSha: string
+): StoredProcessedReviewRecord | undefined {
+  const lookup = (state as Partial<Pick<ReviewStateStore, "getProcessedReview">>).getProcessedReview;
+  return typeof lookup === "function" ? lookup.call(state, repo, pullNumber, headSha) : undefined;
 }
 
 export function activateRepoForNewOnlyReview(input: {
