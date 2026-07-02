@@ -32,7 +32,13 @@ import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } 
 import { ReviewRunBudget } from "./review-budget.js";
 import { redactSecrets } from "./secrets.js";
 import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skill-packs.js";
-import { parseProviderCooldownError, ReviewStateStore, type ReviewRunLease } from "./state.js";
+import {
+  ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  isActivationBaselineProcessedReview,
+  parseProviderCooldownError,
+  ReviewStateStore,
+  type ReviewRunLease
+} from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
@@ -208,7 +214,8 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             pull,
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
-            budget
+            budget,
+            allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
           if (recordProviderRateLimitCooldownIfNeeded({ config, state, repo, pull, error })) {
@@ -565,6 +572,7 @@ export interface ReviewPullInput {
   budget?: ReviewRunBudget;
   processedHeadPolicy?: "normal" | "retry_failed_head";
   commandCommentId?: number;
+  allowActivationBaselineCommandLookup?: boolean;
 }
 
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
@@ -573,6 +581,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
+
+  const processed = state.getProcessedReview(repo, pull.number, pull.head.sha);
+  if (
+    input.processedHeadPolicy !== "retry_failed_head" &&
+    !input.allowActivationBaselineCommandLookup &&
+    isActivationBaselineProcessedReview(processed)
+  ) {
+    return "skipped_processed";
+  }
 
   const commandDecision = await resolvePullCommandDecision({ config, github, state, repo, pull });
   if (commandDecision.action === "stop") {
@@ -597,7 +614,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !commandReviewRequested &&
-    state.hasProcessed(repo, pull.number, pull.head.sha)
+    (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     return "skipped_processed";
   }
@@ -860,7 +877,7 @@ export function activateRepoForNewOnlyReview(input: {
       pullNumber: pull.number,
       headSha: pull.head.sha,
       status: "skipped",
-      error: "activation_baseline_existing_head"
+      error: ACTIVATION_BASELINE_EXISTING_HEAD_ERROR
     });
     baselined += 1;
   }

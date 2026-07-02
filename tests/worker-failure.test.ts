@@ -1094,6 +1094,50 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("skips activation-baselined heads before fetching commands", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-baseline-command-skip-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1230, "head-baselined");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    let issueCommentReads = 0;
+
+    const result = await reviewPull({
+      config,
+      github: {
+        listIssueComments: async () => {
+          issueCommentReads += 1;
+          throw new Error("activation-baselined heads should not read issue comments");
+        },
+        listPullFiles: async () => {
+          throw new Error("activation-baselined heads should not fetch files");
+        }
+      } as unknown as GitHubApi,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: false
+    });
+
+    expect(result).toBe("skipped_processed");
+    expect(issueCommentReads).toBe(0);
+    state.close();
+  });
+
   it("restores a failed row after a retry dry-run records dry_run", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-dry-run-"));
     roots.push(root);
