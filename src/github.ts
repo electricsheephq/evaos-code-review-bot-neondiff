@@ -94,6 +94,37 @@ export class GitHubApi {
     }
   }
 
+  async listIssuesForEnrichment(
+    repo: string,
+    options: {
+      state?: "open" | "closed" | "all";
+      since?: string;
+      perPage?: number;
+      pageLimit?: number;
+    } = {}
+  ): Promise<GitHubRelatedIssueOrPull[]> {
+    const issues: GitHubRelatedIssueOrPull[] = [];
+    const state = options.state ?? "all";
+    const perPage = options.perPage ?? 100;
+    const pageLimit = options.pageLimit ?? 1;
+    for (let page = 1; page <= pageLimit; page += 1) {
+      const params = new URLSearchParams({
+        state,
+        sort: "updated",
+        direction: "desc",
+        per_page: String(perPage),
+        page: String(page)
+      });
+      if (options.since) params.set("since", options.since);
+      const chunk = await this.request<GitHubRelatedIssueOrPull[]>(`/repos/${repo}/issues?${params.toString()}`, {
+        token: await this.getReadToken(repo)
+      });
+      issues.push(...chunk);
+      if (chunk.length < perPage) return issues;
+    }
+    return issues;
+  }
+
   async createReview(input: {
     repo: string;
     pullNumber: number;

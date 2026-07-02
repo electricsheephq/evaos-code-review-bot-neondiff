@@ -30,6 +30,19 @@
     "trustedAuthors": ["100yenadmin"],
     "acknowledge": false
   },
+  "issueEnrichment": {
+    "enabled": false,
+    "postIssueComment": false,
+    "allowlist": [],
+    "maxIssuesPerCycle": 5,
+    "maxCommentsPerCycle": 0,
+    "cooldownMs": 3600000,
+    "burstWindowMs": 3600000,
+    "maxIssuesPerBurst": 10,
+    "lookbackMs": 600000,
+    "processExistingOpenIssuesOnActivation": false,
+    "repos": {}
+  },
   "gitnexusContext": {
     "enabled": false,
     "packetVersion": "gitnexus-context-packet-v0.1",

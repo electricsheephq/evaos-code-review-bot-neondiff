@@ -21,6 +21,7 @@ import {
   type OperatorAgentInventory,
   type OperatorDurableQueueSnapshot
 } from "../src/operator-cli.js";
+import type { IssueEnrichmentStatus } from "../src/issue-enrichment.js";
 import type { ReviewBudgetStatus } from "../src/review-budget.js";
 import type { ReleaseStatus } from "../src/release-status.js";
 import type { RepoProviderCooldownRecord } from "../src/state.js";
@@ -92,6 +93,48 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("surfaces issue enrichment live-post blockers in operator status", () => {
+    const issueEnrichment: IssueEnrichmentStatus = {
+      ok: false,
+      checkedAt: "2026-07-03T00:00:00.000Z",
+      state: "blocked",
+      enabled: true,
+      postIssueComment: true,
+      separateAllowlist: true,
+      allowlist: ["owner/issue-repo"],
+      throttleDefaults: {
+        maxIssuesPerCycle: 5,
+        maxCommentsPerCycle: 2,
+        cooldownMs: 3_600_000,
+        burstWindowMs: 3_600_000,
+        maxIssuesPerBurst: 10,
+        lookbackMs: 600_000,
+        processExistingOpenIssuesOnActivation: false
+      },
+      repoOverrides: [],
+      blockers: ["github_app_credentials_required_for_live_issue_comments"]
+    };
+
+    const status = buildOperatorStatus({
+      release: releaseStatus({ ok: true }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
+      issueEnrichment,
+      checkedAt: "2026-07-03T00:00:00.000Z"
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.summary.issueEnrichmentState).toBe("blocked");
+    expect(status.gates).toContainEqual({
+      name: "issue_enrichment_ready",
+      ok: false,
+      detail: "blocked: github_app_credentials_required_for_live_issue_comments"
+    });
+    expect(status.recommendedActions).toContain("resolve issue-enrichment blockers before enabling live issue comments");
   });
 
   it("treats pending heads covered by durable queue work as healthy active runtime", () => {

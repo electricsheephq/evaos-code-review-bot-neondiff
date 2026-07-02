@@ -12,6 +12,16 @@ Required repository permissions:
 - Actions: read
 - Metadata: read
 
+Optional issue-enrichment permissions, gated by `issueEnrichment`:
+
+- Issues: read, only for dry-run/operator issue enrichment reads.
+- Issues: write, only after a tracked rollout explicitly enables App-authored
+  sticky issue enrichment comments on an `issueEnrichment.allowlist` repo.
+
+Do not add Issues permissions merely because a repository is in the PR review
+monitor list. Issue enrichment has a separate allowlist and per-repo throttles
+because milestone or planning days can create large issue bursts.
+
 Install the app only on:
 
 - `electricsheephq/WorldOS`

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
+import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan } from "../src/issue-enrichment.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 
 const HEAD_A = "a".repeat(40);
@@ -38,6 +39,95 @@ describe("sticky enrichment comments", () => {
       postIssueComment: false,
       packetVersion: "enrichment-comment-v0.1"
     });
+    expect(loadConfig().issueEnrichment).toMatchObject({
+      enabled: false,
+      postIssueComment: false,
+      allowlist: [],
+      maxIssuesPerCycle: 5,
+      maxCommentsPerCycle: 0,
+      maxIssuesPerBurst: 10,
+      processExistingOpenIssuesOnActivation: false
+    });
+  });
+
+  it("keeps issue enrichment allowlist and throttles separate from PR monitoring", () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-config-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["owner/pr-review-repo"],
+        issueEnrichment: {
+          enabled: false,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 2,
+          maxCommentsPerCycle: 1,
+          cooldownMs: 3_600_000,
+          burstWindowMs: 3_600_000,
+          maxIssuesPerBurst: 8,
+          lookbackMs: 600_000,
+          processExistingOpenIssuesOnActivation: false,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 3,
+              maxCommentsPerCycle: 2
+            }
+          }
+        }
+      })}\n`);
+
+      const config = loadConfig(configPath);
+      const issueConfig = config.issueEnrichment;
+      expect(issueConfig).toBeDefined();
+
+      expect(config.pilotRepos).toEqual(["owner/pr-review-repo"]);
+      expect(issueConfig?.allowlist).toEqual(["owner/issue-repo"]);
+      expect(issueConfig?.allowlist).not.toContain("owner/pr-review-repo");
+      expect(issueConfig?.repos?.["owner/issue-repo"]).toMatchObject({
+        maxIssuesPerCycle: 3,
+        maxCommentsPerCycle: 2
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports issue enrichment blockers without failing when the lane is disabled", () => {
+    const disabled = buildIssueEnrichmentStatus({
+      config: loadConfig(),
+      canPostAsApp: false
+    });
+
+    expect(disabled).toMatchObject({
+      ok: true,
+      state: "disabled",
+      separateAllowlist: true,
+      allowlist: [],
+      blockers: ["issue_enrichment_disabled", "issue_enrichment_allowlist_empty", "issue_enrichment_live_posting_disabled"]
+    });
+
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-status-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"]
+        }
+      })}\n`);
+
+      const enabled = buildIssueEnrichmentStatus({
+        config: loadConfig(configPath),
+        canPostAsApp: false
+      });
+
+      expect(enabled.ok).toBe(false);
+      expect(enabled.state).toBe("blocked");
+      expect(enabled.blockers).toContain("github_app_credentials_required_for_live_issue_comments");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("renders a stable marker with head-specific state and suggestion-only text", () => {
@@ -380,6 +470,105 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).not.toContain("Suggested labels: Bug");
     expect(comment.body).toContain("Suggested owners: owner-a, owner-b, owner-c.");
     expect(comment.body).not.toContain("owner-d");
+  });
+
+  it("dry-run scans only the issue-enrichment allowlist and skips closed issues and PR-shaped issues", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-scan-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["owner/pr-review-repo"],
+        issueEnrichment: {
+          enabled: false,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 3,
+          maxCommentsPerCycle: 1,
+          maxIssuesPerBurst: 10,
+          processExistingOpenIssuesOnActivation: false
+        }
+      })}\n`);
+      const reposScanned: string[] = [];
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        includeExisting: true,
+        checkedAt: "2026-07-03T00:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo) => {
+            reposScanned.push(repo);
+            return [
+              { number: 10, title: "New issue", state: "open", body: "Acceptance criteria and owner present." },
+              { number: 11, title: "Closed issue", state: "closed", body: "Done." },
+              { number: 12, title: "PR issue", state: "open", pull_request: {}, body: "Pull request record." },
+              { number: 13, title: "Another new issue", state: "open", body: "Acceptance criteria and owner present." }
+            ];
+          }
+        }
+      });
+
+      expect(reposScanned).toEqual(["owner/issue-repo"]);
+      expect(reposScanned).not.toContain("owner/pr-review-repo");
+      expect(scan.ok).toBe(true);
+      expect(scan.summary).toMatchObject({
+        reposScanned: 1,
+        issuesSeen: 4,
+        eligible: 2,
+        skipped: 2,
+        wouldComment: 1,
+        deferred: 1
+      });
+      expect(scan.items.find((item) => item.issueNumber === 11)).toMatchObject({ action: "skipped", reason: "stale_issue_closed" });
+      expect(scan.items.find((item) => item.issueNumber === 12)).toMatchObject({ action: "skipped", reason: "issue_is_pull_request" });
+      expect(scan.items.find((item) => item.issueNumber === 13)).toMatchObject({ action: "deferred", reason: "repo_max_comments_per_cycle" });
+      expect(JSON.stringify(scan)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("defers large issue bursts instead of enriching every issue in a milestone filing wave", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-burst-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 2,
+          maxIssuesPerBurst: 2
+        }
+      })}\n`);
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        includeExisting: true,
+        checkedAt: "2026-07-03T00:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async () => [
+            { number: 20, title: "Issue 20", state: "open", body: "Acceptance criteria and owner present." },
+            { number: 21, title: "Issue 21", state: "open", body: "Acceptance criteria and owner present." },
+            { number: 22, title: "Issue 22", state: "open", body: "Acceptance criteria and owner present." }
+          ]
+        }
+      });
+
+      expect(scan.ok).toBe(true);
+      expect(scan.summary).toMatchObject({
+        issuesSeen: 3,
+        eligible: 3,
+        wouldEnrich: 0,
+        wouldComment: 0,
+        deferred: 3
+      });
+      expect(scan.items.every((item) => item.action === "deferred" && item.reason === "burst_threshold_exceeded")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

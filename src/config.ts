@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
+import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
 export interface BotConfig {
@@ -47,6 +48,7 @@ export interface BotConfig {
   githubRelatedContext?: GitHubRelatedContextConfig;
   skillPacks?: SkillPackContextConfig;
   enrichment?: EnrichmentConfig;
+  issueEnrichment?: IssueEnrichmentConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -250,6 +252,7 @@ const DEFAULT_CONFIG: BotConfig = {
     maxRelatedRefs: 8,
     maxSuggestions: 8
   },
+  issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG,
   commands: {
     enabled: false,
     botMentions: ["@evaos-code-review-bot"],
@@ -340,6 +343,9 @@ function validateConfig(config: BotConfig): void {
   const enrichment = config.enrichment ?? DEFAULT_CONFIG.enrichment!;
   config.enrichment = enrichment;
   validateEnrichmentConfig(enrichment, "config.enrichment");
+  const issueEnrichment = config.issueEnrichment ?? DEFAULT_CONFIG.issueEnrichment!;
+  config.issueEnrichment = issueEnrichment;
+  validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
   validateBoolean(config.commands.enabled, "config.commands.enabled");
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
@@ -465,6 +471,53 @@ function validateEnrichmentConfig(value: unknown, label: string): void {
   }
   validatePositiveInteger(value.maxRelatedRefs, `${label}.maxRelatedRefs`);
   validatePositiveInteger(value.maxSuggestions, `${label}.maxSuggestions`);
+}
+
+function validateIssueEnrichmentConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateBoolean(value.postIssueComment, `${label}.postIssueComment`);
+  validateStringArray(value.allowlist, `${label}.allowlist`);
+  const allowlist = value.allowlist as string[];
+  for (const repo of allowlist) validateRepoName(repo, `${label}.allowlist`);
+  validatePositiveInteger(value.maxIssuesPerCycle, `${label}.maxIssuesPerCycle`);
+  validateNonNegativeInteger(value.maxCommentsPerCycle, `${label}.maxCommentsPerCycle`);
+  validatePositiveInteger(value.cooldownMs, `${label}.cooldownMs`);
+  validatePositiveInteger(value.burstWindowMs, `${label}.burstWindowMs`);
+  validatePositiveInteger(value.maxIssuesPerBurst, `${label}.maxIssuesPerBurst`);
+  validatePositiveInteger(value.lookbackMs, `${label}.lookbackMs`);
+  validateBoolean(value.processExistingOpenIssuesOnActivation, `${label}.processExistingOpenIssuesOnActivation`);
+  if (typeof value.maxIssuesPerCycle === "number" && typeof value.maxCommentsPerCycle === "number" && value.maxCommentsPerCycle > value.maxIssuesPerCycle) {
+    throw new Error(`${label}.maxCommentsPerCycle must be <= ${label}.maxIssuesPerCycle`);
+  }
+  if (value.repos !== undefined) {
+    if (!isRecord(value.repos)) throw new Error(`${label}.repos must be an object`);
+    for (const [repo, override] of Object.entries(value.repos)) {
+      validateRepoName(repo, `${label}.repos`);
+      validateIssueEnrichmentRepoOverride(override, `${label}.repos.${repo}`);
+    }
+  }
+}
+
+function validateIssueEnrichmentRepoOverride(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  if (value.enabled !== undefined) validateBoolean(value.enabled, `${label}.enabled`);
+  if (value.maxIssuesPerCycle !== undefined) validatePositiveInteger(value.maxIssuesPerCycle, `${label}.maxIssuesPerCycle`);
+  if (value.maxCommentsPerCycle !== undefined) validateNonNegativeInteger(value.maxCommentsPerCycle, `${label}.maxCommentsPerCycle`);
+  if (value.cooldownMs !== undefined) validatePositiveInteger(value.cooldownMs, `${label}.cooldownMs`);
+  if (value.burstWindowMs !== undefined) validatePositiveInteger(value.burstWindowMs, `${label}.burstWindowMs`);
+  if (value.maxIssuesPerBurst !== undefined) validatePositiveInteger(value.maxIssuesPerBurst, `${label}.maxIssuesPerBurst`);
+  if (value.lookbackMs !== undefined) validatePositiveInteger(value.lookbackMs, `${label}.lookbackMs`);
+  if (value.processExistingOpenIssuesOnActivation !== undefined) {
+    validateBoolean(value.processExistingOpenIssuesOnActivation, `${label}.processExistingOpenIssuesOnActivation`);
+  }
+  if (
+    typeof value.maxIssuesPerCycle === "number" &&
+    typeof value.maxCommentsPerCycle === "number" &&
+    value.maxCommentsPerCycle > value.maxIssuesPerCycle
+  ) {
+    throw new Error(`${label}.maxCommentsPerCycle must be <= ${label}.maxIssuesPerCycle`);
+  }
 }
 
 function validateProfileRecord(record: Record<string, RepoProfileConfig> | undefined, label: string): void {

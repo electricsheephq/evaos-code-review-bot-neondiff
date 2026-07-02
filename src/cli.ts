@@ -9,6 +9,7 @@ import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enri
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
+import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan } from "./issue-enrichment.js";
 import {
   buildOperatorDashboard,
   buildRuntimeInventory,
@@ -75,8 +76,13 @@ async function main(): Promise<void> {
         });
       }
     }
+    const issueEnrichment = buildIssueEnrichmentStatus({
+      config,
+      canPostAsApp: github.canPostAsApp()
+    });
+    const ok = readChecks.every((check) => check.ok) && issueEnrichment.ok;
     console.log(JSON.stringify({
-      ok: readChecks.every((check) => check.ok),
+      ok,
       pilotRepos: config.pilotRepos,
       monitoredRepos,
       canaryPulls: config.canaryPulls ?? [],
@@ -85,6 +91,7 @@ async function main(): Promise<void> {
       reviewConcurrency: config.reviewConcurrency,
       reviewerSessions: config.reviewerSessions,
       repoMemory: config.repoMemory,
+      issueEnrichment,
       commandsEnabled: config.commands.enabled,
       statePath: config.statePath,
       workRoot: config.workRoot,
@@ -96,7 +103,7 @@ async function main(): Promise<void> {
         readChecks
       }
     }, null, 2));
-    if (readChecks.some((check) => !check.ok)) process.exitCode = 1;
+    if (!ok) process.exitCode = 1;
     return;
   }
 
@@ -190,12 +197,18 @@ async function main(): Promise<void> {
       repo: args.repo,
       limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
     });
+    const github = new GitHubApi(config.github);
     const status = buildOperatorStatus({
       release,
       coverage,
       agents,
       providerCooldowns,
-      durableQueue
+      durableQueue,
+      issueEnrichment: buildIssueEnrichmentStatus({
+        config,
+        canPostAsApp: github.canPostAsApp(),
+        checkedAt: release.checkedAt
+      })
     });
     console.log(JSON.stringify(status, null, 2));
     if (!status.ok) process.exitCode = 1;
@@ -234,6 +247,7 @@ async function main(): Promise<void> {
       repo: args.repo,
       now
     });
+    const github = new GitHubApi(config.github);
     const processes = collectBotProcessInventory({
       repoPath: process.cwd(),
       launchdLabel: release.launchd.label,
@@ -248,6 +262,11 @@ async function main(): Promise<void> {
       providerCooldowns,
       repoProviderCooldowns,
       durableQueue,
+      issueEnrichment: buildIssueEnrichmentStatus({
+        config,
+        canPostAsApp: github.canPostAsApp(),
+        checkedAt: now.toISOString()
+      }),
       checkedAt: now.toISOString()
     });
     console.log(args.human === "true" ? formatRuntimeInventoryHuman(inventory) : JSON.stringify(inventory, null, 2));
@@ -596,7 +615,6 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const github = new GitHubApi(config.github);
     const repoPolicy = resolveRepoProfile(config, repo);
-    if (!repoPolicy.allowed) throw new Error(`Repo ${repo} is skipped by policy: ${repoPolicy.reason}`);
     const enrichmentConfig = config.enrichment!;
     if (args.issue) {
       const issueNumber = parsePositiveInteger(parseSingleArg(args.issue, "--issue"), "--issue");
@@ -605,8 +623,8 @@ async function main(): Promise<void> {
       const output = buildIssueEnrichmentDryRunOutput({
         repo,
         issue,
-        suggestedLabels: repoPolicy.profile.suggestedLabels,
-        suggestedOwners: repoPolicy.profile.suggestedReviewers,
+        suggestedLabels: repoPolicy.allowed ? repoPolicy.profile.suggestedLabels : undefined,
+        suggestedOwners: repoPolicy.allowed ? repoPolicy.profile.suggestedReviewers : undefined,
         validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
         maxRelatedRefs: enrichmentConfig.maxRelatedRefs,
         maxSuggestions: enrichmentConfig.maxSuggestions
@@ -620,6 +638,7 @@ async function main(): Promise<void> {
       console.log(redactSecrets(JSON.stringify(output, null, 2)));
       return;
     }
+    if (!repoPolicy.allowed) throw new Error(`Repo ${repo} is skipped by policy: ${repoPolicy.reason}`);
     const prArg = parseSingleArg(args.pr ?? [], "--pr");
     const pullNumber = parsePositiveInteger(prArg, "--pr");
     const pull = await github.getPull(repo, pullNumber);
@@ -660,6 +679,30 @@ async function main(): Promise<void> {
       writeFileSync(join(safeOutputDir, "enrichment.md"), enrichment.body);
     }
     console.log(redactSecrets(JSON.stringify(output, null, 2)));
+    return;
+  }
+
+  if (command === "issue-enrichment-scan") {
+    const config = loadConfig(args.config);
+    const dryRun = args["dry-run"] !== "false";
+    if (!dryRun) throw new Error("issue-enrichment-scan currently supports dry-run only; live issue comments require a separate promotion gate");
+    const github = new GitHubApi(config.github);
+    const scan = await collectIssueEnrichmentScan({
+      config,
+      reader: github,
+      dryRun,
+      canPostAsApp: github.canPostAsApp(),
+      ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {}),
+      includeExisting: args["include-existing"] === "true",
+      ...(args.since ? { since: parseSingleArg(args.since, "--since") } : {})
+    });
+    if (args["output-dir"]) {
+      const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+      mkdirSync(safeOutputDir, { recursive: true });
+      writeFileSync(join(safeOutputDir, "issue-enrichment-scan.json"), `${redactSecrets(JSON.stringify(scan, null, 2))}\n`);
+    }
+    console.log(redactSecrets(JSON.stringify(scan, null, 2)));
+    if (!scan.ok) process.exitCode = 1;
     return;
   }
 
@@ -903,6 +946,7 @@ function buildHelp() {
         "build-github-related-context-packet",
         "build-skill-pack",
         "build-enrichment-comment",
+        "issue-enrichment-scan",
         "provider-cooldowns",
         "retry-provider-cooldowns",
         "retry-failed",
@@ -930,6 +974,7 @@ function buildHelp() {
       "npx tsx src/cli.ts build-skill-pack --config /path/to/live.json --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --issue 456 --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts issue-enrichment-scan --config /path/to/live.json --dry-run true --output-dir /path/to/evidence",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };
