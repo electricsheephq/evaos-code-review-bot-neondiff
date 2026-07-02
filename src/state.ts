@@ -966,7 +966,6 @@ export class ReviewStateStore {
     this.db.exec("begin immediate");
     try {
       this.db.prepare("delete from issue_enrichment_run_leases where expires_at <= ?").run(startedAt);
-      this.pruneInactiveIssueEnrichmentRunLeases();
       const row = this.db.prepare("select count(*) as count from issue_enrichment_run_leases").get() as { count: number };
       if (row.count >= maxActiveRuns) {
         this.db.exec("commit");
@@ -1590,17 +1589,6 @@ export class ReviewStateStore {
     for (const row of rows) {
       if (row.owner_pid === null || !isProcessAlive(row.owner_pid)) {
         this.db.prepare("delete from review_run_leases where lease_id = ?").run(row.lease_id);
-      }
-    }
-  }
-
-  private pruneInactiveIssueEnrichmentRunLeases(): void {
-    const rows = this.db
-      .prepare("select lease_id, owner_pid from issue_enrichment_run_leases")
-      .all() as unknown as Array<{ lease_id: string; owner_pid: number | null }>;
-    for (const row of rows) {
-      if (row.owner_pid === null || !isProcessAlive(row.owner_pid)) {
-        this.db.prepare("delete from issue_enrichment_run_leases where lease_id = ?").run(row.lease_id);
       }
     }
   }

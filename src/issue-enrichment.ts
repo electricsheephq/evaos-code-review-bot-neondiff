@@ -90,6 +90,7 @@ export type IssueEnrichmentBlocker =
   | "issue_enrichment_disabled"
   | "issue_enrichment_allowlist_empty"
   | "issue_enrichment_live_posting_disabled"
+  | "issue_enrichment_worker_busy"
   | "github_app_credentials_required_for_live_issue_comments";
 
 export interface IssueEnrichmentReader {
@@ -260,6 +261,7 @@ export async function collectIssueEnrichmentScan(input: {
   canPostAsApp?: boolean;
   checkedAt?: string;
   applyGlobalCaps?: boolean;
+  shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
 }): Promise<IssueEnrichmentScanResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
@@ -333,7 +335,8 @@ export async function collectIssueEnrichmentScan(input: {
       issues,
       throttle: policy.throttle,
       postIssueComment: config.postIssueComment,
-      checkedAt
+      checkedAt,
+      shouldCountItem: input.shouldCountItem
     });
     items.push(...issueItems);
     repoScans.push({
@@ -359,7 +362,8 @@ export async function collectIssueEnrichmentScan(input: {
       items,
       repoScans,
       config,
-      checkedAt
+      checkedAt,
+      shouldCountItem: input.shouldCountItem
     });
   }
   const summary = summarizeScan(repoScans);
@@ -431,11 +435,17 @@ export async function runIssueEnrichmentCycle(input: {
     lease = input.state.tryAcquireIssueEnrichmentRunLease(config.maxActiveRuns, config.leaseTtlMs, new Date(checkedAt));
     if (!lease) {
       const summary = { ...emptyCycleSummary(), workerSkipped: 1 };
+      const busyStatus: IssueEnrichmentStatus = {
+        ...status,
+        ok: false,
+        state: "blocked",
+        blockers: [...new Set([...status.blockers, "issue_enrichment_worker_busy" as const])]
+      };
       return {
         ok: false,
         checkedAt,
         dryRun: input.dryRun,
-        status,
+        status: busyStatus,
         summary,
         repos: [],
         items: [],
@@ -501,6 +511,12 @@ export async function runIssueEnrichmentCycle(input: {
     }
 
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
+    const shouldCountItem = (item: IssueEnrichmentScanItem) => {
+      const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
+      const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
+      const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
+      return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
+    };
     const scanned = reposToScan.length
       ? await collectIssueEnrichmentScan({
           config: input.config,
@@ -518,7 +534,8 @@ export async function runIssueEnrichmentCycle(input: {
           sinceByRepo,
           canPostAsApp: input.github.canPostAsApp(),
           checkedAt,
-          applyGlobalCaps: false
+          applyGlobalCaps: false,
+          shouldCountItem
         })
       : {
           ok: true,
@@ -535,12 +552,7 @@ export async function runIssueEnrichmentCycle(input: {
       repoScans: scanned.repos,
       config,
       checkedAt,
-      shouldCountItem: (item) => {
-        const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
-        const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
-        const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-        return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
-      }
+      shouldCountItem
     });
     const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
@@ -718,26 +730,32 @@ function planRepoIssueScan(input: {
   throttle: IssueEnrichmentThrottlePolicy;
   postIssueComment: boolean;
   checkedAt: string;
+  shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
 }): IssueEnrichmentScanItem[] {
-  const eligible = input.issues
-    .map((issue) => buildIssueEnrichmentDryRunOutput({
-      repo: input.repo,
-      issue,
-      maxRelatedRefs: 8,
-      maxSuggestions: 8
-    }))
-    .filter((output) => !output.skipped);
-  const burstExceeded = eligible.length > input.throttle.maxIssuesPerBurst;
+  const planned = input.issues.map((issue) => buildIssueEnrichmentDryRunOutput({
+    repo: input.repo,
+    issue,
+    maxRelatedRefs: 8,
+    maxSuggestions: 8
+  }));
+  const eligible = planned.filter((output) => !output.skipped);
+  const countableEligible = input.shouldCountItem
+    ? eligible.filter((output) => input.shouldCountItem!(
+        issueScanItem(
+          input.repo,
+          output.issueNumber,
+          output.state,
+          input.postIssueComment ? "would_comment" : "would_enrich",
+          "eligible",
+          output.url
+        )
+      ))
+    : eligible;
+  const burstExceeded = countableEligible.length > input.throttle.maxIssuesPerBurst;
   let enriched = 0;
   let comments = 0;
 
-  return input.issues.map((issue) => {
-    const output = buildIssueEnrichmentDryRunOutput({
-      repo: input.repo,
-      issue,
-      maxRelatedRefs: 8,
-      maxSuggestions: 8
-    });
+  return planned.map((output) => {
     if (output.skipped) {
       return {
         repo: input.repo,
@@ -748,6 +766,10 @@ function planRepoIssueScan(input: {
         ...(output.url ? { url: output.url } : {})
       };
     }
+    const eligibleAction = input.postIssueComment ? "would_comment" : "would_enrich";
+    const eligibleItem = issueScanItem(input.repo, output.issueNumber, output.state, eligibleAction, "eligible", output.url);
+    const countTowardCaps = input.shouldCountItem ? input.shouldCountItem(eligibleItem) : true;
+    if (!countTowardCaps) return eligibleItem;
     if (burstExceeded) {
       return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "burst_threshold_exceeded", output.url, nextEligibleAt(input));
     }
@@ -760,9 +782,9 @@ function planRepoIssueScan(input: {
         return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "repo_max_comments_per_cycle", output.url, nextEligibleAt(input));
       }
       comments += 1;
-      return issueScanItem(input.repo, output.issueNumber, output.state, "would_comment", "eligible", output.url);
+      return eligibleItem;
     }
-    return issueScanItem(input.repo, output.issueNumber, output.state, "would_enrich", "eligible", output.url);
+    return eligibleItem;
   });
 }
 

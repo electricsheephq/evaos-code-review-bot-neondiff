@@ -49,6 +49,21 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("keeps non-expired issue enrichment leases until TTL even when owner pid is not alive", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-lease-ttl-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const first = store.tryAcquireIssueEnrichmentRunLease(1, 1_000, new Date("2026-07-03T05:00:00.000Z"), 999_999_999);
+    const beforeExpiry = store.tryAcquireIssueEnrichmentRunLease(1, 1_000, new Date("2026-07-03T05:00:00.500Z"), process.pid);
+    const afterExpiry = store.tryAcquireIssueEnrichmentRunLease(1, 1_000, new Date("2026-07-03T05:00:01.001Z"), process.pid);
+
+    expect(first).toBeDefined();
+    expect(beforeExpiry).toBeUndefined();
+    expect(afterExpiry).toBeDefined();
+    store.close();
+  });
+
   it("stores one activation watermark per repository", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
     roots.push(root);

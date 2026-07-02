@@ -20,6 +20,7 @@
     "maxIssuesPerCycle": 5,
     "maxCommentsPerCycle": 1,
     "globalMaxIssuesPerCycle": 5,
+    "_globalMaxCommentsPerCycleComment": "Beta safety default: at most one live issue-enrichment comment per daemon cycle globally. Raise only after dry-run evidence.",
     "globalMaxCommentsPerCycle": 1,
     "maxActiveRuns": 1,
     "leaseTtlMs": 1200000,

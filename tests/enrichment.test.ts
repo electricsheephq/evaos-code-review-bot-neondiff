@@ -1168,6 +1168,80 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("posts new issues in order on the second live cycle after global-cap deferrals", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-global-cap-live-progress-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 10,
+          maxCommentsPerCycle: 2,
+          globalMaxIssuesPerCycle: 2,
+          globalMaxCommentsPerCycle: 2,
+          cooldownMs: 60_000,
+          maxIssuesPerBurst: 10,
+          processExistingOpenIssuesOnActivation: true
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const issues: GitHubRelatedIssueOrPull[] = [1, 2, 3, 4].map((number) => ({
+          number,
+          title: `Issue ${number}`,
+          state: "open",
+          updated_at: "2026-07-03T06:00:00.000Z",
+          body: "Acceptance criteria and owner present."
+        }));
+        const posted: number[] = [];
+        const github = {
+          listIssuesForEnrichment: async () => issues,
+          canPostAsApp: () => true,
+          upsertIssueComment: async (input: { issueNumber: number }) => {
+            const issueNumber = input.issueNumber;
+            posted.push(issueNumber);
+            return {
+              action: "created" as const,
+              id: issueNumber,
+              html_url: `https://github.test/owner/issue-repo/issues/${issueNumber}#issuecomment-${issueNumber}`
+            };
+          }
+        };
+
+        const first = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T06:01:00.000Z"
+        });
+        const second = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T06:03:00.000Z"
+        });
+
+        expect(first.summary).toMatchObject({ posted: 2, deferredRecorded: 2, alreadyProcessed: 0, failed: 0 });
+        expect(second.summary).toMatchObject({ posted: 2, deferredRecorded: 0, alreadyProcessed: 2, failed: 0 });
+        expect(posted).toEqual([1, 2, 3, 4]);
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 1)).toMatchObject({ status: "posted" });
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 2)).toMatchObject({ status: "posted" });
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 3)).toMatchObject({ status: "posted" });
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 4)).toMatchObject({ status: "posted" });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("baselines a newly allowlisted repo before scanning issue history", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-baseline-"));
     try {
@@ -1773,6 +1847,11 @@ describe("sticky enrichment comments", () => {
         expect(readerCalls).toBe(0);
         expect(postCalls).toBe(0);
         expect(result.ok).toBe(false);
+        expect(result.status).toMatchObject({
+          ok: false,
+          state: "blocked",
+          blockers: expect.arrayContaining(["issue_enrichment_worker_busy"])
+        });
         expect(result.summary).toMatchObject({
           reposScanned: 0,
           issuesSeen: 0,
