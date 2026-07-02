@@ -974,9 +974,10 @@ describe("sticky enrichment comments", () => {
       });
       expect(scan.items.find((item) => item.issueNumber === 202)).toMatchObject({
         action: "deferred",
-        reason: "global_max_issues_per_cycle",
+        reason: "global_max_comments_per_cycle",
         nextEligibleAt: "2026-07-03T04:02:00.000Z"
       });
+      expect(scan.items.filter((item) => item.reason === "global_max_issues_per_cycle")).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

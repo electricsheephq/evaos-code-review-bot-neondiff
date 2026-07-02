@@ -485,6 +485,7 @@ function validateIssueEnrichmentConfig(value: unknown, label: string): void {
   validatePositiveInteger(value.globalMaxIssuesPerCycle, `${label}.globalMaxIssuesPerCycle`);
   validateNonNegativeInteger(value.globalMaxCommentsPerCycle, `${label}.globalMaxCommentsPerCycle`);
   validatePositiveInteger(value.maxActiveRuns, `${label}.maxActiveRuns`);
+  // leaseTtlMs is the stuck-worker recovery bound; cooldownMs is the per-issue deferral cadence and may be longer.
   validatePositiveInteger(value.leaseTtlMs, `${label}.leaseTtlMs`);
   validatePositiveInteger(value.cooldownMs, `${label}.cooldownMs`);
   validatePositiveInteger(value.burstWindowMs, `${label}.burstWindowMs`);

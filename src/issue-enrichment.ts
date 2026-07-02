@@ -877,7 +877,6 @@ function applyGlobalIssueEnrichmentCaps(input: {
       );
       continue;
     }
-    issuesConsidered += 1;
     if (item.action === "would_comment") {
       if (commentsConsidered >= input.config.globalMaxCommentsPerCycle) {
         input.items[index] = issueScanItem(
@@ -893,6 +892,7 @@ function applyGlobalIssueEnrichmentCaps(input: {
       }
       commentsConsidered += 1;
     }
+    issuesConsidered += 1;
   }
 
   for (const scan of input.repoScans) {
