@@ -213,7 +213,7 @@ function emptyReport(input: {
       "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted.",
       "processed_reviews events are bucketed by created_at; review_queue_jobs events are bucketed by coalesce(finished_at, updated_at, started_at, created_at), so deduped queue incidents may reflect retry/update time instead of first-observed throttle time.",
       "processed_reviews does not store provider_id, so provider context for those rows is reported as unknown.",
-      "retryOutcomes is sourced from review_queue_jobs current state only; stale queue rows can skew retry outcome telemetry until the worker repairs them."
+      "retryOutcomes is sourced from review_queue_jobs current state only; processed_reviews-only incidents are excluded from retry outcomes, and stale queue rows can skew retry outcome telemetry until the worker repairs them."
     ]
   };
 }
@@ -471,10 +471,10 @@ function addRetryOutcome(report: ProviderThrottleReport, event: ProviderThrottle
 function extractProviderCodes(error: string): string[] {
   const codes = new Set<string>();
   for (const match of error.matchAll(EXPLICIT_PROVIDER_CODES)) {
-    if (match[1] && KNOWN_PROVIDER_CODES.has(match[1])) codes.add(match[1]);
+    if (match[1]) codes.add(match[1]);
   }
   for (const match of error.matchAll(PROVIDER_BUSINESS_ERROR_CODES)) {
-    if (match[1] && KNOWN_PROVIDER_CODES.has(match[1])) codes.add(match[1]);
+    if (match[1]) codes.add(match[1]);
   }
   return [...codes];
 }

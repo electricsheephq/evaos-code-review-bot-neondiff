@@ -575,7 +575,8 @@ export async function retryFailedHeadWithDeps(input: {
       pullNumber: options.pullNumber,
       headSha: options.headSha,
       status: retryStatus,
-      dryRun: options.dryRun
+      dryRun: options.dryRun,
+      providerCooldownError: retryTarget.previousError
     });
     await syncRetryReviewStatusComment({
       config,
@@ -746,6 +747,7 @@ function updateRetryQueueJobsAfterRetry(input: {
   headSha: string;
   status: RetryFailedHeadResult["status"];
   dryRun: boolean;
+  providerCooldownError?: string;
 }): void {
   const retryStates: ReviewQueueJobState[] = ["queued", "leased", "running", "provider_deferred"];
   if (!input.dryRun) retryStates.push("failed");
@@ -762,7 +764,7 @@ function updateRetryQueueJobsAfterRetry(input: {
   if (targetJobs.length === 0) return;
 
   const processed = input.state.getProcessedReview(input.repo, input.pullNumber, input.headSha);
-  const providerCooldown = parseProviderCooldownError(processed?.error);
+  const providerCooldown = parseProviderCooldownError(processed?.error) ?? parseProviderCooldownError(input.providerCooldownError);
   const patch = retryQueuePatchForStatus({
     status: input.status,
     dryRun: input.dryRun,
@@ -772,7 +774,12 @@ function updateRetryQueueJobsAfterRetry(input: {
     processedError: processed?.error
   });
   for (const job of targetJobs) {
-    const lastError = buildRetryQueueLastError({ jobLastError: job.lastError, patchLastError: patch.lastError, patchState: patch.state });
+    const lastError = buildRetryQueueLastError({
+      jobLastError: job.lastError,
+      patchLastError: patch.lastError,
+      patchState: patch.state,
+      fallbackProviderCooldown: providerCooldown
+    });
     input.state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: patch.state,
@@ -796,9 +803,10 @@ function buildRetryQueueLastError(input: {
   jobLastError?: string;
   patchLastError: string;
   patchState: ReviewQueueJobState;
+  fallbackProviderCooldown?: ReturnType<typeof parseProviderCooldownError>;
 }): string {
   if (input.patchState !== "posted") return input.patchLastError;
-  const providerCooldown = parseProviderCooldownError(input.jobLastError);
+  const providerCooldown = parseProviderCooldownError(input.jobLastError) ?? input.fallbackProviderCooldown;
   if (!providerCooldown) return input.patchLastError;
   const previousReason = redactSecrets(providerCooldown.reason ?? "provider_cooldown");
   const previousProviderCode = providerCooldown.providerCode ? redactSecrets(providerCooldown.providerCode) : undefined;

@@ -2132,6 +2132,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts dashboard --config /path/to/live.json --human",
       "npx tsx src/cli.ts budget-status --config /path/to/live.json",
       "npx tsx src/cli.ts provider-throttle-report --config /path/to/live.json --since 7d --timezone Asia/Singapore",
+      "provider-throttle-report peak-window flags use inclusive local-hour buckets, e.g. --peak-start-hour 14 --peak-end-hour 18 includes 14:00 through 18:00",
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
       "npx tsx src/cli.ts build-memory-packet --config /path/to/live.json --repo owner/repo --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-gitnexus-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
