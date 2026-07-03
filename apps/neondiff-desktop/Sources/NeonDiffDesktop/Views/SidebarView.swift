@@ -45,6 +45,7 @@ struct SidebarView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(section.title)
                     }
                 }
 

@@ -11,11 +11,23 @@ let package = Package(
         .executable(name: "NeonDiffDesktopCoreSmoke", targets: ["NeonDiffDesktopCoreSmoke"]),
         .library(name: "NeonDiffDesktopCore", targets: ["NeonDiffDesktopCore"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0")
+    ],
     targets: [
         .target(name: "NeonDiffDesktopCore"),
         .executableTarget(
             name: "NeonDiffDesktop",
-            dependencies: ["NeonDiffDesktopCore"]
+            dependencies: [
+                "NeonDiffDesktopCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
+            resources: [
+                .process("Resources")
+            ],
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
+            ]
         ),
         .executableTarget(
             name: "NeonDiffDesktopCoreSmoke",
