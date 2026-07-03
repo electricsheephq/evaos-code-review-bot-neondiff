@@ -242,6 +242,41 @@ describe("provider throttle report", () => {
     expect(report.summary.providerErrors).toBe(0);
     expect(report.codes).toEqual([]);
   });
+
+  it("drops provider events whose SQLite timestamp cannot be bucketed by JavaScript", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-malformed-timestamp-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 11,
+        headSha: "julian-date-head",
+        status: "skipped",
+        error: "provider_rate_limit_cooldown_until=2000-01-01T12:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302",
+        createdAt: "2451545.0"
+      });
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2000-01-02T00:00:00.000Z"),
+      since: "1999-12-31T00:00:00.000Z",
+      timezone: "Asia/Singapore"
+    });
+
+    expect(report.summary).toMatchObject({
+      providerErrors: 0,
+      droppedEvents: 1,
+      malformedTimestamps: 1
+    });
+    expect(report.hourly).toEqual([]);
+    expect(report.repos).toEqual([]);
+  });
 });
 
 function insertProcessed(

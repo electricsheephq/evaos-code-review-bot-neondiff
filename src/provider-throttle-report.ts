@@ -36,6 +36,8 @@ export interface ProviderThrottleSummary extends ProviderThrottleCounts {
   providerErrors: number;
   peakWindowErrors: number;
   offPeakErrors: number;
+  droppedEvents: number;
+  malformedTimestamps: number;
   worstLocalHour?: string;
 }
 
@@ -178,7 +180,9 @@ function emptyReport(input: {
       networkOrGithubDependency: 0,
       unknownProviderError: 0,
       peakWindowErrors: 0,
-      offPeakErrors: 0
+      offPeakErrors: 0,
+      droppedEvents: 0,
+      malformedTimestamps: 0
     },
     retryOutcomes: {
       retriedPosted: 0,
@@ -266,6 +270,11 @@ function addEventToReport(
   const category = classifyProviderThrottle(event.error);
   if (!category) return;
   const hour = localHour(event.timestamp, timezone);
+  if (!hour) {
+    report.summary.droppedEvents += 1;
+    report.summary.malformedTimestamps += 1;
+    return;
+  }
   const peakWindow = isPeakHour(hour, peakStartHour, peakEndHour);
   const hourly = getHourlyBucket(report, hour, peakWindow);
   const repo = getRepoBucket(report, event.repo);
@@ -415,8 +424,9 @@ function extractProviderCodes(error: string): string[] {
   return [...codes];
 }
 
-function localHour(timestamp: string, timezone: string): string {
+function localHour(timestamp: string, timezone: string): string | undefined {
   const date = parseSqliteUtcTimestamp(timestamp);
+  if (!Number.isFinite(date.getTime())) return undefined;
   const hour = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     hour: "2-digit",
