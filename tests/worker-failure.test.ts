@@ -981,6 +981,18 @@ describe("worker review failures", () => {
       status: "skipped",
       error: "provider_rate_limit_cooldown_until=2000-01-01T00:00:00.000Z; reason=provider_rate_limit"
     });
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "running",
+      clearLease: false,
+      lastError: "retry_started"
+    });
 
     const result = await retryProviderCooldownsWithDeps({
       config,
@@ -1007,6 +1019,11 @@ describe("worker review failures", () => {
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
       status: "skipped",
       error: expect.stringContaining("provider_rate_limit_cooldown_until=")
+    });
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "provider_deferred",
+      nextEligibleAt: expect.stringMatching(/T/),
+      lastError: expect.stringContaining("provider_rate_limit_cooldown_until=")
     });
     state.close();
   });
@@ -1482,6 +1499,201 @@ describe("worker review failures", () => {
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
       status: "posted",
       reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1233#pullrequestreview-1"
+    });
+    state.close();
+  });
+
+  it("keeps dry-run processed retry rows queued instead of marking them posted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-race-dry-run-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1234, "head-retry-dry-run");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "running",
+      clearLease: false,
+      lastError: "retry_started"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async (input) => {
+        state.recordProcessed({
+          repo: "electricsheephq/WorldOS",
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return reviewPull(input);
+      }
+    });
+
+    expect(result.status).toBe("skipped_processed");
+    const updatedQueueJob = state.getReviewQueueJob(queueJob.jobId);
+    expect(updatedQueueJob).toMatchObject({
+      state: "queued",
+      lastError: "retry_did_not_review=skipped_processed:dry_run"
+    });
+    expect(updatedQueueJob?.reviewUrl).toBeUndefined();
+    state.close();
+  });
+
+  it("settles retry-owned RepoSticky session rows for command-recorded outcomes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-command-session-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1235, "head-retry-command");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original timeout"
+    });
+    const assignment = state.assignReviewerSessionJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      ttlMs: 60_000,
+      headCountLimit: 5,
+      allowProcessed: true
+    });
+    if (!assignment.session) throw new Error("expected session assignment");
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha,
+      source: "manual_command",
+      lane: "manual",
+      commentId: 12345,
+      sessionId: assignment.session.sessionId
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "running",
+      sessionId: assignment.session.sessionId,
+      clearLease: false,
+      lastError: "retry_started"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => "skipped_command_explain"
+    });
+
+    expect(result.status).toBe("skipped_command_explain");
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "command_recorded",
+      lastError: "manual_command_explain_recorded"
+    });
+    expect(state.getReviewerSessionJob("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      jobState: "skipped",
+      processedReviewStatus: "skipped"
+    });
+    state.close();
+  });
+
+  it("does not retire automatic retry work when a provider retry only records a command", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-command-auto-isolation-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1236, "head-retry-command-isolated");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original provider cooldown"
+    });
+    const automaticJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: automaticJob.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-01T00:01:00.000Z",
+      lastError: "provider cooldown"
+    });
+    const manualJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha,
+      source: "manual_command",
+      lane: "manual",
+      commentId: 98765
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: manualJob.jobId,
+      state: "running",
+      clearLease: false,
+      lastError: "manual_retry_started"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => "skipped_command_explain"
+    });
+
+    expect(result.status).toBe("skipped_command_explain");
+    expect(state.getReviewQueueJob(manualJob.jobId)).toMatchObject({
+      state: "command_recorded",
+      lastError: "manual_command_explain_recorded"
+    });
+    expect(state.getReviewQueueJob(automaticJob.jobId)).toMatchObject({
+      state: "provider_deferred",
+      lastError: "provider cooldown"
     });
     state.close();
   });

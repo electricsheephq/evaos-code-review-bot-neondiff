@@ -1194,7 +1194,7 @@ function readinessStateForProcessedStatus(
     case "skipped":
       return "skipped";
     case undefined:
-      return "ready_for_human";
+      return "queued";
     default:
       return assertNever(status);
   }
@@ -1345,7 +1345,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
         return;
       }
       const sessionState = reviewerSessionJobStateForProcessedStatus(processed?.status);
-      updateReviewerSessionJobFromQueueStatus(input, sessionState, processed?.status ?? (input.dryRun ? "dry_run" : "posted"));
+      updateReviewerSessionJobFromQueueStatus(input, sessionState, processed?.status);
       return;
     }
     case "skipped_provider_cooldown":
@@ -1510,7 +1510,7 @@ function reviewStatusCommentStateForProcessedStatus(
     case "skipped":
       return "skipped";
     case undefined:
-      return "completed";
+      return "queued";
     default:
       return assertNever(status);
   }
@@ -1527,7 +1527,7 @@ function reviewQueueJobStateForProcessedStatus(status: ProcessedStatus | undefin
     case "skipped":
       return "stale_retired";
     case undefined:
-      return dryRun ? "queued" : "posted";
+      return "queued";
     default:
       return assertNever(status);
   }
@@ -1543,7 +1543,7 @@ function reviewerSessionJobStateForProcessedStatus(status: ProcessedStatus | und
     case "skipped":
       return "skipped";
     case undefined:
-      return "completed";
+      return "assigned";
     default:
       return assertNever(status);
   }

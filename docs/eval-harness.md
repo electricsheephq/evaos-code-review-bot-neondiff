@@ -16,6 +16,14 @@ npm run eval:suite -- \
   --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/local-suite
 ```
 
+Run the paired sticky-vs-cold fixture:
+
+```bash
+npm run eval:sticky-vs-cold -- \
+  --input tests/fixtures/sticky-vs-cold/seeded_quality_packet.json \
+  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold-seeded-quality
+```
+
 The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.
@@ -107,6 +115,31 @@ Supported suites:
 - `safety_redaction`
 - `duplicate_suppression`
 
+Sticky-vs-cold scenarios are paired wrappers around normal offline scenarios.
+They run one cold packet and one sticky packet for the same repo, PR, head SHA,
+suite, and expected label baseline, then write side-by-side deltas and a
+conservative decision. They do not enable public confidence percentages; the
+default output is `advisory` unless the sticky packet regresses safety/quality
+gates or enough measured runtime-safe evidence exists.
+
+The current CLI accepts one paired scenario at a time, so normal single-run
+packets cannot reach `runtime_safe_candidate` with the default evidence-volume
+thresholds. That stronger decision is reserved for a future batch/aggregate
+runner or an explicitly configured evidence packet that proves enough paired
+scenarios, labels, negative controls, provider-attempt observations, and fresh
+sticky context. Fresh sticky context requires both `staleContext: false` and a
+`repoMemoryAgeSeconds` value no older than the default 24-hour freshness cap;
+missing age evidence keeps the result advisory-only.
+
+The sticky-vs-cold output root must be empty before a run starts. The runner
+rejects non-empty roots instead of deleting them, so stale artifacts cannot
+survive into a new evidence packet and the CLI cannot accidentally remove a
+broader eval directory.
+
+An empty sticky-vs-cold label set is not counted as negative-control evidence by
+itself. The wrapper must set `negativeControl: true`, and declared
+negative-control wrappers may not include expected labels.
+
 Supported label sources:
 
 - `coderabbit`
@@ -115,7 +148,10 @@ Supported label sources:
 - `merged_fix`
 - `seeded_defect`
 
-Negative controls use an empty `labels` array. The run passes only when the bot also emits no findings, unless thresholds are intentionally loosened for exploratory scoring.
+Negative controls use an empty `labels` array. In sticky-vs-cold packets, a
+declared negative control only counts and only passes when both cold and sticky
+packets emit zero findings, even when the inner packets use exploratory
+thresholds.
 
 `mode` defaults to `gating`. Gating scenarios may tighten thresholds, but cannot
 silently loosen below the harness defaults. Use `mode: "exploratory"` for scout
@@ -153,6 +189,34 @@ until the public-display policy is satisfied.
 `promotion-decision.md` is the human-readable proof boundary for #8/#26/#85. It
 must say whether calibrated public confidence remains disabled, why, and what
 evidence is missing before any stronger confidence display can be considered.
+
+`eval-sticky-vs-cold` writes paired packet artifacts under `--output-root`:
+
+- `cold/` normal offline eval packet
+- `sticky/` normal offline eval packet
+- `sticky-vs-cold-summary.json`
+- `sticky-vs-cold-report.md`
+
+The sticky-vs-cold summary compares precision, recall, seeded recall, true/false
+positives, false negatives, schema drops, duplicate findings, secret findings,
+and optional runtime metrics such as provider attempts, latency, and token
+counts. The wrapper rejects different cold/sticky expected labels and fails
+closed when sticky recall, seeded recall, false negatives, false positives,
+secret findings, duplicate findings, or schema drops regress beyond the
+non-loosenable default policy. The decision is:
+
+- `not_enough_evidence` when sticky fails packet gates or regresses configured
+  safety/quality thresholds, misses a label matched by the cold baseline, or
+  contains any secret-like finding.
+- `advisory` when the paired comparison is clean but measured evidence is still
+  too small for runtime-safe promotion.
+- `runtime_safe_candidate` only when paired scenarios, labels, P0/P1 labels,
+  negative controls, provider-attempt evidence, explicit fresh sticky context,
+  and repo-memory age evidence meet the configured thresholds. With the current
+  single-input CLI, this requires future batch aggregation; caller-provided
+  sticky-vs-cold thresholds cannot loosen the default promotion policy or
+  freshness cap, and this must not be used as a public calibrated-confidence
+  claim.
 
 `manifest.json` records the effective thresholds, scenario mode, optional
 scenario source, artifact inventory with SHA-256 digests, metadata counts, and
