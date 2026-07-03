@@ -1551,6 +1551,26 @@ export class ReviewStateStore {
     return this.getReviewQueueJob(input.jobId)!;
   }
 
+  updateReviewQueueJobPriority(input: {
+    jobId: string;
+    priority: number;
+    now?: Date;
+  }): ReviewQueueJobRecord {
+    const existing = this.getReviewQueueJob(input.jobId);
+    if (!existing) throw new Error(`No review queue job for jobId ${input.jobId}`);
+    validateReviewQueueInput(existing.repo, existing.pullNumber, existing.headSha, input.priority, existing.commentId);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    this.db
+      .prepare(
+        `update review_queue_jobs
+         set priority = ?,
+             updated_at = ?
+         where job_id = ?`
+      )
+      .run(input.priority, nowIso, input.jobId);
+    return this.getReviewQueueJob(input.jobId)!;
+  }
+
   getReviewQueueJob(jobId: string): ReviewQueueJobRecord | undefined {
     const row = this.db
       .prepare(

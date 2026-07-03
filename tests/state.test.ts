@@ -844,6 +844,45 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("updates queued job priority without losing provider deferral metadata", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-priority-update-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const job = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 172,
+      headSha: "head-a",
+      baseSha: "base-a",
+      priority: 50,
+      now: new Date("2026-07-03T00:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-03T00:05:00.000Z",
+      lastError: "provider_rate_limit_cooldown_until=2026-07-03T00:05:00.000Z; reason=provider_overloaded",
+      now: new Date("2026-07-03T00:00:01.000Z")
+    });
+
+    const updated = store.updateReviewQueueJobPriority({
+      jobId: job.jobId,
+      priority: 1,
+      now: new Date("2026-07-03T00:00:02.000Z")
+    });
+
+    expect(updated).toMatchObject({
+      priority: 1,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-03T00:05:00.000Z",
+      lastError: "provider_rate_limit_cooldown_until=2026-07-03T00:05:00.000Z; reason=provider_overloaded",
+      updatedAt: "2026-07-03T00:00:02.000Z"
+    });
+    expect(() => store.updateReviewQueueJobPriority({ jobId: job.jobId, priority: -1 })).toThrow(
+      "priority must be a non-negative integer"
+    );
+    store.close();
+  });
+
   it("leases bounded queue jobs by provider org repo and manual reserve", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-lease-"));
     roots.push(root);
