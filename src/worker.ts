@@ -1263,6 +1263,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     });
     return "skipped_provider_cooldown";
   }
+  if (input.processedHeadPolicy === "retry_failed_head") {
+    const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
+      return "skipped_processed";
+    }
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const liveBeforeReview = await github.getPull(repo, pull.number);
+    const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
+    if (staleBeforeReview) {
+      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeReview, evidenceDir });
+      return "skipped_stale_head";
+    }
+  }
   const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
   if (!licenseGate.ok) {
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
@@ -1286,10 +1299,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (!lease) return "skipped_capacity";
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (input.processedHeadPolicy === "retry_failed_head") {
-      const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
-      if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
-        return "skipped_processed";
-      }
       const liveBeforeReview = await github.getPull(repo, pull.number);
       const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
       if (staleBeforeReview) {
@@ -1496,7 +1505,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 }
 
-async function buildLicenseGateForPull(input: {
+export async function buildLicenseGateForPull(input: {
   config: BotConfig;
   github: GitHubApi;
   repo: string;
@@ -1522,18 +1531,20 @@ async function buildLicenseGateForPull(input: {
       reason: "license gate skipped for dry-run review"
     };
   }
-  let visibility: "public" | "private" | "unknown" = "unknown";
-  try {
-    const repoMetadata = await getRepoMetadataForLicenseGate(input.github, input.repo);
-    visibility = visibilityFromRepositorySummary(repoMetadata);
-  } catch (error) {
-    return {
-      ok: false,
-      repo: input.repo,
-      visibility,
-      status: "network",
-      reason: `could not determine repo visibility for license gate: ${error instanceof Error ? error.message : String(error)}`
-    };
+  let visibility = visibilityFromPullSummary(input.pull);
+  if (visibility === "unknown") {
+    try {
+      const repoMetadata = await getRepoMetadataForLicenseGate(input.github, input.repo);
+      visibility = visibilityFromRepositorySummary(repoMetadata);
+    } catch (error) {
+      return {
+        ok: false,
+        repo: input.repo,
+        visibility,
+        status: "network",
+        reason: `could not determine repo visibility for license gate: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
   }
   return evaluateLicenseReviewGate({
     config: license,

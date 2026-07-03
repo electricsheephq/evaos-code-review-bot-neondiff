@@ -17,7 +17,7 @@ import {
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { reviewPull } from "../src/worker.js";
+import { buildLicenseGateForPull, reviewPull } from "../src/worker.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -149,6 +149,36 @@ describe("license activation and entitlement cache", () => {
       stale: true,
       classification: "network"
     });
+  });
+
+  it("refreshes stale private gate cache when the API is healthy", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => writeJson(res, 200, {
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true
+    }));
+    servers.push(server);
+    const config = licenseConfig(root, server.url);
+    writeFileSync(join(root, "license.key"), "LIC-refresh-gate-test-123456\n", { mode: 0o600 });
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-01T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+
+    const gate = await evaluateLicenseReviewGate({
+      config,
+      repo: "owner/private",
+      visibility: "private",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+
+    expect(gate).toMatchObject({ ok: true, status: "active" });
   });
 
   it("clears cached active entitlement after terminal API denial", async () => {
@@ -293,6 +323,22 @@ describe("license activation and entitlement cache", () => {
     })).rejects.toMatchObject({
       stderr: expect.stringContaining("NEONDIFF_LICENSE_KEY_DOES_NOT_EXIST did not resolve")
     });
+
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      "src/cli.ts",
+      "license",
+      "status",
+      "--config",
+      configPath,
+      "--refresh",
+      "yes"
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stderr: expect.stringContaining("--refresh must be true or false")
+    });
   });
 
   it("tightens existing file backend key permissions on activation", async () => {
@@ -346,6 +392,38 @@ describe("license activation and entitlement cache", () => {
     expect(gateEvidence).toContain("private repo review requires active entitlement");
     expect(existsSync(join(root, "work"))).toBe(false);
     state.close();
+  });
+
+  it("skips live metadata for dry-run and public repo license gate paths", async () => {
+    const root = mkRoot(roots);
+    const config = minimalConfig(root);
+    const github = new GitHubApi({});
+    github.getRepo = async () => {
+      throw new Error("getRepo should not run");
+    };
+
+    await expect(buildLicenseGateForPull({
+      config,
+      github,
+      repo: "owner/private",
+      pull: pullSummary(8, "dry-run-head"),
+      dryRun: true
+    })).resolves.toMatchObject({
+      ok: true,
+      reason: "license gate skipped for dry-run review"
+    });
+
+    await expect(buildLicenseGateForPull({
+      config,
+      github,
+      repo: "owner/public",
+      pull: publicPullSummary(9, "public-head"),
+      dryRun: false
+    })).resolves.toMatchObject({
+      ok: true,
+      visibility: "public",
+      reason: "public repo path is free"
+    });
   });
 });
 
@@ -494,6 +572,26 @@ function pullSummary(number: number, headSha: string): PullRequestSummary {
       repo: { full_name: "owner/private" }
     },
     html_url: `https://github.com/owner/private/pull/${number}`
+  };
+}
+
+function publicPullSummary(number: number, headSha: string): PullRequestSummary {
+  return {
+    number,
+    title: `PR ${number}`,
+    draft: false,
+    state: "open",
+    head: {
+      sha: headSha,
+      ref: `pr-${number}`,
+      repo: { full_name: "owner/public", private: false, visibility: "public" }
+    },
+    base: {
+      sha: "base",
+      ref: "main",
+      repo: { full_name: "owner/public", private: false, visibility: "public" }
+    },
+    html_url: `https://github.com/owner/public/pull/${number}`
   };
 }
 

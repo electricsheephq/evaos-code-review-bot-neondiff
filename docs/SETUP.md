@@ -112,6 +112,11 @@ is true.
 The `keychain` backend remains listed for future native macOS storage support,
 but headless CLI activation currently rejects Keychain writes rather than passing
 license keys through `security add-generic-password` process arguments.
+Treat `--license-storage keychain` as read/delete-only for pre-existing native
+items during this beta; `license activate` with `keychain` intentionally throws.
+The local `machineId` sent to the license API is advisory beta metadata derived
+from host name and platform, not hardware attestation or a durable seat-binding
+primitive.
 
 ## 4. Check Readiness
 

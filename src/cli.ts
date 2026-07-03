@@ -133,7 +133,7 @@ async function main(): Promise<void> {
     if (action === "status") {
       const result = await getLicenseStatus({
         config: licenseConfig,
-        refresh: args.refresh === "true",
+        refresh: args.refresh === undefined ? false : parseBooleanArg(args.refresh, "--refresh"),
         ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
       });
       console.log(stringifyRedactedJson({ command: "license status", ...result }));
@@ -143,7 +143,7 @@ async function main(): Promise<void> {
     if (action === "deactivate") {
       const result = await deactivateLicense({
         config: licenseConfig,
-        notifyApi: args["notify-api"] === "true"
+        notifyApi: args["notify-api"] === undefined ? false : parseBooleanArg(args["notify-api"], "--notify-api")
       });
       console.log(stringifyRedactedJson({ command: "license deactivate", ...result }));
       return;

@@ -201,7 +201,7 @@ export async function evaluateLicenseReviewGate(input: {
   const status = await getLicenseStatus({
     config: input.config,
     repo: input.repo,
-    refresh: false,
+    refresh: true,
     now: input.now,
     fetchImpl: input.fetchImpl
   });
@@ -507,8 +507,10 @@ function readKeychainLicenseKey(config: LicenseConfig): string | undefined {
     config.keychainAccount,
     "-w"
   ], { encoding: "utf8" });
-  if (result.status !== 0) return undefined;
   const key = result.stdout.trim();
+  result.stdout = "";
+  result.stderr = "";
+  if (result.status !== 0) return undefined;
   return key || undefined;
 }
 
