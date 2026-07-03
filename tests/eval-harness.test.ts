@@ -1264,6 +1264,49 @@ describe("offline eval harness", () => {
     expect(explicit.summary.evidenceCounts.negativeControlScenarios).toBe(1);
   });
 
+  it("fails declared negative-control evidence when either packet emits findings", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-dirty-negative-control-"));
+    roots.push(outputRoot);
+    const finding = {
+      severity: "P3" as const,
+      path: "src/worker.ts",
+      line: 12,
+      title: "Noisy advisory",
+      body: "A clean negative-control packet should not produce findings.",
+      confidence: 0.4
+    };
+    const packet = {
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 85,
+      headSha: "abc",
+      suite: "canary_shadow" as const,
+      mode: "exploratory" as const,
+      botFindings: { findings: [finding] },
+      labels: [],
+      thresholds: {
+        minPrecision: 0,
+        minRecall: 0
+      }
+    };
+
+    const result = runStickyVsColdEval({
+      runId: "sticky-vs-cold-dirty-negative-control",
+      negativeControl: true,
+      cold: { ...packet, runId: "cold-noisy" },
+      sticky: { ...packet, runId: "sticky-noisy" },
+      coldRuntime: { providerAttempts: 1 },
+      stickyRuntime: { providerAttempts: 1, staleContext: false, repoMemoryAgeSeconds: 60 }
+    }, { outputRoot });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.decision).toBe("not_enough_evidence");
+    expect(result.summary.evidenceCounts.negativeControlScenarios).toBe(0);
+    expect(result.summary.gates.find((gate) => gate.name === "negative_control_clean")).toMatchObject({
+      ok: false,
+      status: "fail"
+    });
+  });
+
   it("rejects declared negative-control scenarios with expected labels", () => {
     const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-negative-labels-"));
     roots.push(outputRoot);

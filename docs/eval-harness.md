@@ -148,7 +148,10 @@ Supported label sources:
 - `merged_fix`
 - `seeded_defect`
 
-Negative controls use an empty `labels` array. The run passes only when the bot also emits no findings, unless thresholds are intentionally loosened for exploratory scoring.
+Negative controls use an empty `labels` array. In sticky-vs-cold packets, a
+declared negative control only counts and only passes when both cold and sticky
+packets emit zero findings, even when the inner packets use exploratory
+thresholds.
 
 `mode` defaults to `gating`. Gating scenarios may tighten thresholds, but cannot
 silently loosen below the harness defaults. Use `mode: "exploratory"` for scout

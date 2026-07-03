@@ -505,11 +505,12 @@ function buildStickyVsColdSummary(input: {
     coldRuntime: input.input.coldRuntime,
     stickyRuntime: input.input.stickyRuntime
   });
+  const negativeControlClean = hasCleanNegativeControlEvidence(input.cold.scorecard, input.sticky.scorecard);
   const evidenceCounts = {
     pairedScenarios: 1,
     labeledFindings: input.sticky.scorecard.counts.labels,
     p0p1Labels: input.sticky.scorecard.counts.p0p1Labels,
-    negativeControlScenarios: input.input.negativeControl === true ? 1 : 0
+    negativeControlScenarios: input.input.negativeControl === true && negativeControlClean ? 1 : 0
   };
   const gates = buildStickyVsColdGates({
     cold: input.cold,
@@ -517,7 +518,8 @@ function buildStickyVsColdSummary(input: {
     deltas,
     thresholds: input.thresholds,
     coldRuntime: input.input.coldRuntime,
-    stickyRuntime: input.input.stickyRuntime
+    stickyRuntime: input.input.stickyRuntime,
+    negativeControl: input.input.negativeControl
   });
   const ok = gates.every((gate) => gate.ok);
   const providerAttemptsComparable =
@@ -613,6 +615,7 @@ function buildStickyVsColdGates(input: {
   thresholds: StickyVsColdThresholds;
   coldRuntime?: StickyVsColdRuntimeMetrics;
   stickyRuntime?: StickyVsColdRuntimeMetrics;
+  negativeControl?: boolean;
 }): StickyVsColdSummary["gates"] {
   const providerAttemptsComparable =
     typeof input.coldRuntime?.providerAttempts === "number" &&
@@ -624,6 +627,7 @@ function buildStickyVsColdGates(input: {
   const stickyMatchedLabelSet = new Set(input.sticky.scorecard.matchedLabelKeys);
   const missingColdMatchesInSticky = input.cold.scorecard.matchedLabelKeys
     .filter((labelKey) => !stickyMatchedLabelSet.has(labelKey));
+  const negativeControlClean = hasCleanNegativeControlEvidence(input.cold.scorecard, input.sticky.scorecard);
   return [
     {
       name: "sticky_packet_ok",
@@ -636,6 +640,18 @@ function buildStickyVsColdGates(input: {
       ok: input.sticky.scorecard.counts.secretFindings === 0,
       status: input.sticky.scorecard.counts.secretFindings === 0 ? "pass" : "fail",
       detail: `${input.sticky.scorecard.counts.secretFindings} sticky secret-like finding(s)`
+    },
+    {
+      name: "negative_control_clean",
+      ok: input.negativeControl !== true || negativeControlClean,
+      status: input.negativeControl === true
+        ? negativeControlClean ? "pass" : "fail"
+        : "skip",
+      detail: input.negativeControl === true
+        ? negativeControlClean
+          ? "declared negative control has zero cold/sticky labels, findings, and false positives"
+          : "declared negative control must have zero cold/sticky labels, findings, and false positives"
+        : "SKIPPED: scenario is not declared as a negative control"
     },
     {
       name: "no_secret_regression",
@@ -780,6 +796,14 @@ function buildStickyVsColdGates(input: {
       detail: input.cold.ok ? "cold packet gates passed" : "cold packet gates failed; paired comparison cannot pass"
     }
   ];
+}
+
+function hasCleanNegativeControlEvidence(cold: EvalScorecard, sticky: EvalScorecard): boolean {
+  return [cold, sticky].every((scorecard) =>
+    scorecard.counts.labels === 0 &&
+    scorecard.counts.botFindings === 0 &&
+    scorecard.counts.falsePositive === 0
+  );
 }
 
 function buildStickyVsColdReport(summary: StickyVsColdSummary): string {
