@@ -415,16 +415,7 @@ function classifyProviderThrottle(error: string): ProviderThrottleCategory | und
   ) {
     return "requestRateLimit";
   }
-  if (
-    normalized.includes("github api fetch failed") ||
-    normalized.includes("enotfound") ||
-    normalized.includes("econnreset") ||
-    normalized.includes("eaddrnotavail") ||
-    normalized.includes("nghttp2") ||
-    normalized.includes("connect timeout") ||
-    normalized.includes("unable to verify first certificate") ||
-    normalized.includes("fetch failed")
-  ) {
+  if (isNetworkOrGithubDependencySignal(normalized)) {
     return "networkOrGithubDependency";
   }
   if (
@@ -500,6 +491,25 @@ function extractProviderCodes(error: string): string[] {
     if (match[1]) codes.add(match[1]);
   }
   return [...codes];
+}
+
+function isNetworkOrGithubDependencySignal(normalizedError: string): boolean {
+  return normalizedError.includes("github api fetch failed") ||
+    normalizedError.includes("api.github.com") ||
+    normalizedError.includes("enotfound") ||
+    normalizedError.includes("econnreset") ||
+    normalizedError.includes("eaddrnotavail") ||
+    normalizedError.includes("nghttp2") ||
+    normalizedError.includes("connect timeout") ||
+    normalizedError.includes("unable to verify first certificate") ||
+    (
+      normalizedError.includes("fetch failed") &&
+      (
+        normalizedError.includes("github") ||
+        normalizedError.includes("provider") ||
+        normalizedError.includes("api.github.com")
+      )
+    );
 }
 
 function hasRetryAttemptTrail(error: string): boolean {

@@ -309,6 +309,14 @@ describe("provider throttle report", () => {
         error: "reviewer provider not configured",
         createdAt: "2026-07-01 10:00:00"
       });
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 13,
+        headSha: "generic-fetch-head",
+        status: "failed",
+        error: "Tool failed while fetching a project URL: fetch failed",
+        createdAt: "2026-07-01 11:00:00"
+      });
     } finally {
       db.close();
     }
