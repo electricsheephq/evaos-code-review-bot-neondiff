@@ -1734,10 +1734,14 @@ describe("public NeonDiff CLI surface", () => {
     new ReviewStateStore(statePath).close();
     const db = new DatabaseSync(statePath);
     try {
+      const recentTimestamp = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .replace("T", " ")
+        .replace(/\.\d+Z$/, "");
       db.prepare(
         `insert into processed_reviews (repo, pull_number, head_sha, status, error, created_at)
-         values ('owner/repo', 1, 'head-provider-overload', 'failed', ?, '2026-07-01 08:00:00')`
-      ).run("ProviderBusinessError: [1305][temporarily overloaded] providerRequestId: 'secret-request-id'");
+         values ('owner/repo', 1, 'head-provider-overload', 'failed', ?, ?)`
+      ).run("ProviderBusinessError: [1305][temporarily overloaded] providerRequestId: 'secret-request-id'", recentTimestamp);
     } finally {
       db.close();
     }
@@ -1767,6 +1771,9 @@ describe("public NeonDiff CLI surface", () => {
       codes: [{ code: "1305", count: 1 }]
     });
     expect(stdout).not.toContain("secret-request-id");
+    expect(stdout).not.toContain("ProviderBusinessError");
+    expect(stdout).not.toContain("[1305]");
+    expect(stdout).not.toContain("temporarily overloaded");
   });
 
   it("prints launchd daemon control plans in dry-run mode by default", async () => {

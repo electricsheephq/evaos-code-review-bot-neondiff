@@ -48,6 +48,7 @@ describe("provider throttle report", () => {
         repo: "owner/repo",
         pullNumber: 4,
         headSha: "queue-deferred",
+        providerId: "GLM-5.2",
         state: "provider_deferred",
         lastError: "ProviderBusinessError: [1305][temporarily overloaded]",
         createdAt: "2026-07-01T10:00:00.000Z",
@@ -57,8 +58,9 @@ describe("provider throttle report", () => {
         repo: "owner/other",
         pullNumber: 5,
         headSha: "network-head",
+        providerId: "GLM-5.2",
         state: "failed",
-        lastError: "GitHub API fetch failed for /app/installations/access_tokens: fetch failed; cause=Error: getaddrinfo ENOTFOUND api.github.com",
+        lastError: "GitHub API fetch failed for /app/installations/access_tokens: fetch failed; providerRequestId: 'secret-request-id'; cause=Error: getaddrinfo ENOTFOUND api.github.com",
         createdAt: "2026-07-01T11:00:00.000Z",
         updatedAt: "2026-07-01T11:01:00.000Z"
       });
@@ -66,6 +68,7 @@ describe("provider throttle report", () => {
         repo: "owner/repo",
         pullNumber: 6,
         headSha: "posted-head",
+        providerId: "GLM-5.2",
         state: "posted",
         lastError: "reviewed_after_provider_deferred; previous_reason=provider_request_rate_limit; previous_provider_code=1302",
         createdAt: "2026-07-01T12:00:00.000Z",
@@ -116,6 +119,10 @@ describe("provider throttle report", () => {
       repo: "owner/repo",
       total: 4
     });
+    expect(report.providers).toEqual([
+      expect.objectContaining({ providerId: "GLM-5.2", total: 3 }),
+      expect.objectContaining({ providerId: "unknown", total: 3 })
+    ]);
     expect(report.knownLimitations).toContain(
       "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted."
     );
@@ -131,6 +138,21 @@ describe("provider throttle report", () => {
       statePath,
       timezone: "Foo/Bar"
     })).toThrow("Invalid --timezone value: Foo/Bar");
+  });
+
+  it("rejects invalid peak-window hour values before aggregating", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-peak-hour-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+
+    expect(() => collectProviderThrottleReport({
+      statePath,
+      peakStartHour: 24
+    })).toThrow("Invalid --peak-start-hour value: 24; expected an integer from 0 to 23");
+    expect(() => collectProviderThrottleReport({
+      statePath,
+      peakEndHour: 14.5
+    })).toThrow("Invalid --peak-end-hour value: 14.5; expected an integer from 0 to 23");
   });
 
   it("deduplicates processed and queued rows for the same provider incident", () => {
@@ -152,10 +174,21 @@ describe("provider throttle report", () => {
         repo: "owner/repo",
         pullNumber: 7,
         headSha: "same-provider-head",
+        providerId: "GLM-5.2",
         state: "provider_deferred",
         lastError: "provider_rate_limit_cooldown_until=2026-07-01T08:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302",
         createdAt: "2026-07-01T08:00:00.000Z",
         updatedAt: "2026-07-01T08:01:00.000Z"
+      });
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 7,
+        headSha: "same-provider-head",
+        providerId: "GLM-5.2",
+        state: "posted",
+        lastError: "reviewed_after_provider_deferred; previous_reason=provider_request_rate_limit; previous_provider_code=1302",
+        createdAt: "2026-07-01T08:00:00.000Z",
+        updatedAt: "2026-07-01T09:01:00.000Z"
       });
     } finally {
       db.close();
@@ -170,7 +203,8 @@ describe("provider throttle report", () => {
 
     expect(report.summary.providerErrors).toBe(1);
     expect(report.summary.requestRateLimit).toBe(1);
-    expect(report.retryOutcomes.retriedProviderDeferred).toBe(1);
+    expect(report.retryOutcomes.retriedProviderDeferred).toBe(0);
+    expect(report.retryOutcomes.retriedPosted).toBe(1);
     expect(report.codes).toContainEqual({ code: "1302", count: 1 });
   });
 
@@ -314,13 +348,14 @@ function insertQueueJob(
     lastError: string;
     createdAt: string;
     updatedAt: string;
+    providerId?: string;
   }
 ): void {
   db.prepare(
     `insert into review_queue_jobs
       (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
-       priority, state, last_error, created_at, updated_at)
-     values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, ?, ?, ?, ?)`
+       provider_id, priority, state, last_error, created_at, updated_at)
+     values (?, ?, 'automatic', 'background', ?, ?, ?, ?, ?, 50, ?, ?, ?, ?)`
   ).run(
     `${input.state}-${input.headSha}`,
     `${input.state}:${input.repo}#${input.pullNumber}@${input.headSha}`,
@@ -328,6 +363,7 @@ function insertQueueJob(
     input.repo.split("/")[0],
     input.pullNumber,
     input.headSha,
+    input.providerId ?? null,
     input.state,
     input.lastError,
     input.createdAt,

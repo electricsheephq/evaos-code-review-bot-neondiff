@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { redactSecrets } from "./secrets.js";
 
 export interface ProviderThrottleReportOptions {
   statePath: string;
@@ -29,6 +30,7 @@ export interface ProviderThrottleReport {
   codes: Array<{ code: string; count: number }>;
   hourly: ProviderThrottleHourlyBucket[];
   repos: ProviderThrottleRepoBucket[];
+  providers: ProviderThrottleProviderBucket[];
   knownLimitations: string[];
 }
 
@@ -61,6 +63,11 @@ export interface ProviderThrottleRepoBucket extends ProviderThrottleCounts {
   total: number;
 }
 
+export interface ProviderThrottleProviderBucket extends ProviderThrottleCounts {
+  providerId: string;
+  total: number;
+}
+
 interface ProviderThrottleCounts {
   requestRateLimit: number;
   overloaded: number;
@@ -83,6 +90,7 @@ interface ProviderThrottleEvent {
   status: string;
   error: string;
   timestamp: string;
+  providerId: string;
   source: "processed_reviews" | "review_queue_jobs";
 }
 
@@ -101,6 +109,7 @@ interface ReviewQueueErrorRow {
   head_sha: string;
   state: string;
   last_error: string | null;
+  provider_id?: string | null;
   created_at: string;
   updated_at: string;
   started_at?: string | null;
@@ -121,6 +130,8 @@ export function collectProviderThrottleReport(input: ProviderThrottleReportOptio
   assertValidTimezone(timezone);
   const peakStartHour = input.peakStartHour ?? DEFAULT_PEAK_START_HOUR;
   const peakEndHour = input.peakEndHour ?? DEFAULT_PEAK_END_HOUR;
+  assertValidHour("--peak-start-hour", peakStartHour);
+  assertValidHour("--peak-end-hour", peakEndHour);
   const sinceRaw = input.since ?? DEFAULT_SINCE;
   const sinceStart = resolveSinceStart(sinceRaw, now);
   const report = emptyReport({
@@ -147,6 +158,7 @@ export function collectProviderThrottleReport(input: ProviderThrottleReportOptio
   report.codes.sort((left, right) => right.count - left.count || left.code.localeCompare(right.code));
   report.hourly.sort((left, right) => left.localHour.localeCompare(right.localHour));
   report.repos.sort((left, right) => right.total - left.total || left.repo.localeCompare(right.repo));
+  report.providers.sort((left, right) => right.total - left.total || left.providerId.localeCompare(right.providerId));
   report.summary.worstLocalHour = findWorstLocalHour(report.hourly);
   return report;
 }
@@ -196,9 +208,12 @@ function emptyReport(input: {
     codes: [],
     hourly: [],
     repos: [],
+    providers: [],
     knownLimitations: [
       "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted.",
-      "processed_reviews events are bucketed by created_at; review_queue_jobs events are bucketed by coalesce(finished_at, updated_at, started_at, created_at), so deduped queue incidents may reflect retry/update time instead of first-observed throttle time."
+      "processed_reviews events are bucketed by created_at; review_queue_jobs events are bucketed by coalesce(finished_at, updated_at, started_at, created_at), so deduped queue incidents may reflect retry/update time instead of first-observed throttle time.",
+      "processed_reviews does not store provider_id, so provider context for those rows is reported as unknown.",
+      "retryOutcomes is sourced from review_queue_jobs current state only; stale queue rows can skew retry outcome telemetry until the worker repairs them."
     ]
   };
 }
@@ -227,6 +242,7 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
         status: row.status,
         error: row.error,
         timestamp: row.created_at,
+        providerId: "unknown",
         source: "processed_reviews"
       });
     }
@@ -236,13 +252,17 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
     const timestampExpr = queueTimestampExpression(db);
     const rows = db
       .prepare(
-        `select repo, pull_number, head_sha, state, last_error, created_at, updated_at,
+        `select repo, pull_number, head_sha, state, last_error,
+                ${hasColumn(db, "review_queue_jobs", "provider_id") ? "provider_id" : "null as provider_id"},
+                created_at, updated_at,
                 ${hasColumn(db, "review_queue_jobs", "started_at") ? "started_at" : "null as started_at"},
                 ${hasColumn(db, "review_queue_jobs", "finished_at") ? "finished_at" : "null as finished_at"}
          from review_queue_jobs
          where last_error is not null
+           and state not in ('queued', 'leased', 'running')
            and datetime(${timestampExpr}) >= datetime(?)
-           and datetime(${timestampExpr}) <= datetime(?)`
+           and datetime(${timestampExpr}) <= datetime(?)
+         order by datetime(${timestampExpr}) asc`
       )
       .all(start, end) as unknown as ReviewQueueErrorRow[];
     for (const row of rows) {
@@ -254,6 +274,7 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
         status: row.state,
         error: row.last_error,
         timestamp: row.finished_at ?? row.updated_at ?? row.started_at ?? row.created_at,
+        providerId: normalizeProviderId(row.provider_id),
         source: "review_queue_jobs"
       });
     }
@@ -280,6 +301,7 @@ function addEventToReport(
   const peakWindow = isPeakHour(hour, peakStartHour, peakEndHour);
   const hourly = getHourlyBucket(report, hour, peakWindow);
   const repo = getRepoBucket(report, event.repo);
+  const provider = getProviderBucket(report, event.providerId);
 
   report.summary.providerErrors += 1;
   report.summary[category] += 1;
@@ -287,6 +309,8 @@ function addEventToReport(
   hourly[category] += 1;
   repo.total += 1;
   repo[category] += 1;
+  provider.total += 1;
+  provider[category] += 1;
   if (peakWindow) report.summary.peakWindowErrors += 1;
   else report.summary.offPeakErrors += 1;
 
@@ -321,6 +345,18 @@ function getRepoBucket(report: ProviderThrottleReport, repo: string): ProviderTh
     ...emptyCounts()
   };
   report.repos.push(created);
+  return created;
+}
+
+function getProviderBucket(report: ProviderThrottleReport, providerId: string): ProviderThrottleProviderBucket {
+  const existing = report.providers.find((row) => row.providerId === providerId);
+  if (existing) return existing;
+  const created: ProviderThrottleProviderBucket = {
+    providerId,
+    total: 0,
+    ...emptyCounts()
+  };
+  report.providers.push(created);
   return created;
 }
 
@@ -396,11 +432,22 @@ function dedupeProviderThrottleEvents(events: ProviderThrottleEvent[]): Provider
       extractProviderCodes(event.error).sort().join(",")
     ].join("\0");
     const existing = byIncident.get(key);
-    if (!existing || event.source === "review_queue_jobs") {
+    if (!existing || shouldReplaceProviderThrottleIncident(existing, event)) {
       byIncident.set(key, event);
     }
   }
   return [...byIncident.values()];
+}
+
+function shouldReplaceProviderThrottleIncident(existing: ProviderThrottleEvent, candidate: ProviderThrottleEvent): boolean {
+  if (existing.source === "processed_reviews" && candidate.source === "review_queue_jobs") return true;
+  if (existing.source === "review_queue_jobs" && candidate.source === "processed_reviews") return false;
+  return eventTimestampMs(candidate) >= eventTimestampMs(existing);
+}
+
+function eventTimestampMs(event: ProviderThrottleEvent): number {
+  const date = parseSqliteUtcTimestamp(event.timestamp);
+  return Number.isFinite(date.getTime()) ? date.getTime() : Number.NEGATIVE_INFINITY;
 }
 
 function addRetryOutcome(report: ProviderThrottleReport, event: ProviderThrottleEvent): void {
@@ -456,6 +503,17 @@ function assertValidTimezone(timezone: string): void {
   } catch {
     throw new Error(`Invalid --timezone value: ${timezone}`);
   }
+}
+
+function assertValidHour(name: string, hour: number): void {
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    throw new Error(`Invalid ${name} value: ${hour}; expected an integer from 0 to 23`);
+  }
+}
+
+function normalizeProviderId(value?: string | null): string {
+  const redacted = redactSecrets(value?.trim() || "unknown");
+  return redacted || "unknown";
 }
 
 function isPeakHour(localHour: string, peakStartHour: number, peakEndHour: number): boolean {

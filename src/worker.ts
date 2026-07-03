@@ -800,10 +800,12 @@ function buildRetryQueueLastError(input: {
   if (input.patchState !== "posted") return input.patchLastError;
   const providerCooldown = parseProviderCooldownError(input.jobLastError);
   if (!providerCooldown) return input.patchLastError;
+  const previousReason = redactSecrets(providerCooldown.reason ?? "provider_cooldown");
+  const previousProviderCode = providerCooldown.providerCode ? redactSecrets(providerCooldown.providerCode) : undefined;
   return [
     `${input.patchLastError}_after_provider_deferred`,
-    `previous_reason=${providerCooldown.reason ?? "provider_cooldown"}`,
-    ...(providerCooldown.providerCode ? [`previous_provider_code=${providerCooldown.providerCode}`] : [])
+    `previous_reason=${previousReason}`,
+    ...(previousProviderCode ? [`previous_provider_code=${previousProviderCode}`] : [])
   ].join("; ");
 }
 
