@@ -589,6 +589,36 @@ describe("license activation and entitlement cache", () => {
     expect(getRepoCalls).toBe(1);
   });
 
+  it("caches fallback public repo visibility metadata during license gate checks", async () => {
+    const root = mkRoot(roots);
+    const config = minimalConfig(root);
+    let getRepoCalls = 0;
+    const github = new GitHubApi({});
+    github.getRepo = async () => {
+      getRepoCalls += 1;
+      return { full_name: "owner/cache-public-visibility", private: false as const, visibility: "public" as const };
+    };
+
+    for (const head of ["public-head-a", "public-head-b"]) {
+      const pull = pullSummary(13, head);
+      await expect(buildLicenseGateForPull({
+        config,
+        github,
+        repo: "owner/cache-public-visibility",
+        pull: {
+          ...pull,
+          base: { ...pull.base, repo: { full_name: "owner/cache-public-visibility" } }
+        },
+        dryRun: false
+      })).resolves.toMatchObject({
+        ok: true,
+        visibility: "public"
+      });
+    }
+
+    expect(getRepoCalls).toBe(1);
+  });
+
   it("does not retry repo metadata lookup inside the license gate fallback", async () => {
     const root = mkRoot(roots);
     const config = minimalConfig(root);

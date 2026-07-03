@@ -65,6 +65,7 @@ import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
 import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan } from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
+const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
 const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private"; expiresAtMs: number }>();
 
 export interface RunOnceOptions {
@@ -917,14 +918,19 @@ function retryQueuePatchForStatus(input: {
         sessionJobState: "skipped",
         sessionProcessedStatus: "skipped"
       };
+    case "skipped_license_gate":
+      return {
+        state: "blocked_on_proof",
+        lastError: input.processedError ?? "license_entitlement_required",
+        sessionJobState: "assigned"
+      };
     case "failed":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
-    case "skipped_license_gate":
       return {
         state: "failed",
-        lastError: input.status === "skipped_license_gate" ? "license_entitlement_required" : `retry_did_not_review=${input.status}`,
+        lastError: `retry_did_not_review=${input.status}`,
         sessionJobState: "failed",
         sessionProcessedStatus: "failed"
       };
@@ -1570,21 +1576,30 @@ function visibilityFromPullSummary(pull: PullRequestSummary): "public" | "privat
 async function getRepoVisibilityForLicenseGate(github: GitHubApi, repo: string): Promise<"public" | "private" | "unknown"> {
   const now = Date.now();
   const cached = licenseGateRepoVisibilityCache.get(repo);
-  if (cached && cached.expiresAtMs > now) return cached.visibility;
+  if (cached) {
+    if (cached.expiresAtMs > now) return cached.visibility;
+    licenseGateRepoVisibilityCache.delete(repo);
+  }
 
   const repoMetadata = await getRepoMetadataForLicenseGate(github, repo);
   const visibility = visibilityFromRepositorySummary(repoMetadata);
-  if (visibility === "private") {
-    licenseGateRepoVisibilityCache.set(repo, {
-      visibility,
-      expiresAtMs: now + LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS
-    });
-  }
+  if (visibility === "public" || visibility === "private") cacheLicenseGateRepoVisibility(repo, visibility, now);
   return visibility;
 }
 
 async function getRepoMetadataForLicenseGate(github: GitHubApi, repo: string): ReturnType<GitHubApi["getRepo"]> {
   return github.getRepo(repo);
+}
+
+function cacheLicenseGateRepoVisibility(repo: string, visibility: "public" | "private", now: number): void {
+  if (!licenseGateRepoVisibilityCache.has(repo) && licenseGateRepoVisibilityCache.size >= LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES) {
+    const oldest = licenseGateRepoVisibilityCache.keys().next().value;
+    if (oldest) licenseGateRepoVisibilityCache.delete(oldest);
+  }
+  licenseGateRepoVisibilityCache.set(repo, {
+    visibility,
+    expiresAtMs: now + LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS
+  });
 }
 
 function recordActivationBaselineExistingHead(state: ReviewStateStore, repo: string, pull: PullRequestSummary): void {

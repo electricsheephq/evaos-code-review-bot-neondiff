@@ -168,7 +168,7 @@ export function buildReviewBudgetStatus(input: {
   const activeProvider = countBy(active, (job) => providerKey(job));
   const activeOrg = countBy(active, (job) => job.org);
   const activeRepo = countBy(active, (job) => job.repo);
-  const queued = jobs.filter((job) => job.state === "queued" || job.state === "provider_deferred");
+  const queued = jobs.filter((job) => job.state === "queued" || job.state === "provider_deferred" || job.state === "blocked_on_proof");
   const manualQueued = queued.filter((job) => job.lane === "manual").length;
   const activeManual = active.filter((job) => job.lane === "manual").length;
 
@@ -180,7 +180,7 @@ export function buildReviewBudgetStatus(input: {
   }
 
   const eligible = queued
-    .filter((job) => job.state === "queued" || isProviderDeferredEligible(job, now))
+    .filter((job) => job.state === "queued" || job.state === "blocked_on_proof" || isProviderDeferredEligible(job, now))
     .sort(compareQueueJobsForBudget);
   const hasManualAfter = buildManualEligibilitySuffix(eligible);
   const wouldLease: ReviewBudgetCandidate[] = [];

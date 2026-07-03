@@ -1606,7 +1606,7 @@ export class ReviewStateStore {
           .prepare(
             `update review_queue_jobs
              set state = 'leased', lease_id = ?, lease_expires_at = ?, updated_at = ?
-             where job_id = ? and state in ('queued', 'provider_deferred')`
+             where job_id = ? and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
           )
           .run(leaseId, leaseExpiresAt, nowIso, job.jobId);
         providerActive.set(provider, providerCount + 1);
@@ -2690,6 +2690,7 @@ function repoOrg(repo: string): string {
 
 function isQueueJobEligible(job: ReviewQueueJobRecord, nowIso: string): boolean {
   if (job.state === "queued") return true;
+  if (job.state === "blocked_on_proof") return true;
   if (job.state !== "provider_deferred") return false;
   if (!job.nextEligibleAt) return true;
   const nextEligibleAtMs = Date.parse(job.nextEligibleAt);

@@ -222,7 +222,7 @@ export async function runScheduledCycleWithDeps(input: {
     }
   }
 
-  result.queue.remainingQueued = input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred"] }).length;
+  result.queue.remainingQueued = input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "blocked_on_proof"] }).length;
   return result;
 }
 
@@ -487,7 +487,7 @@ function reprioritizeExistingSelfRepoQueueJobs(input: {
   const targetPriority = automaticQueuePriority(input.config, SELF_REPO);
   if (targetPriority === undefined) return 0;
   let updated = 0;
-  for (const job of input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred"] })) {
+  for (const job of input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "blocked_on_proof"] })) {
     if (job.repo.toLowerCase() !== SELF_REPO) continue;
     if (job.source !== "automatic" || job.lane !== "background") continue;
     if (job.priority <= targetPriority) continue;
@@ -574,7 +574,7 @@ async function retireSupersededQueueJobsForPull(input: {
   const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
     pullNumber: input.pull.number,
-    states: ["queued", "provider_deferred"]
+    states: ["queued", "provider_deferred", "blocked_on_proof"]
   }).filter((job) => job.headSha !== input.pull.head.sha);
 
   for (const job of jobs) {
@@ -620,7 +620,7 @@ async function retireQueuedJobsForClosedPull(input: {
   const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
     pullNumber: input.pull.number,
-    states: ["queued", "provider_deferred"]
+    states: ["queued", "provider_deferred", "blocked_on_proof"]
   });
 
   for (const job of jobs) {
@@ -891,7 +891,7 @@ async function runLeasedQueueJob(input: {
       dryRun: input.dryRun,
       useZCode: input.useZCode,
       budget: input.budget,
-      processedHeadPolicy: isProviderDeferredRetryJob(input.job) ? "retry_failed_head" : "normal",
+      processedHeadPolicy: processedHeadPolicyForQueueJob(input.state, input.job, pull),
       allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
@@ -1695,14 +1695,14 @@ function getActiveQueueJobForHead(
 ): ReviewQueueJobRecord | undefined {
   return state.listReviewQueueJobs({
     repo,
-    states: ["queued", "leased", "running", "provider_deferred"]
+    states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"]
   }).find((job) => job.pullNumber === pullNumber && job.headSha === headSha);
 }
 
 function hasRepoQueueCapacity(state: ReviewStateStore, repo: string, maxQueuedPerRepo: number): boolean {
   const active = state.listReviewQueueJobs({
     repo,
-    states: ["queued", "leased", "running", "provider_deferred"]
+    states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"]
   });
   return active.length < maxQueuedPerRepo;
 }
@@ -1714,6 +1714,18 @@ function isProviderDeferredRetryJob(job: ReviewQueueJobRecord): boolean {
     job.lastError?.includes("repo_provider_cooldown_until=") ||
     job.lastError === "provider_deferred_without_cooldown"
   );
+}
+
+function processedHeadPolicyForQueueJob(
+  state: ReviewStateStore,
+  job: ReviewQueueJobRecord,
+  pull: PullRequestSummary
+): ReviewPullInput["processedHeadPolicy"] {
+  if (isProviderDeferredRetryJob(job)) return "retry_failed_head";
+  const processed = state.getProcessedReview(job.repo, pull.number, pull.head.sha);
+  return processed?.status === "failed" || parseProviderCooldownError(processed?.error)
+    ? "retry_failed_head"
+    : "normal";
 }
 
 function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): void {

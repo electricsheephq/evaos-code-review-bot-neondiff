@@ -1678,6 +1678,58 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("retries blocked_on_proof queue jobs after entitlement activation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-blocked-proof-retry-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    const job = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      baseSha: "base",
+      providerId: "zai",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "blocked_on_proof",
+      lastError: "license_entitlement_required",
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+    const policies: Array<ReviewPullInput["processedHeadPolicy"]> = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, processedHeadPolicy }) => {
+        policies.push(processedHeadPolicy);
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: `https://github.com/${repo}/pull/${reviewPull.number}#pullrequestreview-blocked-proof-retry`
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(policies).toEqual(["normal"]);
+    expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-blocked-proof-retry"
+    });
+    state.close();
+  });
+
   it("retires stale and closed queued jobs before running review work", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-retire-"));
     roots.push(root);
