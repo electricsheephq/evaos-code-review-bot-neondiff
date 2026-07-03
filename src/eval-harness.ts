@@ -117,9 +117,12 @@ export interface StickyVsColdRuntimeMetrics {
 
 export interface StickyVsColdThresholds {
   maxFalsePositiveDelta: number;
+  maxFalseNegativeDelta: number;
   maxSecretFindingDelta: number;
   maxDuplicateFindingDelta: number;
   maxSchemaDropDelta: number;
+  minRecallDelta: number;
+  minSeededRecallDelta: number;
   requireProviderAttemptsNotHigher: boolean;
   minRuntimeSafeScenarios: number;
   minRuntimeSafeLabeledFindings: number;
@@ -195,7 +198,7 @@ export interface StickyVsColdSummary {
     negativeControlScenarios: number;
   };
   thresholds: StickyVsColdThresholds;
-  gates: Array<{ name: string; ok: boolean; detail: string }>;
+  gates: Array<{ name: string; ok: boolean; status: "pass" | "fail" | "skip"; detail: string }>;
   artifactInventory: Array<{ name: string; sha256: string }>;
   proofBoundary: string;
 }
@@ -315,9 +318,12 @@ export const REQUIRED_SUITES: EvalSuiteName[] = [
 
 const DEFAULT_STICKY_VS_COLD_THRESHOLDS: StickyVsColdThresholds = {
   maxFalsePositiveDelta: 0,
+  maxFalseNegativeDelta: 0,
   maxSecretFindingDelta: 0,
   maxDuplicateFindingDelta: 0,
   maxSchemaDropDelta: 0,
+  minRecallDelta: 0,
+  minSeededRecallDelta: 0,
   requireProviderAttemptsNotHigher: true,
   minRuntimeSafeScenarios: 30,
   minRuntimeSafeLabeledFindings: PUBLIC_CONFIDENCE_POLICY.minLabeledFindings,
@@ -604,41 +610,70 @@ function buildStickyVsColdGates(input: {
     {
       name: "sticky_packet_ok",
       ok: input.sticky.ok,
+      status: input.sticky.ok ? "pass" : "fail",
       detail: input.sticky.ok ? "sticky packet gates passed" : "sticky packet gates failed"
     },
     {
       name: "no_secret_regression",
       ok: input.deltas.secretFindings <= input.thresholds.maxSecretFindingDelta,
+      status: input.deltas.secretFindings <= input.thresholds.maxSecretFindingDelta ? "pass" : "fail",
       detail: `${input.deltas.secretFindings} <= ${input.thresholds.maxSecretFindingDelta}`
     },
     {
       name: "no_duplicate_regression",
       ok: input.deltas.duplicateFindings <= input.thresholds.maxDuplicateFindingDelta,
+      status: input.deltas.duplicateFindings <= input.thresholds.maxDuplicateFindingDelta ? "pass" : "fail",
       detail: `${input.deltas.duplicateFindings} <= ${input.thresholds.maxDuplicateFindingDelta}`
     },
     {
       name: "no_schema_drop_regression",
       ok: input.deltas.droppedFromSchema <= input.thresholds.maxSchemaDropDelta,
+      status: input.deltas.droppedFromSchema <= input.thresholds.maxSchemaDropDelta ? "pass" : "fail",
       detail: `${input.deltas.droppedFromSchema} <= ${input.thresholds.maxSchemaDropDelta}`
     },
     {
       name: "no_false_positive_regression",
       ok: input.deltas.falsePositive <= input.thresholds.maxFalsePositiveDelta,
+      status: input.deltas.falsePositive <= input.thresholds.maxFalsePositiveDelta ? "pass" : "fail",
       detail: `${input.deltas.falsePositive} <= ${input.thresholds.maxFalsePositiveDelta}`
+    },
+    {
+      name: "no_false_negative_regression",
+      ok: input.deltas.falseNegative <= input.thresholds.maxFalseNegativeDelta,
+      status: input.deltas.falseNegative <= input.thresholds.maxFalseNegativeDelta ? "pass" : "fail",
+      detail: `${input.deltas.falseNegative} <= ${input.thresholds.maxFalseNegativeDelta}`
+    },
+    {
+      name: "recall_not_lower",
+      ok: input.deltas.recall >= input.thresholds.minRecallDelta,
+      status: input.deltas.recall >= input.thresholds.minRecallDelta ? "pass" : "fail",
+      detail: `${input.deltas.recall} >= ${input.thresholds.minRecallDelta}`
+    },
+    {
+      name: "seeded_recall_not_lower",
+      ok: input.deltas.seededRecall >= input.thresholds.minSeededRecallDelta,
+      status: input.deltas.seededRecall >= input.thresholds.minSeededRecallDelta ? "pass" : "fail",
+      detail: `${input.deltas.seededRecall} >= ${input.thresholds.minSeededRecallDelta}`
     },
     {
       name: "provider_attempts_not_higher",
       ok: !input.thresholds.requireProviderAttemptsNotHigher ||
         !providerAttemptsComparable ||
         (input.stickyRuntime?.providerAttempts ?? 0) <= (input.coldRuntime?.providerAttempts ?? 0),
+      status: providerAttemptsComparable
+        ? (input.stickyRuntime?.providerAttempts ?? 0) <= (input.coldRuntime?.providerAttempts ?? 0)
+          ? "pass"
+          : "fail"
+        : "skip",
       detail: providerAttemptsComparable
         ? `${input.stickyRuntime!.providerAttempts} <= ${input.coldRuntime!.providerAttempts}`
-        : "provider attempt counts not supplied; gate is informational"
+        : "SKIPPED: provider attempt counts not supplied; runtime_safe_candidate remains disabled"
     },
     {
-      name: "cold_packet_observed",
-      ok: true,
-      detail: input.cold.ok ? "cold packet gates passed" : "cold packet gates failed but remains usable as baseline evidence"
+      name: "cold_packet_ok",
+      ok: input.cold.ok,
+      status: input.cold.ok ? "pass" : "fail",
+      detail: input.cold.ok ? "cold packet gates passed" : "cold packet gates failed; paired comparison cannot be advisory"
     }
   ];
 }
@@ -675,7 +710,7 @@ function buildStickyVsColdReport(summary: StickyVsColdSummary): string {
     "",
     "## Gates",
     "",
-    ...summary.gates.map((gate) => `- ${gate.ok ? "PASS" : "FAIL"} ${gate.name}: ${gate.detail}`),
+    ...summary.gates.map((gate) => `- ${gate.status.toUpperCase()} ${gate.name}: ${gate.detail}`),
     "",
     "## Evidence Counts",
     "",
@@ -1356,6 +1391,7 @@ function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
       throw new Error(`cold.${field} must match sticky.${field}`);
     }
   }
+  validateEquivalentExpectedLabels(input.cold.labels, input.sticky.labels);
 }
 
 function validateStickyRuntimeMetrics(metrics: StickyVsColdRuntimeMetrics, labelPath: string): void {
@@ -1389,11 +1425,25 @@ function validateStickyRuntimeMetrics(metrics: StickyVsColdRuntimeMetrics, label
 }
 
 function validateStickyVsColdThresholds(thresholds: StickyVsColdThresholds): void {
-  for (const key of ["maxFalsePositiveDelta", "maxSecretFindingDelta", "maxDuplicateFindingDelta", "maxSchemaDropDelta"] as const) {
+  for (const key of ["maxFalsePositiveDelta", "maxFalseNegativeDelta", "maxSecretFindingDelta", "maxDuplicateFindingDelta", "maxSchemaDropDelta"] as const) {
     if (!Number.isInteger(thresholds[key]) || thresholds[key] < 0) throw new Error(`${key} must be a non-negative integer`);
+    if (thresholds[key] > DEFAULT_STICKY_VS_COLD_THRESHOLDS[key]) {
+      throw new Error(`${key} cannot be loosened below the default sticky-vs-cold safety policy`);
+    }
+  }
+  for (const key of ["minRecallDelta", "minSeededRecallDelta"] as const) {
+    if (typeof thresholds[key] !== "number" || thresholds[key] < -1 || thresholds[key] > 1) {
+      throw new Error(`${key} must be between -1 and 1`);
+    }
+    if (thresholds[key] < DEFAULT_STICKY_VS_COLD_THRESHOLDS[key]) {
+      throw new Error(`${key} cannot be loosened below the default sticky-vs-cold quality policy`);
+    }
   }
   if (typeof thresholds.requireProviderAttemptsNotHigher !== "boolean") {
     throw new Error("requireProviderAttemptsNotHigher must be a boolean");
+  }
+  if (thresholds.requireProviderAttemptsNotHigher !== DEFAULT_STICKY_VS_COLD_THRESHOLDS.requireProviderAttemptsNotHigher) {
+    throw new Error("requireProviderAttemptsNotHigher cannot be disabled for sticky-vs-cold promotion");
   }
   for (const key of [
     "minRuntimeSafeScenarios",
@@ -1402,7 +1452,43 @@ function validateStickyVsColdThresholds(thresholds: StickyVsColdThresholds): voi
     "minRuntimeSafeNegativeControls"
   ] as const) {
     if (!Number.isInteger(thresholds[key]) || thresholds[key] < 0) throw new Error(`${key} must be a non-negative integer`);
+    if (thresholds[key] < DEFAULT_STICKY_VS_COLD_THRESHOLDS[key]) {
+      throw new Error(`${key} cannot be loosened below the default sticky-vs-cold promotion policy`);
+    }
   }
+}
+
+function validateEquivalentExpectedLabels(coldLabels: EvalLabelInput[], stickyLabels: EvalLabelInput[]): void {
+  const cold = expectedLabelKeys(coldLabels);
+  const sticky = expectedLabelKeys(stickyLabels);
+  if (cold.length !== sticky.length) {
+    throw new Error(`cold and sticky expected labels must match (${cold.length} != ${sticky.length})`);
+  }
+  for (let index = 0; index < cold.length; index += 1) {
+    if (cold[index] !== sticky[index]) {
+      throw new Error("cold and sticky expected labels must match");
+    }
+  }
+}
+
+function expectedLabelKeys(labels: EvalLabelInput[]): string[] {
+  return labels
+    .filter((label) => label.expected !== false)
+    .map((label) => [
+      label.source,
+      label.severity,
+      label.path,
+      label.line,
+      label.title.trim(),
+      label.body.trim(),
+      label.sourceId ?? "",
+      label.sourceUrl ?? "",
+      label.author ?? "",
+      label.checkName ?? "",
+      label.mergeSha ?? "",
+      label.diffSummary ?? ""
+    ].join("\u001f"))
+    .sort();
 }
 
 function validateEvalInput(input: EvalScenarioInput): void {

@@ -117,10 +117,16 @@ Supported suites:
 
 Sticky-vs-cold scenarios are paired wrappers around normal offline scenarios.
 They run one cold packet and one sticky packet for the same repo, PR, head SHA,
-and suite, then write side-by-side deltas and a conservative decision. They do
-not enable public confidence percentages; the default output is `advisory`
-unless the sticky packet regresses safety/quality gates or enough measured
-runtime-safe evidence exists.
+suite, and expected label baseline, then write side-by-side deltas and a
+conservative decision. They do not enable public confidence percentages; the
+default output is `advisory` unless the sticky packet regresses safety/quality
+gates or enough measured runtime-safe evidence exists.
+
+The current CLI accepts one paired scenario at a time, so normal single-run
+packets cannot reach `runtime_safe_candidate` with the default evidence-volume
+thresholds. That stronger decision is reserved for a future batch/aggregate
+runner or an explicitly configured evidence packet that proves enough paired
+scenarios, labels, negative controls, and provider-attempt observations.
 
 Supported label sources:
 
@@ -179,7 +185,10 @@ evidence is missing before any stronger confidence display can be considered.
 The sticky-vs-cold summary compares precision, recall, seeded recall, true/false
 positives, false negatives, schema drops, duplicate findings, secret findings,
 and optional runtime metrics such as provider attempts, latency, and token
-counts. The decision is:
+counts. The wrapper rejects different cold/sticky expected labels and fails
+closed when sticky recall, seeded recall, false negatives, false positives,
+secret findings, duplicate findings, or schema drops regress beyond the
+non-loosenable default policy. The decision is:
 
 - `not_enough_evidence` when sticky fails packet gates or regresses configured
   safety/quality thresholds.
@@ -187,6 +196,9 @@ counts. The decision is:
   too small for runtime-safe promotion.
 - `runtime_safe_candidate` only when paired scenarios, labels, P0/P1 labels,
   negative controls, and provider-attempt evidence meet the configured thresholds.
+  With the current single-input CLI, this requires future batch aggregation;
+  caller-provided sticky-vs-cold thresholds cannot loosen the default promotion
+  policy, and this must not be used as a public calibrated-confidence claim.
 
 `manifest.json` records the effective thresholds, scenario mode, optional
 scenario source, artifact inventory with SHA-256 digests, metadata counts, and
