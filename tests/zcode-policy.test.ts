@@ -48,4 +48,21 @@ describe("temporary ZCode review policy", () => {
 
     expect(readFileSync(configPath, "utf8")).toBe("{\"features\":{\"subagent\":true}}\n");
   });
+
+  it("restores an existing repo ZCode config when the run removes the config directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "zcode-policy-existing-removed-"));
+    roots.push(root);
+    const configDir = join(root, ".zcode");
+    const configPath = join(configDir, "config.json");
+    mkdirSync(configDir);
+    writeFileSync(configPath, "{\"features\":{\"subagent\":true}}\n");
+
+    const result = withTemporaryZCodeReviewPolicy(root, undefined, () => {
+      rmSync(configDir, { recursive: true, force: true });
+      return "reviewed";
+    });
+
+    expect(result).toBe("reviewed");
+    expect(readFileSync(configPath, "utf8")).toBe("{\"features\":{\"subagent\":true}}\n");
+  });
 });
