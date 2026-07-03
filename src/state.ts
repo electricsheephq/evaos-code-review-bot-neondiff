@@ -934,6 +934,15 @@ export class ReviewStateStore {
       throw new Error(`Refusing to retire missing review row for ${input.repo}#${input.pullNumber}@${input.headSha}`);
     }
     if (existing.status !== "failed") {
+      if (existing.status === "skipped" && existing.error?.startsWith("retired_failed_head:")) {
+        this.retireFailedReviewQueueJobs({
+          repo: input.repo,
+          pullNumber: input.pullNumber,
+          headSha: input.headSha,
+          retiredError: existing.error
+        });
+        return existing;
+      }
       throw new Error(
         `Refusing to retire ${input.repo}#${input.pullNumber}@${input.headSha}: status is ${existing.status}, not failed`
       );
@@ -941,14 +950,45 @@ export class ReviewStateStore {
 
     const reason = normalizeRetirementReason(input.reason);
     const previousError = existing.error ? `; previous_error=${redactSecrets(existing.error)}` : "";
+    const retiredError = `retired_failed_head:${reason}${previousError}`;
     this.recordProcessed({
       repo: input.repo,
       pullNumber: input.pullNumber,
       headSha: input.headSha,
       status: "skipped",
-      error: `retired_failed_head:${reason}${previousError}`
+      error: retiredError
+    });
+    this.retireFailedReviewQueueJobs({
+      repo: input.repo,
+      pullNumber: input.pullNumber,
+      headSha: input.headSha,
+      retiredError
     });
     return this.getProcessedReview(input.repo, input.pullNumber, input.headSha)!;
+  }
+
+  private retireFailedReviewQueueJobs(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    retiredError: string;
+  }): void {
+    const nowIso = new Date().toISOString();
+    this.db
+      .prepare(
+        `update review_queue_jobs
+         set state = 'stale_retired',
+             lease_id = null,
+             lease_expires_at = null,
+             last_error = ?,
+             updated_at = ?,
+             finished_at = coalesce(finished_at, ?)
+         where repo = ?
+           and pull_number = ?
+           and head_sha = ?
+           and state = 'failed'`
+      )
+      .run(input.retiredError, nowIso, nowIso, input.repo, input.pullNumber, input.headSha);
   }
 
   hasRepoActivation(repo: string): boolean {

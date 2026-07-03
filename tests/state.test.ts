@@ -254,6 +254,19 @@ describe("review state store", () => {
       status: "failed",
       error: "ZCode failed before completion: spawnSync node ETIMEDOUT"
     });
+    const queueJob = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 212,
+      headSha: "failed-head",
+      baseSha: "base-head",
+      now: new Date("2026-07-03T00:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: "ZCode failed before completion: spawnSync node ETIMEDOUT",
+      now: new Date("2026-07-03T00:01:00.000Z")
+    });
 
     const retired = store.retireFailedReview({
       repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
@@ -272,6 +285,10 @@ describe("review state store", () => {
     expect(store.getProcessedReview("100yenadmin/Lossless-Codex-Orchestrator-LCO", 212, "failed-head")).toMatchObject({
       status: "skipped",
       error: expect.stringContaining("retired_failed_head:closed_or_stale_after_coverage_audit")
+    });
+    expect(store.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "stale_retired",
+      lastError: expect.stringContaining("retired_failed_head:closed_or_stale_after_coverage_audit")
     });
     expect(store.hasProcessed("100yenadmin/Lossless-Codex-Orchestrator-LCO", 212, "failed-head")).toBe(true);
     store.close();
@@ -296,6 +313,48 @@ describe("review state store", () => {
       headSha: "posted-head",
       reason: "operator_request"
     })).toThrow("status is posted, not failed");
+    store.close();
+  });
+
+  it("finishes queue retirement for an already retired failed head", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-state-retire-idempotent-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordProcessed({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "failed-head",
+      status: "skipped",
+      error: "retired_failed_head:old_operator_run; previous_error=ENOENT"
+    });
+    const queueJob = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "failed-head",
+      baseSha: "base-head"
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: "ENOENT"
+    });
+
+    const retired = store.retireFailedReview({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "failed-head",
+      reason: "rerun_after_partial_retirement"
+    });
+
+    expect(retired).toMatchObject({
+      status: "skipped",
+      error: "retired_failed_head:old_operator_run; previous_error=ENOENT"
+    });
+    expect(store.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "stale_retired",
+      lastError: "retired_failed_head:old_operator_run; previous_error=ENOENT"
+    });
     store.close();
   });
 
