@@ -129,6 +129,10 @@ runner or an explicitly configured evidence packet that proves enough paired
 scenarios, labels, negative controls, provider-attempt observations, and fresh
 sticky context.
 
+An empty sticky-vs-cold label set is not counted as negative-control evidence by
+itself. The wrapper must set `negativeControl: true`, and declared
+negative-control wrappers may not include expected labels.
+
 Supported label sources:
 
 - `coderabbit`

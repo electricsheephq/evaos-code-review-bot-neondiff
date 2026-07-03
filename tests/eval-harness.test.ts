@@ -955,7 +955,14 @@ describe("offline eval harness", () => {
     expect(result.summary.decision).toBe("not_enough_evidence");
     expect(result.summary.gates.find((gate) => gate.name === "sticky_packet_ok")).toMatchObject({ ok: false });
     expect(result.summary.gates.find((gate) => gate.name === "no_secret_regression")).toMatchObject({ ok: false });
-    expect(readFileSync(join(outputRoot, "sticky", "normalized-findings.json"), "utf8")).not.toContain(token);
+    for (const artifact of [
+      join(outputRoot, "sticky", "normalized-findings.json"),
+      join(outputRoot, "sticky", "scorecard.json"),
+      join(outputRoot, "sticky", "manifest.json"),
+      join(outputRoot, "sticky-vs-cold-summary.json")
+    ]) {
+      expect(readFileSync(artifact, "utf8"), artifact).not.toContain(token);
+    }
   });
 
   it("fails sticky-vs-cold closed when the cold baseline packet fails", () => {
@@ -1006,6 +1013,7 @@ describe("offline eval harness", () => {
     expect(result.ok).toBe(false);
     expect(result.summary.decision).toBe("not_enough_evidence");
     expect(result.summary.gates.find((gate) => gate.name === "cold_packet_ok")).toMatchObject({ ok: false, status: "fail" });
+    expect(result.summary.gates.find((gate) => gate.name === "recall_not_lower")).toMatchObject({ ok: true, status: "skip" });
   });
 
   it("fails sticky-vs-cold when sticky regresses recall against the same labels", () => {
@@ -1080,6 +1088,51 @@ describe("offline eval harness", () => {
         labels: []
       }
     }, { outputRoot })).toThrow("cold and sticky expected labels must match");
+  });
+
+  it("counts negative-control evidence only when explicitly declared", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-negative-control-"));
+    roots.push(outputRoot);
+    const base = {
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 85,
+      headSha: "abc",
+      suite: "canary_shadow" as const,
+      botFindings: { findings: [] },
+      labels: []
+    };
+
+    const implicit = runStickyVsColdEval({
+      runId: "sticky-vs-cold-implicit-empty-labels",
+      cold: { ...base, runId: "cold-empty" },
+      sticky: { ...base, runId: "sticky-empty" },
+      coldRuntime: { providerAttempts: 1 },
+      stickyRuntime: { providerAttempts: 1, staleContext: false }
+    }, { outputRoot: join(outputRoot, "implicit") });
+    const explicit = runStickyVsColdEval({
+      runId: "sticky-vs-cold-explicit-negative-control",
+      negativeControl: true,
+      cold: { ...base, runId: "cold-negative" },
+      sticky: { ...base, runId: "sticky-negative" },
+      coldRuntime: { providerAttempts: 1 },
+      stickyRuntime: { providerAttempts: 1, staleContext: false }
+    }, { outputRoot: join(outputRoot, "explicit") });
+
+    expect(implicit.summary.evidenceCounts.negativeControlScenarios).toBe(0);
+    expect(explicit.summary.evidenceCounts.negativeControlScenarios).toBe(1);
+  });
+
+  it("rejects declared negative-control scenarios with expected labels", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-negative-labels-"));
+    roots.push(outputRoot);
+    const scenario = JSON.parse(
+      readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")
+    ) as StickyVsColdScenarioInput;
+
+    expect(() => runStickyVsColdEval({
+      ...scenario,
+      negativeControl: true
+    }, { outputRoot })).toThrow("negativeControl sticky-vs-cold scenarios must not include expected labels");
   });
 
   it("fails sticky-vs-cold when sticky runtime reports stale context", () => {

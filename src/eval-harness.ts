@@ -134,6 +134,7 @@ export interface StickyVsColdScenarioInput {
   evalName?: string;
   runId: string;
   scenarioSource?: EvalScenarioSourceInput;
+  negativeControl?: boolean;
   cold: EvalScenarioInput;
   sticky: EvalScenarioInput;
   coldRuntime?: StickyVsColdRuntimeMetrics;
@@ -504,7 +505,7 @@ function buildStickyVsColdSummary(input: {
     pairedScenarios: 1,
     labeledFindings: input.sticky.scorecard.counts.labels,
     p0p1Labels: input.sticky.scorecard.counts.p0p1Labels,
-    negativeControlScenarios: input.sticky.scorecard.counts.labels === 0 ? 1 : 0
+    negativeControlScenarios: input.input.negativeControl === true ? 1 : 0
   };
   const gates = buildStickyVsColdGates({
     cold: input.cold,
@@ -608,6 +609,7 @@ function buildStickyVsColdGates(input: {
   const providerAttemptsComparable =
     typeof input.coldRuntime?.providerAttempts === "number" &&
     typeof input.stickyRuntime?.providerAttempts === "number";
+  const coldComparable = input.cold.ok;
   return [
     {
       name: "sticky_packet_ok",
@@ -635,27 +637,51 @@ function buildStickyVsColdGates(input: {
     },
     {
       name: "no_false_positive_regression",
-      ok: input.deltas.falsePositive <= input.thresholds.maxFalsePositiveDelta,
-      status: input.deltas.falsePositive <= input.thresholds.maxFalsePositiveDelta ? "pass" : "fail",
-      detail: `${input.deltas.falsePositive} <= ${input.thresholds.maxFalsePositiveDelta}`
+      ok: !coldComparable || input.deltas.falsePositive <= input.thresholds.maxFalsePositiveDelta,
+      status: !coldComparable
+        ? "skip"
+        : input.deltas.falsePositive <= input.thresholds.maxFalsePositiveDelta
+          ? "pass"
+          : "fail",
+      detail: coldComparable
+        ? `${input.deltas.falsePositive} <= ${input.thresholds.maxFalsePositiveDelta}`
+        : "SKIPPED: cold packet failed; comparative false-positive delta is not meaningful"
     },
     {
       name: "no_false_negative_regression",
-      ok: input.deltas.falseNegative <= input.thresholds.maxFalseNegativeDelta,
-      status: input.deltas.falseNegative <= input.thresholds.maxFalseNegativeDelta ? "pass" : "fail",
-      detail: `${input.deltas.falseNegative} <= ${input.thresholds.maxFalseNegativeDelta}`
+      ok: !coldComparable || input.deltas.falseNegative <= input.thresholds.maxFalseNegativeDelta,
+      status: !coldComparable
+        ? "skip"
+        : input.deltas.falseNegative <= input.thresholds.maxFalseNegativeDelta
+          ? "pass"
+          : "fail",
+      detail: coldComparable
+        ? `${input.deltas.falseNegative} <= ${input.thresholds.maxFalseNegativeDelta}`
+        : "SKIPPED: cold packet failed; comparative false-negative delta is not meaningful"
     },
     {
       name: "recall_not_lower",
-      ok: input.deltas.recall >= input.thresholds.minRecallDelta,
-      status: input.deltas.recall >= input.thresholds.minRecallDelta ? "pass" : "fail",
-      detail: `${input.deltas.recall} >= ${input.thresholds.minRecallDelta}`
+      ok: !coldComparable || input.deltas.recall >= input.thresholds.minRecallDelta,
+      status: !coldComparable
+        ? "skip"
+        : input.deltas.recall >= input.thresholds.minRecallDelta
+          ? "pass"
+          : "fail",
+      detail: coldComparable
+        ? `${input.deltas.recall} >= ${input.thresholds.minRecallDelta}`
+        : "SKIPPED: cold packet failed; comparative recall delta is not meaningful"
     },
     {
       name: "seeded_recall_not_lower",
-      ok: input.deltas.seededRecall >= input.thresholds.minSeededRecallDelta,
-      status: input.deltas.seededRecall >= input.thresholds.minSeededRecallDelta ? "pass" : "fail",
-      detail: `${input.deltas.seededRecall} >= ${input.thresholds.minSeededRecallDelta}`
+      ok: !coldComparable || input.deltas.seededRecall >= input.thresholds.minSeededRecallDelta,
+      status: !coldComparable
+        ? "skip"
+        : input.deltas.seededRecall >= input.thresholds.minSeededRecallDelta
+          ? "pass"
+          : "fail",
+      detail: coldComparable
+        ? `${input.deltas.seededRecall} >= ${input.thresholds.minSeededRecallDelta}`
+        : "SKIPPED: cold packet failed; comparative seeded-recall delta is not meaningful"
     },
     {
       name: "provider_attempts_not_higher",
@@ -1401,6 +1427,9 @@ function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
   if (input.coldRuntime !== undefined) validateStickyRuntimeMetrics(input.coldRuntime, "coldRuntime");
   if (input.stickyRuntime !== undefined) validateStickyRuntimeMetrics(input.stickyRuntime, "stickyRuntime");
   if (input.thresholds !== undefined) validateStickyVsColdThresholds({ ...DEFAULT_STICKY_VS_COLD_THRESHOLDS, ...input.thresholds });
+  if (input.negativeControl !== undefined && typeof input.negativeControl !== "boolean") {
+    throw new Error("negativeControl must be a boolean");
+  }
 
   for (const field of ["repo", "pullNumber", "headSha", "suite"] as const) {
     if (input.cold[field] !== input.sticky[field]) {
@@ -1408,6 +1437,9 @@ function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
     }
   }
   validateEquivalentExpectedLabels(input.cold.labels, input.sticky.labels);
+  if (input.negativeControl === true && expectedLabelKeys(input.sticky.labels).length > 0) {
+    throw new Error("negativeControl sticky-vs-cold scenarios must not include expected labels");
+  }
 }
 
 function validateStickyRuntimeMetrics(metrics: StickyVsColdRuntimeMetrics, labelPath: string): void {
