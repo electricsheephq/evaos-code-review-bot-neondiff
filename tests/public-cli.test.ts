@@ -39,6 +39,8 @@ describe("public NeonDiff CLI surface", () => {
 
     expect(output.commands.public).toEqual([
       "init",
+      "config inspect",
+      "config patch",
       "doctor",
       "daemon start",
       "daemon stop",

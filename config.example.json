@@ -40,6 +40,10 @@
       }
     }
   },
+  "desktop": {
+    "openAICompatibleEndpoint": "http://localhost:8000/v1",
+    "updateChannel": "dev"
+  },
   "commands": {
     "enabled": false,
     "botMentions": ["@evaos-code-review-bot"],
