@@ -117,8 +117,13 @@ export interface RepoPreMergeCheckConfig {
 }
 
 export interface RepoFinishingTouchesConfig {
+  docs?: RepoFinishingTouchConfig;
   docstrings?: RepoFinishingTouchConfig;
   unitTests?: RepoFinishingTouchConfig;
+  simplifySuggestion?: RepoFinishingTouchConfig;
+  changelogDraft?: RepoFinishingTouchConfig;
+  riskExplanation?: RepoFinishingTouchConfig;
+  reviewReady?: RepoFinishingTouchConfig;
   stackedPr?: RepoFinishingTouchConfig;
 }
 
@@ -582,7 +587,16 @@ function validatePreMergeCheck(value: unknown, label: string): void {
 function validateFinishingTouches(value: unknown, label: string): void {
   if (value === undefined) return;
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  for (const field of ["docstrings", "unitTests", "stackedPr"] as const) {
+  for (const field of [
+    "docs",
+    "docstrings",
+    "unitTests",
+    "simplifySuggestion",
+    "changelogDraft",
+    "riskExplanation",
+    "reviewReady",
+    "stackedPr"
+  ] as const) {
     validateFinishingTouch(value[field], `${label}.${field}`);
   }
 }

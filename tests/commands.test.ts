@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { collectTrustedReviewCommands, decideCommandAction, parseReviewCommand } from "../src/commands.js";
+import {
+  collectTrustedReviewCommands,
+  decideCommandAction,
+  isRecordOnlyCommandAction,
+  parseReviewCommand
+} from "../src/commands.js";
 
 describe("maintainer command parsing", () => {
   const config = {
@@ -23,6 +28,12 @@ describe("maintainer command parsing", () => {
     });
     expect(parseReviewCommand(comment(104, "100yenadmin", "@evaos-code-review-bot stop"), config)).toMatchObject({
       action: "stop"
+    });
+    expect(parseReviewCommand(comment(105, "100yenadmin", "@evaos-code-review-bot generate tests"), config)).toMatchObject({
+      action: "generate_tests"
+    });
+    expect(parseReviewCommand(comment(106, "100yenadmin", "@evaos-code-review-bot explain risk"), config)).toMatchObject({
+      action: "explain_risk"
     });
   });
 
@@ -84,6 +95,73 @@ describe("maintainer command parsing", () => {
       action: "review",
       commandId: 101,
       shouldReview: true
+    });
+  });
+
+  it("keeps finishing-touch commands record-only", () => {
+    const collected = collectTrustedReviewCommands(
+      [comment(101, "100yenadmin", "@evaos-code-review-bot generate tests")],
+      config
+    );
+
+    const decision = decideCommandAction({
+      commands: collected.commands,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1161,
+      headSha: "head-1",
+      hasProcessedCommand: () => false
+    });
+
+    expect(decision).toMatchObject({
+      action: "generate_tests",
+      commandId: 101,
+      shouldReview: false
+    });
+    expect(isRecordOnlyCommandAction("generate_tests")).toBe(true);
+    expect(isRecordOnlyCommandAction("re-review")).toBe(false);
+  });
+
+  it("does not let draft-only commands supersede an outstanding review request", () => {
+    const collected = collectTrustedReviewCommands(
+      [
+        comment(101, "100yenadmin", "@evaos-code-review-bot review"),
+        comment(102, "100yenadmin", "@evaos-code-review-bot generate tests")
+      ],
+      config
+    );
+
+    expect(decideCommandAction({
+      commands: collected.commands,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1161,
+      headSha: "head-1",
+      hasProcessedCommand: () => false
+    })).toMatchObject({
+      action: "review",
+      commandId: 101,
+      shouldReview: true
+    });
+  });
+
+  it("does not let a later draft-only command supersede an outstanding stop command", () => {
+    const collected = collectTrustedReviewCommands(
+      [
+        comment(101, "100yenadmin", "@evaos-code-review-bot stop"),
+        comment(102, "100yenadmin", "@evaos-code-review-bot generate tests")
+      ],
+      config
+    );
+
+    expect(decideCommandAction({
+      commands: collected.commands,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1161,
+      headSha: "head-1",
+      hasProcessedCommand: () => false
+    })).toMatchObject({
+      action: "stop",
+      commandId: 101,
+      shouldReview: false
     });
   });
 
