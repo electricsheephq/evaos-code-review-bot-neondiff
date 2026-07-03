@@ -29,6 +29,7 @@ export interface ProviderThrottleReport {
   codes: Array<{ code: string; count: number }>;
   hourly: ProviderThrottleHourlyBucket[];
   repos: ProviderThrottleRepoBucket[];
+  knownLimitations: string[];
 }
 
 export interface ProviderThrottleSummary extends ProviderThrottleCounts {
@@ -109,6 +110,7 @@ const DEFAULT_SINCE = "24h";
 const DEFAULT_TIMEZONE = "Asia/Singapore";
 const DEFAULT_PEAK_START_HOUR = 14;
 const DEFAULT_PEAK_END_HOUR = 18;
+const KNOWN_PROVIDER_CODES = new Set(["1302", "1305", "1308", "1309", "1310", "1316", "1317"]);
 
 export function collectProviderThrottleReport(input: ProviderThrottleReportOptions): ProviderThrottleReport {
   const now = input.now ?? new Date();
@@ -188,7 +190,10 @@ function emptyReport(input: {
     },
     codes: [],
     hourly: [],
-    repos: []
+    repos: [],
+    knownLimitations: [
+      "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted."
+    ]
   };
 }
 
@@ -405,7 +410,7 @@ function addRetryOutcome(report: ProviderThrottleReport, event: ProviderThrottle
 function extractProviderCodes(error: string): string[] {
   const codes = new Set<string>();
   for (const match of error.matchAll(PROVIDER_CODES)) {
-    if (match[1]) codes.add(match[1]);
+    if (match[1] && KNOWN_PROVIDER_CODES.has(match[1])) codes.add(match[1]);
   }
   return [...codes];
 }

@@ -116,6 +116,9 @@ describe("provider throttle report", () => {
       repo: "owner/repo",
       total: 4
     });
+    expect(report.knownLimitations).toContain(
+      "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted."
+    );
     expect(JSON.stringify(report)).not.toMatch(/secret-request-id|PRIVATE KEY|ghp_/);
   });
 
@@ -208,6 +211,36 @@ describe("provider throttle report", () => {
     expect(report.summary.providerErrors).toBe(2);
     expect(report.summary.quotaExhausted).toBe(2);
     expect(report.summary.unknownProviderError).toBe(0);
+  });
+
+  it("does not treat unrelated bracketed numbers as provider codes", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-codes-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 10,
+        headSha: "unrelated-code-head",
+        status: "failed",
+        error: "Tool failed with internal marker [1234]",
+        createdAt: "2026-07-01 08:00:00"
+      });
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2026-07-08T00:00:00.000Z"),
+      since: "7d",
+      timezone: "Asia/Singapore"
+    });
+
+    expect(report.summary.providerErrors).toBe(0);
+    expect(report.codes).toEqual([]);
   });
 });
 
