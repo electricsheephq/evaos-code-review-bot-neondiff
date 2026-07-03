@@ -1096,12 +1096,17 @@ function syncReadinessForReviewResult(input: {
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
   const readinessState = readinessStateForReviewResult(input.status, processed);
   if (!readinessState) return;
+  const existing = input.status === "skipped_license_gate"
+    ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)
+    : undefined;
   recordReadinessTransition({
     state: input.state,
     repo: input.job.repo,
     pull: input.pull,
     readinessState,
-    reason: readinessReasonForReviewResult(input.status, processed),
+    reason: input.status === "skipped_license_gate" && existing?.state === "blocked_on_proof" && existing.reason
+      ? existing.reason
+      : readinessReasonForReviewResult(input.status, processed),
     ...(processed?.event ? { event: processed.event } : {}),
     ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
     now: input.now

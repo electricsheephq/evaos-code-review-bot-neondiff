@@ -329,7 +329,7 @@ async function callLicenseApi(input: {
     });
     const text = await response.text();
     const body = text ? safeJsonParse(text) : {};
-    if (!response.ok) return apiFailureResult(response.status, body, now);
+    if (!response.ok) return apiFailureResult(response.status, body, now, input.licenseKey);
 
     const entitlement = normalizeEntitlement(body, input.licenseKey, now);
     if (!entitlement) return invalidApiResult(now, "license API returned malformed success response");
@@ -350,14 +350,14 @@ async function callLicenseApi(input: {
       source: "none",
       checkedAt: now.toISOString(),
       classification: "network",
-      detail: `license API network failure: ${redactSecrets(message)}`
+      detail: `license API network failure: ${redactSubmittedLicenseKey(message, input.licenseKey)}`
     };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function apiFailureResult(statusCode: number, body: unknown, now: Date): LicenseStatusResult {
+function apiFailureResult(statusCode: number, body: unknown, now: Date, licenseKey: string): LicenseStatusResult {
   const status = statusCode >= 500 ? "server" : statusFromApiError(statusCode, body);
   return {
     ok: false,
@@ -365,7 +365,7 @@ function apiFailureResult(statusCode: number, body: unknown, now: Date): License
     source: "api",
     checkedAt: now.toISOString(),
     classification: status,
-    detail: `license API returned ${statusCode}: ${redactSecrets(readApiDetail(body, status))}`
+    detail: `license API returned ${statusCode}: ${redactSubmittedLicenseKey(readApiDetail(body, status), licenseKey)}`
   };
 }
 
@@ -541,8 +541,6 @@ function readKeychainLicenseKey(config: LicenseConfig): string | undefined {
     "-w"
   ], { encoding: "utf8" });
   const key = result.stdout.trim();
-  result.stdout = "";
-  result.stderr = "";
   if (result.status !== 0) return undefined;
   return key || undefined;
 }
@@ -575,6 +573,12 @@ function safeJsonParse(text: string): unknown {
 
 function fingerprintLicenseKey(key: string): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
+
+function redactSubmittedLicenseKey(text: string, licenseKey: string): string {
+  const genericRedacted = redactSecrets(text);
+  if (!licenseKey) return genericRedacted;
+  return genericRedacted.split(licenseKey).join("[REDACTED_LICENSE_KEY]");
 }
 
 function localMachineId(): string {

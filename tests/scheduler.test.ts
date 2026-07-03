@@ -162,6 +162,41 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("preserves the worker-recorded license gate reason when scheduler syncs readiness", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-license-gate-reason-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    const reason = "license API network failure: visibility lookup denied";
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordReviewReadiness({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          state: "blocked_on_proof",
+          reason
+        });
+        return "skipped_license_gate";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.skippedPolicy).toBe(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "blocked_on_proof",
+      reason
+    });
+    state.close();
+  });
+
   it("preserves readiness state on duplicate processed-head scheduler cycles", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-duplicate-"));
     roots.push(root);

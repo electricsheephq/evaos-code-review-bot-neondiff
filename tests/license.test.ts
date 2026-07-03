@@ -97,6 +97,21 @@ describe("license activation and entitlement cache", () => {
     expect(network).toMatchObject({ ok: false, status: "network", classification: "network" });
   });
 
+  it("redacts the exact submitted license key from API failure details", async () => {
+    const root = mkRoot(roots);
+    const key = "plain-key-that-does-not-match-generic-pattern";
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 401, { status: "invalid", detail: `license ${key} is invalid` });
+    });
+    servers.push(server);
+
+    const result = await activateLicense({ config: licenseConfig(root, server.url), licenseKey: key });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("[REDACTED_LICENSE_KEY]");
+    expect(JSON.stringify(result)).not.toContain(key);
+  });
+
   it("derives cache path from statePath and rejects license artifacts inside the checkout", () => {
     const root = mkRoot(roots);
     const config = loadConfigFromObject({
