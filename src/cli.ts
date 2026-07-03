@@ -2108,7 +2108,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts status --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --human",
-      "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD",
+      "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha \"$(gh pr view 123 --repo owner/repo --json headRefOid --jq .headRefOid)\"",
       "npx tsx src/cli.ts agents --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json --state provider_deferred",

@@ -59,8 +59,10 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   read-only pre-merge guard for self-repo and release-critical PRs. It checks
   the exact `{repo, pr, head_sha}` against processed reviews, durable queue
   state, and readiness state. It exits zero only when the exact head has a live
-  posted evaOS review; missing, queued, provider-deferred, skipped, failed,
-  stale, closed, or dry-run-only heads exit nonzero with a next action.
+  recorded, non-blocking evaOS review; missing, queued, provider-deferred,
+  skipped, failed, stale, closed, or dry-run-only heads exit nonzero with a next
+  action. The gate does not independently prove GitHub App authorship; pair it
+  with `release-status` to verify the live App-backed launchd configuration.
 - `coverage`: raw coverage-audit report with the shorter operator command name.
 - `cooldowns`: provider cooldown review rows plus repo/global cooldown rows.
 - `clear-review-queue-leases`: dry-run-first recovery command for stale

@@ -99,7 +99,7 @@ banner to stdout.
 ```bash
 CURRENT_HEAD="$(gh pr view <pr-number> --repo electricsheephq/evaos-code-review-bot --json headRefOid --jq .headRefOid)"
 npx tsx src/cli.ts review-head-gate \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config <path-to-active-installed-live.json> \
   --repo electricsheephq/evaos-code-review-bot \
   --pr <pr-number> \
   --head-sha "$CURRENT_HEAD"
@@ -108,6 +108,9 @@ npx tsx src/cli.ts review-head-gate \
   A green `coverage-audit` does not replace this gate: coverage only checks
   currently open eligible heads, so a final head pushed and merged between
   daemon cycles can otherwise leave no terminal evaOS marker for agents.
+  This exact-head gate checks the bot's recorded review state for the current
+  head; it does not independently prove GitHub App authorship. Pair it with
+  `release-status`, which verifies the live App-backed launchd configuration.
 - Release checkout is clean and exactly at the intended source SHA.
 - `npm test` and `npm run build` pass from the release checkout.
 - `release:status` records exact source SHA, branch, config path, launchd job,

@@ -55,7 +55,7 @@ export function buildReviewHeadGate(input: {
   const ok = decision === "passed";
   const gates = [
     {
-      name: "exact_head_has_terminal_evaos_review",
+      name: "exact_head_has_recorded_nonblocking_evaos_review",
       ok,
       detail: gateDetail(decision, processed, readiness, queueJobs)
     }

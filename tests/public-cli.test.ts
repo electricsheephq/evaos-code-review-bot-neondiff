@@ -50,6 +50,12 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
+    expect(output.examples).toContain(
+      "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha \"$(gh pr view 123 --repo owner/repo --json headRefOid --jq .headRefOid)\""
+    );
+    expect(output.examples).not.toContain(
+      "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
+    );
   });
 
   it("prints command help without executing run-once, review-pr, or daemon paths", async () => {
@@ -630,7 +636,7 @@ describe("public NeonDiff CLI surface", () => {
         nextAction: expect.stringContaining("do not merge")
       });
       expect(output.gates[0]).toMatchObject({
-        name: "exact_head_has_terminal_evaos_review",
+        name: "exact_head_has_recorded_nonblocking_evaos_review",
         ok: false
       });
     }
