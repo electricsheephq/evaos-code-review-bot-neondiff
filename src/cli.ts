@@ -40,7 +40,9 @@ import {
   explainPullStatus,
   formatOperatorDashboardHuman,
   formatRuntimeInventoryHuman,
-  summarizeAgentInventory
+  summarizeAgentInventory,
+  type OperatorDurableQueueSnapshot,
+  type OperatorQueueSnapshot
 } from "./operator-cli.js";
 import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
@@ -48,7 +50,7 @@ import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets } from "./secrets.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
-import { listRepoMemoryNotesReadOnly, ReviewStateStore, type ReviewQueueJobState } from "./state.js";
+import { listRepoMemoryNotesReadOnly, ReviewStateStore, type ReviewQueueJobRecord, type ReviewQueueJobState } from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -63,6 +65,11 @@ async function main(): Promise<void> {
 
   if (!command || command === "help" || command === "--help" || command === "-h") {
     console.log(JSON.stringify(buildHelp(), null, 2));
+    return;
+  }
+
+  if (isHelpRequested(args)) {
+    console.log(JSON.stringify(buildHelp(command), null, 2));
     return;
   }
 
@@ -150,7 +157,12 @@ async function main(): Promise<void> {
       ...(budgetDetailLimit !== undefined ? { budgetDetailLimit } : {}),
       ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {})
     });
-    console.log(JSON.stringify(status, null, 2));
+    console.log(JSON.stringify({
+      ...status,
+      healthState: status.ok ? "runtime_ok" : "runtime_blocked",
+      runtimeOk: status.ok,
+      failedGates: failedGates(status.gates)
+    }, null, 2));
     if (!status.ok) process.exitCode = 1;
     return;
   }
@@ -168,10 +180,51 @@ async function main(): Promise<void> {
       budgetDetailLimit,
       budgetJobLimit
     });
-    const ok = status.budget?.enabled === true && status.budget.details.inputJobsTruncated !== true;
+    const readyToRetry = status.budget?.providerDeferred.readyToRetry ?? 0;
+    const failed = status.database.failedReviewQueueJobCount ?? 0;
+    const ok = status.budget?.enabled === true &&
+      status.budget.details.inputJobsTruncated !== true &&
+      readyToRetry === 0 &&
+      failed === 0;
+    const gates = [
+      {
+        name: "budget_available",
+        ok: status.budget?.enabled === true,
+        detail: status.budget?.enabled === true ? "enabled" : "not available"
+      },
+      {
+        name: "budget_input_not_truncated",
+        ok: status.budget?.details.inputJobsTruncated !== true,
+        detail: status.budget?.details.inputJobsTruncated === true ? "input jobs truncated" : "input jobs complete"
+      },
+      {
+        name: "budget_no_ready_provider_deferred_jobs",
+        ok: readyToRetry === 0,
+        detail: `${readyToRetry} ready-to-retry provider-deferred job(s)`
+      },
+      {
+        name: "budget_no_failed_queue_jobs",
+        ok: failed === 0,
+        detail: `${failed} failed durable queue job(s)`
+      }
+    ];
     console.log(JSON.stringify({
       ok,
+      healthState: ok ? "runtime_ok" : "runtime_blocked",
+      runtimeOk: ok,
       checkedAt: status.checkedAt,
+      summary: {
+        readyToRetryProviderDeferredJobs: readyToRetry,
+        failedQueueJobs: failed,
+        wouldLeaseCount: status.budget?.wouldLeaseCount ?? 0,
+        delayedCount: status.budget?.delayedCount ?? 0
+      },
+      failedGates: failedGates(gates),
+      recommendedActions: ok ? [] : [
+        ...(readyToRetry > 0 ? ["wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry"] : []),
+        ...(failed > 0 ? ["inspect operator queue failed jobs before promotion"] : [])
+      ],
+      gates,
       budget: status.budget
     }, null, 2));
     if (!ok) process.exitCode = 1;
@@ -191,7 +244,17 @@ async function main(): Promise<void> {
         pullNumber: args.pr ? Number(args.pr) : undefined,
         verifyCurrentHeads: args["verify-current-heads"] !== "false"
       });
-      console.log(JSON.stringify(audit, null, 2));
+      const gates = coverageAuditGates(audit);
+      console.log(JSON.stringify({
+        ...audit,
+        healthScope: "coverage",
+        healthState: audit.ok ? "coverage_ok" : "coverage_blocked",
+        coverageOk: audit.ok,
+        runtimeOk: null,
+        failedGates: failedGates(gates),
+        recommendedActions: coverageAuditRecommendedActions(audit),
+        gates
+      }, null, 2));
       if (!audit.ok) process.exitCode = 1;
     } finally {
       state.close();
@@ -338,7 +401,23 @@ async function main(): Promise<void> {
       state: parseReviewQueueJobState(args.state),
       limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
     });
-    const output = { ...queue, ok: queue.ok, coverage: queue, durableQueue, ...collectQueueBudget(args) };
+    const budgetOutput = collectQueueBudget(args);
+    const gates = queueHealthGates(queue, durableQueue, budgetOutput.budget);
+    const ok = gates.every((gate) => gate.ok);
+    const output = {
+      ...queue,
+      ok,
+      healthState: ok ? "runtime_ok" : "runtime_blocked",
+      coverageOk: queue.ok,
+      runtimeOk: ok,
+      failedGates: failedGates(gates),
+      recommendedActions: queueRecommendedActions(gates),
+      actionableRows: queueActionableRows(durableQueue, budgetOutput.budget),
+      gates,
+      coverage: queue,
+      durableQueue,
+      ...budgetOutput
+    };
     console.log(JSON.stringify(output, null, 2));
     if (!output.ok) process.exitCode = 1;
     return;
@@ -771,6 +850,49 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "clear-review-queue-leases") {
+    const config = loadConfig(args.config);
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    const confirm = args.confirm === undefined ? false : parseBooleanArg(args.confirm, "--confirm");
+    const expiredOnly = args["expired-only"] === undefined ? true : parseBooleanArg(args["expired-only"], "--expired-only");
+    const forceActive = args["force-active"] === undefined ? false : parseBooleanArg(args["force-active"], "--force-active");
+    if (!dryRun && !confirm) {
+      throw new Error("clear-review-queue-leases requires --confirm true when --dry-run false");
+    }
+    if (!dryRun && !expiredOnly && !forceActive) {
+      throw new Error("clearing active review queue leases requires --force-active true; use --expired-only true for expired-only cleanup");
+    }
+    const statePath = args["state-path"] ?? config.statePath;
+    const state = new ReviewStateStore(statePath);
+    try {
+      const result = state.clearReviewQueueLeases({
+        dryRun,
+        expiredOnly,
+        forceActive,
+        ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {}),
+        ...(args.pr ? { pullNumber: parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr") } : {}),
+        ...(args["job-id"] ? { jobId: parseSingleArg(args["job-id"], "--job-id") } : {})
+      });
+      const recommendedActions = buildReviewQueueLeaseClearRecommendations({
+        dryRun,
+        expiredOnly,
+        forceActive,
+        expiredMatched: result.expiredMatched,
+        activeMatched: result.activeMatched
+      });
+      console.log(redactSecrets(JSON.stringify({
+        ok: true,
+        statePath,
+        forceActive,
+        ...result,
+        recommendedActions
+      }, null, 2)));
+    } finally {
+      state.close();
+    }
+    return;
+  }
+
   if (command === "finishing-touch-dry-run") {
     if (!args.repo) throw new Error("--repo is required for finishing-touch-dry-run");
     if (!args.pr) throw new Error("--pr is required for finishing-touch-dry-run");
@@ -1079,15 +1201,36 @@ async function main(): Promise<void> {
         expiredOnly,
         limit
       });
+      const expiredCount = rows.filter((row) => row.expired).length;
+      const gates = [
+        {
+          name: "provider_cooldowns_no_expired_rows",
+          ok: expiredCount === 0,
+          detail: `${expiredCount} expired provider cooldown row(s)`
+        }
+      ];
+      const ok = gates.every((gate) => gate.ok);
       console.log(JSON.stringify({
-        ok: true,
+        ok,
+        healthState: ok ? "provider_cooldowns_ok" : "provider_cooldowns_actionable",
+        runtimeOk: ok,
         checkedAt: new Date().toISOString(),
         expiredOnly,
         ...(args.repo ? { repo: args.repo } : {}),
+        summary: {
+          total: rows.length,
+          expired: expiredCount
+        },
+        failedGates: failedGates(gates),
+        recommendedActions: expiredCount > 0
+          ? [`npx tsx src/cli.ts retry-provider-cooldowns --config ${args.config ?? "(default config)"} --expired-only true --dry-run false --zcode true${args.repo ? ` --repo ${args.repo}` : ""}`]
+          : [],
+        gates,
         count: rows.length,
-        expiredCount: rows.filter((row) => row.expired).length,
+        expiredCount,
         rows
       }, null, 2));
+      if (!ok) process.exitCode = 1;
     } finally {
       state.close();
     }
@@ -1622,9 +1765,94 @@ function collectQueueBudget(args: ParsedArgs): {
   }
 }
 
-function buildHelp() {
+function failedGates(gates: Array<{ name: string; ok: boolean; detail: string }>): Array<{ name: string; ok: boolean; detail: string }> {
+  return gates.filter((gate) => !gate.ok);
+}
+
+function coverageAuditGates(report: Awaited<ReturnType<typeof collectCoverageAudit>>): Array<{ name: string; ok: boolean; detail: string }> {
+  return [
+    {
+      name: "coverage_no_unprocessed_heads",
+      ok: report.summary.unprocessed === 0,
+      detail: `${report.summary.unprocessed} unprocessed eligible head(s)`
+    },
+    {
+      name: "coverage_no_read_failures",
+      ok: report.summary.readFailures === 0,
+      detail: `${report.summary.readFailures} read failure(s)`
+    },
+    {
+      name: "coverage_no_stale_heads",
+      ok: report.summary.staleHeads === 0,
+      detail: `${report.summary.staleHeads} stale head(s)`
+    }
+  ];
+}
+
+function coverageAuditRecommendedActions(report: Awaited<ReturnType<typeof collectCoverageAudit>>): string[] {
+  return [
+    ...(report.summary.unprocessed > 0 ? ["wait for daemon cycle or run scoped run-once for unprocessed heads"] : []),
+    ...(report.summary.readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
+    ...(report.summary.staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : [])
+  ];
+}
+
+function queueHealthGates(
+  coverage: OperatorQueueSnapshot,
+  durableQueue: OperatorDurableQueueSnapshot,
+  budget?: ReleaseStatus["budget"]
+): Array<{ name: string; ok: boolean; detail: string }> {
+  const readyToRetry = budget?.providerDeferred.readyToRetry ?? durableQueue.summary.retryableProviderDeferred;
+  return [
+    {
+      name: "queue_coverage_ok",
+      ok: coverage.ok,
+      detail:
+        `${coverage.summary.pending} pending, ${coverage.summary.readFailures} read failure(s), ` +
+        `${coverage.summary.staleHeads} stale head(s)`
+    },
+    {
+      name: "queue_no_failed_jobs",
+      ok: durableQueue.summary.failed === 0,
+      detail: `${durableQueue.summary.failed} failed durable queue job(s)`
+    },
+    {
+      name: "queue_no_ready_provider_deferred_jobs",
+      ok: readyToRetry === 0,
+      detail:
+        `${readyToRetry} ready-to-retry provider-deferred job(s); ` +
+        `provider_deferred total=${budget?.providerDeferred.total ?? durableQueue.summary.providerDeferred}`
+    }
+  ];
+}
+
+function queueRecommendedActions(gates: Array<{ name: string; ok: boolean; detail: string }>): string[] {
+  const failed = new Set(failedGates(gates).map((gate) => gate.name));
+  return [
+    ...(failed.has("queue_coverage_ok") ? ["inspect coverage queues, read failures, and stale heads before promotion"] : []),
+    ...(failed.has("queue_no_failed_jobs") ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(failed.has("queue_no_ready_provider_deferred_jobs")
+      ? ["wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry"]
+      : [])
+  ];
+}
+
+function queueActionableRows(
+  durableQueue: OperatorDurableQueueSnapshot,
+  budget?: ReleaseStatus["budget"]
+): ReviewQueueJobRecord[] {
+  const readyToRetry = budget?.providerDeferred.readyToRetry ?? durableQueue.summary.retryableProviderDeferred;
+  const failed = durableQueue.jobs.filter((job) => job.state === "failed");
+  const providerDeferred = readyToRetry > 0
+    ? durableQueue.jobs.filter((job) => job.state === "provider_deferred")
+    : [];
+  return [...failed, ...providerDeferred];
+}
+
+function buildHelp(command?: string) {
   return {
     ok: true,
+    ...(command ? { command } : {}),
     commands: {
       public: [
         "init",
@@ -1657,6 +1885,7 @@ function buildHelp() {
         "build-enrichment-comment",
         "issue-enrichment-scan",
         "clear-issue-enrichment-leases",
+        "clear-review-queue-leases",
         "finishing-touch-dry-run",
         "provider-cooldowns",
         "retry-provider-cooldowns",
@@ -1695,11 +1924,17 @@ function buildHelp() {
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --issue 456 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts issue-enrichment-scan --config /path/to/live.json --dry-run true --output-dir /path/to/evidence",
       "npx tsx src/cli.ts clear-issue-enrichment-leases --config /path/to/live.json --dry-run true --expired-only true",
+      "npx tsx src/cli.ts clear-review-queue-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };
+}
+
+function isHelpRequested(args: ParsedArgs): boolean {
+  if (args.help === "true") return true;
+  return args._.slice(1).some((arg) => arg === "help" || arg === "-h" || arg === "--help");
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -1766,6 +2001,24 @@ function buildIssueEnrichmentLeaseClearRecommendations(input: {
   }
   if (input.activeMatched > 0 && !input.expiredOnly) {
     recommendations.push("active issue-enrichment lease(s) matched; verify no worker is running before rerunning with --dry-run false --confirm true --expired-only false --force-active true");
+  }
+  return recommendations;
+}
+
+function buildReviewQueueLeaseClearRecommendations(input: {
+  dryRun: boolean;
+  expiredOnly: boolean;
+  forceActive: boolean;
+  activeMatched: number;
+  expiredMatched: number;
+}): string[] {
+  if (!input.dryRun) return [];
+  const recommendations: string[] = [];
+  if (input.expiredMatched > 0) {
+    recommendations.push("rerun with --dry-run false --confirm true --expired-only true to requeue expired review queue lease(s) and delete stale review run lease(s)");
+  }
+  if (input.activeMatched > 0 && !input.expiredOnly && !input.forceActive) {
+    recommendations.push("active review queue lease(s) matched; verify no worker is running before rerunning with --dry-run false --confirm true --expired-only false --force-active true");
   }
   return recommendations;
 }

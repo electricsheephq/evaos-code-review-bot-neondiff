@@ -1044,6 +1044,105 @@ describe("beta release status", () => {
     expect(status.recommendedActions).not.toContain("wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry");
   });
 
+  it("recommends review queue lease cleanup when stale run leases or active queue leases exist", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-stale-review-leases-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_run_leases (
+          lease_id text primary key,
+          started_at text not null,
+          expires_at text not null,
+          owner_pid integer
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          lease_expires_at text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare("insert into review_run_leases (lease_id, started_at, expires_at, owner_pid) values (?, ?, ?, ?)")
+        .run("dead-owner", "2026-07-03T08:00:00.000Z", "2026-07-03T09:00:00.000Z", 999_999_999);
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, lease_id, lease_expires_at, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'running', ?, ?, ?, ?)`
+      ).run(
+        "stale-running",
+        "automatic:electricsheephq/evaos-code-review-bot#174@head-a",
+        "electricsheephq/evaos-code-review-bot",
+        "electricsheephq",
+        174,
+        "head-a",
+        "queue-lease-expired",
+        "2026-07-03T08:00:10.000Z",
+        "2026-07-03T08:00:00.000Z",
+        "2026-07-03T08:00:00.000Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-03T08:01:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.database).toMatchObject({
+      reviewRunLeaseCount: 1,
+      staleReviewRunLeaseCount: 1,
+      staleActiveReviewQueueJobCount: 1
+    });
+    expect(status.gates).toContainEqual({
+      name: "queue_no_stale_review_leases",
+      ok: false,
+      detail: "1 stale review run lease(s); 1 stale active queue job(s)"
+    });
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts clear-review-queue-leases --config (default config) --dry-run true --expired-only true"
+    );
+  });
+
   it("filters terminal queue rows and preserves active jobs before applying the budget row cap", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-budget-cap-terminal-"));
     roots.push(root);

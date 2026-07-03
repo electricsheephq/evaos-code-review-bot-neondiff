@@ -988,6 +988,167 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("dry-runs and clears expired review queue leases without manual SQL", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-lease-clear-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const job = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 174,
+      headSha: "head-a",
+      providerId: "zai",
+      now: new Date("2026-07-03T08:00:00.000Z")
+    }).job;
+    const leased = store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      leaseTtlMs: 1_000,
+      now: new Date("2026-07-03T08:00:01.000Z")
+    })[0]!;
+
+    const dryRun = store.clearReviewQueueLeases({
+      dryRun: true,
+      expiredOnly: true,
+      now: new Date("2026-07-03T08:00:02.001Z")
+    });
+    expect(dryRun).toMatchObject({
+      dryRun: true,
+      expiredOnly: true,
+      matched: 1,
+      expiredMatched: 1,
+      activeMatched: 0,
+      requeued: 0,
+      jobs: [
+        expect.objectContaining({
+          jobId: job.jobId,
+          state: "leased",
+          staleReason: "expired"
+        })
+      ]
+    });
+    expect(store.getReviewQueueJob(job.jobId)).toMatchObject({ state: "leased", leaseId: leased.leaseId });
+
+    const cleared = store.clearReviewQueueLeases({
+      dryRun: false,
+      expiredOnly: true,
+      now: new Date("2026-07-03T08:00:02.002Z")
+    });
+    expect(cleared).toMatchObject({ dryRun: false, matched: 1, expiredMatched: 1, requeued: 1 });
+    expect(store.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "queued",
+      lastError: "queue_lease_operator_requeued:expired"
+    });
+    expect(store.getReviewQueueJob(job.jobId)?.leaseId).toBeUndefined();
+    store.close();
+  });
+
+  it("requires force-active semantics before requeueing active review queue leases", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-force-active-clear-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const job = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 175,
+      headSha: "head-active",
+      providerId: "zai",
+      now: new Date("2026-07-03T08:10:00.000Z")
+    }).job;
+    const leased = store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      leaseTtlMs: 60_000,
+      now: new Date("2026-07-03T08:10:01.000Z")
+    })[0]!;
+
+    expect(store.clearReviewQueueLeases({
+      dryRun: true,
+      expiredOnly: true,
+      now: new Date("2026-07-03T08:10:02.000Z")
+    })).toMatchObject({ matched: 0, activeMatched: 0 });
+
+    const forcedDryRun = store.clearReviewQueueLeases({
+      dryRun: true,
+      expiredOnly: false,
+      forceActive: true,
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 175,
+      now: new Date("2026-07-03T08:10:02.000Z")
+    });
+    expect(forcedDryRun).toMatchObject({
+      matched: 1,
+      expiredMatched: 0,
+      activeMatched: 1,
+      requeued: 0,
+      filters: {
+        repo: "electricsheephq/evaos-code-review-bot",
+        pullNumber: 175
+      },
+      jobs: [
+        expect.objectContaining({
+          jobId: job.jobId,
+          active: true,
+          staleReason: "forced_active"
+        })
+      ]
+    });
+    expect(store.getReviewQueueJob(job.jobId)).toMatchObject({ state: "leased", leaseId: leased.leaseId });
+
+    const cleared = store.clearReviewQueueLeases({
+      dryRun: false,
+      expiredOnly: false,
+      forceActive: true,
+      jobId: job.jobId,
+      now: new Date("2026-07-03T08:10:03.000Z")
+    });
+    expect(cleared).toMatchObject({ matched: 1, activeMatched: 1, requeued: 1 });
+    expect(store.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "queued",
+      lastError: "queue_lease_operator_requeued:forced_active"
+    });
+    store.close();
+  });
+
+  it("deletes stale review run leases owned by dead workers", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-run-lease-clear-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const lease = store.tryAcquireReviewRunLease(
+      1,
+      60_000,
+      new Date("2026-07-03T08:20:00.000Z"),
+      999_999_999
+    );
+
+    const dryRun = store.clearReviewQueueLeases({
+      dryRun: true,
+      expiredOnly: true,
+      now: new Date("2026-07-03T08:20:01.000Z")
+    });
+    expect(dryRun).toMatchObject({
+      matched: 1,
+      expiredMatched: 1,
+      deletedRunLeases: 0,
+      runLeases: [
+        expect.objectContaining({
+          leaseId: lease!.leaseId,
+          ownerAlive: false,
+          staleReason: "owner_not_running"
+        })
+      ]
+    });
+
+    const cleared = store.clearReviewQueueLeases({
+      dryRun: false,
+      expiredOnly: true,
+      now: new Date("2026-07-03T08:20:02.000Z")
+    });
+    expect(cleared).toMatchObject({ matched: 1, deletedRunLeases: 1 });
+    expect(store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-03T08:20:03.000Z"), process.pid)).toBeDefined();
+    store.close();
+  });
+
   it("defers and later leases provider-deferred queue jobs after next eligible time", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-deferred-"));
     roots.push(root);

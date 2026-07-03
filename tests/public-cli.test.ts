@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { ReviewStateStore } from "../src/state.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -47,6 +48,20 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
+  });
+
+  it("prints command help without executing run-once, review-pr, or daemon paths", async () => {
+    for (const args of [["run-once", "--help"], ["review-pr", "help"], ["daemon", "start", "-h"]]) {
+      const { stdout } = await runCli(args);
+      const output = JSON.parse(stdout);
+
+      expect(output.ok).toBe(true);
+      expect(output.command).toBe(args[0]);
+      expect(output.commands.existing).toContain("run-once");
+      expect(output.commands.public).toContain("review-pr");
+      expect(stdout).not.toContain("\"dryRun\"");
+      expect(stdout).not.toContain("\"reposScanned\"");
+    }
   });
 
   it("initializes a local config from the packaged example outside the repo cwd", async () => {
@@ -390,6 +405,73 @@ describe("public NeonDiff CLI surface", () => {
     ])).rejects.toMatchObject({
       stdout: expect.stringContaining("requires --repo and --pr")
     });
+  });
+
+  it("marks queue output blocked when durable provider-deferred work is ready even if coverage is scoped-ok", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-queue-health-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      const job = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 123,
+        headSha: "head-ready",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:01.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    await expect(runCli(["queue", "--config", configPath, "--state", "provider_deferred"])).rejects.toMatchObject({
+      stdout: expect.stringContaining("\"runtimeOk\": false")
+    });
+
+    try {
+      await runCli(["queue", "--config", configPath, "--state", "provider_deferred"]);
+      throw new Error("queue command unexpectedly passed");
+    } catch (error) {
+      const stdout = (error as { stdout: string }).stdout;
+      const output = JSON.parse(stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        coverageOk: true,
+        runtimeOk: false,
+        healthState: "runtime_blocked",
+        durableQueue: {
+          summary: {
+            providerDeferred: 1,
+            retryableProviderDeferred: 1
+          }
+        }
+      });
+      expect(output.failedGates).toEqual([
+        expect.objectContaining({ name: "queue_no_ready_provider_deferred_jobs" })
+      ]);
+      expect(output.actionableRows).toEqual([
+        expect.objectContaining({ repo: "owner/repo", pullNumber: 123, state: "provider_deferred" })
+      ]);
+    }
   });
 
   it("prints launchd daemon control plans in dry-run mode by default", async () => {

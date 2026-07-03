@@ -54,6 +54,7 @@ export interface OperatorStatus {
     issueEnrichmentRuntimeState?: OperatorIssueEnrichmentRuntimeState;
   };
   gates: Array<{ name: string; ok: boolean; detail: string }>;
+  failedGates: Array<{ name: string; ok: boolean; detail: string }>;
   recommendedActions: string[];
   release: ReleaseStatus;
   budget?: ReviewBudgetStatus;
@@ -100,6 +101,7 @@ export interface RuntimeInventory {
     issueEnrichmentRuntimeState?: OperatorIssueEnrichmentRuntimeState;
   };
   gates: Array<{ name: string; ok: boolean; detail: string }>;
+  failedGates: Array<{ name: string; ok: boolean; detail: string }>;
   recommendedActions: string[];
   activeWork: ReviewQueueJobRecord[];
   uncoveredPendingHeads: OperatorQueueEntry[];
@@ -467,6 +469,7 @@ export function buildOperatorStatus(input: {
       ...(issueEnrichmentRuntimeState ? { issueEnrichmentRuntimeState } : {})
     },
     gates,
+    failedGates: gates.filter((gate) => !gate.ok),
     recommendedActions,
     release: input.release,
     ...(budget ? { budget } : {}),
@@ -664,6 +667,7 @@ export function buildRuntimeInventory(input: {
       ...(issueEnrichmentRuntimeState ? { issueEnrichmentRuntimeState } : {})
     },
     gates,
+    failedGates: gates.filter((gate) => !gate.ok),
     recommendedActions,
     activeWork,
     uncoveredPendingHeads,

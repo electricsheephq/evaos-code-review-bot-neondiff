@@ -35,7 +35,9 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
 - `queue`: open PR-head coverage grouped into processed, provider-deferred,
   pending review, skipped, stale-head, and read-failure buckets. Also includes
   durable `review_queue_jobs` rows and budget delay reasons when the state DB
-  has the scheduler table.
+  has the scheduler table. The command reports both `coverageOk` and
+  `runtimeOk`; `coverageOk: true` can still pair with `runtimeOk: false` when
+  every PR head is covered but a durable queue row is failed or ready to retry.
 - `dashboard`: read-only PR review dashboard over coverage, durable queue,
   readiness lifecycle rows, GitHub PR links, and local evidence-path hints.
   Filter with `--repo`, `--status`, `--priority`, `--stale-head-reason`, and
@@ -55,6 +57,11 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   capped row-level details.
 - `coverage`: raw coverage-audit report with the shorter operator command name.
 - `cooldowns`: provider cooldown review rows plus repo/global cooldown rows.
+- `clear-review-queue-leases`: dry-run-first recovery command for stale
+  review-run leases and leased/running durable PR review queue rows. Use it
+  instead of manual SQLite edits after launchd restarts leave orphaned review
+  work. Mutation requires `--dry-run false --confirm true`; active/non-expired
+  rows additionally require `--expired-only false --force-active true`.
 - `why --repo <owner/name> --pr <number>`: scoped explanation for why one PR
   head is processed, pending, provider-deferred, skipped, blocked by a read
   failure, or unknown.
@@ -184,6 +191,11 @@ Inspect only durable provider-deferred jobs:
 npx tsx src/cli.ts queue --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --state provider_deferred
 ```
 
+If `queue` returns `coverageOk: true` and `runtimeOk: false`, coverage has found
+every eligible head but the durable queue still has actionable runtime debt.
+Inspect `failedGates`, `recommendedActions`, and `actionableRows` before
+restarting launchd or retrying provider work.
+
 Show the review dashboard:
 
 ```bash
@@ -228,6 +240,18 @@ Inspect provider cooldowns:
 
 ```bash
 npx tsx src/cli.ts cooldowns --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --expired-only true
+```
+
+Dry-run stale review queue lease cleanup:
+
+```bash
+npx tsx src/cli.ts clear-review-queue-leases --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --dry-run true --expired-only true
+```
+
+Apply expired-only cleanup after inspecting the dry-run output:
+
+```bash
+npx tsx src/cli.ts clear-review-queue-leases --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --dry-run false --confirm true --expired-only true
 ```
 
 Build a repo-memory packet for dry-run evidence:
