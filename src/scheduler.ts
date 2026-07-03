@@ -188,7 +188,7 @@ export async function runScheduledCycleWithDeps(input: {
   result.queue.leased = leased.length;
 
   const budget = new ReviewRunBudget(Math.max(1, scheduler.maxProviderActive));
-  for (const job of leased) {
+  for (const [index, job] of leased.entries()) {
     const status = await runLeasedQueueJob({
       config,
       github: input.github,
@@ -205,6 +205,16 @@ export async function runScheduledCycleWithDeps(input: {
       clock: eventClock
     });
     applyReviewStatus(result, status);
+    if (status === "skipped_provider_cooldown") {
+      result.queue.providerDeferred += deferUnstartedLeasedJobsForProviderThrottle({
+        config,
+        state: input.state,
+        triggerJob: job,
+        jobs: leased.slice(index + 1),
+        now: eventClock()
+      });
+      break;
+    }
   }
 
   result.queue.remainingQueued = input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred"] }).length;
@@ -449,11 +459,17 @@ function enqueueReviewJob(input: {
     source,
     lane: source === "manual_command" ? "manual" : "background",
     providerId: input.providerId,
-    priority: source === "manual_command" ? undefined : input.config.reviewScheduler?.backgroundPriority,
+    priority: source === "manual_command" ? undefined : automaticQueuePriority(input.config, input.repo),
     ...(commandDecision ? { commentId: commandDecision.commandId } : {}),
     ...(sessionId ? { sessionId } : {}),
     now: input.now
   });
+}
+
+function automaticQueuePriority(config: BotConfig, repo: string): number | undefined {
+  const backgroundPriority = config.reviewScheduler?.backgroundPriority;
+  if (repo.toLowerCase() !== "electricsheephq/evaos-code-review-bot") return backgroundPriority;
+  return Math.min(backgroundPriority ?? 50, 1);
 }
 
 function recordReadinessForEnqueue(input: {
@@ -1117,6 +1133,42 @@ function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobReco
   return existing?.commandAction ? isReviewCommandAction(existing.commandAction) : true;
 }
 
+function deferUnstartedLeasedJobsForProviderThrottle(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  triggerJob: ReviewQueueJobRecord;
+  jobs: ReviewQueueJobRecord[];
+  now: Date;
+}): number {
+  const cooldown = providerThrottleCooldownFromTriggerJob(input);
+  for (const job of input.jobs) {
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: cooldown.cooldownUntil,
+      lastError: `provider_throttle_cycle_deferred_until=${cooldown.cooldownUntil}; reason=${cooldown.reason}; trigger_repo=${input.triggerJob.repo}`,
+      now: input.now
+    });
+  }
+  return input.jobs.length;
+}
+
+function providerThrottleCooldownFromTriggerJob(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  triggerJob: ReviewQueueJobRecord;
+  now: Date;
+}): { cooldownUntil: string; reason: string } {
+  const processed = input.state.getProcessedReview(input.triggerJob.repo, input.triggerJob.pullNumber, input.triggerJob.headSha);
+  const parsed = parseProviderCooldownError(processed?.error);
+  const repoCooldown = input.state.getActiveRepoProviderCooldown(input.triggerJob.repo, input.now);
+  const fallbackCooldownUntil = new Date(input.now.getTime() + input.config.providerCooldown.durationMs).toISOString();
+  return {
+    cooldownUntil: parsed?.cooldownUntil ?? repoCooldown?.cooldownUntil ?? fallbackCooldownUntil,
+    reason: parsed?.reason ?? repoCooldown?.reason ?? "provider_cooldown"
+  };
+}
+
 function readinessStateForReviewResult(
   status: ReviewPullResult,
   processed?: { status: ProcessedStatus; event?: ReviewEvent; error?: string }
@@ -1563,8 +1615,8 @@ function markQueueJobProviderDeferredFromProcessed(input: {
     : undefined;
   const parsed = parseProviderCooldownError(processed?.error);
   const repoCooldown = input.state.getActiveRepoProviderCooldown(input.job.repo, input.now);
-  const cooldownUntil = directCooldown?.cooldownUntil ?? parsed?.cooldownUntil ?? repoCooldown?.cooldownUntil;
-  const reason = directCooldown?.reason ?? parsed?.reason ?? repoCooldown?.reason;
+  const cooldownUntil = parsed?.cooldownUntil ?? repoCooldown?.cooldownUntil ?? directCooldown?.cooldownUntil;
+  const reason = parsed?.reason ?? repoCooldown?.reason ?? directCooldown?.reason;
   input.state.updateReviewQueueJobState({
     jobId: input.job.jobId,
     state: "provider_deferred",

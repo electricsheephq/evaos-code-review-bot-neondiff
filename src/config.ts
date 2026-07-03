@@ -33,6 +33,8 @@ export interface BotConfig {
     requestRateLimitDurationMs: number;
     overloadDurationMs: number;
     quotaDurationMs: number;
+    overloadBackoffMaxDurationMs: number;
+    overloadBackoffJitterMs: number;
     transientRetryAttempts: number;
     transientRetryBaseDelayMs: number;
     transientRetryMaxDelayMs: number;
@@ -193,6 +195,8 @@ const DEFAULT_CONFIG: BotConfig = {
     requestRateLimitDurationMs: 90_000,
     overloadDurationMs: 2 * 60_000,
     quotaDurationMs: 30 * 60_000,
+    overloadBackoffMaxDurationMs: 10 * 60_000,
+    overloadBackoffJitterMs: 30_000,
     transientRetryAttempts: 4,
     transientRetryBaseDelayMs: 2_000,
     transientRetryMaxDelayMs: 20_000
@@ -328,6 +332,8 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
   validatePositiveInteger(config.providerCooldown.overloadDurationMs, "config.providerCooldown.overloadDurationMs");
   validatePositiveInteger(config.providerCooldown.quotaDurationMs, "config.providerCooldown.quotaDurationMs");
+  validatePositiveInteger(config.providerCooldown.overloadBackoffMaxDurationMs, "config.providerCooldown.overloadBackoffMaxDurationMs");
+  validateNonNegativeInteger(config.providerCooldown.overloadBackoffJitterMs, "config.providerCooldown.overloadBackoffJitterMs");
   validateNonNegativeInteger(config.providerCooldown.transientRetryAttempts, "config.providerCooldown.transientRetryAttempts");
   validatePositiveInteger(config.providerCooldown.transientRetryBaseDelayMs, "config.providerCooldown.transientRetryBaseDelayMs");
   validatePositiveInteger(config.providerCooldown.transientRetryMaxDelayMs, "config.providerCooldown.transientRetryMaxDelayMs");

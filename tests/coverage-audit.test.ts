@@ -1116,6 +1116,8 @@ function minimalConfig(root: string): BotConfig {
       requestRateLimitDurationMs: 5 * 60_000,
       overloadDurationMs: 2 * 60_000,
       quotaDurationMs: 30 * 60_000,
+      overloadBackoffMaxDurationMs: 10 * 60_000,
+      overloadBackoffJitterMs: 0,
       transientRetryAttempts: 2,
       transientRetryBaseDelayMs: 1,
       transientRetryMaxDelayMs: 1

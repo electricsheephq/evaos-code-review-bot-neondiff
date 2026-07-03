@@ -23,6 +23,10 @@ describe("review scheduler config", () => {
       manualCommandReserve: 1,
       backgroundPriority: 50
     });
+    expect(config.providerCooldown).toMatchObject({
+      overloadBackoffMaxDurationMs: 10 * 60_000,
+      overloadBackoffJitterMs: 30_000
+    });
   });
 
   it("rejects scheduler settings that cannot preserve manual reserve capacity", () => {
@@ -32,6 +36,19 @@ describe("review scheduler config", () => {
         manualCommandReserve: 2
       }
     }))).toThrow("config.reviewScheduler.manualCommandReserve must be <= config.reviewScheduler.maxProviderActive");
+  });
+
+  it("validates provider overload backoff settings", () => {
+    expect(() => loadConfig(writeConfig({
+      providerCooldown: {
+        overloadBackoffMaxDurationMs: 0
+      }
+    }))).toThrow("config.providerCooldown.overloadBackoffMaxDurationMs must be a positive integer");
+    expect(() => loadConfig(writeConfig({
+      providerCooldown: {
+        overloadBackoffJitterMs: -1
+      }
+    }))).toThrow("config.providerCooldown.overloadBackoffJitterMs must be a non-negative integer");
   });
 
   it("validates optional GitHub API client settings", () => {

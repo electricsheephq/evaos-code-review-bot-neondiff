@@ -476,6 +476,156 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("stops the current provider batch after an overload and requeues unstarted leased jobs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-overload-stop-"));
+    roots.push(root);
+    const config = schedulerConfig(root, []);
+    config.reviewScheduler!.maxProviderActive = 2;
+    config.reviewScheduler!.maxOrgActive = 2;
+    config.reviewScheduler!.maxRepoActive = 1;
+    const state = new ReviewStateStore(config.statePath);
+    const first = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base",
+      priority: 10,
+      providerId: "zai-coding-plan",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    }).job;
+    const second = state.enqueueReviewQueueJob({
+      repo: "org/repo-b",
+      pullNumber: 2,
+      headSha: HEAD_B,
+      baseSha: "base",
+      priority: 20,
+      providerId: "zai-coding-plan",
+      now: new Date("2026-07-02T00:00:01.000Z")
+    }).job;
+    const attempted: string[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]],
+        ["org/repo-b", [pull("org/repo-b", 2, HEAD_B)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: true },
+      reviewPullImpl: async ({ repo }) => {
+        attempted.push(repo);
+        throw new Error("ProviderBusinessError: [1305][The service may be temporarily overloaded]");
+      },
+      now: new Date("2026-07-02T00:05:00.000Z")
+    });
+
+    expect(attempted).toEqual(["org/repo-a"]);
+    expect(result.skippedProviderCooldown).toBe(1);
+    expect(result.queue.providerDeferred).toBe(2);
+    expect(state.getReviewQueueJob(first.jobId)).toMatchObject({
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:07:00.000Z",
+      lastError: expect.stringContaining("reason=provider_overloaded")
+    });
+    expect(state.getReviewQueueJob(second.jobId)).toMatchObject({
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:07:00.000Z",
+      lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-02T00:07:00.000Z")
+    });
+    state.close();
+  });
+
+  it("prioritizes self-repo release PR heads ahead of ordinary background queue work", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-self-repo-priority-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "electricsheephq/evaos-code-review-bot"]);
+    config.reviewScheduler!.maxProviderActive = 1;
+    const state = new ReviewStateStore(config.statePath);
+    const reviewed: string[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]],
+        ["electricsheephq/evaos-code-review-bot", [pull("electricsheephq/evaos-code-review-bot", 165, HEAD_B)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewed.push(`${repo}#${reviewPull.number}`);
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.queue.enqueued).toBe(2);
+    expect(result.reviewed).toBe(1);
+    expect(reviewed).toEqual(["electricsheephq/evaos-code-review-bot#165"]);
+    expect(state.listReviewQueueJobs({ repo: "electricsheephq/evaos-code-review-bot" })).toEqual([
+      expect.objectContaining({ pullNumber: 165, priority: 1, lastError: "reviewed" })
+    ]);
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a", state: "queued" })).toEqual([
+      expect.objectContaining({ pullNumber: 1, priority: 50 })
+    ]);
+    state.close();
+  });
+
+  it("retires self-repo provider-deferred jobs when the PR closes before retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-self-repo-provider-deferred-closed-"));
+    roots.push(root);
+    const config = schedulerConfig(root, []);
+    const state = new ReviewStateStore(config.statePath);
+    const job = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 165,
+      headSha: HEAD_A,
+      baseSha: "base",
+      priority: 1,
+      providerId: "zai-coding-plan",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:04:00.000Z",
+      lastError: "provider_rate_limit_cooldown_until=2026-07-02T00:04:00.000Z; reason=provider_overloaded",
+      now: new Date("2026-07-02T00:00:01.000Z")
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["electricsheephq/evaos-code-review-bot", [
+          pull("electricsheephq/evaos-code-review-bot", 165, HEAD_A, "base", { state: "closed", mergedAt: "2026-07-02T00:03:00Z" })
+        ]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: true },
+      reviewPullImpl: async () => {
+        throw new Error("closed provider-deferred self-repo PR must not run review work");
+      },
+      now: new Date("2026-07-02T00:05:00.000Z")
+    });
+
+    expect(result.queue.closedRetired).toBe(1);
+    expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "closed_retired",
+      lastError: "closed_or_merged_before_review state=closed"
+    });
+    expect(state.getReviewReadiness("electricsheephq/evaos-code-review-bot", 165, HEAD_A)).toMatchObject({
+      state: "closed",
+      reason: "closed_or_merged_before_review state=closed"
+    });
+    state.close();
+  });
+
   it("marks a queued status failed when refetching the leased pull fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-refetch-failed-"));
     roots.push(root);
@@ -1258,7 +1408,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("records provider throttle on one repo without blocking an unrelated leased repo", async () => {
+  it("records provider throttle and stops the current leased provider batch", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-throttle-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/repo-a", "org/repo-b", "org/repo-c"]);
@@ -1291,15 +1441,16 @@ describe("provider-aware review scheduler", () => {
       now: new Date("2026-07-01T00:00:00.000Z")
     });
 
-    expect(result.reviewed).toBe(1);
+    expect(result.reviewed).toBe(0);
     expect(result.skippedProviderCooldown).toBe(1);
     expect(state.getActiveRepoProviderCooldown("org/repo-a", new Date("2026-07-01T00:00:01.000Z"))).toBeDefined();
     expect(state.getActiveRepoProviderCooldown("org/repo-b", new Date("2026-07-01T00:00:01.000Z"))).toBeUndefined();
     expect(state.listReviewQueueJobs({ state: "provider_deferred" })).toEqual([
-      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z" })
+      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z" }),
+      expect.objectContaining({ repo: "org/repo-b", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z", lastError: expect.stringContaining("trigger_repo=org/repo-a") })
     ]);
-    expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
-      expect.objectContaining({ repo: "org/repo-b", pullNumber: 1 })
+    expect(state.listReviewQueueJobs({ state: "queued" })).toEqual([
+      expect.objectContaining({ repo: "org/repo-c", pullNumber: 1 })
     ]);
     state.close();
   });
@@ -2680,6 +2831,8 @@ function schedulerConfig(root: string, repos: string[]): BotConfig {
       requestRateLimitDurationMs: 90_000,
       overloadDurationMs: 2 * 60_000,
       quotaDurationMs: 30 * 60_000,
+      overloadBackoffMaxDurationMs: 10 * 60_000,
+      overloadBackoffJitterMs: 0,
       transientRetryAttempts: 0,
       transientRetryBaseDelayMs: 1,
       transientRetryMaxDelayMs: 1

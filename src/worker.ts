@@ -1649,7 +1649,11 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   if (!classification.cooldown) return false;
 
   const now = input.now ?? new Date();
-  const cooldownUntil = new Date(now.getTime() + providerCooldownDurationMs(input.config, classification));
+  const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  const retryAttempt = nextProviderCooldownRetryAttempt(previous?.error, classification);
+  const jitterMs = providerCooldownJitterMs(input.config, classification, retryAttempt);
+  const durationMs = providerCooldownDurationMs(input.config, classification, retryAttempt, jitterMs);
+  const cooldownUntil = new Date(now.getTime() + durationMs);
   input.state.recordRepoProviderCooldown({
     repo: input.repo,
     cooldownUntil,
@@ -1660,7 +1664,10 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
     repo: input.repo,
     pull: input.pull,
     cooldownUntil: cooldownUntil.toISOString(),
-    reason: classification.reason
+    reason: classification.reason,
+    ...(classification.category === "overloaded" ? { retryAttempt } : {}),
+    ...(classification.category === "overloaded" && classification.providerCode ? { providerCode: classification.providerCode } : {}),
+    ...(classification.category === "overloaded" && classification.retryAfterMs ? { retryAfterMs: classification.retryAfterMs } : {})
   });
   return true;
 }
@@ -1713,11 +1720,46 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
   };
 }
 
-export function providerCooldownDurationMs(config: BotConfig, classification: ProviderErrorClassification): number {
+export function providerCooldownDurationMs(
+  config: BotConfig,
+  classification: ProviderErrorClassification,
+  retryAttempt = 1,
+  jitterMs = 0
+): number {
   if (classification.category === "request_rate_limit") return config.providerCooldown.requestRateLimitDurationMs;
-  if (classification.category === "overloaded") return config.providerCooldown.overloadDurationMs;
+  if (classification.category === "overloaded") {
+    const attempt = Math.max(1, Math.floor(retryAttempt));
+    const exponential = config.providerCooldown.overloadDurationMs * 2 ** Math.max(0, attempt - 1);
+    const boundedJitter = Math.min(
+      Math.max(0, Math.floor(jitterMs)),
+      config.providerCooldown.overloadBackoffJitterMs
+    );
+    return Math.min(config.providerCooldown.overloadBackoffMaxDurationMs, exponential + boundedJitter);
+  }
   if (classification.category === "quota_exhausted") return config.providerCooldown.quotaDurationMs;
   return config.providerCooldown.durationMs;
+}
+
+function nextProviderCooldownRetryAttempt(
+  previousError: string | undefined,
+  classification: ProviderErrorClassification
+): number {
+  if (classification.category !== "overloaded") return 1;
+  const previous = parseProviderCooldownError(previousError);
+  if (previous?.reason !== classification.reason) return 1;
+  return Math.min(99, (previous.retryAttempt ?? 1) + 1);
+}
+
+function providerCooldownJitterMs(
+  config: BotConfig,
+  classification: ProviderErrorClassification,
+  retryAttempt: number
+): number {
+  if (classification.category !== "overloaded") return 0;
+  if (retryAttempt <= 1) return 0;
+  const max = config.providerCooldown.overloadBackoffJitterMs;
+  if (max <= 0) return 0;
+  return Math.floor(Math.random() * (max + 1));
 }
 
 async function runZCodeReviewWithProviderRetry(input: {
@@ -1854,13 +1896,22 @@ function recordProviderCooldownSkip(input: {
   pull: PullRequestSummary;
   cooldownUntil: string;
   reason: string;
+  retryAttempt?: number;
+  providerCode?: string;
+  retryAfterMs?: number;
 }): void {
+  const metadata = [
+    `reason=${redactSecrets(input.reason)}`,
+    ...(input.retryAttempt ? [`retry_attempt=${input.retryAttempt}`] : []),
+    ...(input.providerCode ? [`provider_code=${redactSecrets(input.providerCode)}`] : []),
+    ...(input.retryAfterMs ? [`retry_after_ms=${input.retryAfterMs}`] : [])
+  ];
   input.state.recordProcessed({
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,
     status: "skipped",
-    error: `provider_rate_limit_cooldown_until=${input.cooldownUntil}; reason=${redactSecrets(input.reason)}`
+    error: `provider_rate_limit_cooldown_until=${input.cooldownUntil}; ${metadata.join("; ")}`
   });
 }
 

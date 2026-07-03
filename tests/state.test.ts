@@ -1114,6 +1114,15 @@ describe("review state store", () => {
       cooldownUntil: "2026-07-01T00:15:00.000Z",
       reason: "provider_rate_limit"
     });
+    expect(parseProviderCooldownError(
+      "provider_rate_limit_cooldown_until=2026-07-01T00:15:00.000Z; reason=provider_overloaded; retry_attempt=3; provider_code=1305; retry_after_ms=45000"
+    )).toEqual({
+      cooldownUntil: "2026-07-01T00:15:00.000Z",
+      reason: "provider_overloaded",
+      retryAttempt: 3,
+      providerCode: "1305",
+      retryAfterMs: 45000
+    });
     expect(store.listProviderCooldownReviews({
       repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
       now: new Date("2026-07-01T00:30:00.000Z")

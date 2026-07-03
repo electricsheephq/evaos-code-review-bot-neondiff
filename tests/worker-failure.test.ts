@@ -525,7 +525,60 @@ describe("worker review failures", () => {
     });
     expect(providerCooldownDurationMs(config, rateLimit)).toBe(90_000);
     expect(providerCooldownDurationMs(config, overload)).toBe(2 * 60_000);
+    expect(providerCooldownDurationMs(config, overload, 2)).toBe(4 * 60_000);
+    expect(providerCooldownDurationMs({
+      ...config,
+      providerCooldown: {
+        ...config.providerCooldown,
+        overloadBackoffJitterMs: 30_000
+      }
+    }, overload, 3, 5_000)).toBe(8 * 60_000 + 5_000);
+    expect(providerCooldownDurationMs(config, overload, 99, 60_000)).toBe(10 * 60_000);
     expect(providerCooldownDurationMs(config, quota)).toBe(30 * 60_000);
+  });
+
+  it("backs off repeated provider overload cooldowns for the same head", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-overload-backoff-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1330, "head-overload");
+
+    const first = recordProviderRateLimitCooldownIfNeeded({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("ProviderBusinessError: [1305][The service may be temporarily overloaded] providerRequestId: 'req-1'"),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const firstRecord = state.getProcessedReview("electricsheephq/WorldOS", 1330, "head-overload");
+
+    const second = recordProviderRateLimitCooldownIfNeeded({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("ProviderBusinessError: [1305][The service may be temporarily overloaded] providerRequestId: 'req-2'"),
+      now: new Date("2026-07-01T00:02:00.000Z")
+    });
+    const secondRecord = state.getProcessedReview("electricsheephq/WorldOS", 1330, "head-overload");
+
+    expect(first).toBe(true);
+    expect(firstRecord).toMatchObject({
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:02:00.000Z; reason=provider_overloaded; retry_attempt=1; provider_code=1305"
+    });
+    expect(second).toBe(true);
+    expect(secondRecord).toMatchObject({
+      status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2026-07-01T00:06:00.000Z; reason=provider_overloaded; retry_attempt=2; provider_code=1305"
+    });
+    expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:05:59.000Z"))).toMatchObject({
+      reason: "provider_overloaded",
+      cooldownUntil: "2026-07-01T00:06:00.000Z"
+    });
+    state.close();
   });
 
   it("retries transient provider throttles before surfacing failure", async () => {
@@ -1732,6 +1785,8 @@ function minimalConfig(root: string): BotConfig {
       requestRateLimitDurationMs: 90_000,
       overloadDurationMs: 2 * 60_000,
       quotaDurationMs: 30 * 60_000,
+      overloadBackoffMaxDurationMs: 10 * 60_000,
+      overloadBackoffJitterMs: 0,
       transientRetryAttempts: 4,
       transientRetryBaseDelayMs: 1,
       transientRetryMaxDelayMs: 1
