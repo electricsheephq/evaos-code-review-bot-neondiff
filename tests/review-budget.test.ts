@@ -127,6 +127,17 @@ describe("review run budget", () => {
       providerDeferred: 1,
       retryableProviderDeferred: 0
     });
+    expect(status.providerDeferred).toMatchObject({
+      total: 1,
+      retryable: 0,
+      readyToRetry: 0,
+      waitingCooldown: 1,
+      waitingProviderCapacity: 0,
+      waitingOrgCapacity: 0,
+      waitingRepoCapacity: 0,
+      waitingManualReserve: 0,
+      waitingLeaseLimit: 0
+    });
     expect(status.wouldLease.map((entry) => entry.jobId)).toEqual(["manual-slot"]);
     expect(status.delayedByReason).toMatchObject({
       repo_capacity: 1,
@@ -140,6 +151,84 @@ describe("review run budget", () => {
       reservedSlotsOpen: 1,
       backgroundSlotsAvailableBeforeReserve: 0
     });
+  });
+
+  it("separates retryable provider-deferred jobs from actionable ready-to-retry jobs", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-provider-deferred-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 10,
+        maxRepoActive: 10,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      }
+    };
+    const now = new Date("2026-07-01T00:05:00.000Z");
+
+    const capacityBlocked = buildReviewBudgetStatus({
+      config,
+      now,
+      jobs: [
+        queueJob("active", { repo: "owner/active", state: "running", priority: 1 }),
+        queueJob("retryable", {
+          repo: "owner/retryable",
+          state: "provider_deferred",
+          priority: 2,
+          nextEligibleAt: "2026-07-01T00:01:00.000Z"
+        }),
+        queueJob("cooldown", {
+          repo: "owner/cooldown",
+          state: "provider_deferred",
+          priority: 3,
+          nextEligibleAt: "2026-07-01T00:10:00.000Z"
+        })
+      ]
+    });
+
+    expect(capacityBlocked.queued).toMatchObject({
+      providerDeferred: 2,
+      retryableProviderDeferred: 1
+    });
+    expect(capacityBlocked.providerDeferred).toMatchObject({
+      total: 2,
+      retryable: 1,
+      readyToRetry: 0,
+      waitingCooldown: 1,
+      waitingProviderCapacity: 1
+    });
+
+    const ready = buildReviewBudgetStatus({
+      config,
+      now,
+      jobs: [
+        queueJob("retryable", {
+          repo: "owner/retryable",
+          state: "provider_deferred",
+          priority: 2,
+          nextEligibleAt: "2026-07-01T00:01:00.000Z"
+        })
+      ]
+    });
+
+    expect(ready.providerDeferred).toMatchObject({
+      total: 1,
+      retryable: 1,
+      readyToRetry: 1,
+      waitingCooldown: 0,
+      waitingProviderCapacity: 0
+    });
+    expect(ready.wouldLease).toEqual([
+      expect.objectContaining({
+        jobId: "retryable",
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-01T00:01:00.000Z"
+      })
+    ]);
   });
 
   it("does not count expired leased or running jobs against active capacity", () => {

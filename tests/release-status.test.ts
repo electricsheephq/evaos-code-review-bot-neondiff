@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildReleaseStatus, collectReleaseStatus } from "../src/release-status.js";
+import type { ReviewBudgetStatus } from "../src/review-budget.js";
 
 describe("beta release status", () => {
   const roots: string[] = [];
@@ -898,6 +899,12 @@ describe("beta release status", () => {
         providerDeferred: 2,
         retryableProviderDeferred: 1
       },
+      providerDeferred: {
+        total: 2,
+        retryable: 1,
+        readyToRetry: 1,
+        waitingCooldown: 1
+      },
       delayedByReason: {
         repo_capacity: 1,
         provider_cooldown: 1
@@ -953,9 +960,9 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({
       name: "queue_no_retryable_provider_deferred_jobs",
       ok: false,
-      detail: "1 retryable provider-deferred queue job(s); queue total=5 queued=1 leased=0 running=1 provider_deferred=2 failed=1"
+      detail: "1 ready-to-retry provider-deferred queue job(s); provider_deferred total=2 retryable=1 waiting_cooldown=1 waiting_capacity=0; queue total=5 queued=1 leased=0 running=1 provider_deferred=2 failed=1"
     });
-    expect(status.recommendedActions).toContain("inspect operator queue and retry provider-deferred jobs whose nextEligibleAt has expired");
+    expect(status.recommendedActions).toContain("wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry");
 
     const detailedStatus = collectReleaseStatus({
       cwd: process.cwd(),
@@ -976,6 +983,65 @@ describe("beta release status", () => {
     });
     expect(detailedStatus.budget?.wouldLease.length).toBeLessThanOrEqual(1);
     expect(detailedStatus.budget?.delayed.length).toBeLessThanOrEqual(1);
+  });
+
+  it("does not fail the provider-deferred gate when retryable jobs are waiting on capacity", () => {
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false
+      },
+      database: {
+        rowCount: 21,
+        errorCount: 0,
+        reviewQueueJobCount: 2,
+        queuedReviewQueueJobCount: 0,
+        leasedReviewQueueJobCount: 0,
+        runningReviewQueueJobCount: 1,
+        providerDeferredReviewQueueJobCount: 1,
+        retryableProviderDeferredReviewQueueJobCount: 1,
+        failedReviewQueueJobCount: 0
+      },
+      budget: releaseBudgetStatus({
+        queued: {
+          total: 1,
+          manual: 0,
+          background: 1,
+          providerDeferred: 1,
+          retryableProviderDeferred: 1
+        },
+        providerDeferred: {
+          total: 1,
+          retryable: 1,
+          readyToRetry: 0,
+          waitingCooldown: 0,
+          waitingProviderCapacity: 1,
+          waitingOrgCapacity: 0,
+          waitingRepoCapacity: 0,
+          waitingManualReserve: 0,
+          waitingLeaseLimit: 0
+        }
+      }),
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.gates).toContainEqual({
+      name: "queue_no_retryable_provider_deferred_jobs",
+      ok: true,
+      detail: "0 ready-to-retry provider-deferred queue job(s); provider_deferred total=1 retryable=1 waiting_cooldown=0 waiting_capacity=1; queue total=2 queued=0 leased=0 running=1 provider_deferred=1 failed=0"
+    });
+    expect(status.recommendedActions).not.toContain("wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry");
   });
 
   it("filters terminal queue rows and preserves active jobs before applying the budget row cap", () => {
@@ -1215,6 +1281,76 @@ function freshHeartbeat() {
     cycle: 5,
     event: "daemon_cycle_complete",
     dryRun: false
+  };
+}
+
+function releaseBudgetStatus(overrides: Partial<ReviewBudgetStatus> = {}): ReviewBudgetStatus {
+  return {
+    enabled: true,
+    checkedAt: "2026-07-01T00:00:00.000Z",
+    config: {
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 60_000
+      },
+      scheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      }
+    },
+    active: {
+      total: 1,
+      leased: 0,
+      running: 1,
+      manual: 0,
+      background: 1,
+      byProvider: [],
+      byOrg: [],
+      byRepo: []
+    },
+    queued: {
+      total: 0,
+      manual: 0,
+      background: 0,
+      providerDeferred: 0,
+      retryableProviderDeferred: 0
+    },
+    providerDeferred: {
+      total: 0,
+      retryable: 0,
+      readyToRetry: 0,
+      waitingCooldown: 0,
+      waitingProviderCapacity: 0,
+      waitingOrgCapacity: 0,
+      waitingRepoCapacity: 0,
+      waitingManualReserve: 0,
+      waitingLeaseLimit: 0
+    },
+    manualReserve: {
+      configured: 0,
+      activeManual: 0,
+      queuedManual: 0,
+      reservedSlotsOpen: 0,
+      backgroundSlotsAvailableBeforeReserve: 1
+    },
+    wouldLeaseCount: 0,
+    delayedCount: 0,
+    details: {
+      included: false,
+      wouldLeaseReturned: 0,
+      delayedReturned: 0,
+      detailsTruncated: false,
+      inputJobs: 0
+    },
+    wouldLease: [],
+    delayed: [],
+    delayedByReason: {},
+    ...overrides
   };
 }
 

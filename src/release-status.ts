@@ -128,7 +128,10 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     );
   const expiredProviderCooldownOk = retryableExpiredProviderCooldownCount === 0;
   const failedQueueJobsOk = (input.database.failedReviewQueueJobCount ?? 0) === 0;
-  const retryableDeferredQueueJobsOk = (input.database.retryableProviderDeferredReviewQueueJobCount ?? 0) === 0;
+  const actionableProviderDeferredQueueJobs =
+    input.budget?.providerDeferred.readyToRetry ??
+    (input.database.retryableProviderDeferredReviewQueueJobCount ?? 0);
+  const retryableDeferredQueueJobsOk = actionableProviderDeferredQueueJobs === 0;
   const heartbeatOk = input.heartbeat.status === "fresh" || input.heartbeat.status === "active";
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
@@ -181,9 +184,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     {
       name: "queue_no_retryable_provider_deferred_jobs",
       ok: retryableDeferredQueueJobsOk,
-      detail:
-        `${input.database.retryableProviderDeferredReviewQueueJobCount ?? 0} retryable provider-deferred queue job(s)` +
-        describeReviewQueueCounts(input.database)
+      detail: describeProviderDeferredQueueStatus(input.database, input.budget)
     },
     {
       name: "daemon_heartbeat_recent",
@@ -209,7 +210,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     recommendedActions: expiredProviderCooldownOk
       ? retryableDeferredQueueJobsOk
         ? []
-        : ["inspect operator queue and retry provider-deferred jobs whose nextEligibleAt has expired"]
+        : ["wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry"]
       : [
           retryProviderCooldownCommand,
           `npx tsx src/cli.ts provider-cooldowns --config ${input.configPath} --expired-only true`
@@ -727,6 +728,32 @@ function describeReviewQueueCounts(database: ReleaseDatabaseStatus): string {
     ` running=${database.runningReviewQueueJobCount ?? 0}` +
     ` provider_deferred=${database.providerDeferredReviewQueueJobCount ?? 0}` +
     ` failed=${database.failedReviewQueueJobCount ?? 0}`
+  );
+}
+
+function describeProviderDeferredQueueStatus(
+  database: ReleaseDatabaseStatus,
+  budget?: ReviewBudgetStatus
+): string {
+  if (!budget) {
+    return (
+      `${database.retryableProviderDeferredReviewQueueJobCount ?? 0} retryable provider-deferred queue job(s)` +
+      describeReviewQueueCounts(database)
+    );
+  }
+  const waitingCapacity =
+    budget.providerDeferred.waitingProviderCapacity +
+    budget.providerDeferred.waitingOrgCapacity +
+    budget.providerDeferred.waitingRepoCapacity +
+    budget.providerDeferred.waitingManualReserve +
+    budget.providerDeferred.waitingLeaseLimit;
+  return (
+    `${budget.providerDeferred.readyToRetry} ready-to-retry provider-deferred queue job(s)` +
+    `; provider_deferred total=${budget.providerDeferred.total}` +
+    ` retryable=${budget.providerDeferred.retryable}` +
+    ` waiting_cooldown=${budget.providerDeferred.waitingCooldown}` +
+    ` waiting_capacity=${waitingCapacity}` +
+    describeReviewQueueCounts(database)
   );
 }
 
