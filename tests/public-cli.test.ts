@@ -723,7 +723,8 @@ describe("public NeonDiff CLI surface", () => {
       headSha,
       baseSha: "base",
       source: "manual_command",
-      priority: 0
+      priority: 0,
+      now: new Date("2099-01-01T00:00:00.000Z")
     });
     store.close();
 
@@ -752,6 +753,68 @@ describe("public NeonDiff CLI surface", () => {
         nextAction: expect.stringContaining("wait for evaOS review")
       });
     }
+  });
+
+  it("does not let older active queue residue block a newer posted exact-head review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-zombie-active-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base",
+      source: "manual_command",
+      priority: 0,
+      now: new Date("2020-01-01T00:00:00.000Z")
+    });
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-5`
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "review-head-gate",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      decision: "passed",
+      processed: {
+        status: "posted",
+        event: "COMMENT"
+      },
+      queueJobs: [
+        {
+          state: "queued"
+        }
+      ]
+    });
   });
 
   it("passes review-head-gate from terminal posted queue evidence when processed rows are absent", async () => {

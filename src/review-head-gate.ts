@@ -82,7 +82,9 @@ function decideReviewHeadGate(input: {
   queueJobs: ReviewQueueJobRecord[];
 }): ReviewHeadGateDecision {
   const activeJob = input.queueJobs.find(isActiveQueueJob);
-  if (activeJob) return decisionFromQueueJob(activeJob);
+  if (activeJob && (!input.processed || isQueueJobNewerThanProcessed(activeJob, input.processed))) {
+    return decisionFromQueueJob(activeJob);
+  }
   if (input.processed) return decisionFromProcessed(input.processed);
   const terminalJob = input.queueJobs.find(isTerminalQueueJob);
   if (terminalJob) return decisionFromQueueJob(terminalJob);
@@ -167,6 +169,20 @@ function isActiveQueueJob(job: ReviewQueueJobRecord): boolean {
 
 function isTerminalQueueJob(job: ReviewQueueJobRecord): boolean {
   return job.state === "posted" || job.state === "failed" || job.state === "stale_retired" || job.state === "closed_retired" || job.state === "command_recorded";
+}
+
+function isQueueJobNewerThanProcessed(job: ReviewQueueJobRecord, processed: StoredProcessedReviewRecord): boolean {
+  const jobMs = parseStoreTimestamp(job.updatedAt);
+  const processedMs = parseStoreTimestamp(processed.createdAt);
+  if (!Number.isFinite(jobMs) || !Number.isFinite(processedMs)) return true;
+  return jobMs > processedMs;
+}
+
+function parseStoreTimestamp(value: string): number {
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return Date.parse(`${value.replace(" ", "T")}Z`);
+  }
+  return Date.parse(value);
 }
 
 function gateDetail(
