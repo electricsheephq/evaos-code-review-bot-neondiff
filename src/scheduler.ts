@@ -166,6 +166,11 @@ export async function runScheduledCycleWithDeps(input: {
   const reconciled = reconcileProcessedSkippedFailedQueueJobs(input.state, now);
   result.queue.providerDeferred += reconciled.providerDeferred;
   result.queue.staleRetired += reconciled.staleRetired;
+  reprioritizeExistingSelfRepoQueueJobs({
+    config,
+    state: input.state,
+    now
+  });
 
   result.queue.budget = buildReviewBudgetStatus({
     config,
@@ -468,8 +473,32 @@ function enqueueReviewJob(input: {
 
 function automaticQueuePriority(config: BotConfig, repo: string): number | undefined {
   const backgroundPriority = config.reviewScheduler?.backgroundPriority;
-  if (repo.toLowerCase() !== "electricsheephq/evaos-code-review-bot") return backgroundPriority;
+  if (repo.toLowerCase() !== SELF_REPO) return backgroundPriority;
   return Math.min(backgroundPriority ?? 50, 1);
+}
+
+const SELF_REPO = "electricsheephq/evaos-code-review-bot";
+
+function reprioritizeExistingSelfRepoQueueJobs(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  now: Date;
+}): number {
+  const targetPriority = automaticQueuePriority(input.config, SELF_REPO);
+  if (targetPriority === undefined) return 0;
+  let updated = 0;
+  for (const job of input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred"] })) {
+    if (job.repo.toLowerCase() !== SELF_REPO) continue;
+    if (job.source !== "automatic" || job.lane !== "background") continue;
+    if (job.priority <= targetPriority) continue;
+    input.state.updateReviewQueueJobPriority({
+      jobId: job.jobId,
+      priority: targetPriority,
+      now: input.now
+    });
+    updated += 1;
+  }
+  return updated;
 }
 
 function recordReadinessForEnqueue(input: {

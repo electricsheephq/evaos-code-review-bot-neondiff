@@ -577,6 +577,66 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("reprioritizes existing queued self-repo jobs before ordinary backlog", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-self-repo-existing-priority-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "electricsheephq/evaos-code-review-bot"]);
+    config.reviewScheduler!.maxProviderActive = 1;
+    config.reviewScheduler!.maxOrgActive = 1;
+    config.reviewScheduler!.manualCommandReserve = 0;
+    const state = new ReviewStateStore(config.statePath);
+    const selfRepoJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 172,
+      headSha: HEAD_A,
+      baseSha: "base",
+      providerId: "zai-coding-plan",
+      priority: 50,
+      now: new Date("2026-07-03T00:00:00.000Z")
+    }).job;
+    const ordinaryJob = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_B,
+      baseSha: "base",
+      providerId: "zai-coding-plan",
+      priority: 10,
+      now: new Date("2026-07-03T00:00:01.000Z")
+    }).job;
+    const reviewed: string[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_B)]],
+        ["electricsheephq/evaos-code-review-bot", [
+          pull("electricsheephq/evaos-code-review-bot", 172, HEAD_A, "base", { state: "closed", mergedAt: "2026-07-03T00:00:30Z" })
+        ]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ repo, pull: reviewPull }) => {
+        reviewed.push(`${repo}#${reviewPull.number}`);
+        return "reviewed";
+      },
+      now: new Date("2026-07-03T00:01:00.000Z")
+    });
+
+    expect(result.queue.leased).toBe(1);
+    expect(result.queue.closedRetired).toBe(1);
+    expect(reviewed).toEqual([]);
+    expect(state.getReviewQueueJob(selfRepoJob.jobId)).toMatchObject({
+      priority: 1,
+      state: "closed_retired",
+      lastError: "closed_or_merged_before_review state=closed"
+    });
+    expect(state.getReviewQueueJob(ordinaryJob.jobId)).toMatchObject({
+      priority: 10,
+      state: "queued"
+    });
+    state.close();
+  });
+
   it("retires self-repo provider-deferred jobs when the PR closes before retry", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-self-repo-provider-deferred-closed-"));
     roots.push(root);
