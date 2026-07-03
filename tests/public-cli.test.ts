@@ -694,6 +694,171 @@ describe("public NeonDiff CLI surface", () => {
     }
   });
 
+  it("blocks review-head-gate when an exact-head re-review job is still active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-rereview-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-3`
+    });
+    store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base",
+      source: "manual_command",
+      priority: 0
+    });
+    store.close();
+
+    try {
+      await runCli([
+        "review-head-gate",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--pr",
+        String(pullNumber),
+        "--head-sha",
+        headSha
+      ]);
+      throw new Error("review-head-gate unexpectedly passed");
+    } catch (error) {
+      const output = JSON.parse((error as { stdout: string }).stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        decision: "queued",
+        processed: {
+          status: "posted",
+          event: "COMMENT"
+        },
+        nextAction: expect.stringContaining("wait for evaOS review")
+      });
+    }
+  });
+
+  it("passes review-head-gate from terminal posted queue evidence when processed rows are absent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-queue-posted-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "cccccccccccccccccccccccccccccccccccccccc";
+    const reviewUrl = `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-4`;
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    const queueJob = store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base"
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "posted",
+      reviewUrl,
+      lastError: "reviewed"
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "review-head-gate",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      decision: "passed",
+      queueJobs: [
+        {
+          state: "posted",
+          reviewUrl
+        }
+      ]
+    });
+  });
+
+  it("blocks review-head-gate for readiness-only passes without review proof", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-readiness-proof-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "dddddddddddddddddddddddddddddddddddddddd";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordReviewReadiness({
+      repo,
+      pullNumber,
+      headSha,
+      state: "ready_for_human",
+      reason: "dry-run-ready"
+    });
+    store.close();
+
+    try {
+      await runCli([
+        "review-head-gate",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--pr",
+        String(pullNumber),
+        "--head-sha",
+        headSha
+      ]);
+      throw new Error("review-head-gate unexpectedly passed");
+    } catch (error) {
+      const output = JSON.parse((error as { stdout: string }).stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        decision: "blocked",
+        readiness: {
+          state: "ready_for_human"
+        },
+        nextAction: expect.stringContaining("resolve the blocked")
+      });
+    }
+  });
+
   it("requires review-pr repos to be configured and enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-pr-"));
     roots.push(root);

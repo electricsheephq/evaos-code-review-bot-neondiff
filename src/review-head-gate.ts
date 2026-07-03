@@ -1,5 +1,4 @@
 import type {
-  ProcessedStatus,
   ReviewQueueJobRecord,
   ReviewReadinessRecord,
   ReviewStateStore,
@@ -82,10 +81,12 @@ function decideReviewHeadGate(input: {
   readiness?: ReviewReadinessRecord;
   queueJobs: ReviewQueueJobRecord[];
 }): ReviewHeadGateDecision {
+  const activeJob = input.queueJobs.find(isActiveQueueJob);
+  if (activeJob) return decisionFromQueueJob(activeJob);
   if (input.processed) return decisionFromProcessed(input.processed);
-  const activeJob = input.queueJobs.find((job) => ["queued", "leased", "running", "provider_deferred"].includes(job.state));
-  if (activeJob) return decisionFromQueueState(activeJob.state);
-  if (input.readiness) return decisionFromReadinessState(input.readiness.state);
+  const terminalJob = input.queueJobs.find(isTerminalQueueJob);
+  if (terminalJob) return decisionFromQueueJob(terminalJob);
+  if (input.readiness) return decisionFromReadiness(input.readiness);
   return "missing";
 }
 
@@ -106,8 +107,8 @@ function decisionFromProcessed(processed: StoredProcessedReviewRecord): ReviewHe
   }
 }
 
-function decisionFromQueueState(state: ReviewQueueJobRecord["state"]): ReviewHeadGateDecision {
-  switch (state) {
+function decisionFromQueueJob(job: ReviewQueueJobRecord): ReviewHeadGateDecision {
+  switch (job.state) {
     case "queued":
       return "queued";
     case "leased":
@@ -124,16 +125,16 @@ function decisionFromQueueState(state: ReviewQueueJobRecord["state"]): ReviewHea
     case "command_recorded":
       return "blocked";
     case "posted":
-      return "passed";
+      return job.reviewUrl ? "passed" : "blocked";
     default:
-      return assertNever(state);
+      return assertNever(job.state);
   }
 }
 
-function decisionFromReadinessState(state: ReviewReadinessRecord["state"]): ReviewHeadGateDecision {
-  switch (state) {
+function decisionFromReadiness(readiness: ReviewReadinessRecord): ReviewHeadGateDecision {
+  switch (readiness.state) {
     case "ready_for_human":
-      return "passed";
+      return readiness.reviewUrl ? "passed" : "blocked";
     case "needs_fix":
       return "needs_fix";
     case "queued":
@@ -156,8 +157,16 @@ function decisionFromReadinessState(state: ReviewReadinessRecord["state"]): Revi
     case "blocked_on_proof":
       return "blocked";
     default:
-      return assertNever(state);
+      return assertNever(readiness.state);
   }
+}
+
+function isActiveQueueJob(job: ReviewQueueJobRecord): boolean {
+  return job.state === "queued" || job.state === "leased" || job.state === "running" || job.state === "provider_deferred";
+}
+
+function isTerminalQueueJob(job: ReviewQueueJobRecord): boolean {
+  return job.state === "posted" || job.state === "failed" || job.state === "stale_retired" || job.state === "closed_retired" || job.state === "command_recorded";
 }
 
 function gateDetail(
@@ -169,14 +178,18 @@ function gateDetail(
   if (decision === "passed" && processed) {
     return `processed_reviews status=${processed.status} event=${processed.event ?? "unknown"} reviewUrl=${processed.reviewUrl ?? "none"}`;
   }
+  const activeJob = queueJobs.find(isActiveQueueJob);
+  if (activeJob) {
+    return `queue_job state=${activeJob.state} priority=${activeJob.priority} lastError=${activeJob.lastError ?? "none"}`;
+  }
+  const terminalJob = queueJobs.find(isTerminalQueueJob);
+  if (terminalJob) {
+    return `queue_job state=${terminalJob.state} priority=${terminalJob.priority} reviewUrl=${terminalJob.reviewUrl ?? "none"} lastError=${terminalJob.lastError ?? "none"}`;
+  }
   if (decision === "passed" && readiness) {
     return `review_readiness state=${readiness.state} reviewUrl=${readiness.reviewUrl ?? "none"}`;
   }
   if (processed) return `processed_reviews status=${processed.status} error=${processed.error ?? "none"}`;
-  const activeJob = queueJobs.find((job) => ["queued", "leased", "running", "provider_deferred"].includes(job.state));
-  if (activeJob) {
-    return `queue_job state=${activeJob.state} priority=${activeJob.priority} lastError=${activeJob.lastError ?? "none"}`;
-  }
   if (readiness) return `review_readiness state=${readiness.state} reason=${readiness.reason ?? "none"}`;
   return "no processed review, active queue job, or readiness row for exact head";
 }
