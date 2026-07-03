@@ -44,6 +44,9 @@ export interface ReleaseDatabaseStatus {
   providerDeferredReviewQueueJobCount?: number;
   retryableProviderDeferredReviewQueueJobCount?: number;
   failedReviewQueueJobCount?: number;
+  reviewRunLeaseCount?: number;
+  staleReviewRunLeaseCount?: number;
+  staleActiveReviewQueueJobCount?: number;
   reviewQueueJobsByRepo?: ReviewQueueRepoStatus[];
 }
 
@@ -93,6 +96,17 @@ export interface ReleaseStatusInput {
 export interface ReleaseStatus {
   ok: boolean;
   checkedAt: string;
+  summary: {
+    blockingErrorRows: number;
+    failedQueueJobs: number;
+    staleReviewLeases: number;
+    providerDeferredQueueJobs: number;
+    retryableProviderDeferredQueueJobs: number;
+    readyToRetryProviderDeferredJobs: number;
+    expiredProviderCooldowns: number;
+    retryableExpiredProviderCooldowns: number;
+    activeProviderCooldowns: number;
+  };
   releaseUnit: {
     channel: "local-beta";
     sourceHead: string;
@@ -128,6 +142,9 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     );
   const expiredProviderCooldownOk = retryableExpiredProviderCooldownCount === 0;
   const failedQueueJobsOk = (input.database.failedReviewQueueJobCount ?? 0) === 0;
+  const staleReviewLeaseCount = (input.database.staleReviewRunLeaseCount ?? 0) +
+    (input.database.staleActiveReviewQueueJobCount ?? 0);
+  const staleReviewLeasesOk = staleReviewLeaseCount === 0;
   const actionableProviderDeferredQueueJobs =
     input.budget?.providerDeferred.readyToRetry ??
     (input.database.retryableProviderDeferredReviewQueueJobCount ?? 0);
@@ -182,6 +199,13 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       detail: `${input.database.failedReviewQueueJobCount ?? 0} failed durable queue job(s)`
     },
     {
+      name: "queue_no_stale_review_leases",
+      ok: staleReviewLeasesOk,
+      detail:
+        `${input.database.staleReviewRunLeaseCount ?? 0} stale review run lease(s); ` +
+        `${input.database.staleActiveReviewQueueJobCount ?? 0} stale active queue job(s)`
+    },
+    {
       name: "queue_no_retryable_provider_deferred_jobs",
       ok: retryableDeferredQueueJobsOk,
       detail: describeProviderDeferredQueueStatus(input.database, input.budget)
@@ -196,6 +220,17 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   return {
     ok: gates.every((gate) => gate.ok),
     checkedAt: (input.now ?? new Date()).toISOString(),
+    summary: {
+      blockingErrorRows: input.database.errorCount,
+      failedQueueJobs: input.database.failedReviewQueueJobCount ?? 0,
+      staleReviewLeases: staleReviewLeaseCount,
+      providerDeferredQueueJobs: input.database.providerDeferredReviewQueueJobCount ?? 0,
+      retryableProviderDeferredQueueJobs: input.database.retryableProviderDeferredReviewQueueJobCount ?? 0,
+      readyToRetryProviderDeferredJobs: actionableProviderDeferredQueueJobs,
+      expiredProviderCooldowns: input.database.expiredProviderCooldownCount ?? 0,
+      retryableExpiredProviderCooldowns: retryableExpiredProviderCooldownCount,
+      activeProviderCooldowns: input.database.activeProviderCooldownCount ?? 0
+    },
     releaseUnit: {
       channel: "local-beta",
       sourceHead: input.repo.head,
@@ -207,14 +242,19 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     database: input.database,
     heartbeat: input.heartbeat,
     ...(input.budget ? { budget: input.budget } : {}),
-    recommendedActions: expiredProviderCooldownOk
-      ? retryableDeferredQueueJobsOk
-        ? []
-        : ["wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry"]
-      : [
-          retryProviderCooldownCommand,
-          `npx tsx src/cli.ts provider-cooldowns --config ${input.configPath} --expired-only true`
-        ],
+    recommendedActions: [
+      ...(expiredProviderCooldownOk
+        ? retryableDeferredQueueJobsOk
+          ? []
+          : ["wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry"]
+        : [
+            retryProviderCooldownCommand,
+            `npx tsx src/cli.ts provider-cooldowns --config ${input.configPath} --expired-only true`
+          ]),
+      ...(!staleReviewLeasesOk
+        ? [`npx tsx src/cli.ts clear-review-queue-leases --config ${input.configPath} --dry-run true --expired-only true`]
+        : [])
+    ],
     gates,
     rollback: {
       restartCommand: `launchctl kickstart -k gui/$(id -u)/${input.launchd.label}`,
@@ -456,6 +496,8 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
         : "none";
     const reviewerSessions = readReviewerSessionCounts(db, now);
     const reviewQueue = readReviewQueueCounts(db, now);
+    const reviewRunLeases = readReviewRunLeaseCounts(db, now);
+    const staleActiveReviewQueueJobCount = readStaleActiveReviewQueueJobCount(db, now, leaseTtlMs);
     return {
       rowCount: row.rowCount ?? 0,
       skippedCount: row.skippedCount ?? 0,
@@ -478,6 +520,9 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       providerDeferredReviewQueueJobCount: reviewQueue.providerDeferred,
       retryableProviderDeferredReviewQueueJobCount: reviewQueue.retryableProviderDeferred,
       failedReviewQueueJobCount: reviewQueue.failed,
+      reviewRunLeaseCount: reviewRunLeases.total,
+      staleReviewRunLeaseCount: reviewRunLeases.stale,
+      staleActiveReviewQueueJobCount,
       reviewQueueJobsByRepo: reviewQueue.byRepo,
       errorCount: row.errorCount ?? 0
     };
@@ -554,6 +599,65 @@ function readReviewQueueCounts(
       failed: repoRow.failed ?? 0
     }))
   };
+}
+
+function readReviewRunLeaseCounts(db: DatabaseSync, now: Date): { total: number; stale: number } {
+  const hasLeaseTable = db
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_run_leases' limit 1")
+    .get();
+  if (!hasLeaseTable) return { total: 0, stale: 0 };
+  const columns = new Set(
+    (db.prepare("pragma table_info(review_run_leases)").all() as unknown as Array<{ name: string }>)
+      .map((column) => column.name)
+  );
+  const ownerPidColumn = columns.has("owner_pid") ? "owner_pid" : "null as owner_pid";
+  const rows = db
+    .prepare(`select lease_id, expires_at, ${ownerPidColumn} from review_run_leases`)
+    .all() as unknown as Array<{ lease_id: string; expires_at: string; owner_pid: number | null }>;
+  return {
+    total: rows.length,
+    stale: rows.filter((row) => {
+      const expiresAtMs = Date.parse(row.expires_at);
+      if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime()) return true;
+      return row.owner_pid === null || !isProcessAlive(row.owner_pid);
+    }).length
+  };
+}
+
+function readStaleActiveReviewQueueJobCount(db: DatabaseSync, now: Date, leaseTtlMs: number): number {
+  const hasQueueTable = db
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_queue_jobs' limit 1")
+    .get();
+  if (!hasQueueTable) return 0;
+  const columns = new Set(
+    (db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>)
+      .map((column) => column.name)
+  );
+  if (columns.has("lease_expires_at")) {
+    const legacyLeaseCutoffIso = new Date(now.getTime() - leaseTtlMs).toISOString();
+    const row = db
+      .prepare(
+        `select count(*) as count
+         from review_queue_jobs
+	         where state in ('leased', 'running')
+	           and (
+	             (lease_expires_at is not null and (datetime(lease_expires_at) is null or datetime(lease_expires_at) <= datetime(?)))
+	             or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
+	           )`
+      )
+      .get(now.toISOString(), legacyLeaseCutoffIso) as { count?: number };
+    return row.count ?? 0;
+  }
+  const legacyLeaseCutoffIso = new Date(now.getTime() - leaseTtlMs).toISOString();
+  const row = db
+    .prepare(
+      `select count(*) as count
+       from review_queue_jobs
+       where state in ('leased', 'running')
+         and datetime(updated_at) <= datetime(?)`
+    )
+    .get(legacyLeaseCutoffIso) as { count?: number };
+  return row.count ?? 0;
 }
 
 function readReviewerSessionCounts(

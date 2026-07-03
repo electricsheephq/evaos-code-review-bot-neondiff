@@ -114,6 +114,36 @@ export interface ClearIssueEnrichmentRunLeasesResult {
   leases: IssueEnrichmentRunLeaseClearCandidate[];
 }
 
+export interface ReviewRunLeaseClearCandidate extends ReviewRunLease {
+  expired: boolean;
+  ownerAlive: boolean;
+  staleReason?: "expired" | "owner_not_running";
+}
+
+export interface ReviewQueueLeaseClearCandidate extends ReviewQueueJobRecord {
+  expired: boolean;
+  active: boolean;
+  staleReason?: "expired" | "missing_lease_expiry" | "forced_active";
+}
+
+export interface ClearReviewQueueLeasesResult {
+  checkedAt: string;
+  expiredOnly: boolean;
+  dryRun: boolean;
+  filters: {
+    repo?: string;
+    pullNumber?: number;
+    jobId?: string;
+  };
+  matched: number;
+  expiredMatched: number;
+  activeMatched: number;
+  requeued: number;
+  deletedRunLeases: number;
+  jobs: ReviewQueueLeaseClearCandidate[];
+  runLeases: ReviewRunLeaseClearCandidate[];
+}
+
 export interface ReviewerSessionRecord {
   sessionId: string;
   repo: string;
@@ -1128,6 +1158,104 @@ export class ReviewStateStore {
     }
   }
 
+  clearReviewQueueLeases(input: {
+    now?: Date;
+    leaseTtlMs?: number;
+    expiredOnly?: boolean;
+    dryRun?: boolean;
+    repo?: string;
+    pullNumber?: number;
+    jobId?: string;
+    forceActive?: boolean;
+  } = {}): ClearReviewQueueLeasesResult {
+    const checkedAt = (input.now ?? new Date()).toISOString();
+    const expiredOnly = input.expiredOnly ?? true;
+    const dryRun = input.dryRun ?? true;
+    const forceActive = input.forceActive ?? false;
+    const leaseTtlMs = input.leaseTtlMs ?? 15 * 60_000;
+    validatePositiveQueueLimit(leaseTtlMs, "leaseTtlMs");
+    const checkedAtMs = Date.parse(checkedAt);
+
+    this.db.exec("begin immediate");
+    try {
+	      const staleRunLeases = this.listReviewRunLeaseClearCandidates(checkedAt)
+	        .filter((lease) => lease.staleReason);
+	      const staleRunLeaseIds = new Set(staleRunLeases.map((lease) => lease.leaseId));
+	      const jobs = this.listReviewQueueLeaseClearCandidates({
+	        checkedAt,
+	        checkedAtMs,
+        leaseTtlMs,
+        expiredOnly,
+        forceActive,
+        staleRunLeaseIds,
+        repo: input.repo,
+	        pullNumber: input.pullNumber,
+	        jobId: input.jobId
+	      });
+	      const hasQueueFilters = Boolean(input.repo || input.pullNumber !== undefined || input.jobId);
+	      const scopedJobLeaseIds = new Set(jobs.map((job) => job.leaseId).filter((leaseId): leaseId is string => Boolean(leaseId)));
+	      const runLeases = hasQueueFilters
+	        ? staleRunLeases.filter((lease) => scopedJobLeaseIds.has(lease.leaseId))
+	        : staleRunLeases;
+	      const matched = jobs.length + runLeases.length;
+	      const expiredMatched =
+	        jobs.filter((job) => job.expired).length +
+	        runLeases.length;
+      const activeMatched = matched - expiredMatched;
+      let requeued = 0;
+      let deletedRunLeases = 0;
+
+      if (!dryRun) {
+        for (const job of jobs) {
+          const result = this.db
+            .prepare(
+              `update review_queue_jobs
+               set state = 'queued',
+                   lease_id = null,
+                   lease_expires_at = null,
+                   last_error = ?,
+                   updated_at = ?
+               where job_id = ?
+                 and state in ('leased', 'running')`
+            )
+            .run(
+              `queue_lease_operator_requeued:${job.staleReason ?? "matched"}`,
+              checkedAt,
+              job.jobId
+            );
+          requeued += Number(result.changes);
+        }
+        for (const lease of runLeases) {
+          deletedRunLeases += Number(
+            this.db.prepare("delete from review_run_leases where lease_id = ?").run(lease.leaseId).changes
+          );
+        }
+      }
+
+      this.db.exec("commit");
+      return {
+        checkedAt,
+        expiredOnly,
+        dryRun,
+        filters: {
+          ...(input.repo ? { repo: input.repo } : {}),
+          ...(input.pullNumber !== undefined ? { pullNumber: input.pullNumber } : {}),
+          ...(input.jobId ? { jobId: input.jobId } : {})
+        },
+        matched,
+        expiredMatched,
+        activeMatched,
+        requeued,
+        deletedRunLeases,
+        jobs,
+        runLeases
+      };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
   assignReviewerSessionJob(input: {
     repo: string;
     pullNumber: number;
@@ -1753,6 +1881,80 @@ export class ReviewStateStore {
         this.db.prepare("delete from review_run_leases where lease_id = ?").run(row.lease_id);
       }
     }
+  }
+
+  private listReviewRunLeaseClearCandidates(checkedAt: string): ReviewRunLeaseClearCandidate[] {
+    const rows = this.db
+      .prepare("select lease_id, started_at, expires_at, owner_pid from review_run_leases order by datetime(expires_at) asc")
+      .all() as unknown as Array<{
+        lease_id: string;
+        expires_at: string;
+        owner_pid: number | null;
+      }>;
+    const checkedAtMs = Date.parse(checkedAt);
+    return rows.map((row) => {
+      const expiresAtMs = Date.parse(row.expires_at);
+      const expired = !Number.isFinite(expiresAtMs) || (Number.isFinite(checkedAtMs) && expiresAtMs <= checkedAtMs);
+      const ownerAlive = row.owner_pid === null ? false : isProcessAlive(row.owner_pid);
+      const staleReason = ownerAlive === false
+        ? "owner_not_running"
+        : expired
+          ? "expired"
+          : undefined;
+      return {
+        leaseId: row.lease_id,
+        expiresAt: row.expires_at,
+        ownerPid: row.owner_pid ?? 0,
+        expired,
+        ownerAlive,
+        ...(staleReason ? { staleReason } : {})
+      };
+    });
+  }
+
+  private listReviewQueueLeaseClearCandidates(input: {
+    checkedAt: string;
+    checkedAtMs: number;
+    leaseTtlMs: number;
+    expiredOnly: boolean;
+    forceActive: boolean;
+    staleRunLeaseIds: Set<string>;
+    repo?: string;
+    pullNumber?: number;
+    jobId?: string;
+  }): ReviewQueueLeaseClearCandidate[] {
+    return this.listReviewQueueJobs({ states: ["leased", "running"] })
+      .filter((job) => !input.repo || job.repo === input.repo)
+      .filter((job) => input.pullNumber === undefined || job.pullNumber === input.pullNumber)
+      .filter((job) => !input.jobId || job.jobId === input.jobId)
+      .map((job) => {
+        const leaseExpiresAtMs = job.leaseExpiresAt ? Date.parse(job.leaseExpiresAt) : Number.NaN;
+        const updatedAtMs = Date.parse(job.updatedAt);
+        const legacyLeaseCutoffMs = input.checkedAtMs - input.leaseTtlMs;
+        const expiredByLeaseExpiry = job.leaseExpiresAt
+          ? !Number.isFinite(leaseExpiresAtMs) ||
+            (Number.isFinite(input.checkedAtMs) && leaseExpiresAtMs <= input.checkedAtMs)
+          : !Number.isFinite(updatedAtMs) ||
+            (Number.isFinite(input.checkedAtMs) && updatedAtMs <= legacyLeaseCutoffMs);
+        const expiredByStaleRunLease = Boolean(job.leaseId && input.staleRunLeaseIds.has(job.leaseId));
+        const expired =
+          expiredByLeaseExpiry ||
+          expiredByStaleRunLease;
+        const staleReason: ReviewQueueLeaseClearCandidate["staleReason"] = !job.leaseExpiresAt && expiredByLeaseExpiry
+          ? "missing_lease_expiry"
+          : expired
+            ? "expired"
+            : input.forceActive && !input.expiredOnly
+              ? "forced_active"
+              : undefined;
+        return {
+          ...job,
+          expired,
+          active: !expired,
+          ...(staleReason ? { staleReason } : {})
+        };
+      })
+      .filter((job) => job.expired || (!input.expiredOnly && input.forceActive));
   }
 
   private createReviewerSession(input: {

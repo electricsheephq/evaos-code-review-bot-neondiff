@@ -1432,10 +1432,23 @@ function releaseStatus(input: {
       sourceHead: "head",
       branch: "main",
       configPath: "/config/live.json"
-    },
-    repo: { branch: "main", head: "head", dirtyFiles: [] },
-    launchd: { label: "com.electricsheephq.evaos-code-review-bot", state: "running", pid: 1234, dryRun: false },
-    database: {
+	    },
+	    repo: { branch: "main", head: "head", dirtyFiles: [] },
+	    launchd: { label: "com.electricsheephq.evaos-code-review-bot", state: "running", pid: 1234, dryRun: false },
+	    summary: {
+	      blockingErrorRows: input.database?.errorCount ?? 0,
+	      failedQueueJobs: input.database?.failedReviewQueueJobCount ?? 0,
+	      staleReviewLeases:
+	        (input.database?.staleReviewRunLeaseCount ?? 0) +
+	        (input.database?.staleActiveReviewQueueJobCount ?? 0),
+	      providerDeferredQueueJobs: input.database?.providerDeferredReviewQueueJobCount ?? 0,
+	      retryableProviderDeferredQueueJobs: input.database?.retryableProviderDeferredReviewQueueJobCount ?? 0,
+	      readyToRetryProviderDeferredJobs: input.budget?.providerDeferred.readyToRetry ?? 0,
+	      expiredProviderCooldowns: expiredProviderCooldownCount,
+	      retryableExpiredProviderCooldowns: input.database?.retryableExpiredProviderCooldownCount ?? expiredProviderCooldownCount,
+	      activeProviderCooldowns: input.database?.activeProviderCooldownCount ?? 0
+	    },
+	    database: {
       rowCount: 10,
       errorCount: 0,
       providerCooldownCount,

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { ReviewStateStore } from "../src/state.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -47,6 +48,20 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
+  });
+
+  it("prints command help without executing run-once, review-pr, or daemon paths", async () => {
+    for (const args of [["run-once", "--help"], ["review-pr", "help"], ["daemon", "start", "-h"]]) {
+      const { stdout } = await runCli(args);
+      const output = JSON.parse(stdout);
+
+      expect(output.ok).toBe(true);
+      expect(output.command).toBe(args[0]);
+      expect(output.commands.existing).toContain("run-once");
+      expect(output.commands.public).toContain("review-pr");
+      expect(stdout).not.toContain("\"dryRun\"");
+      expect(stdout).not.toContain("\"reposScanned\"");
+    }
   });
 
   it("initializes a local config from the packaged example outside the repo cwd", async () => {
@@ -390,6 +405,511 @@ describe("public NeonDiff CLI surface", () => {
     ])).rejects.toMatchObject({
       stdout: expect.stringContaining("requires --repo and --pr")
     });
+  });
+
+  it("marks queue output blocked when durable provider-deferred work is ready even if coverage is scoped-ok", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-queue-health-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 24 * 60 * 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      const job = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 123,
+        headSha: "head-ready",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:01.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
+      const coolingDown = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 124,
+        headSha: "head-cooling-down",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: coolingDown.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2999-01-01T00:00:00.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    await expect(runCli(["queue", "--config", configPath, "--state", "provider_deferred"])).rejects.toMatchObject({
+      stdout: expect.stringContaining("\"runtimeOk\": false")
+    });
+
+    try {
+      await runCli(["queue", "--config", configPath, "--state", "provider_deferred"]);
+      throw new Error("queue command unexpectedly passed");
+    } catch (error) {
+      const stdout = (error as { stdout: string }).stdout;
+      const output = JSON.parse(stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        coverageOk: true,
+        runtimeOk: false,
+        healthState: "runtime_blocked",
+	        durableQueue: {
+	          summary: {
+	            providerDeferred: 2,
+	            retryableProviderDeferred: 1
+	          }
+	        }
+      });
+      expect(output.failedGates).toEqual([
+        expect.objectContaining({ name: "queue_no_ready_provider_deferred_jobs" })
+      ]);
+	      expect(output.actionableRows).toEqual([
+	        expect.objectContaining({ repo: "owner/repo", pullNumber: 123, state: "provider_deferred" })
+	      ]);
+	      expect(output.actionableRows.some((row: { pullNumber: number }) => row.pullNumber === 124)).toBe(false);
+    }
+  });
+
+  it("keeps queue --state provider_deferred blocked by global active provider capacity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-queue-provider-deferred-capacity-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 24 * 60 * 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      store.enqueueReviewQueueJob({
+        repo: "other/repo",
+        pullNumber: 1,
+        headSha: "active-head",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      });
+      store.leaseNextReviewQueueJobs({
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        leaseTtlMs: 24 * 60 * 60_000,
+        now: new Date("2026-07-03T00:00:01.000Z")
+      });
+      const deferred = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 123,
+        headSha: "head-provider-deferred",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: deferred.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:03.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:04.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    try {
+      await runCli(["queue", "--config", configPath, "--state", "provider_deferred"]);
+      throw new Error("queue command unexpectedly passed");
+    } catch (error) {
+      const output = JSON.parse((error as { stdout: string }).stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        runtimeOk: false,
+        durableQueue: {
+          summary: {
+            providerDeferred: 1,
+            retryableProviderDeferred: 1
+          }
+        },
+        budget: {
+          active: {
+            total: 1
+          },
+          providerDeferred: {
+            total: 1,
+            readyToRetry: 0,
+            waitingProviderCapacity: 1
+          }
+        }
+      });
+      expect(output.actionableRows).toEqual([]);
+      expect(output.failedGates).toEqual([
+        expect.objectContaining({ name: "queue_no_ready_provider_deferred_jobs" })
+      ]);
+    }
+  });
+
+  it("keeps queue --repo health scoped to the requested repo", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-queue-health-scoped-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      const job = store.enqueueReviewQueueJob({
+        repo: "other/repo",
+        pullNumber: 999,
+        headSha: "other-head-ready",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:01.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    let output: Record<string, any>;
+    try {
+      await runCli(["queue", "--config", configPath, "--repo", "owner/repo"]);
+      throw new Error("queue command unexpectedly passed");
+    } catch (error) {
+      output = JSON.parse((error as { stdout: string }).stdout);
+    }
+    expect(output).toMatchObject({
+      ok: false,
+      coverageOk: false,
+      runtimeOk: false,
+      durableQueue: {
+        summary: {
+          total: 0,
+          providerDeferred: 0,
+          retryableProviderDeferred: 0
+        }
+      },
+      budget: {
+        providerDeferred: {
+          total: 0,
+          readyToRetry: 0
+        }
+      }
+    });
+    expect(output.failedGates).toEqual([
+      expect.objectContaining({ name: "queue_coverage_ok" })
+    ]);
+  });
+
+  it("marks provider-cooldowns blocked when retryable durable provider-deferred work exists", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cooldown-health-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 24 * 60 * 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      const job = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 124,
+        headSha: "head-provider-deferred",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:01.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    try {
+      await runCli(["provider-cooldowns", "--config", configPath, "--expired-only", "true", "--repo", "owner/repo"]);
+      throw new Error("provider-cooldowns command unexpectedly passed");
+    } catch (error) {
+      const stdout = (error as { stdout: string }).stdout;
+      const output = JSON.parse(stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        runtimeOk: false,
+        healthState: "provider_cooldowns_actionable",
+        summary: {
+          expired: 0,
+          providerDeferredJobs: 1,
+          retryableProviderDeferredJobs: 1,
+          readyToRetryProviderDeferredJobs: 1
+        }
+      });
+      expect(output.failedGates).toEqual([
+        expect.objectContaining({ name: "provider_cooldowns_no_retryable_provider_deferred_jobs" })
+      ]);
+      expect(output.recommendedActions).toEqual([
+        expect.stringContaining("retry-provider-cooldowns")
+      ]);
+    }
+  });
+
+  it("reports provider-cooldowns backpressured when retryable work waits on active provider capacity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cooldown-backpressure-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 24 * 60 * 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      store.enqueueReviewQueueJob({
+        repo: "other/repo",
+        pullNumber: 1,
+        headSha: "active-head",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      });
+      store.leaseNextReviewQueueJobs({
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        leaseTtlMs: 24 * 60 * 60_000,
+        now: new Date("2026-07-03T00:00:01.000Z")
+      });
+      const deferred = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 125,
+        headSha: "head-provider-backpressured",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: deferred.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:03.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:04.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    try {
+      await runCli(["provider-cooldowns", "--config", configPath, "--expired-only", "true", "--repo", "owner/repo"]);
+      throw new Error("provider-cooldowns command unexpectedly passed");
+    } catch (error) {
+      const stdout = (error as { stdout: string }).stdout;
+      const output = JSON.parse(stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        runtimeOk: false,
+        healthState: "provider_cooldowns_backpressured",
+        repo: "owner/repo",
+        summary: {
+          expired: 0,
+          providerDeferredJobs: 1,
+          retryableProviderDeferredJobs: 1,
+          readyToRetryProviderDeferredJobs: 0,
+          waitingProviderCapacity: 1
+        }
+      });
+      expect(output.recommendedActions).toContain(
+        "wait for active provider run to finish; retryable provider-deferred jobs are blocked by provider capacity"
+      );
+    }
+  });
+
+  it("keeps provider-cooldowns backpressured under an active provider cooldown", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cooldown-active-window-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 24 * 60 * 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      store.recordRepoProviderCooldown({
+        repo: "other/repo",
+        cooldownUntil: new Date("2999-01-01T00:00:00.000Z"),
+        reason: "provider_overloaded"
+      });
+      const deferred = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 126,
+        headSha: "head-active-provider-cooldown",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: deferred.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:01.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    try {
+      await runCli(["provider-cooldowns", "--config", configPath, "--expired-only", "true", "--repo", "owner/repo"]);
+      throw new Error("provider-cooldowns command unexpectedly passed");
+    } catch (error) {
+      const output = JSON.parse((error as { stdout: string }).stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        runtimeOk: false,
+        healthState: "provider_cooldowns_backpressured",
+        summary: {
+          activeProviderCooldowns: 1,
+          providerDeferredJobs: 1,
+          retryableProviderDeferredJobs: 1,
+          readyToRetryProviderDeferredJobs: 1
+        }
+      });
+      expect(output.recommendedActions).toContain(
+        "wait for active provider cooldown to expire before retrying provider-deferred work"
+      );
+      expect(output.recommendedActions.some((action: string) => action.includes("retry-provider-cooldowns"))).toBe(false);
+    }
   });
 
   it("prints launchd daemon control plans in dry-run mode by default", async () => {
