@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -235,6 +235,7 @@ export interface EvalScorecard {
     seededRecall: number;
     maxWilsonLowerBound: number;
   };
+  matchedLabelKeys: string[];
   thresholds: EvalThresholds;
   gates: Array<{ name: string; ok: boolean; detail: string }>;
 }
@@ -444,6 +445,7 @@ export function runStickyVsColdEval(
   validateStickyVsColdThresholds(thresholds);
   const outputRoot = options.outputRoot ?? defaultStickyVsColdOutputRoot(input, now);
   guardOutputDir(outputRoot);
+  guardEmptyOutputRoot(outputRoot);
   mkdirSync(outputRoot, { recursive: true });
 
   const cold = runOfflineEval(input.cold, {
@@ -619,12 +621,21 @@ function buildStickyVsColdGates(input: {
   const stickyRepoMemoryAgeFresh =
     typeof stickyRepoMemoryAge === "number" && stickyRepoMemoryAge <= input.thresholds.maxRepoMemoryAgeSeconds;
   const coldComparable = input.cold.ok;
+  const stickyMatchedLabelSet = new Set(input.sticky.scorecard.matchedLabelKeys);
+  const missingColdMatchesInSticky = input.cold.scorecard.matchedLabelKeys
+    .filter((labelKey) => !stickyMatchedLabelSet.has(labelKey));
   return [
     {
       name: "sticky_packet_ok",
       ok: input.sticky.ok,
       status: input.sticky.ok ? "pass" : "fail",
       detail: input.sticky.ok ? "sticky packet gates passed" : "sticky packet gates failed"
+    },
+    {
+      name: "sticky_has_no_secrets",
+      ok: input.sticky.scorecard.counts.secretFindings === 0,
+      status: input.sticky.scorecard.counts.secretFindings === 0 ? "pass" : "fail",
+      detail: `${input.sticky.scorecard.counts.secretFindings} sticky secret-like finding(s)`
     },
     {
       name: "no_secret_regression",
@@ -693,6 +704,18 @@ function buildStickyVsColdGates(input: {
         : "SKIPPED: cold packet failed; comparative seeded-recall delta is not meaningful"
     },
     {
+      name: "sticky_preserves_cold_matches",
+      ok: !coldComparable || missingColdMatchesInSticky.length === 0,
+      status: !coldComparable
+        ? "skip"
+        : missingColdMatchesInSticky.length === 0
+          ? "pass"
+          : "fail",
+      detail: coldComparable
+        ? `${missingColdMatchesInSticky.length} cold-matched label(s) missing from sticky`
+        : "SKIPPED: cold packet failed; matched-label comparison is not meaningful"
+    },
+    {
       name: "provider_attempts_not_higher",
       ok: !input.thresholds.requireProviderAttemptsNotHigher ||
         !providerAttemptsComparable ||
@@ -736,7 +759,7 @@ function buildStickyVsColdGates(input: {
       name: "cold_packet_ok",
       ok: input.cold.ok,
       status: input.cold.ok ? "pass" : "fail",
-      detail: input.cold.ok ? "cold packet gates passed" : "cold packet gates failed; paired comparison cannot be advisory"
+      detail: input.cold.ok ? "cold packet gates passed" : "cold packet gates failed; paired comparison cannot pass"
     }
   ];
 }
@@ -825,6 +848,12 @@ function buildScorecard(input: {
   const truePositive = matchedBotIds.size;
   const falsePositive = input.botFindings.length - truePositive;
   const falseNegative = input.labels.length - matchedLabelIds.size;
+  const labelById = new Map(input.labels.map((label) => [label.id, label]));
+  const matchedLabelKeys = [...matchedLabelIds]
+    .map((labelId) => labelById.get(labelId))
+    .filter((label): label is NormalizedEvalFinding => label !== undefined)
+    .map(normalizedExpectedLabelKey)
+    .sort();
   const seededLabels = input.labels.filter((label) => label.source === "seeded_defect");
   const matchedSeeded = seededLabels.filter((label) => matchedLabelIds.has(label.id)).length;
   const precision = input.botFindings.length === 0 ? (input.labels.length === 0 ? 1 : 0) : truePositive / input.botFindings.length;
@@ -873,6 +902,7 @@ function buildScorecard(input: {
       seededRecall: roundMetric(seededRecall),
       maxWilsonLowerBound
     },
+    matchedLabelKeys,
     thresholds: input.thresholds,
     gates: [
       {
@@ -1379,6 +1409,17 @@ function guardOutputDir(outputDir: string): void {
   assertEvalOutputDirSafe(outputDir);
 }
 
+function guardEmptyOutputRoot(outputRoot: string): void {
+  if (!existsSync(outputRoot)) return;
+  const stat = statSync(outputRoot);
+  if (!stat.isDirectory()) {
+    throw new Error("outputRoot must be a directory when it already exists");
+  }
+  if (readdirSync(outputRoot).length > 0) {
+    throw new Error("outputRoot must be empty before running sticky-vs-cold eval; choose a fresh output root to avoid stale artifacts");
+  }
+}
+
 function resolveRealPathForPotentialOutput(path: string): string {
   const resolved = resolve(path);
   if (existsSync(resolved)) return realpathSync(resolved);
@@ -1564,6 +1605,24 @@ function expectedLabelKeys(labels: EvalLabelInput[]): string[] {
       label.diffSummary ?? ""
     ].join("\u001f"))
     .sort();
+}
+
+function normalizedExpectedLabelKey(label: NormalizedEvalFinding): string {
+  const evidence = label.evidence ?? {};
+  return [
+    label.source,
+    label.severity,
+    label.path,
+    label.line,
+    label.title.trim(),
+    label.body.trim(),
+    evidence.sourceId ?? "",
+    evidence.sourceUrl ?? "",
+    evidence.author ?? "",
+    evidence.checkName ?? "",
+    evidence.mergeSha ?? "",
+    evidence.diffSummary ?? ""
+  ].join("\u001f");
 }
 
 function validateEvalInput(input: EvalScenarioInput): void {

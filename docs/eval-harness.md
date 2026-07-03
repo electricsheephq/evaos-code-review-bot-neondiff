@@ -131,6 +131,11 @@ sticky context. Fresh sticky context requires both `staleContext: false` and a
 `repoMemoryAgeSeconds` value no older than the default 24-hour freshness cap;
 missing age evidence keeps the result advisory-only.
 
+The sticky-vs-cold output root must be empty before a run starts. The runner
+rejects non-empty roots instead of deleting them, so stale artifacts cannot
+survive into a new evidence packet and the CLI cannot accidentally remove a
+broader eval directory.
+
 An empty sticky-vs-cold label set is not counted as negative-control evidence by
 itself. The wrapper must set `negativeControl: true`, and declared
 negative-control wrappers may not include expected labels.
@@ -198,7 +203,8 @@ secret findings, duplicate findings, or schema drops regress beyond the
 non-loosenable default policy. The decision is:
 
 - `not_enough_evidence` when sticky fails packet gates or regresses configured
-  safety/quality thresholds.
+  safety/quality thresholds, misses a label matched by the cold baseline, or
+  contains any secret-like finding.
 - `advisory` when the paired comparison is clean but measured evidence is still
   too small for runtime-safe promotion.
 - `runtime_safe_candidate` only when paired scenarios, labels, P0/P1 labels,

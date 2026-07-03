@@ -883,7 +883,7 @@ async function main(): Promise<void> {
   if (command === "eval-sticky-vs-cold") {
     if (!args.input) throw new Error("--input is required for eval-sticky-vs-cold");
     if (!args["output-root"]) throw new Error("--output-root is required for eval-sticky-vs-cold");
-    const input = JSON.parse(readFileSync(args.input, "utf8"));
+    const input = readJsonInput(args.input, "--input") as Parameters<typeof runStickyVsColdEval>[0];
     const result = runStickyVsColdEval(input, {
       outputRoot: args["output-root"]
     });
@@ -1251,6 +1251,15 @@ function parseReviewQueueJobState(value?: string): ReviewQueueJobState | undefin
     return value as ReviewQueueJobState;
   }
   throw new Error(`--state must be one of: ${REVIEW_QUEUE_JOB_STATES.join(", ")}`);
+}
+
+function readJsonInput(path: string, flagName: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed to parse ${flagName} ${path}: ${detail}`);
+  }
 }
 
 function listJsonFiles(inputDir: string): string[] {

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runOfflineEval, runStickyVsColdEval, type EvalScenarioInput, type StickyVsColdScenarioInput } from "../src/eval-harness.js";
 
 const nodeRequire = createRequire(import.meta.url);
+const tsxCli = nodeRequire.resolve("tsx/cli");
 
 describe("offline eval harness", () => {
   const roots: string[] = [];
@@ -737,8 +738,8 @@ describe("offline eval harness", () => {
     const outputRoot = mkdtempSync(join(tmpdir(), "evaos-eval-suite-success-output-"));
     roots.push(outputRoot);
 
-    const output = execFileSync("npx", [
-      "tsx",
+    const output = execFileSync(process.execPath, [
+      tsxCli,
       "src/cli.ts",
       "eval-suite",
       "--input-dir",
@@ -765,8 +766,8 @@ describe("offline eval harness", () => {
 
     let stderr = "";
     try {
-      execFileSync("npx", [
-        "tsx",
+      execFileSync(process.execPath, [
+        tsxCli,
         "src/cli.ts",
         "eval-suite",
         "--input-dir",
@@ -801,8 +802,8 @@ describe("offline eval harness", () => {
 
     let output = "";
     try {
-      execFileSync("npx", [
-        "tsx",
+      execFileSync(process.execPath, [
+        tsxCli,
         "src/cli.ts",
         "eval-suite",
         "--input-dir",
@@ -838,8 +839,8 @@ describe("offline eval harness", () => {
 
     let output = "";
     try {
-      execFileSync("npx", [
-        "tsx",
+      execFileSync(process.execPath, [
+        tsxCli,
         "src/cli.ts",
         "eval-suite",
         "--input-dir",
@@ -903,6 +904,18 @@ describe("offline eval harness", () => {
     ]);
   });
 
+  it("rejects non-empty sticky-vs-cold output roots to avoid stale artifacts", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-stale-root-"));
+    roots.push(outputRoot);
+    writeFileSync(join(outputRoot, "stale-artifact.json"), "{}\n");
+    const scenario = JSON.parse(
+      readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")
+    ) as StickyVsColdScenarioInput;
+
+    expect(() => runStickyVsColdEval(scenario, { outputRoot })).toThrow("outputRoot must be empty");
+    expect(readFileSync(join(outputRoot, "stale-artifact.json"), "utf8")).toBe("{}\n");
+  });
+
   it("fails sticky-vs-cold when sticky introduces a safety regression", () => {
     const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-regression-"));
     roots.push(outputRoot);
@@ -957,6 +970,7 @@ describe("offline eval harness", () => {
     expect(result.ok).toBe(false);
     expect(result.summary.decision).toBe("not_enough_evidence");
     expect(result.summary.gates.find((gate) => gate.name === "sticky_packet_ok")).toMatchObject({ ok: false });
+    expect(result.summary.gates.find((gate) => gate.name === "sticky_has_no_secrets")).toMatchObject({ ok: false });
     expect(result.summary.gates.find((gate) => gate.name === "no_secret_regression")).toMatchObject({ ok: false });
     for (const artifact of [
       join(outputRoot, "sticky", "normalized-findings.json"),
@@ -966,6 +980,50 @@ describe("offline eval harness", () => {
     ]) {
       expect(readFileSync(artifact, "utf8"), artifact).not.toContain(token);
     }
+  });
+
+  it("fails sticky-vs-cold when sticky has secret-like findings even without a secret-count delta", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-secret-same-count-"));
+    roots.push(outputRoot);
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const secretFinding = {
+      severity: "P1" as const,
+      path: "src/worker.ts",
+      line: 1,
+      title: "Leaked token",
+      body: `The packet repeated ${token}.`,
+      confidence: 0.9
+    };
+    const packet = {
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 85,
+      headSha: "abc",
+      suite: "canary_shadow" as const,
+      mode: "exploratory" as const,
+      botFindings: { findings: [secretFinding] },
+      labels: [],
+      thresholds: {
+        minPrecision: 0,
+        minRecall: 0,
+        maxSecretFindings: 1
+      }
+    };
+
+    const result = runStickyVsColdEval({
+      runId: "sticky-vs-cold-secret-same-count",
+      cold: { ...packet, runId: "cold-secret" },
+      sticky: { ...packet, runId: "sticky-secret" },
+      coldRuntime: { providerAttempts: 1 },
+      stickyRuntime: { providerAttempts: 1, staleContext: false, repoMemoryAgeSeconds: 60 }
+    }, { outputRoot });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.decision).toBe("not_enough_evidence");
+    expect(result.summary.deltas.secretFindings).toBe(0);
+    expect(result.summary.gates.find((gate) => gate.name === "sticky_has_no_secrets")).toMatchObject({
+      ok: false,
+      status: "fail"
+    });
   });
 
   it("fails sticky-vs-cold closed when the cold baseline packet fails", () => {
@@ -1017,6 +1075,84 @@ describe("offline eval harness", () => {
     expect(result.summary.decision).toBe("not_enough_evidence");
     expect(result.summary.gates.find((gate) => gate.name === "cold_packet_ok")).toMatchObject({ ok: false, status: "fail" });
     expect(result.summary.gates.find((gate) => gate.name === "recall_not_lower")).toMatchObject({ ok: true, status: "skip" });
+  });
+
+  it("fails sticky-vs-cold when sticky misses a label matched by cold", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-matched-label-regression-"));
+    roots.push(outputRoot);
+    const labelA = {
+      source: "seeded_defect" as const,
+      severity: "P1" as const,
+      path: "src/worker.ts",
+      line: 44,
+      title: "Provider timeout kills the review loop",
+      body: "A provider timeout escaping the per-PR boundary can stop the worker from scanning later repos.",
+      sourceId: "seed-provider-timeout-loop"
+    };
+    const labelB = {
+      source: "seeded_defect" as const,
+      severity: "P1" as const,
+      path: "src/state.ts",
+      line: 88,
+      title: "Duplicate head state is overwritten",
+      body: "A duplicate head row overwrite can hide a pending review lease from the scheduler.",
+      sourceId: "seed-duplicate-head-state"
+    };
+    const packetBase = {
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 85,
+      headSha: "abc",
+      suite: "seeded_defect_recall" as const,
+      mode: "exploratory" as const,
+      labels: [labelA, labelB],
+      thresholds: {
+        minPrecision: 0.5,
+        minRecall: 0.5,
+        minSeededRecall: 0.5
+      }
+    };
+
+    const result = runStickyVsColdEval({
+      runId: "sticky-vs-cold-matched-label-regression",
+      cold: {
+        ...packetBase,
+        runId: "cold-label-a",
+        botFindings: {
+          findings: [{
+            severity: "P1",
+            path: labelA.path,
+            line: labelA.line,
+            title: labelA.title,
+            body: labelA.body,
+            confidence: 0.9
+          }]
+        }
+      },
+      sticky: {
+        ...packetBase,
+        runId: "sticky-label-b",
+        botFindings: {
+          findings: [{
+            severity: "P1",
+            path: labelB.path,
+            line: labelB.line,
+            title: labelB.title,
+            body: labelB.body,
+            confidence: 0.9
+          }]
+        }
+      },
+      coldRuntime: { providerAttempts: 1 },
+      stickyRuntime: { providerAttempts: 1, staleContext: false, repoMemoryAgeSeconds: 60 }
+    }, { outputRoot });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.decision).toBe("not_enough_evidence");
+    expect(result.summary.deltas.recall).toBe(0);
+    expect(result.summary.gates.find((gate) => gate.name === "sticky_preserves_cold_matches")).toMatchObject({
+      ok: false,
+      status: "fail"
+    });
   });
 
   it("fails sticky-vs-cold when sticky regresses recall against the same labels", () => {
@@ -1241,7 +1377,6 @@ describe("offline eval harness", () => {
   it("runs sticky-vs-cold eval through the CLI", () => {
     const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-cli-"));
     roots.push(outputRoot);
-    const tsxCli = nodeRequire.resolve("tsx/cli");
     const output = execFileSync(process.execPath, [
       tsxCli,
       "src/cli.ts",
@@ -1260,6 +1395,31 @@ describe("offline eval harness", () => {
     });
     expect(existsSync(join(outputRoot, "sticky-vs-cold-summary.json"))).toBe(true);
     expect(existsSync(join(outputRoot, "sticky-vs-cold-report.md"))).toBe(true);
+  });
+
+  it("reports malformed sticky-vs-cold CLI input with path context", () => {
+    const inputDir = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-bad-input-"));
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-bad-output-"));
+    roots.push(inputDir, outputRoot);
+    const inputPath = join(inputDir, "bad.json");
+    writeFileSync(inputPath, "{ bad json\n");
+
+    let stderr = "";
+    try {
+      execFileSync(process.execPath, [
+        tsxCli,
+        "src/cli.ts",
+        "eval-sticky-vs-cold",
+        "--input",
+        inputPath,
+        "--output-root",
+        outputRoot
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      stderr = String((error as { stderr?: string }).stderr ?? "");
+    }
+
+    expect(stderr).toContain(`failed to parse --input ${inputPath}`);
   });
 
   it("rejects sticky-vs-cold output roots inside the checkout", () => {
