@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parsePositiveInteger } from "../src/cli-args.js";
 import { buildRunOnceCliReport, runOnceCliCommand, runOnceCliExitCode, serializeRunOnceCliReport } from "../src/run-once-cli.js";
-import type { RunOnceResult } from "../src/worker.js";
+import { assertExpectedReviewPrHead, type RunOnceResult } from "../src/worker.js";
 
 describe("run-once CLI reporting", () => {
   it("prints invocation metadata with the structured runOnce result", () => {
@@ -41,6 +41,57 @@ describe("run-once CLI reporting", () => {
       },
       result
     });
+  });
+
+  it("prints review-pr as the command on successful review-pr invocations", async () => {
+    let forwardedExpectedHeadSha: string | undefined;
+    const command = await runOnceCliCommand({
+      options: {
+        dryRun: true,
+        repo: "owner/repo",
+        pullNumber: 123,
+        expectedHeadSha: "head-123",
+        useZCode: false
+      },
+      commandName: "review-pr",
+      runOnceImpl: async (options) => {
+        forwardedExpectedHeadSha = options.expectedHeadSha;
+        return runOnceResult({
+          reposScanned: 1,
+          pullsSeen: 1,
+          reviewed: 1,
+          scopedPull: {
+            repo: "owner/repo",
+            pullNumber: 123,
+            headSha: "head-123",
+            title: "reviewed",
+            url: "https://github.com/owner/repo/pull/123"
+          }
+        });
+      }
+    });
+
+    expect(command.exitCode).toBe(0);
+    expect(forwardedExpectedHeadSha).toBe("head-123");
+    expect(command.report.command).toBe("review-pr");
+    expect(JSON.parse(command.output)).toMatchObject({
+      ok: true,
+      command: "review-pr",
+      scope: {
+        repo: "owner/repo",
+        pullNumber: 123,
+        headSha: "head-123"
+      }
+    });
+  });
+
+  it("rejects review-pr execution when the fetched PR head differs from the approved head", () => {
+    expect(() => assertExpectedReviewPrHead({
+      repo: "owner/repo",
+      pullNumber: 123,
+      expectedHeadSha: "approved-head",
+      currentHeadSha: "advanced-head"
+    })).toThrow("review-pr expected head mismatch for owner/repo#123: expected=approved-head current=advanced-head");
   });
 
   it("marks failed reviews as non-ok and requests a nonzero exit code", () => {
@@ -114,6 +165,37 @@ describe("run-once CLI reporting", () => {
     expect(JSON.parse(command.output)).toMatchObject({
       ok: false,
       command: "run-once",
+      dryRun: true,
+      useZCode: false,
+      scope: {
+        repo: "owner/repo",
+        pullNumber: 123
+      },
+      error: {
+        message: "GitHub API fetch failed for /repos/owner/repo/pulls/123"
+      }
+    });
+  });
+
+  it("prints review-pr as the command when review-pr execution throws", async () => {
+    const command = await runOnceCliCommand({
+      options: {
+        dryRun: true,
+        repo: "owner/repo",
+        pullNumber: 123,
+        useZCode: false
+      },
+      commandName: "review-pr",
+      runOnceImpl: async () => {
+        throw new Error("GitHub API fetch failed for /repos/owner/repo/pulls/123");
+      }
+    });
+
+    expect(command.exitCode).toBe(1);
+    expect(command.report.ok).toBe(false);
+    expect(JSON.parse(command.output)).toMatchObject({
+      ok: false,
+      command: "review-pr",
       dryRun: true,
       useZCode: false,
       scope: {

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
+    "neondiff": "dist/src/cli.js",
     "evaos-review-bot": "dist/src/cli.js"
   },
   "description": "Local ZCode-backed GitHub PR review bot pilot for evaOS repos.",

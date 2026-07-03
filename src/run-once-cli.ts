@@ -6,7 +6,7 @@ const STRUCTURED_SECRET_VALUE_PATTERN =
 
 export interface RunOnceCliReportBase {
   ok: boolean;
-  command: "run-once";
+  command: "run-once" | "review-pr";
   dryRun: boolean;
   useZCode: boolean;
   scope: {
@@ -44,10 +44,11 @@ export function buildRunOnceCliReport(input: {
   useZCode: boolean;
   repo?: string;
   pullNumber?: number;
+  commandName?: "run-once" | "review-pr";
 }): RunOnceCliReport {
   return {
     ok: runOnceCliExitCode(input.result) === 0,
-    command: "run-once",
+    command: input.commandName ?? "run-once",
     dryRun: input.dryRun,
     useZCode: input.useZCode,
     scope: {
@@ -71,6 +72,7 @@ export function serializeRunOnceCliReport(report: RunOnceCliReport): string {
 export async function runOnceCliCommand(input: {
   options: RunOnceOptions;
   runOnceImpl?: (options: RunOnceOptions) => Promise<RunOnceResult>;
+  commandName?: "run-once" | "review-pr";
 }): Promise<RunOnceCliCommandResult> {
   let result: RunOnceResult;
   try {
@@ -81,7 +83,8 @@ export async function runOnceCliCommand(input: {
       dryRun: input.options.dryRun,
       useZCode: input.options.useZCode ?? true,
       repo: input.options.repo,
-      pullNumber: input.options.pullNumber
+      pullNumber: input.options.pullNumber,
+      commandName: input.commandName
     });
     return {
       report,
@@ -94,7 +97,8 @@ export async function runOnceCliCommand(input: {
     dryRun: input.options.dryRun,
     useZCode: input.options.useZCode ?? true,
     repo: input.options.repo,
-    pullNumber: input.options.pullNumber
+    pullNumber: input.options.pullNumber,
+    commandName: input.commandName
   });
   return {
     report,
@@ -109,10 +113,11 @@ function buildRunOnceCliErrorReport(input: {
   useZCode: boolean;
   repo?: string;
   pullNumber?: number;
+  commandName?: "run-once" | "review-pr";
 }): RunOnceCliErrorReport {
   return {
     ok: false,
-    command: "run-once",
+    command: input.commandName ?? "run-once",
     dryRun: input.dryRun,
     useZCode: input.useZCode,
     scope: {
