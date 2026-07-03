@@ -107,7 +107,8 @@ interface ReviewQueueErrorRow {
   finished_at?: string | null;
 }
 
-const PROVIDER_CODES = /(?:\bprovider_code=|\bprevious_provider_code=|\bproviderCode:\s*["']?|\[)(\d{4})\b/g;
+const EXPLICIT_PROVIDER_CODES = /(?:\bprovider_code=|\bprevious_provider_code=|\bproviderCode:\s*["']?)(\d{4})\b/g;
+const PROVIDER_BUSINESS_ERROR_CODES = /\bproviderbusinesserror\b[^\[]*\[(\d{4})\]/gi;
 const DEFAULT_SINCE = "24h";
 const DEFAULT_TIMEZONE = "Asia/Singapore";
 const DEFAULT_PEAK_START_HOUR = 14;
@@ -196,7 +197,8 @@ function emptyReport(input: {
     hourly: [],
     repos: [],
     knownLimitations: [
-      "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted."
+      "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted.",
+      "processed_reviews events are bucketed by created_at; review_queue_jobs events are bucketed by coalesce(finished_at, updated_at, started_at, created_at), so deduped queue incidents may reflect retry/update time instead of first-observed throttle time."
     ]
   };
 }
@@ -358,6 +360,8 @@ function classifyProviderThrottle(error: string): ProviderThrottleCategory | und
   if (
     normalized.includes("reason=provider_request_rate_limit") ||
     normalized.includes("reason=provider_rate_limit") ||
+    normalized.includes("previous_reason=provider_request_rate_limit") ||
+    normalized.includes("previous_reason=provider_rate_limit") ||
     normalized.includes("provider_request_rate_limit") ||
     codes.includes("1302")
   ) {
@@ -400,6 +404,7 @@ function dedupeProviderThrottleEvents(events: ProviderThrottleEvent[]): Provider
 }
 
 function addRetryOutcome(report: ProviderThrottleReport, event: ProviderThrottleEvent): void {
+  if (event.source !== "review_queue_jobs") return;
   const status = event.status.toLowerCase();
   if (status === "posted" || status === "reviewed" || status === "reviewed_command") {
     report.retryOutcomes.retriedPosted += 1;
@@ -418,7 +423,10 @@ function addRetryOutcome(report: ProviderThrottleReport, event: ProviderThrottle
 
 function extractProviderCodes(error: string): string[] {
   const codes = new Set<string>();
-  for (const match of error.matchAll(PROVIDER_CODES)) {
+  for (const match of error.matchAll(EXPLICIT_PROVIDER_CODES)) {
+    if (match[1] && KNOWN_PROVIDER_CODES.has(match[1])) codes.add(match[1]);
+  }
+  for (const match of error.matchAll(PROVIDER_BUSINESS_ERROR_CODES)) {
     if (match[1] && KNOWN_PROVIDER_CODES.has(match[1])) codes.add(match[1]);
   }
   return [...codes];

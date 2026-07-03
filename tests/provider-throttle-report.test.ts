@@ -102,7 +102,7 @@ describe("provider throttle report", () => {
       retryOutcomes: {
         retriedPosted: 1,
         retriedProviderDeferred: 1,
-        gaveUpAfterBackoff: 2
+        gaveUpAfterBackoff: 1
       }
     });
     expect(report.codes).toContainEqual({ code: "1302", count: 2 });
@@ -227,6 +227,14 @@ describe("provider throttle report", () => {
         status: "failed",
         error: "Tool failed with internal marker [1234]",
         createdAt: "2026-07-01 08:00:00"
+      });
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 11,
+        headSha: "unrelated-known-code-head",
+        status: "failed",
+        error: "Tool failed with internal marker [1302]",
+        createdAt: "2026-07-01 09:00:00"
       });
     } finally {
       db.close();

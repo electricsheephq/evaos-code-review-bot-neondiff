@@ -1679,6 +1679,57 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("does not append provider-deferred retry signal when the retry remains non-posted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-provider-queue-capacity-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1234, "head-provider-retry-capacity");
+    const providerCooldownError =
+      "provider_rate_limit_cooldown_until=2026-07-01T00:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302";
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      error: providerCooldownError
+    });
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-01T00:05:00.000Z",
+      lastError: providerCooldownError
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => "skipped_capacity"
+    });
+
+    expect(result.status).toBe("skipped_capacity");
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "queued",
+      lastError: "retry_did_not_review=skipped_capacity"
+    });
+    state.close();
+  });
+
   it("repairs failed durable queue jobs when the processed row is already posted", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-posted-queue-repair-"));
     roots.push(root);
