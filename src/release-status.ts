@@ -594,7 +594,7 @@ function buildPublicReleaseChannelStatus(
   channel: Record<string, unknown>
 ): PublicReleaseChannelStatus {
   const state = readString(channel.state) ?? "missing";
-  const requiredForThisRelease = readBoolean(channel.requiredForThisRelease) ?? true;
+  const requiredForThisRelease = isRequiredPublicUpdateChannel(name) || (readBoolean(channel.requiredForThisRelease) ?? true);
   const version = readString(channel.version);
   const rollback = readString(channel.rollback);
   const trackingIssue = readString(channel.trackingIssue);

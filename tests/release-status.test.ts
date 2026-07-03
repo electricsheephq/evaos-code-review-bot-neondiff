@@ -388,6 +388,19 @@ describe("beta release status", () => {
     expect(redactedOutput).toContain("[redacted-secret]");
   });
 
+  it("preserves Date values when redacting JSON output", () => {
+    const redactedOutput = stringifyRedactedJson({
+      checkedAt: new Date("2026-07-04T00:00:00.000Z"),
+      nested: {
+        generatedAt: new Date("2026-07-04T00:01:00.000Z")
+      }
+    });
+
+    expect(redactedOutput).toContain("\"checkedAt\": \"2026-07-04T00:00:00.000Z\"");
+    expect(redactedOutput).toContain("\"generatedAt\": \"2026-07-04T00:01:00.000Z\"");
+    expect(redactedOutput).not.toContain("\"checkedAt\": {}");
+  });
+
   it("fails public docs gate when the expected public version is omitted", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-no-version-"));
     roots.push(root);
@@ -649,6 +662,59 @@ describe("beta release status", () => {
         name: "daemon",
         ok: false,
         detail: "daemon state launchd_prerelease blocks this release; requiredForThisRelease=true; missing rollback command"
+      })
+    ]);
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("forces policy-mandatory public update channels to remain required", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-mandatory-channel-opt-out-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: false,
+          state: "pending"
+        },
+        daemon: {
+          requiredForThisRelease: false,
+          state: "pending"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels).toEqual([
+      expect.objectContaining({
+        name: "cli",
+        requiredForThisRelease: true,
+        ok: false,
+        detail: "cli state pending blocks this release; requiredForThisRelease=true; missing version, rollback command"
+      }),
+      expect.objectContaining({
+        name: "daemon",
+        requiredForThisRelease: true,
+        ok: false,
+        detail: "daemon state pending blocks this release; requiredForThisRelease=true; missing version, rollback command"
       })
     ]);
     expect(manifest.updateChannels.ok).toBe(false);

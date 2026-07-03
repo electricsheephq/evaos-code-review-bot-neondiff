@@ -35,6 +35,7 @@ export function stringifyRedactedJson(input: unknown): string {
 
 function redactJsonValue(input: unknown): unknown {
   if (typeof input === "string") return redactSecrets(input);
+  if (input instanceof Date) return input.toISOString();
   if (Array.isArray(input)) return input.map((item) => redactJsonValue(item));
   if (input && typeof input === "object") {
     const output: Record<string, unknown> = {};
