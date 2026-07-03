@@ -2099,6 +2099,7 @@ function buildHelp(command?: string) {
       "neondiff init --config config.local.json",
       "neondiff config inspect --config config.local.json",
       "neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true",
+      "desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}",
       "neondiff doctor --config config.local.json --json",
       "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff",

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { patchConfigForDesktop } from "../src/config-cli.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -65,6 +66,28 @@ describe("desktop config CLI", () => {
     });
     expect(output.config.notes.customProviderHeader).toBe("[redacted-secret]");
     expect(output.config.customSecret).toBe("[redacted-secret]");
+  });
+
+  it("redacts empty secret values consistently", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      github: {
+        token: "",
+        privateKeyPath: null
+      }
+    });
+
+    const output = await runConfig(["config", "inspect", "--config", configPath]);
+
+    expect(output.config.github).toMatchObject({
+      token: "[redacted-secret]",
+      privateKeyPath: null
+    });
   });
 
   it("dry-runs whitelisted non-secret patches without writing", async () => {
@@ -359,7 +382,7 @@ describe("desktop config CLI", () => {
     });
   });
 
-  it("does not leave temp config files after candidate validation rejects a live patch", async () => {
+  it("rejects invalid live patches before creating temp config files", async () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
     const patchPath = join(root, "patch.json");
@@ -400,6 +423,47 @@ describe("desktop config CLI", () => {
       wrote: false,
       error: expect.stringContaining("config.zcode.cliPath must be a non-empty string")
     });
+    expect(readdirSync(root).filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
+  it("removes temp config files when an atomic live write fails", () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      desktop: {
+        updateChannel: "dev"
+      }
+    });
+    const before = readFileSync(configPath, "utf8");
+    writeConfig(patchPath, {
+      desktop: {
+        updateChannel: "beta"
+      }
+    });
+
+    const output = patchConfigForDesktop({
+      configPath,
+      inputPath: patchPath,
+      dryRun: false,
+      confirm: true,
+      fileOps: {
+        renameSync: () => {
+          throw new Error("forced rename failure");
+        }
+      }
+    });
+
+    expect(output).toMatchObject({
+      ok: false,
+      wrote: false,
+      error: expect.stringContaining("failed to write config atomically")
+    });
+    expect(readFileSync(configPath, "utf8")).toBe(before);
     expect(readdirSync(root).filter((name) => name.includes(".tmp"))).toEqual([]);
   });
 

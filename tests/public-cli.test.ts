@@ -56,6 +56,7 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).not.toContain(
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
     );
+    expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
   });
 
   it("prints command help without executing run-once, review-pr, or daemon paths", async () => {

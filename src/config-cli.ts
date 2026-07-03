@@ -84,6 +84,32 @@ interface FlattenedPatch {
   value: unknown;
 }
 
+type ConfigFileOps = {
+  chmodSync: typeof chmodSync;
+  closeSync: typeof closeSync;
+  existsSync: typeof existsSync;
+  fsyncSync: typeof fsyncSync;
+  mkdirSync: typeof mkdirSync;
+  openSync: typeof openSync;
+  renameSync: typeof renameSync;
+  statSync: typeof statSync;
+  unlinkSync: typeof unlinkSync;
+  writeFileSync: typeof writeFileSync;
+};
+
+const defaultConfigFileOps: ConfigFileOps = {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+};
+
 export function inspectConfigForDesktop(configPath?: string): ConfigInspectResult {
   const resolvedConfigPath = configPath ? resolve(configPath) : undefined;
   const config = loadConfig(resolvedConfigPath);
@@ -103,6 +129,7 @@ export function patchConfigForDesktop(input: {
   inputPath: string;
   dryRun: boolean;
   confirm: boolean;
+  fileOps?: Partial<ConfigFileOps>;
 }): ConfigPatchResult {
   const configPath = resolve(input.configPath);
   const inputPath = resolve(input.inputPath);
@@ -165,7 +192,11 @@ export function patchConfigForDesktop(input: {
   if (validationError) return failedPatch(input, configPath, inputPath, validationError);
 
   if (!input.dryRun && changedPaths.length > 0) {
-    writeConfigAtomic(configPath, next);
+    try {
+      writeConfigAtomic(configPath, next, input.fileOps);
+    } catch (error) {
+      return failedPatch(input, configPath, inputPath, `failed to write config atomically: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return {
@@ -291,30 +322,36 @@ function validateCandidateConfig(candidate: unknown): string | undefined {
   }
 }
 
-function writeConfigAtomic(configPath: string, value: unknown): void {
-  mkdirSync(dirname(configPath), { recursive: true });
-  const mode = existsSync(configPath) ? statSync(configPath).mode & 0o777 : 0o600;
+function writeConfigAtomic(configPath: string, value: unknown, fileOps?: Partial<ConfigFileOps>): void {
+  const ops = { ...defaultConfigFileOps, ...fileOps };
+  ops.mkdirSync(dirname(configPath), { recursive: true });
+  const mode = ops.existsSync(configPath) ? ops.statSync(configPath).mode & 0o777 : 0o600;
   const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
   const data = `${JSON.stringify(value, null, 2)}\n`;
   let fd: number | undefined;
   try {
-    fd = openSync(tempPath, "w", mode);
-    writeFileSync(fd, data);
-    fsyncSync(fd);
-    closeSync(fd);
+    fd = ops.openSync(tempPath, "w", mode);
+    ops.writeFileSync(fd, data);
+    ops.fsyncSync(fd);
+    ops.closeSync(fd);
     fd = undefined;
-    chmodSync(tempPath, mode);
-    renameSync(tempPath, configPath);
+    ops.chmodSync(tempPath, mode);
+    ops.renameSync(tempPath, configPath);
   } catch (error) {
-    if (fd !== undefined) closeSync(fd);
-    if (existsSync(tempPath)) unlinkSync(tempPath);
+    if (fd !== undefined) {
+      try {
+        ops.closeSync(fd);
+      } catch {
+        // Continue cleanup; preserving no temp config is more important here.
+      }
+    }
+    if (ops.existsSync(tempPath)) ops.unlinkSync(tempPath);
     throw error;
   }
 }
 
 function redactSecretValue(value: unknown): unknown {
-  if (value === undefined || value === null || value === "") return value;
-  if (Array.isArray(value) || isRecord(value)) return "[redacted-secret]";
+  if (value === undefined || value === null) return value;
   return "[redacted-secret]";
 }
 
