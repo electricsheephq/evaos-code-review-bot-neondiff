@@ -216,6 +216,9 @@ export const PROVIDER_COOLDOWN_ERROR_PREFIX = "provider_rate_limit_cooldown_unti
 export interface ParsedProviderCooldownError {
   cooldownUntil: string;
   reason?: string;
+  retryAttempt?: number;
+  providerCode?: string;
+  retryAfterMs?: number;
 }
 
 export interface ProviderCooldownReviewRecord extends StoredProcessedReviewRecord {
@@ -2506,10 +2509,25 @@ export function parseProviderCooldownError(error?: string): ParsedProviderCooldo
   if (!cooldownUntil) return undefined;
   const reasonPart = rest.map((part) => part.trim()).find((part) => part.startsWith("reason="));
   const reason = reasonPart?.slice("reason=".length).trim();
+  const retryAttemptPart = rest.map((part) => part.trim()).find((part) => part.startsWith("retry_attempt="));
+  const retryAttempt = parsePositiveInt(retryAttemptPart?.slice("retry_attempt=".length));
+  const providerCodePart = rest.map((part) => part.trim()).find((part) => part.startsWith("provider_code="));
+  const providerCode = providerCodePart?.slice("provider_code=".length).trim();
+  const retryAfterPart = rest.map((part) => part.trim()).find((part) => part.startsWith("retry_after_ms="));
+  const retryAfterMs = parsePositiveInt(retryAfterPart?.slice("retry_after_ms=".length));
   return {
     cooldownUntil,
-    ...(reason ? { reason } : {})
+    ...(reason ? { reason } : {}),
+    ...(retryAttempt ? { retryAttempt } : {}),
+    ...(providerCode ? { providerCode } : {}),
+    ...(retryAfterMs ? { retryAfterMs } : {})
   };
+}
+
+function parsePositiveInt(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 interface ProcessedReviewRow {
