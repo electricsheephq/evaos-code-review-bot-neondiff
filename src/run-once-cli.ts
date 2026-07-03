@@ -62,7 +62,7 @@ export function buildRunOnceCliReport(input: {
 }
 
 export function runOnceCliExitCode(result: RunOnceResult): 0 | 1 {
-  return result.failed > 0 ? 1 : 0;
+  return result.failed > 0 || (result.skippedLicenseGate ?? 0) > 0 ? 1 : 0;
 }
 
 export function serializeRunOnceCliReport(report: RunOnceCliReport): string {

@@ -97,7 +97,7 @@ describe("license activation and entitlement cache", () => {
     expect(network).toMatchObject({ ok: false, status: "network", classification: "network" });
   });
 
-  it("redacts the exact submitted license key from API failure details", async () => {
+  it("does not echo API failure detail bodies that can contain license keys", async () => {
     const root = mkRoot(roots);
     const key = "plain-key-that-does-not-match-generic-pattern";
     const server = await startLicenseServer((_req, res) => {
@@ -108,7 +108,7 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({ config: licenseConfig(root, server.url), licenseKey: key });
 
     expect(result.ok).toBe(false);
-    expect(result.detail).toContain("[REDACTED_LICENSE_KEY]");
+    expect(result.detail).toBe("license API returned 401: invalid");
     expect(JSON.stringify(result)).not.toContain(key);
   });
 
@@ -505,7 +505,7 @@ describe("license activation and entitlement cache", () => {
     state.close();
   });
 
-  it("skips live metadata for dry-run and public repo license gate paths", async () => {
+  it("enforces private entitlement proof for dry-run reviews", async () => {
     const root = mkRoot(roots);
     const config = minimalConfig(root);
     const github = new GitHubApi({});
@@ -520,9 +520,19 @@ describe("license activation and entitlement cache", () => {
       pull: pullSummary(8, "dry-run-head"),
       dryRun: true
     })).resolves.toMatchObject({
-      ok: true,
-      reason: "license gate skipped for dry-run review"
+      ok: false,
+      status: "missing",
+      reason: expect.stringContaining("private repo review requires active entitlement")
     });
+  });
+
+  it("skips live metadata for public repo license gate paths", async () => {
+    const root = mkRoot(roots);
+    const config = minimalConfig(root);
+    const github = new GitHubApi({});
+    github.getRepo = async () => {
+      throw new Error("getRepo should not run");
+    };
 
     await expect(buildLicenseGateForPull({
       config,
@@ -613,6 +623,37 @@ describe("license activation and entitlement cache", () => {
       })).resolves.toMatchObject({
         ok: true,
         visibility: "public"
+      });
+    }
+
+    expect(getRepoCalls).toBe(1);
+  });
+
+  it("caches unknown fallback repo visibility metadata during license gate checks", async () => {
+    const root = mkRoot(roots);
+    const config = minimalConfig(root);
+    let getRepoCalls = 0;
+    const github = new GitHubApi({});
+    github.getRepo = async () => {
+      getRepoCalls += 1;
+      return { full_name: "owner/cache-unknown-visibility", private: false };
+    };
+
+    for (const head of ["unknown-head-a", "unknown-head-b"]) {
+      const pull = pullSummary(14, head);
+      await expect(buildLicenseGateForPull({
+        config,
+        github,
+        repo: "owner/cache-unknown-visibility",
+        pull: {
+          ...pull,
+          base: { ...pull.base, repo: { full_name: "owner/cache-unknown-visibility" } }
+        },
+        dryRun: false
+      })).resolves.toMatchObject({
+        ok: false,
+        visibility: "unknown",
+        reason: expect.stringContaining("visibility is unknown")
       });
     }
 

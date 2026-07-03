@@ -869,7 +869,7 @@ async function runLeasedQueueJob(input: {
 
   const sessionId = ensureReviewerSessionForLeasedJob(input, now);
   updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "running");
-  if (input.job.source !== "manual_command") {
+  if (input.job.source !== "manual_command" && shouldPostInProgressStatusForLeasedJob(input.job)) {
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -1055,6 +1055,15 @@ async function syncReviewStatusCommentForReviewResult(input: {
     onStatusCommentFailure: input.onStatusCommentFailure,
     now: input.now
   });
+}
+
+function shouldPostInProgressStatusForLeasedJob(job: ReviewQueueJobRecord): boolean {
+  return !isProofBlockedQueueJob(job);
+}
+
+function isProofBlockedQueueJob(job: ReviewQueueJobRecord): boolean {
+  if (job.state === "blocked_on_proof") return true;
+  return Boolean(job.lastError && /license_entitlement_required|review requires active entitlement|blocked_on_proof/i.test(job.lastError));
 }
 
 function reviewResultStatusCommentState(
@@ -1789,6 +1798,7 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
     case "skipped_policy":
     case "skipped_license_gate":
       result.skippedPolicy += 1;
+      if (status === "skipped_license_gate") result.skippedLicenseGate += 1;
       break;
     case "skipped_command_stop":
       result.skippedCommandStop += 1;
@@ -1836,6 +1846,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
     skippedDraft: 0,
     skippedCanary: 0,
     skippedPolicy: 0,
+    skippedLicenseGate: 0,
     skippedCommandStop: 0,
     skippedCommandExplain: 0,
     skippedFinishingTouchDraft: 0,

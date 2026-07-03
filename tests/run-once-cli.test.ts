@@ -109,6 +109,22 @@ describe("run-once CLI reporting", () => {
     expect(runOnceCliExitCode(result)).toBe(1);
   });
 
+  it("marks one-shot license gate skips as non-ok and requests a nonzero exit code", () => {
+    const result = runOnceResult({
+      skippedPolicy: 1,
+      skippedLicenseGate: 1
+    });
+
+    expect(buildRunOnceCliReport({ result, dryRun: false, useZCode: true })).toMatchObject({
+      ok: false,
+      result: {
+        skippedPolicy: 1,
+        skippedLicenseGate: 1
+      }
+    });
+    expect(runOnceCliExitCode(result)).toBe(1);
+  });
+
   it("returns nonzero command output when an injected runOnce implementation reports failures", async () => {
     const command = await runOnceCliCommand({
       options: {
@@ -373,6 +389,7 @@ function runOnceResult(overrides: Partial<RunOnceResult> = {}): RunOnceResult {
     skippedDraft: 0,
     skippedCanary: 0,
     skippedPolicy: 0,
+    skippedLicenseGate: 0,
     skippedCommandStop: 0,
     skippedCommandExplain: 0,
     skippedFinishingTouchDraft: 0,

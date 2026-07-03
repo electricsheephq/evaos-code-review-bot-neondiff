@@ -214,7 +214,10 @@ export async function evaluateLicenseReviewGate(input: {
       reason: `${input.visibility} repo review requires active entitlement: ${status.detail}`
     };
   }
-  if (!entitlementUsableDuringOutage(status.entitlement, input.now ?? new Date(), input.config.offlineGraceMs)) {
+  if (
+    status.source !== "api" &&
+    !entitlementUsableDuringOutage(status.entitlement, input.now ?? new Date(), input.config.offlineGraceMs)
+  ) {
     return {
       ok: false,
       repo: input.repo,
@@ -359,13 +362,15 @@ async function callLicenseApi(input: {
 
 function apiFailureResult(statusCode: number, body: unknown, now: Date, licenseKey: string): LicenseStatusResult {
   const status = statusCode >= 500 ? "server" : statusFromApiError(statusCode, body);
+  const bodyStatus = readBodyStatus(body);
+  const statusDetail = bodyStatus && bodyStatus !== status ? ` classified=${bodyStatus}` : "";
   return {
     ok: false,
     status,
     source: "api",
     checkedAt: now.toISOString(),
     classification: status,
-    detail: `license API returned ${statusCode}: ${redactSubmittedLicenseKey(readApiDetail(body, status), licenseKey)}`
+    detail: redactSubmittedLicenseKey(`license API returned ${statusCode}: ${status}${statusDetail}`, licenseKey)
   };
 }
 
@@ -405,10 +410,6 @@ function readRepoVisibilityScope(body: unknown): RepoVisibilityScope | undefined
   const value = readString(body, "repoVisibilityScope") ?? readString(body, "repoScope");
   if (value === "public" || value === "private" || value === "all") return value;
   return undefined;
-}
-
-function readApiDetail(body: unknown, fallback: string): string {
-  return readString(body, "detail") ?? readString(body, "message") ?? fallback;
 }
 
 function missingResult(now = new Date(), detail = "license is missing"): LicenseStatusResult {

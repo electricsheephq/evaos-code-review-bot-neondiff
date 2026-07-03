@@ -65,9 +65,10 @@ import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
 import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan } from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
+const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
 const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
-const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private"; expiresAtMs: number }>();
+const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private" | "unknown"; expiresAtMs: number }>();
 
 export interface RunOnceOptions {
   configPath?: string;
@@ -86,6 +87,7 @@ export interface RunOnceResult {
   skippedDraft: number;
   skippedCanary: number;
   skippedPolicy: number;
+  skippedLicenseGate: number;
   skippedCommandStop: number;
   skippedCommandExplain: number;
   skippedFinishingTouchDraft: number;
@@ -221,6 +223,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     skippedDraft: 0,
     skippedCanary: 0,
     skippedPolicy: 0,
+    skippedLicenseGate: 0,
     skippedCommandStop: 0,
     skippedCommandExplain: 0,
     skippedFinishingTouchDraft: 0,
@@ -298,6 +301,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         if (status === "skipped_draft") result.skippedDraft += 1;
         if (status === "skipped_canary") result.skippedCanary += 1;
         if (status === "skipped_policy" || status === "skipped_license_gate") result.skippedPolicy += 1;
+        if (status === "skipped_license_gate") result.skippedLicenseGate += 1;
         if (status === "skipped_command_stop") result.skippedCommandStop += 1;
         if (status === "skipped_command_explain") result.skippedCommandExplain += 1;
         if (status === "skipped_finishing_touch_draft") result.skippedFinishingTouchDraft += 1;
@@ -1274,40 +1278,41 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     });
     return "skipped_provider_cooldown";
   }
+  if (input.processedHeadPolicy === "retry_failed_head") {
+    const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
+      return "skipped_processed";
+    }
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const liveBeforeReview = await github.getPull(repo, pull.number);
+    const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
+    if (staleBeforeReview) {
+      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeReview, evidenceDir });
+      return "skipped_stale_head";
+    }
+  }
+  const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
+  if (!licenseGate.ok) {
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    mkdirSync(evidenceDir, { recursive: true });
+    writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
+    state.recordReviewReadiness({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      state: "blocked_on_proof",
+      reason: licenseGate.reason
+    });
+    return "skipped_license_gate";
+  }
+
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   if (!budget.tryStart()) return "skipped_capacity";
   let lease: ReviewRunLease | undefined;
 
   try {
-    if (input.processedHeadPolicy === "retry_failed_head") {
-      const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
-      if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
-        return "skipped_processed";
-      }
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-      const liveBeforeReview = await github.getPull(repo, pull.number);
-      const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
-      if (staleBeforeReview) {
-        recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeReview, evidenceDir });
-        return "skipped_stale_head";
-      }
-    }
     lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
     if (!lease) return "skipped_capacity";
-    const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
-    if (!licenseGate.ok) {
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-      mkdirSync(evidenceDir, { recursive: true });
-      writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
-      state.recordReviewReadiness({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        state: "blocked_on_proof",
-        reason: licenseGate.reason
-      });
-      return "skipped_license_gate";
-    }
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (commandReviewRequested) {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
@@ -1525,15 +1530,6 @@ export async function buildLicenseGateForPull(input: {
       reason: "license enforcement disabled"
     };
   }
-  if (input.dryRun) {
-    return {
-      ok: true,
-      repo: input.repo,
-      visibility: visibilityFromPullSummary(input.pull),
-      status: "active",
-      reason: "license gate skipped for dry-run review"
-    };
-  }
   let visibility = visibilityFromPullSummary(input.pull);
   if (visibility === "unknown" && !license.privateReposRequireEntitlement) {
     return evaluateLicenseReviewGate({
@@ -1585,7 +1581,7 @@ async function getRepoVisibilityForLicenseGate(github: GitHubApi, repo: string):
 
   const repoMetadata = await getRepoMetadataForLicenseGate(github, repo);
   const visibility = visibilityFromRepositorySummary(repoMetadata);
-  if (visibility === "public" || visibility === "private") cacheLicenseGateRepoVisibility(repo, visibility, now);
+  cacheLicenseGateRepoVisibility(repo, visibility, now);
   return visibility;
 }
 
@@ -1593,14 +1589,16 @@ async function getRepoMetadataForLicenseGate(github: GitHubApi, repo: string): R
   return github.getRepo(repo);
 }
 
-function cacheLicenseGateRepoVisibility(repo: string, visibility: "public" | "private", now: number): void {
+function cacheLicenseGateRepoVisibility(repo: string, visibility: "public" | "private" | "unknown", now: number): void {
   if (!licenseGateRepoVisibilityCache.has(repo) && licenseGateRepoVisibilityCache.size >= LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES) {
     const oldest = licenseGateRepoVisibilityCache.keys().next().value;
     if (oldest) licenseGateRepoVisibilityCache.delete(oldest);
   }
   licenseGateRepoVisibilityCache.set(repo, {
     visibility,
-    expiresAtMs: now + LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS
+    expiresAtMs: now + (visibility === "unknown"
+      ? LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS
+      : LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS)
   });
 }
 

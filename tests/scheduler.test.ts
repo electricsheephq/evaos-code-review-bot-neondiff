@@ -1685,7 +1685,9 @@ describe("provider-aware review scheduler", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-blocked-proof-retry-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
     const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
     const job = state.enqueueReviewQueueJob({
       repo: "org/repo-a",
       pullNumber: 1,
@@ -1707,7 +1709,7 @@ describe("provider-aware review scheduler", () => {
       config,
       github: githubFromMap(new Map([
         ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
-      ])),
+      ]), new Map(), statusCalls),
       state,
       options: { dryRun: false, useZCode: false },
       reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, processedHeadPolicy }) => {
@@ -1727,6 +1729,7 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.reviewed).toBe(1);
     expect(policies).toEqual(["normal"]);
+    expect(statusCalls.map(statusFromBody)).not.toContain("in_progress");
     expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
       state: "posted",
       reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-blocked-proof-retry"
