@@ -108,9 +108,10 @@ do {
     }
 
     let fakeProductLicense = "NEONDIFF-1234567890-ABCDE"
+    let fakeUnderscoreLicense = "NDL_PRIVATE_1234567890"
     let jsonLicense = "fixture-license-secret-1234567890"
-    let redacted = NeonDiffRedactor.redact("token=\(fakeProviderKey)\nlicenseKey=\(fakeProductLicense)\n{\"licenseKey\":\"\(jsonLicense)\"}")
-    guard !redacted.contains(fakeProviderKey), !redacted.contains(fakeProductLicense), !redacted.contains(jsonLicense) else {
+    let redacted = NeonDiffRedactor.redact("token=\(fakeProviderKey)\nlicenseKey=\(fakeProductLicense)\nlicense=\(fakeUnderscoreLicense)\n{\"licenseKey\":\"\(jsonLicense)\"}")
+    guard !redacted.contains(fakeProviderKey), !redacted.contains(fakeProductLicense), !redacted.contains(fakeUnderscoreLicense), !redacted.contains(jsonLicense) else {
         throw NSError(domain: "NeonDiffDesktopSmoke", code: 9, userInfo: [NSLocalizedDescriptionKey: "redaction failed"])
     }
 

@@ -36,13 +36,14 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
 
     public func run(arguments: [String], timeout: TimeInterval = 15) throws -> CLIRunResult {
         let process = Process()
-        if executablePath.contains("/") {
-            process.executableURL = URL(fileURLWithPath: executablePath)
+        if let resolvedExecutable = resolveExecutablePath(executablePath, workingDirectory: workingDirectory) {
+            process.executableURL = resolvedExecutable
             process.arguments = arguments
         } else {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = [executablePath] + arguments
         }
+        process.environment = guiSafeEnvironment()
         if let workingDirectory {
             process.currentDirectoryURL = workingDirectory
         }
@@ -100,4 +101,55 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         let stderrText = String(data: stderrSnapshot, encoding: .utf8) ?? ""
         return CLIRunResult(exitCode: process.terminationStatus, stdout: stdoutText, stderr: stderrText)
     }
+}
+
+private func resolveExecutablePath(_ executablePath: String, workingDirectory: URL?) -> URL? {
+    let fileManager = FileManager.default
+    if executablePath.contains("/") {
+        return isExecutableFilePath(executablePath, fileManager: fileManager) ? URL(fileURLWithPath: executablePath) : nil
+    }
+
+    var candidates = guiSafeUserBinDirectories(fileManager: fileManager).map { "\($0)/\(executablePath)" }
+    if let localBin = workingDirectory?.appendingPathComponent("node_modules/.bin/\(executablePath)").path {
+        candidates.append(localBin)
+    }
+
+    return candidates.first { isExecutableFilePath($0, fileManager: fileManager) }.map(URL.init(fileURLWithPath:))
+}
+
+private func isExecutableFilePath(_ path: String, fileManager: FileManager) -> Bool {
+    var isDirectory: ObjCBool = false
+    guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+        return false
+    }
+    return fileManager.isExecutableFile(atPath: path)
+}
+
+private func guiSafeUserBinDirectories(fileManager: FileManager = .default) -> [String] {
+    let home = fileManager.homeDirectoryForCurrentUser.path
+    return [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "\(home)/.local/bin",
+        "\(home)/.bun/bin",
+        "\(home)/.npm-global/bin"
+    ]
+}
+
+private func guiSafeSearchPath() -> String {
+    (
+        guiSafeUserBinDirectories()
+            + ["/opt/homebrew/sbin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    ).joined(separator: ":")
+}
+
+private func guiSafeEnvironment() -> [String: String] {
+    let inherited = ProcessInfo.processInfo.environment
+    var environment = ["PATH": guiSafeSearchPath()]
+    for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"] {
+        if let value = inherited[key], !value.isEmpty {
+            environment[key] = value
+        }
+    }
+    return environment
 }

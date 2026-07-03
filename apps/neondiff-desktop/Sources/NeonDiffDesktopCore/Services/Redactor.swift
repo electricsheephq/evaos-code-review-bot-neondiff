@@ -9,7 +9,7 @@ public enum NeonDiffRedactor {
         (#"[?&](?:access[_-]?token|auth[_-]?token|api[_-]?key|token|secret|session|cookie)=[A-Za-z0-9._~+/=-]{16,}"#, [.caseInsensitive]),
         (#"\b(?:api[_-]?key|license[_-]?key|licenseKey|license|token|secret|password|cookie|session)\b\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{12,}"#, [.caseInsensitive]),
         (#""(?:api[_-]?key|license[_-]?key|licenseKey|license|token|secret|password|cookie|session)"\s*:\s*"[^"]{8,}""#, [.caseInsensitive]),
-        (#"\b(?:LIC|NDL|NEONDIFF)-[A-Za-z0-9-]{12,}\b"#, [.caseInsensitive]),
+        (#"\b(?:LIC|NDL|NEONDIFF)[_-][A-Za-z0-9][A-Za-z0-9_-]{11,}\b"#, [.caseInsensitive]),
         (#"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----)?"#, [])
     ]
 

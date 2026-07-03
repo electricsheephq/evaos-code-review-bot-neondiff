@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { patchConfigForDesktop } from "../src/config-cli.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -29,6 +30,12 @@ describe("desktop config CLI", () => {
         appId: "123",
         privateKeyPath: join(root, "private-key.pem"),
         token: "ghp_123456789012345678901234567890123456"
+      },
+      notes: {
+        customProviderHeader: "Bearer custom-provider-token-1234567890"
+      },
+      customSecret: {
+        nestedKeyName: "not-secret-shaped-but-container-is"
       }
     });
 
@@ -56,6 +63,30 @@ describe("desktop config CLI", () => {
       appId: "123",
       privateKeyPath: "[redacted-secret]",
       token: "[redacted-secret]"
+    });
+    expect(output.config.notes.customProviderHeader).toBe("[redacted-secret]");
+    expect(output.config.customSecret).toBe("[redacted-secret]");
+  });
+
+  it("redacts empty secret values consistently", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      github: {
+        token: "",
+        privateKeyPath: null
+      }
+    });
+
+    const output = await runConfig(["config", "inspect", "--config", configPath]);
+
+    expect(output.config.github).toMatchObject({
+      token: "[redacted-secret]",
+      privateKeyPath: null
     });
   });
 
@@ -213,12 +244,45 @@ describe("desktop config CLI", () => {
     expect(readFileSync(configPath, "utf8")).toBe(before);
   });
 
+  it("keeps default patch mode dry-run even when confirm is true", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      desktop: {
+        updateChannel: "dev"
+      }
+    });
+    writeConfig(patchPath, {
+      desktop: {
+        updateChannel: "beta"
+      }
+    });
+    const before = readFileSync(configPath, "utf8");
+
+    const output = await runConfig(["config", "patch", "--config", configPath, "--input", patchPath, "--confirm", "true"]);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: true,
+      wrote: false,
+      changedPaths: ["desktop.updateChannel"]
+    });
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
   it("rejects secrets and non-desktop-safe patch paths", async () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
     const secretPatchPath = join(root, "secret-patch.json");
     const licensePatchPath = join(root, "license-patch.json");
     const blockedPatchPath = join(root, "blocked-patch.json");
+    const sensitivePathPatchPath = join(root, "sensitive-path-patch.json");
+    const flatDottedPatchPath = join(root, "flat-dotted-patch.json");
     writeConfig(configPath, {
       pilotRepos: ["owner/repo"],
       workRoot: join(root, "runtime"),
@@ -233,6 +297,12 @@ describe("desktop config CLI", () => {
     });
     writeConfig(blockedPatchPath, {
       pollIntervalMs: 120_000
+    });
+    writeConfig(sensitivePathPatchPath, {
+      "NDL_SECRETLIKEPATH12345": "not-a-secret-value"
+    });
+    writeConfig(flatDottedPatchPath, {
+      "zcode.cliPath": "/new/bin/neondiff"
     });
 
     expect(await runConfig(["config", "patch", "--config", configPath, "--input", secretPatchPath])).toMatchObject({
@@ -249,6 +319,18 @@ describe("desktop config CLI", () => {
       ok: false,
       error: expect.stringContaining("non-desktop-safe path")
     });
+    const sensitivePathRejected = await runConfig(["config", "patch", "--config", configPath, "--input", sensitivePathPatchPath]);
+    expect(sensitivePathRejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("secret-like text")
+    });
+    expect(JSON.stringify(sensitivePathRejected)).not.toContain("NDL_SECRETLIKEPATH12345");
+    const flatDottedRejected = await runConfig(["config", "patch", "--config", configPath, "--input", flatDottedPatchPath]);
+    expect(flatDottedRejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("unsupported dotted key segment")
+    });
+    expect(JSON.stringify(flatDottedRejected)).not.toContain("/new/bin/neondiff");
   });
 
   it("keeps GitHub API base URL out of desktop-safe patches", async () => {
@@ -297,6 +379,109 @@ describe("desktop config CLI", () => {
     expect(output).toMatchObject({
       ok: false,
       error: expect.stringContaining("config.zcode.cliPath must be a non-empty string")
+    });
+  });
+
+  it("rejects invalid live patches before creating temp config files", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      zcode: {
+        cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+        appConfigPath: "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+        model: "GLM-5.2"
+      }
+    });
+    writeConfig(patchPath, {
+      zcode: {
+        cliPath: "",
+        appConfigPath: "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+        model: "GLM-5.2"
+      }
+    });
+
+    const output = await runConfig([
+      "config",
+      "patch",
+      "--config",
+      configPath,
+      "--input",
+      patchPath,
+      "--dry-run",
+      "false",
+      "--confirm",
+      "true"
+    ]);
+
+    expect(output).toMatchObject({
+      ok: false,
+      wrote: false,
+      error: expect.stringContaining("config.zcode.cliPath must be a non-empty string")
+    });
+    expect(readdirSync(root).filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
+  it("removes temp config files when an atomic live write fails", () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      desktop: {
+        updateChannel: "dev"
+      }
+    });
+    const before = readFileSync(configPath, "utf8");
+    writeConfig(patchPath, {
+      desktop: {
+        updateChannel: "beta"
+      }
+    });
+
+    const output = patchConfigForDesktop({
+      configPath,
+      inputPath: patchPath,
+      dryRun: false,
+      confirm: true,
+      fileOps: {
+        renameSync: () => {
+          throw new Error("forced rename failure");
+        }
+      }
+    });
+
+    expect(output).toMatchObject({
+      ok: false,
+      wrote: false,
+      error: expect.stringContaining("failed to write config atomically")
+    });
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+    expect(readdirSync(root).filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
+  it("rejects empty object patches with a clear message", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+    writeConfig(patchPath, {});
+
+    await expect(runConfig(["config", "patch", "--config", configPath, "--input", patchPath])).resolves.toMatchObject({
+      ok: false,
+      error: "patch input did not contain any leaf settings"
     });
   });
 
