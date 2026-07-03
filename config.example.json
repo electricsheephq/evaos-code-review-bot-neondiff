@@ -40,6 +40,20 @@
       }
     }
   },
+  "license": {
+    "_enabledComment": "Enable this for public/private license enforcement. Public repos may remain free; private repos fail closed without active entitlement.",
+    "enabled": false,
+    "apiBaseUrl": "https://api.neondiff.com",
+    "cachePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/license/entitlement-cache.json",
+    "storageBackend": "keychain",
+    "keychainService": "com.electricsheephq.neondiff.license",
+    "keychainAccount": "default",
+    "requestTimeoutMs": 10000,
+    "offlineGraceMs": 86400000,
+    "publicReposFree": true,
+    "privateReposRequireEntitlement": true,
+    "updateEntitlementRequiresLicense": true
+  },
   "desktop": {
     "openAICompatibleEndpoint": "http://localhost:8000/v1",
     "updateChannel": "dev"

@@ -73,6 +73,12 @@ export interface PullRequestSummary {
   labels?: Array<{ name: string }>;
 }
 
+export interface RepositorySummary {
+  full_name: string;
+  private: boolean;
+  visibility?: "public" | "private" | "internal";
+}
+
 export interface ReviewComment {
   path: string;
   line: number;

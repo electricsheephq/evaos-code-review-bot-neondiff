@@ -3,6 +3,7 @@ import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
+import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -52,6 +53,7 @@ export interface BotConfig {
   skillPacks?: SkillPackContextConfig;
   enrichment?: EnrichmentConfig;
   issueEnrichment?: IssueEnrichmentConfig;
+  license?: LicenseConfig;
   desktop?: DesktopConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
@@ -269,6 +271,20 @@ const DEFAULT_CONFIG: BotConfig = {
     maxSuggestions: 8
   },
   issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG,
+  license: {
+    enabled: false,
+    apiBaseUrl: undefined,
+    cachePath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/license/entitlement-cache.json",
+    storageBackend: "keychain",
+    keyPath: undefined,
+    keychainService: "com.electricsheephq.neondiff.license",
+    keychainAccount: "default",
+    requestTimeoutMs: 10_000,
+    offlineGraceMs: 24 * 60 * 60_000,
+    publicReposFree: true,
+    privateReposRequireEntitlement: true,
+    updateEntitlementRequiresLicense: true
+  },
   desktop: {
     openAICompatibleEndpoint: "http://localhost:8000/v1",
     updateChannel: "dev"
@@ -374,6 +390,9 @@ function validateConfig(config: BotConfig): void {
   const issueEnrichment = config.issueEnrichment ?? DEFAULT_CONFIG.issueEnrichment!;
   config.issueEnrichment = issueEnrichment;
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
+  const license = config.license ?? DEFAULT_CONFIG.license!;
+  config.license = license;
+  validateLicenseConfig(license, "config.license");
   const desktop = config.desktop ?? DEFAULT_CONFIG.desktop!;
   config.desktop = desktop;
   validateDesktopConfig(desktop, "config.desktop");
@@ -565,6 +584,37 @@ function validateIssueEnrichmentRepoOverride(value: unknown, label: string): voi
   ) {
     throw new Error(`${label}.maxCommentsPerCycle must be <= ${label}.maxIssuesPerCycle`);
   }
+}
+
+function validateLicenseConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.apiBaseUrl, `${label}.apiBaseUrl`);
+  validateOptionalString(value.cachePath, `${label}.cachePath`);
+  if (typeof value.cachePath !== "string" || value.cachePath.trim().length === 0) {
+    throw new Error(`${label}.cachePath must be a non-empty string`);
+  }
+  validateOptionalString(value.storageBackend, `${label}.storageBackend`);
+  if (value.storageBackend !== "keychain" && value.storageBackend !== "file") {
+    throw new Error(`${label}.storageBackend must be keychain or file`);
+  }
+  validateOptionalString(value.keyPath, `${label}.keyPath`);
+  if (value.storageBackend === "file" && (typeof value.keyPath !== "string" || value.keyPath.trim().length === 0)) {
+    throw new Error(`${label}.keyPath is required when ${label}.storageBackend=file`);
+  }
+  validateOptionalString(value.keychainService, `${label}.keychainService`);
+  validateOptionalString(value.keychainAccount, `${label}.keychainAccount`);
+  if (typeof value.keychainService !== "string" || value.keychainService.trim().length === 0) {
+    throw new Error(`${label}.keychainService must be a non-empty string`);
+  }
+  if (typeof value.keychainAccount !== "string" || value.keychainAccount.trim().length === 0) {
+    throw new Error(`${label}.keychainAccount must be a non-empty string`);
+  }
+  validatePositiveInteger(value.requestTimeoutMs, `${label}.requestTimeoutMs`);
+  validateNonNegativeInteger(value.offlineGraceMs, `${label}.offlineGraceMs`);
+  validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
+  validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
+  validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);
 }
 
 function validateDesktopConfig(value: unknown, label: string): void {

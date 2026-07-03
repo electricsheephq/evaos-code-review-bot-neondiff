@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import { redactSecrets } from "./secrets.js";
-import type { PullFilePatch, PullRequestSummary, ReviewComment, ReviewEvent } from "./types.js";
+import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 
 export interface GitHubApiOptions {
   appId?: string;
@@ -49,6 +49,12 @@ export class GitHubApi {
 
   async getPull(repo: string, pullNumber: number): Promise<PullRequestSummary> {
     return this.request<PullRequestSummary>(`/repos/${repo}/pulls/${pullNumber}`, {
+      token: await this.getReadToken(repo)
+    });
+  }
+
+  async getRepo(repo: string): Promise<RepositorySummary> {
+    return this.request<RepositorySummary>(`/repos/${repo}`, {
       token: await this.getReadToken(repo)
     });
   }

@@ -73,6 +73,38 @@ If you are reviewing private or commercial repos, set your license key through
 the configured local secret path or environment used by your operator wrapper.
 Do not paste license keys into tracked config.
 
+The public license path is explicit and local-first. By default, license
+enforcement is disabled in the example config so internal beta workers do not
+change behavior accidentally. For a public/private repo install, enable
+`license.enabled`, keep `license.storageBackend` as `keychain` on macOS, and
+activate the key without writing it to tracked config:
+
+```bash
+NEONDIFF_LICENSE_KEY="..." \
+  neondiff license activate \
+  --config config.local.json \
+  --license-key-env NEONDIFF_LICENSE_KEY \
+  --json
+```
+
+Check entitlement cache state:
+
+```bash
+neondiff license status --config config.local.json --json
+```
+
+Remove the local key and cache:
+
+```bash
+neondiff license deactivate --config config.local.json --json
+```
+
+When `license.enabled` and `license.privateReposRequireEntitlement` are true,
+private repo review fails closed before worktree prep, model/provider calls, or
+GitHub review posting unless the cached entitlement is active and covers private
+repos. Public repo review may run without a license when `license.publicReposFree`
+is true.
+
 ## 4. Check Readiness
 
 Run doctor with the config you intend to use:

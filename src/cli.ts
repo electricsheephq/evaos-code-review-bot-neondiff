@@ -27,6 +27,7 @@ import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan } from "./issue-enrichment.js";
+import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
 import { buildReviewBudgetStatus } from "./review-budget.js";
 import {
   buildOperatorDashboard,
@@ -112,6 +113,43 @@ async function main(): Promise<void> {
       return;
     }
     throw new Error("config subcommand must be one of: inspect, patch");
+  }
+
+  if (command === "license") {
+    const action = args._[1];
+    const config = loadConfig(args.config);
+    const licenseConfig = licenseConfigFromArgs(config.license!, args);
+    if (action === "activate") {
+      const licenseKey = args["license-key"] ?? (args["license-key-env"] ? process.env[parseSingleArg(args["license-key-env"], "--license-key-env")] : undefined);
+      if (!licenseKey) throw new Error("license activate requires --license-key or --license-key-env");
+      const result = await activateLicense({
+        config: licenseConfig,
+        licenseKey: parseSingleArg(licenseKey, "--license-key"),
+        ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
+      });
+      console.log(stringifyRedactedJson({ command: "license activate", ...result }));
+      if (!result.ok) process.exitCode = 1;
+      return;
+    }
+    if (action === "status") {
+      const result = await getLicenseStatus({
+        config: licenseConfig,
+        refresh: args.refresh === "true",
+        ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
+      });
+      console.log(stringifyRedactedJson({ command: "license status", ...result }));
+      if (!result.ok) process.exitCode = 1;
+      return;
+    }
+    if (action === "deactivate") {
+      const result = await deactivateLicense({
+        config: licenseConfig,
+        notifyApi: args["notify-api"] === "true"
+      });
+      console.log(stringifyRedactedJson({ command: "license deactivate", ...result }));
+      return;
+    }
+    throw new Error("license subcommand must be one of: activate, status, deactivate");
   }
 
   if (command === "doctor") {
@@ -2074,6 +2112,9 @@ function buildHelp(command?: string) {
         "daemon start",
         "daemon stop",
         "daemon status",
+        "license activate",
+        "license status",
+        "license deactivate",
         "status",
         "review-pr"
       ],
@@ -2120,6 +2161,9 @@ function buildHelp(command?: string) {
       "neondiff config inspect --config config.local.json",
       "neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true",
       "desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}",
+      "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
+      "neondiff license status --config config.local.json --json",
+      "neondiff license deactivate --config config.local.json --json",
       "neondiff doctor --config config.local.json --json",
       "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff",
@@ -2179,6 +2223,21 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
   return parsed;
+}
+
+function licenseConfigFromArgs(base: LicenseConfig, args: ParsedArgs): LicenseConfig {
+  return {
+    ...base,
+    ...(args["license-api-url"] ? { apiBaseUrl: parseSingleArg(args["license-api-url"], "--license-api-url") } : {}),
+    ...(args["license-cache-path"] ? { cachePath: parseSingleArg(args["license-cache-path"], "--license-cache-path") } : {}),
+    ...(args["license-key-path"] ? { keyPath: parseSingleArg(args["license-key-path"], "--license-key-path") } : {}),
+    ...(args["license-storage"] ? { storageBackend: parseLicenseStorageBackend(parseSingleArg(args["license-storage"], "--license-storage")) } : {})
+  };
+}
+
+function parseLicenseStorageBackend(value: string): "keychain" | "file" {
+  if (value === "keychain" || value === "file") return value;
+  throw new Error("--license-storage must be keychain or file");
 }
 
 function setParsedArg(parsed: ParsedArgs, key: string, value: string): void {

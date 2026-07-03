@@ -30,6 +30,7 @@ import {
 } from "./finishing-touches.js";
 import { GitHubApi } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
+import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
   buildPullFileFilterImpact,
   filterPullFilesForProfile,
@@ -1258,6 +1259,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     });
     return "skipped_provider_cooldown";
   }
+  const licenseGate = await buildLicenseGateForPull({ config, github, repo });
+  if (!licenseGate.ok) {
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    mkdirSync(evidenceDir, { recursive: true });
+    writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
+    state.recordReviewReadiness({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      state: "blocked_on_proof",
+      reason: licenseGate.reason
+    });
+    return "skipped_policy";
+  }
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   if (!budget.tryStart()) return "skipped_capacity";
   let lease: ReviewRunLease | undefined;
@@ -1475,6 +1490,41 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (lease) state.releaseReviewRunLease(lease.leaseId);
     budget.finish();
   }
+}
+
+async function buildLicenseGateForPull(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  repo: string;
+}): Promise<LicenseReviewGateResult> {
+  const license = input.config.license;
+  if (!license?.enabled) {
+    return {
+      ok: true,
+      repo: input.repo,
+      visibility: "unknown",
+      status: "active",
+      reason: "license enforcement disabled"
+    };
+  }
+  let visibility: "public" | "private" | "unknown" = "unknown";
+  try {
+    const repoMetadata = await input.github.getRepo(input.repo);
+    visibility = repoMetadata.private || repoMetadata.visibility === "private" ? "private" : "public";
+  } catch (error) {
+    return {
+      ok: false,
+      repo: input.repo,
+      visibility,
+      status: "network",
+      reason: `could not determine repo visibility for license gate: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+  return evaluateLicenseReviewGate({
+    config: license,
+    repo: input.repo,
+    visibility
+  });
 }
 
 function recordActivationBaselineExistingHead(state: ReviewStateStore, repo: string, pull: PullRequestSummary): void {
