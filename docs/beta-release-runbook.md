@@ -140,8 +140,14 @@ npx tsx src/cli.ts retire-failed \
   --repo owner/repo \
   --pr 123 \
   --head-sha <failed-head-sha> \
-  --reason closed_or_stale_after_coverage_audit
+  --reason closed_or_stale_after_coverage_audit \
+  --dry-run true
 ```
+
+Inspect the dry-run output first. To perform the retirement against the current
+SQLite state, rerun the same command with `--dry-run false`; the live command
+re-checks state and may refuse or retire a different queue-job set if the row
+changed after the preview.
 
 Do not retire an active failed current head. Use `retry-failed` or disable the
 repo through the tracked allowlist/policy lane when the provider is repeatedly

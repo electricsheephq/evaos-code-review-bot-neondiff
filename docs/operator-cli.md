@@ -363,11 +363,17 @@ Mutating commands remain explicit:
 
 - `retry-provider-cooldowns --dry-run false`
 - `retry-failed --dry-run false`
-- `retire-failed`
+- `retire-failed --dry-run false`
 - `build-memory-packet --record-build true`
 - `run-once --dry-run false`
 - `daemon --dry-run false`
 - `daemon start|stop --dry-run false --confirm true`
+
+`retire-failed` defaults to dry-run and prints the normalized retirement reason
+plus any failed queue jobs that a live run would reconcile. If the processed row
+is already a retired failed head, dry-run returns `alreadyRetired`; rerunning
+with `--dry-run false` is idempotent for the processed row and can still retire
+matching failed queue jobs.
 
 `build-skill-pack` and `build-enrichment-comment` are dry-run/evidence builders.
 They remain read-only. Live `run-once` and `daemon` can consume skill-pack

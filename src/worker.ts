@@ -39,6 +39,11 @@ import {
 import { applyDeterministicReviewGate } from "./review-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
+import {
+  postReviewStatusComment,
+  type ReviewStatusCommentGithub,
+  type ReviewStatusCommentState
+} from "./review-status-comment.js";
 import { redactSecrets } from "./secrets.js";
 import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skill-packs.js";
 import {
@@ -455,11 +460,48 @@ export async function retryFailedHeadWithDeps(input: {
       status: "skipped_closed",
       dryRun: options.dryRun
     });
+    await syncRetryReviewStatusComment({
+      config,
+      github,
+      state,
+      repo: options.repo,
+      pull,
+      headSha: options.headSha,
+      status: "skipped_closed",
+      dryRun: options.dryRun
+    });
     return {
       repo: options.repo,
       pullNumber: options.pullNumber,
       headSha: options.headSha,
       status: "skipped_closed"
+    };
+  }
+  const processed = state.getProcessedReview(options.repo, options.pullNumber, options.headSha);
+  if (processed && processed.status !== "failed" && !isProviderCooldownProcessedReview(processed)) {
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_processed",
+      dryRun: options.dryRun
+    });
+    await syncRetryReviewStatusComment({
+      config,
+      github,
+      state,
+      repo: options.repo,
+      pull,
+      headSha: options.headSha,
+      status: "skipped_processed",
+      dryRun: options.dryRun
+    });
+    return {
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_processed"
     };
   }
   if (pull.head.sha !== options.headSha) {
@@ -478,6 +520,16 @@ export async function retryFailedHeadWithDeps(input: {
       state,
       repo: options.repo,
       pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_stale_head",
+      dryRun: options.dryRun
+    });
+    await syncRetryReviewStatusComment({
+      config,
+      github,
+      state,
+      repo: options.repo,
+      pull,
       headSha: options.headSha,
       status: "skipped_stale_head",
       dryRun: options.dryRun
@@ -525,6 +577,16 @@ export async function retryFailedHeadWithDeps(input: {
       status: retryStatus,
       dryRun: options.dryRun
     });
+    await syncRetryReviewStatusComment({
+      config,
+      github,
+      state,
+      repo: options.repo,
+      pull,
+      headSha: options.headSha,
+      status: retryStatus,
+      dryRun: options.dryRun
+    });
     restoreFailedRetryRowIfNeeded({
       state,
       retryTarget,
@@ -552,6 +614,16 @@ export async function retryFailedHeadWithDeps(input: {
         status: "skipped_provider_cooldown",
         dryRun: options.dryRun
       });
+      await syncRetryReviewStatusComment({
+        config,
+        github,
+        state,
+        repo: options.repo,
+        pull,
+        headSha: options.headSha,
+        status: "skipped_provider_cooldown",
+        dryRun: options.dryRun
+      });
       return {
         repo: options.repo,
         pullNumber: options.pullNumber,
@@ -574,12 +646,96 @@ export async function retryFailedHeadWithDeps(input: {
       status: "failed",
       dryRun: options.dryRun
     });
+    await syncRetryReviewStatusComment({
+      config,
+      github,
+      state,
+      repo: options.repo,
+      pull,
+      headSha: options.headSha,
+      status: "failed",
+      dryRun: options.dryRun
+    });
     return {
       repo: options.repo,
       pullNumber: options.pullNumber,
       headSha: options.headSha,
       status: "failed"
     };
+  }
+}
+
+async function syncRetryReviewStatusComment(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  headSha: string;
+  status: RetryFailedHeadResult["status"];
+  dryRun: boolean;
+}): Promise<void> {
+  if (!isReviewStatusCommentGithub(input.github)) return;
+  const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.headSha);
+  const state = retryStatusCommentState(input.status, processed?.status, processed?.error);
+  if (!state) return;
+  await postReviewStatusComment({
+    enabled: input.config.reviewStatusComment?.enabled ?? false,
+    dryRun: input.dryRun,
+    github: input.github,
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.headSha,
+    state,
+    pullTitle: input.pull.title,
+    pullUrl: input.pull.html_url,
+    ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+    ...(state === "failed" ? { details: "Review failed; see bot evidence for operator-only details." } : {})
+  });
+}
+
+function isReviewStatusCommentGithub(github: GitHubApi): github is GitHubApi & ReviewStatusCommentGithub {
+  const candidate = github as Partial<ReviewStatusCommentGithub>;
+  return typeof candidate.canPostAsApp === "function" && typeof candidate.upsertIssueComment === "function";
+}
+
+function retryStatusCommentState(
+  status: RetryFailedHeadResult["status"],
+  processedStatus?: ProcessedStatus,
+  processedError?: string
+): ReviewStatusCommentState | undefined {
+  switch (status) {
+    case "reviewed":
+    case "reviewed_command":
+      return "completed";
+    case "dry_run":
+      return undefined;
+    case "skipped_processed":
+      if (processedStatus === "posted") return "completed";
+      if (processedStatus === "skipped" && processedError && parseProviderCooldownError(processedError)) {
+        return "provider_deferred";
+      }
+      if (processedStatus === "skipped") return "skipped";
+      return undefined;
+    case "skipped_provider_cooldown":
+      return "provider_deferred";
+    case "skipped_stale_head":
+      return "stale_head";
+    case "skipped_closed":
+      return "closed_or_merged_before_review";
+    case "failed":
+      return "failed";
+    case "skipped_capacity":
+      return "provider_deferred";
+    case "skipped_draft":
+    case "skipped_canary":
+    case "skipped_policy":
+    case "skipped_command_stop":
+    case "skipped_command_explain":
+    case "skipped_finishing_touch_draft":
+      return undefined;
+    default:
+      return assertNever(status);
   }
 }
 
@@ -591,11 +747,13 @@ function updateRetryQueueJobsAfterRetry(input: {
   status: RetryFailedHeadResult["status"];
   dryRun: boolean;
 }): void {
+  const retryStates: ReviewQueueJobState[] = ["queued", "leased", "running", "provider_deferred"];
+  if (!input.dryRun) retryStates.push("failed");
   const activeJobs = input.state
     .listReviewQueueJobsForPull({
       repo: input.repo,
       pullNumber: input.pullNumber,
-      states: ["queued", "leased", "running", "provider_deferred"]
+      states: retryStates
     })
     .filter((job) => job.headSha === input.headSha);
   const targetJobs = isRetryCommandRecordedStatus(input.status)
