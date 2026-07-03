@@ -106,45 +106,50 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
 private func resolveExecutablePath(_ executablePath: String, workingDirectory: URL?) -> URL? {
     let fileManager = FileManager.default
     if executablePath.contains("/") {
-        return fileManager.isExecutableFile(atPath: executablePath) ? URL(fileURLWithPath: executablePath) : nil
+        return isExecutableFilePath(executablePath, fileManager: fileManager) ? URL(fileURLWithPath: executablePath) : nil
     }
 
-    let home = fileManager.homeDirectoryForCurrentUser.path
-    let candidates = [
-        "/opt/homebrew/bin/\(executablePath)",
-        "/usr/local/bin/\(executablePath)",
-        "\(home)/.local/bin/\(executablePath)",
-        "\(home)/.bun/bin/\(executablePath)",
-        "\(home)/.npm-global/bin/\(executablePath)",
-        workingDirectory?.appendingPathComponent("node_modules/.bin/\(executablePath)").path
-    ].compactMap { $0 }
+    var candidates = guiSafeUserBinDirectories(fileManager: fileManager).map { "\($0)/\(executablePath)" }
+    if let localBin = workingDirectory?.appendingPathComponent("node_modules/.bin/\(executablePath)").path {
+        candidates.append(localBin)
+    }
 
-    return candidates.first(where: fileManager.isExecutableFile).map(URL.init(fileURLWithPath:))
+    return candidates.first { isExecutableFilePath($0, fileManager: fileManager) }.map(URL.init(fileURLWithPath:))
 }
 
-private func guiSafeSearchPath() -> String {
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
+private func isExecutableFilePath(_ path: String, fileManager: FileManager) -> Bool {
+    var isDirectory: ObjCBool = false
+    guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+        return false
+    }
+    return fileManager.isExecutableFile(atPath: path)
+}
+
+private func guiSafeUserBinDirectories(fileManager: FileManager = .default) -> [String] {
+    let home = fileManager.homeDirectoryForCurrentUser.path
     return [
         "/opt/homebrew/bin",
-        "/opt/homebrew/sbin",
         "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-        "/usr/sbin",
-        "/sbin",
         "\(home)/.local/bin",
         "\(home)/.bun/bin",
         "\(home)/.npm-global/bin"
-    ].joined(separator: ":")
+    ]
+}
+
+private func guiSafeSearchPath() -> String {
+    (
+        guiSafeUserBinDirectories()
+            + ["/opt/homebrew/sbin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    ).joined(separator: ":")
 }
 
 private func guiSafeEnvironment() -> [String: String] {
-    var environment = ProcessInfo.processInfo.environment
-    let safePath = guiSafeSearchPath()
-    if let existingPath = environment["PATH"], !existingPath.isEmpty {
-        environment["PATH"] = "\(safePath):\(existingPath)"
-    } else {
-        environment["PATH"] = safePath
+    let inherited = ProcessInfo.processInfo.environment
+    var environment = ["PATH": guiSafeSearchPath()]
+    for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"] {
+        if let value = inherited[key], !value.isEmpty {
+            environment[key] = value
+        }
     }
     return environment
 }
