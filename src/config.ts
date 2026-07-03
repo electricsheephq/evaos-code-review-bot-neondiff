@@ -393,7 +393,7 @@ function validateConfig(config: BotConfig): void {
   const issueEnrichment = config.issueEnrichment ?? DEFAULT_CONFIG.issueEnrichment!;
   config.issueEnrichment = issueEnrichment;
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
-  const license = config.license ?? DEFAULT_CONFIG.license!;
+  const license = { ...DEFAULT_CONFIG.license!, ...(config.license ?? {}) };
   license.cachePath = license.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
   if (license.storageBackend === "file" && !license.keyPath) {
     license.keyPath = join(dirname(config.statePath), "license", "license-key.txt");
@@ -643,6 +643,10 @@ function validateLicenseConfig(value: unknown, label: string): void {
   validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
   validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
   validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);
+}
+
+export function validateLicenseConfigOverride(value: LicenseConfig, label = "config.license"): void {
+  validateLicenseConfig(value, label);
 }
 
 function validateLicenseApiBaseUrl(value: unknown, label: string): void {

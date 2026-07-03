@@ -24,6 +24,7 @@ export type ReviewQueueJobState =
   | "leased"
   | "running"
   | "provider_deferred"
+  | "blocked_on_proof"
   | "stale_retired"
   | "closed_retired"
   | "command_recorded"
@@ -1639,10 +1640,11 @@ export class ReviewStateStore {
     const nowIso = (input.now ?? new Date()).toISOString();
     const terminal = isTerminalQueueState(input.state);
     const clearLease = input.clearLease ?? (
-      terminal ||
-      input.state === "queued" ||
-      input.state === "provider_deferred"
-    );
+	      terminal ||
+	      input.state === "queued" ||
+	      input.state === "provider_deferred" ||
+	      input.state === "blocked_on_proof"
+	    );
     this.db
       .prepare(
         `update review_queue_jobs

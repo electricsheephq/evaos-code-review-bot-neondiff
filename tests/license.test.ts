@@ -110,6 +110,17 @@ describe("license activation and entitlement cache", () => {
     });
 
     expect(config.license?.cachePath).toBe(join(root, "state", "license", "entitlement-cache.json"));
+    const otherRoot = mkRoot(roots);
+    const otherConfig = loadConfigFromObject({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(otherRoot, "runtime"),
+      statePath: join(otherRoot, "state", "reviews.sqlite"),
+      evidenceDir: join(otherRoot, "evidence"),
+      license: {
+        enabled: true
+      }
+    });
+    expect(otherConfig.license?.cachePath).toBe(join(otherRoot, "state", "license", "entitlement-cache.json"));
 
     expect(() => loadConfigFromObject({
       pilotRepos: ["owner/repo"],
@@ -322,6 +333,21 @@ describe("license activation and entitlement cache", () => {
       ok: true,
       reason: "active entitlement covers private repo review"
     });
+
+    const paidPublicRoot = mkRoot(roots);
+    const paidPublicConfig = licenseConfig(paidPublicRoot, undefined);
+    paidPublicConfig.publicReposFree = false;
+    const paidPublic = await evaluateLicenseReviewGate({
+      config: paidPublicConfig,
+      repo: "owner/public",
+      visibility: "public",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+    expect(paidPublic).toMatchObject({
+      ok: false,
+      status: "missing",
+      reason: expect.stringContaining("public repo review requires active entitlement")
+    });
   });
 
   it("rejects malformed API success responses and reports missing env vars clearly", async () => {
@@ -376,6 +402,22 @@ describe("license activation and entitlement cache", () => {
       env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
     })).rejects.toMatchObject({
       stderr: expect.stringContaining("argv can expose secrets")
+    });
+
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      "src/cli.ts",
+      "license",
+      "status",
+      "--config",
+      configPath,
+      "--license-cache-path",
+      join(process.cwd(), "license-cache.json")
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stderr: expect.stringContaining("config.license.cachePath must be outside protected checkout root")
     });
 
     await expect(execFileAsync(process.execPath, [
@@ -529,6 +571,30 @@ describe("license activation and entitlement cache", () => {
       });
     }
 
+    expect(getRepoCalls).toBe(1);
+  });
+
+  it("does not retry repo metadata lookup inside the license gate fallback", async () => {
+    const root = mkRoot(roots);
+    const config = minimalConfig(root);
+    let getRepoCalls = 0;
+    const github = new GitHubApi({});
+    github.getRepo = async () => {
+      getRepoCalls += 1;
+      throw new Error("secondary rate limit");
+    };
+
+    await expect(buildLicenseGateForPull({
+      config,
+      github,
+      repo: "owner/rate-limited",
+      pull: pullSummary(12, "head-rate-limited"),
+      dryRun: false
+    })).resolves.toMatchObject({
+      ok: false,
+      status: "network",
+      reason: expect.stringContaining("secondary rate limit")
+    });
     expect(getRepoCalls).toBe(1);
   });
 });

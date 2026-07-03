@@ -194,7 +194,7 @@ export async function evaluateLicenseReviewGate(input: {
       reason: "repo visibility is unknown; private repo entitlement gate fails closed"
     };
   }
-  if (input.visibility !== "private" || !input.config.privateReposRequireEntitlement) {
+  if (!repoVisibilityRequiresEntitlement(input.visibility, input.config)) {
     return { ok: true, repo: input.repo, visibility: input.visibility, status: "active", reason: "repo visibility does not require entitlement" };
   }
 
@@ -211,7 +211,7 @@ export async function evaluateLicenseReviewGate(input: {
       repo: input.repo,
       visibility: input.visibility,
       status: status.status,
-      reason: `private repo review requires active entitlement: ${status.detail}`
+      reason: `${input.visibility} repo review requires active entitlement: ${status.detail}`
     };
   }
   if (!entitlementUsableDuringOutage(status.entitlement, input.now ?? new Date(), input.config.offlineGraceMs)) {
@@ -221,17 +221,17 @@ export async function evaluateLicenseReviewGate(input: {
       visibility: input.visibility,
       status: "expired",
       entitlement: status.entitlement,
-      reason: `private repo review requires a fresh entitlement cache within offlineGraceMs=${input.config.offlineGraceMs}`
+      reason: `${input.visibility} repo review requires a fresh entitlement cache within offlineGraceMs=${input.config.offlineGraceMs}`
     };
   }
-  if (!entitlementCoversPrivateRepo(status.entitlement)) {
+  if (!entitlementCoversRepoVisibility(status.entitlement, input.visibility)) {
     return {
       ok: false,
       repo: input.repo,
       visibility: input.visibility,
       status: status.status,
       entitlement: status.entitlement,
-      reason: `entitlement scope ${status.entitlement.repoVisibilityScope} does not cover private repos`
+      reason: `entitlement scope ${status.entitlement.repoVisibilityScope} does not cover ${input.visibility} repos`
     };
   }
   return {
@@ -240,12 +240,21 @@ export async function evaluateLicenseReviewGate(input: {
     visibility: input.visibility,
     status: "active",
     entitlement: status.entitlement,
-    reason: "active entitlement covers private repo review"
+    reason: `active entitlement covers ${input.visibility} repo review`
   };
 }
 
-function entitlementCoversPrivateRepo(entitlement: LicenseEntitlement): boolean {
-  return entitlement.repoVisibilityScope === "private" || entitlement.repoVisibilityScope === "all";
+function repoVisibilityRequiresEntitlement(visibility: "public" | "private" | "unknown", config: LicenseConfig): boolean {
+  if (visibility === "private") return config.privateReposRequireEntitlement;
+  if (visibility === "public") return !config.publicReposFree;
+  return config.privateReposRequireEntitlement;
+}
+
+function entitlementCoversRepoVisibility(entitlement: LicenseEntitlement, visibility: "public" | "private" | "unknown"): boolean {
+  if (entitlement.repoVisibilityScope === "all") return true;
+  if (visibility === "public") return entitlement.repoVisibilityScope === "public" || entitlement.repoVisibilityScope === "private";
+  if (visibility === "private") return entitlement.repoVisibilityScope === "private";
+  return false;
 }
 
 function statusFromCache(entitlement: LicenseEntitlement | undefined, now: Date): LicenseStatusResult {

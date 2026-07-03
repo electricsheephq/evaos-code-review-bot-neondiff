@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./config.js";
+import { loadConfig, validateLicenseConfigOverride } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
 import { runDaemonCycle } from "./daemon.js";
@@ -2225,13 +2225,15 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function licenseConfigFromArgs(base: LicenseConfig, args: ParsedArgs): LicenseConfig {
-  return {
+  const config = {
     ...base,
     ...(args["license-api-url"] ? { apiBaseUrl: parseSingleArg(args["license-api-url"], "--license-api-url") } : {}),
     ...(args["license-cache-path"] ? { cachePath: parseSingleArg(args["license-cache-path"], "--license-cache-path") } : {}),
     ...(args["license-key-path"] ? { keyPath: parseSingleArg(args["license-key-path"], "--license-key-path") } : {}),
     ...(args["license-storage"] ? { storageBackend: parseLicenseStorageBackend(parseSingleArg(args["license-storage"], "--license-storage")) } : {})
   };
+  validateLicenseConfigOverride(config, "config.license");
+  return config;
 }
 
 function resolveLicenseKeyArg(args: ParsedArgs): string {

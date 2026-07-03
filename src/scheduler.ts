@@ -1522,7 +1522,7 @@ function updateQueueJobAfterReviewStatus(input: {
     case "skipped_license_gate":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: "failed",
+        state: input.status === "skipped_license_gate" ? "blocked_on_proof" : "failed",
         lastError: input.status === "skipped_license_gate"
           ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)?.reason ?? "license_entitlement_required"
           : `unexpected_scheduler_review_status=${input.status}`

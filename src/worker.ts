@@ -1284,6 +1284,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         return "skipped_stale_head";
       }
     }
+    lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
+    if (!lease) return "skipped_capacity";
     const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
     if (!licenseGate.ok) {
       const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
@@ -1298,8 +1300,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_license_gate";
     }
-    lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
-    if (!lease) return "skipped_capacity";
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (commandReviewRequested) {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
@@ -1574,7 +1574,7 @@ async function getRepoVisibilityForLicenseGate(github: GitHubApi, repo: string):
 
   const repoMetadata = await getRepoMetadataForLicenseGate(github, repo);
   const visibility = visibilityFromRepositorySummary(repoMetadata);
-  if (visibility !== "unknown") {
+  if (visibility === "private") {
     licenseGateRepoVisibilityCache.set(repo, {
       visibility,
       expiresAtMs: now + LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS
@@ -1584,18 +1584,7 @@ async function getRepoVisibilityForLicenseGate(github: GitHubApi, repo: string):
 }
 
 async function getRepoMetadataForLicenseGate(github: GitHubApi, repo: string): ReturnType<GitHubApi["getRepo"]> {
-  try {
-    return await github.getRepo(repo);
-  } catch (firstError) {
-    try {
-      return await github.getRepo(repo);
-    } catch (secondError) {
-      throw new Error(
-        `repo metadata lookup failed after retry: first=${firstError instanceof Error ? firstError.message : String(firstError)}; ` +
-          `second=${secondError instanceof Error ? secondError.message : String(secondError)}`
-      );
-    }
-  }
+  return github.getRepo(repo);
 }
 
 function recordActivationBaselineExistingHead(state: ReviewStateStore, repo: string, pull: PullRequestSummary): void {

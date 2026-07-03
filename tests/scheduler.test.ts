@@ -1354,7 +1354,7 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.skippedPolicy).toBe(1);
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
-    expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(1);
+    expect(state.listReviewQueueJobs({ state: "blocked_on_proof" })).toHaveLength(1);
     expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
       state: "blocked_on_proof",
       reason: "license_entitlement_required"
