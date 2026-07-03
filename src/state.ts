@@ -982,8 +982,7 @@ export class ReviewStateStore {
     }
 
     const reason = normalizeRetirementReason(input.reason);
-    const previousError = existing.error ? `; previous_error=${redactSecrets(existing.error)}` : "";
-    const retiredError = `retired_failed_head:${reason}${previousError}`;
+    const retiredError = buildRetiredFailedHeadError({ reason, previousError: existing.error });
     this.recordProcessed({
       repo: input.repo,
       pullNumber: input.pullNumber,
@@ -2505,7 +2504,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function normalizeRetirementReason(reason: string): string {
+export function normalizeRetirementReason(reason: string): string {
   const normalized = reason
     .trim()
     .toLowerCase()
@@ -2513,6 +2512,12 @@ function normalizeRetirementReason(reason: string): string {
     .replaceAll(/^_+|_+$/g, "")
     .slice(0, 80);
   return normalized || "operator_acknowledged";
+}
+
+export function buildRetiredFailedHeadError(input: { reason: string; previousError?: string }): string {
+  const reason = normalizeRetirementReason(input.reason);
+  const previousError = input.previousError ? `; previous_error=${redactSecrets(input.previousError)}` : "";
+  return `retired_failed_head:${reason}${previousError}`;
 }
 
 function validateReviewerSessionInput(ttlMs: number, headCountLimit: number, workerPid?: number): void {

@@ -122,6 +122,410 @@ describe("public NeonDiff CLI surface", () => {
     expect(readFileSync(output.backupPath, "utf8")).toBe("{}\n");
   });
 
+  it("does not mutate failed review rows when retire-failed runs in dry-run mode", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retire-failed-dry-run-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 176;
+    const headSha = "dry-run-failed-head";
+    const previousError = "ZCode failed before completion: spawnSync node ETIMEDOUT";
+    let store = new ReviewStateStore(statePath);
+
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "failed",
+      error: previousError
+    });
+    const queueJob = store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base-head",
+      now: new Date("2026-07-03T00:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: previousError,
+      now: new Date("2026-07-03T00:01:00.000Z")
+    });
+    const beforeProcessed = store.getProcessedReview(repo, pullNumber, headSha);
+    const beforeQueueJob = store.getReviewQueueJob(queueJob.jobId);
+    store.close();
+
+    const { stdout } = await runCli([
+      "retire-failed",
+      "--state-path",
+      statePath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha,
+      "--reason",
+      "Closed Or Merged Before Review!",
+      "--dry-run",
+      "true"
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: true,
+      wouldRetire: {
+        repo,
+        pullNumber,
+        headSha,
+        status: "failed",
+        error: previousError
+      },
+      reason: "closed_or_merged_before_review",
+      retiredErrorPreview: `retired_failed_head:closed_or_merged_before_review; previous_error=${previousError}`
+    });
+    store = new ReviewStateStore(statePath);
+    expect(store.getProcessedReview(repo, pullNumber, headSha)).toEqual(beforeProcessed);
+    expect(store.getReviewQueueJob(queueJob.jobId)).toEqual(beforeQueueJob);
+    store.close();
+  });
+
+  it("refuses retire-failed dry-runs for missing or non-failed rows", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retire-failed-refuse-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 176;
+    const store = new ReviewStateStore(statePath);
+
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha: "posted-head",
+      status: "posted",
+      event: "COMMENT"
+    });
+    store.close();
+
+    await expect(runCli([
+      "retire-failed",
+      "--state-path",
+      statePath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      "missing-head",
+      "--reason",
+      "operator_request",
+      "--dry-run",
+      "true"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining(`Refusing to retire missing review row for ${repo}#${pullNumber}@missing-head`)
+    });
+
+    await expect(runCli([
+      "retire-failed",
+      "--state-path",
+      statePath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      "posted-head",
+      "--reason",
+      "operator_request",
+      "--dry-run",
+      "true"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining(`Refusing to retire ${repo}#${pullNumber}@posted-head: status is posted, not failed`)
+    });
+  });
+
+  it("redacts retire-failed dry-run output before operators copy evidence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retire-failed-redact-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 176;
+    const headSha = "secret-failed-head";
+    const ghToken = "ghp_abcdefghijklmnopqrstuvwx";
+    const bearerToken = "Bearer abcdefghijklmnopqrstuvwxyz";
+    let store = new ReviewStateStore(statePath);
+
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "failed",
+      error: `provider failed with ${ghToken} at https://user@example.com`
+    });
+    const queueJob = store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base-head",
+      now: new Date("2026-07-03T00:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: `retry failed with ${bearerToken}`,
+      now: new Date("2026-07-03T00:01:00.000Z")
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "retire-failed",
+      "--state-path",
+      statePath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha,
+      "--reason",
+      "closed_or_merged_before_review",
+      "--dry-run",
+      "true"
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(stdout).not.toContain(ghToken);
+    expect(stdout).not.toContain(bearerToken);
+    expect(stdout).not.toContain("https://user@example.com");
+    expect(output.wouldRetire.error).toContain("[redacted-secret]");
+    expect(output.retiredErrorPreview).toContain("[redacted-secret]");
+    expect(output.queueJobsToRetire[0].lastError).toContain("[redacted-secret]");
+  });
+
+  it("retires failed review rows only when retire-failed is explicit non-dry-run", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retire-failed-live-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 176;
+    const headSha = "live-failed-head";
+    const previousError = "ZCode failed before completion: spawnSync node ETIMEDOUT";
+    let store = new ReviewStateStore(statePath);
+
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "failed",
+      error: previousError
+    });
+    const queueJob = store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base-head",
+      now: new Date("2026-07-03T00:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: previousError,
+      now: new Date("2026-07-03T00:01:00.000Z")
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "retire-failed",
+      "--state-path",
+      statePath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha,
+      "--reason",
+      "closed_or_merged_before_review",
+      "--dry-run",
+      "false"
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: false,
+      retired: {
+        repo,
+        pullNumber,
+        headSha,
+        status: "skipped",
+        error: "retired_failed_head:closed_or_merged_before_review; previous_error=ZCode failed before completion: spawnSync node ETIMEDOUT"
+      }
+    });
+    store = new ReviewStateStore(statePath);
+    expect(store.getProcessedReview(repo, pullNumber, headSha)).toMatchObject({
+      status: "skipped",
+      error: "retired_failed_head:closed_or_merged_before_review; previous_error=ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+    expect(store.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "stale_retired",
+      lastError: "retired_failed_head:closed_or_merged_before_review; previous_error=ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+    store.close();
+  });
+
+  it("previews failed queue reconciliation for already retired heads without mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retire-failed-already-dry-run-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 176;
+    const headSha = "already-retired-head";
+    const retiredError = "retired_failed_head:old_operator_run; previous_error=ENOENT";
+    let store = new ReviewStateStore(statePath);
+
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "skipped",
+      error: retiredError
+    });
+    const queueJob = store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base-head",
+      now: new Date("2026-07-03T00:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: "ENOENT",
+      now: new Date("2026-07-03T00:01:00.000Z")
+    });
+    const beforeProcessed = store.getProcessedReview(repo, pullNumber, headSha);
+    const beforeQueueJob = store.getReviewQueueJob(queueJob.jobId);
+    store.close();
+
+    const { stdout } = await runCli([
+      "retire-failed",
+      "--state-path",
+      statePath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha,
+      "--reason",
+      "closed_or_merged_before_review",
+      "--dry-run",
+      "true"
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: true,
+      alreadyRetired: {
+        repo,
+        pullNumber,
+        headSha,
+        status: "skipped",
+        error: retiredError
+      },
+      queueJobsToRetire: [
+        {
+          jobId: queueJob.jobId,
+          repo,
+          pullNumber,
+          headSha,
+          state: "failed",
+          lastError: "ENOENT"
+        }
+      ]
+    });
+    store = new ReviewStateStore(statePath);
+    expect(store.getProcessedReview(repo, pullNumber, headSha)).toEqual(beforeProcessed);
+    expect(store.getReviewQueueJob(queueJob.jobId)).toEqual(beforeQueueJob);
+    store.close();
+  });
+
+  it("reconciles failed queue jobs for already retired heads only when explicit non-dry-run", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retire-failed-already-live-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 176;
+    const headSha = "already-retired-live-head";
+    const retiredError = "retired_failed_head:old_operator_run; previous_error=ENOENT";
+    let store = new ReviewStateStore(statePath);
+
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "skipped",
+      error: retiredError
+    });
+    const queueJob = store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base-head",
+      now: new Date("2026-07-03T00:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: "ENOENT",
+      now: new Date("2026-07-03T00:01:00.000Z")
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "retire-failed",
+      "--state-path",
+      statePath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha,
+      "--reason",
+      "closed_or_merged_before_review",
+      "--dry-run",
+      "false"
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: false,
+      retired: {
+        repo,
+        pullNumber,
+        headSha,
+        status: "skipped",
+        error: retiredError
+      }
+    });
+    store = new ReviewStateStore(statePath);
+    expect(store.getProcessedReview(repo, pullNumber, headSha)).toMatchObject({
+      status: "skipped",
+      error: retiredError
+    });
+    expect(store.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "stale_retired",
+      lastError: retiredError
+    });
+    store.close();
+  });
+
   it("requires review-pr repos to be configured and enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-pr-"));
     roots.push(root);

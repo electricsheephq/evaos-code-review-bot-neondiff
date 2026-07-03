@@ -52,7 +52,14 @@ import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets } from "./secrets.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
-import { listRepoMemoryNotesReadOnly, ReviewStateStore, type ReviewQueueJobRecord, type ReviewQueueJobState } from "./state.js";
+import {
+  buildRetiredFailedHeadError,
+  listRepoMemoryNotesReadOnly,
+  normalizeRetirementReason,
+  ReviewStateStore,
+  type ReviewQueueJobRecord,
+  type ReviewQueueJobState
+} from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -1343,16 +1350,41 @@ async function main(): Promise<void> {
     if (!args.pr) throw new Error("--pr is required for retire-failed");
     if (!args["head-sha"]) throw new Error("--head-sha is required for retire-failed");
     if (!args.reason) throw new Error("--reason is required for retire-failed");
+    const pullNumber = Number(args.pr);
+    const headSha = args["head-sha"];
+    const reason = normalizeRetirementReason(args.reason);
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
     const config = loadConfig(args.config);
     const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
     try {
+      if (dryRun) {
+        const current = state.getProcessedReview(args.repo, pullNumber, headSha);
+        if (!current) {
+          throw new Error(`Refusing to retire missing review row for ${args.repo}#${pullNumber}@${headSha}`);
+        }
+        const queueJobsToRetire = state
+          .listReviewQueueJobsForPull({ repo: args.repo, pullNumber, state: "failed" })
+          .filter((job) => job.headSha === headSha);
+        if (current.status !== "failed") {
+          if (current.status === "skipped" && current.error?.startsWith("retired_failed_head:")) {
+            console.log(stringifyRedactedJson({ ok: true, dryRun, alreadyRetired: current, queueJobsToRetire }));
+            return;
+          }
+          throw new Error(
+            `Refusing to retire ${args.repo}#${pullNumber}@${headSha}: status is ${current.status}, not failed`
+          );
+        }
+        const retiredErrorPreview = buildRetiredFailedHeadError({ reason, previousError: current.error });
+        console.log(stringifyRedactedJson({ ok: true, dryRun, wouldRetire: current, queueJobsToRetire, reason, retiredErrorPreview }));
+        return;
+      }
       const retired = state.retireFailedReview({
         repo: args.repo,
-        pullNumber: Number(args.pr),
-        headSha: args["head-sha"],
-        reason: args.reason
+        pullNumber,
+        headSha,
+        reason
       });
-      console.log(JSON.stringify({ ok: true, retired }, null, 2));
+      console.log(stringifyRedactedJson({ ok: true, dryRun, retired }));
     } finally {
       state.close();
     }
@@ -2282,6 +2314,21 @@ function validateScenarioRunId(input: unknown, scenarioPath: string): string {
     throw new Error(`${scenarioPath}: runId must be a safe path segment`);
   }
   return trimmed;
+}
+
+function stringifyRedactedJson(input: unknown): string {
+  return JSON.stringify(redactJsonValue(input), null, 2);
+}
+
+function redactJsonValue(input: unknown): unknown {
+  if (typeof input === "string") return redactSecrets(input);
+  if (Array.isArray(input)) return input.map((item) => redactJsonValue(item));
+  if (input && typeof input === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input)) output[key] = redactJsonValue(value);
+    return output;
+  }
+  return input;
 }
 
 interface ParsedArgs {

@@ -97,6 +97,9 @@ banner to stdout.
 - `npm test` and `npm run build` pass from the release checkout.
 - `release:status` records exact source SHA, branch, config path, launchd job,
   launchd dry-run mode, state DB row count, and error count.
+- `release:status` verifies the loaded LaunchAgent includes
+  `NODE_OPTIONS=--use-system-ca` so Node uses the macOS system trust store for
+  GitHub App installation fetches.
 - launchd emits a fresh heartbeat after restart.
 - live DB has no unexpected error rows.
 - active provider cooldown rows are allowed only when they are explicit
@@ -137,8 +140,14 @@ npx tsx src/cli.ts retire-failed \
   --repo owner/repo \
   --pr 123 \
   --head-sha <failed-head-sha> \
-  --reason closed_or_stale_after_coverage_audit
+  --reason closed_or_stale_after_coverage_audit \
+  --dry-run true
 ```
+
+Inspect the dry-run output first. To perform the retirement against the current
+SQLite state, rerun the same command with `--dry-run false`; the live command
+re-checks state and may refuse or retire a different queue-job set if the row
+changed after the preview.
 
 Do not retire an active failed current head. Use `retry-failed` or disable the
 repo through the tracked allowlist/policy lane when the provider is repeatedly

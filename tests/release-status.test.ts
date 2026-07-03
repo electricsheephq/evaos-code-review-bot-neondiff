@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildReleaseStatus, collectReleaseStatus } from "../src/release-status.js";
+import { buildReleaseStatus, collectReleaseStatus, parseLaunchdPrintStatus } from "../src/release-status.js";
 import type { ReviewBudgetStatus } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 
@@ -60,7 +60,9 @@ describe("beta release status", () => {
         state: "running",
         pid: 456,
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: { rowCount: 2, errorCount: 0 },
       heartbeat: freshHeartbeat(),
@@ -103,6 +105,213 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({ name: "launchd_config", ok: false, detail: "not detected" });
   });
 
+  it("fails closed when launchd reports Node without the macOS system CA option", () => {
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false,
+        nodeOptions: "--trace-warnings",
+        usesSystemCa: false
+      },
+      database: { rowCount: 2, errorCount: 0 },
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.gates).toContainEqual({
+      name: "launchd_node_system_ca",
+      ok: false,
+      detail: "NODE_OPTIONS missing --use-system-ca"
+    });
+  });
+
+  it("fails closed when launchd NODE_OPTIONS cannot be verified", () => {
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false
+      },
+      database: { rowCount: 2, errorCount: 0 },
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.gates).toContainEqual({
+      name: "launchd_node_system_ca",
+      ok: false,
+      detail: "NODE_OPTIONS not detected"
+    });
+  });
+
+  it("parses launchd NODE_OPTIONS from the loaded service environment", () => {
+    const status = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/502/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\tpid = 57466
+\targuments = {
+\t\t/opt/homebrew/bin/node
+\t\tsrc/cli.ts
+\t\tdaemon
+\t\t--config
+\t\t/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+\t\t--dry-run
+\t\tfalse
+\t}
+\tenvironment = {
+\t\tNODE_OPTIONS => --use-system-ca --trace-warnings
+\t}
+}
+`);
+
+    expect(status).toMatchObject({
+      state: "running",
+      pid: 57466,
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      dryRun: false,
+      nodeOptions: "--use-system-ca --trace-warnings",
+      usesSystemCa: true
+    });
+  });
+
+  it("normalizes quoted launchd NODE_OPTIONS and requires the exact system CA flag", () => {
+    const status = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/502/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\tenvironment = {
+\t\tNODE_OPTIONS => "\t--use-system-ca   --trace-warnings\t"
+\t}
+}
+`);
+
+    expect(status.nodeOptions).toBe("--use-system-ca   --trace-warnings");
+    expect(status.usesSystemCa).toBe(true);
+
+    const substringOnly = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/502/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\tenvironment = {
+\t\tNODE_OPTIONS => "--use-system-ca-proxy"
+\t}
+}
+`);
+
+    expect(substringOnly.nodeOptions).toBe("--use-system-ca-proxy");
+    expect(substringOnly.usesSystemCa).toBe(false);
+  });
+
+  it("leaves launchd system CA undetected when the loaded service environment block is absent", () => {
+    const status = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/502/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\targuments = {
+\t\t/opt/homebrew/bin/node
+\t\tsrc/cli.ts
+\t\tdaemon
+\t\t--config
+\t\t/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+\t}
+}
+`);
+
+    expect(status.usesSystemCa).toBeUndefined();
+    expect(status.nodeOptions).toBeUndefined();
+  });
+
+  it("parses NODE_OPTIONS from a launchctl print excerpt with adjacent environment sections", () => {
+    const status = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/502/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\tpid = 57466
+\targuments = {
+\t\t/opt/homebrew/bin/node
+\t\t/Volumes/LEXAR/repos/evaos-code-review-bot/node_modules/tsx/dist/cli.mjs
+\t\tsrc/cli.ts
+\t\tdaemon
+\t\t--config
+\t\t/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+\t\t--dry-run
+\t\tfalse
+\t}
+\tinherited environment = {
+\t\tSSH_AUTH_SOCK => /var/run/com.apple.launchd.example/Listeners
+\t}
+\tdefault environment = {
+\t\tPATH => /usr/bin:/bin:/usr/sbin:/sbin
+\t}
+\tenvironment = {
+\t\tOSLogRateLimit => 64
+\t\tPATH => /opt/homebrew/bin:/usr/bin:/bin
+\t\tNODE_OPTIONS => --use-system-ca
+\t\tSHELL => /bin/zsh
+\t}
+}
+`);
+
+    expect(status).toMatchObject({
+      state: "running",
+      pid: 57466,
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      dryRun: false,
+      nodeOptions: "--use-system-ca",
+      usesSystemCa: true
+    });
+  });
+
+  it("marks launchd system CA as disabled when the loaded service environment omits it", () => {
+    const status = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/502/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\targuments = {
+\t\t/opt/homebrew/bin/node
+\t\tsrc/cli.ts
+\t\tdaemon
+\t\t--config
+\t\t/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+\t}
+\tenvironment = {
+\t\tPATH => /usr/bin:/bin
+\t}
+}
+`);
+
+    expect(status.usesSystemCa).toBe(false);
+    expect(status.nodeOptions).toBeUndefined();
+  });
+
+  it("does not match NODE_OPTIONS text embedded inside another environment value", () => {
+    const status = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/502/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\tenvironment = {
+\t\tPATH => /usr/bin:/bin NODE_OPTIONS => --use-system-ca
+\t}
+}
+`);
+
+    expect(status.usesSystemCa).toBe(false);
+    expect(status.nodeOptions).toBeUndefined();
+  });
+
   it("fails closed when promotion is attempted from a non-main branch", () => {
     const status = buildReleaseStatus({
       repo: {
@@ -116,7 +325,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: { rowCount: 2, errorCount: 0 },
       heartbeat: freshHeartbeat(),
@@ -140,7 +351,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: { rowCount: 21, errorCount: 0, skippedCount: 16 },
       heartbeat: freshHeartbeat(),
@@ -170,7 +383,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: {
         rowCount: 21,
@@ -211,7 +426,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: {
         rowCount: 21,
@@ -249,7 +466,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: {
         rowCount: 21,
@@ -1004,7 +1223,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: {
         rowCount: 21,
@@ -1482,7 +1703,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: { rowCount: 21, errorCount: 0, skippedCount: 16 },
       heartbeat: { status: "missing", maxAgeMs: 120_000 },
@@ -1510,7 +1733,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: { rowCount: 21, errorCount: 0, skippedCount: 16 },
       heartbeat: {
@@ -1546,7 +1771,9 @@ describe("beta release status", () => {
         label: "com.electricsheephq.evaos-code-review-bot",
         state: "running",
         configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
-        dryRun: false
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
       },
       database: { rowCount: 21, errorCount: 0, skippedCount: 16 },
       heartbeat: {
