@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, platform } from "node:os";
 import { dirname } from "node:path";
 import { redactSecrets } from "./secrets.js";
@@ -456,9 +456,7 @@ function readLicenseCache(path: string): LicenseEntitlement | undefined {
 }
 
 function writeLicenseCache(path: string, entitlement: LicenseEntitlement): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(entitlement, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600);
+  writeAtomicSecretFile(path, `${JSON.stringify(entitlement, null, 2)}\n`);
 }
 
 function readLicenseKey(config: LicenseConfig): string | undefined {
@@ -469,9 +467,7 @@ function readLicenseKey(config: LicenseConfig): string | undefined {
 function writeLicenseKey(config: LicenseConfig, licenseKey: string): void {
   if (config.storageBackend === "file") {
     if (!config.keyPath) throw new Error("license.keyPath is required when storageBackend=file");
-    mkdirSync(dirname(config.keyPath), { recursive: true });
-    writeFileSync(config.keyPath, `${licenseKey}\n`, { mode: 0o600 });
-    chmodSync(config.keyPath, 0o600);
+    writeAtomicSecretFile(config.keyPath, `${licenseKey}\n`);
     return;
   }
   writeKeychainLicenseKey(config, licenseKey);
@@ -479,14 +475,42 @@ function writeLicenseKey(config: LicenseConfig, licenseKey: string): void {
 
 function deleteLicenseKey(config: LicenseConfig): void {
   if (config.storageBackend === "file") {
-    if (config.keyPath && existsSync(config.keyPath)) rmSync(config.keyPath, { force: true });
+    if (config.keyPath) removeExistingFile(config.keyPath);
     return;
   }
   deleteKeychainLicenseKey(config);
 }
 
 function deleteLicenseCache(path: string): void {
-  if (existsSync(path)) rmSync(path, { force: true });
+  removeExistingFile(path);
+}
+
+function writeAtomicSecretFile(path: string, contents: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tempPath, contents, { mode: 0o600 });
+    chmodSync(tempPath, 0o600);
+    renameSync(tempPath, path);
+    chmodSync(path, 0o600);
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
+
+function removeExistingFile(path: string): void {
+  if (!existsSync(path)) return;
+  try {
+    rmSync(path);
+  } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+}
+
+function isErrno(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
 
 function readFileLicenseKey(path: string | undefined): string | undefined {

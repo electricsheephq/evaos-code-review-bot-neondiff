@@ -1263,42 +1263,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     });
     return "skipped_provider_cooldown";
   }
-  if (input.processedHeadPolicy === "retry_failed_head") {
-    const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
-    if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
-      return "skipped_processed";
-    }
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-    const liveBeforeReview = await github.getPull(repo, pull.number);
-    const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
-    if (staleBeforeReview) {
-      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeReview, evidenceDir });
-      return "skipped_stale_head";
-    }
-  }
-  const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
-  if (!licenseGate.ok) {
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-    mkdirSync(evidenceDir, { recursive: true });
-    writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
-    state.recordReviewReadiness({
-      repo,
-      pullNumber: pull.number,
-      headSha: pull.head.sha,
-      state: "blocked_on_proof",
-      reason: licenseGate.reason
-    });
-    return "skipped_license_gate";
-  }
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   if (!budget.tryStart()) return "skipped_capacity";
   let lease: ReviewRunLease | undefined;
 
   try {
-    lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
-    if (!lease) return "skipped_capacity";
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (input.processedHeadPolicy === "retry_failed_head") {
+      const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
+      if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
+        return "skipped_processed";
+      }
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
       const liveBeforeReview = await github.getPull(repo, pull.number);
       const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
       if (staleBeforeReview) {
@@ -1306,6 +1281,23 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         return "skipped_stale_head";
       }
     }
+    const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
+    if (!licenseGate.ok) {
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+      mkdirSync(evidenceDir, { recursive: true });
+      writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
+      state.recordReviewReadiness({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        state: "blocked_on_proof",
+        reason: licenseGate.reason
+      });
+      return "skipped_license_gate";
+    }
+    lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
+    if (!lease) return "skipped_capacity";
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (commandReviewRequested) {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
     }
@@ -1532,6 +1524,13 @@ export async function buildLicenseGateForPull(input: {
     };
   }
   let visibility = visibilityFromPullSummary(input.pull);
+  if (visibility === "unknown" && !license.privateReposRequireEntitlement) {
+    return evaluateLicenseReviewGate({
+      config: license,
+      repo: input.repo,
+      visibility
+    });
+  }
   if (visibility === "unknown") {
     try {
       const repoMetadata = await getRepoMetadataForLicenseGate(input.github, input.repo);

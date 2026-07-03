@@ -53,11 +53,11 @@ describe("license activation and entitlement cache", () => {
       "activate",
       "--config",
       configPath,
-      "--license-key",
-      key,
+      "--license-key-env",
+      "NEONDIFF_TEST_LICENSE_KEY",
       "--repo",
       "owner/private"
-    ]);
+    ], { NEONDIFF_TEST_LICENSE_KEY: key });
     expect(activated.ok).toBe(true);
     expect(activated.status).toBe("active");
     expect(JSON.stringify(activated)).not.toContain(key);
@@ -328,6 +328,22 @@ describe("license activation and entitlement cache", () => {
       tsxCliPath,
       "src/cli.ts",
       "license",
+      "activate",
+      "--config",
+      configPath,
+      "--license-key",
+      "LIC-argv-secret-test-123456"
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stderr: expect.stringContaining("argv can expose secrets")
+    });
+
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      "src/cli.ts",
+      "license",
       "status",
       "--config",
       configPath,
@@ -425,6 +441,28 @@ describe("license activation and entitlement cache", () => {
       reason: "public repo path is free"
     });
   });
+
+  it("does not fetch repo metadata when unknown visibility is configured to avoid private entitlement", async () => {
+    const root = mkRoot(roots);
+    const config = minimalConfig(root);
+    config.license!.privateReposRequireEntitlement = false;
+    const github = new GitHubApi({});
+    github.getRepo = async () => {
+      throw new Error("getRepo should not run");
+    };
+
+    await expect(buildLicenseGateForPull({
+      config,
+      github,
+      repo: "owner/unknown",
+      pull: pullSummary(10, "unknown-head"),
+      dryRun: false
+    })).resolves.toMatchObject({
+      ok: true,
+      visibility: "unknown",
+      reason: "repo visibility does not require entitlement"
+    });
+  });
 });
 
 async function expectStatus(config: LicenseConfig, status: string): Promise<void> {
@@ -474,10 +512,10 @@ function writeConfig(path: string, root: string, apiBaseUrl: string): void {
   })}\n`);
 }
 
-async function runCli(args: string[]): Promise<Record<string, unknown>> {
+async function runCli(args: string[], env: Record<string, string> = {}): Promise<Record<string, unknown>> {
   const { stdout } = await execFileAsync(process.execPath, [tsxCliPath, "src/cli.ts", ...args], {
     cwd: process.cwd(),
-    env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" },
+    env: { ...process.env, ...env, NODE_OPTIONS: "--experimental-sqlite" },
     maxBuffer: 1024 * 1024
   });
   return JSON.parse(stdout) as Record<string, unknown>;

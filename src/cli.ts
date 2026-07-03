@@ -2235,14 +2235,16 @@ function licenseConfigFromArgs(base: LicenseConfig, args: ParsedArgs): LicenseCo
 }
 
 function resolveLicenseKeyArg(args: ParsedArgs): string {
-  if (args["license-key"]) return parseSingleArg(args["license-key"], "--license-key");
+  if (args["license-key"]) {
+    throw new Error("license activate no longer accepts --license-key because argv can expose secrets; use --license-key-env");
+  }
   if (args["license-key-env"]) {
     const envName = parseSingleArg(args["license-key-env"], "--license-key-env");
     const value = process.env[envName];
     if (!value) throw new Error(`license activate --license-key-env ${envName} did not resolve to a non-empty environment variable`);
     return value;
   }
-  throw new Error("license activate requires --license-key or --license-key-env");
+  throw new Error("license activate requires --license-key-env");
 }
 
 function parseLicenseStorageBackend(value: string): "keychain" | "file" {
