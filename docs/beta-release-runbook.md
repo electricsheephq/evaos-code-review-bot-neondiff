@@ -89,16 +89,16 @@ npm run release:status -- \
 For public source-beta releases, run the same gate with manifest checks:
 
 ```bash
+PUBLIC_BETA_TAG=v1.0.0-beta.1
 npx tsx src/cli.ts release-status \
   --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
-  --expected-public-version <tag> \
+  --expected-public-version "$PUBLIC_BETA_TAG" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
-Replace `<tag>` with the actual public beta tag before running the command; do
-not copy the placeholder literally.
+Set `PUBLIC_BETA_TAG` to the actual public beta tag before running the command.
 
 By default this public manifest gate validates rollback command shape only, so
 fresh or shallow checkouts are not blocked by missing local tags. After
@@ -106,6 +106,20 @@ fresh or shallow checkouts are not blocked by missing local tags. After
 `--verify-public-rollback-refs true` for the stricter local ref-existence check;
 that failure is reported as a missing rollback target rather than a malformed
 rollback command.
+
+Public promotion evidence should include the strict variant after tags are
+fetched:
+
+```bash
+git fetch origin --tags
+npx tsx src/cli.ts release-status \
+  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --expected-head "$(git rev-parse HEAD)" \
+  --public-release-manifest docs/public-release-manifest.json \
+  --expected-public-version "$PUBLIC_BETA_TAG" \
+  --verify-public-rollback-refs true \
+  --launchd-label com.electricsheephq.evaos-code-review-bot
+```
 
 If the first `release:status` fails only because launchd is still on the
 previous head before restart, record that as pre-promotion state. The

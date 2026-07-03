@@ -130,17 +130,17 @@ npm run release:status -- \
 For public source-beta or public beta releases, include the public manifest gate:
 
 ```bash
+SOURCE_SHA=replace-with-release-source-sha
+PUBLIC_BETA_TAG=vX.Y.Z-beta.N
 npx tsx src/cli.ts release-status \
   --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
-  --expected-head <source-sha> \
+  --expected-head "$SOURCE_SHA" \
   --public-release-manifest docs/public-release-manifest.json \
-  --expected-public-version <tag> \
+  --expected-public-version "$PUBLIC_BETA_TAG" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
-Replace `<source-sha>` and `<tag>` with the actual release source SHA and
-public beta tag before running the command; the placeholders are not valid gate
-inputs.
+Set `SOURCE_SHA` and `PUBLIC_BETA_TAG` before running the command.
 
 The public manifest gate validates rollback command syntax by default. Use
 `git fetch origin --tags` and append `--verify-public-rollback-refs true` only

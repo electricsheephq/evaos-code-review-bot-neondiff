@@ -187,7 +187,9 @@ async function main(): Promise<void> {
       expectedHead: args["expected-head"],
       publicReleaseManifestPath: args["public-release-manifest"],
       expectedPublicVersion: args["expected-public-version"],
-      verifyPublicRollbackRefs: args["verify-public-rollback-refs"] === "true",
+      verifyPublicRollbackRefs: args["verify-public-rollback-refs"] === undefined
+        ? false
+        : parseBooleanArg(args["verify-public-rollback-refs"], "--verify-public-rollback-refs"),
       launchdLabel: args["launchd-label"],
       statePath: args["state-path"],
       budgetDetails: args["budget-details"] === "true",

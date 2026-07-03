@@ -1273,6 +1273,69 @@ describe("beta release status", () => {
     expect(manifest.updateChannels.ok).toBe(false);
   });
 
+  it("passes required public update channels when strict rollback targets exist in a git checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-existing-rollback-ref-"));
+    roots.push(root);
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["-c", "user.name=evaOS Bot", "-c", "user.email=bot@example.invalid", "commit", "--allow-empty", "-m", "seed"], {
+      cwd: root,
+      stdio: "ignore"
+    });
+    execFileSync("git", ["tag", "v0.4.9-beta.1"], { cwd: root, stdio: "ignore" });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: `git revert ${headSha}`
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1",
+      verifyRollbackRefs: true
+    });
+
+    expect(manifest.updateChannels.channels).toEqual([
+      expect.objectContaining({
+        name: "cli",
+        ok: true,
+        detail: "cli state source_checkout; requiredForThisRelease=true"
+      }),
+      expect.objectContaining({
+        name: "daemon",
+        ok: true,
+        detail: "daemon state launchd_prerelease; requiredForThisRelease=true"
+      })
+    ]);
+    expect(manifest.updateChannels.ok).toBe(true);
+  });
+
   it("fails required public update channels when rollback uses an ambiguous plain tag target", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-plain-tag-rollback-"));
     roots.push(root);
