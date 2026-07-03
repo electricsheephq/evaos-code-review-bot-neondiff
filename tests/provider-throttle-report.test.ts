@@ -67,7 +67,7 @@ describe("provider throttle report", () => {
         pullNumber: 6,
         headSha: "posted-head",
         state: "posted",
-        lastError: "provider_rate_limit_cooldown_until=2026-07-01T12:00:00.000Z; reason=provider_request_rate_limit; provider_code=1302",
+        lastError: "reviewed_after_provider_deferred; previous_reason=provider_request_rate_limit; previous_provider_code=1302",
         createdAt: "2026-07-01T12:00:00.000Z",
         updatedAt: "2026-07-01T12:01:00.000Z"
       });
@@ -128,6 +128,86 @@ describe("provider throttle report", () => {
       statePath,
       timezone: "Foo/Bar"
     })).toThrow("Invalid --timezone value: Foo/Bar");
+  });
+
+  it("deduplicates processed and queued rows for the same provider incident", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-dedupe-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 7,
+        headSha: "same-provider-head",
+        status: "skipped",
+        error: "provider_rate_limit_cooldown_until=2026-07-01T08:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302",
+        createdAt: "2026-07-01 08:00:00"
+      });
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 7,
+        headSha: "same-provider-head",
+        state: "provider_deferred",
+        lastError: "provider_rate_limit_cooldown_until=2026-07-01T08:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302",
+        createdAt: "2026-07-01T08:00:00.000Z",
+        updatedAt: "2026-07-01T08:01:00.000Z"
+      });
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2026-07-08T00:00:00.000Z"),
+      since: "7d",
+      timezone: "Asia/Singapore"
+    });
+
+    expect(report.summary.providerErrors).toBe(1);
+    expect(report.summary.requestRateLimit).toBe(1);
+    expect(report.retryOutcomes.retriedProviderDeferred).toBe(1);
+    expect(report.codes).toContainEqual({ code: "1302", count: 1 });
+  });
+
+  it("matches quota exhaustion text forms used by provider classification", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-quota-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 8,
+        headSha: "usage-limit-head",
+        status: "failed",
+        error: "ProviderBusinessError: usage limit reached",
+        createdAt: "2026-07-01 08:00:00"
+      });
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 9,
+        headSha: "expired-package-head",
+        status: "failed",
+        error: "ProviderBusinessError: package has expired",
+        createdAt: "2026-07-01 09:00:00"
+      });
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2026-07-08T00:00:00.000Z"),
+      since: "7d",
+      timezone: "Asia/Singapore"
+    });
+
+    expect(report.summary.providerErrors).toBe(2);
+    expect(report.summary.quotaExhausted).toBe(2);
+    expect(report.summary.unknownProviderError).toBe(0);
   });
 });
 

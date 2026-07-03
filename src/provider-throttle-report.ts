@@ -75,13 +75,18 @@ type ProviderThrottleCategory =
 
 interface ProviderThrottleEvent {
   repo: string;
+  pullNumber: number;
+  headSha: string;
   status: string;
   error: string;
   timestamp: string;
+  source: "processed_reviews" | "review_queue_jobs";
 }
 
 interface ProcessedReviewErrorRow {
   repo: string;
+  pull_number: number;
+  head_sha: string;
   status: string;
   error: string | null;
   created_at: string;
@@ -89,6 +94,8 @@ interface ProcessedReviewErrorRow {
 
 interface ReviewQueueErrorRow {
   repo: string;
+  pull_number: number;
+  head_sha: string;
   state: string;
   last_error: string | null;
   created_at: string;
@@ -97,7 +104,7 @@ interface ReviewQueueErrorRow {
   finished_at?: string | null;
 }
 
-const PROVIDER_CODES = /(?:\bprovider_code=|\bproviderCode:\s*["']?|\[)(\d{4})\b/g;
+const PROVIDER_CODES = /(?:\bprovider_code=|\bprevious_provider_code=|\bproviderCode:\s*["']?|\[)(\d{4})\b/g;
 const DEFAULT_SINCE = "24h";
 const DEFAULT_TIMEZONE = "Asia/Singapore";
 const DEFAULT_PEAK_START_HOUR = 14;
@@ -193,7 +200,7 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
   if (hasTable(db, "processed_reviews")) {
     const rows = db
       .prepare(
-        `select repo, status, error, created_at
+        `select repo, pull_number, head_sha, status, error, created_at
          from processed_reviews
          where error is not null
            and datetime(created_at) >= datetime(?)
@@ -204,9 +211,12 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
       if (!row.error || !classifyProviderThrottle(row.error)) continue;
       events.push({
         repo: row.repo,
+        pullNumber: row.pull_number,
+        headSha: row.head_sha,
         status: row.status,
         error: row.error,
-        timestamp: row.created_at
+        timestamp: row.created_at,
+        source: "processed_reviews"
       });
     }
   }
@@ -215,7 +225,7 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
     const timestampExpr = queueTimestampExpression(db);
     const rows = db
       .prepare(
-        `select repo, state, last_error, created_at, updated_at,
+        `select repo, pull_number, head_sha, state, last_error, created_at, updated_at,
                 ${hasColumn(db, "review_queue_jobs", "started_at") ? "started_at" : "null as started_at"},
                 ${hasColumn(db, "review_queue_jobs", "finished_at") ? "finished_at" : "null as finished_at"}
          from review_queue_jobs
@@ -228,14 +238,17 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
       if (!row.last_error || !classifyProviderThrottle(row.last_error)) continue;
       events.push({
         repo: row.repo,
+        pullNumber: row.pull_number,
+        headSha: row.head_sha,
         status: row.state,
         error: row.last_error,
-        timestamp: row.finished_at ?? row.updated_at ?? row.started_at ?? row.created_at
+        timestamp: row.finished_at ?? row.updated_at ?? row.started_at ?? row.created_at,
+        source: "review_queue_jobs"
       });
     }
   }
 
-  return events;
+  return dedupeProviderThrottleEvents(events);
 }
 
 function addEventToReport(
@@ -319,9 +332,11 @@ function classifyProviderThrottle(error: string): ProviderThrottleCategory | und
   }
   if (
     normalized.includes("provider_quota_exhausted") ||
+    normalized.includes("usage limit reached") ||
     normalized.includes("weekly/monthly limit exhausted") ||
     normalized.includes("limit exhausted") ||
     normalized.includes("quota exhausted") ||
+    normalized.includes("package has expired") ||
     codes.some((code) => ["1308", "1309", "1310", "1316", "1317"].includes(code))
   ) {
     return "quotaExhausted";
@@ -348,6 +363,26 @@ function classifyProviderThrottle(error: string): ProviderThrottleCategory | und
   }
   if (normalized.includes("provider") || codes.length > 0) return "unknownProviderError";
   return undefined;
+}
+
+function dedupeProviderThrottleEvents(events: ProviderThrottleEvent[]): ProviderThrottleEvent[] {
+  const byIncident = new Map<string, ProviderThrottleEvent>();
+  for (const event of events) {
+    const category = classifyProviderThrottle(event.error);
+    if (!category) continue;
+    const key = [
+      event.repo,
+      event.pullNumber,
+      event.headSha,
+      category,
+      extractProviderCodes(event.error).sort().join(",")
+    ].join("\0");
+    const existing = byIncident.get(key);
+    if (!existing || event.source === "review_queue_jobs") {
+      byIncident.set(key, event);
+    }
+  }
+  return [...byIncident.values()];
 }
 
 function addRetryOutcome(report: ProviderThrottleReport, event: ProviderThrottleEvent): void {

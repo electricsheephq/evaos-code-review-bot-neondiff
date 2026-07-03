@@ -772,12 +772,13 @@ function updateRetryQueueJobsAfterRetry(input: {
     processedError: processed?.error
   });
   for (const job of targetJobs) {
+    const lastError = buildRetryQueueLastError({ jobLastError: job.lastError, patchLastError: patch.lastError, patchState: patch.state });
     input.state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: patch.state,
       ...(patch.nextEligibleAt ? { nextEligibleAt: patch.nextEligibleAt } : {}),
       ...(patch.reviewUrl ? { reviewUrl: patch.reviewUrl } : {}),
-      lastError: patch.lastError
+      lastError
     });
     if (job.sessionId && patch.sessionJobState) {
       input.state.updateReviewerSessionJobState({
@@ -789,6 +790,21 @@ function updateRetryQueueJobsAfterRetry(input: {
       });
     }
   }
+}
+
+function buildRetryQueueLastError(input: {
+  jobLastError?: string;
+  patchLastError: string;
+  patchState: ReviewQueueJobState;
+}): string {
+  if (input.patchState !== "posted") return input.patchLastError;
+  const providerCooldown = parseProviderCooldownError(input.jobLastError);
+  if (!providerCooldown) return input.patchLastError;
+  return [
+    `${input.patchLastError}_after_provider_deferred`,
+    `previous_reason=${providerCooldown.reason ?? "provider_cooldown"}`,
+    ...(providerCooldown.providerCode ? [`previous_provider_code=${providerCooldown.providerCode}`] : [])
+  ].join("; ");
 }
 
 function retryQueuePatchForStatus(input: {
