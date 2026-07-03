@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, platform } from "node:os";
 import { dirname } from "node:path";
 import { redactSecrets } from "./secrets.js";
@@ -80,8 +80,8 @@ export async function activateLicense(input: {
     ...response.entitlement,
     licenseFingerprint: fingerprintLicenseKey(licenseKey)
   };
-  writeLicenseCache(input.config.cachePath, entitlement);
   writeLicenseKey(input.config, licenseKey);
+  writeLicenseCache(input.config.cachePath, entitlement);
   return {
     ...response,
     entitlement,
@@ -137,6 +137,9 @@ export async function getLicenseStatus(input: {
       detail: `using cached entitlement after ${response.status} license API failure`
     };
   }
+  if (response.status === "expired" || response.status === "revoked" || response.status === "invalid") {
+    deleteLicenseCache(input.config.cachePath);
+  }
   return response;
 }
 
@@ -159,7 +162,7 @@ export async function deactivateLicense(input: {
     apiNotified = response.ok;
   }
   deleteLicenseKey(input.config);
-  if (existsSync(input.config.cachePath)) rmSync(input.config.cachePath, { force: true });
+  deleteLicenseCache(input.config.cachePath);
   return {
     ok: true,
     status: "deactivated",
@@ -320,6 +323,7 @@ async function callLicenseApi(input: {
     if (!response.ok) return apiFailureResult(response.status, body, now);
 
     const entitlement = normalizeEntitlement(body, input.licenseKey, now);
+    if (!entitlement) return invalidApiResult(now, "license API returned malformed success response");
     return {
       ok: entitlement.status === "active",
       status: entitlement.status,
@@ -365,14 +369,16 @@ function statusFromApiError(statusCode: number, body: unknown): Exclude<LicenseS
   return "server";
 }
 
-function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): LicenseEntitlement {
+function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): LicenseEntitlement | undefined {
   const record = isRecord(body) && isRecord(body.entitlement) ? body.entitlement : body;
-  const status = readBodyStatus(record) ?? "active";
+  const status = readBodyStatus(record);
+  const repoVisibilityScope = readRepoVisibilityScope(record);
+  if (!status || !repoVisibilityScope) return undefined;
   return {
     status,
     checkedAt: readString(record, "checkedAt") ?? now.toISOString(),
     ...(readString(record, "expiresAt") ? { expiresAt: readString(record, "expiresAt")! } : {}),
-    repoVisibilityScope: readRepoVisibilityScope(record) ?? "public",
+    repoVisibilityScope,
     updateEntitlement: readBoolean(record, "updateEntitlement") ?? false,
     ...(readString(record, "plan") ? { plan: readString(record, "plan")! } : {}),
     ...(readNumber(record, "seats") !== undefined ? { seats: readNumber(record, "seats")! } : {}),
@@ -418,6 +424,17 @@ function serverResult(now = new Date(), detail = "license API is unavailable"): 
   };
 }
 
+function invalidApiResult(now: Date, detail: string): LicenseStatusResult {
+  return {
+    ok: false,
+    status: "invalid",
+    source: "api",
+    checkedAt: now.toISOString(),
+    classification: "invalid",
+    detail
+  };
+}
+
 function readLicenseCache(path: string): LicenseEntitlement | undefined {
   if (!existsSync(path)) return undefined;
   const parsed = safeJsonParse(readFileSync(path, "utf8"));
@@ -441,6 +458,7 @@ function readLicenseCache(path: string): LicenseEntitlement | undefined {
 function writeLicenseCache(path: string, entitlement: LicenseEntitlement): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(entitlement, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 function readLicenseKey(config: LicenseConfig): string | undefined {
@@ -453,6 +471,7 @@ function writeLicenseKey(config: LicenseConfig, licenseKey: string): void {
     if (!config.keyPath) throw new Error("license.keyPath is required when storageBackend=file");
     mkdirSync(dirname(config.keyPath), { recursive: true });
     writeFileSync(config.keyPath, `${licenseKey}\n`, { mode: 0o600 });
+    chmodSync(config.keyPath, 0o600);
     return;
   }
   writeKeychainLicenseKey(config, licenseKey);
@@ -466,6 +485,10 @@ function deleteLicenseKey(config: LicenseConfig): void {
   deleteKeychainLicenseKey(config);
 }
 
+function deleteLicenseCache(path: string): void {
+  if (existsSync(path)) rmSync(path, { force: true });
+}
+
 function readFileLicenseKey(path: string | undefined): string | undefined {
   if (!path || !existsSync(path)) return undefined;
   const key = readFileSync(path, "utf8").trim();
@@ -473,7 +496,9 @@ function readFileLicenseKey(path: string | undefined): string | undefined {
 }
 
 function readKeychainLicenseKey(config: LicenseConfig): string | undefined {
-  if (platform() !== "darwin") return undefined;
+  if (platform() !== "darwin") {
+    throw new Error("macOS Keychain license storage is only available on darwin; use storageBackend=file for headless Linux/CI");
+  }
   const result = spawnSync("security", [
     "find-generic-password",
     "-s",
@@ -487,30 +512,22 @@ function readKeychainLicenseKey(config: LicenseConfig): string | undefined {
   return key || undefined;
 }
 
-function writeKeychainLicenseKey(config: LicenseConfig, licenseKey: string): void {
-  if (platform() !== "darwin") throw new Error("macOS Keychain license storage is only available on darwin; use storageBackend=file for tests/dev");
-  const result = spawnSync("security", [
-    "add-generic-password",
-    "-U",
-    "-s",
-    config.keychainService,
-    "-a",
-    config.keychainAccount,
-    "-w",
-    licenseKey
-  ], { encoding: "utf8" });
-  if (result.status !== 0) throw new Error(`failed to store license key in Keychain: ${redactSecrets(result.stderr || result.stdout)}`);
+function writeKeychainLicenseKey(_config: LicenseConfig, _licenseKey: string): void {
+  throw new Error("Keychain license activation is disabled in headless CLI until native no-argv secret storage is available; use storageBackend=file with 0600 permissions");
 }
 
 function deleteKeychainLicenseKey(config: LicenseConfig): void {
   if (platform() !== "darwin") return;
-  spawnSync("security", [
+  const result = spawnSync("security", [
     "delete-generic-password",
     "-s",
     config.keychainService,
     "-a",
     config.keychainAccount
   ], { encoding: "utf8" });
+  if (result.status !== 0 && !/could not be found|The specified item could not be found/i.test(result.stderr || result.stdout)) {
+    throw new Error(`failed to delete license key from Keychain: ${redactSecrets(result.stderr || result.stdout)}`);
+  }
 }
 
 function safeJsonParse(text: string): unknown {

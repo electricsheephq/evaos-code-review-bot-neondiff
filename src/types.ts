@@ -58,6 +58,8 @@ export interface PullRequestSummary {
     repo?: {
       full_name: string;
       clone_url?: string;
+      private?: boolean;
+      visibility?: "public" | "private" | "internal";
     } | null;
   };
   base: {
@@ -66,6 +68,8 @@ export interface PullRequestSummary {
     repo: {
       full_name: string;
       clone_url?: string;
+      private?: boolean;
+      visibility?: "public" | "private" | "internal";
     };
   };
   html_url: string;

@@ -62,7 +62,7 @@ import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
-import type { PullFilePatch, PullRequestSummary, ReviewPlan } from "./types.js";
+import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan } from "./types.js";
 
 export interface RunOnceOptions {
   configPath?: string;
@@ -156,6 +156,7 @@ export type ReviewPullResult =
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_policy"
+  | "skipped_license_gate"
   | "skipped_command_stop"
   | "skipped_command_explain"
   | "skipped_finishing_touch_draft"
@@ -176,6 +177,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
     case "skipped_command_stop":
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
@@ -290,7 +292,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         if (status === "reviewed" || status === "reviewed_command") result.reviewed += 1;
         if (status === "skipped_draft") result.skippedDraft += 1;
         if (status === "skipped_canary") result.skippedCanary += 1;
-        if (status === "skipped_policy") result.skippedPolicy += 1;
+        if (status === "skipped_policy" || status === "skipped_license_gate") result.skippedPolicy += 1;
         if (status === "skipped_command_stop") result.skippedCommandStop += 1;
         if (status === "skipped_command_explain") result.skippedCommandExplain += 1;
         if (status === "skipped_finishing_touch_draft") result.skippedFinishingTouchDraft += 1;
@@ -732,6 +734,7 @@ function retryStatusCommentState(
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
     case "skipped_command_stop":
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
@@ -915,9 +918,10 @@ function retryQueuePatchForStatus(input: {
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
       return {
         state: "failed",
-        lastError: `retry_did_not_review=${input.status}`,
+        lastError: input.status === "skipped_license_gate" ? "license_entitlement_required" : `retry_did_not_review=${input.status}`,
         sessionJobState: "failed",
         sessionProcessedStatus: "failed"
       };
@@ -1259,7 +1263,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     });
     return "skipped_provider_cooldown";
   }
-  const licenseGate = await buildLicenseGateForPull({ config, github, repo });
+  const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
   if (!licenseGate.ok) {
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     mkdirSync(evidenceDir, { recursive: true });
@@ -1271,7 +1275,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       state: "blocked_on_proof",
       reason: licenseGate.reason
     });
-    return "skipped_policy";
+    return "skipped_license_gate";
   }
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   if (!budget.tryStart()) return "skipped_capacity";
@@ -1496,6 +1500,8 @@ async function buildLicenseGateForPull(input: {
   config: BotConfig;
   github: GitHubApi;
   repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
 }): Promise<LicenseReviewGateResult> {
   const license = input.config.license;
   if (!license?.enabled) {
@@ -1507,10 +1513,19 @@ async function buildLicenseGateForPull(input: {
       reason: "license enforcement disabled"
     };
   }
+  if (input.dryRun) {
+    return {
+      ok: true,
+      repo: input.repo,
+      visibility: visibilityFromPullSummary(input.pull),
+      status: "active",
+      reason: "license gate skipped for dry-run review"
+    };
+  }
   let visibility: "public" | "private" | "unknown" = "unknown";
   try {
     const repoMetadata = await getRepoMetadataForLicenseGate(input.github, input.repo);
-    visibility = repoMetadata.private || repoMetadata.visibility === "private" ? "private" : "public";
+    visibility = visibilityFromRepositorySummary(repoMetadata);
   } catch (error) {
     return {
       ok: false,
@@ -1525,6 +1540,19 @@ async function buildLicenseGateForPull(input: {
     repo: input.repo,
     visibility
   });
+}
+
+function visibilityFromRepositorySummary(repoMetadata: RepositorySummary): "public" | "private" | "unknown" {
+  if (repoMetadata.private || repoMetadata.visibility === "private" || repoMetadata.visibility === "internal") return "private";
+  if (repoMetadata.visibility === "public") return "public";
+  return "unknown";
+}
+
+function visibilityFromPullSummary(pull: PullRequestSummary): "public" | "private" | "unknown" {
+  const repo = pull.base.repo;
+  if (repo.private === true || repo.visibility === "private" || repo.visibility === "internal") return "private";
+  if (repo.visibility === "public" || repo.private === false) return "public";
+  return "unknown";
 }
 
 async function getRepoMetadataForLicenseGate(github: GitHubApi, repo: string): ReturnType<GitHubApi["getRepo"]> {

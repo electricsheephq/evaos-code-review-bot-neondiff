@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfigFromObject, type BotConfig } from "../src/config.js";
+import { GitHubApi } from "../src/github.js";
 import {
   activateLicense,
   evaluateLicenseReviewGate,
@@ -150,6 +151,30 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
+  it("clears cached active entitlement after terminal API denial", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => writeJson(res, 410, { status: "revoked", detail: "revoked" }));
+    servers.push(server);
+    const config = licenseConfig(root, server.url);
+    writeFileSync(join(root, "license.key"), "LIC-revoked-cache-test-123456\n", { mode: 0o600 });
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+
+    const status = await getLicenseStatus({
+      config,
+      refresh: true,
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({ ok: false, status: "revoked", source: "api" });
+    expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
   it("fails private repo review closed without an active private entitlement", async () => {
     const root = mkRoot(roots);
     const config = licenseConfig(root, undefined);
@@ -231,7 +256,7 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
-  it("defaults missing API repo scope to public and reports missing env vars clearly", async () => {
+  it("rejects malformed API success responses and reports missing env vars clearly", async () => {
     const root = mkRoot(roots);
     const server = await startLicenseServer((_req, res) => {
       writeJson(res, 200, {
@@ -245,7 +270,11 @@ describe("license activation and entitlement cache", () => {
       config: licenseConfig(root, server.url),
       licenseKey: "LIC-missing-scope-test-123456"
     });
-    expect(activated.entitlement?.repoVisibilityScope).toBe("public");
+    expect(activated).toMatchObject({
+      ok: false,
+      status: "invalid",
+      classification: "invalid"
+    });
 
     const configPath = join(root, "config.json");
     writeConfig(configPath, root, server.url);
@@ -266,18 +295,36 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
+  it("tightens existing file backend key permissions on activation", async () => {
+    const root = mkRoot(roots);
+    const keyPath = join(root, "license.key");
+    const server = await startLicenseServer((_req, res) => writeJson(res, 200, {
+      status: "active",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true
+    }));
+    servers.push(server);
+    writeFileSync(keyPath, "old-key\n", { mode: 0o644 });
+    await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: "LIC-permission-test-123456"
+    });
+
+    expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+  });
+
   it("blocks private repo worker reviews before ZCode or posting when entitlement is missing", async () => {
     const root = mkRoot(roots);
     const state = new ReviewStateStore(join(root, "state.sqlite"));
     const config = minimalConfig(root);
     const pull = pullSummary(7, "private-head");
-    const github = {
-      getRepo: async () => ({ full_name: "owner/private", private: true as const, visibility: "private" as const })
-    };
+    const github = new GitHubApi({});
+    github.getRepo = async () => ({ full_name: "owner/private", private: true as const, visibility: "private" as const });
 
     const status = await reviewPull({
       config,
-      github: github as never,
+      github,
       state,
       repo: "owner/private",
       pull,
@@ -286,7 +333,7 @@ describe("license activation and entitlement cache", () => {
       budget: new ReviewRunBudget(1)
     });
 
-    expect(status).toBe("skipped_policy");
+    expect(status).toBe("skipped_license_gate");
     const readiness = state.getReviewReadiness("owner/private", 7, "private-head");
     expect(readiness).toMatchObject({
       state: "blocked_on_proof",

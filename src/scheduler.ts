@@ -1075,6 +1075,7 @@ function reviewResultStatusCommentState(
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
       return "skipped";
     case "skipped_command_stop":
     case "skipped_command_explain":
@@ -1219,6 +1220,8 @@ function readinessStateForReviewResult(
       return "skipped";
     case "skipped_policy":
       return "failed";
+    case "skipped_license_gate":
+      return "blocked_on_proof";
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
       return undefined;
@@ -1249,6 +1252,8 @@ function readinessReasonForReviewResult(
       return "canary_policy";
     case "skipped_policy":
       return "unexpected_scheduler_review_status=skipped_policy";
+    case "skipped_license_gate":
+      return processed?.error ?? "license_entitlement_required";
     case "skipped_command_stop":
       return "manual_command_stop";
     case "skipped_command_explain":
@@ -1436,6 +1441,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
     case "skipped_command_stop":
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
@@ -1513,10 +1519,13 @@ function updateQueueJobAfterReviewStatus(input: {
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "failed",
-        lastError: `unexpected_scheduler_review_status=${input.status}`
+        lastError: input.status === "skipped_license_gate"
+          ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)?.reason ?? "license_entitlement_required"
+          : `unexpected_scheduler_review_status=${input.status}`
       });
       return;
     case "skipped_command_stop":
@@ -1755,6 +1764,7 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       result.skippedCanary += 1;
       break;
     case "skipped_policy":
+    case "skipped_license_gate":
       result.skippedPolicy += 1;
       break;
     case "skipped_command_stop":

@@ -8,6 +8,8 @@ import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
+const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
+
 export interface BotConfig {
   pilotRepos: string[];
   pollIntervalMs: number;
@@ -276,12 +278,12 @@ const DEFAULT_CONFIG: BotConfig = {
     enabled: false,
     apiBaseUrl: undefined,
     cachePath: "",
-    storageBackend: "keychain",
+    storageBackend: "file",
     keyPath: undefined,
     keychainService: "com.electricsheephq.neondiff.license",
     keychainAccount: "default",
     requestTimeoutMs: 10_000,
-    offlineGraceMs: 24 * 60 * 60_000,
+    offlineGraceMs: MAX_LICENSE_OFFLINE_GRACE_MS,
     publicReposFree: true,
     privateReposRequireEntitlement: true,
     updateEntitlementRequiresLicense: true
@@ -393,6 +395,9 @@ function validateConfig(config: BotConfig): void {
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
   const license = config.license ?? DEFAULT_CONFIG.license!;
   license.cachePath = license.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
+  if (license.storageBackend === "file" && !license.keyPath) {
+    license.keyPath = join(dirname(config.statePath), "license", "license-key.txt");
+  }
   config.license = license;
   validateLicenseConfig(license, "config.license");
   const desktop = config.desktop ?? DEFAULT_CONFIG.desktop!;
@@ -630,6 +635,10 @@ function validateLicenseConfig(value: unknown, label: string): void {
   }
   validatePositiveInteger(value.requestTimeoutMs, `${label}.requestTimeoutMs`);
   validateNonNegativeInteger(value.offlineGraceMs, `${label}.offlineGraceMs`);
+  const offlineGraceMs = value.offlineGraceMs as number;
+  if (offlineGraceMs > MAX_LICENSE_OFFLINE_GRACE_MS) {
+    throw new Error(`${label}.offlineGraceMs must be <= ${MAX_LICENSE_OFFLINE_GRACE_MS}`);
+  }
   validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
   validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
   validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);

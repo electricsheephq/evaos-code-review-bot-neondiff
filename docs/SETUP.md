@@ -76,8 +76,12 @@ Do not paste license keys into tracked config.
 The public license path is explicit and local-first. By default, license
 enforcement is disabled in the example config so internal beta workers do not
 change behavior accidentally. For a public/private repo install, enable
-`license.enabled`, keep `license.storageBackend` as `keychain` on macOS, and
-activate the key without writing it to tracked config:
+`license.enabled`, use the beta `file` storage backend, and activate the key
+without writing it to tracked config. The file backend writes the key with 0600
+permissions under the configured `license.keyPath`, which defaults next to
+`statePath` when omitted.
+Private-repo review only accepts a cached entitlement during a transient API
+outage for up to 15 minutes; longer grace windows are rejected at config load.
 
 ```bash
 NEONDIFF_LICENSE_KEY="..." \
@@ -104,6 +108,10 @@ private repo review fails closed before worktree prep, model/provider calls, or
 GitHub review posting unless the cached entitlement is active and covers private
 repos. Public repo review may run without a license when `license.publicReposFree`
 is true.
+
+The `keychain` backend remains listed for future native macOS storage support,
+but headless CLI activation currently rejects Keychain writes rather than passing
+license keys through `security add-generic-password` process arguments.
 
 ## 4. Check Readiness
 

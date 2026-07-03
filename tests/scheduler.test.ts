@@ -1333,6 +1333,35 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("sets blocked proof readiness when a queued job becomes license-skipped after in-progress", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-license-skip-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => "skipped_license_gate",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.skippedPolicy).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
+    expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "blocked_on_proof",
+      reason: "license_entitlement_required"
+    });
+    state.close();
+  });
+
   it("moves in-progress status to provider_deferred when legacy capacity is busy", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-capacity-"));
     roots.push(root);
