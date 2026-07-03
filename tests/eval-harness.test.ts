@@ -1,9 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runOfflineEval, runStickyVsColdEval, type EvalScenarioInput, type StickyVsColdScenarioInput } from "../src/eval-harness.js";
+
+const nodeRequire = createRequire(import.meta.url);
 
 describe("offline eval harness", () => {
   const roots: string[] = [];
@@ -1158,6 +1161,30 @@ describe("offline eval harness", () => {
     });
   });
 
+  it("fails sticky-vs-cold when sticky repo memory is older than the freshness threshold", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-stale-memory-"));
+    roots.push(outputRoot);
+    const scenario = JSON.parse(
+      readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")
+    ) as StickyVsColdScenarioInput;
+
+    const result = runStickyVsColdEval({
+      ...scenario,
+      stickyRuntime: {
+        ...scenario.stickyRuntime,
+        repoMemoryAgeSeconds: 90000,
+        staleContext: false
+      }
+    }, { outputRoot });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.decision).toBe("not_enough_evidence");
+    expect(result.summary.gates.find((gate) => gate.name === "sticky_repo_memory_fresh")).toMatchObject({
+      ok: false,
+      status: "fail"
+    });
+  });
+
   it("rejects loosened sticky-vs-cold promotion thresholds", () => {
     const scenario = JSON.parse(
       readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")
@@ -1165,7 +1192,8 @@ describe("offline eval harness", () => {
     const minRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-loosen-min-"));
     const deltaRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-loosen-delta-"));
     const providerRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-loosen-provider-"));
-    roots.push(minRoot, deltaRoot, providerRoot);
+    const memoryRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-loosen-memory-"));
+    roots.push(minRoot, deltaRoot, providerRoot, memoryRoot);
 
     expect(() => runStickyVsColdEval({
       ...scenario,
@@ -1187,6 +1215,11 @@ describe("offline eval harness", () => {
       thresholds: { requireProviderAttemptsNotHigher: false }
     }, { outputRoot: providerRoot }))
       .toThrow("requireProviderAttemptsNotHigher cannot be disabled");
+    expect(() => runStickyVsColdEval({
+      ...scenario,
+      thresholds: { maxRepoMemoryAgeSeconds: 172800 }
+    }, { outputRoot: memoryRoot }))
+      .toThrow("maxRepoMemoryAgeSeconds cannot be loosened");
   });
 
   it("rejects paired scenarios for different heads", () => {
@@ -1208,8 +1241,9 @@ describe("offline eval harness", () => {
   it("runs sticky-vs-cold eval through the CLI", () => {
     const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-cli-"));
     roots.push(outputRoot);
+    const tsxCli = nodeRequire.resolve("tsx/cli");
     const output = execFileSync(process.execPath, [
-      join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"),
+      tsxCli,
       "src/cli.ts",
       "eval-sticky-vs-cold",
       "--input",

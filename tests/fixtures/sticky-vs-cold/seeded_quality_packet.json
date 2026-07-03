@@ -96,6 +96,7 @@
     "memoryPacketSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "gitnexusPacketSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "stickySessionId": "repo-sticky-eval-fixture",
+    "repoMemoryAgeSeconds": 120,
     "staleContext": false
   }
 }

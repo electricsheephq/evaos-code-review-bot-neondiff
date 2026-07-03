@@ -124,6 +124,7 @@ export interface StickyVsColdThresholds {
   minRecallDelta: number;
   minSeededRecallDelta: number;
   requireProviderAttemptsNotHigher: boolean;
+  maxRepoMemoryAgeSeconds: number;
   minRuntimeSafeScenarios: number;
   minRuntimeSafeLabeledFindings: number;
   minRuntimeSafeP0P1Labels: number;
@@ -326,6 +327,7 @@ const DEFAULT_STICKY_VS_COLD_THRESHOLDS: StickyVsColdThresholds = {
   minRecallDelta: 0,
   minSeededRecallDelta: 0,
   requireProviderAttemptsNotHigher: true,
+  maxRepoMemoryAgeSeconds: 86400,
   minRuntimeSafeScenarios: 30,
   minRuntimeSafeLabeledFindings: PUBLIC_CONFIDENCE_POLICY.minLabeledFindings,
   minRuntimeSafeP0P1Labels: PUBLIC_CONFIDENCE_POLICY.minP0P1Labels,
@@ -520,10 +522,14 @@ function buildStickyVsColdSummary(input: {
     typeof input.input.coldRuntime?.providerAttempts === "number" &&
     typeof input.input.stickyRuntime?.providerAttempts === "number";
   const stickyContextFreshForPromotion = input.input.stickyRuntime?.staleContext === false;
+  const stickyRepoMemoryFreshForPromotion =
+    typeof input.input.stickyRuntime?.repoMemoryAgeSeconds === "number" &&
+    input.input.stickyRuntime.repoMemoryAgeSeconds <= input.thresholds.maxRepoMemoryAgeSeconds;
   const runtimeSafeEvidence =
     ok &&
     providerAttemptsComparable &&
     stickyContextFreshForPromotion &&
+    stickyRepoMemoryFreshForPromotion &&
     evidenceCounts.pairedScenarios >= input.thresholds.minRuntimeSafeScenarios &&
     evidenceCounts.labeledFindings >= input.thresholds.minRuntimeSafeLabeledFindings &&
     evidenceCounts.p0p1Labels >= input.thresholds.minRuntimeSafeP0P1Labels &&
@@ -609,6 +615,9 @@ function buildStickyVsColdGates(input: {
   const providerAttemptsComparable =
     typeof input.coldRuntime?.providerAttempts === "number" &&
     typeof input.stickyRuntime?.providerAttempts === "number";
+  const stickyRepoMemoryAge = input.stickyRuntime?.repoMemoryAgeSeconds;
+  const stickyRepoMemoryAgeFresh =
+    typeof stickyRepoMemoryAge === "number" && stickyRepoMemoryAge <= input.thresholds.maxRepoMemoryAgeSeconds;
   const coldComparable = input.cold.ok;
   return [
     {
@@ -710,6 +719,18 @@ function buildStickyVsColdGates(input: {
         : input.stickyRuntime?.staleContext === false
           ? "sticky runtime marked context fresh"
           : "SKIPPED: sticky context freshness not supplied; runtime_safe_candidate remains disabled"
+    },
+    {
+      name: "sticky_repo_memory_fresh",
+      ok: typeof stickyRepoMemoryAge !== "number" || stickyRepoMemoryAgeFresh,
+      status: typeof stickyRepoMemoryAge === "number"
+        ? stickyRepoMemoryAgeFresh
+          ? "pass"
+          : "fail"
+        : "skip",
+      detail: typeof stickyRepoMemoryAge === "number"
+        ? `${stickyRepoMemoryAge} <= ${input.thresholds.maxRepoMemoryAgeSeconds}`
+        : "SKIPPED: sticky repo-memory age not supplied; runtime_safe_candidate remains disabled"
     },
     {
       name: "cold_packet_ok",
@@ -1492,6 +1513,12 @@ function validateStickyVsColdThresholds(thresholds: StickyVsColdThresholds): voi
   }
   if (thresholds.requireProviderAttemptsNotHigher !== DEFAULT_STICKY_VS_COLD_THRESHOLDS.requireProviderAttemptsNotHigher) {
     throw new Error("requireProviderAttemptsNotHigher cannot be disabled for sticky-vs-cold promotion");
+  }
+  if (!Number.isFinite(thresholds.maxRepoMemoryAgeSeconds) || thresholds.maxRepoMemoryAgeSeconds < 0) {
+    throw new Error("maxRepoMemoryAgeSeconds must be a non-negative number");
+  }
+  if (thresholds.maxRepoMemoryAgeSeconds > DEFAULT_STICKY_VS_COLD_THRESHOLDS.maxRepoMemoryAgeSeconds) {
+    throw new Error("maxRepoMemoryAgeSeconds cannot be loosened below the default sticky-vs-cold freshness policy");
   }
   for (const key of [
     "minRuntimeSafeScenarios",

@@ -127,7 +127,9 @@ packets cannot reach `runtime_safe_candidate` with the default evidence-volume
 thresholds. That stronger decision is reserved for a future batch/aggregate
 runner or an explicitly configured evidence packet that proves enough paired
 scenarios, labels, negative controls, provider-attempt observations, and fresh
-sticky context.
+sticky context. Fresh sticky context requires both `staleContext: false` and a
+`repoMemoryAgeSeconds` value no older than the default 24-hour freshness cap;
+missing age evidence keeps the result advisory-only.
 
 An empty sticky-vs-cold label set is not counted as negative-control evidence by
 itself. The wrapper must set `negativeControl: true`, and declared
@@ -200,11 +202,12 @@ non-loosenable default policy. The decision is:
 - `advisory` when the paired comparison is clean but measured evidence is still
   too small for runtime-safe promotion.
 - `runtime_safe_candidate` only when paired scenarios, labels, P0/P1 labels,
-  negative controls, provider-attempt evidence, and explicit fresh sticky context
-  meet the configured thresholds. With the current single-input CLI, this
-  requires future batch aggregation; caller-provided sticky-vs-cold thresholds
-  cannot loosen the default promotion policy, and this must not be used as a
-  public calibrated-confidence claim.
+  negative controls, provider-attempt evidence, explicit fresh sticky context,
+  and repo-memory age evidence meet the configured thresholds. With the current
+  single-input CLI, this requires future batch aggregation; caller-provided
+  sticky-vs-cold thresholds cannot loosen the default promotion policy or
+  freshness cap, and this must not be used as a public calibrated-confidence
+  claim.
 
 `manifest.json` records the effective thresholds, scenario mode, optional
 scenario source, artifact inventory with SHA-256 digests, metadata counts, and
