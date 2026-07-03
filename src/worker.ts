@@ -575,7 +575,8 @@ export async function retryFailedHeadWithDeps(input: {
       pullNumber: options.pullNumber,
       headSha: options.headSha,
       status: retryStatus,
-      dryRun: options.dryRun
+      dryRun: options.dryRun,
+      providerCooldownError: retryTarget.previousError
     });
     await syncRetryReviewStatusComment({
       config,
@@ -746,6 +747,7 @@ function updateRetryQueueJobsAfterRetry(input: {
   headSha: string;
   status: RetryFailedHeadResult["status"];
   dryRun: boolean;
+  providerCooldownError?: string;
 }): void {
   const retryStates: ReviewQueueJobState[] = ["queued", "leased", "running", "provider_deferred"];
   if (!input.dryRun) retryStates.push("failed");
@@ -762,7 +764,7 @@ function updateRetryQueueJobsAfterRetry(input: {
   if (targetJobs.length === 0) return;
 
   const processed = input.state.getProcessedReview(input.repo, input.pullNumber, input.headSha);
-  const providerCooldown = parseProviderCooldownError(processed?.error);
+  const providerCooldown = parseProviderCooldownError(processed?.error) ?? parseProviderCooldownError(input.providerCooldownError);
   const patch = retryQueuePatchForStatus({
     status: input.status,
     dryRun: input.dryRun,
@@ -772,12 +774,18 @@ function updateRetryQueueJobsAfterRetry(input: {
     processedError: processed?.error
   });
   for (const job of targetJobs) {
+    const lastError = buildRetryQueueLastError({
+      jobLastError: job.lastError,
+      patchLastError: patch.lastError,
+      patchState: patch.state,
+      fallbackProviderCooldown: providerCooldown
+    });
     input.state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: patch.state,
       ...(patch.nextEligibleAt ? { nextEligibleAt: patch.nextEligibleAt } : {}),
       ...(patch.reviewUrl ? { reviewUrl: patch.reviewUrl } : {}),
-      lastError: patch.lastError
+      lastError
     });
     if (job.sessionId && patch.sessionJobState) {
       input.state.updateReviewerSessionJobState({
@@ -789,6 +797,26 @@ function updateRetryQueueJobsAfterRetry(input: {
       });
     }
   }
+}
+
+function buildRetryQueueLastError(input: {
+  jobLastError?: string;
+  patchLastError: string;
+  patchState: ReviewQueueJobState;
+  fallbackProviderCooldown?: ReturnType<typeof parseProviderCooldownError>;
+}): string {
+  if (input.patchState !== "posted") return input.patchLastError;
+  const jobProviderCooldown = parseProviderCooldownError(input.jobLastError);
+  const providerCooldown = jobProviderCooldown ?? input.fallbackProviderCooldown;
+  if (!providerCooldown) return input.patchLastError;
+  const previousReason = redactSecrets(providerCooldown.reason ?? "provider_cooldown");
+  const previousProviderCode = providerCooldown.providerCode ?? input.fallbackProviderCooldown?.providerCode;
+  const redactedProviderCode = previousProviderCode ? redactSecrets(previousProviderCode) : undefined;
+  return [
+    `${input.patchLastError}_after_provider_deferred`,
+    `previous_reason=${previousReason}`,
+    ...(redactedProviderCode ? [`previous_provider_code=${redactedProviderCode}`] : [])
+  ].join("; ");
 }
 
 function retryQueuePatchForStatus(input: {
