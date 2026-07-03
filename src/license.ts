@@ -376,7 +376,7 @@ function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): Lic
   if (!status || !repoVisibilityScope) return undefined;
   return {
     status,
-    checkedAt: readString(record, "checkedAt") ?? now.toISOString(),
+    checkedAt: now.toISOString(),
     ...(readString(record, "expiresAt") ? { expiresAt: readString(record, "expiresAt")! } : {}),
     repoVisibilityScope,
     updateEntitlement: readBoolean(record, "updateEntitlement") ?? false,

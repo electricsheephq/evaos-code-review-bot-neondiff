@@ -597,6 +597,7 @@ function validateLicenseConfig(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validateBoolean(value.enabled, `${label}.enabled`);
   validateOptionalString(value.apiBaseUrl, `${label}.apiBaseUrl`);
+  validateLicenseApiBaseUrl(value.apiBaseUrl, `${label}.apiBaseUrl`);
   validateOptionalString(value.cachePath, `${label}.cachePath`);
   if (typeof value.cachePath !== "string" || value.cachePath.trim().length === 0) {
     throw new Error(`${label}.cachePath must be a non-empty string`);
@@ -642,6 +643,25 @@ function validateLicenseConfig(value: unknown, label: string): void {
   validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
   validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
   validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);
+}
+
+function validateLicenseApiBaseUrl(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} must be a non-empty string`);
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid URL`);
+  }
+  if (parsed.protocol === "https:") return;
+  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) return;
+  throw new Error(`${label} must use https unless it points to localhost/loopback for local testing`);
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
 }
 
 function validateDesktopConfig(value: unknown, label: string): void {

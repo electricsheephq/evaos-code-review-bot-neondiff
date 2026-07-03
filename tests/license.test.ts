@@ -121,6 +121,20 @@ describe("license activation and entitlement cache", () => {
         cachePath: join(process.cwd(), "license-cache.json")
       }
     })).toThrow(/config\.license\.cachePath must be outside protected checkout root/);
+
+    expect(() => loadConfigFromObject({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: {
+        enabled: true,
+        apiBaseUrl: "http://license.example.invalid",
+        cachePath: join(root, "entitlement.json"),
+        storageBackend: "file",
+        keyPath: join(root, "license.key")
+      }
+    })).toThrow(/config\.license\.apiBaseUrl must use https/);
   });
 
   it("uses a still-active cached entitlement during transient API outage", async () => {
@@ -149,6 +163,30 @@ describe("license activation and entitlement cache", () => {
       stale: true,
       classification: "network"
     });
+  });
+
+  it("stamps API entitlement checkedAt locally instead of trusting server time", async () => {
+    const root = mkRoot(roots);
+    const now = new Date("2026-07-04T00:00:00.000Z");
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "active",
+        checkedAt: "2099-01-01T00:00:00.000Z",
+        expiresAt: "2099-02-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        updateEntitlement: true
+      });
+    });
+    servers.push(server);
+
+    const result = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: "LIC-local-checked-at-test-123456",
+      now
+    });
+
+    expect(result.entitlement?.checkedAt).toBe(now.toISOString());
+    expect(JSON.parse(readFileSync(join(root, "entitlement.json"), "utf8")).checkedAt).toBe(now.toISOString());
   });
 
   it("refreshes stale private gate cache when the API is healthy", async () => {
@@ -462,6 +500,36 @@ describe("license activation and entitlement cache", () => {
       visibility: "unknown",
       reason: "repo visibility does not require entitlement"
     });
+  });
+
+  it("caches fallback repo visibility metadata during license gate checks", async () => {
+    const root = mkRoot(roots);
+    const config = minimalConfig(root);
+    let getRepoCalls = 0;
+    const github = new GitHubApi({});
+    github.getRepo = async () => {
+      getRepoCalls += 1;
+      return { full_name: "owner/cache-visibility", private: true as const, visibility: "private" as const };
+    };
+
+    for (const head of ["head-a", "head-b"]) {
+      const pull = pullSummary(11, head);
+      await expect(buildLicenseGateForPull({
+        config,
+        github,
+        repo: "owner/cache-visibility",
+        pull: {
+          ...pull,
+          base: { ...pull.base, repo: { full_name: "owner/cache-visibility" } }
+        },
+        dryRun: false
+      })).resolves.toMatchObject({
+        ok: false,
+        visibility: "private"
+      });
+    }
+
+    expect(getRepoCalls).toBe(1);
   });
 });
 

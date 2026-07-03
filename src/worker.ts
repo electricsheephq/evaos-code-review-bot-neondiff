@@ -64,6 +64,9 @@ import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkth
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
 import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan } from "./types.js";
 
+const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
+const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private"; expiresAtMs: number }>();
+
 export interface RunOnceOptions {
   configPath?: string;
   dryRun: boolean;
@@ -1533,8 +1536,7 @@ export async function buildLicenseGateForPull(input: {
   }
   if (visibility === "unknown") {
     try {
-      const repoMetadata = await getRepoMetadataForLicenseGate(input.github, input.repo);
-      visibility = visibilityFromRepositorySummary(repoMetadata);
+      visibility = await getRepoVisibilityForLicenseGate(input.github, input.repo);
     } catch (error) {
       return {
         ok: false,
@@ -1563,6 +1565,22 @@ function visibilityFromPullSummary(pull: PullRequestSummary): "public" | "privat
   if (repo.private === true || repo.visibility === "private" || repo.visibility === "internal") return "private";
   if (repo.visibility === "public" || repo.private === false) return "public";
   return "unknown";
+}
+
+async function getRepoVisibilityForLicenseGate(github: GitHubApi, repo: string): Promise<"public" | "private" | "unknown"> {
+  const now = Date.now();
+  const cached = licenseGateRepoVisibilityCache.get(repo);
+  if (cached && cached.expiresAtMs > now) return cached.visibility;
+
+  const repoMetadata = await getRepoMetadataForLicenseGate(github, repo);
+  const visibility = visibilityFromRepositorySummary(repoMetadata);
+  if (visibility !== "unknown") {
+    licenseGateRepoVisibilityCache.set(repo, {
+      visibility,
+      expiresAtMs: now + LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS
+    });
+  }
+  return visibility;
 }
 
 async function getRepoMetadataForLicenseGate(github: GitHubApi, repo: string): ReturnType<GitHubApi["getRepo"]> {
