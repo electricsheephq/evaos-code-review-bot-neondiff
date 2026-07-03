@@ -410,7 +410,7 @@ async function main(): Promise<void> {
 	      repo: args.repo,
 	      state: queueState
 	    });
-	    const budgetOutput = collectQueueBudget(config, budgetQueue.jobs);
+	    const budgetOutput = collectQueueBudget(config, collectBudgetJobsForSelection(statePath, budgetQueue.jobs));
     const gates = queueHealthGates(queue, durableQueue, budgetOutput.budget);
     const ok = gates.every((gate) => gate.ok);
     const output = {
@@ -1218,16 +1218,18 @@ async function main(): Promise<void> {
         repo: args.repo,
         now: checkedAt
       });
+      const activeProviderCooldowns = state.listRepoProviderCooldowns({ activeOnly: true, now: checkedAt });
       const budget = buildReviewBudgetStatus({
         config,
-        jobs: durableQueue.jobs,
+        jobs: collectBudgetJobsForSelection(statePath, durableQueue.jobs, checkedAt),
         now: checkedAt,
         includeDetails: false,
-        inputJobLimit: durableQueue.jobs.length
+        inputJobLimit: durableQueue.jobs.length + activeProviderCooldowns.length
       });
       const failedQueueJobs = durableQueue.summary.failed;
       const retryableProviderDeferred = durableQueue.summary.retryableProviderDeferred;
       const readyToRetry = budget.providerDeferred.readyToRetry;
+      const activeProviderCooldownCount = activeProviderCooldowns.length;
       const gates = [
         {
           name: "provider_cooldowns_no_expired_rows",
@@ -1252,7 +1254,7 @@ async function main(): Promise<void> {
         ok,
         healthState: ok
           ? "provider_cooldowns_ok"
-          : retryableProviderDeferred > 0 && readyToRetry === 0
+          : retryableProviderDeferred > 0 && (readyToRetry === 0 || activeProviderCooldownCount > 0)
             ? "provider_cooldowns_backpressured"
             : "provider_cooldowns_actionable",
         runtimeOk: ok,
@@ -1266,6 +1268,7 @@ async function main(): Promise<void> {
           providerDeferredJobs: durableQueue.summary.providerDeferred,
           retryableProviderDeferredJobs: retryableProviderDeferred,
           readyToRetryProviderDeferredJobs: readyToRetry,
+          activeProviderCooldowns: activeProviderCooldownCount,
           waitingProviderCapacity: budget.providerDeferred.waitingProviderCapacity,
           waitingCooldown: budget.providerDeferred.waitingCooldown
         },
@@ -1277,6 +1280,7 @@ async function main(): Promise<void> {
           failedQueueJobs,
           retryableProviderDeferred,
           readyToRetry,
+          activeProviderCooldownCount,
           waitingProviderCapacity: budget.providerDeferred.waitingProviderCapacity
         }),
         gates,
@@ -1820,6 +1824,21 @@ function collectQueueBudget(config: ReturnType<typeof loadConfig>, jobs: ReviewQ
   }
 }
 
+function collectBudgetJobsForSelection(
+  statePath: string,
+  selectedJobs: ReviewQueueJobRecord[],
+  now?: Date
+): ReviewQueueJobRecord[] {
+  const jobsById = new Map<string, ReviewQueueJobRecord>();
+  for (const job of collectOperatorReviewQueue(statePath, { now }).jobs) {
+    if (job.state === "leased" || job.state === "running") jobsById.set(job.jobId, job);
+  }
+  for (const job of selectedJobs) {
+    jobsById.set(job.jobId, job);
+  }
+  return [...jobsById.values()];
+}
+
 function failedGates(gates: Array<{ name: string; ok: boolean; detail: string }>): Array<{ name: string; ok: boolean; detail: string }> {
   return gates.filter((gate) => !gate.ok);
 }
@@ -1858,6 +1877,7 @@ function queueHealthGates(
   budget?: ReleaseStatus["budget"]
 ): Array<{ name: string; ok: boolean; detail: string }> {
   const readyToRetry = budget?.providerDeferred.readyToRetry ?? durableQueue.summary.retryableProviderDeferred;
+  const retryableProviderDeferred = budget?.providerDeferred.retryable ?? durableQueue.summary.retryableProviderDeferred;
   return [
     {
       name: "queue_coverage_ok",
@@ -1873,10 +1893,13 @@ function queueHealthGates(
     },
     {
       name: "queue_no_ready_provider_deferred_jobs",
-      ok: readyToRetry === 0,
+      ok: retryableProviderDeferred === 0,
       detail:
         `${readyToRetry} ready-to-retry provider-deferred job(s); ` +
-        `provider_deferred total=${budget?.providerDeferred.total ?? durableQueue.summary.providerDeferred}`
+        `provider_deferred total=${budget?.providerDeferred.total ?? durableQueue.summary.providerDeferred} ` +
+        `retryable=${retryableProviderDeferred} ` +
+        `waiting_capacity=${budget?.providerDeferred.waitingProviderCapacity ?? 0} ` +
+        `waiting_cooldown=${budget?.providerDeferred.waitingCooldown ?? 0}`
     }
   ];
 }
@@ -1899,6 +1922,7 @@ function providerCooldownRecommendedActions(input: {
   failedQueueJobs: number;
   retryableProviderDeferred: number;
   readyToRetry: number;
+  activeProviderCooldownCount: number;
   waitingProviderCapacity: number;
 }): string[] {
   const retryCommand =
@@ -1906,7 +1930,10 @@ function providerCooldownRecommendedActions(input: {
     `--expired-only true --dry-run false --zcode true${input.repo ? ` --repo ${input.repo}` : ""}`;
   return [
     ...(input.failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
-    ...(input.expiredCount > 0 || input.readyToRetry > 0 ? [retryCommand] : []),
+    ...(input.activeProviderCooldownCount > 0
+      ? ["wait for active provider cooldown to expire before retrying provider-deferred work"]
+      : []),
+    ...(input.activeProviderCooldownCount === 0 && (input.expiredCount > 0 || input.readyToRetry > 0) ? [retryCommand] : []),
     ...(input.retryableProviderDeferred > 0 && input.readyToRetry === 0 && input.waitingProviderCapacity > 0
       ? ["wait for active provider run to finish; retryable provider-deferred jobs are blocked by provider capacity"]
       : []),
