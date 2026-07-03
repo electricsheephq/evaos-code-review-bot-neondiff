@@ -1160,6 +1160,7 @@ export class ReviewStateStore {
 
   clearReviewQueueLeases(input: {
     now?: Date;
+    leaseTtlMs?: number;
     expiredOnly?: boolean;
     dryRun?: boolean;
     repo?: string;
@@ -1171,16 +1172,19 @@ export class ReviewStateStore {
     const expiredOnly = input.expiredOnly ?? true;
     const dryRun = input.dryRun ?? true;
     const forceActive = input.forceActive ?? false;
+    const leaseTtlMs = input.leaseTtlMs ?? 15 * 60_000;
+    validatePositiveQueueLimit(leaseTtlMs, "leaseTtlMs");
     const checkedAtMs = Date.parse(checkedAt);
 
     this.db.exec("begin immediate");
     try {
       const runLeases = this.listReviewRunLeaseClearCandidates(checkedAt)
-        .filter((lease) => !expiredOnly || lease.staleReason);
+        .filter((lease) => lease.staleReason);
       const staleRunLeaseIds = new Set(runLeases.filter((lease) => lease.staleReason).map((lease) => lease.leaseId));
       const jobs = this.listReviewQueueLeaseClearCandidates({
         checkedAt,
         checkedAtMs,
+        leaseTtlMs,
         expiredOnly,
         forceActive,
         staleRunLeaseIds,
@@ -1190,7 +1194,7 @@ export class ReviewStateStore {
       });
       const matched = jobs.length + runLeases.length;
       const expiredMatched =
-        jobs.filter((job) => job.expired || job.staleReason === "missing_lease_expiry").length +
+        jobs.filter((job) => job.expired).length +
         runLeases.filter((lease) => lease.staleReason).length;
       const activeMatched = matched - expiredMatched;
       let requeued = 0;
@@ -1217,7 +1221,6 @@ export class ReviewStateStore {
           requeued += Number(result.changes);
         }
         for (const lease of runLeases) {
-          if (!lease.staleReason && !forceActive) continue;
           deletedRunLeases += Number(
             this.db.prepare("delete from review_run_leases where lease_id = ?").run(lease.leaseId).changes
           );
@@ -1907,6 +1910,7 @@ export class ReviewStateStore {
   private listReviewQueueLeaseClearCandidates(input: {
     checkedAt: string;
     checkedAtMs: number;
+    leaseTtlMs: number;
     expiredOnly: boolean;
     forceActive: boolean;
     staleRunLeaseIds: Set<string>;
@@ -1920,12 +1924,18 @@ export class ReviewStateStore {
       .filter((job) => !input.jobId || job.jobId === input.jobId)
       .map((job) => {
         const leaseExpiresAtMs = job.leaseExpiresAt ? Date.parse(job.leaseExpiresAt) : Number.NaN;
+        const updatedAtMs = Date.parse(job.updatedAt);
+        const legacyLeaseCutoffMs = input.checkedAtMs - input.leaseTtlMs;
+        const expiredByLeaseExpiry = job.leaseExpiresAt
+          ? !Number.isFinite(leaseExpiresAtMs) ||
+            (Number.isFinite(input.checkedAtMs) && leaseExpiresAtMs <= input.checkedAtMs)
+          : !Number.isFinite(updatedAtMs) ||
+            (Number.isFinite(input.checkedAtMs) && updatedAtMs <= legacyLeaseCutoffMs);
+        const expiredByStaleRunLease = Boolean(job.leaseId && input.staleRunLeaseIds.has(job.leaseId));
         const expired =
-          !job.leaseExpiresAt ||
-          !Number.isFinite(leaseExpiresAtMs) ||
-          (Number.isFinite(input.checkedAtMs) && leaseExpiresAtMs <= input.checkedAtMs) ||
-          Boolean(job.leaseId && input.staleRunLeaseIds.has(job.leaseId));
-        const staleReason: ReviewQueueLeaseClearCandidate["staleReason"] = !job.leaseExpiresAt
+          expiredByLeaseExpiry ||
+          expiredByStaleRunLease;
+        const staleReason: ReviewQueueLeaseClearCandidate["staleReason"] = !job.leaseExpiresAt && expiredByLeaseExpiry
           ? "missing_lease_expiry"
           : expired
             ? "expired"

@@ -72,6 +72,11 @@ describe("beta release status", () => {
       sourceHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
       configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-live.json"
     });
+    expect(status.summary).toMatchObject({
+      blockingErrorRows: 0,
+      failedQueueJobs: 0,
+      staleReviewLeases: 0
+    });
     expect(JSON.stringify(status)).not.toMatch(/PRIVATE KEY|ghp_|BEGIN RSA|BEGIN OPENSSH/);
   });
 
@@ -1141,6 +1146,87 @@ describe("beta release status", () => {
     expect(status.recommendedActions).toContain(
       "npx tsx src/cli.ts clear-review-queue-leases --config (default config) --dry-run true --expired-only true"
     );
+  });
+
+  it("does not flag fresh legacy null review queue leases before the TTL expires", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-fresh-null-review-lease-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          lease_expires_at text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, lease_id, lease_expires_at, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'running', ?, null, ?, ?)`
+      ).run(
+        "fresh-null-running",
+        "automatic:electricsheephq/evaos-code-review-bot#176@head-null",
+        "electricsheephq/evaos-code-review-bot",
+        "electricsheephq",
+        176,
+        "head-null",
+        "queue-lease-fresh-null",
+        "2026-07-03T08:00:00.000Z",
+        "2026-07-03T08:00:59.000Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-03T08:01:00.000Z")
+    });
+
+    expect(status.database.staleActiveReviewQueueJobCount).toBe(0);
+    expect(status.gates).toContainEqual({
+      name: "queue_no_stale_review_leases",
+      ok: true,
+      detail: "0 stale review run lease(s); 0 stale active queue job(s)"
+    });
   });
 
   it("filters terminal queue rows and preserves active jobs before applying the budget row cap", () => {

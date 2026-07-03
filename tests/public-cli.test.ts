@@ -417,6 +417,19 @@ describe("public NeonDiff CLI surface", () => {
       workRoot: join(root, "runtime"),
       statePath,
       evidenceDir: join(root, "evidence"),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 24 * 60 * 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
       repoProfiles: {
         repos: {
           "owner/repo": { enabled: false }
@@ -471,6 +484,168 @@ describe("public NeonDiff CLI surface", () => {
       expect(output.actionableRows).toEqual([
         expect.objectContaining({ repo: "owner/repo", pullNumber: 123, state: "provider_deferred" })
       ]);
+    }
+  });
+
+  it("marks provider-cooldowns blocked when retryable durable provider-deferred work exists", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cooldown-health-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 24 * 60 * 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      const job = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 124,
+        headSha: "head-provider-deferred",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:01.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    try {
+      await runCli(["provider-cooldowns", "--config", configPath, "--expired-only", "true"]);
+      throw new Error("provider-cooldowns command unexpectedly passed");
+    } catch (error) {
+      const stdout = (error as { stdout: string }).stdout;
+      const output = JSON.parse(stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        runtimeOk: false,
+        healthState: "provider_cooldowns_actionable",
+        summary: {
+          expired: 0,
+          providerDeferredJobs: 1,
+          retryableProviderDeferredJobs: 1,
+          readyToRetryProviderDeferredJobs: 1
+        }
+      });
+      expect(output.failedGates).toEqual([
+        expect.objectContaining({ name: "provider_cooldowns_no_retryable_provider_deferred_jobs" })
+      ]);
+      expect(output.recommendedActions).toEqual([
+        expect.stringContaining("retry-provider-cooldowns")
+      ]);
+    }
+  });
+
+  it("reports provider-cooldowns backpressured when retryable work waits on active provider capacity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cooldown-backpressure-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewConcurrency: {
+        maxActiveRuns: 1,
+        leaseTtlMs: 24 * 60 * 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      store.enqueueReviewQueueJob({
+        repo: "other/repo",
+        pullNumber: 1,
+        headSha: "active-head",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      });
+      store.leaseNextReviewQueueJobs({
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        leaseTtlMs: 24 * 60 * 60_000,
+        now: new Date("2026-07-03T00:00:01.000Z")
+      });
+      const deferred = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 125,
+        headSha: "head-provider-backpressured",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: deferred.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:03.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:04.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    try {
+      await runCli(["provider-cooldowns", "--config", configPath, "--expired-only", "true"]);
+      throw new Error("provider-cooldowns command unexpectedly passed");
+    } catch (error) {
+      const stdout = (error as { stdout: string }).stdout;
+      const output = JSON.parse(stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        runtimeOk: false,
+        healthState: "provider_cooldowns_backpressured",
+        summary: {
+          expired: 0,
+          providerDeferredJobs: 1,
+          retryableProviderDeferredJobs: 1,
+          readyToRetryProviderDeferredJobs: 0,
+          waitingProviderCapacity: 1
+        }
+      });
+      expect(output.recommendedActions).toContain(
+        "wait for active provider run to finish; retryable provider-deferred jobs are blocked by provider capacity"
+      );
     }
   });
 

@@ -96,6 +96,17 @@ export interface ReleaseStatusInput {
 export interface ReleaseStatus {
   ok: boolean;
   checkedAt: string;
+  summary: {
+    blockingErrorRows: number;
+    failedQueueJobs: number;
+    staleReviewLeases: number;
+    providerDeferredQueueJobs: number;
+    retryableProviderDeferredQueueJobs: number;
+    readyToRetryProviderDeferredJobs: number;
+    expiredProviderCooldowns: number;
+    retryableExpiredProviderCooldowns: number;
+    activeProviderCooldowns: number;
+  };
   releaseUnit: {
     channel: "local-beta";
     sourceHead: string;
@@ -209,6 +220,17 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   return {
     ok: gates.every((gate) => gate.ok),
     checkedAt: (input.now ?? new Date()).toISOString(),
+    summary: {
+      blockingErrorRows: input.database.errorCount,
+      failedQueueJobs: input.database.failedReviewQueueJobCount ?? 0,
+      staleReviewLeases: staleReviewLeaseCount,
+      providerDeferredQueueJobs: input.database.providerDeferredReviewQueueJobCount ?? 0,
+      retryableProviderDeferredQueueJobs: input.database.retryableProviderDeferredReviewQueueJobCount ?? 0,
+      readyToRetryProviderDeferredJobs: actionableProviderDeferredQueueJobs,
+      expiredProviderCooldowns: input.database.expiredProviderCooldownCount ?? 0,
+      retryableExpiredProviderCooldowns: retryableExpiredProviderCooldownCount,
+      activeProviderCooldowns: input.database.activeProviderCooldownCount ?? 0
+    },
     releaseUnit: {
       channel: "local-beta",
       sourceHead: input.repo.head,
@@ -612,17 +634,18 @@ function readStaleActiveReviewQueueJobCount(db: DatabaseSync, now: Date, leaseTt
       .map((column) => column.name)
   );
   if (columns.has("lease_expires_at")) {
+    const legacyLeaseCutoffIso = new Date(now.getTime() - leaseTtlMs).toISOString();
     const row = db
       .prepare(
         `select count(*) as count
          from review_queue_jobs
          where state in ('leased', 'running')
            and (
-             lease_expires_at is null
-             or datetime(lease_expires_at) <= datetime(?)
+             (lease_expires_at is not null and datetime(lease_expires_at) <= datetime(?))
+             or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
            )`
       )
-      .get(now.toISOString()) as { count?: number };
+      .get(now.toISOString(), legacyLeaseCutoffIso) as { count?: number };
     return row.count ?? 0;
   }
   const legacyLeaseCutoffIso = new Date(now.getTime() - leaseTtlMs).toISOString();

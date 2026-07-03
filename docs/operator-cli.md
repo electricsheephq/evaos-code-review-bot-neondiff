@@ -239,8 +239,14 @@ npx tsx src/cli.ts why --config /Volumes/LEXAR/Codex/evaos-code-review-bot/confi
 Inspect provider cooldowns:
 
 ```bash
-npx tsx src/cli.ts cooldowns --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --expired-only true
+npx tsx src/cli.ts provider-cooldowns --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --expired-only true
 ```
+
+The provider-cooldown output includes `runtimeOk`, `healthState`, `failedGates`,
+and a compact summary of expired cooldown rows plus durable queue provider
+backpressure. `provider_cooldowns_backpressured` means retryable
+provider-deferred jobs exist, but provider capacity is currently occupied by an
+active run; wait for that run to finish before retrying.
 
 Dry-run stale review queue lease cleanup:
 
@@ -253,6 +259,10 @@ Apply expired-only cleanup after inspecting the dry-run output:
 ```bash
 npx tsx src/cli.ts clear-review-queue-leases --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --dry-run false --confirm true --expired-only true
 ```
+
+`--force-active true` only applies to queue jobs matched by the explicit filters.
+It does not clear healthy global run leases; stale/dead run leases are removed
+only when they are independently expired or owned by a dead worker.
 
 Build a repo-memory packet for dry-run evidence:
 

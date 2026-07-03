@@ -25,6 +25,7 @@ import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan } from "./issue-enrichment.js";
+import { buildReviewBudgetStatus } from "./review-budget.js";
 import {
   buildOperatorDashboard,
   buildRuntimeInventory,
@@ -869,6 +870,7 @@ async function main(): Promise<void> {
         dryRun,
         expiredOnly,
         forceActive,
+        leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
         ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {}),
         ...(args.pr ? { pullNumber: parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr") } : {}),
         ...(args["job-id"] ? { jobId: parseSingleArg(args["job-id"], "--job-id") } : {})
@@ -1192,8 +1194,10 @@ async function main(): Promise<void> {
 
   if (command === "provider-cooldowns") {
     const config = loadConfig(args.config);
-    const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
+    const statePath = args["state-path"] ?? config.statePath;
+    const state = new ReviewStateStore(statePath);
     try {
+      const checkedAt = new Date();
       const expiredOnly = args["expired-only"] === "true";
       const limit = args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined;
       const rows = state.listProviderCooldownReviews({
@@ -1202,32 +1206,76 @@ async function main(): Promise<void> {
         limit
       });
       const expiredCount = rows.filter((row) => row.expired).length;
+      const durableQueue = collectOperatorReviewQueue(statePath, {
+        repo: args.repo,
+        now: checkedAt
+      });
+      const budget = buildReviewBudgetStatus({
+        config,
+        jobs: durableQueue.jobs,
+        now: checkedAt,
+        includeDetails: false,
+        inputJobLimit: durableQueue.jobs.length
+      });
+      const failedQueueJobs = durableQueue.summary.failed;
+      const retryableProviderDeferred = durableQueue.summary.retryableProviderDeferred;
+      const readyToRetry = budget.providerDeferred.readyToRetry;
       const gates = [
         {
           name: "provider_cooldowns_no_expired_rows",
           ok: expiredCount === 0,
           detail: `${expiredCount} expired provider cooldown row(s)`
+        },
+        {
+          name: "provider_cooldowns_no_failed_queue_jobs",
+          ok: failedQueueJobs === 0,
+          detail: `${failedQueueJobs} failed durable queue job(s)`
+        },
+        {
+          name: "provider_cooldowns_no_retryable_provider_deferred_jobs",
+          ok: retryableProviderDeferred === 0,
+          detail:
+            `${retryableProviderDeferred} retryable provider-deferred job(s); ` +
+            `${readyToRetry} ready now; ${budget.providerDeferred.waitingProviderCapacity} waiting provider capacity`
         }
       ];
       const ok = gates.every((gate) => gate.ok);
       console.log(JSON.stringify({
         ok,
-        healthState: ok ? "provider_cooldowns_ok" : "provider_cooldowns_actionable",
+        healthState: ok
+          ? "provider_cooldowns_ok"
+          : retryableProviderDeferred > 0 && readyToRetry === 0
+            ? "provider_cooldowns_backpressured"
+            : "provider_cooldowns_actionable",
         runtimeOk: ok,
-        checkedAt: new Date().toISOString(),
+        checkedAt: checkedAt.toISOString(),
         expiredOnly,
         ...(args.repo ? { repo: args.repo } : {}),
         summary: {
           total: rows.length,
-          expired: expiredCount
+          expired: expiredCount,
+          failedQueueJobs,
+          providerDeferredJobs: durableQueue.summary.providerDeferred,
+          retryableProviderDeferredJobs: retryableProviderDeferred,
+          readyToRetryProviderDeferredJobs: readyToRetry,
+          waitingProviderCapacity: budget.providerDeferred.waitingProviderCapacity,
+          waitingCooldown: budget.providerDeferred.waitingCooldown
         },
         failedGates: failedGates(gates),
-        recommendedActions: expiredCount > 0
-          ? [`npx tsx src/cli.ts retry-provider-cooldowns --config ${args.config ?? "(default config)"} --expired-only true --dry-run false --zcode true${args.repo ? ` --repo ${args.repo}` : ""}`]
-          : [],
+        recommendedActions: providerCooldownRecommendedActions({
+          configPath: args.config ?? "(default config)",
+          repo: args.repo,
+          expiredCount,
+          failedQueueJobs,
+          retryableProviderDeferred,
+          readyToRetry,
+          waitingProviderCapacity: budget.providerDeferred.waitingProviderCapacity
+        }),
         gates,
         count: rows.length,
         expiredCount,
+        durableQueue,
+        budget,
         rows
       }, null, 2));
       if (!ok) process.exitCode = 1;
@@ -1833,6 +1881,30 @@ function queueRecommendedActions(gates: Array<{ name: string; ok: boolean; detai
     ...(failed.has("queue_no_failed_jobs") ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(failed.has("queue_no_ready_provider_deferred_jobs")
       ? ["wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry"]
+      : [])
+  ];
+}
+
+function providerCooldownRecommendedActions(input: {
+  configPath: string;
+  repo?: string;
+  expiredCount: number;
+  failedQueueJobs: number;
+  retryableProviderDeferred: number;
+  readyToRetry: number;
+  waitingProviderCapacity: number;
+}): string[] {
+  const retryCommand =
+    `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
+    `--expired-only true --dry-run false --zcode true${input.repo ? ` --repo ${input.repo}` : ""}`;
+  return [
+    ...(input.failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(input.expiredCount > 0 || input.readyToRetry > 0 ? [retryCommand] : []),
+    ...(input.retryableProviderDeferred > 0 && input.readyToRetry === 0 && input.waitingProviderCapacity > 0
+      ? ["wait for active provider run to finish; retryable provider-deferred jobs are blocked by provider capacity"]
+      : []),
+    ...(input.retryableProviderDeferred > 0 && input.readyToRetry === 0 && input.waitingProviderCapacity === 0
+      ? ["inspect provider-deferred queue rows; retryable jobs are blocked by a non-cooldown budget gate"]
       : [])
   ];
 }

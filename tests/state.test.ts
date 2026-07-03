@@ -1047,6 +1047,13 @@ describe("review state store", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-force-active-clear-"));
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const runLease = store.tryAcquireReviewRunLease(
+      1,
+      60_000,
+      new Date("2026-07-03T08:10:00.000Z"),
+      process.pid
+    );
+    expect(runLease).toBeDefined();
     const job = store.enqueueReviewQueueJob({
       repo: "electricsheephq/evaos-code-review-bot",
       pullNumber: 175,
@@ -1101,11 +1108,65 @@ describe("review state store", () => {
       forceActive: true,
       jobId: job.jobId,
       now: new Date("2026-07-03T08:10:03.000Z")
+	    });
+	    expect(cleared).toMatchObject({ matched: 1, activeMatched: 1, requeued: 1, deletedRunLeases: 0, runLeases: [] });
+	    expect(store.getReviewQueueJob(job.jobId)).toMatchObject({
+	      state: "queued",
+	      lastError: "queue_lease_operator_requeued:forced_active"
+	    });
+	    expect(store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-03T08:10:04.000Z"), process.pid)).toBeUndefined();
+	    store.close();
+	  });
+
+  it("uses the queue lease TTL fallback for fresh legacy null lease expiries", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-null-lease-fallback-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const job = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 176,
+      headSha: "head-null-expiry",
+      providerId: "zai",
+      now: new Date("2026-07-03T08:30:00.000Z")
+    }).job;
+    store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      leaseTtlMs: 60_000,
+      now: new Date("2026-07-03T08:30:01.000Z")
     });
-    expect(cleared).toMatchObject({ matched: 1, activeMatched: 1, requeued: 1 });
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare("update review_queue_jobs set lease_expires_at = null, updated_at = ? where job_id = ?")
+        .run("2026-07-03T08:30:01.000Z", job.jobId);
+    } finally {
+      db.close();
+    }
+
+    expect(store.clearReviewQueueLeases({
+      dryRun: true,
+      expiredOnly: true,
+      leaseTtlMs: 60_000,
+      now: new Date("2026-07-03T08:30:30.000Z")
+    })).toMatchObject({ matched: 0, expiredMatched: 0 });
+
+    const expired = store.clearReviewQueueLeases({
+      dryRun: false,
+      expiredOnly: true,
+      leaseTtlMs: 60_000,
+      now: new Date("2026-07-03T08:31:01.001Z")
+    });
+    expect(expired).toMatchObject({
+      matched: 1,
+      expiredMatched: 1,
+      requeued: 1,
+      jobs: [expect.objectContaining({ jobId: job.jobId, staleReason: "missing_lease_expiry" })]
+    });
     expect(store.getReviewQueueJob(job.jobId)).toMatchObject({
       state: "queued",
-      lastError: "queue_lease_operator_requeued:forced_active"
+      lastError: "queue_lease_operator_requeued:missing_lease_expiry"
     });
     store.close();
   });
