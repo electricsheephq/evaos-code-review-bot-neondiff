@@ -46,7 +46,9 @@ import {
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
+  type ProcessedStatus,
   type ReviewQueueJobState,
+  type ReviewerSessionJobState,
   type ReviewRunLease,
   type StoredProcessedReviewRecord
 } from "./state.js";
@@ -493,11 +495,6 @@ export async function retryFailedHeadWithDeps(input: {
     });
     const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
     // A retry dry-run is a successful inspection, but the original row must remain retryable for the later live run.
-    restoreFailedRetryRowIfNeeded({
-      state,
-      retryTarget,
-      reason: retryStatus === "dry_run" ? "retry_dry_run" : `retry_did_not_review=${retryStatus}`
-    });
     updateRetryQueueJobsAfterRetry({
       state,
       repo: options.repo,
@@ -505,6 +502,11 @@ export async function retryFailedHeadWithDeps(input: {
       headSha: options.headSha,
       status: retryStatus,
       dryRun: options.dryRun
+    });
+    restoreFailedRetryRowIfNeeded({
+      state,
+      retryTarget,
+      reason: retryStatus === "dry_run" ? "retry_dry_run" : `retry_did_not_review=${retryStatus}`
     });
     return {
       repo: options.repo,
@@ -581,6 +583,7 @@ function updateRetryQueueJobsAfterRetry(input: {
   const patch = retryQueuePatchForStatus({
     status: input.status,
     dryRun: input.dryRun,
+    processedStatus: processed?.status,
     processedReviewUrl: processed?.reviewUrl,
     providerCooldownUntil: providerCooldown?.cooldownUntil,
     processedError: processed?.error
@@ -593,80 +596,170 @@ function updateRetryQueueJobsAfterRetry(input: {
       ...(patch.reviewUrl ? { reviewUrl: patch.reviewUrl } : {}),
       lastError: patch.lastError
     });
+    if (job.sessionId && patch.sessionJobState) {
+      input.state.updateReviewerSessionJobState({
+        repo: job.repo,
+        pullNumber: job.pullNumber,
+        headSha: job.headSha,
+        jobState: patch.sessionJobState,
+        ...(patch.sessionProcessedStatus ? { processedReviewStatus: patch.sessionProcessedStatus } : {})
+      });
+    }
   }
 }
 
 function retryQueuePatchForStatus(input: {
   status: RetryFailedHeadResult["status"];
   dryRun: boolean;
+  processedStatus?: ProcessedStatus;
   processedReviewUrl?: string;
   providerCooldownUntil?: string;
   processedError?: string;
-}): { state: ReviewQueueJobState; nextEligibleAt?: string; reviewUrl?: string; lastError: string } {
+}): {
+  state: ReviewQueueJobState;
+  nextEligibleAt?: string;
+  reviewUrl?: string;
+  lastError: string;
+  sessionJobState?: ReviewerSessionJobState;
+  sessionProcessedStatus?: ProcessedStatus;
+} {
   switch (input.status) {
     case "reviewed":
     case "reviewed_command":
       return input.dryRun
         ? {
-            state: "provider_deferred",
-            lastError: "retry_dry_run_completed_not_posted"
+            state: "queued",
+            lastError: "retry_dry_run_completed_not_posted",
+            sessionJobState: "completed",
+            sessionProcessedStatus: "dry_run"
           }
         : {
             state: "posted",
             ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
-            lastError: input.status
+            lastError: input.status,
+            sessionJobState: "completed",
+            sessionProcessedStatus: "posted"
           };
     case "dry_run":
       return {
-        state: "provider_deferred",
-        lastError: "retry_dry_run_completed_not_posted"
+        state: "queued",
+        lastError: "retry_dry_run_completed_not_posted",
+        sessionJobState: "completed",
+        sessionProcessedStatus: "dry_run"
       };
     case "skipped_provider_cooldown":
       return {
         state: "provider_deferred",
         ...(input.providerCooldownUntil ? { nextEligibleAt: input.providerCooldownUntil } : {}),
-        lastError: input.processedError ?? "provider_deferred_without_cooldown"
+        lastError: input.processedError ?? "provider_deferred_without_cooldown",
+        sessionJobState: "assigned"
       };
     case "skipped_stale_head":
       return {
         state: "stale_retired",
-        lastError: "retry_did_not_review=skipped_stale_head"
+        lastError: "retry_did_not_review=skipped_stale_head",
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
       };
     case "skipped_closed":
       return {
         state: "closed_retired",
-        lastError: "retry_did_not_review=skipped_closed"
+        lastError: "retry_did_not_review=skipped_closed",
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
       };
     case "skipped_capacity":
       return {
         state: "queued",
-        lastError: "retry_did_not_review=skipped_capacity"
+        lastError: "retry_did_not_review=skipped_capacity",
+        sessionJobState: "assigned"
       };
     case "skipped_processed":
       return input.processedError && parseProviderCooldownError(input.processedError)
         ? {
             state: "provider_deferred",
             ...(input.providerCooldownUntil ? { nextEligibleAt: input.providerCooldownUntil } : {}),
-            lastError: input.processedError
+            lastError: input.processedError,
+            sessionJobState: "assigned",
+            ...(input.processedStatus ? { sessionProcessedStatus: input.processedStatus } : {})
           }
         : {
-            state: "posted",
+            state: retryQueueJobStateForProcessedStatus(input.processedStatus, input.dryRun),
             ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
-            lastError: "retry_did_not_review=skipped_processed"
+            lastError: `retry_did_not_review=skipped_processed:${input.processedStatus ?? "unknown"}`,
+            sessionJobState: reviewerSessionJobStateForProcessedStatus(input.processedStatus),
+            ...(input.processedStatus ? { sessionProcessedStatus: input.processedStatus } : {})
           };
-    case "failed":
-    case "skipped_draft":
-    case "skipped_canary":
-    case "skipped_policy":
     case "skipped_command_stop":
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
       return {
+        state: "command_recorded",
+        lastError: retryQueueCommandRecordedReason(input.status),
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
+      };
+    case "failed":
+    case "skipped_draft":
+    case "skipped_canary":
+    case "skipped_policy":
+      return {
         state: "failed",
-        lastError: `retry_did_not_review=${input.status}`
+        lastError: `retry_did_not_review=${input.status}`,
+        sessionJobState: "failed",
+        sessionProcessedStatus: "failed"
       };
     default:
       return assertNever(input.status);
+  }
+}
+
+function retryQueueJobStateForProcessedStatus(status: ProcessedStatus | undefined, dryRun: boolean): ReviewQueueJobState {
+  switch (status) {
+    case "posted":
+      return "posted";
+    case "dry_run":
+      return "queued";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "stale_retired";
+    case undefined:
+      return dryRun ? "queued" : "posted";
+    default:
+      return assertNever(status);
+  }
+}
+
+function reviewerSessionJobStateForProcessedStatus(status: ProcessedStatus | undefined): ReviewerSessionJobState {
+  switch (status) {
+    case "posted":
+    case "dry_run":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "skipped";
+    case undefined:
+      return "completed";
+    default:
+      return assertNever(status);
+  }
+}
+
+function retryQueueCommandRecordedReason(status: Extract<
+  RetryFailedHeadResult["status"],
+  "skipped_command_stop" | "skipped_command_explain" | "skipped_finishing_touch_draft"
+>): string {
+  switch (status) {
+    case "skipped_command_stop":
+      return "manual_command_stop_recorded";
+    case "skipped_command_explain":
+      return "manual_command_explain_recorded";
+    case "skipped_finishing_touch_draft":
+      return "manual_command_finishing_touch_draft_recorded";
+    default:
+      return assertNever(status);
   }
 }
 
