@@ -182,6 +182,15 @@ export async function evaluateLicenseReviewGate(input: {
   if (input.visibility === "public" && input.config.publicReposFree) {
     return { ok: true, repo: input.repo, visibility: input.visibility, status: "active", reason: "public repo path is free" };
   }
+  if (input.visibility === "unknown" && input.config.privateReposRequireEntitlement) {
+    return {
+      ok: false,
+      repo: input.repo,
+      visibility: input.visibility,
+      status: "network",
+      reason: "repo visibility is unknown; private repo entitlement gate fails closed"
+    };
+  }
   if (input.visibility !== "private" || !input.config.privateReposRequireEntitlement) {
     return { ok: true, repo: input.repo, visibility: input.visibility, status: "active", reason: "repo visibility does not require entitlement" };
   }
@@ -200,6 +209,16 @@ export async function evaluateLicenseReviewGate(input: {
       visibility: input.visibility,
       status: status.status,
       reason: `private repo review requires active entitlement: ${status.detail}`
+    };
+  }
+  if (!entitlementUsableDuringOutage(status.entitlement, input.now ?? new Date(), input.config.offlineGraceMs)) {
+    return {
+      ok: false,
+      repo: input.repo,
+      visibility: input.visibility,
+      status: "expired",
+      entitlement: status.entitlement,
+      reason: `private repo review requires a fresh entitlement cache within offlineGraceMs=${input.config.offlineGraceMs}`
     };
   }
   if (!entitlementCoversPrivateRepo(status.entitlement)) {
@@ -353,7 +372,7 @@ function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): Lic
     status,
     checkedAt: readString(record, "checkedAt") ?? now.toISOString(),
     ...(readString(record, "expiresAt") ? { expiresAt: readString(record, "expiresAt")! } : {}),
-    repoVisibilityScope: readRepoVisibilityScope(record) ?? "private",
+    repoVisibilityScope: readRepoVisibilityScope(record) ?? "public",
     updateEntitlement: readBoolean(record, "updateEntitlement") ?? false,
     ...(readString(record, "plan") ? { plan: readString(record, "plan")! } : {}),
     ...(readNumber(record, "seats") !== undefined ? { seats: readNumber(record, "seats")! } : {}),

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
@@ -274,7 +275,7 @@ const DEFAULT_CONFIG: BotConfig = {
   license: {
     enabled: false,
     apiBaseUrl: undefined,
-    cachePath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/license/entitlement-cache.json",
+    cachePath: "",
     storageBackend: "keychain",
     keyPath: undefined,
     keychainService: "com.electricsheephq.neondiff.license",
@@ -391,6 +392,7 @@ function validateConfig(config: BotConfig): void {
   config.issueEnrichment = issueEnrichment;
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
   const license = config.license ?? DEFAULT_CONFIG.license!;
+  license.cachePath = license.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
   config.license = license;
   validateLicenseConfig(license, "config.license");
   const desktop = config.desktop ?? DEFAULT_CONFIG.desktop!;
@@ -594,6 +596,13 @@ function validateLicenseConfig(value: unknown, label: string): void {
   if (typeof value.cachePath !== "string" || value.cachePath.trim().length === 0) {
     throw new Error(`${label}.cachePath must be a non-empty string`);
   }
+  assertPathOutsideProtectedRoot({
+    path: value.cachePath,
+    protectedRoot: process.cwd(),
+    protectedRoots: getProtectedCheckoutRoots(),
+    pathLabel: `${label}.cachePath`,
+    protectedRootLabel: "protected checkout root"
+  });
   validateOptionalString(value.storageBackend, `${label}.storageBackend`);
   if (value.storageBackend !== "keychain" && value.storageBackend !== "file") {
     throw new Error(`${label}.storageBackend must be keychain or file`);
@@ -601,6 +610,15 @@ function validateLicenseConfig(value: unknown, label: string): void {
   validateOptionalString(value.keyPath, `${label}.keyPath`);
   if (value.storageBackend === "file" && (typeof value.keyPath !== "string" || value.keyPath.trim().length === 0)) {
     throw new Error(`${label}.keyPath is required when ${label}.storageBackend=file`);
+  }
+  if (typeof value.keyPath === "string" && value.keyPath.trim().length > 0) {
+    assertPathOutsideProtectedRoot({
+      path: value.keyPath,
+      protectedRoot: process.cwd(),
+      protectedRoots: getProtectedCheckoutRoots(),
+      pathLabel: `${label}.keyPath`,
+      protectedRootLabel: "protected checkout root"
+    });
   }
   validateOptionalString(value.keychainService, `${label}.keychainService`);
   validateOptionalString(value.keychainAccount, `${label}.keychainAccount`);

@@ -1509,7 +1509,7 @@ async function buildLicenseGateForPull(input: {
   }
   let visibility: "public" | "private" | "unknown" = "unknown";
   try {
-    const repoMetadata = await input.github.getRepo(input.repo);
+    const repoMetadata = await getRepoMetadataForLicenseGate(input.github, input.repo);
     visibility = repoMetadata.private || repoMetadata.visibility === "private" ? "private" : "public";
   } catch (error) {
     return {
@@ -1525,6 +1525,21 @@ async function buildLicenseGateForPull(input: {
     repo: input.repo,
     visibility
   });
+}
+
+async function getRepoMetadataForLicenseGate(github: GitHubApi, repo: string): ReturnType<GitHubApi["getRepo"]> {
+  try {
+    return await github.getRepo(repo);
+  } catch (firstError) {
+    try {
+      return await github.getRepo(repo);
+    } catch (secondError) {
+      throw new Error(
+        `repo metadata lookup failed after retry: first=${firstError instanceof Error ? firstError.message : String(firstError)}; ` +
+          `second=${secondError instanceof Error ? secondError.message : String(secondError)}`
+      );
+    }
+  }
 }
 
 function recordActivationBaselineExistingHead(state: ReviewStateStore, repo: string, pull: PullRequestSummary): void {

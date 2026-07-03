@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BotConfig } from "../src/config.js";
+import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import {
   activateLicense,
   evaluateLicenseReviewGate,
@@ -96,6 +96,32 @@ describe("license activation and entitlement cache", () => {
     expect(network).toMatchObject({ ok: false, status: "network", classification: "network" });
   });
 
+  it("derives cache path from statePath and rejects license artifacts inside the checkout", () => {
+    const root = mkRoot(roots);
+    const config = loadConfigFromObject({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state", "reviews.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: {
+        enabled: true
+      }
+    });
+
+    expect(config.license?.cachePath).toBe(join(root, "state", "license", "entitlement-cache.json"));
+
+    expect(() => loadConfigFromObject({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: {
+        enabled: true,
+        cachePath: join(process.cwd(), "license-cache.json")
+      }
+    })).toThrow(/config\.license\.cachePath must be outside protected checkout root/);
+  });
+
   it("uses a still-active cached entitlement during transient API outage", async () => {
     const root = mkRoot(roots);
     const config = licenseConfig(root, "http://127.0.0.1:9");
@@ -139,6 +165,17 @@ describe("license activation and entitlement cache", () => {
       status: "missing"
     });
 
+    const unknown = await evaluateLicenseReviewGate({
+      config,
+      repo: "owner/private",
+      visibility: "unknown",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+    expect(unknown).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("visibility is unknown")
+    });
+
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
       status: "active",
       checkedAt: "2026-07-04T00:00:00.000Z",
@@ -159,6 +196,24 @@ describe("license activation and entitlement cache", () => {
 
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
       status: "active",
+      checkedAt: "2026-07-01T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+    const stale = await evaluateLicenseReviewGate({
+      config,
+      repo: "owner/private",
+      visibility: "private",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+    expect(stale).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("fresh entitlement cache")
+    });
+
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
       checkedAt: "2026-07-04T00:00:00.000Z",
       expiresAt: "2026-08-01T00:00:00.000Z",
       repoVisibilityScope: "private",
@@ -173,6 +228,41 @@ describe("license activation and entitlement cache", () => {
     expect(active).toMatchObject({
       ok: true,
       reason: "active entitlement covers private repo review"
+    });
+  });
+
+  it("defaults missing API repo scope to public and reports missing env vars clearly", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        updateEntitlement: false
+      });
+    });
+    servers.push(server);
+    const activated = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: "LIC-missing-scope-test-123456"
+    });
+    expect(activated.entitlement?.repoVisibilityScope).toBe("public");
+
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, root, server.url);
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      "src/cli.ts",
+      "license",
+      "activate",
+      "--config",
+      configPath,
+      "--license-key-env",
+      "NEONDIFF_LICENSE_KEY_DOES_NOT_EXIST"
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stderr: expect.stringContaining("NEONDIFF_LICENSE_KEY_DOES_NOT_EXIST did not resolve")
     });
   });
 

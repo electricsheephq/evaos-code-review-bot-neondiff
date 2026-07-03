@@ -120,11 +120,10 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const licenseConfig = licenseConfigFromArgs(config.license!, args);
     if (action === "activate") {
-      const licenseKey = args["license-key"] ?? (args["license-key-env"] ? process.env[parseSingleArg(args["license-key-env"], "--license-key-env")] : undefined);
-      if (!licenseKey) throw new Error("license activate requires --license-key or --license-key-env");
+      const licenseKey = resolveLicenseKeyArg(args);
       const result = await activateLicense({
         config: licenseConfig,
-        licenseKey: parseSingleArg(licenseKey, "--license-key"),
+        licenseKey,
         ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
       });
       console.log(stringifyRedactedJson({ command: "license activate", ...result }));
@@ -2233,6 +2232,17 @@ function licenseConfigFromArgs(base: LicenseConfig, args: ParsedArgs): LicenseCo
     ...(args["license-key-path"] ? { keyPath: parseSingleArg(args["license-key-path"], "--license-key-path") } : {}),
     ...(args["license-storage"] ? { storageBackend: parseLicenseStorageBackend(parseSingleArg(args["license-storage"], "--license-storage")) } : {})
   };
+}
+
+function resolveLicenseKeyArg(args: ParsedArgs): string {
+  if (args["license-key"]) return parseSingleArg(args["license-key"], "--license-key");
+  if (args["license-key-env"]) {
+    const envName = parseSingleArg(args["license-key-env"], "--license-key-env");
+    const value = process.env[envName];
+    if (!value) throw new Error(`license activate --license-key-env ${envName} did not resolve to a non-empty environment variable`);
+    return value;
+  }
+  throw new Error("license activate requires --license-key or --license-key-env");
 }
 
 function parseLicenseStorageBackend(value: string): "keychain" | "file" {
