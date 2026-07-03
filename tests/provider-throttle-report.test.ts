@@ -301,6 +301,14 @@ describe("provider throttle report", () => {
         error: "Tool failed with internal marker [1302]",
         createdAt: "2026-07-01 09:00:00"
       });
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 12,
+        headSha: "provider-wording-head",
+        status: "failed",
+        error: "reviewer provider not configured",
+        createdAt: "2026-07-01 10:00:00"
+      });
     } finally {
       db.close();
     }

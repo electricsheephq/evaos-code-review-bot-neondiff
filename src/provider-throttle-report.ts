@@ -122,7 +122,6 @@ const DEFAULT_SINCE = "24h";
 const DEFAULT_TIMEZONE = "Asia/Singapore";
 const DEFAULT_PEAK_START_HOUR = 14;
 const DEFAULT_PEAK_END_HOUR = 18;
-const KNOWN_PROVIDER_CODES = new Set(["1302", "1305", "1308", "1309", "1310", "1316", "1317"]);
 
 export function collectProviderThrottleReport(input: ProviderThrottleReportOptions): ProviderThrottleReport {
   const now = input.now ?? new Date();
@@ -213,7 +212,8 @@ function emptyReport(input: {
       "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted.",
       "processed_reviews events are bucketed by created_at; review_queue_jobs events are bucketed by coalesce(finished_at, updated_at, started_at, created_at), so deduped queue incidents may reflect retry/update time instead of first-observed throttle time.",
       "processed_reviews does not store provider_id, so provider context for those rows is reported as unknown.",
-      "retryOutcomes is sourced from review_queue_jobs current state only; processed_reviews-only incidents are excluded from retry outcomes, and stale queue rows can skew retry outcome telemetry until the worker repairs them."
+      "retryOutcomes is sourced from review_queue_jobs current state only; processed_reviews-only incidents are excluded from retry outcomes, and stale queue rows can skew retry outcome telemetry until the worker repairs them.",
+      "Each incident is assigned to the first matching category by precedence; mixed-cause provider errors are collapsed into one summary category while all extracted provider codes remain visible."
     ]
   };
 }
@@ -415,7 +415,16 @@ function classifyProviderThrottle(error: string): ProviderThrottleCategory | und
   ) {
     return "networkOrGithubDependency";
   }
-  if (normalized.includes("provider") || codes.length > 0) return "unknownProviderError";
+  if (
+    normalized.includes("providerbusinesserror") ||
+    normalized.includes("provider throttle") ||
+    normalized.includes("provider cooldown") ||
+    normalized.includes("provider_throttle") ||
+    normalized.includes("provider_cooldown") ||
+    codes.length > 0
+  ) {
+    return "unknownProviderError";
+  }
   return undefined;
 }
 
