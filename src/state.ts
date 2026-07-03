@@ -93,6 +93,27 @@ export interface ReviewRunLease {
   ownerPid: number;
 }
 
+export interface IssueEnrichmentRunLease {
+  leaseId: string;
+  expiresAt: string;
+  ownerPid: number;
+}
+
+export interface IssueEnrichmentRunLeaseClearCandidate extends IssueEnrichmentRunLease {
+  expired: boolean;
+}
+
+export interface ClearIssueEnrichmentRunLeasesResult {
+  checkedAt: string;
+  expiredOnly: boolean;
+  dryRun: boolean;
+  matched: number;
+  expiredMatched: number;
+  activeMatched: number;
+  deleted: number;
+  leases: IssueEnrichmentRunLeaseClearCandidate[];
+}
+
 export interface ReviewerSessionRecord {
   sessionId: string;
   repo: string;
@@ -556,6 +577,13 @@ export class ReviewStateStore {
         created_at text not null,
         updated_at text not null
       );
+
+      create table if not exists issue_enrichment_run_leases (
+        lease_id text primary key,
+        started_at text not null,
+        expires_at text not null,
+        owner_pid integer
+      );
     `);
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
@@ -986,6 +1014,75 @@ export class ReviewStateStore {
 
   releaseReviewRunLease(leaseId: string): void {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  tryAcquireIssueEnrichmentRunLease(
+    maxActiveRuns: number,
+    leaseTtlMs: number,
+    now = new Date(),
+    ownerPid = process.pid
+  ): IssueEnrichmentRunLease | undefined {
+    if (!Number.isInteger(maxActiveRuns)) throw new Error("maxActiveRuns must be an integer");
+    if (maxActiveRuns < 1) throw new Error("maxActiveRuns must be at least 1");
+    if (!Number.isInteger(leaseTtlMs)) throw new Error("leaseTtlMs must be an integer");
+    if (leaseTtlMs < 1) throw new Error("leaseTtlMs must be at least 1");
+    if (!Number.isInteger(ownerPid) || ownerPid < 1) throw new Error("ownerPid must be a positive integer");
+
+    const leaseId = randomUUID();
+    const startedAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + leaseTtlMs).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      // Issue-enrichment leases intentionally use TTL-only lazy cleanup: expired rows are swept on the next acquire
+      // or by the confirm-gated clear-issue-enrichment-leases operator command.
+      this.db.prepare("delete from issue_enrichment_run_leases where expires_at <= ?").run(startedAt);
+      const row = this.db.prepare("select count(*) as count from issue_enrichment_run_leases").get() as { count: number };
+      if (row.count >= maxActiveRuns) {
+        this.db.exec("commit");
+        return undefined;
+      }
+      this.db
+        .prepare("insert into issue_enrichment_run_leases (lease_id, started_at, expires_at, owner_pid) values (?, ?, ?, ?)")
+        .run(leaseId, startedAt, expiresAt, ownerPid);
+      this.db.exec("commit");
+      return { leaseId, expiresAt, ownerPid };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  releaseIssueEnrichmentRunLease(leaseId: string): void {
+    this.db.prepare("delete from issue_enrichment_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  clearIssueEnrichmentRunLeases(input: { now?: Date; expiredOnly?: boolean; dryRun?: boolean } = {}): ClearIssueEnrichmentRunLeasesResult {
+    const checkedAt = (input.now ?? new Date()).toISOString();
+    const expiredOnly = input.expiredOnly ?? false;
+    const dryRun = input.dryRun ?? true;
+    const params: [string] | [] = expiredOnly ? [checkedAt] : [];
+    const whereClause = expiredOnly ? " where expires_at <= ?" : "";
+    this.db.exec("begin immediate");
+    try {
+      const rows = this.db
+        .prepare(`select lease_id as leaseId, expires_at as expiresAt, owner_pid as ownerPid from issue_enrichment_run_leases${whereClause} order by expires_at asc`)
+        .all(...params) as unknown as IssueEnrichmentRunLease[];
+      const leases = rows.map((lease) => ({
+        ...lease,
+        expired: lease.expiresAt <= checkedAt
+      }));
+      const matched = leases.length;
+      const expiredMatched = leases.filter((lease) => lease.expired).length;
+      const activeMatched = matched - expiredMatched;
+      const deleted = dryRun
+        ? 0
+        : Number(this.db.prepare(`delete from issue_enrichment_run_leases${whereClause}`).run(...params).changes);
+      this.db.exec("commit");
+      return { checkedAt, expiredOnly, dryRun, matched, expiredMatched, activeMatched, deleted, leases };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   assignReviewerSessionJob(input: {

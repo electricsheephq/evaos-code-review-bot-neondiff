@@ -31,6 +31,78 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("leases issue enrichment live workers separately from PR review runs", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-lease-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const first = store.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T05:00:00.000Z"), process.pid);
+    const second = store.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T05:01:00.000Z"), process.pid);
+
+    expect(first).toBeDefined();
+    expect(second).toBeUndefined();
+    expect(store.tryAcquireReviewRunLease(1, 1_200_000, new Date("2026-07-03T05:01:00.000Z"), process.pid)).toBeDefined();
+
+    store.releaseIssueEnrichmentRunLease(first!.leaseId);
+    const afterRelease = store.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T05:02:00.000Z"), process.pid);
+    expect(afterRelease).toBeDefined();
+    store.close();
+  });
+
+  it("keeps non-expired issue enrichment leases until TTL even when owner pid is not alive", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-lease-ttl-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const first = store.tryAcquireIssueEnrichmentRunLease(1, 1_000, new Date("2026-07-03T05:00:00.000Z"), 999_999_999);
+    const beforeExpiry = store.tryAcquireIssueEnrichmentRunLease(1, 1_000, new Date("2026-07-03T05:00:00.500Z"), process.pid);
+    const afterExpiry = store.tryAcquireIssueEnrichmentRunLease(1, 1_000, new Date("2026-07-03T05:00:01.001Z"), process.pid);
+
+    expect(first).toBeDefined();
+    expect(beforeExpiry).toBeUndefined();
+    expect(afterExpiry).toBeDefined();
+    store.close();
+  });
+
+  it("clears issue enrichment worker leases only after an explicit non-dry-run request", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-lease-clear-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const first = store.tryAcquireIssueEnrichmentRunLease(1, 60_000, new Date("2026-07-03T05:00:00.000Z"), process.pid);
+    const dryRun = store.clearIssueEnrichmentRunLeases({
+      now: new Date("2026-07-03T05:00:30.000Z"),
+      dryRun: true
+    });
+    const stillBlocked = store.tryAcquireIssueEnrichmentRunLease(1, 60_000, new Date("2026-07-03T05:00:31.000Z"), process.pid);
+    const cleared = store.clearIssueEnrichmentRunLeases({
+      now: new Date("2026-07-03T05:00:32.000Z"),
+      dryRun: false
+    });
+    const afterClear = store.tryAcquireIssueEnrichmentRunLease(1, 60_000, new Date("2026-07-03T05:00:33.000Z"), process.pid);
+
+    expect(first).toBeDefined();
+    expect(dryRun).toMatchObject({
+      expiredOnly: false,
+      dryRun: true,
+      matched: 1,
+      expiredMatched: 0,
+      activeMatched: 1,
+      deleted: 0,
+      leases: [
+        expect.objectContaining({
+          leaseId: first!.leaseId,
+          ownerPid: process.pid,
+          expired: false
+        })
+      ]
+    });
+    expect(stillBlocked).toBeUndefined();
+    expect(cleared).toMatchObject({ expiredOnly: false, dryRun: false, matched: 1, expiredMatched: 0, activeMatched: 1, deleted: 1 });
+    expect(afterClear).toBeDefined();
+    store.close();
+  });
+
   it("stores one activation watermark per repository", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
     roots.push(root);

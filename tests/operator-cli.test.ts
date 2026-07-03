@@ -116,6 +116,12 @@ describe("operator CLI summaries", () => {
         lookbackMs: 600_000,
         processExistingOpenIssuesOnActivation: false
       },
+      globalLimits: {
+        globalMaxIssuesPerCycle: 5,
+        globalMaxCommentsPerCycle: 1,
+        maxActiveRuns: 1,
+        leaseTtlMs: 1_200_000
+      },
       repoOverrides: [],
       blockers: ["github_app_credentials_required_for_live_issue_comments"]
     };
@@ -1638,6 +1644,12 @@ function issueEnrichmentStatus(input: Partial<IssueEnrichmentStatus> = {}): Issu
       maxIssuesPerBurst: 10,
       lookbackMs: 600_000,
       processExistingOpenIssuesOnActivation: false
+    },
+    globalLimits: input.globalLimits ?? {
+      globalMaxIssuesPerCycle: 5,
+      globalMaxCommentsPerCycle: 1,
+      maxActiveRuns: 1,
+      leaseTtlMs: 1_200_000
     },
     repoOverrides: input.repoOverrides ?? [],
     blockers: input.blockers ?? []

@@ -490,6 +490,11 @@ function validateIssueEnrichmentConfig(value: unknown, label: string): void {
   for (const repo of allowlist) validateRepoName(repo, `${label}.allowlist`);
   validatePositiveInteger(value.maxIssuesPerCycle, `${label}.maxIssuesPerCycle`);
   validateNonNegativeInteger(value.maxCommentsPerCycle, `${label}.maxCommentsPerCycle`);
+  validatePositiveInteger(value.globalMaxIssuesPerCycle, `${label}.globalMaxIssuesPerCycle`);
+  validateNonNegativeInteger(value.globalMaxCommentsPerCycle, `${label}.globalMaxCommentsPerCycle`);
+  validatePositiveInteger(value.maxActiveRuns, `${label}.maxActiveRuns`);
+  // leaseTtlMs is the stuck-worker recovery bound and worst-case abnormal-exit stall; cooldownMs is per-issue cadence.
+  validatePositiveInteger(value.leaseTtlMs, `${label}.leaseTtlMs`);
   validatePositiveInteger(value.cooldownMs, `${label}.cooldownMs`);
   validatePositiveInteger(value.burstWindowMs, `${label}.burstWindowMs`);
   validatePositiveInteger(value.maxIssuesPerBurst, `${label}.maxIssuesPerBurst`);
@@ -497,6 +502,13 @@ function validateIssueEnrichmentConfig(value: unknown, label: string): void {
   validateBoolean(value.processExistingOpenIssuesOnActivation, `${label}.processExistingOpenIssuesOnActivation`);
   if (typeof value.maxIssuesPerCycle === "number" && typeof value.maxCommentsPerCycle === "number" && value.maxCommentsPerCycle > value.maxIssuesPerCycle) {
     throw new Error(`${label}.maxCommentsPerCycle must be <= ${label}.maxIssuesPerCycle`);
+  }
+  if (
+    typeof value.globalMaxIssuesPerCycle === "number" &&
+    typeof value.globalMaxCommentsPerCycle === "number" &&
+    value.globalMaxCommentsPerCycle > value.globalMaxIssuesPerCycle
+  ) {
+    throw new Error(`${label}.globalMaxCommentsPerCycle must be <= ${label}.globalMaxIssuesPerCycle`);
   }
   if (value.repos !== undefined) {
     if (!isRecord(value.repos)) throw new Error(`${label}.repos must be an object`);

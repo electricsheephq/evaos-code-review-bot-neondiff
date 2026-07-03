@@ -228,6 +228,7 @@ export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: stri
     return run();
   } finally {
     if (originalConfig) {
+      mkdirSync(configDir, { recursive: true });
       writeFileSync(configPath, originalConfig.contents, { mode: originalConfig.mode });
     } else {
       rmSync(configPath, { force: true });
