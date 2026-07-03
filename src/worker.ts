@@ -725,7 +725,7 @@ function retryQueueJobStateForProcessedStatus(status: ProcessedStatus | undefine
     case "skipped":
       return "stale_retired";
     case undefined:
-      return dryRun ? "queued" : "posted";
+      return "queued";
     default:
       return assertNever(status);
   }

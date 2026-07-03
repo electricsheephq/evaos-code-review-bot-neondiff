@@ -916,6 +916,28 @@ describe("offline eval harness", () => {
     expect(readFileSync(join(outputRoot, "stale-artifact.json"), "utf8")).toBe("{}\n");
   });
 
+  it("preflights both sticky-vs-cold packet threshold policies before writing artifacts", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-preflight-policies-"));
+    roots.push(outputRoot);
+    const scenario = JSON.parse(
+      readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")
+    ) as StickyVsColdScenarioInput;
+
+    expect(() => runStickyVsColdEval({
+      ...scenario,
+      sticky: {
+        ...scenario.sticky,
+        mode: "gating",
+        thresholds: {
+          ...scenario.sticky.thresholds,
+          minPrecision: 0
+        }
+      }
+    }, { outputRoot })).toThrow('sticky.minPrecision below the default requires mode="exploratory"');
+    expect(existsSync(join(outputRoot, "cold"))).toBe(false);
+    expect(existsSync(join(outputRoot, "sticky"))).toBe(false);
+  });
+
   it("fails sticky-vs-cold when sticky introduces a safety regression", () => {
     const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-regression-"));
     roots.push(outputRoot);

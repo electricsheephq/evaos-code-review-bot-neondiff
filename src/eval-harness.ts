@@ -1527,6 +1527,8 @@ function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
   if (!input.sticky || typeof input.sticky !== "object") throw new Error("sticky scenario is required");
   validateEvalInput(input.cold);
   validateEvalInput(input.sticky);
+  validateEvalScenarioThresholdPolicy(input.cold, "cold");
+  validateEvalScenarioThresholdPolicy(input.sticky, "sticky");
   if (input.scenarioSource !== undefined) validateScenarioSource(input.scenarioSource);
   if (input.coldRuntime !== undefined) validateStickyRuntimeMetrics(input.coldRuntime, "coldRuntime");
   if (input.stickyRuntime !== undefined) validateStickyRuntimeMetrics(input.stickyRuntime, "stickyRuntime");
@@ -1543,6 +1545,17 @@ function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
   validateEquivalentExpectedLabels(input.cold.labels, input.sticky.labels);
   if (input.negativeControl === true && expectedLabelKeys(input.sticky.labels).length > 0) {
     throw new Error("negativeControl sticky-vs-cold scenarios must not include expected labels");
+  }
+}
+
+function validateEvalScenarioThresholdPolicy(input: EvalScenarioInput, labelPath: string): void {
+  const thresholds = { ...DEFAULT_THRESHOLDS, ...(input.thresholds ?? {}) };
+  try {
+    validateThresholds(thresholds);
+    validateThresholdPolicy(input.mode ?? "gating", input.thresholds ?? {});
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${labelPath}.${detail}`);
   }
 }
 

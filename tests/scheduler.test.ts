@@ -667,6 +667,12 @@ describe("provider-aware review scheduler", () => {
         expectedStatus: "provider_deferred",
         expectedQueueState: "provider_deferred",
         expectedLastError: cooldownError
+      },
+      {
+        processedStatus: undefined,
+        expectedStatus: "queued",
+        expectedQueueState: "queued",
+        expectedLastError: "processed_head_already_unknown"
       }
     ] as const;
 
@@ -676,16 +682,18 @@ describe("provider-aware review scheduler", () => {
       const config = schedulerConfig(root, ["org/repo-a"]);
       config.reviewStatusComment!.enabled = true;
       const state = new ReviewStateStore(config.statePath);
-      state.recordProcessed({
-        repo: "org/repo-a",
-        pullNumber: 1,
-        headSha: HEAD_A,
-        status: scenario.processedStatus,
-        ...("error" in scenario ? { error: scenario.error } : {}),
-        ...(scenario.processedStatus === "posted"
-          ? { event: "COMMENT" as const, reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-existing" }
-          : {})
-      });
+      if (scenario.processedStatus) {
+        state.recordProcessed({
+          repo: "org/repo-a",
+          pullNumber: 1,
+          headSha: HEAD_A,
+          status: scenario.processedStatus,
+          ...("error" in scenario ? { error: scenario.error } : {}),
+          ...(scenario.processedStatus === "posted"
+            ? { event: "COMMENT" as const, reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-existing" }
+            : {})
+        });
+      }
       const job = state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, baseSha: "base" }).job;
       const statusCalls: StatusCommentCall[] = [];
 
