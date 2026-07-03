@@ -1590,6 +1590,9 @@ describe("worker review failures", () => {
       pullNumber: pull.number,
       headSha: pull.head.sha,
       baseSha: pull.base.sha,
+      source: "manual_command",
+      lane: "manual",
+      commentId: 12345,
       sessionId: assignment.session.sessionId
     }).job;
     state.updateReviewQueueJobState({
@@ -1623,6 +1626,74 @@ describe("worker review failures", () => {
     expect(state.getReviewerSessionJob("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
       jobState: "skipped",
       processedReviewStatus: "skipped"
+    });
+    state.close();
+  });
+
+  it("does not retire automatic retry work when a provider retry only records a command", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-command-auto-isolation-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1236, "head-retry-command-isolated");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "original provider cooldown"
+    });
+    const automaticJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: automaticJob.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-01T00:01:00.000Z",
+      lastError: "provider cooldown"
+    });
+    const manualJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha,
+      source: "manual_command",
+      lane: "manual",
+      commentId: 98765
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: manualJob.jobId,
+      state: "running",
+      clearLease: false,
+      lastError: "manual_retry_started"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => "skipped_command_explain"
+    });
+
+    expect(result.status).toBe("skipped_command_explain");
+    expect(state.getReviewQueueJob(manualJob.jobId)).toMatchObject({
+      state: "command_recorded",
+      lastError: "manual_command_explain_recorded"
+    });
+    expect(state.getReviewQueueJob(automaticJob.jobId)).toMatchObject({
+      state: "provider_deferred",
+      lastError: "provider cooldown"
     });
     state.close();
   });

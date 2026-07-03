@@ -576,7 +576,10 @@ function updateRetryQueueJobsAfterRetry(input: {
       states: ["queued", "leased", "running", "provider_deferred"]
     })
     .filter((job) => job.headSha === input.headSha);
-  if (activeJobs.length === 0) return;
+  const targetJobs = isRetryCommandRecordedStatus(input.status)
+    ? activeJobs.filter((job) => job.source === "manual_command")
+    : activeJobs;
+  if (targetJobs.length === 0) return;
 
   const processed = input.state.getProcessedReview(input.repo, input.pullNumber, input.headSha);
   const providerCooldown = parseProviderCooldownError(processed?.error);
@@ -588,7 +591,7 @@ function updateRetryQueueJobsAfterRetry(input: {
     providerCooldownUntil: providerCooldown?.cooldownUntil,
     processedError: processed?.error
   });
-  for (const job of activeJobs) {
+  for (const job of targetJobs) {
     input.state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: patch.state,
@@ -741,10 +744,21 @@ function reviewerSessionJobStateForProcessedStatus(status: ProcessedStatus | und
     case "skipped":
       return "skipped";
     case undefined:
-      return "completed";
+      return "assigned";
     default:
       return assertNever(status);
   }
+}
+
+function isRetryCommandRecordedStatus(
+  status: RetryFailedHeadResult["status"]
+): status is Extract<
+  RetryFailedHeadResult["status"],
+  "skipped_command_stop" | "skipped_command_explain" | "skipped_finishing_touch_draft"
+> {
+  return status === "skipped_command_stop" ||
+    status === "skipped_command_explain" ||
+    status === "skipped_finishing_touch_draft";
 }
 
 function retryQueueCommandRecordedReason(status: Extract<

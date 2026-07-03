@@ -1345,7 +1345,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
         return;
       }
       const sessionState = reviewerSessionJobStateForProcessedStatus(processed?.status);
-      updateReviewerSessionJobFromQueueStatus(input, sessionState, processed?.status ?? (input.dryRun ? "dry_run" : "posted"));
+      updateReviewerSessionJobFromQueueStatus(input, sessionState, processed?.status);
       return;
     }
     case "skipped_provider_cooldown":
@@ -1543,7 +1543,7 @@ function reviewerSessionJobStateForProcessedStatus(status: ProcessedStatus | und
     case "skipped":
       return "skipped";
     case undefined:
-      return "completed";
+      return "assigned";
     default:
       return assertNever(status);
   }

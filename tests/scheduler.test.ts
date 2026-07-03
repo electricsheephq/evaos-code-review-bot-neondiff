@@ -720,6 +720,58 @@ describe("provider-aware review scheduler", () => {
     }
   });
 
+  it("keeps RepoSticky session jobs assigned when processed-head status is missing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-processed-missing-session-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    config.reviewerSessions = {
+      enabled: true,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const assignment = state.assignReviewerSessionJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      ttlMs: 8 * 60 * 60_000,
+      headCountLimit: 10,
+      allowProcessed: true,
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    if (!assignment.session) throw new Error("expected session assignment");
+    const job = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base",
+      sessionId: assignment.session.sessionId
+    }).job;
+    const statusCalls: StatusCommentCall[] = [];
+
+    await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => "skipped_processed",
+      now: new Date("2026-07-02T00:01:00.000Z")
+    });
+
+    expect(statusCalls.map(statusFromBody)).toEqual(["in_progress", "queued"]);
+    expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "queued",
+      lastError: "processed_head_already_unknown"
+    });
+    const sessionJob = state.getReviewerSessionJob("org/repo-a", 1, HEAD_A);
+    expect(sessionJob).toMatchObject({ jobState: "assigned" });
+    expect(sessionJob?.processedReviewStatus).toBeUndefined();
+    state.close();
+  });
+
   it("reconciles historical failed queue rows for already-skipped processed heads", async () => {
     const cooldownError = "provider_rate_limit_cooldown_until=2026-07-02T00:10:00.000Z; reason=provider_overloaded";
     const scenarios = [
