@@ -46,6 +46,7 @@ import {
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
+  type ReviewQueueJobState,
   type ReviewRunLease,
   type StoredProcessedReviewRecord
 } from "./state.js";
@@ -422,6 +423,14 @@ export async function retryFailedHeadWithDeps(input: {
   const pull = await github.getPull(options.repo, options.pullNumber);
   if (isClosedPull(pull)) {
     recordClosedRetrySkip({ state, repo: options.repo, pull, headSha: options.headSha });
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_closed",
+      dryRun: options.dryRun
+    });
     return {
       repo: options.repo,
       pullNumber: options.pullNumber,
@@ -440,6 +449,14 @@ export async function retryFailedHeadWithDeps(input: {
       state,
       retryTarget,
       reason: "retry_did_not_review=skipped_stale_head"
+    });
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_stale_head",
+      dryRun: options.dryRun
     });
     return {
       repo: options.repo,
@@ -481,6 +498,14 @@ export async function retryFailedHeadWithDeps(input: {
       retryTarget,
       reason: retryStatus === "dry_run" ? "retry_dry_run" : `retry_did_not_review=${retryStatus}`
     });
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: retryStatus,
+      dryRun: options.dryRun
+    });
     return {
       repo: options.repo,
       pullNumber: options.pullNumber,
@@ -495,6 +520,14 @@ export async function retryFailedHeadWithDeps(input: {
       pull,
       error: retryFailureError(retryTarget.previousError, error)
     })) {
+      updateRetryQueueJobsAfterRetry({
+        state,
+        repo: options.repo,
+        pullNumber: options.pullNumber,
+        headSha: options.headSha,
+        status: "skipped_provider_cooldown",
+        dryRun: options.dryRun
+      });
       return {
         repo: options.repo,
         pullNumber: options.pullNumber,
@@ -509,12 +542,131 @@ export async function retryFailedHeadWithDeps(input: {
       pull,
       error: retryFailureError(retryTarget.previousError, error)
     });
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "failed",
+      dryRun: options.dryRun
+    });
     return {
       repo: options.repo,
       pullNumber: options.pullNumber,
       headSha: options.headSha,
       status: "failed"
     };
+  }
+}
+
+function updateRetryQueueJobsAfterRetry(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  status: RetryFailedHeadResult["status"];
+  dryRun: boolean;
+}): void {
+  const activeJobs = input.state
+    .listReviewQueueJobsForPull({
+      repo: input.repo,
+      pullNumber: input.pullNumber,
+      states: ["queued", "leased", "running", "provider_deferred"]
+    })
+    .filter((job) => job.headSha === input.headSha);
+  if (activeJobs.length === 0) return;
+
+  const processed = input.state.getProcessedReview(input.repo, input.pullNumber, input.headSha);
+  const providerCooldown = parseProviderCooldownError(processed?.error);
+  const patch = retryQueuePatchForStatus({
+    status: input.status,
+    dryRun: input.dryRun,
+    processedReviewUrl: processed?.reviewUrl,
+    providerCooldownUntil: providerCooldown?.cooldownUntil,
+    processedError: processed?.error
+  });
+  for (const job of activeJobs) {
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: patch.state,
+      ...(patch.nextEligibleAt ? { nextEligibleAt: patch.nextEligibleAt } : {}),
+      ...(patch.reviewUrl ? { reviewUrl: patch.reviewUrl } : {}),
+      lastError: patch.lastError
+    });
+  }
+}
+
+function retryQueuePatchForStatus(input: {
+  status: RetryFailedHeadResult["status"];
+  dryRun: boolean;
+  processedReviewUrl?: string;
+  providerCooldownUntil?: string;
+  processedError?: string;
+}): { state: ReviewQueueJobState; nextEligibleAt?: string; reviewUrl?: string; lastError: string } {
+  switch (input.status) {
+    case "reviewed":
+    case "reviewed_command":
+      return input.dryRun
+        ? {
+            state: "provider_deferred",
+            lastError: "retry_dry_run_completed_not_posted"
+          }
+        : {
+            state: "posted",
+            ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
+            lastError: input.status
+          };
+    case "dry_run":
+      return {
+        state: "provider_deferred",
+        lastError: "retry_dry_run_completed_not_posted"
+      };
+    case "skipped_provider_cooldown":
+      return {
+        state: "provider_deferred",
+        ...(input.providerCooldownUntil ? { nextEligibleAt: input.providerCooldownUntil } : {}),
+        lastError: input.processedError ?? "provider_deferred_without_cooldown"
+      };
+    case "skipped_stale_head":
+      return {
+        state: "stale_retired",
+        lastError: "retry_did_not_review=skipped_stale_head"
+      };
+    case "skipped_closed":
+      return {
+        state: "closed_retired",
+        lastError: "retry_did_not_review=skipped_closed"
+      };
+    case "skipped_capacity":
+      return {
+        state: "queued",
+        lastError: "retry_did_not_review=skipped_capacity"
+      };
+    case "skipped_processed":
+      return input.processedError && parseProviderCooldownError(input.processedError)
+        ? {
+            state: "provider_deferred",
+            ...(input.providerCooldownUntil ? { nextEligibleAt: input.providerCooldownUntil } : {}),
+            lastError: input.processedError
+          }
+        : {
+            state: "posted",
+            ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
+            lastError: "retry_did_not_review=skipped_processed"
+          };
+    case "failed":
+    case "skipped_draft":
+    case "skipped_canary":
+    case "skipped_policy":
+    case "skipped_command_stop":
+    case "skipped_command_explain":
+    case "skipped_finishing_touch_draft":
+      return {
+        state: "failed",
+        lastError: `retry_did_not_review=${input.status}`
+      };
+    default:
+      return assertNever(input.status);
   }
 }
 

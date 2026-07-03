@@ -981,6 +981,18 @@ describe("worker review failures", () => {
       status: "skipped",
       error: "provider_rate_limit_cooldown_until=2000-01-01T00:00:00.000Z; reason=provider_rate_limit"
     });
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "running",
+      clearLease: false,
+      lastError: "retry_started"
+    });
 
     const result = await retryProviderCooldownsWithDeps({
       config,
@@ -1007,6 +1019,11 @@ describe("worker review failures", () => {
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
       status: "skipped",
       error: expect.stringContaining("provider_rate_limit_cooldown_until=")
+    });
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "provider_deferred",
+      nextEligibleAt: expect.stringMatching(/T/),
+      lastError: expect.stringContaining("provider_rate_limit_cooldown_until=")
     });
     state.close();
   });
