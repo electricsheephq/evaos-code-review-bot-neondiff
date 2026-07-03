@@ -6,6 +6,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
 import { assertEvalOutputDirSafe, buildEvalPromotionDecisionMarkdown, REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
 import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
+import {
+  buildFinishingTouchDraft,
+  FINISHING_TOUCH_ACTIONS,
+  parseFinishingTouchCommand,
+  validateFinishingTouchRequest,
+  type FinishingTouchAction
+} from "./finishing-touches.js";
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
@@ -717,6 +724,94 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "finishing-touch-dry-run") {
+    if (!args.repo) throw new Error("--repo is required for finishing-touch-dry-run");
+    if (!args.pr) throw new Error("--pr is required for finishing-touch-dry-run");
+    if (!args["head-sha"]) throw new Error("--head-sha is required for finishing-touch-dry-run");
+    if (!args["current-head"]) throw new Error("--current-head is required for finishing-touch-dry-run");
+    if (!args.author) throw new Error("--author is required for finishing-touch-dry-run");
+    if (!args["comment-id"]) throw new Error("--comment-id is required for finishing-touch-dry-run");
+    if (args["dry-run"] !== undefined && args["dry-run"] !== "true" && args["dry-run"] !== "false") {
+      throw new Error("--dry-run must be true or false");
+    }
+    if (args.record !== undefined && args.record !== "true" && args.record !== "false") {
+      throw new Error("--record must be true or false");
+    }
+    const dryRun = args["dry-run"] !== "false";
+    const record = args.record === "true";
+    if (dryRun && record) throw new Error("--record true requires --dry-run false");
+    const repo = parseSingleArg(args.repo, "--repo");
+    const headSha = parseSingleArg(args["head-sha"], "--head-sha");
+    const author = parseSingleArg(args.author, "--author");
+    const action = resolveFinishingTouchAction({
+      action: args.action,
+      body: args.body,
+      botMentions: args["bot-mentions"]
+    });
+    const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
+    const commentId = parsePositiveInteger(parseSingleArg(args["comment-id"], "--comment-id"), "--comment-id");
+    const trustedAuthors = parseCsv(args["trusted-authors"]);
+    const worktreeClean = args["worktree-clean"] === undefined
+      ? true
+      : parseBooleanArg(args["worktree-clean"], "--worktree-clean");
+    const trigger = parseSingleArg(args.body ?? args.action ?? action, "--body");
+    const draft = buildFinishingTouchDraft({
+      repo,
+      pullNumber,
+      headSha,
+      action,
+      author,
+      commentId,
+      trigger,
+      ...(args["generated-at"] ? { generatedAt: args["generated-at"] } : {})
+    });
+    const validation = validateFinishingTouchRequest({
+      repo,
+      pullNumber,
+      headSha,
+      currentHeadSha: parseSingleArg(args["current-head"], "--current-head"),
+      commentId,
+      author,
+      trustedAuthors,
+      worktreeClean,
+      action,
+      proposedOutput: draft
+    });
+    if (!validation.ok) {
+      console.log(redactSecrets(JSON.stringify({ ok: false, dryRun, validation }, null, 2)));
+      process.exitCode = 1;
+      return;
+    }
+    let stored;
+    if (record) {
+      const config = loadConfig(args.config);
+      const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
+      try {
+        stored = state.recordFinishingTouchDraft({
+          repo,
+          pullNumber,
+          headSha,
+          commandCommentId: commentId,
+          action,
+          author,
+          trigger,
+          status: "drafted",
+          proposedOutput: draft
+        });
+      } finally {
+        state.close();
+      }
+    }
+    console.log(redactSecrets(JSON.stringify({
+      ok: true,
+      dryRun,
+      recorded: Boolean(stored),
+      draft,
+      ...(stored ? { stored } : {})
+    }, null, 2)));
+    return;
+  }
+
   if (command === "eval-offline") {
     if (!args.input) throw new Error("--input is required for eval-offline");
     const input = JSON.parse(readFileSync(args.input, "utf8"));
@@ -969,6 +1064,7 @@ function buildHelp() {
         "build-skill-pack",
         "build-enrichment-comment",
         "issue-enrichment-scan",
+        "finishing-touch-dry-run",
         "provider-cooldowns",
         "retry-provider-cooldowns",
         "retry-failed",
@@ -997,6 +1093,7 @@ function buildHelp() {
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --issue 456 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts issue-enrichment-scan --config /path/to/live.json --dry-run true --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };
@@ -1046,6 +1143,29 @@ function parseCanonicalIsoTimestamp(value: string, label: string): Date {
     throw new Error(`${label} must be a canonical ISO timestamp`);
   }
   return new Date(parsed);
+}
+
+function resolveFinishingTouchAction(input: {
+  action?: string | string[];
+  body?: string | string[];
+  botMentions?: string | string[];
+}): FinishingTouchAction {
+  if (input.action !== undefined) {
+    const action = parseSingleArg(input.action, "--action");
+    if (FINISHING_TOUCH_ACTIONS.includes(action as FinishingTouchAction)) return action as FinishingTouchAction;
+    throw new Error(`--action must be one of: ${FINISHING_TOUCH_ACTIONS.join(", ")}`);
+  }
+  if (input.body === undefined) throw new Error("one of --action or --body is required");
+  const body = parseSingleArg(input.body, "--body");
+  const botMentions = parseCsv(input.botMentions);
+  const parsed = parseFinishingTouchCommand({
+    body,
+    botMentions: botMentions.length > 0 ? botMentions : ["@evaos-code-review-bot"]
+  });
+  if (!parsed) {
+    throw new Error(`--body must contain one of the finishing-touch commands for mentions ${botMentions.join(", ") || "@evaos-code-review-bot"}`);
+  }
+  return parsed.action;
 }
 
 function parseCsv(value?: string | string[]): string[] {

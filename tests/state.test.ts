@@ -1023,4 +1023,60 @@ describe("review state store", () => {
     expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 124)).toBe(false);
     store.close();
   });
+
+  it("records finishing-touch draft outputs per command and head", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-finishing-touch-state-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const draft = store.recordFinishingTouchDraft({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "head-a",
+      commandCommentId: 456,
+      action: "explain_risk",
+      author: "100yenadmin",
+      trigger: "@evaos-code-review-bot explain risk",
+      status: "drafted",
+      proposedOutput: {
+        mode: "draft_only",
+        markdown: "Draft only: explain runtime risk. No branch was pushed."
+      },
+      now: new Date("2026-07-03T00:00:00.000Z")
+    });
+
+    expect(draft).toMatchObject({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "head-a",
+      commandCommentId: 456,
+      action: "explain_risk",
+      author: "100yenadmin",
+      status: "drafted"
+    });
+    expect(store.getFinishingTouchDraft({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "head-a",
+      commandCommentId: 456
+    })).toMatchObject({
+      action: "explain_risk",
+      outputSha: expect.stringMatching(/^[a-f0-9]{64}$/),
+      proposedOutput: {
+        markdown: expect.stringContaining("No branch was pushed")
+      }
+    });
+    expect(() => store.recordFinishingTouchDraft({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "head-a",
+      commandCommentId: 457,
+      action: "generate_tests",
+      author: "100yenadmin",
+      trigger: "@evaos-code-review-bot generate tests",
+      status: "rejected",
+      proposedOutput: { markdown: "token ghp_123456789012345678901234567890123456" }
+    })).toThrow(/secret-like/);
+    store.close();
+  });
 });

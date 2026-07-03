@@ -1,6 +1,11 @@
 import type { CommandConfig } from "./config.js";
+import {
+  FINISHING_TOUCH_ACTIONS,
+  parseFinishingTouchCommand,
+  type FinishingTouchAction
+} from "./finishing-touches.js";
 
-export type ReviewCommandAction = "review" | "re-review" | "explain" | "stop";
+export type ReviewCommandAction = "review" | "re-review" | "explain" | "stop" | FinishingTouchAction;
 
 export interface IssueCommentCommandSource {
   id: number;
@@ -96,15 +101,32 @@ export function decideCommandAction(input: {
   const pending = input.commands.filter(
     (command) => !input.hasProcessedCommand(input.repo, input.pullNumber, input.headSha, command.commentId)
   );
-  const latest = pending.at(-1);
+  const latestPending = pending.at(-1);
+  const latestReview = pending.filter((command) => isReviewCommandAction(command.action)).at(-1);
+  const latestStop = pending.filter((command) => command.action === "stop").at(-1);
+  const latest = latestStop && (!latestReview || latestStop.commentId > latestReview.commentId)
+    ? latestStop
+    : latestReview ?? latestPending;
   if (!latest) return { action: "none", shouldReview: false };
 
   return {
     action: latest.action,
     commandId: latest.commentId,
     command: latest,
-    shouldReview: latest.action === "review" || latest.action === "re-review"
+    shouldReview: isReviewCommandAction(latest.action)
   };
+}
+
+export function isReviewCommandAction(action: ReviewCommandAction): boolean {
+  return action === "review" || action === "re-review";
+}
+
+export function isFinishingTouchCommandAction(action: ReviewCommandAction): action is FinishingTouchAction {
+  return FINISHING_TOUCH_ACTIONS.includes(action as FinishingTouchAction);
+}
+
+export function isRecordOnlyCommandAction(action: ReviewCommandAction): boolean {
+  return !isReviewCommandAction(action);
 }
 
 export function buildCommandStatusMarker(repo: string, pullNumber: number, headSha: string): string {
@@ -136,7 +158,7 @@ function parseCommandAction(body: string | null | undefined, mentions: string[])
       if (suffix === "review" || suffix === "re-review" || suffix === "explain" || suffix === "stop") return suffix;
     }
   }
-  return undefined;
+  return parseFinishingTouchCommand({ body, botMentions: mentions })?.action;
 }
 
 function isTrustedAuthor(author: string, config: CommandConfig): boolean {

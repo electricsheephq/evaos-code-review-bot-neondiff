@@ -1,13 +1,15 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+import type { FinishingTouchAction } from "./finishing-touches.js";
 import type { ReviewEvent } from "./types.js";
 
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
-export type ProcessedCommandAction = "review" | "re-review" | "explain" | "stop";
+export type ProcessedCommandAction = "review" | "re-review" | "explain" | "stop" | FinishingTouchAction;
 export type ProcessedCommandStatus = "triggered" | "explained" | "stopped" | "ignored";
+export type FinishingTouchDraftStatus = "drafted" | "rejected";
 export type ReviewerSessionState = "warming" | "active" | "draining" | "expired" | "failed";
 export type ReviewerSessionJobState = "assigned" | "running" | "completed" | "skipped" | "failed";
 export type ReviewerSessionAssignmentReason =
@@ -320,6 +322,41 @@ export interface RepoMemoryPacketBuildRecord {
   memoryRoot?: string;
 }
 
+export interface RecordFinishingTouchDraftInput {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  commandCommentId: number;
+  action: FinishingTouchAction;
+  author: string;
+  trigger: string;
+  status: FinishingTouchDraftStatus;
+  proposedOutput: unknown;
+  now?: Date;
+}
+
+export interface GetFinishingTouchDraftInput {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  commandCommentId: number;
+}
+
+export interface FinishingTouchDraftRecord {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  commandCommentId: number;
+  action: FinishingTouchAction;
+  author: string;
+  trigger: string;
+  status: FinishingTouchDraftStatus;
+  proposedOutput: unknown;
+  outputSha: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class ReviewStateStore {
   private readonly db: DatabaseSync;
 
@@ -535,6 +572,22 @@ export class ReviewStateStore {
         url text,
         created_at text not null default (datetime('now')),
         primary key (repo, pull_number, head_sha, comment_id)
+      );
+
+      create table if not exists finishing_touch_drafts (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        command_comment_id integer not null,
+        action text not null,
+        author text not null,
+        trigger text not null,
+        status text not null,
+        proposed_output_json text not null,
+        output_sha text not null,
+        created_at text not null,
+        updated_at text not null,
+        primary key (repo, pull_number, head_sha, command_comment_id)
       );
     `);
   }
@@ -1813,6 +1866,75 @@ export class ReviewStateStore {
       );
   }
 
+  recordFinishingTouchDraft(input: RecordFinishingTouchDraftInput): FinishingTouchDraftRecord {
+    validateRepoName(input.repo, "repo");
+    validatePullAndCommand(input.pullNumber, input.commandCommentId);
+    const trigger = redactSecrets(input.trigger).trim().slice(0, 2_000);
+    const author = redactSecrets(input.author).trim().slice(0, 100);
+    if (!trigger) throw new Error("trigger must be a non-empty string");
+    if (!author) throw new Error("author must be a non-empty string");
+    const proposedOutputJson = JSON.stringify(input.proposedOutput);
+    if (!proposedOutputJson) throw new Error("proposedOutput must be JSON-serializable");
+    if (containsSecretLikeText([input.repo, input.headSha, input.action, author, trigger, proposedOutputJson].join("\n"))) {
+      throw new Error("Refusing to store finishing-touch draft: secret-like text detected");
+    }
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const outputSha = createHash("sha256").update(proposedOutputJson).digest("hex");
+    const existing = this.getFinishingTouchDraft({
+      repo: input.repo,
+      pullNumber: input.pullNumber,
+      headSha: input.headSha,
+      commandCommentId: input.commandCommentId
+    });
+    this.db
+      .prepare(
+        `insert or replace into finishing_touch_drafts
+          (repo, pull_number, head_sha, command_comment_id, action, author, trigger, status,
+           proposed_output_json, output_sha, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        input.repo,
+        input.pullNumber,
+        input.headSha,
+        input.commandCommentId,
+        input.action,
+        author,
+        trigger,
+        input.status,
+        proposedOutputJson,
+        outputSha,
+        existing?.createdAt ?? nowIso,
+        nowIso
+      );
+    return this.getFinishingTouchDraft({
+      repo: input.repo,
+      pullNumber: input.pullNumber,
+      headSha: input.headSha,
+      commandCommentId: input.commandCommentId
+    })!;
+  }
+
+  getFinishingTouchDraft(input: GetFinishingTouchDraftInput): FinishingTouchDraftRecord | undefined {
+    validateRepoName(input.repo, "repo");
+    validatePullAndCommand(input.pullNumber, input.commandCommentId);
+    const row = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, command_comment_id, action, author, trigger, status,
+                proposed_output_json, output_sha, created_at, updated_at
+         from finishing_touch_drafts
+         where repo = ?
+           and pull_number = ?
+           and head_sha = ?
+           and command_comment_id = ?
+         limit 1`
+      )
+      .get(input.repo, input.pullNumber, input.headSha, input.commandCommentId) as
+        | FinishingTouchDraftRow
+        | undefined;
+    return row ? mapFinishingTouchDraftRow(row) : undefined;
+  }
+
   recordRepoMemoryNote(input: RecordRepoMemoryNoteInput): RepoMemoryNoteRecord {
     validateRepoMemoryNoteInput(input);
     const rawText = [input.noteId, input.title, input.body, input.source, input.fingerprint ?? ""].join("\n");
@@ -2056,6 +2178,13 @@ function validateReviewQueueInput(
   }
   if (commentId !== undefined && (!Number.isInteger(commentId) || commentId < 1)) {
     throw new Error("commentId must be a positive integer");
+  }
+}
+
+function validatePullAndCommand(pullNumber: number, commandCommentId: number): void {
+  if (!Number.isInteger(pullNumber) || pullNumber < 1) throw new Error("pullNumber must be a positive integer");
+  if (!Number.isInteger(commandCommentId) || commandCommentId < 1) {
+    throw new Error("commandCommentId must be a positive integer");
   }
 }
 
@@ -2399,6 +2528,21 @@ interface IssueEnrichmentRepoWatermarkRow {
   updated_at: string;
 }
 
+interface FinishingTouchDraftRow {
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  command_comment_id: number;
+  action: FinishingTouchAction;
+  author: string;
+  trigger: string;
+  status: FinishingTouchDraftStatus;
+  proposed_output_json: string;
+  output_sha: string;
+  created_at: string;
+  updated_at: string;
+}
+
 function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRecord {
   return {
     repo: row.repo,
@@ -2448,6 +2592,23 @@ function mapIssueEnrichmentRepoWatermarkRow(row: IssueEnrichmentRepoWatermarkRow
     repo: row.repo,
     activatedAt: row.activated_at,
     lastCheckedAt: row.last_checked_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapFinishingTouchDraftRow(row: FinishingTouchDraftRow): FinishingTouchDraftRecord {
+  return {
+    repo: row.repo,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    commandCommentId: row.command_comment_id,
+    action: row.action,
+    author: row.author,
+    trigger: row.trigger,
+    status: row.status,
+    proposedOutput: parseStoredJson(row.proposed_output_json),
+    outputSha: row.output_sha,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -2582,5 +2743,13 @@ function parseIncludedNoteIds(raw: string): string[] {
     return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
   } catch {
     return [];
+  }
+}
+
+function parseStoredJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
   }
 }
