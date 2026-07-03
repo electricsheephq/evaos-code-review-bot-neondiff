@@ -146,6 +146,7 @@ async function main(): Promise<void> {
         notifyApi: args["notify-api"] === undefined ? false : parseBooleanArg(args["notify-api"], "--notify-api")
       });
       console.log(stringifyRedactedJson({ command: "license deactivate", ...result }));
+      if (!result.ok) process.exitCode = 1;
       return;
     }
     throw new Error("license subcommand must be one of: activate, status, deactivate");

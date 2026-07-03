@@ -43,7 +43,7 @@
   "license": {
     "_enabledComment": "Enable this for public/private license enforcement. Public repos may remain free; private repos fail closed without active entitlement.",
     "enabled": false,
-    "apiBaseUrl": "https://api.neondiff.com",
+    "_apiBaseUrlComment": "Set apiBaseUrl when enabling license enforcement.",
     "_cachePathComment": "Defaults to a license/entitlement-cache.json file next to statePath when omitted.",
     "_keyPathComment": "For the beta file backend, keyPath defaults to license/license-key.txt next to statePath when omitted. The file is written with 0600 permissions.",
     "storageBackend": "file",

@@ -1,6 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import { hostname, platform } from "node:os";
 import { dirname } from "node:path";
 import { redactSecrets } from "./secrets.js";
@@ -62,6 +73,17 @@ export async function activateLicense(input: {
   now?: Date;
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
+  const now = input.now ?? new Date();
+  if (input.config.storageBackend === "keychain") {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "Keychain license activation is disabled in headless CLI until native no-argv secret storage is available; use storageBackend=file"
+    };
+  }
   const licenseKey = input.licenseKey.trim();
   if (!licenseKey) return missingResult(input.now, "license key is empty");
   if (!input.config.apiBaseUrl) return serverResult(input.now, "license API base URL is not configured");
@@ -149,6 +171,7 @@ export async function deactivateLicense(input: {
   now?: Date;
   fetchImpl?: typeof fetch;
 }): Promise<{ ok: boolean; status: "deactivated"; checkedAt: string; apiNotified: boolean; detail: string }> {
+  const checkedAt = (input.now ?? new Date()).toISOString();
   const licenseKey = readLicenseKey(input.config);
   let apiNotified = false;
   if (input.notifyApi && licenseKey && input.config.apiBaseUrl) {
@@ -160,13 +183,22 @@ export async function deactivateLicense(input: {
       fetchImpl: input.fetchImpl
     });
     apiNotified = response.ok;
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: "deactivated",
+        checkedAt,
+        apiNotified,
+        detail: `license API deactivation failed; local license was kept: ${response.detail}`
+      };
+    }
   }
   deleteLicenseKey(input.config);
   deleteLicenseCache(input.config.cachePath);
   return {
     ok: true,
     status: "deactivated",
-    checkedAt: (input.now ?? new Date()).toISOString(),
+    checkedAt,
     apiNotified,
     detail: apiNotified ? "license removed and API notified" : "license removed locally"
   };
@@ -498,12 +530,24 @@ function deleteLicenseCache(path: string): void {
 function writeAtomicSecretFile(path: string, contents: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  let fd: number | undefined;
   try {
-    writeFileSync(tempPath, contents, { mode: 0o600 });
+    fd = openSync(tempPath, "w", 0o600);
+    writeFileSync(fd, contents);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
     chmodSync(tempPath, 0o600);
     renameSync(tempPath, path);
     chmodSync(path, 0o600);
   } catch (error) {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best effort cleanup before rethrowing the original write error.
+      }
+    }
     rmSync(tempPath, { force: true });
     throw error;
   }
@@ -542,6 +586,8 @@ function readKeychainLicenseKey(config: LicenseConfig): string | undefined {
     "-w"
   ], { encoding: "utf8" });
   const key = result.stdout.trim();
+  result.stdout = "";
+  result.stderr = "";
   if (result.status !== 0) return undefined;
   return key || undefined;
 }

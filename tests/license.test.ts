@@ -97,6 +97,84 @@ describe("license activation and entitlement cache", () => {
     expect(network).toMatchObject({ ok: false, status: "network", classification: "network" });
   });
 
+  it("rejects keychain activation before contacting the API", async () => {
+    const root = mkRoot(roots);
+    let requests = 0;
+    const server = await startLicenseServer((_req, res) => {
+      requests += 1;
+      writeJson(res, 200, {
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        updateEntitlement: true
+      });
+    });
+    servers.push(server);
+    const config = licenseConfig(root, server.url);
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-disabled-test-123456",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: expect.stringContaining("Keychain license activation is disabled")
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("keeps local license proof and fails when API deactivation notification fails", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-deactivate-notify-test-123456";
+    const server = await startLicenseServer((req, res) => {
+      if (req.url === "/v1/license/deactivate") {
+        writeJson(res, 503, { detail: "try later" });
+        return;
+      }
+      writeJson(res, 200, {
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        updateEntitlement: true
+      });
+    });
+    servers.push(server);
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, root, server.url);
+    await runCli([
+      "license",
+      "activate",
+      "--config",
+      configPath,
+      "--license-key-env",
+      "NEONDIFF_TEST_LICENSE_KEY"
+    ], { NEONDIFF_TEST_LICENSE_KEY: key });
+
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      "src/cli.ts",
+      "license",
+      "deactivate",
+      "--config",
+      configPath,
+      "--notify-api",
+      "true"
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stdout: expect.stringContaining("\"ok\": false")
+    });
+    expect(existsSync(join(root, "license.key"))).toBe(true);
+    expect(existsSync(join(root, "entitlement.json"))).toBe(true);
+  });
+
   it("does not echo API failure detail bodies that can contain license keys", async () => {
     const root = mkRoot(roots);
     const key = "plain-key-that-does-not-match-generic-pattern";
