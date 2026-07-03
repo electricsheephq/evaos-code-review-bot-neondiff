@@ -66,6 +66,7 @@ import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan }
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
+const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private"; expiresAtMs: number }>();
 
 export interface RunOnceOptions {
@@ -921,6 +922,7 @@ function retryQueuePatchForStatus(input: {
     case "skipped_license_gate":
       return {
         state: "blocked_on_proof",
+        nextEligibleAt: nextLicenseGateRetryAt(),
         lastError: input.processedError ?? "license_entitlement_required",
         sessionJobState: "assigned"
       };
@@ -1600,6 +1602,10 @@ function cacheLicenseGateRepoVisibility(repo: string, visibility: "public" | "pr
     visibility,
     expiresAtMs: now + LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS
   });
+}
+
+function nextLicenseGateRetryAt(now = new Date()): string {
+  return new Date(now.getTime() + LICENSE_GATE_RETRY_DELAY_MS).toISOString();
 }
 
 function recordActivationBaselineExistingHead(state: ReviewStateStore, repo: string, pull: PullRequestSummary): void {

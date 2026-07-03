@@ -2690,8 +2690,7 @@ function repoOrg(repo: string): string {
 
 function isQueueJobEligible(job: ReviewQueueJobRecord, nowIso: string): boolean {
   if (job.state === "queued") return true;
-  if (job.state === "blocked_on_proof") return true;
-  if (job.state !== "provider_deferred") return false;
+  if (job.state !== "provider_deferred" && job.state !== "blocked_on_proof") return false;
   if (!job.nextEligibleAt) return true;
   const nextEligibleAtMs = Date.parse(job.nextEligibleAt);
   if (!Number.isFinite(nextEligibleAtMs)) return true;

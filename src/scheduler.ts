@@ -478,6 +478,7 @@ function automaticQueuePriority(config: BotConfig, repo: string): number | undef
 }
 
 const SELF_REPO = "electricsheephq/evaos-code-review-bot";
+const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 
 function reprioritizeExistingSelfRepoQueueJobs(input: {
   config: BotConfig;
@@ -895,7 +896,7 @@ async function runLeasedQueueJob(input: {
       allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
-    updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun });
+    updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun, now });
     syncReadinessForReviewResult({
       state: input.state,
       job: input.job,
@@ -1478,6 +1479,7 @@ function updateQueueJobAfterReviewStatus(input: {
   pull: PullRequestSummary;
   status: ReviewPullResult;
   dryRun: boolean;
+  now: Date;
 }): void {
   switch (input.status) {
     case "reviewed":
@@ -1528,6 +1530,7 @@ function updateQueueJobAfterReviewStatus(input: {
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: input.status === "skipped_license_gate" ? "blocked_on_proof" : "failed",
+        ...(input.status === "skipped_license_gate" ? { nextEligibleAt: nextLicenseGateRetryAt(input.now) } : {}),
         lastError: input.status === "skipped_license_gate"
           ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)?.reason ?? "license_entitlement_required"
           : `unexpected_scheduler_review_status=${input.status}`
@@ -1703,13 +1706,12 @@ function hasRepoQueueCapacity(state: ReviewStateStore, repo: string, maxQueuedPe
   const active = state.listReviewQueueJobs({
     repo,
     states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"]
-  });
+  }).filter((job) => job.state !== "blocked_on_proof");
   return active.length < maxQueuedPerRepo;
 }
 
 function isProviderDeferredRetryJob(job: ReviewQueueJobRecord): boolean {
   return Boolean(
-    job.nextEligibleAt ||
     parseProviderCooldownError(job.lastError) ||
     job.lastError?.includes("repo_provider_cooldown_until=") ||
     job.lastError === "provider_deferred_without_cooldown"
@@ -1726,6 +1728,10 @@ function processedHeadPolicyForQueueJob(
   return processed?.status === "failed" || parseProviderCooldownError(processed?.error)
     ? "retry_failed_head"
     : "normal";
+}
+
+function nextLicenseGateRetryAt(now = new Date()): string {
+  return new Date(now.getTime() + LICENSE_GATE_RETRY_DELAY_MS).toISOString();
 }
 
 function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): void {
