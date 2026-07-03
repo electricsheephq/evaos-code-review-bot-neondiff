@@ -52,6 +52,7 @@ export interface BotConfig {
   skillPacks?: SkillPackContextConfig;
   enrichment?: EnrichmentConfig;
   issueEnrichment?: IssueEnrichmentConfig;
+  desktop?: DesktopConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -77,6 +78,11 @@ export interface RepoProfilesConfig {
   enableOrgFallbacks?: boolean;
   repos?: Record<string, RepoProfileConfig>;
   orgFallbacks?: Record<string, RepoProfileConfig>;
+}
+
+export interface DesktopConfig {
+  openAICompatibleEndpoint?: string;
+  updateChannel?: string;
 }
 
 export interface RepoProfileConfig {
@@ -263,6 +269,10 @@ const DEFAULT_CONFIG: BotConfig = {
     maxSuggestions: 8
   },
   issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG,
+  desktop: {
+    openAICompatibleEndpoint: "http://localhost:8000/v1",
+    updateChannel: "dev"
+  },
   commands: {
     enabled: false,
     botMentions: ["@evaos-code-review-bot"],
@@ -282,6 +292,10 @@ const DEFAULT_CONFIG: BotConfig = {
 
 export function loadConfig(configPath?: string): BotConfig {
   const fromFile = configPath && existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {};
+  return loadConfigFromObject(fromFile);
+}
+
+export function loadConfigFromObject(fromFile: unknown): BotConfig {
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
 
   merged.github.appId = process.env.EVAOS_REVIEW_BOT_APP_ID ?? merged.github.appId;
@@ -360,13 +374,20 @@ function validateConfig(config: BotConfig): void {
   const issueEnrichment = config.issueEnrichment ?? DEFAULT_CONFIG.issueEnrichment!;
   config.issueEnrichment = issueEnrichment;
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
+  const desktop = config.desktop ?? DEFAULT_CONFIG.desktop!;
+  config.desktop = desktop;
+  validateDesktopConfig(desktop, "config.desktop");
   validateBoolean(config.commands.enabled, "config.commands.enabled");
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
   validateBoolean(config.commands.acknowledge, "config.commands.acknowledge");
+  validateNonEmptyString(config.zcode.cliPath, "config.zcode.cliPath");
+  validateNonEmptyString(config.zcode.appConfigPath, "config.zcode.appConfigPath");
+  validateNonEmptyString(config.zcode.model, "config.zcode.model");
   validatePositiveInteger(config.zcode.timeoutMs, "config.zcode.timeoutMs");
   validatePositiveInteger(config.zcode.maxPatchBytes, "config.zcode.maxPatchBytes");
   validateNonNegativeInteger(config.zcode.retryMaxRetries, "config.zcode.retryMaxRetries");
+  validateOptionalString(config.zcode.providerId, "config.zcode.providerId");
   validateOptionalString(config.github.apiBaseUrl, "config.github.apiBaseUrl");
   validateOptionalString(config.github.botLogin, "config.github.botLogin");
   if (config.github.requestTimeoutMs !== undefined) validatePositiveInteger(config.github.requestTimeoutMs, "config.github.requestTimeoutMs");
@@ -543,6 +564,18 @@ function validateIssueEnrichmentRepoOverride(value: unknown, label: string): voi
     value.maxCommentsPerCycle > value.maxIssuesPerCycle
   ) {
     throw new Error(`${label}.maxCommentsPerCycle must be <= ${label}.maxIssuesPerCycle`);
+  }
+}
+
+function validateDesktopConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateOptionalString(value.openAICompatibleEndpoint, `${label}.openAICompatibleEndpoint`);
+  validateOptionalString(value.updateChannel, `${label}.updateChannel`);
+  if (typeof value.openAICompatibleEndpoint === "string" && value.openAICompatibleEndpoint.trim().length === 0) {
+    throw new Error(`${label}.openAICompatibleEndpoint must not be empty`);
+  }
+  if (typeof value.updateChannel === "string" && value.updateChannel.trim().length === 0) {
+    throw new Error(`${label}.updateChannel must not be empty`);
   }
 }
 

@@ -13,6 +13,7 @@ import {
   runOfflineEval,
   runStickyVsColdEval
 } from "./eval-harness.js";
+import { inspectConfigForDesktop, patchConfigForDesktop } from "./config-cli.js";
 import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
 import {
   buildFinishingTouchDraft,
@@ -86,6 +87,29 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
     return;
+  }
+
+  if (command === "config") {
+    const configAction = args._[1];
+    if (configAction === "inspect") {
+      const result = inspectConfigForDesktop(args.config ? parseSingleArg(args.config, "--config") : undefined);
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (configAction === "patch") {
+      if (!args.config) throw new Error("config patch requires --config");
+      if (!args.input) throw new Error("config patch requires --input");
+      const result = patchConfigForDesktop({
+        configPath: parseSingleArg(args.config, "--config"),
+        inputPath: parseSingleArg(args.input, "--input"),
+        dryRun: args["dry-run"] !== "false",
+        confirm: args.confirm === "true"
+      });
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exitCode = 1;
+      return;
+    }
+    throw new Error("config subcommand must be one of: inspect, patch");
   }
 
   if (command === "doctor") {
@@ -2002,6 +2026,8 @@ function buildHelp(command?: string) {
     commands: {
       public: [
         "init",
+        "config inspect",
+        "config patch",
         "doctor",
         "daemon start",
         "daemon stop",
@@ -2046,6 +2072,8 @@ function buildHelp(command?: string) {
     },
     examples: [
       "neondiff init --config config.local.json",
+      "neondiff config inspect --config config.local.json",
+      "neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true",
       "neondiff doctor --config config.local.json --json",
       "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff",
