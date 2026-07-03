@@ -1,0 +1,100 @@
+{
+  "evalName": "evaos-zcode-review-bot-sticky-vs-cold-v0.1",
+  "runId": "sticky-vs-cold-seeded-quality",
+  "scenarioSource": {
+    "path": "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"
+  },
+  "cold": {
+    "evalName": "evaos-zcode-review-bot-comparison-v0.1",
+    "runId": "sticky-vs-cold-seeded-quality-cold",
+    "repo": "electricsheephq/evaos-code-review-bot",
+    "pullNumber": 85,
+    "headSha": "abc123sticky",
+    "suite": "seeded_defect_recall",
+    "mode": "exploratory",
+    "botFindings": {
+      "findings": [
+        {
+          "severity": "P1",
+          "path": "src/worker.ts",
+          "line": 44,
+          "title": "Provider timeout kills the review loop",
+          "body": "The provider timeout escapes the per-PR review boundary and can stop later repos from being scanned.",
+          "confidence": 0.91
+        },
+        {
+          "severity": "P3",
+          "path": "src/docs.ts",
+          "line": 12,
+          "title": "Doc wording could be clearer",
+          "body": "The wording around beta releases could use another sentence.",
+          "confidence": 0.54
+        }
+      ]
+    },
+    "labels": [
+      {
+        "source": "seeded_defect",
+        "severity": "P1",
+        "path": "src/worker.ts",
+        "line": 44,
+        "title": "Provider timeout kills the review loop",
+        "body": "A provider timeout escaping the per-PR boundary can stop the worker from scanning later repos.",
+        "sourceId": "seed-provider-timeout-loop"
+      }
+    ],
+    "thresholds": {
+      "minPrecision": 0.5,
+      "minRecall": 1,
+      "minSeededRecall": 1
+    }
+  },
+  "sticky": {
+    "evalName": "evaos-zcode-review-bot-comparison-v0.1",
+    "runId": "sticky-vs-cold-seeded-quality-sticky",
+    "repo": "electricsheephq/evaos-code-review-bot",
+    "pullNumber": 85,
+    "headSha": "abc123sticky",
+    "suite": "seeded_defect_recall",
+    "botFindings": {
+      "findings": [
+        {
+          "severity": "P1",
+          "path": "src/worker.ts",
+          "line": 44,
+          "title": "Provider timeout kills the review loop",
+          "body": "The provider timeout escapes the per-PR review boundary and can stop later repos from being scanned.",
+          "confidence": 0.93
+        }
+      ]
+    },
+    "labels": [
+      {
+        "source": "seeded_defect",
+        "severity": "P1",
+        "path": "src/worker.ts",
+        "line": 44,
+        "title": "Provider timeout kills the review loop",
+        "body": "A provider timeout escaping the per-PR boundary can stop the worker from scanning later repos.",
+        "sourceId": "seed-provider-timeout-loop"
+      }
+    ]
+  },
+  "coldRuntime": {
+    "providerAttempts": 2,
+    "latencyMs": 14000,
+    "promptTokens": 12000,
+    "outputTokens": 800,
+    "totalTokens": 12800
+  },
+  "stickyRuntime": {
+    "providerAttempts": 1,
+    "latencyMs": 9000,
+    "promptTokens": 9000,
+    "outputTokens": 650,
+    "totalTokens": 9650,
+    "memoryPacketSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "gitnexusPacketSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "stickySessionId": "repo-sticky-eval-fixture"
+  }
+}

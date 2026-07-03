@@ -4,7 +4,13 @@ import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
-import { assertEvalOutputDirSafe, buildEvalPromotionDecisionMarkdown, REQUIRED_SUITES, runOfflineEval } from "./eval-harness.js";
+import {
+  assertEvalOutputDirSafe,
+  buildEvalPromotionDecisionMarkdown,
+  REQUIRED_SUITES,
+  runOfflineEval,
+  runStickyVsColdEval
+} from "./eval-harness.js";
 import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
 import {
   buildFinishingTouchDraft,
@@ -874,6 +880,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "eval-sticky-vs-cold") {
+    if (!args.input) throw new Error("--input is required for eval-sticky-vs-cold");
+    if (!args["output-root"]) throw new Error("--output-root is required for eval-sticky-vs-cold");
+    const input = JSON.parse(readFileSync(args.input, "utf8"));
+    const result = runStickyVsColdEval(input, {
+      outputRoot: args["output-root"]
+    });
+    console.log(JSON.stringify(result.summary, null, 2));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
   if (command === "run-once") {
     const dryRun = args["dry-run"] !== "false";
     const useZCode = args.zcode !== "false";
@@ -1072,7 +1090,8 @@ function buildHelp() {
         "run-once",
         "daemon",
         "eval-offline",
-        "eval-suite"
+        "eval-suite",
+        "eval-sticky-vs-cold"
       ]
     },
     examples: [
@@ -1093,6 +1112,7 @@ function buildHelp() {
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --issue 456 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts issue-enrichment-scan --config /path/to/live.json --dry-run true --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]

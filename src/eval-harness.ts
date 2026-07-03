@@ -100,6 +100,106 @@ export interface EvalRunResult {
   artifacts: Record<string, string>;
 }
 
+export interface StickyVsColdRuntimeMetrics {
+  providerAttempts?: number;
+  latencyMs?: number;
+  promptTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  providerCooldowns?: number;
+  memoryPacketSha?: string;
+  gitnexusPacketSha?: string;
+  stickySessionId?: string;
+  repoMemoryAgeSeconds?: number;
+  staleContext?: boolean;
+  notes?: string[];
+}
+
+export interface StickyVsColdThresholds {
+  maxFalsePositiveDelta: number;
+  maxSecretFindingDelta: number;
+  maxDuplicateFindingDelta: number;
+  maxSchemaDropDelta: number;
+  requireProviderAttemptsNotHigher: boolean;
+  minRuntimeSafeScenarios: number;
+  minRuntimeSafeLabeledFindings: number;
+  minRuntimeSafeP0P1Labels: number;
+  minRuntimeSafeNegativeControls: number;
+}
+
+export interface StickyVsColdScenarioInput {
+  evalName?: string;
+  runId: string;
+  scenarioSource?: EvalScenarioSourceInput;
+  cold: EvalScenarioInput;
+  sticky: EvalScenarioInput;
+  coldRuntime?: StickyVsColdRuntimeMetrics;
+  stickyRuntime?: StickyVsColdRuntimeMetrics;
+  thresholds?: Partial<StickyVsColdThresholds>;
+}
+
+export type StickyVsColdDecision = "advisory" | "runtime_safe_candidate" | "not_enough_evidence";
+
+export interface StickyVsColdEvalResult {
+  ok: boolean;
+  outputRoot: string;
+  cold: EvalRunResult;
+  sticky: EvalRunResult;
+  summary: StickyVsColdSummary;
+  artifacts: Record<string, string>;
+}
+
+export interface StickyVsColdSummary {
+  evalName: string;
+  artifactVersion: "0.1";
+  runId: string;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  suite: EvalSuiteName;
+  decision: StickyVsColdDecision;
+  ok: boolean;
+  publicConfidence: "uncalibrated";
+  generatedAt: string;
+  scenarioSource?: unknown;
+  packets: {
+    cold: { outputDir: string; ok: boolean; scorecard: EvalScorecard };
+    sticky: { outputDir: string; ok: boolean; scorecard: EvalScorecard };
+  };
+  deltas: {
+    precision: number;
+    recall: number;
+    seededRecall: number;
+    truePositive: number;
+    falsePositive: number;
+    falseNegative: number;
+    botFindings: number;
+    secretFindings: number;
+    duplicateFindings: number;
+    droppedFromSchema: number;
+    providerAttempts?: number;
+    latencyMs?: number;
+    promptTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    providerCooldowns?: number;
+  };
+  context: {
+    coldRuntime?: unknown;
+    stickyRuntime?: unknown;
+  };
+  evidenceCounts: {
+    pairedScenarios: number;
+    labeledFindings: number;
+    p0p1Labels: number;
+    negativeControlScenarios: number;
+  };
+  thresholds: StickyVsColdThresholds;
+  gates: Array<{ name: string; ok: boolean; detail: string }>;
+  artifactInventory: Array<{ name: string; sha256: string }>;
+  proofBoundary: string;
+}
+
 export interface EvalScorecard {
   evalName: string;
   runId: string;
@@ -213,6 +313,18 @@ export const REQUIRED_SUITES: EvalSuiteName[] = [
   "duplicate_suppression"
 ];
 
+const DEFAULT_STICKY_VS_COLD_THRESHOLDS: StickyVsColdThresholds = {
+  maxFalsePositiveDelta: 0,
+  maxSecretFindingDelta: 0,
+  maxDuplicateFindingDelta: 0,
+  maxSchemaDropDelta: 0,
+  requireProviderAttemptsNotHigher: true,
+  minRuntimeSafeScenarios: 30,
+  minRuntimeSafeLabeledFindings: PUBLIC_CONFIDENCE_POLICY.minLabeledFindings,
+  minRuntimeSafeP0P1Labels: PUBLIC_CONFIDENCE_POLICY.minP0P1Labels,
+  minRuntimeSafeNegativeControls: PUBLIC_CONFIDENCE_POLICY.minNegativeControlScenarios
+};
+
 export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions = {}): EvalRunResult {
   validateEvalInput(input);
   const thresholds = { ...DEFAULT_THRESHOLDS, ...(input.thresholds ?? {}) };
@@ -310,6 +422,290 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
     scorecard,
     artifacts
   };
+}
+
+export function runStickyVsColdEval(
+  input: StickyVsColdScenarioInput,
+  options: { outputRoot?: string; now?: Date } = {}
+): StickyVsColdEvalResult {
+  validateStickyVsColdInput(input);
+  const now = options.now ?? new Date();
+  const evalName = input.evalName ?? "evaos-zcode-review-bot-sticky-vs-cold-v0.1";
+  const thresholds = { ...DEFAULT_STICKY_VS_COLD_THRESHOLDS, ...(input.thresholds ?? {}) };
+  validateStickyVsColdThresholds(thresholds);
+  const outputRoot = options.outputRoot ?? defaultStickyVsColdOutputRoot(input, now);
+  guardOutputDir(outputRoot);
+  mkdirSync(outputRoot, { recursive: true });
+
+  const cold = runOfflineEval(input.cold, {
+    outputDir: join(outputRoot, "cold"),
+    now
+  });
+  const sticky = runOfflineEval(input.sticky, {
+    outputDir: join(outputRoot, "sticky"),
+    now
+  });
+
+  const summaryPath = join(outputRoot, "sticky-vs-cold-summary.json");
+  const reportPath = join(outputRoot, "sticky-vs-cold-report.md");
+  const summary = buildStickyVsColdSummary({
+    input,
+    evalName,
+    cold,
+    sticky,
+    thresholds,
+    now
+  });
+  writeFileSync(reportPath, buildStickyVsColdReport(summary));
+  const artifactInventory = [
+    { name: "sticky-vs-cold-report.md", sha256: sha256File(reportPath) },
+    { name: "cold/scorecard.json", sha256: sha256File(cold.artifacts["scorecard.json"]!) },
+    { name: "sticky/scorecard.json", sha256: sha256File(sticky.artifacts["scorecard.json"]!) },
+    { name: "cold/manifest.json", sha256: sha256File(cold.artifacts["manifest.json"]!) },
+    { name: "sticky/manifest.json", sha256: sha256File(sticky.artifacts["manifest.json"]!) }
+  ];
+  const finalSummary = { ...summary, artifactInventory };
+  writeJson(summaryPath, finalSummary);
+
+  return {
+    ok: finalSummary.ok,
+    outputRoot,
+    cold,
+    sticky,
+    summary: finalSummary,
+    artifacts: {
+      "sticky-vs-cold-summary.json": summaryPath,
+      "sticky-vs-cold-report.md": reportPath
+    }
+  };
+}
+
+function buildStickyVsColdSummary(input: {
+  input: StickyVsColdScenarioInput;
+  evalName: string;
+  cold: EvalRunResult;
+  sticky: EvalRunResult;
+  thresholds: StickyVsColdThresholds;
+  now: Date;
+}): StickyVsColdSummary {
+  const deltas = buildStickyVsColdDeltas({
+    cold: input.cold.scorecard,
+    sticky: input.sticky.scorecard,
+    coldRuntime: input.input.coldRuntime,
+    stickyRuntime: input.input.stickyRuntime
+  });
+  const evidenceCounts = {
+    pairedScenarios: 1,
+    labeledFindings: input.sticky.scorecard.counts.labels,
+    p0p1Labels: input.sticky.scorecard.counts.p0p1Labels,
+    negativeControlScenarios: input.sticky.scorecard.counts.labels === 0 ? 1 : 0
+  };
+  const gates = buildStickyVsColdGates({
+    cold: input.cold,
+    sticky: input.sticky,
+    deltas,
+    thresholds: input.thresholds,
+    coldRuntime: input.input.coldRuntime,
+    stickyRuntime: input.input.stickyRuntime
+  });
+  const ok = gates.every((gate) => gate.ok);
+  const providerAttemptsComparable =
+    typeof input.input.coldRuntime?.providerAttempts === "number" &&
+    typeof input.input.stickyRuntime?.providerAttempts === "number";
+  const runtimeSafeEvidence =
+    ok &&
+    providerAttemptsComparable &&
+    evidenceCounts.pairedScenarios >= input.thresholds.minRuntimeSafeScenarios &&
+    evidenceCounts.labeledFindings >= input.thresholds.minRuntimeSafeLabeledFindings &&
+    evidenceCounts.p0p1Labels >= input.thresholds.minRuntimeSafeP0P1Labels &&
+    evidenceCounts.negativeControlScenarios >= input.thresholds.minRuntimeSafeNegativeControls;
+  const decision: StickyVsColdDecision = ok
+    ? runtimeSafeEvidence
+      ? "runtime_safe_candidate"
+      : "advisory"
+    : "not_enough_evidence";
+
+  return {
+    evalName: input.evalName,
+    artifactVersion: "0.1",
+    runId: input.input.runId,
+    repo: input.sticky.scorecard.repo,
+    pullNumber: input.sticky.scorecard.pullNumber,
+    headSha: input.sticky.scorecard.headSha,
+    suite: input.sticky.scorecard.suite,
+    decision,
+    ok,
+    publicConfidence: "uncalibrated",
+    generatedAt: input.now.toISOString(),
+    ...(input.input.scenarioSource ? { scenarioSource: redactUnknown(input.input.scenarioSource) } : {}),
+    packets: {
+      cold: {
+        outputDir: input.cold.outputDir,
+        ok: input.cold.ok,
+        scorecard: input.cold.scorecard
+      },
+      sticky: {
+        outputDir: input.sticky.outputDir,
+        ok: input.sticky.ok,
+        scorecard: input.sticky.scorecard
+      }
+    },
+    deltas,
+    context: {
+      ...(input.input.coldRuntime ? { coldRuntime: redactUnknown(input.input.coldRuntime) } : {}),
+      ...(input.input.stickyRuntime ? { stickyRuntime: redactUnknown(input.input.stickyRuntime) } : {})
+    },
+    evidenceCounts,
+    thresholds: input.thresholds,
+    gates,
+    artifactInventory: [],
+    proofBoundary: "offline paired sticky-vs-cold eval packet only; no GitHub posting, launchd mutation, repo mutation, or calibrated public confidence claim"
+  };
+}
+
+function buildStickyVsColdDeltas(input: {
+  cold: EvalScorecard;
+  sticky: EvalScorecard;
+  coldRuntime?: StickyVsColdRuntimeMetrics;
+  stickyRuntime?: StickyVsColdRuntimeMetrics;
+}): StickyVsColdSummary["deltas"] {
+  return {
+    precision: roundMetric(input.sticky.metrics.precision - input.cold.metrics.precision),
+    recall: roundMetric(input.sticky.metrics.recall - input.cold.metrics.recall),
+    seededRecall: roundMetric(input.sticky.metrics.seededRecall - input.cold.metrics.seededRecall),
+    truePositive: input.sticky.counts.truePositive - input.cold.counts.truePositive,
+    falsePositive: input.sticky.counts.falsePositive - input.cold.counts.falsePositive,
+    falseNegative: input.sticky.counts.falseNegative - input.cold.counts.falseNegative,
+    botFindings: input.sticky.counts.botFindings - input.cold.counts.botFindings,
+    secretFindings: input.sticky.counts.secretFindings - input.cold.counts.secretFindings,
+    duplicateFindings: input.sticky.counts.duplicateFindings - input.cold.counts.duplicateFindings,
+    droppedFromSchema: input.sticky.counts.droppedFromSchema - input.cold.counts.droppedFromSchema,
+    ...optionalNumberDelta("providerAttempts", input.coldRuntime?.providerAttempts, input.stickyRuntime?.providerAttempts),
+    ...optionalNumberDelta("latencyMs", input.coldRuntime?.latencyMs, input.stickyRuntime?.latencyMs),
+    ...optionalNumberDelta("promptTokens", input.coldRuntime?.promptTokens, input.stickyRuntime?.promptTokens),
+    ...optionalNumberDelta("outputTokens", input.coldRuntime?.outputTokens, input.stickyRuntime?.outputTokens),
+    ...optionalNumberDelta("totalTokens", input.coldRuntime?.totalTokens, input.stickyRuntime?.totalTokens),
+    ...optionalNumberDelta("providerCooldowns", input.coldRuntime?.providerCooldowns, input.stickyRuntime?.providerCooldowns)
+  };
+}
+
+function buildStickyVsColdGates(input: {
+  cold: EvalRunResult;
+  sticky: EvalRunResult;
+  deltas: StickyVsColdSummary["deltas"];
+  thresholds: StickyVsColdThresholds;
+  coldRuntime?: StickyVsColdRuntimeMetrics;
+  stickyRuntime?: StickyVsColdRuntimeMetrics;
+}): StickyVsColdSummary["gates"] {
+  const providerAttemptsComparable =
+    typeof input.coldRuntime?.providerAttempts === "number" &&
+    typeof input.stickyRuntime?.providerAttempts === "number";
+  return [
+    {
+      name: "sticky_packet_ok",
+      ok: input.sticky.ok,
+      detail: input.sticky.ok ? "sticky packet gates passed" : "sticky packet gates failed"
+    },
+    {
+      name: "no_secret_regression",
+      ok: input.deltas.secretFindings <= input.thresholds.maxSecretFindingDelta,
+      detail: `${input.deltas.secretFindings} <= ${input.thresholds.maxSecretFindingDelta}`
+    },
+    {
+      name: "no_duplicate_regression",
+      ok: input.deltas.duplicateFindings <= input.thresholds.maxDuplicateFindingDelta,
+      detail: `${input.deltas.duplicateFindings} <= ${input.thresholds.maxDuplicateFindingDelta}`
+    },
+    {
+      name: "no_schema_drop_regression",
+      ok: input.deltas.droppedFromSchema <= input.thresholds.maxSchemaDropDelta,
+      detail: `${input.deltas.droppedFromSchema} <= ${input.thresholds.maxSchemaDropDelta}`
+    },
+    {
+      name: "no_false_positive_regression",
+      ok: input.deltas.falsePositive <= input.thresholds.maxFalsePositiveDelta,
+      detail: `${input.deltas.falsePositive} <= ${input.thresholds.maxFalsePositiveDelta}`
+    },
+    {
+      name: "provider_attempts_not_higher",
+      ok: !input.thresholds.requireProviderAttemptsNotHigher ||
+        !providerAttemptsComparable ||
+        (input.stickyRuntime?.providerAttempts ?? 0) <= (input.coldRuntime?.providerAttempts ?? 0),
+      detail: providerAttemptsComparable
+        ? `${input.stickyRuntime!.providerAttempts} <= ${input.coldRuntime!.providerAttempts}`
+        : "provider attempt counts not supplied; gate is informational"
+    },
+    {
+      name: "cold_packet_observed",
+      ok: true,
+      detail: input.cold.ok ? "cold packet gates passed" : "cold packet gates failed but remains usable as baseline evidence"
+    }
+  ];
+}
+
+function buildStickyVsColdReport(summary: StickyVsColdSummary): string {
+  return [
+    "# Sticky vs Cold Eval Report",
+    "",
+    `Decision: ${summary.decision}`,
+    `Public confidence: ${summary.publicConfidence}`,
+    `Scenario: ${summary.repo}#${summary.pullNumber} @ ${summary.headSha}`,
+    `Suite: ${summary.suite}`,
+    "",
+    "## Packets",
+    "",
+    `- Cold: ${summary.packets.cold.ok ? "ok" : "failed"} (${summary.packets.cold.outputDir})`,
+    `- Sticky: ${summary.packets.sticky.ok ? "ok" : "failed"} (${summary.packets.sticky.outputDir})`,
+    "",
+    "## Scorecard Deltas",
+    "",
+    "| Metric | Sticky - cold |",
+    "| --- | ---: |",
+    `| Precision | ${summary.deltas.precision} |`,
+    `| Recall | ${summary.deltas.recall} |`,
+    `| Seeded recall | ${summary.deltas.seededRecall} |`,
+    `| True positives | ${summary.deltas.truePositive} |`,
+    `| False positives | ${summary.deltas.falsePositive} |`,
+    `| False negatives | ${summary.deltas.falseNegative} |`,
+    `| Bot findings | ${summary.deltas.botFindings} |`,
+    `| Secret findings | ${summary.deltas.secretFindings} |`,
+    `| Duplicate findings | ${summary.deltas.duplicateFindings} |`,
+    `| Schema drops | ${summary.deltas.droppedFromSchema} |`,
+    ...optionalDeltaRows(summary.deltas),
+    "",
+    "## Gates",
+    "",
+    ...summary.gates.map((gate) => `- ${gate.ok ? "PASS" : "FAIL"} ${gate.name}: ${gate.detail}`),
+    "",
+    "## Evidence Counts",
+    "",
+    `- Paired scenarios: ${summary.evidenceCounts.pairedScenarios} / ${summary.thresholds.minRuntimeSafeScenarios}`,
+    `- Labeled findings: ${summary.evidenceCounts.labeledFindings} / ${summary.thresholds.minRuntimeSafeLabeledFindings}`,
+    `- P0/P1 labels: ${summary.evidenceCounts.p0p1Labels} / ${summary.thresholds.minRuntimeSafeP0P1Labels}`,
+    `- Negative-control scenarios: ${summary.evidenceCounts.negativeControlScenarios} / ${summary.thresholds.minRuntimeSafeNegativeControls}`,
+    "",
+    "## Proof Boundary",
+    "",
+    summary.proofBoundary,
+    ""
+  ].join("\n");
+}
+
+function optionalDeltaRows(deltas: StickyVsColdSummary["deltas"]): string[] {
+  const rows: string[] = [];
+  for (const key of ["providerAttempts", "latencyMs", "promptTokens", "outputTokens", "totalTokens", "providerCooldowns"] as const) {
+    if (typeof deltas[key] === "number") rows.push(`| ${key} | ${deltas[key]} |`);
+  }
+  return rows;
+}
+
+function optionalNumberDelta<K extends keyof StickyVsColdSummary["deltas"]>(
+  key: K,
+  cold: number | undefined,
+  sticky: number | undefined
+): Partial<Pick<StickyVsColdSummary["deltas"], K>> {
+  if (typeof cold !== "number" || typeof sticky !== "number") return {};
+  return { [key]: sticky - cold } as Partial<Pick<StickyVsColdSummary["deltas"], K>>;
 }
 
 function buildScorecard(input: {
@@ -937,6 +1333,76 @@ function csvCell(value: string): string {
 
 function roundMetric(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function defaultStickyVsColdOutputRoot(input: Pick<StickyVsColdScenarioInput, "runId">, now: Date): string {
+  const date = now.toISOString().slice(0, 10);
+  return join("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review", date, sanitizePathSegment(input.runId));
+}
+
+function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
+  validateNonEmpty(input.runId, "runId");
+  if (!input.cold || typeof input.cold !== "object") throw new Error("cold scenario is required");
+  if (!input.sticky || typeof input.sticky !== "object") throw new Error("sticky scenario is required");
+  validateEvalInput(input.cold);
+  validateEvalInput(input.sticky);
+  if (input.scenarioSource !== undefined) validateScenarioSource(input.scenarioSource);
+  if (input.coldRuntime !== undefined) validateStickyRuntimeMetrics(input.coldRuntime, "coldRuntime");
+  if (input.stickyRuntime !== undefined) validateStickyRuntimeMetrics(input.stickyRuntime, "stickyRuntime");
+  if (input.thresholds !== undefined) validateStickyVsColdThresholds({ ...DEFAULT_STICKY_VS_COLD_THRESHOLDS, ...input.thresholds });
+
+  for (const field of ["repo", "pullNumber", "headSha", "suite"] as const) {
+    if (input.cold[field] !== input.sticky[field]) {
+      throw new Error(`cold.${field} must match sticky.${field}`);
+    }
+  }
+}
+
+function validateStickyRuntimeMetrics(metrics: StickyVsColdRuntimeMetrics, labelPath: string): void {
+  for (const field of [
+    "providerAttempts",
+    "latencyMs",
+    "promptTokens",
+    "outputTokens",
+    "totalTokens",
+    "providerCooldowns",
+    "repoMemoryAgeSeconds"
+  ] as const) {
+    if (metrics[field] !== undefined && (!Number.isFinite(metrics[field]) || metrics[field] < 0)) {
+      throw new Error(`${labelPath}.${field} must be a non-negative number`);
+    }
+  }
+  for (const field of ["memoryPacketSha", "gitnexusPacketSha"] as const) {
+    if (metrics[field] !== undefined && !/^[a-f0-9]{64}$/i.test(metrics[field])) {
+      throw new Error(`${labelPath}.${field} must be a sha256 hex digest`);
+    }
+  }
+  if (metrics.stickySessionId !== undefined && typeof metrics.stickySessionId !== "string") {
+    throw new Error(`${labelPath}.stickySessionId must be a string`);
+  }
+  if (metrics.staleContext !== undefined && typeof metrics.staleContext !== "boolean") {
+    throw new Error(`${labelPath}.staleContext must be a boolean`);
+  }
+  if (metrics.notes !== undefined && (!Array.isArray(metrics.notes) || metrics.notes.some((note) => typeof note !== "string"))) {
+    throw new Error(`${labelPath}.notes must be an array of strings`);
+  }
+}
+
+function validateStickyVsColdThresholds(thresholds: StickyVsColdThresholds): void {
+  for (const key of ["maxFalsePositiveDelta", "maxSecretFindingDelta", "maxDuplicateFindingDelta", "maxSchemaDropDelta"] as const) {
+    if (!Number.isInteger(thresholds[key]) || thresholds[key] < 0) throw new Error(`${key} must be a non-negative integer`);
+  }
+  if (typeof thresholds.requireProviderAttemptsNotHigher !== "boolean") {
+    throw new Error("requireProviderAttemptsNotHigher must be a boolean");
+  }
+  for (const key of [
+    "minRuntimeSafeScenarios",
+    "minRuntimeSafeLabeledFindings",
+    "minRuntimeSafeP0P1Labels",
+    "minRuntimeSafeNegativeControls"
+  ] as const) {
+    if (!Number.isInteger(thresholds[key]) || thresholds[key] < 0) throw new Error(`${key} must be a non-negative integer`);
+  }
 }
 
 function validateEvalInput(input: EvalScenarioInput): void {

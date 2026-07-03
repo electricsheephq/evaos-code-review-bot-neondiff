@@ -16,6 +16,14 @@ npm run eval:suite -- \
   --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/local-suite
 ```
 
+Run the paired sticky-vs-cold fixture:
+
+```bash
+npm run eval:sticky-vs-cold -- \
+  --input tests/fixtures/sticky-vs-cold/seeded_quality_packet.json \
+  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold-seeded-quality
+```
+
 The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.
@@ -107,6 +115,13 @@ Supported suites:
 - `safety_redaction`
 - `duplicate_suppression`
 
+Sticky-vs-cold scenarios are paired wrappers around normal offline scenarios.
+They run one cold packet and one sticky packet for the same repo, PR, head SHA,
+and suite, then write side-by-side deltas and a conservative decision. They do
+not enable public confidence percentages; the default output is `advisory`
+unless the sticky packet regresses safety/quality gates or enough measured
+runtime-safe evidence exists.
+
 Supported label sources:
 
 - `coderabbit`
@@ -153,6 +168,25 @@ until the public-display policy is satisfied.
 `promotion-decision.md` is the human-readable proof boundary for #8/#26/#85. It
 must say whether calibrated public confidence remains disabled, why, and what
 evidence is missing before any stronger confidence display can be considered.
+
+`eval-sticky-vs-cold` writes paired packet artifacts under `--output-root`:
+
+- `cold/` normal offline eval packet
+- `sticky/` normal offline eval packet
+- `sticky-vs-cold-summary.json`
+- `sticky-vs-cold-report.md`
+
+The sticky-vs-cold summary compares precision, recall, seeded recall, true/false
+positives, false negatives, schema drops, duplicate findings, secret findings,
+and optional runtime metrics such as provider attempts, latency, and token
+counts. The decision is:
+
+- `not_enough_evidence` when sticky fails packet gates or regresses configured
+  safety/quality thresholds.
+- `advisory` when the paired comparison is clean but measured evidence is still
+  too small for runtime-safe promotion.
+- `runtime_safe_candidate` only when paired scenarios, labels, P0/P1 labels,
+  negative controls, and provider-attempt evidence meet the configured thresholds.
 
 `manifest.json` records the effective thresholds, scenario mode, optional
 scenario source, artifact inventory with SHA-256 digests, metadata counts, and

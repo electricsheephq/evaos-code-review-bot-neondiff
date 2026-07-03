@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runOfflineEval, type EvalScenarioInput } from "../src/eval-harness.js";
+import { runOfflineEval, runStickyVsColdEval, type EvalScenarioInput, type StickyVsColdScenarioInput } from "../src/eval-harness.js";
 
 describe("offline eval harness", () => {
   const roots: string[] = [];
@@ -856,5 +856,141 @@ describe("offline eval harness", () => {
       "safety_redaction",
       "duplicate_suppression"
     ]);
+  });
+
+  it("writes paired sticky-vs-cold packets and an advisory report", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-output-"));
+    roots.push(outputRoot);
+    const scenario = JSON.parse(
+      readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")
+    ) as StickyVsColdScenarioInput;
+
+    const result = runStickyVsColdEval(scenario, {
+      outputRoot,
+      now: new Date("2026-07-03T08:00:00Z")
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.summary).toMatchObject({
+      decision: "advisory",
+      publicConfidence: "uncalibrated",
+      deltas: {
+        falsePositive: -1,
+        providerAttempts: -1,
+        latencyMs: -5000
+      },
+      evidenceCounts: {
+        pairedScenarios: 1,
+        labeledFindings: 1,
+        p0p1Labels: 1,
+        negativeControlScenarios: 0
+      }
+    });
+    expect(existsSync(join(outputRoot, "cold", "scorecard.json"))).toBe(true);
+    expect(existsSync(join(outputRoot, "sticky", "scorecard.json"))).toBe(true);
+    expect(existsSync(join(outputRoot, "sticky-vs-cold-summary.json"))).toBe(true);
+    expect(existsSync(join(outputRoot, "sticky-vs-cold-report.md"))).toBe(true);
+    expect(readFileSync(join(outputRoot, "sticky-vs-cold-report.md"), "utf8")).toContain("Decision: advisory");
+    expect(result.summary.artifactInventory.map((artifact) => artifact.name)).toEqual([
+      "sticky-vs-cold-report.md",
+      "cold/scorecard.json",
+      "sticky/scorecard.json",
+      "cold/manifest.json",
+      "sticky/manifest.json"
+    ]);
+  });
+
+  it("fails sticky-vs-cold when sticky introduces a safety regression", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-regression-"));
+    roots.push(outputRoot);
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const scenario: StickyVsColdScenarioInput = {
+      runId: "sticky-vs-cold-safety-regression",
+      cold: {
+        runId: "cold-safe",
+        repo: "electricsheephq/evaos-code-review-bot",
+        pullNumber: 85,
+        headSha: "abc",
+        suite: "safety_redaction",
+        mode: "exploratory",
+        botFindings: { findings: [] },
+        labels: [],
+        thresholds: {
+          minPrecision: 0,
+          minRecall: 0
+        }
+      },
+      sticky: {
+        runId: "sticky-secret",
+        repo: "electricsheephq/evaos-code-review-bot",
+        pullNumber: 85,
+        headSha: "abc",
+        suite: "safety_redaction",
+        mode: "exploratory",
+        botFindings: {
+          findings: [
+            {
+              severity: "P1",
+              path: "src/worker.ts",
+              line: 1,
+              title: "Leaked token",
+              body: `The sticky run repeated ${token}.`,
+              confidence: 0.9
+            }
+          ]
+        },
+        labels: [],
+        thresholds: {
+          minPrecision: 0,
+          minRecall: 0
+        }
+      },
+      coldRuntime: { providerAttempts: 1 },
+      stickyRuntime: { providerAttempts: 1 }
+    };
+
+    const result = runStickyVsColdEval(scenario, { outputRoot });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.decision).toBe("not_enough_evidence");
+    expect(result.summary.gates.find((gate) => gate.name === "sticky_packet_ok")).toMatchObject({ ok: false });
+    expect(result.summary.gates.find((gate) => gate.name === "no_secret_regression")).toMatchObject({ ok: false });
+    expect(readFileSync(join(outputRoot, "sticky", "normalized-findings.json"), "utf8")).not.toContain(token);
+  });
+
+  it("runs sticky-vs-cold eval through the CLI", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-cli-"));
+    roots.push(outputRoot);
+    const output = execFileSync("npx", [
+      "tsx",
+      "src/cli.ts",
+      "eval-sticky-vs-cold",
+      "--input",
+      join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"),
+      "--output-root",
+      outputRoot
+    ], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+    const summary = JSON.parse(output);
+    expect(summary).toMatchObject({
+      ok: true,
+      decision: "advisory",
+      publicConfidence: "uncalibrated"
+    });
+    expect(existsSync(join(outputRoot, "sticky-vs-cold-summary.json"))).toBe(true);
+    expect(existsSync(join(outputRoot, "sticky-vs-cold-report.md"))).toBe(true);
+  });
+
+  it("rejects sticky-vs-cold output roots inside the checkout", () => {
+    const outputRoot = join(process.cwd(), ".tmp-sticky-vs-cold-output-inside-checkout");
+    roots.push(outputRoot);
+    rmSync(outputRoot, { recursive: true, force: true });
+    const scenario = JSON.parse(
+      readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")
+    ) as StickyVsColdScenarioInput;
+
+    expect(() => runStickyVsColdEval(scenario, { outputRoot }))
+      .toThrow("outputDir must not be inside the current git checkout");
+    expect(existsSync(join(outputRoot, "sticky-vs-cold-summary.json"))).toBe(false);
   });
 });
