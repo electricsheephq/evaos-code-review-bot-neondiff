@@ -177,7 +177,7 @@ export interface ReleaseStatus {
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
 const PUBLIC_VERSION_PATTERN =
-  /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
 const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
   ...REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES,
@@ -376,6 +376,7 @@ export function collectReleaseStatus(input: {
   expectedHead?: string;
   publicReleaseManifestPath?: string;
   expectedPublicVersion?: string;
+  verifyPublicRollbackRefs?: boolean;
   launchdLabel?: string;
   statePath?: string;
   budgetDetails?: boolean;
@@ -410,7 +411,8 @@ export function collectReleaseStatus(input: {
           publicRelease: readPublicReleaseManifestStatus({
             cwd: input.cwd,
             manifestPath: input.publicReleaseManifestPath,
-            expectedVersion: input.expectedPublicVersion
+            expectedVersion: input.expectedPublicVersion,
+            verifyRollbackRefs: input.verifyPublicRollbackRefs === true
           })
         }
       : {}),
@@ -429,7 +431,7 @@ export function validatePublicReleaseManifestInputs(input: {
     throw new Error("--public-release-manifest is required when --expected-public-version is provided");
   }
   if (input.expectedPublicVersion && !isPublicVersionTag(input.expectedPublicVersion)) {
-    throw new Error("--expected-public-version must be a semver prerelease tag like v1.0.0-beta.1");
+    throw new Error("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
   }
 }
 
@@ -437,6 +439,7 @@ export function readPublicReleaseManifestStatus(input: {
   cwd: string;
   manifestPath: string;
   expectedVersion?: string;
+  verifyRollbackRefs?: boolean;
 }): PublicReleaseStatus {
   const absolutePath = resolve(input.cwd, input.manifestPath);
   if (!existsSync(absolutePath)) {
@@ -514,7 +517,8 @@ export function readPublicReleaseManifestStatus(input: {
     const channels = channelNames.map((name) =>
       buildPublicReleaseChannelStatus(name, asRecord(updateChannels[name]), {
         cwd: input.cwd,
-        releaseLevel
+        releaseLevel,
+        verifyRollbackRefs: input.verifyRollbackRefs === true
       })
     );
     const channelsOk = channels.every((channel) => channel.ok);
@@ -545,7 +549,7 @@ export function readPublicReleaseManifestStatus(input: {
                   ? `manifest version ${version} matches ${expectedVersion}`
                   : expectedVersionOk
                     ? `manifest version ${version} does not match ${expectedVersion}`
-                    : "--expected-public-version must be a semver prerelease tag like v1.0.0-beta.1"
+                    : "--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1"
                 : "--expected-public-version is required",
               ...(expectedVersion
                 ? [
@@ -608,7 +612,7 @@ export function readPublicReleaseManifestStatus(input: {
 function buildPublicReleaseChannelStatus(
   name: string,
   channel: Record<string, unknown>,
-  options: { cwd?: string; releaseLevel: string }
+  options: { cwd?: string; releaseLevel: string; verifyRollbackRefs?: boolean }
 ): PublicReleaseChannelStatus {
   const state = readString(channel.state) ?? "missing";
   const requiredForThisRelease =
@@ -619,10 +623,10 @@ function buildPublicReleaseChannelStatus(
   const rollback = readString(channel.rollback);
   const trackingIssue = readString(channel.trackingIssue);
   const stateOk = isUpdateChannelStateAcceptable(name, state, requiredForThisRelease);
-  const rollbackOk = rollback ? isRollbackCommandLike(rollback, options.cwd) : false;
+  const rollbackCheck = rollback ? checkRollbackCommand(rollback, options) : { ok: false, missingMetadata: "rollback command" };
   const missingRequiredMetadata = [
     ...(requiredForThisRelease && !version ? ["version"] : []),
-    ...(requiredForThisRelease && !rollbackOk ? ["rollback command"] : [])
+    ...(requiredForThisRelease && !rollbackCheck.ok ? [rollbackCheck.missingMetadata] : [])
   ];
   const metadataOk = missingRequiredMetadata.length === 0;
   const ok = stateOk && metadataOk;
@@ -655,27 +659,39 @@ function isRequiredPublicUpdateChannel(name: string): boolean {
   return REQUIRED_PUBLIC_UPDATE_CHANNELS.includes(name as typeof REQUIRED_PUBLIC_UPDATE_CHANNELS[number]);
 }
 
-function isRollbackCommandLike(rollback: string, cwd?: string): boolean {
-  if (/\s*(?:&&|\|\||;)\s*/.test(rollback)) return false;
+function checkRollbackCommand(
+  rollback: string,
+  options: { cwd?: string; verifyRollbackRefs?: boolean }
+): { ok: boolean; missingMetadata: "rollback command" | "rollback target" } {
+  if (/\s*(?:&&|\|\||;)\s*/.test(rollback)) return { ok: false, missingMetadata: "rollback command" };
   const command = rollback.trim();
   const resetTarget = command.match(/^git\s+reset\s+--hard\s+([^\s;&|]+)$/)?.[1];
-  if (resetTarget) return isRollbackTarget(resetTarget, cwd);
+  if (resetTarget) return checkRollbackTarget(resetTarget, options);
   const revertTarget = command.match(/^git\s+revert\s+(?:--no-edit\s+)?([^\s;&|]+)$/)?.[1];
-  if (revertTarget) return isRollbackTarget(revertTarget, cwd);
-  return false;
+  if (revertTarget) return checkRollbackTarget(revertTarget, options);
+  return { ok: false, missingMetadata: "rollback command" };
 }
 
-function isRollbackTarget(target: string, cwd?: string): boolean {
-  const targetFormatOk =
-    /^refs\/tags\/v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(target) ||
-    /^[0-9a-f]{40}$/i.test(target);
-  if (!targetFormatOk) return false;
-  if (!cwd || !isGitWorktree(cwd)) return true;
-  return gitCommitishExists(cwd, target);
+function checkRollbackTarget(
+  target: string,
+  options: { cwd?: string; verifyRollbackRefs?: boolean }
+): { ok: boolean; missingMetadata: "rollback command" | "rollback target" } {
+  const targetFormatOk = isRollbackVersionTagRef(target) || /^[0-9a-f]{40}$/i.test(target);
+  if (!targetFormatOk) return { ok: false, missingMetadata: "rollback command" };
+  if (options.verifyRollbackRefs !== true) return { ok: true, missingMetadata: "rollback command" };
+  if (!options.cwd || !isGitWorktree(options.cwd)) return { ok: false, missingMetadata: "rollback target" };
+  return gitCommitishExists(options.cwd, target)
+    ? { ok: true, missingMetadata: "rollback command" }
+    : { ok: false, missingMetadata: "rollback target" };
 }
 
 function isPublicVersionTag(version: string): boolean {
   return PUBLIC_VERSION_PATTERN.test(version);
+}
+
+function isRollbackVersionTagRef(target: string): boolean {
+  const prefix = "refs/tags/";
+  return target.startsWith(prefix) && isPublicVersionTag(target.slice(prefix.length));
 }
 
 function isGitWorktree(cwd: string): boolean {

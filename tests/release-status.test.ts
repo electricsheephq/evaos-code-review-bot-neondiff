@@ -240,13 +240,16 @@ describe("beta release status", () => {
         publicReleaseManifestPath: "docs/public-release-manifest.json",
         expectedPublicVersion: "<tag>"
       })
-    ).toThrow("--expected-public-version must be a semver prerelease tag like v1.0.0-beta.1");
+    ).toThrow("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
+  });
+
+  it("accepts stable public release versions for future stable manifests", () => {
     expect(() =>
       validatePublicReleaseManifestInputs({
         publicReleaseManifestPath: "docs/public-release-manifest.json",
         expectedPublicVersion: "v1.0.0"
       })
-    ).toThrow("--expected-public-version must be a semver prerelease tag like v1.0.0-beta.1");
+    ).not.toThrow();
   });
 
   it("collects public release manifest gates through release-status wiring", () => {
@@ -559,7 +562,7 @@ describe("beta release status", () => {
     });
 
     expect(manifest.docs.ok).toBe(false);
-    expect(manifest.docs.detail).toContain("--expected-public-version must be a semver prerelease tag like v1.0.0-beta.1");
+    expect(manifest.docs.detail).toContain("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
     expect(manifest.ok).toBe(false);
   });
 
@@ -1157,7 +1160,7 @@ describe("beta release status", () => {
     expect(manifest.updateChannels.ok).toBe(false);
   });
 
-  it("fails required public update channels when rollback target is absent in a git checkout", () => {
+  it("accepts format-valid rollback targets without requiring local refs by default", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-missing-rollback-ref-"));
     roots.push(root);
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
@@ -1201,13 +1204,70 @@ describe("beta release status", () => {
     expect(manifest.updateChannels.channels).toEqual([
       expect.objectContaining({
         name: "cli",
+        ok: true,
+        detail: "cli state source_checkout; requiredForThisRelease=true"
+      }),
+      expect.objectContaining({
+        name: "daemon",
+        ok: true,
+        detail: "daemon state launchd_prerelease; requiredForThisRelease=true"
+      })
+    ]);
+    expect(manifest.updateChannels.ok).toBe(true);
+  });
+
+  it("can fail required public update channels when rollback target verification is enabled", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-missing-rollback-ref-"));
+    roots.push(root);
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v9.9.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git revert 0123456789abcdef0123456789abcdef01234567"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1",
+      verifyRollbackRefs: true
+    });
+
+    expect(manifest.updateChannels.channels).toEqual([
+      expect.objectContaining({
+        name: "cli",
         ok: false,
-        detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+        detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback target"
       }),
       expect.objectContaining({
         name: "daemon",
         ok: false,
-        detail: "daemon state launchd_prerelease blocks this release; requiredForThisRelease=true; missing rollback command"
+        detail: "daemon state launchd_prerelease blocks this release; requiredForThisRelease=true; missing rollback target"
       })
     ]);
     expect(manifest.updateChannels.ok).toBe(false);

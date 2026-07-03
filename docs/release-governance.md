@@ -142,6 +142,11 @@ Replace `<source-sha>` and `<tag>` with the actual release source SHA and
 public beta tag before running the command; the placeholders are not valid gate
 inputs.
 
+The public manifest gate validates rollback command syntax by default. Use
+`git fetch origin --tags` and append `--verify-public-rollback-refs true` only
+when you want the operator machine to prove that rollback refs are present in
+that checkout; absent refs are reported as a missing rollback target.
+
 Also run:
 
 ```bash

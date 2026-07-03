@@ -187,6 +187,7 @@ async function main(): Promise<void> {
       expectedHead: args["expected-head"],
       publicReleaseManifestPath: args["public-release-manifest"],
       expectedPublicVersion: args["expected-public-version"],
+      verifyPublicRollbackRefs: args["verify-public-rollback-refs"] === "true",
       launchdLabel: args["launchd-label"],
       statePath: args["state-path"],
       budgetDetails: args["budget-details"] === "true",
@@ -2378,6 +2379,7 @@ interface ParsedArgs {
   "expected-head"?: string;
   "public-release-manifest"?: string;
   "expected-public-version"?: string;
+  "verify-public-rollback-refs"?: string;
   "launchd-label"?: string;
   "state-path"?: string;
   "dry-run"?: string;

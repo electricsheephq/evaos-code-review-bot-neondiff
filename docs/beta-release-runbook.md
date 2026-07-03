@@ -100,6 +100,13 @@ npx tsx src/cli.ts release-status \
 Replace `<tag>` with the actual public beta tag before running the command; do
 not copy the placeholder literally.
 
+By default this public manifest gate validates rollback command shape only, so
+fresh or shallow checkouts are not blocked by missing local tags. After
+`git fetch origin --tags`, operators can add
+`--verify-public-rollback-refs true` for the stricter local ref-existence check;
+that failure is reported as a missing rollback target rather than a malformed
+rollback command.
+
 If the first `release:status` fails only because launchd is still on the
 previous head before restart, record that as pre-promotion state. The
 post-restart `release:status` must pass before calling the beta promoted.
