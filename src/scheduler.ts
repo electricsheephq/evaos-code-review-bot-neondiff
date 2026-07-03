@@ -1,6 +1,13 @@
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig } from "./config.js";
-import { collectTrustedReviewCommands, decideCommandAction, type CommandDecision } from "./commands.js";
+import {
+  collectTrustedReviewCommands,
+  decideCommandAction,
+  isFinishingTouchCommandAction,
+  isReviewCommandAction,
+  type CommandDecision
+} from "./commands.js";
+import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
 import { GitHubApi } from "./github.js";
 import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import {
@@ -143,6 +150,7 @@ export async function runScheduledCycleWithDeps(input: {
         providerId,
         now,
         dryRun: input.options.dryRun,
+        reviewPullImpl: input.reviewPullImpl,
         allowActivationBaselineCommandLookup: input.options.pullNumber !== undefined,
         onStatusCommentFailure: () => {
           result.statusCommentFailures += 1;
@@ -210,6 +218,8 @@ type EnqueueStatus =
   | "skipped_canary"
   | "skipped_processed"
   | "skipped_capacity"
+  | "skipped_finishing_touch_draft"
+  | "skipped_stale_head"
   | "provider_deferred"
   | "closed_retired";
 
@@ -222,6 +232,7 @@ async function enqueuePullIfEligible(input: {
   providerId: string;
   now: Date;
   dryRun: boolean;
+  reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
   allowActivationBaselineCommandLookup?: boolean;
   onStatusCommentFailure?: () => void;
   onCommandFetchError?: () => void;
@@ -291,6 +302,28 @@ async function enqueuePullIfEligible(input: {
       commandCommentId: commandDecision.commandId,
       now: input.now
     });
+    if (isFinishingTouchCommandAction(commandDecision.action)) {
+      if (!queued.enqueued) return "already_queued";
+      input.state.updateReviewQueueJobState({
+        jobId: queued.job.jobId,
+        state: "command_recorded",
+        lastError: "manual_command_finishing_touch_draft_recorded",
+        now: input.now
+      });
+      const status = await input.reviewPullImpl({
+        config: input.config,
+        github: input.github as GitHubApi,
+        state: input.state,
+        repo: input.repo,
+        pull: input.pull,
+        dryRun: input.dryRun,
+        useZCode: false,
+        budget: new ReviewRunBudget(1),
+        allowActivationBaselineCommandLookup: true,
+        commandCommentId: commandDecision.commandId
+      });
+      return status === "skipped_stale_head" ? "skipped_stale_head" : "skipped_finishing_touch_draft";
+    }
     if (queued.enqueued && commandDecision.shouldReview) {
       await syncReviewStatusComment({
         config: input.config,
@@ -433,13 +466,14 @@ function recordReadinessForEnqueue(input: {
   now: Date;
 }): void {
   const isManual = input.source === "manual_command";
+  const manualReviewCommand = isManual && input.commandAction ? isReviewCommandAction(input.commandAction) : false;
   const readinessState: ReviewReadinessState =
     isManual && input.commandAction === "re-review" ? "awaiting_re_review" :
     isManual && input.commandAction === "stop" ? "skipped" :
-    isManual && input.commandAction === "explain" ? "command_recorded" :
+    isManual && input.commandAction && !manualReviewCommand ? "command_recorded" :
     "queued";
   const reason = isManual && input.commandAction
-    ? `trusted_${input.commandAction.replace("-", "_")}_command`
+    ? `trusted_${input.commandAction.replaceAll("-", "_")}_command`
     : "automatic_enqueue";
   recordReadinessTransition({
     state: input.state,
@@ -591,8 +625,12 @@ async function resolveSchedulerCommandDecision(input: {
     return { action: "none", shouldReview: false };
   }
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  const repoProfile = resolveRepoProfile(input.config, input.repo);
   return decideCommandAction({
-    commands: collected.commands,
+    commands: collected.commands.filter((command) =>
+      !isFinishingTouchCommandAction(command.action) ||
+      (repoProfile.allowed && isFinishingTouchActionEnabled(command.action, repoProfile.profile.finishingTouches))
+    ),
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,
@@ -995,6 +1033,7 @@ function reviewResultStatusCommentState(
       return "skipped";
     case "skipped_command_stop":
     case "skipped_command_explain":
+    case "skipped_finishing_touch_draft":
       return undefined;
     default:
       return assertNever(status);
@@ -1075,8 +1114,7 @@ function backfillReadinessFromActiveQueueJob(
 function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobRecord): boolean {
   if (job.source !== "manual_command") return true;
   const existing = state.getReviewReadiness(job.repo, job.pullNumber, job.headSha);
-  // Only stop/explain commands suppress reviewing because they do not perform review work.
-  return existing?.commandAction !== "stop" && existing?.commandAction !== "explain";
+  return existing?.commandAction ? isReviewCommandAction(existing.commandAction) : true;
 }
 
 function readinessStateForReviewResult(
@@ -1101,6 +1139,7 @@ function readinessStateForReviewResult(
     case "skipped_policy":
       return "failed";
     case "skipped_command_explain":
+    case "skipped_finishing_touch_draft":
       return undefined;
     default:
       return assertNever(status);
@@ -1133,6 +1172,8 @@ function readinessReasonForReviewResult(
       return "manual_command_stop";
     case "skipped_command_explain":
       return "manual_command_explain";
+    case "skipped_finishing_touch_draft":
+      return "manual_command_finishing_touch_draft";
     default:
       return assertNever(status);
   }
@@ -1153,7 +1194,7 @@ function readinessStateForProcessedStatus(
     case "skipped":
       return "skipped";
     case undefined:
-      return "ready_for_human";
+      return "queued";
     default:
       return assertNever(status);
   }
@@ -1304,7 +1345,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
         return;
       }
       const sessionState = reviewerSessionJobStateForProcessedStatus(processed?.status);
-      updateReviewerSessionJobFromQueueStatus(input, sessionState, processed?.status ?? (input.dryRun ? "dry_run" : "posted"));
+      updateReviewerSessionJobFromQueueStatus(input, sessionState, processed?.status);
       return;
     }
     case "skipped_provider_cooldown":
@@ -1316,6 +1357,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "skipped_policy":
     case "skipped_command_stop":
     case "skipped_command_explain":
+    case "skipped_finishing_touch_draft":
     case "skipped_stale_head":
       updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
       return;
@@ -1410,6 +1452,13 @@ function updateQueueJobAfterReviewStatus(input: {
         lastError: "manual_command_explain_recorded"
       });
       return;
+    case "skipped_finishing_touch_draft":
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "command_recorded",
+        lastError: "manual_command_finishing_touch_draft_recorded"
+      });
+      return;
     default:
       assertNever(input.status);
   }
@@ -1461,7 +1510,7 @@ function reviewStatusCommentStateForProcessedStatus(
     case "skipped":
       return "skipped";
     case undefined:
-      return "completed";
+      return "queued";
     default:
       return assertNever(status);
   }
@@ -1478,7 +1527,7 @@ function reviewQueueJobStateForProcessedStatus(status: ProcessedStatus | undefin
     case "skipped":
       return "stale_retired";
     case undefined:
-      return dryRun ? "queued" : "posted";
+      return "queued";
     default:
       return assertNever(status);
   }
@@ -1494,7 +1543,7 @@ function reviewerSessionJobStateForProcessedStatus(status: ProcessedStatus | und
     case "skipped":
       return "skipped";
     case undefined:
-      return "completed";
+      return "assigned";
     default:
       return assertNever(status);
   }
@@ -1599,6 +1648,12 @@ function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): 
     case "skipped_capacity":
       result.skippedCapacity += 1;
       break;
+    case "skipped_finishing_touch_draft":
+      result.skippedFinishingTouchDraft += 1;
+      break;
+    case "skipped_stale_head":
+      result.skippedStaleHead += 1;
+      break;
     default:
       assertNever(status);
   }
@@ -1626,6 +1681,9 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       break;
     case "skipped_command_explain":
       result.skippedCommandExplain += 1;
+      break;
+    case "skipped_finishing_touch_draft":
+      result.skippedFinishingTouchDraft += 1;
       break;
     case "skipped_processed":
       result.skippedProcessed += 1;
@@ -1666,6 +1724,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
     skippedPolicy: 0,
     skippedCommandStop: 0,
     skippedCommandExplain: 0,
+    skippedFinishingTouchDraft: 0,
     commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,

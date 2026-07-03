@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
@@ -6,10 +6,11 @@ import {
   buildCommandStatusMarker,
   collectTrustedReviewCommands,
   decideCommandAction,
+  isFinishingTouchCommandAction,
   type CommandDecision
 } from "./commands.js";
 import { loadConfig, type BotConfig } from "./config.js";
-import { assertGitClean, preparePullWorktree } from "./git.js";
+import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -21,7 +22,14 @@ import {
   type GitHubRelatedContextReader
 } from "./github-related-context.js";
 import { buildEnrichmentComment, postEnrichmentComment } from "./enrichment.js";
+import {
+  buildFinishingTouchDraft,
+  isFinishingTouchActionEnabled,
+  validateFinishingTouchRequest,
+  type FinishingTouchAction
+} from "./finishing-touches.js";
 import { GitHubApi } from "./github.js";
+import { getProtectedCheckoutRoots } from "./path-safety.js";
 import {
   buildPullFileFilterImpact,
   filterPullFilesForProfile,
@@ -38,6 +46,9 @@ import {
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
+  type ProcessedStatus,
+  type ReviewQueueJobState,
+  type ReviewerSessionJobState,
   type ReviewRunLease,
   type StoredProcessedReviewRecord
 } from "./state.js";
@@ -65,6 +76,7 @@ export interface RunOnceResult {
   skippedPolicy: number;
   skippedCommandStop: number;
   skippedCommandExplain: number;
+  skippedFinishingTouchDraft: number;
   commandReviewRequested: number;
   skippedProcessed: number;
   skippedCapacity: number;
@@ -139,6 +151,7 @@ export type ReviewPullResult =
   | "skipped_policy"
   | "skipped_command_stop"
   | "skipped_command_explain"
+  | "skipped_finishing_touch_draft"
   | "skipped_processed"
   | "skipped_capacity"
   | "skipped_provider_cooldown"
@@ -158,6 +171,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "skipped_policy":
     case "skipped_command_stop":
     case "skipped_command_explain":
+    case "skipped_finishing_touch_draft":
     case "skipped_capacity":
     case "skipped_provider_cooldown":
     case "skipped_stale_head":
@@ -182,6 +196,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     skippedPolicy: 0,
     skippedCommandStop: 0,
     skippedCommandExplain: 0,
+    skippedFinishingTouchDraft: 0,
     commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,
@@ -250,6 +265,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         if (status === "skipped_policy") result.skippedPolicy += 1;
         if (status === "skipped_command_stop") result.skippedCommandStop += 1;
         if (status === "skipped_command_explain") result.skippedCommandExplain += 1;
+        if (status === "skipped_finishing_touch_draft") result.skippedFinishingTouchDraft += 1;
         if (status === "reviewed_command") result.commandReviewRequested += 1;
         if (status === "skipped_processed") result.skippedProcessed += 1;
         if (status === "skipped_capacity") result.skippedCapacity += 1;
@@ -409,6 +425,14 @@ export async function retryFailedHeadWithDeps(input: {
   const pull = await github.getPull(options.repo, options.pullNumber);
   if (isClosedPull(pull)) {
     recordClosedRetrySkip({ state, repo: options.repo, pull, headSha: options.headSha });
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_closed",
+      dryRun: options.dryRun
+    });
     return {
       repo: options.repo,
       pullNumber: options.pullNumber,
@@ -427,6 +451,14 @@ export async function retryFailedHeadWithDeps(input: {
       state,
       retryTarget,
       reason: "retry_did_not_review=skipped_stale_head"
+    });
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "skipped_stale_head",
+      dryRun: options.dryRun
     });
     return {
       repo: options.repo,
@@ -463,6 +495,14 @@ export async function retryFailedHeadWithDeps(input: {
     });
     const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
     // A retry dry-run is a successful inspection, but the original row must remain retryable for the later live run.
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: retryStatus,
+      dryRun: options.dryRun
+    });
     restoreFailedRetryRowIfNeeded({
       state,
       retryTarget,
@@ -482,6 +522,14 @@ export async function retryFailedHeadWithDeps(input: {
       pull,
       error: retryFailureError(retryTarget.previousError, error)
     })) {
+      updateRetryQueueJobsAfterRetry({
+        state,
+        repo: options.repo,
+        pullNumber: options.pullNumber,
+        headSha: options.headSha,
+        status: "skipped_provider_cooldown",
+        dryRun: options.dryRun
+      });
       return {
         repo: options.repo,
         pullNumber: options.pullNumber,
@@ -496,12 +544,236 @@ export async function retryFailedHeadWithDeps(input: {
       pull,
       error: retryFailureError(retryTarget.previousError, error)
     });
+    updateRetryQueueJobsAfterRetry({
+      state,
+      repo: options.repo,
+      pullNumber: options.pullNumber,
+      headSha: options.headSha,
+      status: "failed",
+      dryRun: options.dryRun
+    });
     return {
       repo: options.repo,
       pullNumber: options.pullNumber,
       headSha: options.headSha,
       status: "failed"
     };
+  }
+}
+
+function updateRetryQueueJobsAfterRetry(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  status: RetryFailedHeadResult["status"];
+  dryRun: boolean;
+}): void {
+  const activeJobs = input.state
+    .listReviewQueueJobsForPull({
+      repo: input.repo,
+      pullNumber: input.pullNumber,
+      states: ["queued", "leased", "running", "provider_deferred"]
+    })
+    .filter((job) => job.headSha === input.headSha);
+  const targetJobs = isRetryCommandRecordedStatus(input.status)
+    ? activeJobs.filter((job) => job.source === "manual_command")
+    : activeJobs;
+  if (targetJobs.length === 0) return;
+
+  const processed = input.state.getProcessedReview(input.repo, input.pullNumber, input.headSha);
+  const providerCooldown = parseProviderCooldownError(processed?.error);
+  const patch = retryQueuePatchForStatus({
+    status: input.status,
+    dryRun: input.dryRun,
+    processedStatus: processed?.status,
+    processedReviewUrl: processed?.reviewUrl,
+    providerCooldownUntil: providerCooldown?.cooldownUntil,
+    processedError: processed?.error
+  });
+  for (const job of targetJobs) {
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: patch.state,
+      ...(patch.nextEligibleAt ? { nextEligibleAt: patch.nextEligibleAt } : {}),
+      ...(patch.reviewUrl ? { reviewUrl: patch.reviewUrl } : {}),
+      lastError: patch.lastError
+    });
+    if (job.sessionId && patch.sessionJobState) {
+      input.state.updateReviewerSessionJobState({
+        repo: job.repo,
+        pullNumber: job.pullNumber,
+        headSha: job.headSha,
+        jobState: patch.sessionJobState,
+        ...(patch.sessionProcessedStatus ? { processedReviewStatus: patch.sessionProcessedStatus } : {})
+      });
+    }
+  }
+}
+
+function retryQueuePatchForStatus(input: {
+  status: RetryFailedHeadResult["status"];
+  dryRun: boolean;
+  processedStatus?: ProcessedStatus;
+  processedReviewUrl?: string;
+  providerCooldownUntil?: string;
+  processedError?: string;
+}): {
+  state: ReviewQueueJobState;
+  nextEligibleAt?: string;
+  reviewUrl?: string;
+  lastError: string;
+  sessionJobState?: ReviewerSessionJobState;
+  sessionProcessedStatus?: ProcessedStatus;
+} {
+  switch (input.status) {
+    case "reviewed":
+    case "reviewed_command":
+      return input.dryRun
+        ? {
+            state: "queued",
+            lastError: "retry_dry_run_completed_not_posted",
+            sessionJobState: "completed",
+            sessionProcessedStatus: "dry_run"
+          }
+        : {
+            state: "posted",
+            ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
+            lastError: input.status,
+            sessionJobState: "completed",
+            sessionProcessedStatus: "posted"
+          };
+    case "dry_run":
+      return {
+        state: "queued",
+        lastError: "retry_dry_run_completed_not_posted",
+        sessionJobState: "completed",
+        sessionProcessedStatus: "dry_run"
+      };
+    case "skipped_provider_cooldown":
+      return {
+        state: "provider_deferred",
+        ...(input.providerCooldownUntil ? { nextEligibleAt: input.providerCooldownUntil } : {}),
+        lastError: input.processedError ?? "provider_deferred_without_cooldown",
+        sessionJobState: "assigned"
+      };
+    case "skipped_stale_head":
+      return {
+        state: "stale_retired",
+        lastError: "retry_did_not_review=skipped_stale_head",
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
+      };
+    case "skipped_closed":
+      return {
+        state: "closed_retired",
+        lastError: "retry_did_not_review=skipped_closed",
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
+      };
+    case "skipped_capacity":
+      return {
+        state: "queued",
+        lastError: "retry_did_not_review=skipped_capacity",
+        sessionJobState: "assigned"
+      };
+    case "skipped_processed":
+      return input.processedError && parseProviderCooldownError(input.processedError)
+        ? {
+            state: "provider_deferred",
+            ...(input.providerCooldownUntil ? { nextEligibleAt: input.providerCooldownUntil } : {}),
+            lastError: input.processedError,
+            sessionJobState: "assigned",
+            ...(input.processedStatus ? { sessionProcessedStatus: input.processedStatus } : {})
+          }
+        : {
+            state: retryQueueJobStateForProcessedStatus(input.processedStatus, input.dryRun),
+            ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
+            lastError: `retry_did_not_review=skipped_processed:${input.processedStatus ?? "unknown"}`,
+            sessionJobState: reviewerSessionJobStateForProcessedStatus(input.processedStatus),
+            ...(input.processedStatus ? { sessionProcessedStatus: input.processedStatus } : {})
+          };
+    case "skipped_command_stop":
+    case "skipped_command_explain":
+    case "skipped_finishing_touch_draft":
+      return {
+        state: "command_recorded",
+        lastError: retryQueueCommandRecordedReason(input.status),
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
+      };
+    case "failed":
+    case "skipped_draft":
+    case "skipped_canary":
+    case "skipped_policy":
+      return {
+        state: "failed",
+        lastError: `retry_did_not_review=${input.status}`,
+        sessionJobState: "failed",
+        sessionProcessedStatus: "failed"
+      };
+    default:
+      return assertNever(input.status);
+  }
+}
+
+function retryQueueJobStateForProcessedStatus(status: ProcessedStatus | undefined, dryRun: boolean): ReviewQueueJobState {
+  switch (status) {
+    case "posted":
+      return "posted";
+    case "dry_run":
+      return "queued";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "stale_retired";
+    case undefined:
+      return "queued";
+    default:
+      return assertNever(status);
+  }
+}
+
+function reviewerSessionJobStateForProcessedStatus(status: ProcessedStatus | undefined): ReviewerSessionJobState {
+  switch (status) {
+    case "posted":
+    case "dry_run":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "skipped";
+    case undefined:
+      return "assigned";
+    default:
+      return assertNever(status);
+  }
+}
+
+function isRetryCommandRecordedStatus(
+  status: RetryFailedHeadResult["status"]
+): status is Extract<
+  RetryFailedHeadResult["status"],
+  "skipped_command_stop" | "skipped_command_explain" | "skipped_finishing_touch_draft"
+> {
+  return status === "skipped_command_stop" ||
+    status === "skipped_command_explain" ||
+    status === "skipped_finishing_touch_draft";
+}
+
+function retryQueueCommandRecordedReason(status: Extract<
+  RetryFailedHeadResult["status"],
+  "skipped_command_stop" | "skipped_command_explain" | "skipped_finishing_touch_draft"
+>): string {
+  switch (status) {
+    case "skipped_command_stop":
+      return "manual_command_stop_recorded";
+    case "skipped_command_explain":
+      return "manual_command_explain_recorded";
+    case "skipped_finishing_touch_draft":
+      return "manual_command_finishing_touch_draft_recorded";
+    default:
+      return assertNever(status);
   }
 }
 
@@ -619,7 +891,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     return "skipped_processed";
   }
 
-  const commandDecision = await resolvePullCommandDecision({ config, github, state, repo, pull });
+  const commandDecision = await resolvePullCommandDecision({
+    config,
+    github,
+    state,
+    repo,
+    pull,
+    commandCommentId: input.commandCommentId
+  });
   if (commandDecision.action === "stop") {
     await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
     return "skipped_command_stop";
@@ -627,6 +906,118 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (commandDecision.action === "explain") {
     await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
     return "skipped_command_explain";
+  }
+  const finishingTouchDecision = commandDecision.action !== "none" && isFinishingTouchCommandAction(commandDecision.action)
+    ? commandDecision
+    : undefined;
+  if (finishingTouchDecision) {
+    const finishingTouchAction: FinishingTouchAction = finishingTouchDecision.action as FinishingTouchAction;
+    const livePull = await github.getPull(repo, pull.number);
+    const stale = detectStalePullHead({ expected: pull, live: livePull, phase: "before_command" });
+    const evidenceDir = buildEvidenceDir(config, repo, pull, finishingTouchDecision);
+    if (stale) {
+      mkdirSync(evidenceDir, { recursive: true });
+      writeRedactedJson(join(evidenceDir, "finishing-touch-rejected.json"), {
+        ok: false,
+        reason: "stale_head",
+        detail: `Command targeted ${pull.head.sha}/${pull.base.sha}, but current PR is ${livePull.head.sha}/${livePull.base.sha}.`,
+        stale
+      });
+      state.recordFinishingTouchDraft({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commandCommentId: finishingTouchDecision.commandId,
+        action: finishingTouchAction,
+        author: finishingTouchDecision.command.author,
+        trigger: finishingTouchDecision.command.body,
+        status: "rejected",
+        proposedOutput: {
+          ok: false,
+          reason: "stale_head",
+          stale
+        }
+      });
+      await recordAndAcknowledgeCommandDecision({
+        config,
+        github,
+        state,
+        repo,
+        pull,
+        commandDecision: finishingTouchDecision,
+        acknowledge: false
+      });
+      return "skipped_finishing_touch_draft";
+    }
+    mkdirSync(evidenceDir, { recursive: true });
+    const draft = buildFinishingTouchDraft({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      action: finishingTouchAction,
+      author: finishingTouchDecision.command.author,
+      commentId: finishingTouchDecision.commandId,
+      trigger: finishingTouchDecision.command.body
+    });
+    const validation = validateFinishingTouchRequest({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      currentHeadSha: livePull.head.sha,
+      commentId: finishingTouchDecision.commandId,
+      author: finishingTouchDecision.command.author,
+      trustedAuthors: config.commands.trustedAuthors,
+      worktreeClean: isExistingPullWorktreeClean(config, repo, pull),
+      action: finishingTouchAction,
+      proposedOutput: draft
+    });
+    if (!validation.ok) {
+      state.recordFinishingTouchDraft({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commandCommentId: finishingTouchDecision.commandId,
+        action: finishingTouchAction,
+        author: finishingTouchDecision.command.author,
+        trigger: finishingTouchDecision.command.body,
+        status: "rejected",
+        proposedOutput: validation
+      });
+      await recordAndAcknowledgeCommandDecision({
+        config,
+        github,
+        state,
+        repo,
+        pull,
+        commandDecision: finishingTouchDecision,
+        acknowledge: false
+      });
+      writeRedactedJson(join(evidenceDir, "finishing-touch-rejected.json"), validation);
+      return "skipped_finishing_touch_draft";
+    }
+    const stored = state.recordFinishingTouchDraft({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      commandCommentId: finishingTouchDecision.commandId,
+      action: finishingTouchAction,
+      author: finishingTouchDecision.command.author,
+      trigger: finishingTouchDecision.command.body,
+      status: "drafted",
+      proposedOutput: draft
+    });
+    await recordAndAcknowledgeCommandDecision({
+      config,
+      github,
+      state,
+      repo,
+      pull,
+      commandDecision: finishingTouchDecision,
+      acknowledge: false
+    });
+    writeRedactedJson(join(evidenceDir, "finishing-touch-draft.json"), { draft, stored });
+    writeFileSync(join(evidenceDir, "finishing-touch-draft.md"), draft.markdown);
+    return "skipped_finishing_touch_draft";
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
@@ -699,7 +1090,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       pullNumber: pull.number,
       expectedHeadSha: pull.head.sha,
-      workRoot: config.workRoot
+      workRoot: config.workRoot,
+      protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
     const repoMemory = buildRepoMemoryContext({
       config,
@@ -957,7 +1349,7 @@ export function isCanaryAllowed(config: Pick<BotConfig, "canaryPulls">, repo: st
   return new Set(config.canaryPulls).has(`${repo}#${pullNumber}`);
 }
 
-export type StaleHeadPhase = "before_review" | "before_plan" | "before_post";
+export type StaleHeadPhase = "before_command" | "before_review" | "before_plan" | "before_post";
 
 export interface StaleHeadEvidence {
   reason: `stale_head_${StaleHeadPhase}`;
@@ -989,7 +1381,24 @@ function buildEvidenceDir(
   commandDecision: CommandDecision
 ): string {
   const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
-  return commandDecision.shouldReview ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+  return commandDecision.action !== "none" ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+}
+
+function isExistingPullWorktreeClean(config: BotConfig, repo: string, pull: PullRequestSummary): boolean {
+  const paths = planPullWorktreePaths({
+    repo,
+    pullNumber: pull.number,
+    expectedHeadSha: pull.head.sha,
+    workRoot: config.workRoot,
+    protectedCheckoutRoots: getProtectedCheckoutRoots()
+  });
+  if (!existsSync(paths.worktreePath)) return true;
+  try {
+    assertGitClean(paths.worktreePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function buildRepoMemoryContext(input: {
@@ -1528,11 +1937,15 @@ async function resolvePullCommandDecision(input: {
 
   const comments = await input.github.listIssueComments(input.repo, input.pull.number);
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  const repoProfile = resolveRepoProfile(input.config, input.repo);
   const commands = input.commandCommentId
     ? collected.commands.filter((command) => command.commentId === input.commandCommentId)
     : collected.commands;
   return decideCommandAction({
-    commands,
+    commands: commands.filter((command) =>
+      !isFinishingTouchCommandAction(command.action) ||
+      (repoProfile.allowed && isFinishingTouchActionEnabled(command.action, repoProfile.profile.finishingTouches))
+    ),
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,
@@ -1548,6 +1961,7 @@ async function recordAndAcknowledgeCommandDecision(input: {
   repo: string;
   pull: PullRequestSummary;
   commandDecision: Exclude<CommandDecision, { action: "none"; shouldReview: false }>;
+  acknowledge?: boolean;
 }): Promise<void> {
   input.state.recordProcessedCommand({
     repo: input.repo,
@@ -1578,7 +1992,7 @@ async function recordAndAcknowledgeCommandDecision(input: {
     }
   }
 
-  if (input.config.commands.acknowledge && input.github.canPostAsApp()) {
+  if (input.acknowledge !== false && input.config.commands.acknowledge && input.github.canPostAsApp()) {
     await input.github.upsertIssueComment({
       repo: input.repo,
       issueNumber: input.pull.number,

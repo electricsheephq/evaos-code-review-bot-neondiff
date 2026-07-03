@@ -83,9 +83,10 @@ evidence are recorded.
   optional `instructions`, and optional numeric `threshold` from 0 to 100.
   These modes do not create GitHub Checks or force `REQUEST_CHANGES` by
   themselves.
-- `finishingTouches`: declaration surface for future opt-in commands such as
-  docstrings or unit-test suggestions. Entries must remain `enabled: false`
-  until #11 ships explicit command handling and promotion gates.
+- `finishingTouches`: declaration surface for opt-in draft commands such as
+  docstrings or unit-test suggestions. Commands remain draft-only and entries
+  should stay `enabled: false` until a repo-specific promotion gate explicitly
+  enables them.
 - `suggestedLabels` / `suggestedReviewers`: reserved for later enrichment; they
   do not auto-apply labels or reviewers.
 

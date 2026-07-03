@@ -1,0 +1,26 @@
+name: Docs bug report
+description: Report missing, stale, or contradictory NeonDiff documentation.
+title: "[docs]: "
+labels: ["docs"]
+body:
+  - type: input
+    id: path
+    attributes:
+      label: Affected doc path or URL
+      placeholder: README.md, docs/SETUP.md, https://www.neondiff.com/...
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is confusing, stale, wrong, or unsafe?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected wording or behavior
+      description: Include public-safe examples only. Do not include tokens, credentials, or private repo data.
+    validations:
+      required: true

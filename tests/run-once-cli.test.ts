@@ -293,6 +293,7 @@ function runOnceResult(overrides: Partial<RunOnceResult> = {}): RunOnceResult {
     skippedPolicy: 0,
     skippedCommandStop: 0,
     skippedCommandExplain: 0,
+    skippedFinishingTouchDraft: 0,
     commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,

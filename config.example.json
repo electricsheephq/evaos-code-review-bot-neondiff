@@ -10,7 +10,7 @@
     "maxActiveRuns": 5,
     "leaseTtlMs": 900000
   },
-  "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot/runtime",
+  "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot-runtime",
   "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
   "issueEnrichment": {

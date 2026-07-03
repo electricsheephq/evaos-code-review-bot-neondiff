@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest a NeonDiff capability or product improvement.
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: user_story
+    attributes:
+      label: User story
+      description: Who needs this and what problem does it solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior and any public-safe evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety boundary
+      description: What should this not do? Mention secrets, tokens, credentials, live posting, or repo mutation risks if relevant.
+    validations:
+      required: true

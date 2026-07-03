@@ -1,0 +1,73 @@
+# NeonDiff Agent Instructions
+
+## Repository Agent Quick Start
+
+If you are a coding agent working in this repository:
+
+1. Read README.md for the public product promise and proof boundary.
+2. Read CONTRIBUTING.md for issue routing, validation, evidence, and PR
+   expectations.
+3. Read docs/SETUP.md before changing install, GitHub App, provider, daemon, or
+   first-run behavior.
+4. Read SECURITY.md before touching vulnerability reporting, secrets, auth,
+   posting policy, or private-data handling.
+5. Create or reuse a GitHub issue before meaningful implementation work.
+6. Write or update a failing test, smoke, or eval scenario before the minimal
+   implementation.
+7. Do not commit GitHub App private keys, provider tokens, license keys,
+   customer data, private logs, local SQLite DBs, cookies, connector URLs, or
+   credentials.
+8. Do not restart launchd, promote a live beta, expand GitHub App permissions,
+   flip repo visibility, publish packages, or create GitHub Releases unless the
+   issue explicitly scopes that action.
+9. Update the issue before handoff, merge, pause, or external-review wait.
+
+## Source-Available Product Boundary
+
+- NeonDiff is source-available beta software.
+- Public open-source repos are free.
+- Private and commercial repos require a paid license.
+- License keys support paid/private usage and update entitlement.
+- Exact license text, public/private grants, and commercial terms are governed
+  by https://github.com/electricsheephq/evaos-code-review-bot/issues/104.
+
+Do not claim open-source/MIT status, public launch completion, GA readiness,
+CodeRabbit parity, enterprise readiness, or legal adequacy from this file.
+
+## Shared Owned-Repo Policy
+
+- GitHub issues and PRs are implementation truth.
+- The NeonDiff public product roadmap is #103.
+- Public CLI/package setup is #107.
+- Agent-first docs are #113.
+- Website changes live in `electricsheephq/neon-diff-agent`, not this repo.
+- Before merge, release, or readiness claims, query current-head review threads
+  and separate resolvable review threads from top-level bot comments and check
+  annotations.
+- P0-P2 current actionable review threads block merge/release unless fixed,
+  proven false-positive, or explicitly escalated.
+
+## Validation Rules
+
+- Prefer a focused failing test first, then the minimal implementation.
+- Run the narrowest relevant local test before broader validation.
+- Use `npm test` and `npm run build` before PR readiness unless CI is the
+  recorded validation path.
+- For review-behavior changes, include dry-run evidence and current-head proof.
+- Keep evidence public-safe: summaries, counts, refs, hashes, setup states, and
+  command names are fine; raw secrets, raw private diffs, private logs, keys,
+  tokens, and customer data are not.
+
+## Public Documentation Placement
+
+- Keep README.md as the public landing page: product value, install, setup,
+  first dry-run review, safety boundaries, and links.
+- Keep first-run detail in docs/SETUP.md.
+- Keep operator commands in docs/operator-cli.md.
+- Keep live beta promotion in docs/beta-release-runbook.md and
+  docs/release-governance.md.
+- Keep issue routing and contribution rules in CONTRIBUTING.md.
+- Keep agent-specific repository behavior in this AGENTS.md.
+
+Do not put long release ledgers, local-only raw command dumps, internal live
+paths without context, or active sprint churn into the README.

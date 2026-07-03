@@ -1,85 +1,162 @@
-# evaOS Code Review Bot - CODENAME "OpenRabbit"
+# NeonDiff
 
-Code review agents are getting expensive. This is an OpenSource replacement for CodeRabbit and Copilot. 
+**NeonDiff is a local-first AI PR reviewer for teams and agents that want the
+review loop without handing every diff to a hosted review SaaS.**
 
-## Safety Defaults
+Use it when you want a GitHub App to review pull requests from a local worker,
+with your GitHub installation, your provider keys, your repo policy, and
+public-safe evidence for every live posting decision.
 
-- Reviews only the allowlisted pilot repos in `config.example.json`.
-- Skips draft PRs by default.
-- Posts at most one review per `{repo, pr, head_sha}`.
-- Never submits `APPROVE`.
-- Uses `REQUEST_CHANGES` only for validated P0/P1 findings.
-- Drops findings that cannot be placed on current RIGHT-side diff lines.
-- Drops secret-looking findings instead of redacting and posting them.
-- Re-fetches PR state before command-triggered review, before planning comments, and before live posting; stale-head output is recorded and skipped.
-- Redacts secret-looking material from local evidence logs before writing them.
-- Verifies the ZCode worktree is clean, including untracked files, after every review run.
-- Caps ZCode prompt patch bytes and kills long ZCode runs with `zcode.timeoutMs`.
-- Installs a temporary per-worktree ZCode policy that allows read-only file tools, disables Bash/mutation/subagents, then restores/removes it before the clean check.
-- Sets `ZCODE_MODEL_RETRY_MAX_RETRIES=0` by default so provider rate limits fail fast instead of multiplying requests.
-- Resolves repo profiles before review; once profiles are configured, unknown or disabled repos skip closed before GitHub PR fetches.
-- Writes `filter-impact.json` evidence for profile path filters and always preserves common safety-critical root/workflow/config files unless explicitly excluded.
-- Schema-validates repo policy, allowlist, canary, pre-merge check, and finishing-touch config before runtime use.
-- Keeps maintainer PR-comment commands disabled by default; when enabled, only configured trusted authors can steer read-only reviews.
+Public open-source repos are free. Private and commercial repos require a paid
+NeonDiff license. NeonDiff is a source-available beta, not an open-source or
+GA release.
 
-## Commands
+[Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
+[Contributing](CONTRIBUTING.md) · [Agent Instructions](AGENTS.md) ·
+[Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
+[Roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103) ·
+[License Boundary](https://github.com/electricsheephq/evaos-code-review-bot/issues/104)
+
+## Why It Matters
+
+AI-built software has made PR volume and review fatigue worse. NeonDiff is built
+for the opposite posture: run locally, read only the pull request it is asked to
+review, post only current-head comments, and keep provider/model cost under the
+user's control.
+
+The current implementation grew from the internal evaOS review bot. This repo is
+now the NeonDiff implementation surface; older internal naming is legacy
+operator history, not the public product name.
+
+## What It Does
+
+NeonDiff currently provides:
+
+- a GitHub App based pull-request reviewer
+- current-head duplicate suppression for `{repo, pr, head_sha}`
+- dry-run review output before live posting
+- inline finding placement only on current RIGHT-side diff lines
+- secret-looking finding suppression
+- stale-head checks before command-triggered review, planning, and posting
+- local evidence logs with secret redaction
+- repo profile and policy configuration
+- JSON-first operator commands for status, queue, dashboard, cooldowns, and why
+- offline eval packets for comparing seeded defects, CI, human review, and bot findings
+
+It intentionally does not approve PRs, merge branches, push repairs, expand
+GitHub permissions by profile alone, or claim calibrated review accuracy before
+evals prove it.
+
+## Install
+
+Requirements:
+
+- Node.js 26 or newer
+- npm
+- a GitHub App installed on the repos you want to review
+- a model/provider path configured locally, such as GLM/Z.ai, Ollama, or a
+  future OpenAI-compatible provider slot
+
+Source checkout install for the current beta:
 
 ```bash
-npm run doctor
-npm run eval:offline -- --input /path/to/scenario.json
-npm run release:status -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --expected-head "$(git rev-parse HEAD)"
-npm run run-once -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true --repo electricsheephq/WorldOS --pr 1161
-npm run daemon -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true
+git clone https://github.com/electricsheephq/evaos-code-review-bot.git neondiff
+cd neondiff
+npm install
+npm run build
 ```
 
-Posting reviews requires a GitHub App installed on the pilot repos:
+The public CLI package and final binary name are tracked in
+[issue #107](https://github.com/electricsheephq/evaos-code-review-bot/issues/107).
+Until that closes, use the repo scripts shown in [docs/SETUP.md](docs/SETUP.md)
+and [docs/operator-cli.md](docs/operator-cli.md).
+
+## Set Up
+
+Follow [docs/SETUP.md](docs/SETUP.md) for the full first-run path. The short
+version is:
 
 ```bash
-export EVAOS_REVIEW_BOT_APP_ID=...
-export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH=/path/to/private-key.pem
-npm run run-once -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-live.json --dry-run false
+cp config.example.json config.local.json
+export EVAOS_REVIEW_BOT_APP_ID="<github-app-id>"
+export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+npm run doctor -- --config config.local.json
 ```
 
-The worker derives transient ZCode CLI model environment from the existing ZCode app config at `/Volumes/LEXAR/zcode/.zcode/v2/config.json`; it does not copy the Z.ai API key into this repository.
+Do not store the GitHub App private key, provider API key, license key, tokens,
+or customer data in this repository. Keep local config, secrets, state DBs, and
+evidence outside git.
 
-## Live Beta Releases
+## First Dry-Run Review
 
-The live launchd worker is a local beta release surface, not just whatever
-`main` happens to contain. Before promoting a merged PR to the live worker,
-follow [docs/beta-release-runbook.md](docs/beta-release-runbook.md).
-Named release packets live under [docs/releases](docs/releases), starting with
-`v0.2.1-runtime-resilience`.
+Run a dry-run review before any live posting:
 
-Tag-driven release governance is defined in
-[docs/release-governance.md](docs/release-governance.md). Agents operating the
-release lane should use
-[docs/skills/release-operator.md](docs/skills/release-operator.md). A live beta
-promotion is not green unless it has an immutable Git tag, a GitHub prerelease,
-runtime status proof, and rollback instructions.
+```bash
+npm run run-once -- \
+  --config config.local.json \
+  --repo owner/name \
+  --pr 123 \
+  --dry-run true \
+  --zcode false
+```
 
-## Repo Profiles
+Inspect the JSON result and evidence path. Only switch to `--dry-run false`
+after setup checks, focused tests, and the relevant GitHub issue record the
+exact repo, PR, head SHA, config path, and public-safe evidence.
 
-Use [docs/repo-profiles.md](docs/repo-profiles.md) to add repo-specific review
-guidance, risky paths, proof expectations, and path filters. Profiles are
-prompt/config metadata only; they do not expand GitHub permissions, live
-monitoring, ZCode tools, approvals, or repair behavior by themselves.
+## Agent And Maintainer Workflow
 
-`config.active-profiles.example.json` is the tracked template for the current
-19-repo active monitor profile set. Validate it, dry-run it, and promote through
-the beta release runbook before copying any profile block into live config.
+If you are contributing as an AI coding agent:
 
-## Maintainer Commands
+1. Read [AGENTS.md](AGENTS.md).
+2. Reuse or create a GitHub issue before meaningful work.
+3. Write a failing test, smoke, or docs/eval gate before implementation.
+4. Keep the PR linked to the issue with `Closes #<issue>` or `Related: #<issue>`.
+5. Record validation and evidence without raw secrets, raw customer data, or
+   private logs.
 
-Use [docs/maintainer-commands.md](docs/maintainer-commands.md) for the dormant
-trusted command surface. Commands are PR comments such as
-`@evaos-code-review-bot review`, `re-review`, `explain`, and `stop`; they stay
-behind `commands.enabled` and cannot repair, merge, approve, push branches, or
-expand monitoring.
+Useful public-product issues:
 
-## Offline Evals
+- [#103 NeonDiff public product roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
+- [#104 license and commercial boundary](https://github.com/electricsheephq/evaos-code-review-bot/issues/104)
+- [#107 CLI package and local daemon public install flow](https://github.com/electricsheephq/evaos-code-review-bot/issues/107)
+- [#113 agent-first CLI and API documentation contract](https://github.com/electricsheephq/evaos-code-review-bot/issues/113)
 
-Use [docs/eval-harness.md](docs/eval-harness.md) to create read-only
-CodeRabbit/human/CI/seeded-defect comparison packets under
-`/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/`. Eval packets are advisory
-and uncalibrated until enough labeled findings exist for measured reliability
-bins.
+## Safety Boundaries
+
+Default behavior:
+
+- review only configured repos
+- skip draft PRs by default
+- at most one review per `{repo, pr, head_sha}`
+- never submit `APPROVE`
+- request changes only for validated high-severity findings
+- suppress secret-looking findings instead of posting redacted secrets
+- re-fetch PR state before live operations
+- keep ZCode/model tools read-only during review
+- fail closed when credentials, provider readiness, repo policy, or current-head
+  proof is missing
+
+Not claimed:
+
+- public launch is complete
+- final legal/license adequacy
+- hosted review service
+- auto-merge or branch repair
+- generic GitHub issue mutation
+- enterprise or customer-ready security
+- calibrated CodeRabbit-level accuracy
+- desktop client readiness
+
+## Roadmap Vs Shipped
+
+The current repo is a source-available beta implementation. The public MVP is
+tracked in [#103](https://github.com/electricsheephq/evaos-code-review-bot/issues/103).
+Provider registry, `.neondiff.yml`, public CLI packaging, license activation,
+desktop client, wiki exports, marketplace packaging, and confidence calibration
+each have separate issues and must not be treated as shipped until their PRs and
+proof gates close.
+
+For live beta operation, use [docs/beta-release-runbook.md](docs/beta-release-runbook.md)
+and [docs/release-governance.md](docs/release-governance.md). Documentation-only
+changes do not restart launchd or promote a release by themselves.

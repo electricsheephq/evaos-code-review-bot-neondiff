@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -50,6 +50,54 @@ describe("review scheduler config", () => {
     expect(() => loadConfig(writeConfig({ github: { apiBaseUrl: 42 } }))).toThrow(/config\.github\.apiBaseUrl/);
     expect(() => loadConfig(writeConfig({ github: { botLogin: 42 } }))).toThrow(/config\.github\.botLogin/);
     expect(() => loadConfig(writeConfig({ github: { requestTimeoutMs: 0 } }))).toThrow(/config\.github\.requestTimeoutMs/);
+  });
+
+  it("rejects a review workRoot inside the live repository checkout", () => {
+    expect(() => loadConfig(writeConfig({
+      workRoot: join(process.cwd(), "runtime")
+    }))).toThrow(/config\.workRoot must be outside the current repository checkout/);
+  });
+
+  it("rejects a review workRoot symlinked into the live repository checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-scheduler-runtime-"));
+    roots.push(root);
+    const link = join(root, "runtime-link");
+    symlinkSync(process.cwd(), link, "dir");
+
+    expect(() => loadConfig(writeConfig({
+      workRoot: link
+    }))).toThrow(/config\.workRoot must be outside the current repository checkout/);
+  });
+
+  it("rejects a review workRoot inside an explicit protected checkout root", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-scheduler-protected-"));
+    roots.push(root);
+    const protectedRoot = join(root, "operator-checkout");
+    const oldProtectedRoot = process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT;
+    process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT = protectedRoot;
+
+    try {
+      expect(() => loadConfig(writeConfig({
+        workRoot: join(protectedRoot, "runtime")
+      }))).toThrow(/config\.workRoot must be outside the current repository checkout/);
+    } finally {
+      if (oldProtectedRoot === undefined) {
+        delete process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT;
+      } else {
+        process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT = oldProtectedRoot;
+      }
+    }
+  });
+
+  it("allows reviews when workRoot is outside the live repository checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-scheduler-runtime-"));
+    roots.push(root);
+
+    const config = loadConfig(writeConfig({
+      workRoot: join(root, "runtime")
+    }));
+
+    expect(config.workRoot).toBe(join(root, "runtime"));
   });
 
   function writeConfig(overlay: Record<string, unknown>): string {
