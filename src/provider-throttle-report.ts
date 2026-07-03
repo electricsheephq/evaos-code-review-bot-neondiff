@@ -113,6 +113,7 @@ interface ReviewQueueErrorRow {
   updated_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+  event_timestamp: string;
 }
 
 const EXPLICIT_PROVIDER_CODES = /(?:\bprovider_code=|\bprevious_provider_code=|\bproviderCode:\s*["']?)(\d{4})\b/g;
@@ -269,7 +270,8 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
                 ${hasProviderId ? "provider_id" : "null as provider_id"},
                 created_at, updated_at,
                 ${hasStartedAt ? "started_at" : "null as started_at"},
-                ${hasFinishedAt ? "finished_at" : "null as finished_at"}
+                ${hasFinishedAt ? "finished_at" : "null as finished_at"},
+                ${timestampExpr} as event_timestamp
          from review_queue_jobs
          where last_error is not null
            and state not in ('queued', 'leased', 'running')
@@ -286,7 +288,7 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
         headSha: row.head_sha,
         status: row.state,
         error: row.last_error,
-        timestamp: row.finished_at ?? row.updated_at ?? row.started_at ?? row.created_at,
+        timestamp: row.event_timestamp,
         providerId: normalizeProviderId(row.provider_id),
         source: "review_queue_jobs"
       });
@@ -506,7 +508,6 @@ function isNetworkOrGithubDependencySignal(normalizedError: string): boolean {
       normalizedError.includes("fetch failed") &&
       (
         normalizedError.includes("github") ||
-        normalizedError.includes("provider") ||
         normalizedError.includes("api.github.com")
       )
     );

@@ -806,14 +806,16 @@ function buildRetryQueueLastError(input: {
   fallbackProviderCooldown?: ReturnType<typeof parseProviderCooldownError>;
 }): string {
   if (input.patchState !== "posted") return input.patchLastError;
-  const providerCooldown = parseProviderCooldownError(input.jobLastError) ?? input.fallbackProviderCooldown;
+  const jobProviderCooldown = parseProviderCooldownError(input.jobLastError);
+  const providerCooldown = jobProviderCooldown ?? input.fallbackProviderCooldown;
   if (!providerCooldown) return input.patchLastError;
   const previousReason = redactSecrets(providerCooldown.reason ?? "provider_cooldown");
-  const previousProviderCode = providerCooldown.providerCode ? redactSecrets(providerCooldown.providerCode) : undefined;
+  const previousProviderCode = providerCooldown.providerCode ?? input.fallbackProviderCooldown?.providerCode;
+  const redactedProviderCode = previousProviderCode ? redactSecrets(previousProviderCode) : undefined;
   return [
     `${input.patchLastError}_after_provider_deferred`,
     `previous_reason=${previousReason}`,
-    ...(previousProviderCode ? [`previous_provider_code=${previousProviderCode}`] : [])
+    ...(redactedProviderCode ? [`previous_provider_code=${redactedProviderCode}`] : [])
   ].join("; ");
 }
 

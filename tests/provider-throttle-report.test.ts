@@ -320,10 +320,18 @@ describe("provider throttle report", () => {
       insertProcessed(db, {
         repo: "owner/repo",
         pullNumber: 14,
+        headSha: "generic-provider-fetch-head",
+        status: "failed",
+        error: "Local provider metadata refresh failed: fetch failed",
+        createdAt: "2026-07-01 12:00:00"
+      });
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 15,
         headSha: "generic-overloaded-head",
         status: "failed",
         error: "Local review worker overloaded while opening the worktree",
-        createdAt: "2026-07-01 12:00:00"
+        createdAt: "2026-07-01 13:00:00"
       });
     } finally {
       db.close();
