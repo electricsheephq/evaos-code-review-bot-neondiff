@@ -452,6 +452,20 @@ describe("public NeonDiff CLI surface", () => {
         lastError: "provider_overloaded",
         now: new Date("2026-07-03T00:00:02.000Z")
       });
+      const coolingDown = store.enqueueReviewQueueJob({
+        repo: "owner/repo",
+        pullNumber: 124,
+        headSha: "head-cooling-down",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: coolingDown.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2999-01-01T00:00:00.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
     } finally {
       store.close();
     }
@@ -471,19 +485,20 @@ describe("public NeonDiff CLI surface", () => {
         coverageOk: true,
         runtimeOk: false,
         healthState: "runtime_blocked",
-        durableQueue: {
-          summary: {
-            providerDeferred: 1,
-            retryableProviderDeferred: 1
-          }
-        }
+	        durableQueue: {
+	          summary: {
+	            providerDeferred: 2,
+	            retryableProviderDeferred: 1
+	          }
+	        }
       });
       expect(output.failedGates).toEqual([
         expect.objectContaining({ name: "queue_no_ready_provider_deferred_jobs" })
       ]);
-      expect(output.actionableRows).toEqual([
-        expect.objectContaining({ repo: "owner/repo", pullNumber: 123, state: "provider_deferred" })
-      ]);
+	      expect(output.actionableRows).toEqual([
+	        expect.objectContaining({ repo: "owner/repo", pullNumber: 123, state: "provider_deferred" })
+	      ]);
+	      expect(output.actionableRows.some((row: { pullNumber: number }) => row.pullNumber === 124)).toBe(false);
     }
   });
 

@@ -619,7 +619,7 @@ function readReviewRunLeaseCounts(db: DatabaseSync, now: Date): { total: number;
     stale: rows.filter((row) => {
       const expiresAtMs = Date.parse(row.expires_at);
       if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime()) return true;
-      return row.owner_pid !== null && !isProcessAlive(row.owner_pid);
+      return row.owner_pid === null || !isProcessAlive(row.owner_pid);
     }).length
   };
 }

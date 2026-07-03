@@ -1945,14 +1945,22 @@ function providerCooldownRecommendedActions(input: {
 
 function queueActionableRows(
   durableQueue: OperatorDurableQueueSnapshot,
-  budget?: ReleaseStatus["budget"]
+  budget?: ReleaseStatus["budget"],
+  now = new Date()
 ): ReviewQueueJobRecord[] {
   const readyToRetry = budget?.providerDeferred.readyToRetry ?? durableQueue.summary.retryableProviderDeferred;
   const failed = durableQueue.jobs.filter((job) => job.state === "failed");
   const providerDeferred = readyToRetry > 0
-    ? durableQueue.jobs.filter((job) => job.state === "provider_deferred")
+    ? durableQueue.jobs.filter((job) => job.state === "provider_deferred" && isProviderDeferredQueueJobEligible(job, now))
     : [];
   return [...failed, ...providerDeferred];
+}
+
+function isProviderDeferredQueueJobEligible(job: ReviewQueueJobRecord, now: Date): boolean {
+  if (job.state !== "provider_deferred") return false;
+  if (!job.nextEligibleAt) return true;
+  const eligibleAtMs = Date.parse(job.nextEligibleAt);
+  return !Number.isFinite(eligibleAtMs) || eligibleAtMs <= now.getTime();
 }
 
 function buildHelp(command?: string) {

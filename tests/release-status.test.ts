@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildReleaseStatus, collectReleaseStatus } from "../src/release-status.js";
 import type { ReviewBudgetStatus } from "../src/review-budget.js";
+import { ReviewStateStore } from "../src/state.js";
 
 describe("beta release status", () => {
   const roots: string[] = [];
@@ -1146,6 +1147,39 @@ describe("beta release status", () => {
     expect(status.recommendedActions).toContain(
       "npx tsx src/cli.ts clear-review-queue-leases --config (default config) --dry-run true --expired-only true"
     );
+  });
+
+  it("counts fresh null-owner review run leases as stale", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-null-owner-run-lease-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    store.close();
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare("insert into review_run_leases (lease_id, started_at, expires_at, owner_pid) values (?, ?, ?, ?)")
+        .run("null-owner", "2026-07-03T08:00:00.000Z", "2026-07-03T09:00:00.000Z", null);
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-03T08:01:00.000Z")
+    });
+
+    expect(status.database).toMatchObject({
+      reviewRunLeaseCount: 1,
+      staleReviewRunLeaseCount: 1
+    });
+    expect(status.gates).toContainEqual({
+      name: "queue_no_stale_review_leases",
+      ok: false,
+      detail: "1 stale review run lease(s); 0 stale active queue job(s)"
+    });
   });
 
   it("does not flag fresh legacy null review queue leases before the TTL expires", () => {

@@ -1178,24 +1178,29 @@ export class ReviewStateStore {
 
     this.db.exec("begin immediate");
     try {
-      const runLeases = this.listReviewRunLeaseClearCandidates(checkedAt)
-        .filter((lease) => lease.staleReason);
-      const staleRunLeaseIds = new Set(runLeases.filter((lease) => lease.staleReason).map((lease) => lease.leaseId));
-      const jobs = this.listReviewQueueLeaseClearCandidates({
-        checkedAt,
-        checkedAtMs,
+	      const staleRunLeases = this.listReviewRunLeaseClearCandidates(checkedAt)
+	        .filter((lease) => lease.staleReason);
+	      const staleRunLeaseIds = new Set(staleRunLeases.map((lease) => lease.leaseId));
+	      const jobs = this.listReviewQueueLeaseClearCandidates({
+	        checkedAt,
+	        checkedAtMs,
         leaseTtlMs,
         expiredOnly,
         forceActive,
         staleRunLeaseIds,
         repo: input.repo,
-        pullNumber: input.pullNumber,
-        jobId: input.jobId
-      });
-      const matched = jobs.length + runLeases.length;
-      const expiredMatched =
-        jobs.filter((job) => job.expired).length +
-        runLeases.filter((lease) => lease.staleReason).length;
+	        pullNumber: input.pullNumber,
+	        jobId: input.jobId
+	      });
+	      const hasQueueFilters = Boolean(input.repo || input.pullNumber !== undefined || input.jobId);
+	      const scopedJobLeaseIds = new Set(jobs.map((job) => job.leaseId).filter((leaseId): leaseId is string => Boolean(leaseId)));
+	      const runLeases = hasQueueFilters
+	        ? staleRunLeases.filter((lease) => scopedJobLeaseIds.has(lease.leaseId))
+	        : staleRunLeases;
+	      const matched = jobs.length + runLeases.length;
+	      const expiredMatched =
+	        jobs.filter((job) => job.expired).length +
+	        runLeases.length;
       const activeMatched = matched - expiredMatched;
       let requeued = 0;
       let deletedRunLeases = 0;

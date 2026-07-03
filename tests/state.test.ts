@@ -1210,6 +1210,46 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("does not delete unrelated stale run leases during scoped queue cleanup", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-run-lease-scoped-clear-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const lease = store.tryAcquireReviewRunLease(
+      1,
+      60_000,
+      new Date("2026-07-03T08:25:00.000Z"),
+      999_999_999
+    );
+    expect(lease).toBeDefined();
+    store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 176,
+      headSha: "head-scoped",
+      providerId: "zai",
+      now: new Date("2026-07-03T08:25:00.000Z")
+    });
+
+    const scoped = store.clearReviewQueueLeases({
+      dryRun: false,
+      expiredOnly: true,
+      repo: "electricsheephq/evaos-code-review-bot",
+      now: new Date("2026-07-03T08:25:01.000Z")
+    });
+    expect(scoped).toMatchObject({ matched: 0, deletedRunLeases: 0, runLeases: [] });
+
+    const unscoped = store.clearReviewQueueLeases({
+      dryRun: false,
+      expiredOnly: true,
+      now: new Date("2026-07-03T08:25:02.000Z")
+    });
+    expect(unscoped).toMatchObject({
+      matched: 1,
+      deletedRunLeases: 1,
+      runLeases: [expect.objectContaining({ leaseId: lease!.leaseId, staleReason: "owner_not_running" })]
+    });
+    store.close();
+  });
+
   it("defers and later leases provider-deferred queue jobs after next eligible time", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-deferred-"));
     roots.push(root);
