@@ -1082,6 +1082,29 @@ describe("offline eval harness", () => {
     }, { outputRoot })).toThrow("cold and sticky expected labels must match");
   });
 
+  it("fails sticky-vs-cold when sticky runtime reports stale context", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "evaos-sticky-vs-cold-stale-context-"));
+    roots.push(outputRoot);
+    const scenario = JSON.parse(
+      readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")
+    ) as StickyVsColdScenarioInput;
+
+    const result = runStickyVsColdEval({
+      ...scenario,
+      stickyRuntime: {
+        ...scenario.stickyRuntime,
+        staleContext: true
+      }
+    }, { outputRoot });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.decision).toBe("not_enough_evidence");
+    expect(result.summary.gates.find((gate) => gate.name === "sticky_context_fresh")).toMatchObject({
+      ok: false,
+      status: "fail"
+    });
+  });
+
   it("rejects loosened sticky-vs-cold promotion thresholds", () => {
     const scenario = JSON.parse(
       readFileSync(join(process.cwd(), "tests/fixtures/sticky-vs-cold/seeded_quality_packet.json"), "utf8")

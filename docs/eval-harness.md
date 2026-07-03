@@ -126,7 +126,8 @@ The current CLI accepts one paired scenario at a time, so normal single-run
 packets cannot reach `runtime_safe_candidate` with the default evidence-volume
 thresholds. That stronger decision is reserved for a future batch/aggregate
 runner or an explicitly configured evidence packet that proves enough paired
-scenarios, labels, negative controls, and provider-attempt observations.
+scenarios, labels, negative controls, provider-attempt observations, and fresh
+sticky context.
 
 Supported label sources:
 
@@ -195,10 +196,11 @@ non-loosenable default policy. The decision is:
 - `advisory` when the paired comparison is clean but measured evidence is still
   too small for runtime-safe promotion.
 - `runtime_safe_candidate` only when paired scenarios, labels, P0/P1 labels,
-  negative controls, and provider-attempt evidence meet the configured thresholds.
-  With the current single-input CLI, this requires future batch aggregation;
-  caller-provided sticky-vs-cold thresholds cannot loosen the default promotion
-  policy, and this must not be used as a public calibrated-confidence claim.
+  negative controls, provider-attempt evidence, and explicit fresh sticky context
+  meet the configured thresholds. With the current single-input CLI, this
+  requires future batch aggregation; caller-provided sticky-vs-cold thresholds
+  cannot loosen the default promotion policy, and this must not be used as a
+  public calibrated-confidence claim.
 
 `manifest.json` records the effective thresholds, scenario mode, optional
 scenario source, artifact inventory with SHA-256 digests, metadata counts, and

@@ -95,6 +95,7 @@
     "totalTokens": 9650,
     "memoryPacketSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "gitnexusPacketSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "stickySessionId": "repo-sticky-eval-fixture"
+    "stickySessionId": "repo-sticky-eval-fixture",
+    "staleContext": false
   }
 }

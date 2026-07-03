@@ -518,9 +518,11 @@ function buildStickyVsColdSummary(input: {
   const providerAttemptsComparable =
     typeof input.input.coldRuntime?.providerAttempts === "number" &&
     typeof input.input.stickyRuntime?.providerAttempts === "number";
+  const stickyContextFreshForPromotion = input.input.stickyRuntime?.staleContext === false;
   const runtimeSafeEvidence =
     ok &&
     providerAttemptsComparable &&
+    stickyContextFreshForPromotion &&
     evidenceCounts.pairedScenarios >= input.thresholds.minRuntimeSafeScenarios &&
     evidenceCounts.labeledFindings >= input.thresholds.minRuntimeSafeLabeledFindings &&
     evidenceCounts.p0p1Labels >= input.thresholds.minRuntimeSafeP0P1Labels &&
@@ -668,6 +670,20 @@ function buildStickyVsColdGates(input: {
       detail: providerAttemptsComparable
         ? `${input.stickyRuntime!.providerAttempts} <= ${input.coldRuntime!.providerAttempts}`
         : "SKIPPED: provider attempt counts not supplied; runtime_safe_candidate remains disabled"
+    },
+    {
+      name: "sticky_context_fresh",
+      ok: input.stickyRuntime?.staleContext !== true,
+      status: input.stickyRuntime?.staleContext === true
+        ? "fail"
+        : input.stickyRuntime?.staleContext === false
+          ? "pass"
+          : "skip",
+      detail: input.stickyRuntime?.staleContext === true
+        ? "sticky runtime marked context stale"
+        : input.stickyRuntime?.staleContext === false
+          ? "sticky runtime marked context fresh"
+          : "SKIPPED: sticky context freshness not supplied; runtime_safe_candidate remains disabled"
     },
     {
       name: "cold_packet_ok",
