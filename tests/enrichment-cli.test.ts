@@ -228,8 +228,49 @@ describe("build-enrichment-comment issue CLI", () => {
         ok: true,
         dryRun: true,
         expiredOnly: false,
+        forceActive: false,
         matched: 1,
+        expiredMatched: 0,
+        activeMatched: 1,
         deleted: 0
+      });
+
+      await expect(runCli([
+        "clear-issue-enrichment-leases",
+        "--config",
+        configPath,
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true",
+        "--expired-only",
+        "false"
+      ])).rejects.toMatchObject({
+        stderr: expect.stringContaining("clearing active issue-enrichment leases requires --force-active true")
+      });
+
+      const forced = await runCli([
+        "clear-issue-enrichment-leases",
+        "--config",
+        configPath,
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true",
+        "--expired-only",
+        "false",
+        "--force-active",
+        "true"
+      ]);
+      expect(JSON.parse(forced.stdout)).toMatchObject({
+        ok: true,
+        dryRun: false,
+        expiredOnly: false,
+        forceActive: true,
+        matched: 1,
+        expiredMatched: 0,
+        activeMatched: 1,
+        deleted: 1
       });
 
       await expect(runCli([

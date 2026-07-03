@@ -82,9 +82,23 @@ describe("review state store", () => {
     const afterClear = store.tryAcquireIssueEnrichmentRunLease(1, 60_000, new Date("2026-07-03T05:00:33.000Z"), process.pid);
 
     expect(first).toBeDefined();
-    expect(dryRun).toMatchObject({ expiredOnly: false, dryRun: true, matched: 1, deleted: 0 });
+    expect(dryRun).toMatchObject({
+      expiredOnly: false,
+      dryRun: true,
+      matched: 1,
+      expiredMatched: 0,
+      activeMatched: 1,
+      deleted: 0,
+      leases: [
+        expect.objectContaining({
+          leaseId: first!.leaseId,
+          ownerPid: process.pid,
+          expired: false
+        })
+      ]
+    });
     expect(stillBlocked).toBeUndefined();
-    expect(cleared).toMatchObject({ expiredOnly: false, dryRun: false, matched: 1, deleted: 1 });
+    expect(cleared).toMatchObject({ expiredOnly: false, dryRun: false, matched: 1, expiredMatched: 0, activeMatched: 1, deleted: 1 });
     expect(afterClear).toBeDefined();
     store.close();
   });

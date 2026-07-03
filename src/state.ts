@@ -99,12 +99,19 @@ export interface IssueEnrichmentRunLease {
   ownerPid: number;
 }
 
+export interface IssueEnrichmentRunLeaseClearCandidate extends IssueEnrichmentRunLease {
+  expired: boolean;
+}
+
 export interface ClearIssueEnrichmentRunLeasesResult {
   checkedAt: string;
   expiredOnly: boolean;
   dryRun: boolean;
   matched: number;
+  expiredMatched: number;
+  activeMatched: number;
   deleted: number;
+  leases: IssueEnrichmentRunLeaseClearCandidate[];
 }
 
 export interface ReviewerSessionRecord {
@@ -1057,15 +1064,21 @@ export class ReviewStateStore {
     const whereClause = expiredOnly ? " where expires_at <= ?" : "";
     this.db.exec("begin immediate");
     try {
-      const row = this.db
-        .prepare(`select count(*) as count from issue_enrichment_run_leases${whereClause}`)
-        .get(...params) as { count: number };
-      const matched = row.count;
+      const rows = this.db
+        .prepare(`select lease_id as leaseId, expires_at as expiresAt, owner_pid as ownerPid from issue_enrichment_run_leases${whereClause} order by expires_at asc`)
+        .all(...params) as unknown as IssueEnrichmentRunLease[];
+      const leases = rows.map((lease) => ({
+        ...lease,
+        expired: lease.expiresAt <= checkedAt
+      }));
+      const matched = leases.length;
+      const expiredMatched = leases.filter((lease) => lease.expired).length;
+      const activeMatched = matched - expiredMatched;
       const deleted = dryRun
         ? 0
         : Number(this.db.prepare(`delete from issue_enrichment_run_leases${whereClause}`).run(...params).changes);
       this.db.exec("commit");
-      return { checkedAt, expiredOnly, dryRun, matched, deleted };
+      return { checkedAt, expiredOnly, dryRun, matched, expiredMatched, activeMatched, deleted, leases };
     } catch (error) {
       this.db.exec("rollback");
       throw error;

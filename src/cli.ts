@@ -734,18 +734,25 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
     const confirm = args.confirm === undefined ? false : parseBooleanArg(args.confirm, "--confirm");
+    const expiredOnly = args["expired-only"] === undefined ? false : parseBooleanArg(args["expired-only"], "--expired-only");
+    const forceActive = args["force-active"] === undefined ? false : parseBooleanArg(args["force-active"], "--force-active");
     if (!dryRun && !confirm) {
       throw new Error("clear-issue-enrichment-leases requires --confirm true when --dry-run false");
+    }
+    if (!dryRun && !expiredOnly && !forceActive) {
+      throw new Error("clearing active issue-enrichment leases requires --force-active true; use --expired-only true for expired-only cleanup");
     }
     const statePath = args["state-path"] ?? config.statePath;
     const state = new ReviewStateStore(statePath);
     try {
-      const expiredOnly = args["expired-only"] === undefined ? false : parseBooleanArg(args["expired-only"], "--expired-only");
       const result = state.clearIssueEnrichmentRunLeases({ expiredOnly, dryRun });
-      const recommendedActions = dryRun && result.matched > 0
-        ? [`rerun with --dry-run false --confirm true${expiredOnly ? " --expired-only true" : ""} to clear the matched issue-enrichment worker lease(s)`]
-        : [];
-      console.log(redactSecrets(JSON.stringify({ ok: true, statePath, ...result, recommendedActions }, null, 2)));
+      const recommendedActions = buildIssueEnrichmentLeaseClearRecommendations({
+        dryRun,
+        expiredOnly,
+        activeMatched: result.activeMatched,
+        expiredMatched: result.expiredMatched
+      });
+      console.log(redactSecrets(JSON.stringify({ ok: true, statePath, forceActive, ...result, recommendedActions }, null, 2)));
     } finally {
       state.close();
     }
@@ -1136,7 +1143,7 @@ function buildHelp() {
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --issue 456 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts issue-enrichment-scan --config /path/to/live.json --dry-run true --output-dir /path/to/evidence",
-      "npx tsx src/cli.ts clear-issue-enrichment-leases --config /path/to/live.json --dry-run true",
+      "npx tsx src/cli.ts clear-issue-enrichment-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
@@ -1188,6 +1195,23 @@ function parseCanonicalIsoTimestamp(value: string, label: string): Date {
     throw new Error(`${label} must be a canonical ISO timestamp`);
   }
   return new Date(parsed);
+}
+
+function buildIssueEnrichmentLeaseClearRecommendations(input: {
+  dryRun: boolean;
+  expiredOnly: boolean;
+  activeMatched: number;
+  expiredMatched: number;
+}): string[] {
+  if (!input.dryRun) return [];
+  const recommendations: string[] = [];
+  if (input.expiredMatched > 0) {
+    recommendations.push("rerun with --dry-run false --confirm true --expired-only true to clear only expired issue-enrichment worker lease(s)");
+  }
+  if (input.activeMatched > 0 && !input.expiredOnly) {
+    recommendations.push("active issue-enrichment lease(s) matched; verify no worker is running before rerunning with --dry-run false --confirm true --expired-only false --force-active true");
+  }
+  return recommendations;
 }
 
 function resolveFinishingTouchAction(input: {
@@ -1320,6 +1344,7 @@ interface ParsedArgs {
   "state-path"?: string;
   "dry-run"?: string;
   "expired-only"?: string;
+  "force-active"?: string;
   confirm?: string;
   "head-sha"?: string;
   input?: string;
