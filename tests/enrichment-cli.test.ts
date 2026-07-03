@@ -211,7 +211,7 @@ describe("build-enrichment-comment issue CLI", () => {
       const statePath = join(root, "state.sqlite");
       const state = new ReviewStateStore(statePath);
       try {
-        state.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date("2026-07-03T04:00:00.000Z"));
+        state.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date());
       } finally {
         state.close();
       }
