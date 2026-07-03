@@ -93,6 +93,7 @@ function decisionFromProcessed(processed: StoredProcessedReviewRecord): ReviewHe
   switch (processed.status) {
     case "posted":
       if (processed.event === "REQUEST_CHANGES") return "needs_fix";
+      // This gate proves exact-head review state. App authorship is verified by live release-status config.
       return "passed";
     case "dry_run":
       return "dry_run";
