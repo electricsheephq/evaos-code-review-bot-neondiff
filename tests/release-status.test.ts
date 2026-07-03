@@ -993,6 +993,59 @@ describe("beta release status", () => {
     expect(manifest.updateChannels.ok).toBe(false);
   });
 
+  it("fails required public update channels when rollback includes trailing operands", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-trailing-rollback-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1 extra"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git revert 0123456789abcdef0123456789abcdef01234567 unexpected"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels[0]).toMatchObject({
+      name: "cli",
+      ok: false,
+      detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.channels[1]).toMatchObject({
+      name: "daemon",
+      ok: false,
+      detail: "daemon state launchd_prerelease blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
   it("fails public release gates for stale docs, required pending license API, and blocked channels", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-red-"));
     roots.push(root);

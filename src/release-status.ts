@@ -638,9 +638,9 @@ function isRequiredPublicUpdateChannel(name: string): boolean {
 function isRollbackCommandLike(rollback: string): boolean {
   if (/\s*(?:&&|\|\||;)\s*/.test(rollback)) return false;
   const command = rollback.trim();
-  const resetTarget = command.match(/^git\s+reset\s+--hard\s+([^\s;&|]+)/)?.[1];
+  const resetTarget = command.match(/^git\s+reset\s+--hard\s+([^\s;&|]+)$/)?.[1];
   if (resetTarget) return isRollbackTarget(resetTarget);
-  const revertTarget = command.match(/^git\s+revert\s+(?:--no-edit\s+)?([^\s;&|]+)/)?.[1];
+  const revertTarget = command.match(/^git\s+revert\s+(?:--no-edit\s+)?([^\s;&|]+)$/)?.[1];
   if (revertTarget) return isRollbackTarget(revertTarget);
   return false;
 }
