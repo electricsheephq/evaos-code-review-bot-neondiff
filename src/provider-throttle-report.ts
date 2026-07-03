@@ -106,6 +106,7 @@ const DEFAULT_PEAK_END_HOUR = 18;
 export function collectProviderThrottleReport(input: ProviderThrottleReportOptions): ProviderThrottleReport {
   const now = input.now ?? new Date();
   const timezone = input.timezone ?? DEFAULT_TIMEZONE;
+  assertValidTimezone(timezone);
   const peakStartHour = input.peakStartHour ?? DEFAULT_PEAK_START_HOUR;
   const peakEndHour = input.peakEndHour ?? DEFAULT_PEAK_END_HOUR;
   const sinceRaw = input.since ?? DEFAULT_SINCE;
@@ -375,13 +376,28 @@ function extractProviderCodes(error: string): string[] {
 }
 
 function localHour(timestamp: string, timezone: string): string {
-  const date = new Date(timestamp);
+  const date = parseSqliteUtcTimestamp(timestamp);
   const hour = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     hour: "2-digit",
     hourCycle: "h23"
   }).format(date);
   return `${hour}:00`;
+}
+
+function parseSqliteUtcTimestamp(timestamp: string): Date {
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
+    return new Date(`${timestamp.replace(" ", "T")}Z`);
+  }
+  return new Date(timestamp);
+}
+
+function assertValidTimezone(timezone: string): void {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date(0));
+  } catch {
+    throw new Error(`Invalid --timezone value: ${timezone}`);
+  }
 }
 
 function isPeakHour(localHour: string, peakStartHour: number, peakEndHour: number): boolean {

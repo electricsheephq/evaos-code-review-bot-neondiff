@@ -26,7 +26,7 @@ describe("provider throttle report", () => {
         headSha: "rate-head",
         status: "skipped",
         error: "provider_rate_limit_cooldown_until=2026-07-01T08:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302; providerRequestId: 'secret-request-id'",
-        createdAt: "2026-07-01T08:00:00.000Z"
+        createdAt: "2026-07-01 08:00:00"
       });
       insertProcessed(db, {
         repo: "owner/repo",
@@ -34,7 +34,7 @@ describe("provider throttle report", () => {
         headSha: "overload-head",
         status: "skipped",
         error: "provider_rate_limit_cooldown_until=2026-07-01T09:05:00.000Z; reason=provider_overloaded; retry_attempt=2; provider_code=1305",
-        createdAt: "2026-07-01T09:00:00.000Z"
+        createdAt: "2026-07-01 09:00:00"
       });
       insertProcessed(db, {
         repo: "owner/other",
@@ -42,7 +42,7 @@ describe("provider throttle report", () => {
         headSha: "quota-head",
         status: "failed",
         error: "ProviderBusinessError: [1310][Weekly/Monthly Limit Exhausted]",
-        createdAt: "2026-07-01T20:00:00.000Z"
+        createdAt: "2026-07-01 20:00:00"
       });
       insertQueueJob(db, {
         repo: "owner/repo",
@@ -117,6 +117,17 @@ describe("provider throttle report", () => {
       total: 4
     });
     expect(JSON.stringify(report)).not.toMatch(/secret-request-id|PRIVATE KEY|ghp_/);
+  });
+
+  it("rejects invalid timezone values before formatting buckets", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-timezone-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+
+    expect(() => collectProviderThrottleReport({
+      statePath,
+      timezone: "Foo/Bar"
+    })).toThrow("Invalid --timezone value: Foo/Bar");
   });
 });
 

@@ -1736,7 +1736,7 @@ describe("public NeonDiff CLI surface", () => {
     try {
       db.prepare(
         `insert into processed_reviews (repo, pull_number, head_sha, status, error, created_at)
-         values ('owner/repo', 1, 'head-provider-overload', 'failed', ?, '2026-07-01T08:00:00.000Z')`
+         values ('owner/repo', 1, 'head-provider-overload', 'failed', ?, '2026-07-01 08:00:00')`
       ).run("ProviderBusinessError: [1305][temporarily overloaded] providerRequestId: 'secret-request-id'");
     } finally {
       db.close();
