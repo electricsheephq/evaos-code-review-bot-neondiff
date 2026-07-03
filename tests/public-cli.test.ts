@@ -64,6 +64,29 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
   });
 
+  it("rejects non-boolean public rollback ref verification values", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-release-status-bool-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      pollIntervalMs: 60_000
+    })}\n`);
+
+    await expect(runCli([
+      "release-status",
+      "--config",
+      configPath,
+      "--verify-public-rollback-refs",
+      "yes"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("--verify-public-rollback-refs must be true or false")
+    });
+  });
+
   it("prints command help without executing run-once, review-pr, or daemon paths", async () => {
     for (const args of [["run-once", "--help"], ["review-pr", "help"], ["daemon", "start", "-h"]]) {
       const { stdout } = await runCli(args);

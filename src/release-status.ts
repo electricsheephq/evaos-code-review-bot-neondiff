@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
 import { buildReviewBudgetStatus, type ReviewBudgetStatus } from "./review-budget.js";
@@ -92,7 +93,51 @@ export interface ReleaseStatusInput {
   database: ReleaseDatabaseStatus;
   heartbeat: ReleaseHeartbeatStatus;
   budget?: ReviewBudgetStatus;
+  publicRelease?: PublicReleaseStatus;
   now?: Date;
+}
+
+export interface PublicReleaseStatus {
+  manifestPath: string;
+  ok: boolean;
+  version: string;
+  releaseLevel: string;
+  releaseLevelGate: PublicReleaseGateStatus & {
+    state: string;
+  };
+  docs: PublicReleaseGateStatus & {
+    setupPath?: string;
+    releaseNotesPath?: string;
+    websiteRepo?: string;
+  };
+  licenseApi: PublicReleaseGateStatus & {
+    requiredForThisRelease: boolean;
+    state: string;
+    trackingIssue?: string;
+    healthUrl?: string;
+  };
+  updateChannels: {
+    ok: boolean;
+    channels: PublicReleaseChannelStatus[];
+  };
+}
+
+export interface PublicReleaseGateStatus {
+  ok: boolean;
+  expectedVersion?: string;
+  actualVersion?: string;
+  detail: string;
+}
+
+export interface PublicReleaseChannelStatus {
+  name: string;
+  ok: boolean;
+  state: string;
+  requiredForThisRelease: boolean;
+  version?: string;
+  rollback?: string;
+  trackingIssue?: string;
+  detail: string;
 }
 
 export interface ReleaseStatus {
@@ -120,6 +165,7 @@ export interface ReleaseStatus {
   database: ReleaseDatabaseStatus;
   heartbeat: ReleaseHeartbeatStatus;
   budget?: ReviewBudgetStatus;
+  publicRelease?: PublicReleaseStatus;
   recommendedActions: string[];
   gates: Array<{ name: string; ok: boolean; detail: string }>;
   rollback: {
@@ -127,6 +173,23 @@ export interface ReleaseStatus {
     unloadCommand: string;
   };
 }
+
+const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
+const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
+const PUBLIC_VERSION_PATTERN =
+  /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
+const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
+  ...REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES,
+  "deferred",
+  "disabled",
+  "not_applicable",
+  "pending"
+]);
+const OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATE_OVERRIDES = new Map([
+  ["website", new Set([...GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES, "pending-site-sync"])],
+  ["desktop", new Set([...GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES, "post_1_0"])]
+]);
 
 export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const expectedHeadOk = !input.expectedHead || input.repo.head === input.expectedHead;
@@ -156,7 +219,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
     "--expired-only true --dry-run false --zcode true";
-  const gates = [
+  const runtimeGates = [
     {
       name: "expected_head",
       ok: expectedHeadOk,
@@ -228,6 +291,34 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       detail: describeHeartbeat(input.heartbeat)
     }
   ];
+  const publicReleaseGates = input.publicRelease
+    ? [
+        {
+          name: "public_release_level",
+          ok: input.publicRelease.releaseLevelGate.ok,
+          detail: input.publicRelease.releaseLevelGate.detail
+        },
+        {
+          name: "public_docs_version",
+          ok: input.publicRelease.docs.ok,
+          detail: input.publicRelease.docs.detail
+        },
+        {
+          name: "public_license_api_state",
+          ok: input.publicRelease.licenseApi.ok,
+          detail: input.publicRelease.licenseApi.detail
+        },
+        {
+          name: "public_update_channels",
+          ok: input.publicRelease.updateChannels.ok,
+          detail: describePublicUpdateChannels(input.publicRelease.updateChannels.channels)
+        }
+      ]
+    : [];
+  const gates = [
+    ...runtimeGates,
+    ...publicReleaseGates
+  ];
 
   return {
     ok: gates.every((gate) => gate.ok),
@@ -254,7 +345,11 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     database: input.database,
     heartbeat: input.heartbeat,
     ...(input.budget ? { budget: input.budget } : {}),
+    ...(input.publicRelease ? { publicRelease: input.publicRelease } : {}),
     recommendedActions: [
+      ...(input.publicRelease && !input.publicRelease.ok
+        ? [`inspect public release manifest ${input.publicRelease.manifestPath}`]
+        : []),
       ...(expiredProviderCooldownOk
         ? retryableDeferredQueueJobsOk
           ? []
@@ -279,6 +374,9 @@ export function collectReleaseStatus(input: {
   cwd: string;
   configPath?: string;
   expectedHead?: string;
+  publicReleaseManifestPath?: string;
+  expectedPublicVersion?: string;
+  verifyPublicRollbackRefs?: boolean;
   launchdLabel?: string;
   statePath?: string;
   budgetDetails?: boolean;
@@ -286,6 +384,7 @@ export function collectReleaseStatus(input: {
   budgetJobLimit?: number;
   now?: Date;
 }): ReleaseStatus {
+  validatePublicReleaseManifestInputs(input);
   const config = loadConfig(input.configPath);
   const configPath = input.configPath ?? "(default config)";
   const now = input.now ?? new Date();
@@ -307,8 +406,341 @@ export function collectReleaseStatus(input: {
       detailLimit: input.budgetDetailLimit,
       jobLimit: input.budgetJobLimit ?? 1_000
     }),
+    ...(input.publicReleaseManifestPath
+      ? {
+          publicRelease: readPublicReleaseManifestStatus({
+            cwd: input.cwd,
+            manifestPath: input.publicReleaseManifestPath,
+            expectedVersion: input.expectedPublicVersion,
+            verifyRollbackRefs: input.verifyPublicRollbackRefs === true
+          })
+        }
+      : {}),
     now
   });
+}
+
+export function validatePublicReleaseManifestInputs(input: {
+  publicReleaseManifestPath?: string;
+  expectedPublicVersion?: string;
+}): void {
+  if (input.publicReleaseManifestPath && !input.expectedPublicVersion) {
+    throw new Error("--expected-public-version is required when --public-release-manifest is provided");
+  }
+  if (input.expectedPublicVersion && !input.publicReleaseManifestPath) {
+    throw new Error("--public-release-manifest is required when --expected-public-version is provided");
+  }
+  if (input.expectedPublicVersion && !isPublicVersionTag(input.expectedPublicVersion)) {
+    throw new Error("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
+  }
+}
+
+export function readPublicReleaseManifestStatus(input: {
+  cwd: string;
+  manifestPath: string;
+  expectedVersion?: string;
+  verifyRollbackRefs?: boolean;
+}): PublicReleaseStatus {
+  const absolutePath = resolve(input.cwd, input.manifestPath);
+  if (!existsSync(absolutePath)) {
+    return {
+      manifestPath: input.manifestPath,
+      ok: false,
+      version: "(missing)",
+      releaseLevel: "unknown",
+      releaseLevelGate: {
+        ok: false,
+        state: "missing",
+        detail: "release level missing because manifest is absent"
+      },
+      docs: {
+        ok: false,
+        expectedVersion: input.expectedVersion,
+        detail: `public release manifest missing at ${input.manifestPath}`
+      },
+      licenseApi: {
+        ok: false,
+        requiredForThisRelease: true,
+        state: "missing",
+        detail: "license API state missing because manifest is absent"
+      },
+      updateChannels: {
+        ok: false,
+        channels: []
+      }
+    };
+  }
+
+  try {
+    const manifest = JSON.parse(readFileSync(absolutePath, "utf8")) as unknown;
+    const root = asRecord(manifest);
+    const docs = asRecord(root.docs);
+    const licenseApi = asRecord(root.licenseApi);
+    const updateChannels = asRecord(root.updateChannels);
+    const version = readString(root.version) ?? "(missing)";
+    const expectedVersion = input.expectedVersion;
+    const releaseLevel = readString(root.releaseLevel) ?? "unknown";
+    const expectedVersionOk = expectedVersion !== undefined && isPublicVersionTag(expectedVersion);
+    const releaseLevelOk = PUBLIC_RELEASE_LEVELS.has(releaseLevel);
+    const docsVersion = readString(docs.version) ?? "(missing)";
+    const setupPath = readString(docs.setupPath);
+    const releaseNotesPath = readString(docs.releaseNotesPath);
+    const docsPathChecks = [
+      setupPath
+        ? { label: "setup", path: setupPath, exists: existsSync(resolve(input.cwd, setupPath)) }
+        : { label: "setupPath", path: "(missing)", exists: false },
+      releaseNotesPath
+        ? { label: "release notes", path: releaseNotesPath, exists: existsSync(resolve(input.cwd, releaseNotesPath)) }
+        : { label: "releaseNotesPath", path: "(missing)", exists: false }
+    ];
+    const missingDocsPaths = docsPathChecks.filter((pathCheck) => !pathCheck.exists);
+    const manifestVersionOk = expectedVersionOk && version === expectedVersion;
+    const docsVersionOk = expectedVersionOk && docsVersion === expectedVersion;
+    const expectedReleaseNotesPath = expectedVersionOk ? `docs/releases/${expectedVersion}.md` : undefined;
+    const releaseNotesPathOk = expectedReleaseNotesPath !== undefined && releaseNotesPath === expectedReleaseNotesPath;
+    const docsOk =
+      expectedVersionOk &&
+      manifestVersionOk &&
+      docsVersionOk &&
+      releaseNotesPathOk &&
+      missingDocsPaths.length === 0;
+    const licenseState = readString(licenseApi.state) ?? "missing";
+    const licenseRequired = releaseLevel === "source-beta"
+      ? (readBoolean(licenseApi.requiredForThisRelease) ?? true)
+      : true;
+    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired);
+    const declaredChannelNames = Object.keys(updateChannels);
+    const channelNames = [
+      ...REQUIRED_PUBLIC_UPDATE_CHANNELS,
+      ...declaredChannelNames.filter((name) => !isRequiredPublicUpdateChannel(name))
+    ];
+    const channels = channelNames.map((name) =>
+      buildPublicReleaseChannelStatus(name, asRecord(updateChannels[name]), {
+        cwd: input.cwd,
+        releaseLevel,
+        verifyRollbackRefs: input.verifyRollbackRefs === true
+      })
+    );
+    const channelsOk = channels.every((channel) => channel.ok);
+    return {
+      manifestPath: input.manifestPath,
+      ok: releaseLevelOk && docsOk && licenseOk && channelsOk,
+      version,
+      releaseLevel,
+      releaseLevelGate: {
+        ok: releaseLevelOk,
+        state: releaseLevel,
+        detail: releaseLevelOk
+          ? `release level ${releaseLevel}`
+          : `release level ${releaseLevel} is not one of beta, source-beta, stable`
+      },
+      docs: {
+        ok: docsOk,
+        expectedVersion,
+        actualVersion: docsVersion,
+        setupPath,
+        releaseNotesPath,
+        websiteRepo: readString(docs.websiteRepo),
+        detail: docsOk
+          ? `manifest version ${version} and docs version ${docsVersion} match ${expectedVersion}; checked setup and release notes paths`
+          : [
+              expectedVersion
+                ? manifestVersionOk
+                  ? `manifest version ${version} matches ${expectedVersion}`
+                  : expectedVersionOk
+                    ? `manifest version ${version} does not match ${expectedVersion}`
+                    : "--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1"
+                : "--expected-public-version is required",
+              ...(expectedVersion
+                ? [
+                    docsVersionOk
+                      ? `docs version ${docsVersion} matches ${expectedVersion}`
+                      : `docs version ${docsVersion} does not match ${expectedVersion}`
+                  ]
+                : []),
+              ...(releaseNotesPath && expectedReleaseNotesPath && !releaseNotesPathOk
+                ? [`release notes path ${releaseNotesPath} does not match ${expectedReleaseNotesPath}`]
+                : []),
+              ...missingDocsPaths.map((pathCheck) => `${pathCheck.label} missing at ${pathCheck.path}`)
+            ].join("; ")
+      },
+      licenseApi: {
+        ok: licenseOk,
+        requiredForThisRelease: licenseRequired,
+        state: licenseState,
+        trackingIssue: readString(licenseApi.trackingIssue),
+        healthUrl: readString(licenseApi.healthUrl),
+        detail: licenseOk
+          ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}`
+          : `license API state ${licenseState} blocks this release; requiredForThisRelease=${licenseRequired}`
+      },
+      updateChannels: {
+        ok: channelsOk,
+        channels
+      }
+    };
+  } catch (error) {
+    return {
+      manifestPath: input.manifestPath,
+      ok: false,
+      version: "(invalid)",
+      releaseLevel: "unknown",
+      releaseLevelGate: {
+        ok: false,
+        state: "invalid",
+        detail: "release level unavailable because manifest is invalid"
+      },
+      docs: {
+        ok: false,
+        expectedVersion: input.expectedVersion,
+        detail: `public release manifest is invalid JSON: ${error instanceof Error ? error.message : String(error)}`
+      },
+      licenseApi: {
+        ok: false,
+        requiredForThisRelease: true,
+        state: "invalid",
+        detail: "license API state unavailable because manifest is invalid"
+      },
+      updateChannels: {
+        ok: false,
+        channels: []
+      }
+    };
+  }
+}
+
+function buildPublicReleaseChannelStatus(
+  name: string,
+  channel: Record<string, unknown>,
+  options: { cwd?: string; releaseLevel: string; verifyRollbackRefs?: boolean }
+): PublicReleaseChannelStatus {
+  const state = readString(channel.state) ?? "missing";
+  const requiredForThisRelease =
+    isRequiredPublicUpdateChannel(name) ||
+    options.releaseLevel !== "source-beta" ||
+    (readBoolean(channel.requiredForThisRelease) ?? true);
+  const version = readString(channel.version);
+  const rollback = readString(channel.rollback);
+  const trackingIssue = readString(channel.trackingIssue);
+  const stateOk = isUpdateChannelStateAcceptable(name, state, requiredForThisRelease);
+  const rollbackCheck = rollback ? checkRollbackCommand(rollback, options) : { ok: false, missingMetadata: "rollback command" };
+  const missingRequiredMetadata = [
+    ...(requiredForThisRelease && !version ? ["version"] : []),
+    ...(requiredForThisRelease && !rollbackCheck.ok ? [rollbackCheck.missingMetadata] : [])
+  ];
+  const metadataOk = missingRequiredMetadata.length === 0;
+  const ok = stateOk && metadataOk;
+  return {
+    name,
+    ok,
+    state,
+    requiredForThisRelease,
+    version,
+    rollback,
+    trackingIssue,
+    detail: ok
+      ? `${name} state ${state}; requiredForThisRelease=${requiredForThisRelease}`
+      : `${name} state ${state} blocks this release; requiredForThisRelease=${requiredForThisRelease}${
+          missingRequiredMetadata.length ? `; missing ${missingRequiredMetadata.join(", ")}` : ""
+        }`
+  };
+}
+
+function describePublicUpdateChannels(channels: PublicReleaseChannelStatus[]): string {
+  if (channels.length === 0) return "no public update channels declared";
+  return channels
+    .map((channel) =>
+      `${channel.name}=${channel.state}${channel.ok ? "" : " [BLOCKED]"}${channel.requiredForThisRelease ? "" : " (not required)"}`
+    )
+    .join("; ");
+}
+
+function isRequiredPublicUpdateChannel(name: string): boolean {
+  return REQUIRED_PUBLIC_UPDATE_CHANNELS.includes(name as typeof REQUIRED_PUBLIC_UPDATE_CHANNELS[number]);
+}
+
+function checkRollbackCommand(
+  rollback: string,
+  options: { cwd?: string; verifyRollbackRefs?: boolean }
+): { ok: boolean; missingMetadata: "rollback command" | "rollback target" } {
+  if (/\s*(?:&&|\|\||;)\s*/.test(rollback)) return { ok: false, missingMetadata: "rollback command" };
+  const command = rollback.trim();
+  const resetTarget = command.match(/^git\s+reset\s+--hard\s+([^\s;&|]+)$/)?.[1];
+  if (resetTarget) return checkRollbackTarget(resetTarget, options);
+  const revertTarget = command.match(/^git\s+revert\s+(?:--no-edit\s+)?([^\s;&|]+)$/)?.[1];
+  if (revertTarget) return checkRollbackTarget(revertTarget, options);
+  return { ok: false, missingMetadata: "rollback command" };
+}
+
+function checkRollbackTarget(
+  target: string,
+  options: { cwd?: string; verifyRollbackRefs?: boolean }
+): { ok: boolean; missingMetadata: "rollback command" | "rollback target" } {
+  const targetFormatOk = isRollbackVersionTagRef(target) || /^[0-9a-f]{40}$/i.test(target);
+  if (!targetFormatOk) return { ok: false, missingMetadata: "rollback command" };
+  if (options.verifyRollbackRefs !== true) return { ok: true, missingMetadata: "rollback command" };
+  if (!options.cwd || !isGitWorktree(options.cwd)) return { ok: false, missingMetadata: "rollback target" };
+  return gitCommitishExists(options.cwd, target)
+    ? { ok: true, missingMetadata: "rollback command" }
+    : { ok: false, missingMetadata: "rollback target" };
+}
+
+function isPublicVersionTag(version: string): boolean {
+  return PUBLIC_VERSION_PATTERN.test(version);
+}
+
+function isRollbackVersionTagRef(target: string): boolean {
+  const prefix = "refs/tags/";
+  return target.startsWith(prefix) && isPublicVersionTag(target.slice(prefix.length));
+}
+
+function isGitWorktree(cwd: string): boolean {
+  try {
+    return execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+function gitCommitishExists(cwd: string, target: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", `${target}^{commit}`], {
+      cwd,
+      stdio: "ignore"
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLicenseApiStateAcceptable(state: string, requiredForThisRelease: boolean): boolean {
+  if (requiredForThisRelease) return state === "healthy";
+  return state === "healthy" || state === "not_applicable" || state === "disabled" || state === "pending";
+}
+
+function isUpdateChannelStateAcceptable(name: string, state: string, requiredForThisRelease: boolean): boolean {
+  return requiredForThisRelease
+    ? REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES.has(state)
+    : (OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATE_OVERRIDES.get(name) ?? GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES).has(state);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readRepoStatus(cwd: string): ReleaseRepoStatus {

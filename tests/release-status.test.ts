@@ -1,15 +1,25 @@
-import { mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildReleaseStatus, collectReleaseStatus, parseLaunchdPrintStatus } from "../src/release-status.js";
+import {
+  buildReleaseStatus,
+  collectReleaseStatus,
+  parseLaunchdPrintStatus,
+  readPublicReleaseManifestStatus,
+  validatePublicReleaseManifestInputs
+} from "../src/release-status.js";
 import type { ReviewBudgetStatus } from "../src/review-budget.js";
+import { stringifyRedactedJson } from "../src/secrets.js";
 import { ReviewStateStore } from "../src/state.js";
 
 describe("beta release status", () => {
   const roots: string[] = [];
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -81,6 +91,1477 @@ describe("beta release status", () => {
       staleReviewLeases: 0
     });
     expect(JSON.stringify(status)).not.toMatch(/PRIVATE KEY|ghp_|BEGIN RSA|BEGIN OPENSSH/);
+  });
+
+  it("adds public release manifest gates while allowing an explicit source beta license API deferral", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-green-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md",
+        websiteRepo: "electricsheephq/neon-diff-agent"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending",
+        trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot/issues/111"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        desktop: {
+          requiredForThisRelease: false,
+          state: "post_1_0",
+          trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot/issues/116"
+        }
+      }
+    }));
+
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
+      },
+      database: { rowCount: 2, errorCount: 0 },
+      heartbeat: freshHeartbeat(),
+      publicRelease: readPublicReleaseManifestStatus({
+        cwd: root,
+        manifestPath: "public-release.json",
+        expectedVersion: "v1.0.0-beta.1"
+      }),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.publicRelease).toMatchObject({
+      ok: true,
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      licenseApi: {
+        ok: true,
+        state: "pending",
+        requiredForThisRelease: false
+      }
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_docs_version",
+      ok: true,
+      detail: "manifest version v1.0.0-beta.1 and docs version v1.0.0-beta.1 match v1.0.0-beta.1; checked setup and release notes paths"
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_license_api_state",
+      ok: true,
+      detail: "license API state pending; requiredForThisRelease=false"
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_update_channels",
+      ok: true,
+      detail: "cli=source_checkout; daemon=launchd_prerelease; desktop=post_1_0 (not required)"
+    });
+  });
+
+  it("validates the shipped public release manifest against the shipped release notes", () => {
+    // Intentional shipped-manifest smoke: keep assertions scoped to publicRelease fields.
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: repoRoot,
+      manifestPath: "docs/public-release-manifest.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest).toMatchObject({
+      ok: true,
+      version: "v1.0.0-beta.1",
+      docs: {
+        ok: true,
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      updateChannels: {
+        ok: true
+      }
+    });
+    expect(manifest.updateChannels.channels).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "cli",
+          requiredForThisRelease: true,
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }),
+        expect.objectContaining({
+          name: "daemon",
+          requiredForThisRelease: true,
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        })
+      ])
+    );
+  });
+
+  it("fails closed when public release manifest flags are not paired", () => {
+    expect(() =>
+      validatePublicReleaseManifestInputs({
+        publicReleaseManifestPath: "docs/public-release-manifest.json"
+      })
+    ).toThrow("--expected-public-version is required when --public-release-manifest is provided");
+    expect(() =>
+      validatePublicReleaseManifestInputs({
+        expectedPublicVersion: "v1.0.0-beta.1"
+      })
+    ).toThrow("--public-release-manifest is required when --expected-public-version is provided");
+    expect(() =>
+      validatePublicReleaseManifestInputs({
+        publicReleaseManifestPath: "docs/public-release-manifest.json",
+        expectedPublicVersion: "<tag>"
+      })
+    ).toThrow("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
+  });
+
+  it("accepts stable public release versions for future stable manifests", () => {
+    expect(() =>
+      validatePublicReleaseManifestInputs({
+        publicReleaseManifestPath: "docs/public-release-manifest.json",
+        expectedPublicVersion: "v1.0.0"
+      })
+    ).not.toThrow();
+  });
+
+  it("collects public release manifest gates through release-status wiring", () => {
+    // Intentional shipped-manifest smoke: surrounding repo/live-path status is machine-local.
+    const root = mkdtempSync(join(tmpdir(), "release-status-public-manifest-"));
+    roots.push(root);
+
+    const status = collectReleaseStatus({
+      cwd: repoRoot,
+      statePath: join(root, "missing-live-state.sqlite"),
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      publicReleaseManifestPath: "docs/public-release-manifest.json",
+      expectedPublicVersion: "v1.0.0-beta.1",
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot"
+    });
+
+    expect(status.publicRelease).toMatchObject({
+      ok: true,
+      version: "v1.0.0-beta.1"
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_update_channels",
+      ok: true,
+      detail: "cli=source_checkout; daemon=launchd_prerelease; website=pending-site-sync (not required); desktop=post_1_0 (not required)"
+    });
+    const redactedOutput = stringifyRedactedJson({
+      ...status,
+      healthState: status.ok ? "runtime_ok" : "runtime_blocked",
+      runtimeOk: status.ok
+    });
+    expect(redactedOutput).toContain("git reset --hard refs/tags/v0.4.9-beta.1");
+    expect(redactedOutput).toContain("cli=source_checkout; daemon=launchd_prerelease");
+    expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot/issues/111");
+  });
+
+  it("fails closed without throwing when collectReleaseStatus receives a missing public manifest path", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-missing-public-manifest-"));
+    roots.push(root);
+
+    const status = collectReleaseStatus({
+      cwd: repoRoot,
+      statePath: join(root, "missing-live-state.sqlite"),
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      publicReleaseManifestPath: "docs/not-a-public-release-manifest.json",
+      expectedPublicVersion: "v1.0.0-beta.1",
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot"
+    });
+
+    expect(status.publicRelease).toMatchObject({
+      ok: false,
+      version: "(missing)",
+      docs: {
+        ok: false,
+        detail: "public release manifest missing at docs/not-a-public-release-manifest.json"
+      }
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_docs_version",
+      ok: false,
+      detail: "public release manifest missing at docs/not-a-public-release-manifest.json"
+    });
+  });
+
+  it("fails closed without throwing when the public manifest is invalid JSON", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-invalid-json-"));
+    roots.push(root);
+    writeFileSync(join(root, "public-release.json"), "{ not valid json");
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest).toMatchObject({
+      ok: false,
+      version: "(invalid)",
+      docs: {
+        ok: false
+      },
+      licenseApi: {
+        ok: false,
+        state: "invalid"
+      },
+      updateChannels: {
+        ok: false,
+        channels: []
+      }
+    });
+    expect(manifest.docs.detail).toContain("public release manifest is invalid JSON");
+  });
+
+  it("redacts secret-like public manifest strings before release-status JSON output", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-redaction-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending",
+        healthUrl: "https://license.example/status?access_token=abcdefghijklmnopqrstuvwxyz"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+    const redactedOutput = stringifyRedactedJson({
+      publicRelease: manifest,
+      healthState: manifest.ok ? "runtime_ok" : "runtime_blocked"
+    });
+
+    expect(manifest.licenseApi.healthUrl).toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(redactedOutput).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(redactedOutput).toContain("[redacted-secret]");
+  });
+
+  it("preserves Date values when redacting JSON output", () => {
+    const redactedOutput = stringifyRedactedJson({
+      checkedAt: new Date("2026-07-04T00:00:00.000Z"),
+      nested: {
+        generatedAt: new Date("2026-07-04T00:01:00.000Z")
+      }
+    });
+
+    expect(redactedOutput).toContain("\"checkedAt\": \"2026-07-04T00:00:00.000Z\"");
+    expect(redactedOutput).toContain("\"generatedAt\": \"2026-07-04T00:01:00.000Z\"");
+    expect(redactedOutput).not.toContain("\"checkedAt\": {}");
+  });
+
+  it("fails public docs gate when the expected public version is omitted", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-no-version-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json"
+    });
+
+    expect(manifest.ok).toBe(false);
+    expect(manifest.docs).toMatchObject({
+      ok: false,
+      detail: "--expected-public-version is required"
+    });
+  });
+
+  it("fails public docs gate when required docs paths are omitted", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-no-doc-paths-"));
+    roots.push(root);
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.ok).toBe(false);
+    expect(manifest.docs.detail).toBe(
+      "manifest version v1.0.0-beta.1 matches v1.0.0-beta.1; docs version v1.0.0-beta.1 matches v1.0.0-beta.1; setupPath missing at (missing); releaseNotesPath missing at (missing)"
+    );
+  });
+
+  it("fails public docs gate when release notes path does not match the expected version", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-wrong-release-notes-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v0.9.0-beta.1.md"), "# v0.9.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v0.9.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.docs.ok).toBe(false);
+    expect(manifest.docs.detail).toContain("release notes path docs/releases/v0.9.0-beta.1.md does not match docs/releases/v1.0.0-beta.1.md");
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("fails public docs gate when the expected version has malformed prerelease identifiers", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-malformed-prerelease-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta..1.md"), "# v1.0.0-beta..1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta..1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta..1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta..1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta..1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta..1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta..1"
+    });
+
+    expect(manifest.docs.ok).toBe(false);
+    expect(manifest.docs.detail).toContain("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("fails public update channel gates when required channels are omitted", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-missing-channels-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        desktop: {
+          requiredForThisRelease: false,
+          state: "post_1_0",
+          trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot/issues/116"
+        }
+      }
+    }));
+
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
+      },
+      database: { rowCount: 2, errorCount: 0 },
+      heartbeat: freshHeartbeat(),
+      publicRelease: readPublicReleaseManifestStatus({
+        cwd: root,
+        manifestPath: "public-release.json",
+        expectedVersion: "v1.0.0-beta.1"
+      }),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.publicRelease?.updateChannels).toMatchObject({
+      ok: false,
+      channels: [
+        { name: "cli", ok: false, state: "missing", requiredForThisRelease: true },
+        { name: "daemon", ok: false, state: "missing", requiredForThisRelease: true },
+        { name: "desktop", ok: true, state: "post_1_0", requiredForThisRelease: false }
+      ]
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_update_channels",
+      ok: false,
+      detail: "cli=missing [BLOCKED]; daemon=missing [BLOCKED]; desktop=post_1_0 (not required)"
+    });
+  });
+
+  it("blocks license API deferrals outside source-beta releases", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stable-license-deferral-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.licenseApi).toMatchObject({
+      ok: false,
+      requiredForThisRelease: true,
+      state: "pending",
+      detail: "license API state pending blocks this release; requiredForThisRelease=true"
+    });
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("blocks optional channel deferrals outside source-beta releases", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stable-channel-deferral-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        website: {
+          requiredForThisRelease: false,
+          state: "pending-site-sync"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels).toContainEqual(expect.objectContaining({
+      name: "website",
+      requiredForThisRelease: true,
+      ok: false,
+      detail: "website state pending-site-sync blocks this release; requiredForThisRelease=true; missing version, rollback command"
+    }));
+    expect(manifest.updateChannels.ok).toBe(false);
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("fails public release gates for unknown required license and update-channel states", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-unknown-states-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "unknown"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source-chekout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
+      },
+      database: { rowCount: 2, errorCount: 0 },
+      heartbeat: freshHeartbeat(),
+      publicRelease: readPublicReleaseManifestStatus({
+        cwd: root,
+        manifestPath: "public-release.json",
+        expectedVersion: "v1.0.0-beta.1"
+      }),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.gates).toContainEqual({
+      name: "public_license_api_state",
+      ok: false,
+      detail: "license API state unknown blocks this release; requiredForThisRelease=true"
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_update_channels",
+      ok: false,
+      detail: "cli=source-chekout [BLOCKED]; daemon=launchd_prerelease"
+    });
+  });
+
+  it("fails required public update channels without version and rollback or tracking evidence", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-missing-channel-metadata-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot/issues/112"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels).toEqual([
+      expect.objectContaining({
+        name: "cli",
+        ok: false,
+        detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing version, rollback command"
+      }),
+      expect.objectContaining({
+        name: "daemon",
+        ok: false,
+        detail: "daemon state launchd_prerelease blocks this release; requiredForThisRelease=true; missing rollback command"
+      })
+    ]);
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("forces policy-mandatory public update channels to remain required", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-mandatory-channel-opt-out-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: false,
+          state: "pending"
+        },
+        daemon: {
+          requiredForThisRelease: false,
+          state: "pending"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels).toEqual([
+      expect.objectContaining({
+        name: "cli",
+        requiredForThisRelease: true,
+        ok: false,
+        detail: "cli state pending blocks this release; requiredForThisRelease=true; missing version, rollback command"
+      }),
+      expect.objectContaining({
+        name: "daemon",
+        requiredForThisRelease: true,
+        ok: false,
+        detail: "daemon state pending blocks this release; requiredForThisRelease=true; missing version, rollback command"
+      })
+    ]);
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("fails required public update channels with restart-only rollback commands", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-restart-rollback-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels[0]).toMatchObject({
+      name: "cli",
+      ok: false,
+      detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("fails required public update channels with chained rollback commands", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-chained-rollback-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1 && launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels[0]).toMatchObject({
+      name: "cli",
+      ok: false,
+      detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("fails optional public update channels with another channel's specific state", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-cross-channel-state-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        website: {
+          requiredForThisRelease: false,
+          state: "post_1_0"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels.find((channel) => channel.name === "website")).toMatchObject({
+      ok: false,
+      detail: "website state post_1_0 blocks this release; requiredForThisRelease=false"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("fails required public update channels when rollback-like text is not the command", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-embedded-rollback-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "echo git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels[0]).toMatchObject({
+      name: "cli",
+      ok: false,
+      detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("fails required public update channels when checkout only resets the worktree", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-checkout-worktree-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git checkout ."
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels[0]).toMatchObject({
+      name: "cli",
+      ok: false,
+      detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("accepts format-valid rollback targets without requiring local refs by default", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-missing-rollback-ref-"));
+    roots.push(root);
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v9.9.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git revert 0123456789abcdef0123456789abcdef01234567"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels).toEqual([
+      expect.objectContaining({
+        name: "cli",
+        ok: true,
+        detail: "cli state source_checkout; requiredForThisRelease=true"
+      }),
+      expect.objectContaining({
+        name: "daemon",
+        ok: true,
+        detail: "daemon state launchd_prerelease; requiredForThisRelease=true"
+      })
+    ]);
+    expect(manifest.updateChannels.ok).toBe(true);
+  });
+
+  it("can fail required public update channels when rollback target verification is enabled", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-missing-rollback-ref-"));
+    roots.push(root);
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v9.9.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git revert 0123456789abcdef0123456789abcdef01234567"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1",
+      verifyRollbackRefs: true
+    });
+
+    expect(manifest.updateChannels.channels).toEqual([
+      expect.objectContaining({
+        name: "cli",
+        ok: false,
+        detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback target"
+      }),
+      expect.objectContaining({
+        name: "daemon",
+        ok: false,
+        detail: "daemon state launchd_prerelease blocks this release; requiredForThisRelease=true; missing rollback target"
+      })
+    ]);
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("passes required public update channels when strict rollback targets exist in a git checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-existing-rollback-ref-"));
+    roots.push(root);
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["-c", "user.name=evaOS Bot", "-c", "user.email=bot@example.invalid", "commit", "--allow-empty", "-m", "seed"], {
+      cwd: root,
+      stdio: "ignore"
+    });
+    execFileSync("git", ["tag", "v0.4.9-beta.1"], { cwd: root, stdio: "ignore" });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: `git revert ${headSha}`
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1",
+      verifyRollbackRefs: true
+    });
+
+    expect(manifest.updateChannels.channels).toEqual([
+      expect.objectContaining({
+        name: "cli",
+        ok: true,
+        detail: "cli state source_checkout; requiredForThisRelease=true"
+      }),
+      expect.objectContaining({
+        name: "daemon",
+        ok: true,
+        detail: "daemon state launchd_prerelease; requiredForThisRelease=true"
+      })
+    ]);
+    expect(manifest.updateChannels.ok).toBe(true);
+  });
+
+  it("fails required public update channels when rollback uses an ambiguous plain tag target", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-plain-tag-rollback-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels[0]).toMatchObject({
+      name: "cli",
+      ok: false,
+      detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("fails required public update channels when rollback uses an abbreviated SHA", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-short-sha-rollback-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git revert abc1234"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels[0]).toMatchObject({
+      name: "cli",
+      ok: false,
+      detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("fails required public update channels when rollback includes trailing operands", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-trailing-rollback-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1 extra"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git revert 0123456789abcdef0123456789abcdef01234567 unexpected"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.updateChannels.channels[0]).toMatchObject({
+      name: "cli",
+      ok: false,
+      detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.channels[1]).toMatchObject({
+      name: "daemon",
+      ok: false,
+      detail: "daemon state launchd_prerelease blocks this release; requiredForThisRelease=true; missing rollback command"
+    });
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
+  it("fails public release gates for stale docs, required pending license API, and blocked channels", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-red-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "public-beta",
+      docs: {
+        version: "v0.9.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "pending"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease"
+        }
+      }
+    }));
+
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
+      },
+      database: { rowCount: 2, errorCount: 0 },
+      heartbeat: freshHeartbeat(),
+      publicRelease: readPublicReleaseManifestStatus({
+        cwd: root,
+        manifestPath: "public-release.json",
+        expectedVersion: "v1.0.0-beta.1"
+      }),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.gates).toContainEqual({
+      name: "public_release_level",
+      ok: false,
+      detail: "release level public-beta is not one of beta, source-beta, stable"
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_docs_version",
+      ok: false,
+      detail: "manifest version v1.0.0-beta.1 matches v1.0.0-beta.1; docs version v0.9.0-beta.1 does not match v1.0.0-beta.1; release notes missing at docs/releases/v1.0.0-beta.1.md"
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_license_api_state",
+      ok: false,
+      detail: "license API state pending blocks this release; requiredForThisRelease=true"
+    });
+    expect(status.gates).toContainEqual({
+      name: "public_update_channels",
+      ok: false,
+      detail: "cli=pending [BLOCKED]; daemon=launchd_prerelease [BLOCKED]"
+    });
+    expect(status.recommendedActions).toContain("inspect public release manifest public-release.json");
   });
 
   it("fails closed when launchd config path cannot be verified", () => {

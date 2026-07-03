@@ -21,6 +21,11 @@ The beta release unit does not include expanding monitored repos, GitHub App
 permissions, ZCode tools, auto-merge, approvals, or repair behavior. Those need
 their own tracked issue, PR, dry-run evidence, and explicit promotion gate.
 
+Public source-beta releases also include a compact manifest at
+`docs/public-release-manifest.json`. That manifest is the release-status input
+for docs version alignment, license API readiness or explicit deferral, and
+update-channel readiness for CLI, daemon, website, and desktop surfaces.
+
 ## Cadence
 
 - Cut at most one normal beta promotion per focused sprint lane unless a safety
@@ -81,6 +86,41 @@ npm run release:status -- \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
+For public source-beta releases, run the same gate with manifest checks:
+
+```bash
+PUBLIC_BETA_TAG=v1.0.0-beta.1
+npx tsx src/cli.ts release-status \
+  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --expected-head "$(git rev-parse HEAD)" \
+  --public-release-manifest docs/public-release-manifest.json \
+  --expected-public-version "$PUBLIC_BETA_TAG" \
+  --launchd-label com.electricsheephq.evaos-code-review-bot
+```
+
+Set `PUBLIC_BETA_TAG` to the actual public beta tag before running the command.
+
+By default this public manifest gate validates rollback command shape only, so
+fresh or shallow checkouts are not blocked by missing local tags. After
+`git fetch origin --tags`, operators can add
+`--verify-public-rollback-refs true` for the stricter local ref-existence check;
+that failure is reported as a missing rollback target rather than a malformed
+rollback command.
+
+Public promotion evidence should include the strict variant after tags are
+fetched:
+
+```bash
+git fetch origin --tags
+npx tsx src/cli.ts release-status \
+  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --expected-head "$(git rev-parse HEAD)" \
+  --public-release-manifest docs/public-release-manifest.json \
+  --expected-public-version "$PUBLIC_BETA_TAG" \
+  --verify-public-rollback-refs true \
+  --launchd-label com.electricsheephq.evaos-code-review-bot
+```
+
 If the first `release:status` fails only because launchd is still on the
 previous head before restart, record that as pre-promotion state. The
 post-restart `release:status` must pass before calling the beta promoted.
@@ -118,6 +158,12 @@ npx tsx src/cli.ts review-head-gate \
 - `release:status` verifies the loaded LaunchAgent includes
   `NODE_OPTIONS=--use-system-ca` so Node uses the macOS system trust store for
   GitHub App installation fetches.
+- Public source-beta promotions pass `release:status` with
+  `--public-release-manifest docs/public-release-manifest.json` and the release
+  tag as `--expected-public-version`.
+- Public release manifests may mark license API, website, or desktop channels
+  as pending only when `requiredForThisRelease` is `false`; required channels
+  must not be pending.
 - launchd emits a fresh heartbeat after restart.
 - live DB has no unexpected error rows.
 - active provider cooldown rows are allowed only when they are explicit
@@ -245,7 +291,12 @@ For each beta promotion, record:
 - live DB row/error count.
 - provider cooldown rows, if any, with affected repo, PR, head SHA, cooldown
   expiry, active/expired count, retry command, and retry result.
+- public release manifest state for docs, license API, CLI update channel,
+  daemon update channel, website/download channel, and desktop update channel.
 - rollback SHA and command.
+- rollback note for provider config, GitHub App settings, website deploy, and
+  desktop update channel when those surfaces are in scope; otherwise record the
+  tracking issue or `not in this release`.
 - next monitoring action or heartbeat.
 
 Keep raw evidence under `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
@@ -269,6 +320,7 @@ when a docs file is not warranted:
 - Live config:
 - State DB:
 - Evidence path:
+- Public manifest:
 - Monitor owner/window:
 - Rollback SHA:
 - Rollback command:
@@ -283,6 +335,7 @@ when a docs file is not warranted:
 - heartbeat:
 - DB state:
 - provider cooldown rows:
+- public manifest:
 
 ## Notes
 

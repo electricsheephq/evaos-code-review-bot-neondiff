@@ -8,6 +8,10 @@ and a rollback path.
 
 - `beta`: local launchd worker on the operator Mac, posting as the GitHub App
   on the active allowlist. Beta releases are prereleases.
+- `source-beta`: public source-checkout release. The CLI and daemon are
+  installable from git and npm-linkable locally, but package publishing,
+  license activation, website download/version sync, and desktop auto-update may
+  still be explicitly deferred in `docs/public-release-manifest.json`.
 - `stable`: future multi-operator or production rollout. Stable releases are
   blocked until beta evidence proves low-noise behavior over labeled PRs.
 
@@ -19,6 +23,7 @@ Use semver prerelease tags for live beta promotions:
 v0.2.5-beta.1
 v0.2.5-beta.2
 v0.3.0-beta.1
+v1.0.0-beta.1
 ```
 
 Patch beta tags are for runtime/reliability fixes. Minor beta tags are for new
@@ -49,7 +54,22 @@ Before tagging:
    - live config path
    - rollback command
    - known provider cooldown or runtime caveats
-6. `git status --short` is clean in the live checkout.
+6. For public source-beta or public beta releases,
+   `docs/public-release-manifest.json` exists and declares:
+   - docs version and release-notes path
+   - license API state and whether it is required for this release
+   - CLI, daemon, website, and desktop update-channel state
+   - rollback command or tracking issue for each required channel
+   - required-channel rollback fields with one source revert command such as
+     `git reset --hard refs/tags/<tag>` or `git revert <sha>`
+7. `git status --short` is clean in the live checkout.
+
+The manifest `rollback` field is intentionally only the source-revert step.
+Full operator rollback runbooks may restart launchd after that source revert,
+but restart commands live outside the manifest rollback field. `launchctl
+kickstart` alone is a restart, not a rollback. `git checkout` detaches HEAD or
+resets the working tree; it is not accepted as a release rollback for this
+manifest gate.
 
 ## Tag And Release
 
@@ -107,6 +127,26 @@ npm run release:status -- \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
+For public source-beta or public beta releases, include the public manifest gate:
+
+```bash
+SOURCE_SHA=replace-with-release-source-sha
+PUBLIC_BETA_TAG=vX.Y.Z-beta.N
+npx tsx src/cli.ts release-status \
+  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --expected-head "$SOURCE_SHA" \
+  --public-release-manifest docs/public-release-manifest.json \
+  --expected-public-version "$PUBLIC_BETA_TAG" \
+  --launchd-label com.electricsheephq.evaos-code-review-bot
+```
+
+Set `SOURCE_SHA` and `PUBLIC_BETA_TAG` before running the command.
+
+The public manifest gate validates rollback command syntax by default. Use
+`git fetch origin --tags` and append `--verify-public-rollback-refs true` only
+when you want the operator machine to prove that rollback refs are present in
+that checkout; absent refs are reported as a missing rollback target.
+
 Also run:
 
 ```bash
@@ -124,6 +164,9 @@ The release is green only when:
 - launchd is running with the active live config
 - daemon heartbeat is fresh
 - no blocking DB error rows exist
+- public docs, license API state, and update channels are either healthy or
+  explicitly deferred as non-required for the release in
+  `docs/public-release-manifest.json`
 - coverage audit has zero unprocessed eligible heads
 - provider cooldowns are either absent or active and named in release notes
 - durable queue jobs have zero failed rows and zero retryable provider-deferred

@@ -52,7 +52,7 @@ import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
-import { redactSecrets } from "./secrets.js";
+import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
 import {
   buildRetiredFailedHeadError,
@@ -185,18 +185,23 @@ async function main(): Promise<void> {
       cwd: process.cwd(),
       configPath: args.config,
       expectedHead: args["expected-head"],
+      publicReleaseManifestPath: args["public-release-manifest"],
+      expectedPublicVersion: args["expected-public-version"],
+      verifyPublicRollbackRefs: args["verify-public-rollback-refs"] === undefined
+        ? false
+        : parseBooleanArg(args["verify-public-rollback-refs"], "--verify-public-rollback-refs"),
       launchdLabel: args["launchd-label"],
       statePath: args["state-path"],
       budgetDetails: args["budget-details"] === "true",
       ...(budgetDetailLimit !== undefined ? { budgetDetailLimit } : {}),
       ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {})
     });
-    console.log(JSON.stringify({
+    console.log(stringifyRedactedJson({
       ...status,
       healthState: status.ok ? "runtime_ok" : "runtime_blocked",
       runtimeOk: status.ok,
       failedGates: failedGates(status.gates)
-    }, null, 2));
+    }));
     if (!status.ok) process.exitCode = 1;
     return;
   }
@@ -2122,6 +2127,7 @@ function buildHelp(command?: string) {
       "neondiff daemon stop --launchd-label com.example.neondiff --dry-run true",
       "npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true",
       "npx tsx src/cli.ts status --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
+      "npx tsx src/cli.ts release-status --config /path/to/live.json --expected-head \"$(git rev-parse HEAD)\" --public-release-manifest docs/public-release-manifest.json --expected-public-version vX.Y.Z-beta.N --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --human",
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha \"$(gh pr view 123 --repo owner/repo --json headRefOid --jq .headRefOid)\"",
@@ -2366,21 +2372,6 @@ function validateScenarioRunId(input: unknown, scenarioPath: string): string {
   return trimmed;
 }
 
-function stringifyRedactedJson(input: unknown): string {
-  return JSON.stringify(redactJsonValue(input), null, 2);
-}
-
-function redactJsonValue(input: unknown): unknown {
-  if (typeof input === "string") return redactSecrets(input);
-  if (Array.isArray(input)) return input.map((item) => redactJsonValue(item));
-  if (input && typeof input === "object") {
-    const output: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(input)) output[key] = redactJsonValue(value);
-    return output;
-  }
-  return input;
-}
-
 interface ParsedArgs {
   _: string[];
   config?: string;
@@ -2388,6 +2379,9 @@ interface ParsedArgs {
   pr?: string;
   reason?: string;
   "expected-head"?: string;
+  "public-release-manifest"?: string;
+  "expected-public-version"?: string;
+  "verify-public-rollback-refs"?: string;
   "launchd-label"?: string;
   "state-path"?: string;
   "dry-run"?: string;

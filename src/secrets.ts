@@ -28,3 +28,19 @@ export function containsSecretLikeText(input: string): boolean {
 export function redactSecrets(input: string): string {
   return SECRET_PATTERNS.reduce((text, pattern) => text.replace(pattern, "[redacted-secret]"), input);
 }
+
+export function stringifyRedactedJson(input: unknown): string {
+  return JSON.stringify(redactJsonValue(input), null, 2);
+}
+
+function redactJsonValue(input: unknown): unknown {
+  if (typeof input === "string") return redactSecrets(input);
+  if (input instanceof Date) return input.toISOString();
+  if (Array.isArray(input)) return input.map((item) => redactJsonValue(item));
+  if (input && typeof input === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input)) output[key] = redactJsonValue(value);
+    return output;
+  }
+  return input;
+}
