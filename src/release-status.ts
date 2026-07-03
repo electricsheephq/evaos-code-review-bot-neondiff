@@ -19,6 +19,8 @@ export interface ReleaseLaunchdStatus {
   pid?: number;
   configPath?: string;
   dryRun?: boolean;
+  nodeOptions?: string;
+  usesSystemCa?: boolean;
 }
 
 export interface ReleaseDatabaseStatus {
@@ -132,6 +134,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const cleanOk = input.repo.dirtyFiles.length === 0;
   const launchdRunningOk = input.launchd.state === "running";
   const launchdConfigOk = input.launchd.configPath === input.configPath;
+  const launchdSystemCaOk = input.launchd.usesSystemCa === true;
   const dbOk = input.database.errorCount === 0;
   const providerThrottleState = input.database.providerThrottleState ?? inferProviderThrottleState(input.database);
   const retryableExpiredProviderCooldownCount =
@@ -178,6 +181,15 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       name: "launchd_config",
       ok: launchdConfigOk,
       detail: input.launchd.configPath ?? "not detected"
+    },
+    {
+      name: "launchd_node_system_ca",
+      ok: launchdSystemCaOk,
+      detail: input.launchd.usesSystemCa === undefined
+        ? "NODE_OPTIONS not detected"
+        : input.launchd.usesSystemCa
+          ? "NODE_OPTIONS includes --use-system-ca"
+          : "NODE_OPTIONS missing --use-system-ca"
     },
     {
       name: "live_db_no_errors",
@@ -315,19 +327,74 @@ function readLaunchdStatus(label: string): ReleaseLaunchdStatus {
   const target = uid === undefined ? label : `gui/${uid}/${label}`;
   const result = spawnSync("launchctl", ["print", target], { encoding: "utf8" });
   if (result.status !== 0) return { label, state: "unknown" };
-  const stdout = result.stdout;
+  return parseLaunchdPrintStatus(label, result.stdout);
+}
+
+export function parseLaunchdPrintStatus(label: string, stdout: string): ReleaseLaunchdStatus {
   const state = stdout.match(/\bstate = (\w+)/)?.[1] === "running" ? "running" : "not_running";
   const pidText = stdout.match(/\bpid = (\d+)/)?.[1];
-  const args = stdout.match(/arguments = \{([\s\S]*?)\n\t\}/)?.[1] ?? "";
+  const args = extractLaunchdSection(stdout, "arguments") ?? "";
   const configMatch = args.match(/--config\s*\n\s*([^\n]+)/);
   const dryRunMatch = args.match(/--dry-run\s*\n\s*([^\n]+)/);
+  const environment = extractLaunchdSection(stdout, "environment");
+  const nodeOptions = normalizeLaunchdValue(readLaunchdEnvironmentValue(environment, "NODE_OPTIONS"));
+  const hasLaunchdEnvironment = environment !== undefined;
   return {
     label,
     state,
     ...(pidText ? { pid: Number(pidText) } : {}),
     ...(configMatch?.[1] ? { configPath: configMatch[1].trim() } : {}),
-    ...(dryRunMatch?.[1] ? { dryRun: dryRunMatch[1].trim() !== "false" } : {})
+    ...(dryRunMatch?.[1] ? { dryRun: dryRunMatch[1].trim() !== "false" } : {}),
+    ...(nodeOptions ? { nodeOptions } : {}),
+    ...(hasLaunchdEnvironment ? { usesSystemCa: splitNodeOptions(nodeOptions).includes("--use-system-ca") } : {})
   };
+}
+
+function extractLaunchdSection(stdout: string, sectionName: string): string | undefined {
+  const lines = stdout.split(/\r?\n/);
+  const sectionStart = lines.findIndex((line) => line.trim() === `${sectionName} = {`);
+  if (sectionStart === -1) return undefined;
+
+  const sectionIndent = leadingWhitespace(lines[sectionStart]).length;
+  const body: string[] = [];
+  for (const line of lines.slice(sectionStart + 1)) {
+    if (line.trim() === "}" && leadingWhitespace(line).length <= sectionIndent) {
+      return body.join("\n");
+    }
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+function leadingWhitespace(value: string): string {
+  return value.match(/^\s*/)?.[0] ?? "";
+}
+
+function readLaunchdEnvironmentValue(environment: string | undefined, key: string): string | undefined {
+  if (!environment) return undefined;
+  for (const line of environment.split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=>\s*(.*?)\s*$/);
+    if (match?.[1] === key) return match[2];
+  }
+  return undefined;
+}
+
+function normalizeLaunchdValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function splitNodeOptions(nodeOptions: string | undefined): string[] {
+  return (nodeOptions ?? "")
+    .split(/\s+/)
+    .map((option) => option.trim())
+    .filter(Boolean);
 }
 
 function readReviewBudgetStatus(

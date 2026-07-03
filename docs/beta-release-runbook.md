@@ -97,6 +97,9 @@ banner to stdout.
 - `npm test` and `npm run build` pass from the release checkout.
 - `release:status` records exact source SHA, branch, config path, launchd job,
   launchd dry-run mode, state DB row count, and error count.
+- `release:status` verifies the loaded LaunchAgent includes
+  `NODE_OPTIONS=--use-system-ca` so Node uses the macOS system trust store for
+  GitHub App installation fetches.
 - launchd emits a fresh heartbeat after restart.
 - live DB has no unexpected error rows.
 - active provider cooldown rows are allowed only when they are explicit
