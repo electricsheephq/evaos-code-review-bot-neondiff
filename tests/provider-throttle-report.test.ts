@@ -317,6 +317,14 @@ describe("provider throttle report", () => {
         error: "Tool failed while fetching a project URL: fetch failed",
         createdAt: "2026-07-01 11:00:00"
       });
+      insertProcessed(db, {
+        repo: "owner/repo",
+        pullNumber: 14,
+        headSha: "generic-overloaded-head",
+        status: "failed",
+        error: "Local review worker overloaded while opening the worktree",
+        createdAt: "2026-07-01 12:00:00"
+      });
     } finally {
       db.close();
     }
@@ -436,6 +444,16 @@ describe("provider throttle report", () => {
         createdAt: "2026-07-01T11:00:00.000Z",
         updatedAt: "2026-07-01T11:00:00.000Z"
       });
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 15,
+        headSha: "opaque-provider-id-head",
+        providerId: "0123456789abcdefghijklmnopqrstuvwxyzAB",
+        state: "failed",
+        lastError: "ProviderBusinessError: [1305][temporarily overloaded]",
+        createdAt: "2026-07-01T12:00:00.000Z",
+        updatedAt: "2026-07-01T12:00:00.000Z"
+      });
     } finally {
       db.close();
     }
@@ -449,9 +467,10 @@ describe("provider throttle report", () => {
 
     expect(report.providers).toEqual(expect.arrayContaining([
       expect.objectContaining({ providerId: "z.ai/GLM-5.2@beta", total: 1 }),
-      expect.objectContaining({ providerId: "[redacted-provider-id]", total: 1 })
+      expect.objectContaining({ providerId: "[redacted-provider-id]", total: 2 })
     ]));
     expect(JSON.stringify(report)).not.toContain("ghp_123456789012345678901234567890123456");
+    expect(JSON.stringify(report)).not.toContain("0123456789abcdefghijklmnopqrstuvwxyzAB");
   });
 
   it("does not count never-retried provider-deferred rows as retry outcomes", () => {

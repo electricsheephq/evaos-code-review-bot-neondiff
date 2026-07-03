@@ -121,6 +121,7 @@ const SQLITE_UTC_TEXT_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 const ISO_TIMESTAMP_WITHOUT_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
 const PROVIDER_ID_SECRET_LIKE =
   /(-----BEGIN\b|github_pat_|gh[opurs]_[A-Za-z0-9_]+|xox[abprs]-|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]{16,}|[A-Za-z0-9_-]{80,})/i;
+const OPAQUE_PROVIDER_ID = /^[A-Za-z0-9_-]{32,79}$/;
 const REVIEW_QUEUE_JOBS_TABLE = "review_queue_jobs";
 const DEFAULT_SINCE = "24h";
 const DEFAULT_TIMEZONE = "Asia/Singapore";
@@ -388,8 +389,7 @@ function classifyProviderThrottle(error: string): ProviderThrottleCategory | und
 
   if (
     normalized.includes("provider_overloaded") ||
-    normalized.includes("temporarily overloaded") ||
-    normalized.includes("overloaded") ||
+    (normalized.includes("providerbusinesserror") && normalized.includes("temporarily overloaded")) ||
     codes.includes("1305")
   ) {
     return "overloaded";
@@ -554,7 +554,7 @@ function assertValidHour(name: string, hour: number): void {
 function normalizeProviderId(value?: string | null): string {
   const trimmed = value?.trim();
   if (!trimmed) return "unknown";
-  if (PROVIDER_ID_SECRET_LIKE.test(trimmed)) return "[redacted-provider-id]";
+  if (PROVIDER_ID_SECRET_LIKE.test(trimmed) || OPAQUE_PROVIDER_ID.test(trimmed)) return "[redacted-provider-id]";
   const singleLine = trimmed.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   if (!singleLine) return "unknown";
   return singleLine.length > 96 ? `${singleLine.slice(0, 93)}...` : singleLine;
