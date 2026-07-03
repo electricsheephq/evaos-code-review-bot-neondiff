@@ -50,7 +50,7 @@ describe("provider throttle report", () => {
         headSha: "queue-deferred",
         providerId: "GLM-5.2",
         state: "provider_deferred",
-        lastError: "ProviderBusinessError: [1305][temporarily overloaded]",
+        lastError: "ProviderBusinessError: [1305][temporarily overloaded]; retry_attempt=2",
         createdAt: "2026-07-01T10:00:00.000Z",
         updatedAt: "2026-07-01T10:01:00.000Z"
       });
@@ -357,6 +357,198 @@ describe("provider throttle report", () => {
     });
     expect(report.hourly).toEqual([]);
     expect(report.repos).toEqual([]);
+  });
+
+  it("treats offsetless ISO queue timestamps as UTC for local-hour buckets", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-offsetless-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 12,
+        headSha: "offsetless-head",
+        providerId: "z.ai/GLM-5.2@beta",
+        state: "failed",
+        lastError: "provider_rate_limit_cooldown_until=2026-07-01T10:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302",
+        createdAt: "2026-07-01T10:00:00.000",
+        updatedAt: "2026-07-01T10:00:00.000"
+      });
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2026-07-08T00:00:00.000Z"),
+      since: "7d",
+      timezone: "Asia/Singapore",
+      peakStartHour: 14,
+      peakEndHour: 18
+    });
+
+    expect(report.summary).toMatchObject({
+      providerErrors: 1,
+      requestRateLimit: 1,
+      peakWindowErrors: 1,
+      offPeakErrors: 0,
+      worstLocalHour: "18:00"
+    });
+    expect(report.providers).toEqual([
+      expect.objectContaining({ providerId: "z.ai/GLM-5.2@beta", total: 1 })
+    ]);
+  });
+
+  it("preserves normal provider IDs while redacting obvious credential-shaped values", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-provider-id-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 13,
+        headSha: "provider-id-head",
+        providerId: "z.ai/GLM-5.2@beta",
+        state: "failed",
+        lastError: "ProviderBusinessError: [1305][temporarily overloaded]",
+        createdAt: "2026-07-01T10:00:00.000Z",
+        updatedAt: "2026-07-01T10:00:00.000Z"
+      });
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 14,
+        headSha: "secret-provider-id-head",
+        providerId: "ghp_123456789012345678901234567890123456",
+        state: "failed",
+        lastError: "ProviderBusinessError: [1305][temporarily overloaded]",
+        createdAt: "2026-07-01T11:00:00.000Z",
+        updatedAt: "2026-07-01T11:00:00.000Z"
+      });
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2026-07-08T00:00:00.000Z"),
+      since: "7d",
+      timezone: "Asia/Singapore"
+    });
+
+    expect(report.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ providerId: "z.ai/GLM-5.2@beta", total: 1 }),
+      expect.objectContaining({ providerId: "[redacted-provider-id]", total: 1 })
+    ]));
+    expect(JSON.stringify(report)).not.toContain("ghp_123456789012345678901234567890123456");
+  });
+
+  it("does not count never-retried provider-deferred rows as retry outcomes", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-deferred-outcome-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 15,
+        headSha: "first-deferred-head",
+        providerId: "GLM-5.2",
+        state: "provider_deferred",
+        lastError: "provider_rate_limit_cooldown_until=2026-07-01T08:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302",
+        createdAt: "2026-07-01T08:00:00.000Z",
+        updatedAt: "2026-07-01T08:01:00.000Z"
+      });
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 16,
+        headSha: "retry-deferred-head",
+        providerId: "GLM-5.2",
+        state: "provider_deferred",
+        lastError: "provider_rate_limit_cooldown_until=2026-07-01T09:05:00.000Z; reason=provider_request_rate_limit; retry_attempt=2; provider_code=1302",
+        createdAt: "2026-07-01T09:00:00.000Z",
+        updatedAt: "2026-07-01T09:01:00.000Z"
+      });
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2026-07-08T00:00:00.000Z"),
+      since: "7d",
+      timezone: "Asia/Singapore"
+    });
+
+    expect(report.summary.providerErrors).toBe(2);
+    expect(report.retryOutcomes.retriedProviderDeferred).toBe(1);
+  });
+
+  it("aggregates legacy review_queue_jobs rows without provider_id or lifecycle timestamp columns", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-legacy-queue-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec(`
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          priority integer not null,
+          state text not null,
+          last_error text,
+          created_at text not null,
+          updated_at text not null
+        )
+      `);
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, ?, ?, ?, ?)`
+      ).run(
+        "legacy-job",
+        "legacy:owner/repo#17@legacy-head",
+        "owner/repo",
+        "owner",
+        17,
+        "legacy-head",
+        "failed",
+        "ProviderBusinessError: [1305][temporarily overloaded]",
+        "2026-07-01T10:00:00.000Z",
+        "2026-07-01T10:01:00.000Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2026-07-08T00:00:00.000Z"),
+      since: "7d",
+      timezone: "Asia/Singapore"
+    });
+
+    expect(report.summary).toMatchObject({
+      providerErrors: 1,
+      overloaded: 1
+    });
+    expect(report.providers).toEqual([
+      expect.objectContaining({ providerId: "unknown", total: 1 })
+    ]);
+    expect(report.hourly).toEqual([
+      expect.objectContaining({ localHour: "18:00", total: 1 })
+    ]);
   });
 });
 

@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { redactSecrets } from "./secrets.js";
 
 export interface ProviderThrottleReportOptions {
   statePath: string;
@@ -118,6 +117,11 @@ interface ReviewQueueErrorRow {
 
 const EXPLICIT_PROVIDER_CODES = /(?:\bprovider_code=|\bprevious_provider_code=|\bproviderCode:\s*["']?)(\d{4})\b/g;
 const PROVIDER_BUSINESS_ERROR_CODES = /\bproviderbusinesserror\b[^\[]*\[(\d{4})\]/gi;
+const SQLITE_UTC_TEXT_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+const ISO_TIMESTAMP_WITHOUT_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
+const PROVIDER_ID_SECRET_LIKE =
+  /(-----BEGIN\b|github_pat_|gh[opurs]_[A-Za-z0-9_]+|xox[abprs]-|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]{16,}|[A-Za-z0-9_-]{80,})/i;
+const REVIEW_QUEUE_JOBS_TABLE = "review_queue_jobs";
 const DEFAULT_SINCE = "24h";
 const DEFAULT_TIMEZONE = "Asia/Singapore";
 const DEFAULT_PEAK_START_HOUR = 14;
@@ -147,8 +151,13 @@ export function collectProviderThrottleReport(input: ProviderThrottleReportOptio
   const db = new DatabaseSync(input.statePath, { readOnly: true });
   try {
     const events = collectProviderThrottleEvents(db, sinceStart, now);
+    const hourFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "2-digit",
+      hourCycle: "h23"
+    });
     for (const event of events) {
-      addEventToReport(report, event, timezone, peakStartHour, peakEndHour);
+      addEventToReport(report, event, hourFormatter, peakStartHour, peakEndHour);
     }
   } finally {
     db.close();
@@ -212,7 +221,7 @@ function emptyReport(input: {
       "processed_reviews is a current-state table keyed by repo/pull/head; provider throttles that were overwritten before queue retry metadata was preserved may be undercounted.",
       "processed_reviews events are bucketed by created_at; review_queue_jobs events are bucketed by coalesce(finished_at, updated_at, started_at, created_at), so deduped queue incidents may reflect retry/update time instead of first-observed throttle time.",
       "processed_reviews does not store provider_id, so provider context for those rows is reported as unknown.",
-      "retryOutcomes is sourced from review_queue_jobs current state only; processed_reviews-only incidents are excluded from retry outcomes, and stale queue rows can skew retry outcome telemetry until the worker repairs them.",
+      "retryOutcomes is sourced from review_queue_jobs current state only; processed_reviews-only incidents are excluded from retry outcomes, and still-deferred rows only count as retriedProviderDeferred when their error trail includes retry metadata.",
       "Each incident is assigned to the first matching category by precedence; mixed-cause provider errors are collapsed into one summary category while all extracted provider codes remain visible."
     ]
   };
@@ -248,15 +257,18 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
     }
   }
 
-  if (hasTable(db, "review_queue_jobs")) {
+  if (hasTable(db, REVIEW_QUEUE_JOBS_TABLE)) {
     const timestampExpr = queueTimestampExpression(db);
+    const hasProviderId = hasColumn(db, REVIEW_QUEUE_JOBS_TABLE, "provider_id");
+    const hasStartedAt = hasColumn(db, REVIEW_QUEUE_JOBS_TABLE, "started_at");
+    const hasFinishedAt = hasColumn(db, REVIEW_QUEUE_JOBS_TABLE, "finished_at");
     const rows = db
       .prepare(
         `select repo, pull_number, head_sha, state, last_error,
-                ${hasColumn(db, "review_queue_jobs", "provider_id") ? "provider_id" : "null as provider_id"},
+                ${hasProviderId ? "provider_id" : "null as provider_id"},
                 created_at, updated_at,
-                ${hasColumn(db, "review_queue_jobs", "started_at") ? "started_at" : "null as started_at"},
-                ${hasColumn(db, "review_queue_jobs", "finished_at") ? "finished_at" : "null as finished_at"}
+                ${hasStartedAt ? "started_at" : "null as started_at"},
+                ${hasFinishedAt ? "finished_at" : "null as finished_at"}
          from review_queue_jobs
          where last_error is not null
            and state not in ('queued', 'leased', 'running')
@@ -286,13 +298,13 @@ function collectProviderThrottleEvents(db: DatabaseSync, sinceStart: Date, now: 
 function addEventToReport(
   report: ProviderThrottleReport,
   event: ProviderThrottleEvent,
-  timezone: string,
+  hourFormatter: Intl.DateTimeFormat,
   peakStartHour: number,
   peakEndHour: number
 ): void {
   const category = classifyProviderThrottle(event.error);
   if (!category) return;
-  const hour = localHour(event.timestamp, timezone);
+  const hour = localHour(event.timestamp, hourFormatter);
   if (!hour) {
     report.summary.droppedEvents += 1;
     report.summary.malformedTimestamps += 1;
@@ -464,7 +476,9 @@ function addRetryOutcome(report: ProviderThrottleReport, event: ProviderThrottle
   const status = event.status.toLowerCase();
   if (status === "posted" || status === "reviewed" || status === "reviewed_command") {
     report.retryOutcomes.retriedPosted += 1;
-  } else if (status === "provider_deferred" || status === "skipped_provider_cooldown") {
+  } else if (status === "provider_deferred" && hasRetryAttemptTrail(event.error)) {
+    report.retryOutcomes.retriedProviderDeferred += 1;
+  } else if (status === "skipped_provider_cooldown") {
     report.retryOutcomes.retriedProviderDeferred += 1;
   } else if (status === "stale_retired" || status === "skipped_stale_head") {
     report.retryOutcomes.retriedStaleHead += 1;
@@ -488,22 +502,29 @@ function extractProviderCodes(error: string): string[] {
   return [...codes];
 }
 
-function localHour(timestamp: string, timezone: string): string | undefined {
+function hasRetryAttemptTrail(error: string): boolean {
+  return /\bretry_attempt=\d+\b/.test(error) ||
+    /\bretry_after_ms=\d+\b/.test(error) ||
+    error.includes("_after_provider_deferred") ||
+    error.includes("previous_reason=");
+}
+
+function localHour(timestamp: string, hourFormatter: Intl.DateTimeFormat): string | undefined {
   const date = parseSqliteUtcTimestamp(timestamp);
   if (!Number.isFinite(date.getTime())) return undefined;
-  const hour = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    hour: "2-digit",
-    hourCycle: "h23"
-  }).format(date);
+  const hour = hourFormatter.format(date);
   return `${hour}:00`;
 }
 
 function parseSqliteUtcTimestamp(timestamp: string): Date {
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
-    return new Date(`${timestamp.replace(" ", "T")}Z`);
+  const trimmed = timestamp.trim();
+  if (SQLITE_UTC_TEXT_TIMESTAMP.test(trimmed)) {
+    return new Date(`${trimmed.replace(" ", "T")}Z`);
   }
-  return new Date(timestamp);
+  if (ISO_TIMESTAMP_WITHOUT_OFFSET.test(trimmed)) {
+    return new Date(`${trimmed}Z`);
+  }
+  return new Date(trimmed);
 }
 
 function assertValidTimezone(timezone: string): void {
@@ -521,8 +542,12 @@ function assertValidHour(name: string, hour: number): void {
 }
 
 function normalizeProviderId(value?: string | null): string {
-  const redacted = redactSecrets(value?.trim() || "unknown");
-  return redacted || "unknown";
+  const trimmed = value?.trim();
+  if (!trimmed) return "unknown";
+  if (PROVIDER_ID_SECRET_LIKE.test(trimmed)) return "[redacted-provider-id]";
+  const singleLine = trimmed.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!singleLine) return "unknown";
+  return singleLine.length > 96 ? `${singleLine.slice(0, 93)}...` : singleLine;
 }
 
 function isPeakHour(localHour: string, peakStartHour: number, peakEndHour: number): boolean {
@@ -548,9 +573,9 @@ function findWorstLocalHour(rows: ProviderThrottleHourlyBucket[]): string | unde
 
 function queueTimestampExpression(db: DatabaseSync): string {
   const columns = [
-    hasColumn(db, "review_queue_jobs", "finished_at") ? "finished_at" : undefined,
-    hasColumn(db, "review_queue_jobs", "updated_at") ? "updated_at" : undefined,
-    hasColumn(db, "review_queue_jobs", "started_at") ? "started_at" : undefined,
+    hasColumn(db, REVIEW_QUEUE_JOBS_TABLE, "finished_at") ? "finished_at" : undefined,
+    hasColumn(db, REVIEW_QUEUE_JOBS_TABLE, "updated_at") ? "updated_at" : undefined,
+    hasColumn(db, REVIEW_QUEUE_JOBS_TABLE, "started_at") ? "started_at" : undefined,
     "created_at"
   ].filter(Boolean);
   return `coalesce(${columns.join(", ")})`;
@@ -578,6 +603,9 @@ function hasTable(db: DatabaseSync, tableName: string): boolean {
 }
 
 function hasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  const rows = db.prepare(`pragma table_info(${tableName})`).all() as unknown as Array<{ name: string }>;
+  if (tableName !== REVIEW_QUEUE_JOBS_TABLE) {
+    throw new Error(`Unsupported table for column introspection: ${tableName}`);
+  }
+  const rows = db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
   return rows.some((row) => row.name === columnName);
 }
