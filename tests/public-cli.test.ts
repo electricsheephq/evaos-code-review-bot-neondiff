@@ -50,6 +50,12 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
+    expect(output.examples).toContain(
+      "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha \"$(gh pr view 123 --repo owner/repo --json headRefOid --jq .headRefOid)\""
+    );
+    expect(output.examples).not.toContain(
+      "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
+    );
   });
 
   it("prints command help without executing run-once, review-pr, or daemon paths", async () => {
@@ -524,6 +530,396 @@ describe("public NeonDiff CLI surface", () => {
       lastError: retiredError
     });
     store.close();
+  });
+
+  it("passes review-head-gate only for an exact head with a posted evaOS review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-pass-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "fb40fd1d340bb9896b2988b7913395df0b983c3d";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-1`
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "review-head-gate",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      healthState: "review_head_gate_ok",
+      decision: "passed",
+      repo,
+      pullNumber,
+      headSha,
+      processed: {
+        status: "posted",
+        event: "COMMENT"
+      }
+    });
+  });
+
+  it("fails review-head-gate for a final head the daemon never observed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-missing-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const previousHead = "8fef8d6abd0924d42b1d37d11911aed2587619cc";
+    const finalHead = "fb40fd1d340bb9896b2988b7913395df0b983c3d";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha: previousHead,
+      status: "posted",
+      event: "COMMENT"
+    });
+    store.close();
+
+    try {
+      await runCli([
+        "review-head-gate",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--pr",
+        String(pullNumber),
+        "--head-sha",
+        finalHead
+      ]);
+      throw new Error("review-head-gate unexpectedly passed");
+    } catch (error) {
+      const stdout = (error as { stdout: string }).stdout;
+      const output = JSON.parse(stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        healthState: "review_head_gate_blocked",
+        decision: "missing",
+        repo,
+        pullNumber,
+        headSha: finalHead,
+        queueJobs: [],
+        nextAction: expect.stringContaining("do not merge")
+      });
+      expect(output.gates[0]).toMatchObject({
+        name: "exact_head_has_recorded_nonblocking_evaos_review",
+        ok: false
+      });
+    }
+  });
+
+  it("fails review-head-gate for exact heads with evaOS requested changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-needs-fix-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-2`
+    });
+    store.close();
+
+    try {
+      await runCli([
+        "review-head-gate",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--pr",
+        String(pullNumber),
+        "--head-sha",
+        headSha
+      ]);
+      throw new Error("review-head-gate unexpectedly passed");
+    } catch (error) {
+      const output = JSON.parse((error as { stdout: string }).stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        decision: "needs_fix",
+        processed: {
+          status: "posted",
+          event: "REQUEST_CHANGES"
+        },
+        nextAction: expect.stringContaining("do not merge")
+      });
+    }
+  });
+
+  it("blocks review-head-gate when an exact-head re-review job is still active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-rereview-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-3`
+    });
+    store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base",
+      source: "manual_command",
+      priority: 0,
+      now: new Date("2099-01-01T00:00:00.000Z")
+    });
+    store.close();
+
+    try {
+      await runCli([
+        "review-head-gate",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--pr",
+        String(pullNumber),
+        "--head-sha",
+        headSha
+      ]);
+      throw new Error("review-head-gate unexpectedly passed");
+    } catch (error) {
+      const output = JSON.parse((error as { stdout: string }).stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        decision: "queued",
+        processed: {
+          status: "posted",
+          event: "COMMENT"
+        },
+        nextAction: expect.stringContaining("wait for evaOS review")
+      });
+    }
+  });
+
+  it("does not let older active queue residue block a newer posted exact-head review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-zombie-active-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base",
+      source: "manual_command",
+      priority: 0,
+      now: new Date("2020-01-01T00:00:00.000Z")
+    });
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-5`
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "review-head-gate",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      decision: "passed",
+      processed: {
+        status: "posted",
+        event: "COMMENT"
+      },
+      queueJobs: [
+        {
+          state: "queued"
+        }
+      ]
+    });
+  });
+
+  it("passes review-head-gate from terminal posted queue evidence when processed rows are absent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-queue-posted-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "cccccccccccccccccccccccccccccccccccccccc";
+    const reviewUrl = `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-4`;
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    const queueJob = store.enqueueReviewQueueJob({
+      repo,
+      pullNumber,
+      headSha,
+      baseSha: "base"
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "posted",
+      reviewUrl,
+      lastError: "reviewed"
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "review-head-gate",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      decision: "passed",
+      queueJobs: [
+        {
+          state: "posted",
+          reviewUrl
+        }
+      ]
+    });
+  });
+
+  it("blocks review-head-gate for readiness-only passes without review proof", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-readiness-proof-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "dddddddddddddddddddddddddddddddddddddddd";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordReviewReadiness({
+      repo,
+      pullNumber,
+      headSha,
+      state: "ready_for_human",
+      reason: "dry-run-ready"
+    });
+    store.close();
+
+    try {
+      await runCli([
+        "review-head-gate",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--pr",
+        String(pullNumber),
+        "--head-sha",
+        headSha
+      ]);
+      throw new Error("review-head-gate unexpectedly passed");
+    } catch (error) {
+      const output = JSON.parse((error as { stdout: string }).stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        decision: "blocked",
+        readiness: {
+          state: "ready_for_human"
+        },
+        nextAction: expect.stringContaining("resolve the blocked")
+      });
+    }
   });
 
   it("requires review-pr repos to be configured and enabled", async () => {
