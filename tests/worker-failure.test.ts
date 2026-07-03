@@ -1556,6 +1556,270 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("clears failed durable queue jobs when a live retry posts the review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-failed-queue-posted-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1234, "head-retry-posted");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "failed",
+      error: "ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: "ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+
+    const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1234#pullrequestreview-1";
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github: retryGithub(pull),
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => {
+        state.recordProcessed({
+          repo: "electricsheephq/WorldOS",
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl
+        });
+        return "reviewed";
+      }
+    });
+
+    expect(result.status).toBe("reviewed");
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl,
+      lastError: "reviewed"
+    });
+    state.close();
+  });
+
+  it("repairs failed durable queue jobs when the processed row is already posted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-posted-queue-repair-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewStatusComment: { enabled: true }
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const headSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const pull = pullSummary(1234, headSha);
+    const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1234#pullrequestreview-2";
+    const statusCalls: Array<{ marker: string; body: string }> = [];
+    const github = {
+      getPull: async () => pull,
+      canPostAsApp: () => true,
+      upsertIssueComment: async (input: { marker: string; body: string }) => {
+        statusCalls.push(input);
+        return { action: "updated" as const, id: 12345, html_url: "https://github.test/status-comment" };
+      }
+    } as unknown as GitHubApi;
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl
+    });
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: "ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => {
+        throw new Error("already posted retry repair should not rerun review");
+      }
+    });
+
+    expect(result.status).toBe("skipped_processed");
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl,
+      lastError: "retry_did_not_review=skipped_processed:posted"
+    });
+    expect(statusCalls).toHaveLength(1);
+    expect(statusCalls[0]?.marker).toBe(
+      `<!-- evaos-code-review-bot:review-status repo=electricsheephq/WorldOS pr=1234 sha=${headSha} -->`
+    );
+    expect(statusCalls[0]?.body).toContain("review-status-state status=completed");
+    expect(statusCalls[0]?.body).toContain(reviewUrl);
+    state.close();
+  });
+
+  it("posts retry status comments against the requested stale failed head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-stale-status-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewStatusComment: { enabled: true }
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const staleHeadSha = "1111111111111111111111111111111111111111";
+    const currentHeadSha = "2222222222222222222222222222222222222222";
+    const pull = pullSummary(1234, currentHeadSha);
+    const statusCalls: Array<{ marker: string; body: string }> = [];
+    const github = {
+      getPull: async () => pull,
+      canPostAsApp: () => true,
+      upsertIssueComment: async (input: { marker: string; body: string }) => {
+        statusCalls.push(input);
+        return { action: "updated" as const, id: 12345, html_url: "https://github.test/status-comment" };
+      }
+    } as unknown as GitHubApi;
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: staleHeadSha,
+      status: "failed",
+      error: "original timeout"
+    });
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: staleHeadSha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: "ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha: staleHeadSha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => {
+        throw new Error("stale retry must not rerun review");
+      }
+    });
+
+    expect(result.status).toBe("skipped_stale_head");
+    expect(statusCalls).toHaveLength(1);
+    expect(statusCalls[0]?.marker).toBe(
+      `<!-- evaos-code-review-bot:review-status repo=electricsheephq/WorldOS pr=1234 sha=${staleHeadSha} -->`
+    );
+    expect(statusCalls[0]?.marker).not.toContain(currentHeadSha);
+    expect(statusCalls[0]?.body).toContain("review-status-state status=stale_head");
+    state.close();
+  });
+
+  it("updates retry status comments to provider_deferred when capacity blocks a retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-capacity-status-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewStatusComment: { enabled: true }
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const headSha = "3333333333333333333333333333333333333333";
+    const pull = pullSummary(1234, headSha);
+    const statusCalls: Array<{ marker: string; body: string }> = [];
+    const github = {
+      getPull: async () => pull,
+      canPostAsApp: () => true,
+      upsertIssueComment: async (input: { marker: string; body: string }) => {
+        statusCalls.push(input);
+        return { action: "updated" as const, id: 12345, html_url: "https://github.test/status-comment" };
+      }
+    } as unknown as GitHubApi;
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha,
+      status: "failed",
+      error: "original timeout"
+    });
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha,
+      baseSha: pull.base.sha
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "failed",
+      lastError: "ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+
+    const result = await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget: new ReviewRunBudget(1),
+      options: {
+        repo: "electricsheephq/WorldOS",
+        pullNumber: pull.number,
+        headSha,
+        dryRun: false,
+        useZCode: false
+      },
+      reviewPullImpl: async () => "skipped_capacity"
+    });
+
+    expect(result.status).toBe("skipped_capacity");
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "queued",
+      lastError: "retry_did_not_review=skipped_capacity"
+    });
+    expect(statusCalls).toHaveLength(1);
+    expect(statusCalls[0]?.marker).toBe(
+      `<!-- evaos-code-review-bot:review-status repo=electricsheephq/WorldOS pr=1234 sha=${headSha} -->`
+    );
+    expect(statusCalls[0]?.body).toContain("review-status-state status=provider_deferred");
+    state.close();
+  });
+
   it("keeps dry-run processed retry rows queued instead of marking them posted", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-race-dry-run-"));
     roots.push(root);
