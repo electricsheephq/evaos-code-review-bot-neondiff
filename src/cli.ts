@@ -47,6 +47,7 @@ import {
   type OperatorQueueSnapshot
 } from "./operator-cli.js";
 import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
+import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
@@ -196,6 +197,28 @@ async function main(): Promise<void> {
       failedGates: failedGates(status.gates)
     }, null, 2));
     if (!status.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "review-head-gate") {
+    if (!args.repo) throw new Error("--repo is required for review-head-gate");
+    if (!args.pr) throw new Error("--pr is required for review-head-gate");
+    const headSha = args["head-sha"] ?? args["current-head"];
+    if (!headSha) throw new Error("--head-sha is required for review-head-gate");
+    const config = loadConfig(args.config);
+    const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
+    try {
+      const result = buildReviewHeadGate({
+        state,
+        repo: args.repo,
+        pullNumber: parsePositiveInteger(args.pr, "--pr"),
+        headSha: parseSingleArg(headSha, "--head-sha")
+      });
+      console.log(stringifyRedactedJson(result));
+      if (!result.ok) process.exitCode = 1;
+    } finally {
+      state.close();
+    }
     return;
   }
 
@@ -2042,6 +2065,7 @@ function buildHelp(command?: string) {
         "queue",
         "dashboard",
         "budget-status",
+        "review-head-gate",
         "coverage",
         "cooldowns",
         "why"
@@ -2049,6 +2073,7 @@ function buildHelp(command?: string) {
       existing: [
         "doctor",
         "release-status",
+        "review-head-gate",
         "coverage-audit",
         "build-memory-packet",
         "build-gitnexus-context-packet",
@@ -2083,6 +2108,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts status --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --human",
+      "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD",
       "npx tsx src/cli.ts agents --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json --state provider_deferred",

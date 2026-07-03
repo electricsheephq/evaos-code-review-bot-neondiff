@@ -526,6 +526,168 @@ describe("public NeonDiff CLI surface", () => {
     store.close();
   });
 
+  it("passes review-head-gate only for an exact head with a posted evaOS review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-pass-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "fb40fd1d340bb9896b2988b7913395df0b983c3d";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-1`
+    });
+    store.close();
+
+    const { stdout } = await runCli([
+      "review-head-gate",
+      "--config",
+      configPath,
+      "--repo",
+      repo,
+      "--pr",
+      String(pullNumber),
+      "--head-sha",
+      headSha
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      healthState: "review_head_gate_ok",
+      decision: "passed",
+      repo,
+      pullNumber,
+      headSha,
+      processed: {
+        status: "posted",
+        event: "COMMENT"
+      }
+    });
+  });
+
+  it("fails review-head-gate for a final head the daemon never observed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-missing-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const previousHead = "8fef8d6abd0924d42b1d37d11911aed2587619cc";
+    const finalHead = "fb40fd1d340bb9896b2988b7913395df0b983c3d";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha: previousHead,
+      status: "posted",
+      event: "COMMENT"
+    });
+    store.close();
+
+    try {
+      await runCli([
+        "review-head-gate",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--pr",
+        String(pullNumber),
+        "--head-sha",
+        finalHead
+      ]);
+      throw new Error("review-head-gate unexpectedly passed");
+    } catch (error) {
+      const stdout = (error as { stdout: string }).stdout;
+      const output = JSON.parse(stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        healthState: "review_head_gate_blocked",
+        decision: "missing",
+        repo,
+        pullNumber,
+        headSha: finalHead,
+        queueJobs: [],
+        nextAction: expect.stringContaining("do not merge")
+      });
+      expect(output.gates[0]).toMatchObject({
+        name: "exact_head_has_terminal_evaos_review",
+        ok: false
+      });
+    }
+  });
+
+  it("fails review-head-gate for exact heads with evaOS requested changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-head-gate-needs-fix-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    const repo = "electricsheephq/evaos-code-review-bot";
+    const pullNumber = 181;
+    const headSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [repo],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    store.recordProcessed({
+      repo,
+      pullNumber,
+      headSha,
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: `https://github.com/${repo}/pull/${pullNumber}#pullrequestreview-2`
+    });
+    store.close();
+
+    try {
+      await runCli([
+        "review-head-gate",
+        "--config",
+        configPath,
+        "--repo",
+        repo,
+        "--pr",
+        String(pullNumber),
+        "--head-sha",
+        headSha
+      ]);
+      throw new Error("review-head-gate unexpectedly passed");
+    } catch (error) {
+      const output = JSON.parse((error as { stdout: string }).stdout);
+      expect(output).toMatchObject({
+        ok: false,
+        decision: "needs_fix",
+        processed: {
+          status: "posted",
+          event: "REQUEST_CHANGES"
+        },
+        nextAction: expect.stringContaining("do not merge")
+      });
+    }
+  });
+
   it("requires review-pr repos to be configured and enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-pr-"));
     roots.push(root);

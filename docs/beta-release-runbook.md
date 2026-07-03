@@ -93,6 +93,21 @@ banner to stdout.
 
 - GitHub PR merged to `main` with checks green and no current-head actionable
   review threads.
+- For self-repo or release-critical PRs, run the exact-head evaOS gate before
+  merge. It must pass for the current PR head:
+
+```bash
+CURRENT_HEAD="$(gh pr view <pr-number> --repo electricsheephq/evaos-code-review-bot --json headRefOid --jq .headRefOid)"
+npx tsx src/cli.ts review-head-gate \
+  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --repo electricsheephq/evaos-code-review-bot \
+  --pr <pr-number> \
+  --head-sha "$CURRENT_HEAD"
+```
+
+  A green `coverage-audit` does not replace this gate: coverage only checks
+  currently open eligible heads, so a final head pushed and merged between
+  daemon cycles can otherwise leave no terminal evaOS marker for agents.
 - Release checkout is clean and exactly at the intended source SHA.
 - `npm test` and `npm run build` pass from the release checkout.
 - `release:status` records exact source SHA, branch, config path, launchd job,
