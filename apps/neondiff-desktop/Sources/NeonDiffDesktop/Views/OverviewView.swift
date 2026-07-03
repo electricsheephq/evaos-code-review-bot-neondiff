@@ -3,11 +3,12 @@ import NeonDiffDesktopCore
 
 struct OverviewView: View {
     @ObservedObject var model: NeonDiffDesktopModel
+    private let statusColumns = [GridItem(.adaptive(minimum: 160), spacing: 12)]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 12) {
+                LazyVGrid(columns: statusColumns, alignment: .leading, spacing: 12) {
                     StatusTile(title: "Runtime", value: model.status.healthState, systemImage: "bolt.horizontal.circle")
                     StatusTile(title: "Repos", value: "\(model.status.monitoredRepos.count)", systemImage: "folder")
                     StatusTile(title: "Keys", value: model.providers.providerKeyStored ? "stored" : "missing", systemImage: "key")
@@ -20,30 +21,35 @@ struct OverviewView: View {
                     model.configInspectCommand
                 ], copy: model.copyCommand)
 
-                HStack {
-                    Button("Refresh") { model.refreshStatus() }
-                    Button("Load Config") { model.inspectConfig() }
-                    Button("Preview Start") { model.previewStartDaemon() }
-                    Button("Preview Stop") { model.previewStopDaemon() }
+                HStack(spacing: 10) {
+                    Button { model.refreshStatus() } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    Button { model.inspectConfig() } label: {
+                        Label("Load Config", systemImage: "doc.text.magnifyingglass")
+                    }
+                    Button { model.previewStartDaemon() } label: {
+                        Label("Preview Start", systemImage: "play.circle")
+                    }
+                    Button { model.previewStopDaemon() } label: {
+                        Label("Preview Stop", systemImage: "stop.circle")
+                    }
                 }
 
                 if let lastError = model.lastError, !lastError.isEmpty {
                     Text(lastError)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(NeonDiffTheme.warning)
                         .font(.callout)
+                        .operatorPanel()
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Last Command")
-                        .font(.headline)
-                    Text(model.lastCommandLine)
-                        .font(.system(.callout, design: .monospaced))
-                        .textSelection(.enabled)
-                        .foregroundStyle(.secondary)
+                OperatorSection("Last Command") {
+                    OperatorCommandText(text: model.lastCommandLine, lineLimit: 4)
                 }
             }
             .padding(24)
         }
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -55,15 +61,15 @@ private struct StatusTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(title, systemImage: systemImage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(NeonDiffTheme.badgeFont)
+                .foregroundStyle(NeonDiffTheme.textSecondary)
             Text(value)
-                .font(.title3.weight(.semibold))
+                .font(.system(.title3, design: .monospaced).weight(.black))
+                .foregroundStyle(NeonDiffTheme.statusColor(value))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .operatorPanel(active: true)
     }
 }

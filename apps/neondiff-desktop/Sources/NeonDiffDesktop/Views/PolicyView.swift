@@ -7,15 +7,17 @@ struct PolicyView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Review Policy Defaults")
-                    .font(.title2.weight(.semibold))
-
-                VStack(alignment: .leading, spacing: 8) {
+                OperatorSection("Review Policy Defaults") {
                     Label("No direct review posting from desktop UI", systemImage: "checkmark.shield")
                     Label("Daemon duplicate, stale-head, secret, and inline-coordinate gates stay authoritative", systemImage: "checkmark.shield")
                     Label("Config writes use `config patch` with dry-run preview first", systemImage: "checkmark.shield")
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(NeonDiffTheme.textSecondary)
+
+                OperatorSection("Proof Boundary") {
+                    Text("This desktop shell previews and copies operator-safe commands. Runtime gates, live review posting, signing, updater, and release claims remain outside this MVP.")
+                        .operatorBodyText()
+                }
 
                 CommandPanel(commands: [
                     model.configInspectCommand,
@@ -24,6 +26,7 @@ struct PolicyView: View {
             }
             .padding(24)
         }
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -34,17 +37,15 @@ struct CommandPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("CLI Equivalents")
-                .font(.headline)
+                .font(NeonDiffTheme.headlineFont)
+                .foregroundStyle(NeonDiffTheme.accentSoft)
             ForEach(commands) { command in
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(command.title)
                             .font(.subheadline.weight(.semibold))
-                        Text(command.commandLine)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
+                            .foregroundStyle(NeonDiffTheme.textPrimary)
+                        OperatorCommandText(text: command.commandLine)
                     }
                     Spacer()
                     Button {
@@ -54,8 +55,7 @@ struct CommandPanel: View {
                     }
                     .help("Copy command")
                 }
-                .padding(10)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .operatorPanel(padding: 10)
             }
         }
     }
