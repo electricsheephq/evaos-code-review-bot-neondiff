@@ -358,8 +358,11 @@ export function buildOperatorStatus(input: {
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const failedRows = input.release.database.errorCount;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
-  const retryableProviderDeferredJobs = durableQueue?.summary.retryableProviderDeferred ?? 0;
   const budget = input.release.budget;
+  const retryableProviderDeferredJobs = actionableProviderDeferredJobs(
+    budget,
+    durableQueue?.summary.retryableProviderDeferred ?? 0
+  );
   const issueEnrichment = input.issueEnrichment;
   const issueEnrichmentRuntime = input.issueEnrichmentRuntime;
   const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
@@ -398,7 +401,7 @@ export function buildOperatorStatus(input: {
     {
       name: "durable_queue_no_retryable_provider_deferred_jobs",
       ok: retryableProviderDeferredJobs === 0,
-      detail: `${retryableProviderDeferredJobs} retryable provider-deferred durable queue job(s)`
+      detail: describeActionableProviderDeferredJobs(budget, retryableProviderDeferredJobs)
     },
     ...(issueEnrichment
       ? [{
@@ -514,12 +517,15 @@ export function buildRuntimeInventory(input: {
     input.release.database.retryableExpiredProviderCooldownCount ??
     Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
-  const retryableProviderDeferredJobs = durableQueue?.summary.retryableProviderDeferred ?? 0;
   const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
   const readFailures = queue?.summary.readFailures ?? 0;
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
   const budget = input.release.budget;
+  const retryableProviderDeferredJobs = actionableProviderDeferredJobs(
+    budget,
+    durableQueue?.summary.retryableProviderDeferred ?? 0
+  );
   const issueEnrichment = input.issueEnrichment;
   const issueEnrichmentRuntime = input.issueEnrichmentRuntime;
   const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
@@ -541,7 +547,7 @@ export function buildRuntimeInventory(input: {
     {
       name: "runtime_no_retryable_provider_deferred_jobs",
       ok: retryableProviderDeferredJobs === 0,
-      detail: `${retryableProviderDeferredJobs} retryable provider-deferred durable queue job(s)`
+      detail: describeActionableProviderDeferredJobs(budget, retryableProviderDeferredJobs)
     },
     {
       name: "runtime_pending_heads_covered",
@@ -1549,6 +1555,33 @@ function isRetryableQueueJob(job: ReviewQueueJobRecord, now: Date): boolean {
   if (!job.nextEligibleAt) return true;
   const nextEligibleAtMs = Date.parse(job.nextEligibleAt);
   return !Number.isFinite(nextEligibleAtMs) || nextEligibleAtMs <= now.getTime();
+}
+
+function actionableProviderDeferredJobs(
+  budget: ReviewBudgetStatus | undefined,
+  fallbackRetryableProviderDeferred: number
+): number {
+  return budget?.providerDeferred.readyToRetry ?? fallbackRetryableProviderDeferred;
+}
+
+function describeActionableProviderDeferredJobs(
+  budget: ReviewBudgetStatus | undefined,
+  actionableCount: number
+): string {
+  if (!budget) return `${actionableCount} retryable provider-deferred durable queue job(s)`;
+  const waitingCapacity =
+    budget.providerDeferred.waitingProviderCapacity +
+    budget.providerDeferred.waitingOrgCapacity +
+    budget.providerDeferred.waitingRepoCapacity +
+    budget.providerDeferred.waitingManualReserve +
+    budget.providerDeferred.waitingLeaseLimit;
+  return (
+    `${actionableCount} ready-to-retry provider-deferred durable queue job(s)` +
+    `; provider_deferred total=${budget.providerDeferred.total}` +
+    ` retryable=${budget.providerDeferred.retryable}` +
+    ` waiting_cooldown=${budget.providerDeferred.waitingCooldown}` +
+    ` waiting_capacity=${waitingCapacity}`
+  );
 }
 
 function emptyIssueEnrichmentRuntime(checkedAt: string): OperatorIssueEnrichmentRuntime {

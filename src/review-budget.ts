@@ -34,6 +34,8 @@ export interface ReviewBudgetCandidate {
   headSha: string;
   providerId: string;
   priority: number;
+  state: ReviewQueueJobRecord["state"];
+  nextEligibleAt?: string;
 }
 
 export interface ReviewBudgetCapacity {
@@ -77,6 +79,17 @@ export interface ReviewBudgetStatus {
     background: number;
     providerDeferred: number;
     retryableProviderDeferred: number;
+  };
+  providerDeferred: {
+    total: number;
+    retryable: number;
+    readyToRetry: number;
+    waitingCooldown: number;
+    waitingProviderCapacity: number;
+    waitingOrgCapacity: number;
+    waitingRepoCapacity: number;
+    waitingManualReserve: number;
+    waitingLeaseLimit: number;
   };
   manualReserve: {
     configured: number;
@@ -206,6 +219,9 @@ export function buildReviewBudgetStatus(input: {
   for (const entry of delayed) {
     delayedByReason[entry.reason] = (delayedByReason[entry.reason] ?? 0) + 1;
   }
+  const providerDeferredJobs = queued.filter((job) => job.state === "provider_deferred");
+  const providerDeferredDelayed = delayed.filter((job) => job.state === "provider_deferred");
+  const providerDeferredByReason = countBy(providerDeferredDelayed, (job) => job.reason);
   const returnedWouldLease = includeDetails ? applyDetailLimit(wouldLease, detailLimit) : [];
   const returnedDelayed = includeDetails ? applyDetailLimit(delayed, detailLimit) : [];
   const detailsTruncated =
@@ -245,10 +261,19 @@ export function buildReviewBudgetStatus(input: {
       total: queued.length,
       manual: manualQueued,
       background: queued.filter((job) => job.lane === "background").length,
-      providerDeferred: queued.filter((job) => job.state === "provider_deferred").length,
-      retryableProviderDeferred: queued.filter((job) =>
-        job.state === "provider_deferred" && isProviderDeferredEligible(job, now)
-      ).length
+      providerDeferred: providerDeferredJobs.length,
+      retryableProviderDeferred: providerDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length
+    },
+    providerDeferred: {
+      total: providerDeferredJobs.length,
+      retryable: providerDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length,
+      readyToRetry: wouldLease.filter((job) => job.state === "provider_deferred").length,
+      waitingCooldown: providerDeferredByReason.get("provider_cooldown") ?? 0,
+      waitingProviderCapacity: providerDeferredByReason.get("provider_capacity") ?? 0,
+      waitingOrgCapacity: providerDeferredByReason.get("org_capacity") ?? 0,
+      waitingRepoCapacity: providerDeferredByReason.get("repo_capacity") ?? 0,
+      waitingManualReserve: providerDeferredByReason.get("manual_reserve") ?? 0,
+      waitingLeaseLimit: providerDeferredByReason.get("lease_limit") ?? 0
     },
     manualReserve: {
       configured: scheduler.manualCommandReserve,
@@ -367,7 +392,9 @@ function candidate(job: ReviewQueueJobRecord): ReviewBudgetCandidate {
     pullNumber: job.pullNumber,
     headSha: job.headSha,
     providerId: providerKey(job),
-    priority: job.priority
+    priority: job.priority,
+    state: job.state,
+    ...(job.nextEligibleAt ? { nextEligibleAt: job.nextEligibleAt } : {})
   };
 }
 

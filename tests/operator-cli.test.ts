@@ -98,6 +98,73 @@ describe("operator CLI summaries", () => {
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
 
+  it("uses review budget readiness instead of raw provider-deferred retry counts for gates", () => {
+    const budget: ReviewBudgetStatus = {
+      ...reviewBudgetStatus(),
+      queued: {
+        total: 1,
+        manual: 0,
+        background: 1,
+        providerDeferred: 1,
+        retryableProviderDeferred: 1
+      },
+      providerDeferred: {
+        total: 1,
+        retryable: 1,
+        readyToRetry: 0,
+        waitingCooldown: 0,
+        waitingProviderCapacity: 1,
+        waitingOrgCapacity: 0,
+        waitingRepoCapacity: 0,
+        waitingManualReserve: 0,
+        waitingLeaseLimit: 0
+      }
+    };
+    const durableQueue = durableQueueSnapshot({
+      ok: false,
+      summary: {
+        total: 2,
+        queued: 0,
+        running: 1,
+        providerDeferred: 1,
+        retryableProviderDeferred: 1,
+        failed: 0
+      }
+    });
+
+    const status = buildOperatorStatus({
+      release: releaseStatus({ ok: true, budget }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue,
+      checkedAt: "2026-07-01T00:30:00.000Z"
+    });
+
+    expect(status.gates).toContainEqual({
+      name: "durable_queue_no_retryable_provider_deferred_jobs",
+      ok: true,
+      detail: "0 ready-to-retry provider-deferred durable queue job(s); provider_deferred total=1 retryable=1 waiting_cooldown=0 waiting_capacity=1"
+    });
+    expect(status.recommendedActions).not.toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
+
+    const inventory = buildRuntimeInventory({
+      release: releaseStatus({ ok: true, budget }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue,
+      checkedAt: "2026-07-01T00:30:00.000Z"
+    });
+
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_no_retryable_provider_deferred_jobs",
+      ok: true,
+      detail: "0 ready-to-retry provider-deferred durable queue job(s); provider_deferred total=1 retryable=1 waiting_cooldown=0 waiting_capacity=1"
+    });
+    expect(inventory.recommendedActions).not.toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
+  });
+
   it("surfaces issue enrichment live-post blockers in operator status", () => {
     const issueEnrichment: IssueEnrichmentStatus = {
       ok: false,
@@ -1439,6 +1506,17 @@ function reviewBudgetStatus(): ReviewBudgetStatus {
       providerDeferred: 0,
       retryableProviderDeferred: 0
     },
+    providerDeferred: {
+      total: 0,
+      retryable: 0,
+      readyToRetry: 0,
+      waitingCooldown: 0,
+      waitingProviderCapacity: 0,
+      waitingOrgCapacity: 0,
+      waitingRepoCapacity: 0,
+      waitingManualReserve: 0,
+      waitingLeaseLimit: 0
+    },
     manualReserve: {
       configured: 1,
       activeManual: 0,
@@ -1467,7 +1545,8 @@ function reviewBudgetStatus(): ReviewBudgetStatus {
       pullNumber: 7,
       headSha: "head-manual",
       providerId: "zai",
-      priority: 40
+      priority: 40,
+      state: "queued"
     }],
     delayed: [{
       reason: "manual_reserve",
