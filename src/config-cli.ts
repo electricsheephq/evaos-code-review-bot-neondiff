@@ -32,6 +32,7 @@ const REPO_PROFILE_DESKTOP_SAFE_FIELDS = [
 ] as const satisfies readonly (keyof RepoProfileConfig)[];
 
 const REPO_PROFILE_DESKTOP_SAFE_FIELD_PATTERN = REPO_PROFILE_DESKTOP_SAFE_FIELDS.join("|");
+const CONFIG_NAME_SEGMENT_PATTERN = "[A-Za-z0-9_.-]+";
 
 const EXACT_PATCH_PATHS = new Set([
   "pilotRepos",
@@ -50,10 +51,10 @@ const EXACT_PATCH_PATHS = new Set([
 ]);
 
 const REPO_PROFILE_FIELD_PATTERN =
-  new RegExp(`^repoProfiles\\.(?:repos\\.[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+|orgFallbacks\\.[A-Za-z0-9_.-]+)\\.(?:${REPO_PROFILE_DESKTOP_SAFE_FIELD_PATTERN})$`);
+  new RegExp(`^repoProfiles\\.(?:repos\\.(${CONFIG_NAME_SEGMENT_PATTERN}\\/${CONFIG_NAME_SEGMENT_PATTERN})|orgFallbacks\\.(${CONFIG_NAME_SEGMENT_PATTERN}))\\.(?:${REPO_PROFILE_DESKTOP_SAFE_FIELD_PATTERN})$`);
 
 const REPO_PROFILE_NESTED_PATTERN =
-  /^repoProfiles\.repos\.[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.(?:autoReview\.(?:baseBranches|labels)|preMergeChecks\.(?:title|description|linkedIssue|testEvidence|docs|docstrings)\.(?:mode|instructions|threshold)|finishingTouches\.(?:docs|docstrings|unitTests|simplifySuggestion|changelogDraft|riskExplanation|reviewReady|stackedPr)\.(?:enabled|instructions))$/;
+  new RegExp(`^repoProfiles\\.repos\\.(${CONFIG_NAME_SEGMENT_PATTERN}\\/${CONFIG_NAME_SEGMENT_PATTERN})\\.(?:autoReview\\.(?:baseBranches|labels)|preMergeChecks\\.(?:title|description|linkedIssue|testEvidence|docs|docstrings)\\.(?:mode|instructions|threshold)|finishingTouches\\.(?:docs|docstrings|unitTests|simplifySuggestion|changelogDraft|riskExplanation|reviewReady|stackedPr)\\.(?:enabled|instructions))$`);
 
 export interface ConfigInspectResult {
   ok: true;
@@ -129,6 +130,10 @@ export function patchConfigForDesktop(input: {
   if (!isRecord(patch)) {
     return failedPatch(input, configPath, inputPath, "patch input must contain a JSON object");
   }
+  const unsupportedKey = findUnsupportedDottedPatchKey(patch);
+  if (unsupportedKey) {
+    return failedPatch(input, configPath, inputPath, unsupportedDottedKeyError(unsupportedKey));
+  }
   const patchText = JSON.stringify(patch);
   if (containsSecretLikeText(patchText)) {
     return failedPatch(input, configPath, inputPath, "patch input contains secret-like text; store provider and license keys in Keychain instead");
@@ -138,9 +143,9 @@ export function patchConfigForDesktop(input: {
   if (flattened.length === 0) {
     return failedPatch(input, configPath, inputPath, "patch input did not contain any leaf settings");
   }
-  const disallowed = flattened.map((entry) => entry.path.join(".")).filter((path) => !isPatchPathAllowed(path));
+  const disallowed = flattened.map((entry) => entry.path).filter((path) => !isPatchPathAllowed(path.join(".")));
   if (disallowed.length > 0) {
-    return failedPatch(input, configPath, inputPath, `patch contains non-desktop-safe path(s): ${disallowed.join(", ")}`);
+    return failedPatch(input, configPath, inputPath, disallowedPatchPathError(disallowed));
   }
 
   const next = structuredClone(current) as Record<string, unknown>;
@@ -211,6 +216,7 @@ function failedPatch(input: { dryRun: boolean }, configPath: string, inputPath: 
 }
 
 function flattenPatch(value: unknown, prefix: string[] = []): FlattenedPatch[] {
+  if (prefix.length === 0 && !isRecord(value)) return [];
   if (!isRecord(value)) return [{ path: prefix, value }];
   const entries: FlattenedPatch[] = [];
   for (const [key, entry] of Object.entries(value)) {
@@ -224,7 +230,15 @@ function flattenPatch(value: unknown, prefix: string[] = []): FlattenedPatch[] {
 }
 
 function isPatchPathAllowed(path: string): boolean {
-  return EXACT_PATCH_PATHS.has(path) || REPO_PROFILE_FIELD_PATTERN.test(path) || REPO_PROFILE_NESTED_PATTERN.test(path);
+  if (EXACT_PATCH_PATHS.has(path)) return true;
+  const fieldMatch = path.match(REPO_PROFILE_FIELD_PATTERN);
+  if (fieldMatch) {
+    const repo = fieldMatch[1];
+    const owner = fieldMatch[2];
+    return repo ? isConfigRepoName(repo) : Boolean(owner && isConfigNameSegment(owner));
+  }
+  const nestedMatch = path.match(REPO_PROFILE_NESTED_PATTERN);
+  return Boolean(nestedMatch?.[1] && isConfigRepoName(nestedMatch[1]));
 }
 
 function setNestedValue(target: Record<string, unknown>, path: string[], value: unknown): void {
@@ -300,13 +314,56 @@ function writeConfigAtomic(configPath: string, value: unknown): void {
 
 function redactSecretValue(value: unknown): unknown {
   if (value === undefined || value === null || value === "") return value;
-  if (Array.isArray(value)) return value.map((entry) => redactSecretValue(entry));
-  if (isRecord(value)) {
-    return Object.fromEntries(Object.keys(value).map((key) => [key, "[redacted-secret]"]));
-  }
+  if (Array.isArray(value) || isRecord(value)) return "[redacted-secret]";
   return "[redacted-secret]";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function findUnsupportedDottedPatchKey(value: unknown, prefix: string[] = []): string[] | undefined {
+  if (!isRecord(value)) return undefined;
+  for (const [key, entry] of Object.entries(value)) {
+    const keyPath = [...prefix, key];
+    if (key.includes(".") && !isProfileIdentifierSegment(prefix)) {
+      return keyPath;
+    }
+    const nested = findUnsupportedDottedPatchKey(entry, keyPath);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function isProfileIdentifierSegment(prefix: string[]): boolean {
+  return prefix.length === 2 && prefix[0] === "repoProfiles" && (prefix[1] === "repos" || prefix[1] === "orgFallbacks");
+}
+
+function unsupportedDottedKeyError(path: string[]): string {
+  const rendered = renderPatchPath(path);
+  if (containsSecretLikeText(rendered)) {
+    return "patch contains unsupported dotted key segment; one or more path names looked sensitive";
+  }
+  return `patch contains unsupported dotted key segment: ${redactSecrets(rendered)}`;
+}
+
+function disallowedPatchPathError(paths: string[][]): string {
+  const rendered = paths.map(renderPatchPath);
+  if (rendered.some((path) => containsSecretLikeText(path))) {
+    return "patch contains non-desktop-safe path(s); one or more path names looked sensitive";
+  }
+  return `patch contains non-desktop-safe path(s): ${rendered.map(redactSecrets).join(", ")}`;
+}
+
+function renderPatchPath(path: string[]): string {
+  return path.length === 0 ? "<root>" : path.join(".");
+}
+
+function isConfigRepoName(value: string): boolean {
+  const [owner, repo, extra] = value.split("/");
+  return extra === undefined && Boolean(owner && repo && isConfigNameSegment(owner) && isConfigNameSegment(repo));
+}
+
+function isConfigNameSegment(value: string): boolean {
+  return value !== "." && value !== ".." && /^[A-Za-z0-9_.-]+$/.test(value);
 }

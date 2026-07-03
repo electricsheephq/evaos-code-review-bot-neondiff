@@ -177,6 +177,7 @@
     }
   },
   "zcode": {
+    "_desktopPathComment": "Developer-machine defaults. Override cliPath and appConfigPath for any non-author workstation or packaged desktop install.",
     "cliPath": "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
     "appConfigPath": "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
     "model": "GLM-5.2",

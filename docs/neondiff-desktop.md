@@ -33,3 +33,5 @@ neondiff daemon stop --config config.local.json --launchd-label com.example.neon
 ```
 
 `config patch` writes only whitelisted non-secret fields, defaults to dry-run, and requires `--confirm true` for live writes.
+
+The ZCode defaults in `config.example.json` are developer-machine paths. On any non-author workstation or packaged desktop install, set explicit local values for `zcode.cliPath`, `zcode.appConfigPath`, and `zcode.model` before relying on daemon controls.
