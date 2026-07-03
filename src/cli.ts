@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
+import { collectProviderThrottleReport } from "./provider-throttle-report.js";
 import { runDaemonCycle } from "./daemon.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from "node:path";
@@ -1351,6 +1352,19 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "provider-throttle-report") {
+    const config = loadConfig(args.config);
+    const report = collectProviderThrottleReport({
+      statePath: args["state-path"] ?? config.statePath,
+      since: args.since ? parseSingleArg(args.since, "--since") : undefined,
+      timezone: args.timezone ? parseSingleArg(args.timezone, "--timezone") : undefined,
+      peakStartHour: args["peak-start-hour"] ? parseHourArg(args["peak-start-hour"], "--peak-start-hour") : undefined,
+      peakEndHour: args["peak-end-hour"] ? parseHourArg(args["peak-end-hour"], "--peak-end-hour") : undefined
+    });
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+
   if (command === "retry-provider-cooldowns") {
     if (args["dry-run"] !== "true" && args["dry-run"] !== "false") {
       throw new Error("retry-provider-cooldowns requires explicit --dry-run true or --dry-run false");
@@ -2085,6 +2099,7 @@ function buildHelp(command?: string) {
         "clear-review-queue-leases",
         "finishing-touch-dry-run",
         "provider-cooldowns",
+        "provider-throttle-report",
         "retry-provider-cooldowns",
         "retry-failed",
         "retire-failed",
@@ -2116,6 +2131,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts dashboard --config /path/to/live.json --status blocked_on_proof",
       "npx tsx src/cli.ts dashboard --config /path/to/live.json --human",
       "npx tsx src/cli.ts budget-status --config /path/to/live.json",
+      "npx tsx src/cli.ts provider-throttle-report --config /path/to/live.json --since 7d --timezone Asia/Singapore",
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
       "npx tsx src/cli.ts build-memory-packet --config /path/to/live.json --repo owner/repo --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-gitnexus-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
@@ -2166,6 +2182,12 @@ function setParsedArg(parsed: ParsedArgs, key: string, value: string): void {
 function parseNonNegativeInteger(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
+  return parsed;
+}
+
+function parseHourArg(value: string | string[], label: string): number {
+  const parsed = Number(parseSingleArg(value, label));
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 23) throw new Error(`${label} must be an hour from 0 to 23`);
   return parsed;
 }
 

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { ReviewStateStore } from "../src/state.js";
@@ -50,6 +51,10 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
+    expect(output.commands.existing).toContain("provider-throttle-report");
+    expect(output.examples).toContain(
+      "npx tsx src/cli.ts provider-throttle-report --config /path/to/live.json --since 7d --timezone Asia/Singapore"
+    );
     expect(output.examples).toContain(
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha \"$(gh pr view 123 --repo owner/repo --json headRefOid --jq .headRefOid)\""
     );
@@ -1713,6 +1718,55 @@ describe("public NeonDiff CLI surface", () => {
       );
       expect(output.recommendedActions.some((action: string) => action.includes("retry-provider-cooldowns"))).toBe(false);
     }
+  });
+
+  it("prints provider throttle telemetry without raw provider payloads", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-throttle-report-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      db.prepare(
+        `insert into processed_reviews (repo, pull_number, head_sha, status, error, created_at)
+         values ('owner/repo', 1, 'head-provider-overload', 'failed', ?, '2026-07-01T08:00:00.000Z')`
+      ).run("ProviderBusinessError: [1305][temporarily overloaded] providerRequestId: 'secret-request-id'");
+    } finally {
+      db.close();
+    }
+
+    const { stdout } = await runCli([
+      "provider-throttle-report",
+      "--config",
+      configPath,
+      "--since",
+      "7d",
+      "--timezone",
+      "Asia/Singapore",
+      "--peak-start-hour",
+      "14",
+      "--peak-end-hour",
+      "18"
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      recommendedPolicy: "measure_only",
+      summary: {
+        providerErrors: 1,
+        overloaded: 1
+      },
+      codes: [{ code: "1305", count: 1 }]
+    });
+    expect(stdout).not.toContain("secret-request-id");
   });
 
   it("prints launchd daemon control plans in dry-run mode by default", async () => {
