@@ -21,6 +21,26 @@ npm run daemon -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/can
 
 When installed as a LaunchAgent, write stdout/stderr to `~/Library/Logs/evaos-code-review-bot/`. On this Mac, launchd failed with `EX_CONFIG` when those paths pointed directly at the Lexar volume; copy the local launch logs into the Lexar evidence packet after each proof window.
 
+Set `NODE_OPTIONS=--use-system-ca` in the LaunchAgent environment. Without this
+flag, launchd-started Node processes may fail GitHub App installation reads with
+`unable to verify the first certificate` even while the same CLI commands work
+from an interactive shell. `release:status` reports the loaded launchd
+environment and fails when launchd explicitly omits this option.
+
+Minimum LaunchAgent environment block:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>EVAOS_REVIEW_BOT_APP_ID</key>
+  <string>&lt;github-app-id&gt;</string>
+  <key>EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH</key>
+  <string>/absolute/path/to/evaos-code-review-bot.private-key.pem</string>
+  <key>NODE_OPTIONS</key>
+  <string>--use-system-ca</string>
+</dict>
+```
+
 Only switch to `--dry-run false` after:
 
 - current-head duplicate reruns post nothing,
