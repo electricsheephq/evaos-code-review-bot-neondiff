@@ -92,7 +92,7 @@ async function main(): Promise<void> {
   if (command === "config") {
     const configAction = args._[1];
     if (configAction === "inspect") {
-      const result = inspectConfigForDesktop(args.config);
+      const result = inspectConfigForDesktop(args.config ? parseSingleArg(args.config, "--config") : undefined);
       console.log(JSON.stringify(result, null, 2));
       return;
     }

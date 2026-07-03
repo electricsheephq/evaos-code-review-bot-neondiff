@@ -381,9 +381,13 @@ function validateConfig(config: BotConfig): void {
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
   validateBoolean(config.commands.acknowledge, "config.commands.acknowledge");
+  validateNonEmptyString(config.zcode.cliPath, "config.zcode.cliPath");
+  validateNonEmptyString(config.zcode.appConfigPath, "config.zcode.appConfigPath");
+  validateNonEmptyString(config.zcode.model, "config.zcode.model");
   validatePositiveInteger(config.zcode.timeoutMs, "config.zcode.timeoutMs");
   validatePositiveInteger(config.zcode.maxPatchBytes, "config.zcode.maxPatchBytes");
   validateNonNegativeInteger(config.zcode.retryMaxRetries, "config.zcode.retryMaxRetries");
+  validateOptionalString(config.zcode.providerId, "config.zcode.providerId");
   validateOptionalString(config.github.apiBaseUrl, "config.github.apiBaseUrl");
   validateOptionalString(config.github.botLogin, "config.github.botLogin");
   if (config.github.requestTimeoutMs !== undefined) validatePositiveInteger(config.github.requestTimeoutMs, "config.github.requestTimeoutMs");

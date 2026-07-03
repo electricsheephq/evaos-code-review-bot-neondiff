@@ -1,4 +1,16 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { loadConfig, loadConfigFromObject, type RepoProfileConfig } from "./config.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -31,7 +43,6 @@ const EXACT_PATCH_PATHS = new Set([
   "zcode.providerId",
   "zcode.timeoutMs",
   "github.appId",
-  "github.apiBaseUrl",
   "github.botLogin",
   "github.requestTimeoutMs",
   "desktop.openAICompatibleEndpoint",
@@ -241,7 +252,20 @@ function getNestedValue(target: unknown, path: string[]): unknown {
 }
 
 function deepEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return false;
+    if (left.length !== right.length) return false;
+    return left.every((entry, index) => deepEqual(entry, right[index]));
+  }
+  if (isRecord(left) || isRecord(right)) {
+    if (!isRecord(left) || !isRecord(right)) return false;
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    if (!deepEqual(leftKeys, rightKeys)) return false;
+    return leftKeys.every((key) => deepEqual(left[key], right[key]));
+  }
+  return false;
 }
 
 function validateCandidateConfig(candidate: unknown): string | undefined {
@@ -257,9 +281,21 @@ function writeConfigAtomic(configPath: string, value: unknown): void {
   mkdirSync(dirname(configPath), { recursive: true });
   const mode = existsSync(configPath) ? statSync(configPath).mode & 0o777 : 0o600;
   const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { mode });
-  chmodSync(tempPath, mode);
-  renameSync(tempPath, configPath);
+  const data = `${JSON.stringify(value, null, 2)}\n`;
+  let fd: number | undefined;
+  try {
+    fd = openSync(tempPath, "w", mode);
+    writeFileSync(fd, data);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    chmodSync(tempPath, mode);
+    renameSync(tempPath, configPath);
+  } catch (error) {
+    if (fd !== undefined) closeSync(fd);
+    if (existsSync(tempPath)) unlinkSync(tempPath);
+    throw error;
+  }
 }
 
 function redactSecretValue(value: unknown): unknown {

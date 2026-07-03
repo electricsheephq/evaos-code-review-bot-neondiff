@@ -43,6 +43,7 @@ describe("desktop config CLI", () => {
     expect(output.editablePaths).toContain("zcode.model");
     expect(output.editablePaths).toContain("desktop.openAICompatibleEndpoint");
     expect(output.editablePaths).toContain("github.appId");
+    expect(output.editablePaths).not.toContain("github.apiBaseUrl");
     expect(output.editablePaths).not.toContain("github.privateKeyPath");
     expect(output.editablePaths).not.toContain("workRoot");
     expect(output.config.desktop).toMatchObject({
@@ -216,6 +217,7 @@ describe("desktop config CLI", () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
     const secretPatchPath = join(root, "secret-patch.json");
+    const licensePatchPath = join(root, "license-patch.json");
     const blockedPatchPath = join(root, "blocked-patch.json");
     writeConfig(configPath, {
       pilotRepos: ["owner/repo"],
@@ -226,17 +228,90 @@ describe("desktop config CLI", () => {
     writeConfig(secretPatchPath, {
       github: { token: "ghp_123456789012345678901234567890123456" }
     });
+    writeConfig(licensePatchPath, {
+      desktop: { updateChannel: "NEONDIFF-PRIVATE-1234567890123456" }
+    });
     writeConfig(blockedPatchPath, {
-      workRoot: join(root, "runtime-bypass")
+      pollIntervalMs: 120_000
     });
 
     expect(await runConfig(["config", "patch", "--config", configPath, "--input", secretPatchPath])).toMatchObject({
       ok: false,
       error: expect.stringContaining("secret-like text")
     });
+    const licenseRejected = await runConfig(["config", "patch", "--config", configPath, "--input", licensePatchPath]);
+    expect(licenseRejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("secret-like text")
+    });
+    expect(JSON.stringify(licenseRejected)).not.toContain("NEONDIFF-PRIVATE-1234567890123456");
     expect(await runConfig(["config", "patch", "--config", configPath, "--input", blockedPatchPath])).toMatchObject({
       ok: false,
       error: expect.stringContaining("non-desktop-safe path")
+    });
+  });
+
+  it("keeps GitHub API base URL out of desktop-safe patches", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+    writeConfig(patchPath, {
+      github: { apiBaseUrl: "https://example.invalid" }
+    });
+
+    const output = await runConfig(["config", "patch", "--config", configPath, "--input", patchPath]);
+
+    expect(output).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("non-desktop-safe path")
+    });
+    expect(output.error).toContain("github.apiBaseUrl");
+  });
+
+  it("rejects empty ZCode string settings before live desktop writes", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+    writeConfig(patchPath, {
+      zcode: {
+        cliPath: "",
+        appConfigPath: "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+        model: "GLM-5.2"
+      }
+    });
+
+    const output = await runConfig(["config", "patch", "--config", configPath, "--input", patchPath]);
+
+    expect(output).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("config.zcode.cliPath must be a non-empty string")
+    });
+  });
+
+  it("rejects ambiguous repeated config inspect path arguments", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+
+    await expect(runConfigRaw(["config", "inspect", "--config", configPath, "--config", configPath])).rejects.toMatchObject({
+      stderr: expect.stringContaining("--config must be provided once")
     });
   });
 
@@ -251,23 +326,27 @@ describe("desktop config CLI", () => {
   }
 
   async function runConfig(args: string[]): Promise<Record<string, any>> {
-    const {
-      EVAOS_REVIEW_BOT_APP_ID,
-      EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH,
-      GITHUB_TOKEN,
-      ...safeEnv
-    } = process.env;
     try {
-      const { stdout } = await execFileAsync(process.execPath, [tsxCliPath, "src/cli.ts", ...args], {
-        cwd: process.cwd(),
-        env: safeEnv,
-        maxBuffer: 1024 * 1024
-      });
+      const { stdout } = await runConfigRaw(args);
       return JSON.parse(stdout);
     } catch (error) {
       const stdout = (error as { stdout?: string }).stdout ?? "";
       if (!stdout) throw error;
       return JSON.parse(stdout);
     }
+  }
+
+  async function runConfigRaw(args: string[]): Promise<{ stdout: string; stderr: string }> {
+    const {
+      EVAOS_REVIEW_BOT_APP_ID,
+      EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH,
+      GITHUB_TOKEN,
+      ...safeEnv
+    } = process.env;
+    return execFileAsync(process.execPath, [tsxCliPath, "src/cli.ts", ...args], {
+      cwd: process.cwd(),
+      env: safeEnv,
+      maxBuffer: 1024 * 1024
+    });
   }
 });
