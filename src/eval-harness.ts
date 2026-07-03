@@ -639,21 +639,39 @@ function buildStickyVsColdGates(input: {
     },
     {
       name: "no_secret_regression",
-      ok: input.deltas.secretFindings <= input.thresholds.maxSecretFindingDelta,
-      status: input.deltas.secretFindings <= input.thresholds.maxSecretFindingDelta ? "pass" : "fail",
-      detail: `${input.deltas.secretFindings} <= ${input.thresholds.maxSecretFindingDelta}`
+      ok: !coldComparable || input.deltas.secretFindings <= input.thresholds.maxSecretFindingDelta,
+      status: !coldComparable
+        ? "skip"
+        : input.deltas.secretFindings <= input.thresholds.maxSecretFindingDelta
+          ? "pass"
+          : "fail",
+      detail: coldComparable
+        ? `${input.deltas.secretFindings} <= ${input.thresholds.maxSecretFindingDelta}`
+        : "SKIPPED: cold packet failed; comparative secret delta is not meaningful"
     },
     {
       name: "no_duplicate_regression",
-      ok: input.deltas.duplicateFindings <= input.thresholds.maxDuplicateFindingDelta,
-      status: input.deltas.duplicateFindings <= input.thresholds.maxDuplicateFindingDelta ? "pass" : "fail",
-      detail: `${input.deltas.duplicateFindings} <= ${input.thresholds.maxDuplicateFindingDelta}`
+      ok: !coldComparable || input.deltas.duplicateFindings <= input.thresholds.maxDuplicateFindingDelta,
+      status: !coldComparable
+        ? "skip"
+        : input.deltas.duplicateFindings <= input.thresholds.maxDuplicateFindingDelta
+          ? "pass"
+          : "fail",
+      detail: coldComparable
+        ? `${input.deltas.duplicateFindings} <= ${input.thresholds.maxDuplicateFindingDelta}`
+        : "SKIPPED: cold packet failed; comparative duplicate delta is not meaningful"
     },
     {
       name: "no_schema_drop_regression",
-      ok: input.deltas.droppedFromSchema <= input.thresholds.maxSchemaDropDelta,
-      status: input.deltas.droppedFromSchema <= input.thresholds.maxSchemaDropDelta ? "pass" : "fail",
-      detail: `${input.deltas.droppedFromSchema} <= ${input.thresholds.maxSchemaDropDelta}`
+      ok: !coldComparable || input.deltas.droppedFromSchema <= input.thresholds.maxSchemaDropDelta,
+      status: !coldComparable
+        ? "skip"
+        : input.deltas.droppedFromSchema <= input.thresholds.maxSchemaDropDelta
+          ? "pass"
+          : "fail",
+      detail: coldComparable
+        ? `${input.deltas.droppedFromSchema} <= ${input.thresholds.maxSchemaDropDelta}`
+        : "SKIPPED: cold packet failed; comparative schema-drop delta is not meaningful"
     },
     {
       name: "no_false_positive_regression",

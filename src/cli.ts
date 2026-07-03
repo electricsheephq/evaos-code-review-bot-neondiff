@@ -883,6 +883,7 @@ async function main(): Promise<void> {
   if (command === "eval-sticky-vs-cold") {
     if (!args.input) throw new Error("--input is required for eval-sticky-vs-cold");
     if (!args["output-root"]) throw new Error("--output-root is required for eval-sticky-vs-cold");
+    assertEvalOutputDirSafe(args["output-root"]);
     const input = readJsonInput(args.input, "--input") as Parameters<typeof runStickyVsColdEval>[0];
     const result = runStickyVsColdEval(input, {
       outputRoot: args["output-root"]

@@ -1074,6 +1074,9 @@ describe("offline eval harness", () => {
     expect(result.ok).toBe(false);
     expect(result.summary.decision).toBe("not_enough_evidence");
     expect(result.summary.gates.find((gate) => gate.name === "cold_packet_ok")).toMatchObject({ ok: false, status: "fail" });
+    expect(result.summary.gates.find((gate) => gate.name === "no_secret_regression")).toMatchObject({ ok: true, status: "skip" });
+    expect(result.summary.gates.find((gate) => gate.name === "no_duplicate_regression")).toMatchObject({ ok: true, status: "skip" });
+    expect(result.summary.gates.find((gate) => gate.name === "no_schema_drop_regression")).toMatchObject({ ok: true, status: "skip" });
     expect(result.summary.gates.find((gate) => gate.name === "recall_not_lower")).toMatchObject({ ok: true, status: "skip" });
   });
 
