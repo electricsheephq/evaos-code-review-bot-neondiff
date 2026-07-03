@@ -176,7 +176,8 @@ export interface ReleaseStatus {
 
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
-const PUBLIC_VERSION_PATTERN = /^v\d+\.\d+\.\d+-[0-9A-Za-z.-]+(?:\+[0-9A-Za-z.-]+)?$/;
+const PUBLIC_VERSION_PATTERN =
+  /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
 const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
   ...REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES,
@@ -492,9 +493,18 @@ export function readPublicReleaseManifestStatus(input: {
     const missingDocsPaths = docsPathChecks.filter((pathCheck) => !pathCheck.exists);
     const manifestVersionOk = expectedVersionOk && version === expectedVersion;
     const docsVersionOk = expectedVersionOk && docsVersion === expectedVersion;
-    const docsOk = expectedVersionOk && manifestVersionOk && docsVersionOk && missingDocsPaths.length === 0;
+    const expectedReleaseNotesPath = expectedVersionOk ? `docs/releases/${expectedVersion}.md` : undefined;
+    const releaseNotesPathOk = expectedReleaseNotesPath !== undefined && releaseNotesPath === expectedReleaseNotesPath;
+    const docsOk =
+      expectedVersionOk &&
+      manifestVersionOk &&
+      docsVersionOk &&
+      releaseNotesPathOk &&
+      missingDocsPaths.length === 0;
     const licenseState = readString(licenseApi.state) ?? "missing";
-    const licenseRequired = readBoolean(licenseApi.requiredForThisRelease) ?? true;
+    const licenseRequired = releaseLevel === "source-beta"
+      ? (readBoolean(licenseApi.requiredForThisRelease) ?? true)
+      : true;
     const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired);
     const declaredChannelNames = Object.keys(updateChannels);
     const channelNames = [
@@ -502,7 +512,10 @@ export function readPublicReleaseManifestStatus(input: {
       ...declaredChannelNames.filter((name) => !isRequiredPublicUpdateChannel(name))
     ];
     const channels = channelNames.map((name) =>
-      buildPublicReleaseChannelStatus(name, asRecord(updateChannels[name]))
+      buildPublicReleaseChannelStatus(name, asRecord(updateChannels[name]), {
+        cwd: input.cwd,
+        releaseLevel
+      })
     );
     const channelsOk = channels.every((channel) => channel.ok);
     return {
@@ -540,6 +553,9 @@ export function readPublicReleaseManifestStatus(input: {
                       ? `docs version ${docsVersion} matches ${expectedVersion}`
                       : `docs version ${docsVersion} does not match ${expectedVersion}`
                   ]
+                : []),
+              ...(releaseNotesPath && expectedReleaseNotesPath && !releaseNotesPathOk
+                ? [`release notes path ${releaseNotesPath} does not match ${expectedReleaseNotesPath}`]
                 : []),
               ...missingDocsPaths.map((pathCheck) => `${pathCheck.label} missing at ${pathCheck.path}`)
             ].join("; ")
@@ -591,15 +607,19 @@ export function readPublicReleaseManifestStatus(input: {
 
 function buildPublicReleaseChannelStatus(
   name: string,
-  channel: Record<string, unknown>
+  channel: Record<string, unknown>,
+  options: { cwd?: string; releaseLevel: string }
 ): PublicReleaseChannelStatus {
   const state = readString(channel.state) ?? "missing";
-  const requiredForThisRelease = isRequiredPublicUpdateChannel(name) || (readBoolean(channel.requiredForThisRelease) ?? true);
+  const requiredForThisRelease =
+    isRequiredPublicUpdateChannel(name) ||
+    options.releaseLevel !== "source-beta" ||
+    (readBoolean(channel.requiredForThisRelease) ?? true);
   const version = readString(channel.version);
   const rollback = readString(channel.rollback);
   const trackingIssue = readString(channel.trackingIssue);
   const stateOk = isUpdateChannelStateAcceptable(name, state, requiredForThisRelease);
-  const rollbackOk = rollback ? isRollbackCommandLike(rollback) : false;
+  const rollbackOk = rollback ? isRollbackCommandLike(rollback, options.cwd) : false;
   const missingRequiredMetadata = [
     ...(requiredForThisRelease && !version ? ["version"] : []),
     ...(requiredForThisRelease && !rollbackOk ? ["rollback command"] : [])
@@ -635,22 +655,51 @@ function isRequiredPublicUpdateChannel(name: string): boolean {
   return REQUIRED_PUBLIC_UPDATE_CHANNELS.includes(name as typeof REQUIRED_PUBLIC_UPDATE_CHANNELS[number]);
 }
 
-function isRollbackCommandLike(rollback: string): boolean {
+function isRollbackCommandLike(rollback: string, cwd?: string): boolean {
   if (/\s*(?:&&|\|\||;)\s*/.test(rollback)) return false;
   const command = rollback.trim();
   const resetTarget = command.match(/^git\s+reset\s+--hard\s+([^\s;&|]+)$/)?.[1];
-  if (resetTarget) return isRollbackTarget(resetTarget);
+  if (resetTarget) return isRollbackTarget(resetTarget, cwd);
   const revertTarget = command.match(/^git\s+revert\s+(?:--no-edit\s+)?([^\s;&|]+)$/)?.[1];
-  if (revertTarget) return isRollbackTarget(revertTarget);
+  if (revertTarget) return isRollbackTarget(revertTarget, cwd);
   return false;
 }
 
-function isRollbackTarget(target: string): boolean {
-  return /^refs\/tags\/v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(target) || /^[0-9a-f]{40}$/i.test(target);
+function isRollbackTarget(target: string, cwd?: string): boolean {
+  const targetFormatOk =
+    /^refs\/tags\/v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(target) ||
+    /^[0-9a-f]{40}$/i.test(target);
+  if (!targetFormatOk) return false;
+  if (!cwd || !isGitWorktree(cwd)) return true;
+  return gitCommitishExists(cwd, target);
 }
 
 function isPublicVersionTag(version: string): boolean {
   return PUBLIC_VERSION_PATTERN.test(version);
+}
+
+function isGitWorktree(cwd: string): boolean {
+  try {
+    return execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+function gitCommitishExists(cwd: string, target: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", `${target}^{commit}`], {
+      cwd,
+      stdio: "ignore"
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isLicenseApiStateAcceptable(state: string, requiredForThisRelease: boolean): boolean {
