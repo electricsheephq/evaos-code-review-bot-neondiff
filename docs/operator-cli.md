@@ -10,9 +10,11 @@ Run commands from the repository checkout:
 npx tsx src/cli.ts status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
-After `npm run build`, the package also exposes:
+After `npm run build` and `npm link`, the package exposes both the public beta
+binary and the legacy internal binary:
 
 ```bash
+neondiff status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
 evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
 ```
 
@@ -104,6 +106,30 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   the default live posture for repos with large historic issue backlogs.
 - `doctor`: auth/config readiness. Use this for GitHub App/ZCode readiness, not
   runtime health.
+- `init --config <path>`: copy `config.example.json` to a local config path
+  without embedding credentials. Refuses to overwrite unless `--force true` is
+  supplied.
+- `review-pr --repo <owner/name> --pr <number> --dry-run true`: public alias for
+  the existing scoped `run-once` review command. Live posting through this
+  public alias requires `--dry-run false --confirm true` after the exact repo,
+  PR, head SHA, and config path are approved.
+- `daemon start|stop|status`: JSON-first launchd controls. All daemon
+  subcommands require `--launchd-label`; `start` and `stop` default to dry-run planning; live mutation
+  requires both `--dry-run false` and `--confirm true`.
+  When `start` uses `--plist <path>`, `stop` can either pass the same `--plist`
+  to boot out by domain/plist or omit `--plist` to boot out by service label.
+  `start` without `--plist` restarts an already loaded LaunchAgent; first-time
+  installation must pass `--plist`. Use only operator-owned plist paths. Live
+  mutation with a `--plist` outside the NeonDiff package root requires
+  `--allow-external-plist true`; dry-run still reports the warning and planned
+  commands without mutating launchd. The external-plist warning is a lexical
+  path check, not a realpath/symlink containment proof.
+  If a live `bootstrap` fails because the LaunchAgent is already loaded, rerun
+  `daemon start` without `--plist` to use the kickstart-only restart path.
+- `daemon --config <config.json> --dry-run true --once true`: runs one legacy
+  daemon cycle and exits. This is intended for deterministic local smoke tests
+  and operator diagnostics; omit `--once true` for the normal long-running
+  worker loop.
 
 ## Common Operator Flows
 
@@ -307,6 +333,7 @@ Mutating commands remain explicit:
 - `build-memory-packet --record-build true`
 - `run-once --dry-run false`
 - `daemon --dry-run false`
+- `daemon start|stop --dry-run false --confirm true`
 
 `build-skill-pack` and `build-enrichment-comment` are dry-run/evidence builders.
 They remain read-only. Live `run-once` and `daemon` can consume skill-pack

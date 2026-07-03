@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { runDaemonCycle } from "./daemon.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, parse as parsePath, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from "node:path";
 import {
   assertEvalOutputDirSafe,
   buildEvalPromotionDecisionMarkdown,
@@ -52,12 +54,22 @@ import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 import { parsePositiveInteger } from "./cli-args.js";
 
+const LAUNCHCTL_TIMEOUT_MS = 15_000;
+const PLUTIL_TIMEOUT_MS = 5_000;
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
 
   if (!command || command === "help" || command === "--help" || command === "-h") {
     console.log(JSON.stringify(buildHelp(), null, 2));
+    return;
+  }
+
+  if (command === "init") {
+    const result = runInitCommand(args);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
     return;
   }
 
@@ -922,18 +934,114 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "run-once") {
+  if (command === "run-once" || command === "review-pr") {
+    if (command === "review-pr" && (!args.repo || !args.pr)) {
+      console.log(JSON.stringify({
+        ok: false,
+        command: "review-pr",
+        error: "review-pr requires --repo and --pr so the public alias cannot scan every configured repository"
+      }, null, 2));
+      process.exitCode = 1;
+      return;
+    }
+    const repo = args.repo ? parseSingleArg(args.repo, "--repo") : undefined;
     const dryRun = args["dry-run"] !== "false";
+    if (command === "review-pr" && !dryRun && args.confirm !== "true") {
+      console.log(JSON.stringify({
+        ok: false,
+        command: "review-pr",
+        ...(repo ? { repo } : {}),
+        error: "review-pr requires --confirm true when --dry-run false is used"
+      }, null, 2));
+      process.exitCode = 1;
+      return;
+    }
+    let reviewPrExpectedHeadSha: string | undefined;
+    if (command === "review-pr" && !dryRun) {
+      const configPath = args.config ? parseSingleArg(args.config, "--config") : undefined;
+      if (!configPath) {
+        console.log(JSON.stringify({
+          ok: false,
+          command: "review-pr",
+          ...(repo ? { repo } : {}),
+          error: "review-pr requires --config when --dry-run false is used"
+        }, null, 2));
+        process.exitCode = 1;
+        return;
+      }
+      if (!existsSync(configPath) || !statSync(configPath).isFile()) {
+        console.log(JSON.stringify({
+          ok: false,
+          command: "review-pr",
+          ...(repo ? { repo } : {}),
+          error: "review-pr --config must point to an existing config file when --dry-run false is used"
+        }, null, 2));
+        process.exitCode = 1;
+        return;
+      }
+      if (args["head-sha"] && args["expected-head"] && args["head-sha"] !== args["expected-head"]) {
+        console.log(JSON.stringify({
+          ok: false,
+          command: "review-pr",
+          ...(repo ? { repo } : {}),
+          error: "review-pr --head-sha and --expected-head must match when both are provided"
+        }, null, 2));
+        process.exitCode = 1;
+        return;
+      }
+      reviewPrExpectedHeadSha = args["head-sha"] ?? args["expected-head"];
+      if (!reviewPrExpectedHeadSha) {
+        console.log(JSON.stringify({
+          ok: false,
+          command: "review-pr",
+          ...(repo ? { repo } : {}),
+          error: "review-pr requires --head-sha when --dry-run false is used"
+        }, null, 2));
+        process.exitCode = 1;
+        return;
+      }
+    }
+    if (command === "review-pr") {
+      const config = loadConfig(args.config);
+      const allowedRepoError = validateReviewPrRepoAllowed(config, repo!);
+      if (allowedRepoError) {
+        console.log(JSON.stringify({
+          ok: false,
+          command: "review-pr",
+          repo: repo!,
+          error: allowedRepoError
+        }, null, 2));
+        process.exitCode = 1;
+        return;
+      }
+    }
     const useZCode = args.zcode !== "false";
-    const pullNumber = args.pr ? parsePositiveInteger(args.pr, "--pr") : undefined;
+    let pullNumber: number | undefined;
+    try {
+      pullNumber = args.pr ? parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr") : undefined;
+    } catch (error) {
+      if (command === "review-pr") {
+        console.log(JSON.stringify({
+          ok: false,
+          command: "review-pr",
+          ...(repo ? { repo } : {}),
+          error: error instanceof Error ? error.message : String(error)
+        }, null, 2));
+        process.exitCode = 1;
+        return;
+      }
+      throw error;
+    }
     const result = await runOnceCliCommand({
       options: {
         configPath: args.config,
         dryRun,
-        repo: args.repo,
+        repo,
         pullNumber,
-        useZCode
-      }
+        useZCode,
+        expectedHeadSha: reviewPrExpectedHeadSha
+      },
+      commandName: command
     });
     console.log(result.output);
     if (result.exitCode !== 0) process.exitCode = result.exitCode;
@@ -1025,9 +1133,20 @@ async function main(): Promise<void> {
   }
 
   if (command === "daemon") {
+    const daemonAction = args._[1];
+    if (daemonAction === "start" || daemonAction === "stop" || daemonAction === "status") {
+      const result = runDaemonControlCommandSafely(daemonAction, args);
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exitCode = 1;
+      return;
+    }
+    if (daemonAction) {
+      throw new Error("daemon subcommand must be one of: start, stop, status");
+    }
     const config = loadConfig(args.config);
     const monitoredRepos = listReposToScan(config);
     let cycle = 0;
+    const runOnce = args.once === "true";
     for (;;) {
       cycle += 1;
       const dryRun = args["dry-run"] !== "false";
@@ -1042,6 +1161,7 @@ async function main(): Promise<void> {
         issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
         configPath: args.config
       });
+      if (runOnce) return;
       await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
     }
   }
@@ -1064,6 +1184,421 @@ async function collectCoverageReport(args: ParsedArgs, config = loadConfig(args.
   } finally {
     state.close();
   }
+}
+
+function runInitCommand(args: ParsedArgs): {
+  ok: boolean;
+  command: "init";
+  configPath: string;
+  created: boolean;
+  examplePath: string;
+  recommendedCommands: string[];
+  backupPath?: string;
+  error?: string;
+} {
+  const configPath = resolve(parseSingleArg(args.config ?? "config.local.json", "--config"));
+  const examplePath = join(resolvePackageRoot(), "config.example.json");
+  const force = args.force === "true";
+  if (!existsSync(examplePath)) {
+    return {
+      ok: false,
+      command: "init",
+      configPath,
+      created: false,
+      examplePath,
+      recommendedCommands: [],
+      error: "config.example.json not found in the current checkout"
+    };
+  }
+  if (existsSync(configPath) && !force) {
+    return {
+      ok: false,
+      command: "init",
+      configPath,
+      created: false,
+      examplePath,
+      recommendedCommands: [`neondiff doctor --config ${configPath} --json`],
+      error: "config already exists; rerun with --force true to overwrite"
+    };
+  }
+  const forceTargetError = force ? validateInitForceTarget(configPath) : undefined;
+  if (forceTargetError) {
+    return {
+      ok: false,
+      command: "init",
+      configPath,
+      created: false,
+      examplePath,
+      recommendedCommands: [`neondiff init --config ${configPath}`],
+      error: forceTargetError
+    };
+  }
+  const backupPath = force && existsSync(configPath) ? backupInitForceTarget(configPath) : undefined;
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, readFileSync(examplePath, "utf8"));
+  return {
+    ok: true,
+    command: "init",
+    configPath,
+    created: true,
+    examplePath,
+    ...(backupPath ? { backupPath } : {}),
+    recommendedCommands: [
+      `neondiff doctor --config ${configPath} --json`,
+      `neondiff review-pr --config ${configPath} --repo owner/name --pr 123 --dry-run true --zcode false`,
+      `neondiff status --config ${configPath} --json`
+    ]
+  };
+}
+
+function resolvePackageRoot(): string {
+  for (const start of [dirname(fileURLToPath(import.meta.url)), process.cwd()]) {
+    let cursor = resolve(start);
+    while (true) {
+      if (isNeonDiffPackageRoot(cursor)) {
+        return cursor;
+      }
+      const parent = dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
+    }
+  }
+  return process.cwd();
+}
+
+function isNeonDiffPackageRoot(candidate: string): boolean {
+  if (!existsSync(join(candidate, "package.json")) || !existsSync(join(candidate, "config.example.json"))) {
+    return false;
+  }
+  try {
+    const packageJson = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8"));
+    return packageJson.name === "evaos-code-review-bot"
+      && packageJson.bin?.neondiff === "dist/src/cli.js";
+  } catch {
+    return false;
+  }
+}
+
+function validateReviewPrRepoAllowed(config: ReturnType<typeof loadConfig>, repo: string): string | undefined {
+  const configuredRepos = listReposToScan(config);
+  if (!configuredRepos.map(canonicalRepoNameForCli).includes(canonicalRepoNameForCli(repo))) {
+    return `review-pr repo must be present in configured repos: ${configuredRepos.join(", ") || "(none)"}`;
+  }
+  const policy = resolveRepoProfile(config, repo);
+  if (!policy.allowed) {
+    return `review-pr repo is blocked by repo policy: ${policy.reason}`;
+  }
+  return undefined;
+}
+
+function canonicalRepoNameForCli(repo: string): string {
+  const [owner, name] = repo.split("/");
+  return `${owner?.toLowerCase() ?? ""}/${name?.toLowerCase() ?? ""}`;
+}
+
+function validateInitForceTarget(configPath: string): string | undefined {
+  if (!existsSync(configPath)) return undefined;
+  if (extname(configPath) !== ".json") {
+    return "--force true only overwrites existing JSON config files";
+  }
+  const stat = statSync(configPath);
+  if (!stat.isFile()) {
+    return "--force true only overwrites existing JSON config files";
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return "--force true only overwrites existing JSON config object files";
+    }
+  } catch {
+    return "--force true only overwrites existing JSON config files";
+  }
+  return undefined;
+}
+
+function backupInitForceTarget(configPath: string): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = `${configPath}.${timestamp}.bak`;
+  writeFileSync(backupPath, readFileSync(configPath, "utf8"));
+  return backupPath;
+}
+
+type DaemonControlResult = {
+  ok: boolean;
+  command: "daemon start" | "daemon stop" | "daemon status";
+  dryRun?: boolean;
+  launchdLabel?: string;
+  launchdTarget?: string;
+  operation?: "bootstrap_then_kickstart" | "kickstart_existing" | "bootout_plist" | "bootout_service" | "status";
+  plistPath?: string;
+  warning?: string;
+  plannedCommands?: string[][];
+  results?: Array<{ command: string[]; exitCode: number; stdout?: string; stderr?: string; error?: string; signal?: string }>;
+  status?: ReleaseStatus;
+  error?: string;
+};
+
+function runDaemonControlCommandSafely(
+  action: "start" | "stop" | "status",
+  args: ParsedArgs
+): DaemonControlResult {
+  try {
+    return runDaemonControlCommand(action, args);
+  } catch (error) {
+    return {
+      ok: false,
+      command: `daemon ${action}`,
+      error: redactSecrets(error instanceof Error ? error.message : String(error))
+    };
+  }
+}
+
+function runDaemonControlCommand(
+  action: "start" | "stop" | "status",
+  args: ParsedArgs
+): DaemonControlResult {
+  if (action === "status") {
+    if (!args["launchd-label"]) {
+      return {
+        ok: false,
+        command: "daemon status",
+        error: "--launchd-label is required for daemon status"
+      };
+    }
+    if (!args.config) {
+      return {
+        ok: false,
+        command: "daemon status",
+        error: "--config is required for daemon status"
+      };
+    }
+    const launchdLabel = parseLaunchdLabelArg(args["launchd-label"], "--launchd-label");
+    const launchdTarget = launchdServiceTarget(launchdLabel);
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      configPath: parseSingleArg(args.config, "--config"),
+      expectedHead: args["expected-head"],
+      launchdLabel,
+      statePath: args["state-path"]
+    });
+    return {
+      ok: status.ok,
+      command: "daemon status",
+      launchdLabel,
+      launchdTarget,
+      operation: "status",
+      status
+    };
+  }
+
+  if (!args["launchd-label"]) {
+    return {
+      ok: false,
+      command: `daemon ${action}`,
+      error: `--launchd-label is required for daemon ${action}`
+    };
+  }
+  const dryRun = args["dry-run"] !== "false";
+  const confirm = args.confirm === "true";
+  const allowExternalPlist = args["allow-external-plist"] === "true";
+  const launchdLabel = parseLaunchdLabelArg(args["launchd-label"], "--launchd-label");
+  const plistPath = args.plist ? resolve(parseSingleArg(args.plist, "--plist")) : undefined;
+  if (plistPath) assertPlistLabelMatches(plistPath, launchdLabel);
+  const launchdTarget = launchdServiceTarget(launchdLabel);
+  const commands = buildDaemonLaunchctlCommands({
+    action,
+    launchdLabel,
+    ...(plistPath ? { plistPath } : {})
+  });
+  const operation = daemonControlOperation(action, plistPath);
+  const warning = plistPath ? daemonPlistWarning(plistPath) : undefined;
+  if (dryRun) {
+    return {
+      ok: true,
+      command: `daemon ${action}`,
+      dryRun,
+      launchdLabel,
+      launchdTarget,
+      operation,
+      ...(plistPath ? { plistPath } : {}),
+      ...(warning ? { warning } : {}),
+      plannedCommands: commands
+    };
+  }
+  const launchdSessionError = launchdUserSessionError();
+  if (launchdSessionError) {
+    return {
+      ok: false,
+      command: `daemon ${action}`,
+      dryRun,
+      launchdLabel,
+      launchdTarget,
+      operation,
+      ...(plistPath ? { plistPath } : {}),
+      ...(warning ? { warning } : {}),
+      plannedCommands: commands,
+      error: launchdSessionError
+    };
+  }
+  if (warning && !allowExternalPlist) {
+    return {
+      ok: false,
+      command: `daemon ${action}`,
+      dryRun,
+      launchdLabel,
+      launchdTarget,
+      operation,
+      ...(plistPath ? { plistPath } : {}),
+      warning,
+      plannedCommands: commands,
+      error: `daemon ${action} requires --allow-external-plist true when --dry-run false uses a --plist outside the NeonDiff package root`
+    };
+  }
+  if (!confirm) {
+    return {
+      ok: false,
+      command: `daemon ${action}`,
+      dryRun,
+      launchdLabel,
+      launchdTarget,
+      operation,
+      ...(plistPath ? { plistPath } : {}),
+      ...(warning ? { warning } : {}),
+      plannedCommands: commands,
+      error: `daemon ${action} requires --confirm true when --dry-run false is used`
+    };
+  }
+  const results = runLaunchctlPlan(commands);
+  return {
+    ok: results.every((result) => result.exitCode === 0),
+    command: `daemon ${action}`,
+    dryRun,
+    launchdLabel,
+    launchdTarget,
+    operation,
+    ...(plistPath ? { plistPath } : {}),
+    ...(warning ? { warning } : {}),
+    results
+  };
+}
+
+function buildDaemonLaunchctlCommands(input: {
+  action: "start" | "stop";
+  launchdLabel: string;
+  plistPath?: string;
+}): string[][] {
+  const domain = launchdDomainTarget();
+  const service = launchdServiceTarget(input.launchdLabel);
+  if (input.action === "start") {
+    return [
+      ...(input.plistPath ? [["launchctl", "bootstrap", domain, input.plistPath]] : []),
+      ["launchctl", "kickstart", "-k", service]
+    ];
+  }
+  return input.plistPath
+    ? [["launchctl", "bootout", domain, input.plistPath]]
+    : [["launchctl", "bootout", service]];
+}
+
+function daemonControlOperation(
+  action: "start" | "stop",
+  plistPath?: string
+): "bootstrap_then_kickstart" | "kickstart_existing" | "bootout_plist" | "bootout_service" {
+  if (action === "start") return plistPath ? "bootstrap_then_kickstart" : "kickstart_existing";
+  return plistPath ? "bootout_plist" : "bootout_service";
+}
+
+function daemonPlistWarning(plistPath: string): string | undefined {
+  const packageRoot = resolvePackageRoot();
+  const normalizedRoot = `${packageRoot.replace(/\/+$/, "")}/`;
+  const normalizedPlist = resolve(plistPath);
+  if (normalizedPlist === packageRoot || normalizedPlist.startsWith(normalizedRoot)) return undefined;
+  return "--plist is outside the NeonDiff package root; use only operator-owned plist paths";
+}
+
+function runLaunchctlPlan(commands: string[][]): Array<{
+  command: string[];
+  exitCode: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  signal?: string;
+}> {
+  const results = [];
+  for (const command of commands) {
+    const result = runLaunchctl(command);
+    results.push(result);
+    if (result.exitCode !== 0) break;
+  }
+  return results;
+}
+
+function runLaunchctl(command: string[]): {
+  command: string[];
+  exitCode: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  signal?: string;
+} {
+  const [binary, ...args] = command;
+  if (binary !== "launchctl") throw new Error(`unsupported daemon control command: ${command.join(" ")}`);
+  const result = spawnSync(binary, args, {
+    encoding: "utf8",
+    timeout: LAUNCHCTL_TIMEOUT_MS
+  });
+  return {
+    command,
+    exitCode: result.status ?? 1,
+    ...(result.stdout ? { stdout: redactSecrets(result.stdout.trim()) } : {}),
+    ...(result.stderr ? { stderr: redactSecrets(result.stderr.trim()) } : {}),
+    ...(result.error ? { error: redactSecrets(result.error.message) } : {}),
+    ...(result.signal ? { signal: result.signal } : {})
+  };
+}
+
+function parseLaunchdLabelArg(value: string | string[] | undefined, label: string): string {
+  if (value === undefined) throw new Error(`${label} is required`);
+  const parsed = parseSingleArg(value, label);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,255}$/.test(parsed)) {
+    throw new Error(`${label} must be a launchd label using only letters, digits, dots, underscores, and hyphens`);
+  }
+  return parsed;
+}
+
+function assertPlistLabelMatches(plistPath: string, launchdLabel: string): void {
+  if (!existsSync(plistPath)) throw new Error(`--plist does not exist: ${plistPath}`);
+  const result = spawnSync("plutil", ["-extract", "Label", "raw", plistPath], {
+    encoding: "utf8",
+    timeout: PLUTIL_TIMEOUT_MS
+  });
+  if (result.error) {
+    throw new Error(`failed to read --plist Label: ${redactSecrets(result.error.message)}`);
+  }
+  if (result.status !== 0) {
+    const detail = redactSecrets((result.stderr || result.stdout || "").trim());
+    throw new Error(`failed to read --plist Label${detail ? `: ${detail}` : ""}`);
+  }
+  const plistLabel = result.stdout.trim();
+  if (plistLabel !== launchdLabel) {
+    throw new Error(`--plist Label (${redactSecrets(plistLabel)}) must match --launchd-label (${redactSecrets(launchdLabel)})`);
+  }
+}
+
+function launchdDomainTarget(): string {
+  const uid = process.getuid?.();
+  if (uid === undefined) return "gui/<uid-unavailable>";
+  return `gui/${uid}`;
+}
+
+function launchdServiceTarget(label: string): string {
+  return `${launchdDomainTarget()}/${label}`;
+}
+
+function launchdUserSessionError(): string | undefined {
+  return process.getuid?.() === undefined
+    ? "launchd daemon controls require a user session with process.getuid()"
+    : undefined;
 }
 
 function collectQueueBudget(args: ParsedArgs): {
@@ -1091,6 +1626,15 @@ function buildHelp() {
   return {
     ok: true,
     commands: {
+      public: [
+        "init",
+        "doctor",
+        "daemon start",
+        "daemon stop",
+        "daemon status",
+        "status",
+        "review-pr"
+      ],
       operator: [
         "status",
         "runtime-inventory",
@@ -1126,6 +1670,13 @@ function buildHelp() {
       ]
     },
     examples: [
+      "neondiff init --config config.local.json",
+      "neondiff doctor --config config.local.json --json",
+      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
+      "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff",
+      "neondiff daemon start --launchd-label com.example.neondiff --dry-run true",
+      "neondiff daemon stop --launchd-label com.example.neondiff --dry-run true",
+      "npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true",
       "npx tsx src/cli.ts status --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --launchd-label com.electricsheephq.evaos-code-review-bot",
       "npx tsx src/cli.ts runtime-inventory --config /path/to/live.json --human",
@@ -1162,13 +1713,18 @@ function parseArgs(argv: string[]): ParsedArgs {
     const key = arg.slice(2);
     const next = argv[index + 1];
     if (next && !next.startsWith("--")) {
-      parsed[key] = next;
+      setParsedArg(parsed, key, next);
       index += 1;
     } else {
-      parsed[key] = "true";
+      setParsedArg(parsed, key, "true");
     }
   }
   return parsed;
+}
+
+function setParsedArg(parsed: ParsedArgs, key: string, value: string): void {
+  if (parsed[key] !== undefined) throw new Error(`--${key} must be provided once`);
+  parsed[key] = value;
 }
 
 function parseNonNegativeInteger(value: string, label: string): number {

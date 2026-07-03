@@ -1,8 +1,9 @@
 # NeonDiff Setup
 
-This guide is the first-run path for the current source-available beta. It uses
-the checked-out repository scripts until the public CLI package and final
-`neondiff` binary are completed in issue #107.
+This guide is the first-run path for the current source-available beta. After
+`npm run build`, the source checkout exposes the beta `neondiff` binary. Public
+npm/package publishing stays blocked until the license gate in issue #104 and
+the distribution work in issue #107 are both resolved.
 
 ## Requirements
 
@@ -22,7 +23,12 @@ git clone https://github.com/electricsheephq/evaos-code-review-bot.git neondiff
 cd neondiff
 npm install
 npm run build
+npm link
 ```
+
+`npm link` installs the local source-checkout shim so the examples below can use
+`neondiff`. If you intentionally skip linking, substitute `./dist/src/cli.js`
+for `neondiff`.
 
 ## 2. Create A GitHub App
 
@@ -52,11 +58,11 @@ export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key
 
 ## 3. Configure Provider And License
 
-Copy the example config and edit it for your local repo allowlist, provider
-path, state path, and evidence path:
+Create a local config from the example, then edit it for your local repo
+allowlist, provider path, state path, and evidence path:
 
 ```bash
-cp config.example.json config.local.json
+neondiff init --config config.local.json
 ```
 
 For the current internal provider path, the worker derives transient ZCode/GLM
@@ -72,7 +78,7 @@ Do not paste license keys into tracked config.
 Run doctor with the config you intend to use:
 
 ```bash
-npm run doctor -- --config config.local.json
+neondiff doctor --config config.local.json --json
 ```
 
 The doctor output is JSON. Check:
@@ -89,7 +95,7 @@ Use a known repo, PR number, and current head. A dry-run review should produce
 structured output and evidence without posting comments:
 
 ```bash
-npm run run-once -- \
+neondiff review-pr \
   --config config.local.json \
   --repo owner/name \
   --pr 123 \
@@ -106,16 +112,39 @@ path.
 Before touching launchd, use JSON status commands:
 
 ```bash
-npm run cli -- status --json --config config.local.json
-npm run cli -- queue --config config.local.json
-npm run cli -- dashboard --config config.local.json --limit 10
+neondiff status --json --config config.local.json
+neondiff queue --config config.local.json
+neondiff dashboard --config config.local.json --limit 10
 ```
 
-After `npm run build`, the local package also exposes the current beta binary:
+Launchd controls are explicit and JSON-first. Dry-run them before changing a
+loaded LaunchAgent:
 
 ```bash
-./dist/src/cli.js status --config config.local.json
+neondiff daemon status --config config.local.json --launchd-label com.example.neondiff
+neondiff daemon start --launchd-label com.example.neondiff --dry-run true
+neondiff daemon stop --launchd-label com.example.neondiff --dry-run true
 ```
+
+`daemon start` and `daemon stop` default to dry-run planning. Live launchd
+mutation requires both `--dry-run false` and `--confirm true`.
+`daemon start` without `--plist` restarts an already loaded LaunchAgent with
+`kickstart`; first-time LaunchAgent installation must pass the plist path so the
+dry-run plan includes `bootstrap`. If a live `bootstrap` fails because the
+LaunchAgent is already loaded, rerun `daemon start` without `--plist` to perform
+the kickstart-only restart path.
+Use only operator-owned plist paths. The CLI validates the plist `Label` against
+`--launchd-label` and warns when the plist lives outside the NeonDiff package
+root. Live mutation with an external plist also requires
+`--allow-external-plist true`; keep the default off unless the release issue
+names the exact operator-owned plist path. The external-plist check is a lexical
+path warning, not a realpath/symlink containment proof, so do not rely on it as
+a filesystem security boundary.
+
+Live `review-pr` posting is intentionally harder than dry-run inspection. Use
+`--dry-run true` for normal local checks. A live scoped PR review requires
+`--dry-run false --confirm true` after the target repo, PR, head SHA, and config
+path are approved by the relevant issue.
 
 Launchd and live beta promotion are advanced operator tasks. Use
 [docs/launchd.md](launchd.md), [docs/operator-cli.md](operator-cli.md), and

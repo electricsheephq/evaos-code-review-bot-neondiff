@@ -63,6 +63,7 @@ export interface RunOnceOptions {
   dryRun: boolean;
   repo?: string;
   pullNumber?: number;
+  expectedHeadSha?: string;
   useZCode?: boolean;
 }
 
@@ -181,6 +182,19 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
   }
 }
 
+export function assertExpectedReviewPrHead(input: {
+  repo: string;
+  pullNumber: number;
+  expectedHeadSha?: string;
+  currentHeadSha?: string;
+}): void {
+  if (!input.expectedHeadSha) return;
+  if (input.currentHeadSha === input.expectedHeadSha) return;
+  throw new Error(
+    `review-pr expected head mismatch for ${input.repo}#${input.pullNumber}: expected=${input.expectedHeadSha} current=${input.currentHeadSha ?? "unknown"}`
+  );
+}
+
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
   const github = new GitHubApi(config.github);
@@ -218,6 +232,14 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
       const pulls = options.pullNumber
         ? [await github.getPull(repo, options.pullNumber)]
         : await github.listOpenPulls(repo);
+      if (options.pullNumber) {
+        assertExpectedReviewPrHead({
+          repo,
+          pullNumber: options.pullNumber,
+          expectedHeadSha: options.expectedHeadSha,
+          currentHeadSha: pulls[0]?.head.sha
+        });
+      }
       if (options.pullNumber && pulls[0]) {
         result.scopedPull = {
           repo,

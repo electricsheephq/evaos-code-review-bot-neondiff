@@ -64,12 +64,16 @@ git clone https://github.com/electricsheephq/evaos-code-review-bot.git neondiff
 cd neondiff
 npm install
 npm run build
+npm link
 ```
 
-The public CLI package and final binary name are tracked in
-[issue #107](https://github.com/electricsheephq/evaos-code-review-bot/issues/107).
-Until that closes, use the repo scripts shown in [docs/SETUP.md](docs/SETUP.md)
-and [docs/operator-cli.md](docs/operator-cli.md).
+The source checkout exposes the beta `neondiff` binary through `npm link`.
+If you intentionally skip linking, substitute `./dist/src/cli.js` anywhere this
+guide calls `neondiff`. Public npm/package distribution stays blocked until the license gate in
+[issue #104](https://github.com/electricsheephq/evaos-code-review-bot/issues/104)
+and the distribution work in
+[issue #107](https://github.com/electricsheephq/evaos-code-review-bot/issues/107)
+are both resolved.
 
 ## Set Up
 
@@ -77,10 +81,10 @@ Follow [docs/SETUP.md](docs/SETUP.md) for the full first-run path. The short
 version is:
 
 ```bash
-cp config.example.json config.local.json
+neondiff init --config config.local.json
 export EVAOS_REVIEW_BOT_APP_ID="<github-app-id>"
 export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
-npm run doctor -- --config config.local.json
+neondiff doctor --config config.local.json --json
 ```
 
 Do not store the GitHub App private key, provider API key, license key, tokens,
@@ -92,7 +96,7 @@ evidence outside git.
 Run a dry-run review before any live posting:
 
 ```bash
-npm run run-once -- \
+neondiff review-pr \
   --config config.local.json \
   --repo owner/name \
   --pr 123 \
