@@ -639,11 +639,11 @@ function readStaleActiveReviewQueueJobCount(db: DatabaseSync, now: Date, leaseTt
       .prepare(
         `select count(*) as count
          from review_queue_jobs
-         where state in ('leased', 'running')
-           and (
-             (lease_expires_at is not null and datetime(lease_expires_at) <= datetime(?))
-             or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
-           )`
+	         where state in ('leased', 'running')
+	           and (
+	             (lease_expires_at is not null and (datetime(lease_expires_at) is null or datetime(lease_expires_at) <= datetime(?)))
+	             or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
+	           )`
       )
       .get(now.toISOString(), legacyLeaseCutoffIso) as { count?: number };
     return row.count ?? 0;

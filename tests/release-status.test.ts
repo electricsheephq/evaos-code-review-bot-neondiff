@@ -1229,6 +1229,89 @@ describe("beta release status", () => {
     });
   });
 
+  it("flags malformed active review queue lease expiries as stale", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-malformed-review-lease-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          lease_expires_at text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, lease_id, lease_expires_at, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'running', ?, ?, ?, ?)`
+      ).run(
+        "malformed-running",
+        "automatic:electricsheephq/evaos-code-review-bot#176@head-malformed",
+        "electricsheephq/evaos-code-review-bot",
+        "electricsheephq",
+        176,
+        "head-malformed",
+        "queue-lease-malformed",
+        "not-a-date",
+        "2026-07-03T08:00:00.000Z",
+        "2026-07-03T08:00:59.000Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-03T08:01:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.database.staleActiveReviewQueueJobCount).toBe(1);
+    expect(status.gates).toContainEqual({
+      name: "queue_no_stale_review_leases",
+      ok: false,
+      detail: "0 stale review run lease(s); 1 stale active queue job(s)"
+    });
+  });
+
   it("filters terminal queue rows and preserves active jobs before applying the budget row cap", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-budget-cap-terminal-"));
     roots.push(root);

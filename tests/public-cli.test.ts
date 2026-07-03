@@ -487,6 +487,81 @@ describe("public NeonDiff CLI surface", () => {
     }
   });
 
+  it("keeps queue --repo health scoped to the requested repo", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-queue-health-scoped-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence"),
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 1,
+        maxOrgActive: 1,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "owner/repo": { enabled: false }
+        }
+      }
+    })}\n`);
+    const store = new ReviewStateStore(statePath);
+    try {
+      const job = store.enqueueReviewQueueJob({
+        repo: "other/repo",
+        pullNumber: 999,
+        headSha: "other-head-ready",
+        providerId: "GLM-5.2",
+        now: new Date("2026-07-03T00:00:00.000Z")
+      }).job;
+      store.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "provider_deferred",
+        nextEligibleAt: "2026-07-03T00:00:01.000Z",
+        lastError: "provider_overloaded",
+        now: new Date("2026-07-03T00:00:02.000Z")
+      });
+    } finally {
+      store.close();
+    }
+
+    let output: Record<string, any>;
+    try {
+      await runCli(["queue", "--config", configPath, "--repo", "owner/repo"]);
+      throw new Error("queue command unexpectedly passed");
+    } catch (error) {
+      output = JSON.parse((error as { stdout: string }).stdout);
+    }
+    expect(output).toMatchObject({
+      ok: false,
+      coverageOk: false,
+      runtimeOk: false,
+      durableQueue: {
+        summary: {
+          total: 0,
+          providerDeferred: 0,
+          retryableProviderDeferred: 0
+        }
+      },
+      budget: {
+        providerDeferred: {
+          total: 0,
+          readyToRetry: 0
+        }
+      }
+    });
+    expect(output.failedGates).toEqual([
+      expect.objectContaining({ name: "queue_coverage_ok" })
+    ]);
+  });
+
   it("marks provider-cooldowns blocked when retryable durable provider-deferred work exists", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cooldown-health-"));
     roots.push(root);

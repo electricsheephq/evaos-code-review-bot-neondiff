@@ -244,19 +244,21 @@ async function main(): Promise<void> {
         repo: args.repo,
         pullNumber: args.pr ? Number(args.pr) : undefined,
         verifyCurrentHeads: args["verify-current-heads"] !== "false"
-      });
-      const gates = coverageAuditGates(audit);
-      console.log(JSON.stringify({
-        ...audit,
-        healthScope: "coverage",
-        healthState: audit.ok ? "coverage_ok" : "coverage_blocked",
-        coverageOk: audit.ok,
-        runtimeOk: null,
-        failedGates: failedGates(gates),
-        recommendedActions: coverageAuditRecommendedActions(audit),
-        gates
-      }, null, 2));
-      if (!audit.ok) process.exitCode = 1;
+	      });
+	      const gates = coverageAuditGates(audit);
+	      const coverageOk = gates.every((gate) => gate.ok);
+	      console.log(JSON.stringify({
+	        ...audit,
+	        ok: coverageOk,
+	        healthScope: "coverage",
+	        healthState: coverageOk ? "coverage_ok" : "coverage_blocked",
+	        coverageOk,
+	        runtimeOk: null,
+	        failedGates: failedGates(gates),
+	        recommendedActions: coverageAuditRecommendedActions(audit),
+	        gates
+	      }, null, 2));
+	      if (!coverageOk) process.exitCode = 1;
     } finally {
       state.close();
     }
@@ -393,16 +395,22 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "queue") {
-    const config = loadConfig(args.config);
-    const report = await collectCoverageReport(args, config);
-    const queue = buildOperatorQueue(report);
-    const durableQueue = collectOperatorReviewQueue(args["state-path"] ?? config.statePath, {
-      repo: args.repo,
-      state: parseReviewQueueJobState(args.state),
-      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
-    });
-    const budgetOutput = collectQueueBudget(args);
+	  if (command === "queue") {
+	    const config = loadConfig(args.config);
+	    const report = await collectCoverageReport(args, config);
+	    const queue = buildOperatorQueue(report);
+	    const statePath = args["state-path"] ?? config.statePath;
+	    const queueState = parseReviewQueueJobState(args.state);
+	    const durableQueue = collectOperatorReviewQueue(statePath, {
+	      repo: args.repo,
+	      state: queueState,
+	      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+	    });
+	    const budgetQueue = collectOperatorReviewQueue(statePath, {
+	      repo: args.repo,
+	      state: queueState
+	    });
+	    const budgetOutput = collectQueueBudget(config, budgetQueue.jobs);
     const gates = queueHealthGates(queue, durableQueue, budgetOutput.budget);
     const ok = gates.every((gate) => gate.ok);
     const output = {
@@ -1792,19 +1800,18 @@ function launchdUserSessionError(): string | undefined {
     : undefined;
 }
 
-function collectQueueBudget(args: ParsedArgs): {
+function collectQueueBudget(config: ReturnType<typeof loadConfig>, jobs: ReviewQueueJobRecord[]): {
   budget?: ReleaseStatus["budget"];
   budgetError?: string;
 } {
   try {
     return {
-      budget: collectReleaseStatus({
-        cwd: process.cwd(),
-        configPath: args.config,
-        expectedHead: args["expected-head"],
-        launchdLabel: args["launchd-label"],
-        statePath: args["state-path"]
-      }).budget
+      budget: buildReviewBudgetStatus({
+        config,
+        jobs,
+        includeDetails: false,
+        inputJobLimit: jobs.length
+      })
     };
   } catch (error) {
     return {
