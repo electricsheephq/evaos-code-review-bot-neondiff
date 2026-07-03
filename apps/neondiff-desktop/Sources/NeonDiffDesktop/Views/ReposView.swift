@@ -6,27 +6,41 @@ struct ReposView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Button("Load From Config") { model.inspectConfig() }
-                Button("Refresh Runtime") { model.refreshStatus() }
+            HStack(spacing: 10) {
+                Button { model.inspectConfig() } label: {
+                    Label("Load From Config", systemImage: "doc.text.magnifyingglass")
+                }
+                Button { model.refreshStatus() } label: {
+                    Label("Refresh Runtime", systemImage: "arrow.clockwise")
+                }
             }
 
-            Table(model.repos) {
-                TableColumn("Repository") { repo in
-                    Text(repo.name)
-                        .textSelection(.enabled)
-                }
-                TableColumn("Enabled") { repo in
-                    Image(systemName: repo.enabled ? "checkmark.circle.fill" : "pause.circle")
-                        .foregroundStyle(repo.enabled ? .green : .secondary)
-                }
-                TableColumn("Profile", value: \.profile)
-                TableColumn("Last Review", value: \.lastReview)
-            }
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Monitored Repositories")
+                    .font(NeonDiffTheme.headlineFont)
+                    .foregroundStyle(NeonDiffTheme.accentSoft)
 
-            Text("Repo changes are written through `config patch` only; the desktop does not post reviews or bypass daemon gates.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                Table(model.repos) {
+                    TableColumn("Repository") { repo in
+                        Text(repo.name)
+                            .textSelection(.enabled)
+                    }
+                    TableColumn("Enabled") { repo in
+                        Image(systemName: repo.enabled ? "checkmark.circle.fill" : "pause.circle")
+                            .foregroundStyle(repo.enabled ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary)
+                    }
+                    TableColumn("Profile", value: \.profile)
+                    TableColumn("Last Review", value: \.lastReview)
+                }
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 360)
+            }
+            .operatorPanel()
+
+            OperatorSection("Boundary") {
+                Text("Repo changes are written through `config patch` only; the desktop does not post reviews or bypass daemon gates.")
+                    .operatorBodyText()
+            }
         }
         .padding(24)
     }

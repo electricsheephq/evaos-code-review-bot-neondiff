@@ -4,22 +4,26 @@ struct SettingsPane: View {
     @ObservedObject var model: NeonDiffDesktopModel
 
     var body: some View {
-        Form {
-            Section("Local Paths") {
-                TextField("NeonDiff CLI", text: $model.cliPath)
-                TextField("Config", text: $model.configPath)
-                TextField("Launchd Label", text: $model.launchdLabel)
-                Button("Save Local Settings") { model.persistLocalSettings() }
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                OperatorSection("Local Paths") {
+                    OperatorTextField(title: "NeonDiff CLI", text: $model.cliPath)
+                    OperatorTextField(title: "Config", text: $model.configPath)
+                    OperatorTextField(title: "Launchd Label", text: $model.launchdLabel)
+                    Button { model.persistLocalSettings() } label: {
+                        Label("Save Local Settings", systemImage: "externaldrive.badge.checkmark")
+                    }
+                }
 
-            Section("Commands") {
-                Text(model.statusCommand.commandLine)
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-                Button("Copy Status Command") { model.copyCommand(model.statusCommand) }
+                OperatorSection("Commands") {
+                    OperatorCommandText(text: model.statusCommand.commandLine, lineLimit: 5)
+                    Button { model.copyCommand(model.statusCommand) } label: {
+                        Label("Copy Status Command", systemImage: "doc.on.doc")
+                    }
+                }
             }
+            .padding(24)
         }
-        .formStyle(.grouped)
-        .padding(20)
+        .scrollContentBackground(.hidden)
     }
 }

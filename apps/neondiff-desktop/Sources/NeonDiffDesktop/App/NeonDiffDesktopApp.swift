@@ -27,8 +27,14 @@ struct NeonDiffDesktopApp: App {
         }
 
         Settings {
-            SettingsPane(model: model)
-                .frame(width: 560)
+            ZStack {
+                OperatorBackdrop()
+                SettingsPane(model: model)
+            }
+            .buttonStyle(OperatorButtonStyle())
+            .tint(NeonDiffTheme.accent)
+            .preferredColorScheme(.dark)
+            .frame(width: 560)
         }
     }
 }

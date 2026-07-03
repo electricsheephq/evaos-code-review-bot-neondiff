@@ -4,24 +4,42 @@ struct LogsView: View {
     @ObservedObject var model: NeonDiffDesktopModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Button("Refresh Status Logs") { model.refreshStatus() }
-                Button("Copy Last Command") { model.copyCommand(model.statusCommand) }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Button { model.refreshStatus() } label: {
+                    Label("Refresh Status Logs", systemImage: "arrow.clockwise")
+                }
+                Button { model.copyCommand(model.statusCommand) } label: {
+                    Label("Copy Last Command", systemImage: "doc.on.doc")
+                }
             }
 
-            TextEditor(text: $model.logText)
-                .font(.system(.body, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(minHeight: 420)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(.quaternary)
-                }
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Redacted Output")
+                    .font(NeonDiffTheme.headlineFont)
+                    .foregroundStyle(NeonDiffTheme.accentSoft)
 
-            Text("Output is redacted before display. Raw provider keys, license keys, tokens, private keys, and credential URLs must not appear here.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                TextEditor(text: $model.logText)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(NeonDiffTheme.textPrimary)
+                    .scrollContentBackground(.hidden)
+                    .textSelection(.enabled)
+                    .frame(minHeight: 420)
+                    .padding(8)
+                    .background(Color.black.opacity(0.42))
+                    .overlay {
+                        AngularRectangle(corner: 10)
+                            .stroke(NeonDiffTheme.stroke.opacity(0.7), lineWidth: 0.8)
+                    }
+                    .clipShape(AngularRectangle(corner: 10))
+            }
+            .operatorPanel()
+
+            OperatorSection("Display Safety") {
+                Text("Output is redacted before display. Raw provider keys, license keys, tokens, private keys, and credential URLs must not appear here.")
+                    .operatorBodyText()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(24)
     }
