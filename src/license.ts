@@ -210,6 +210,7 @@ export async function evaluateLicenseReviewGate(input: {
   visibility: "public" | "private" | "unknown";
   now?: Date;
   fetchImpl?: typeof fetch;
+  refresh?: boolean;
 }): Promise<LicenseReviewGateResult> {
   if (!input.config.enabled) {
     return { ok: true, repo: input.repo, visibility: input.visibility, status: "active", reason: "license enforcement disabled" };
@@ -233,7 +234,7 @@ export async function evaluateLicenseReviewGate(input: {
   const status = await getLicenseStatus({
     config: input.config,
     repo: input.repo,
-    refresh: true,
+    refresh: input.refresh ?? true,
     now: input.now,
     fetchImpl: input.fetchImpl
   });

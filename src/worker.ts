@@ -1554,7 +1554,8 @@ export async function buildLicenseGateForPull(input: {
   return evaluateLicenseReviewGate({
     config: license,
     repo: input.repo,
-    visibility
+    visibility,
+    refresh: !input.dryRun
   });
 }
 

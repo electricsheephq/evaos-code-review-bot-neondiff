@@ -604,6 +604,63 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
+  it("uses cache-only license freshness for dry-run private review gates", async () => {
+    const root = mkRoot(roots);
+    let requests = 0;
+    const server = await startLicenseServer((_req, res) => {
+      requests += 1;
+      writeJson(res, 200, {
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        updateEntitlement: true
+      });
+    });
+    servers.push(server);
+    const config = minimalConfig(root);
+    config.license = licenseConfig(root, server.url);
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+    const github = new GitHubApi({});
+    github.getRepo = async () => ({ full_name: "owner/private", private: true as const, visibility: "private" as const });
+
+    await expect(buildLicenseGateForPull({
+      config,
+      github,
+      repo: "owner/private",
+      pull: pullSummary(15, "dry-run-cache-head"),
+      dryRun: true
+    })).resolves.toMatchObject({
+      ok: true,
+      reason: "active entitlement covers private repo review"
+    });
+    expect(requests).toBe(0);
+
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-01T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+    await expect(buildLicenseGateForPull({
+      config,
+      github,
+      repo: "owner/private",
+      pull: pullSummary(16, "dry-run-stale-cache-head"),
+      dryRun: true
+    })).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("fresh entitlement cache")
+    });
+    expect(requests).toBe(0);
+  });
+
   it("skips live metadata for public repo license gate paths", async () => {
     const root = mkRoot(roots);
     const config = minimalConfig(root);
@@ -617,6 +674,25 @@ describe("license activation and entitlement cache", () => {
       github,
       repo: "owner/public",
       pull: publicPullSummary(9, "public-head"),
+      dryRun: false
+    })).resolves.toMatchObject({
+      ok: true,
+      visibility: "public",
+      reason: "public repo path is free"
+    });
+
+    const publicWithoutVisibility = publicPullSummary(17, "public-private-flag-head");
+    await expect(buildLicenseGateForPull({
+      config,
+      github,
+      repo: "owner/public",
+      pull: {
+        ...publicWithoutVisibility,
+        base: {
+          ...publicWithoutVisibility.base,
+          repo: { full_name: "owner/public", private: false }
+        }
+      },
       dryRun: false
     })).resolves.toMatchObject({
       ok: true,
