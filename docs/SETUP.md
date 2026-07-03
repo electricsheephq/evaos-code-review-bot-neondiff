@@ -151,6 +151,13 @@ Launchd and live beta promotion are advanced operator tasks. Use
 [docs/beta-release-runbook.md](beta-release-runbook.md) only after dry-run proof
 passes.
 
+Public source-beta promotion additionally uses
+[docs/public-release-manifest.json](public-release-manifest.json). The manifest
+declares the current public beta version, setup/release-notes alignment, license
+API state, and update-channel readiness. A local source beta may explicitly
+defer license API, website, or desktop channels only when the manifest marks
+that channel as `requiredForThisRelease: false`.
+
 ## Troubleshooting
 
 - `doctor` cannot read repos: verify GitHub App installation, app ID, private

@@ -164,3 +164,11 @@ proof gates close.
 For live beta operation, use [docs/beta-release-runbook.md](docs/beta-release-runbook.md)
 and [docs/release-governance.md](docs/release-governance.md). Documentation-only
 changes do not restart launchd or promote a release by themselves.
+
+For public source-beta release readiness, use
+[docs/public-release-manifest.json](docs/public-release-manifest.json) with
+`neondiff release-status --public-release-manifest docs/public-release-manifest.json --expected-public-version <public-beta-tag>`.
+Replace `<public-beta-tag>` with the actual semver prerelease tag, such as
+`v1.0.0-beta.1`; the CLI rejects literal placeholders. The manifest is the
+compact version/alignment surface for setup docs, release notes, license API
+state, and update-channel readiness.
