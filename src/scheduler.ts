@@ -183,6 +183,8 @@ export async function runScheduledCycleWithDeps(input: {
   const budget = new ReviewRunBudget(Math.max(1, scheduler.maxProviderActive));
   const attemptedJobIds = new Set<string>();
   const attemptedJobs: ReviewQueueJobRecord[] = [];
+  // Lease just before execution to avoid idle active rows. This intentionally
+  // performs a bounded scan per provider slot, not one bulk pre-lease.
   for (let leaseAttempt = 0; leaseAttempt < scheduler.maxProviderActive; leaseAttempt += 1) {
     const leased = input.state.leaseNextReviewQueueJobs({
       maxProviderActive: scheduler.maxProviderActive,
