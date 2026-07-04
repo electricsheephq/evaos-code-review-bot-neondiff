@@ -44,6 +44,7 @@ export type FinishingTouchRequestValidationResult =
       ok: false;
       reason:
         | "untrusted_author"
+        | "missing_explicit_head_sha"
         | "stale_head"
         | "dirty_worktree"
         | "secret_detected";
@@ -128,11 +129,11 @@ export interface FinishingTouchDryRunContract {
 }
 
 const COMMAND_PHRASES: Array<[FinishingTouchAction, string[]]> = [
-  ["generate_tests", ["generate tests", "generate unit tests"]],
-  ["generate_docs", ["generate docs", "generate documentation", "docs draft"]],
+  ["generate_tests", ["generate tests", "generate unit tests", "draft tests", "draft unit tests"]],
+  ["generate_docs", ["generate docs", "generate documentation", "docs draft", "draft docs", "draft documentation"]],
   ["generate_docstrings", ["generate docstrings"]],
   ["simplify_suggestion", ["simplify suggestion"]],
-  ["changelog_draft", ["changelog draft", "release notes draft", "draft changelog"]],
+  ["changelog_draft", ["changelog draft", "release notes draft", "draft changelog", "draft release notes"]],
   ["explain_risk", ["explain risk", "risk explanation", "explain risks"]],
   ["make_review_ready", ["make review-ready", "make review ready", "review-ready checklist"]]
 ];
@@ -174,11 +175,21 @@ export function validateFinishingTouchRequest(
       secretScan: "not_scanned"
     };
   }
-  if (input.currentHeadSha && input.currentHeadSha !== input.headSha) {
+  const targetHeadSha = input.headSha.trim();
+  const currentHeadSha = input.currentHeadSha?.trim() ?? "";
+  if (!isFullGitSha(targetHeadSha) || !isFullGitSha(currentHeadSha)) {
+    return {
+      ok: false,
+      reason: "missing_explicit_head_sha",
+      detail: "Finishing-touch commands require explicit 40-character target and current head SHAs.",
+      secretScan: "not_scanned"
+    };
+  }
+  if (currentHeadSha !== targetHeadSha) {
     return {
       ok: false,
       reason: "stale_head",
-      detail: `Command targeted ${input.headSha}, but current head is ${input.currentHeadSha}.`,
+      detail: `Command targeted ${targetHeadSha}, but current head is ${currentHeadSha}.`,
       secretScan: "not_scanned"
     };
   }

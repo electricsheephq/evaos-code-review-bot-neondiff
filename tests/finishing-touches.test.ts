@@ -24,6 +24,18 @@ describe("finishing-touch draft commands", () => {
       botMentions: ["@evaos-code-review-bot"]
     })).toMatchObject({ action: "generate_tests" });
     expect(parseFinishingTouchCommand({
+      body: "@neondiff draft tests",
+      botMentions: ["@neondiff"]
+    })).toMatchObject({ action: "generate_tests", phrase: "draft tests" });
+    expect(parseFinishingTouchCommand({
+      body: "@neondiff draft docs",
+      botMentions: ["@neondiff"]
+    })).toMatchObject({ action: "generate_docs", phrase: "draft docs" });
+    expect(parseFinishingTouchCommand({
+      body: "@neondiff draft changelog",
+      botMentions: ["@neondiff"]
+    })).toMatchObject({ action: "changelog_draft", phrase: "draft changelog" });
+    expect(parseFinishingTouchCommand({
       body: "@evaos-code-review-bot explain risk!",
       botMentions: ["@evaos-code-review-bot"]
     })).toMatchObject({ action: "explain_risk" });
@@ -84,6 +96,36 @@ describe("finishing-touch draft commands", () => {
       reason: "secret_detected",
       secretScan: "failed"
     });
+  });
+
+  it("requires explicit full target and current head SHAs before generation can pass", () => {
+    const base = {
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: fullHeadSha,
+      currentHeadSha: fullHeadSha,
+      commentId: 123,
+      author: "100yenadmin",
+      trustedAuthors: ["100yenadmin"],
+      worktreeClean: true,
+      action: "generate_tests" as const
+    };
+
+    for (const input of [
+      { ...base, headSha: "" },
+      { ...base, headSha: "HEAD" },
+      { ...base, headSha: "0123456" },
+      { ...base, currentHeadSha: undefined },
+      { ...base, currentHeadSha: "" },
+      { ...base, currentHeadSha: "HEAD" },
+      { ...base, currentHeadSha: "0123456" }
+    ]) {
+      expect(validateFinishingTouchRequest(input), JSON.stringify(input)).toMatchObject({
+        ok: false,
+        reason: "missing_explicit_head_sha",
+        secretScan: "not_scanned"
+      });
+    }
   });
 
   it("builds draft-only proposal output without enabling mutation", () => {
