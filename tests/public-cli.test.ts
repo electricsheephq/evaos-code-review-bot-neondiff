@@ -46,6 +46,8 @@ describe("public NeonDiff CLI surface", () => {
       "config inspect",
       "config patch",
       "pricing",
+      "providers list",
+      "providers doctor",
       "doctor",
       "doctor github",
       "daemon start",
@@ -59,6 +61,9 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("neondiff pricing");
+    expect(output.examples).toContain("neondiff providers list --config config.local.json --json");
+    expect(output.examples).toContain("neondiff providers doctor --config config.local.json --json");
+    expect(output.examples).toContain("neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json");
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
@@ -137,6 +142,113 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(stdout).toContain("does not include hosted model credits");
     expect(stdout).not.toMatch(/"includedHostedModelCredits":\s*true|bundled provider tokens included/i);
+  });
+
+  it("lists and doctors providers without hiding env-var names or printing keys", async () => {
+    const list = JSON.parse((await runCli(["providers", "list"])).stdout);
+    const doctor = JSON.parse((await runCli(["providers", "doctor"])).stdout);
+
+    expect(list).toMatchObject({
+      ok: true,
+      command: "providers list",
+      defaultProviderId: "zcode-glm"
+    });
+    expect(list.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "openai-compatible",
+        authMode: "api-key-env",
+        apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
+      }),
+      expect.objectContaining({
+        id: "ollama-local",
+        adapter: "openai-compatible"
+      })
+    ]));
+    expect(JSON.stringify(list)).not.toMatch(/sk-[A-Za-z0-9]|provider-secret/i);
+
+    expect(doctor).toMatchObject({
+      ok: true,
+      command: "providers doctor",
+      defaultProviderId: "zcode-glm",
+      checks: [
+        expect.objectContaining({
+          providerId: "zcode-glm",
+          ok: true,
+          readMode: "metadata_only"
+        })
+      ]
+    });
+  });
+
+  it("runs providers doctor smoke through the public CLI against a local OpenAI-compatible endpoint", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cli-"));
+    roots.push(root);
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/v1/models") {
+        response.end(JSON.stringify({ data: [{ id: "local-review-model" }] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: `unexpected ${request.method} ${url.pathname}` }));
+    });
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        providers: {
+          defaultProviderId: "ollama-local",
+          providers: {
+            "ollama-local": {
+              enabled: true,
+              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              model: "local-review-model",
+              authMode: "none"
+            }
+          }
+        }
+      })}\n`);
+
+      const output = JSON.parse((await runCli([
+        "providers",
+        "doctor",
+        "--config",
+        configPath,
+        "--provider",
+        "ollama-local",
+        "--smoke",
+        "true"
+      ])).stdout);
+
+      expect(output).toMatchObject({
+        ok: true,
+        command: "providers doctor",
+        providerId: "ollama-local",
+        checks: [
+          expect.objectContaining({
+            providerId: "ollama-local",
+            ok: true,
+            smokeAttempted: true,
+            readMode: "openai_compatible_models",
+            modelCount: 1
+          })
+        ]
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects malformed provider ids before reflecting them", async () => {
+    await expect(runCli(["providers", "doctor", "--provider", "sk-live-secret-secret-secret-secret"])).rejects.toMatchObject({
+      stdout: expect.stringContaining("--provider must be a stable provider identifier")
+    });
   });
 
   it("doctor github proves App installation reads without printing secrets", async () => {

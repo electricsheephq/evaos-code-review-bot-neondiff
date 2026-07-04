@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { dirname, join } from "node:path";
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
@@ -6,6 +7,8 @@ import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
+import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
+import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
 const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
@@ -58,6 +61,7 @@ export interface BotConfig {
   issueEnrichment?: IssueEnrichmentConfig;
   license?: LicenseConfig;
   desktop?: DesktopConfig;
+  providers?: ProviderRegistryConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -292,6 +296,113 @@ const DEFAULT_CONFIG: BotConfig = {
     openAICompatibleEndpoint: "http://localhost:8000/v1",
     updateChannel: "dev"
   },
+  providers: {
+    defaultProviderId: "zcode-glm",
+    providers: {
+      "zcode-glm": {
+        enabled: true,
+        adapter: "zcode",
+        displayName: "GLM/Z.ai through ZCode",
+        model: "GLM-5.2",
+        authMode: "zcode-app-config",
+        contextWindowTokens: 128_000,
+        timeoutMs: 180_000,
+        retryMaxRetries: 0,
+        capabilities: {
+          review: true,
+          jsonOutput: true,
+          local: false,
+          streaming: false
+        }
+      },
+      "ollama-local": {
+        enabled: false,
+        adapter: "openai-compatible",
+        displayName: "Ollama local OpenAI-compatible endpoint",
+        baseUrl: "http://localhost:11434/v1",
+        model: "qwen2.5-coder:7b",
+        authMode: "none",
+        contextWindowTokens: 32_000,
+        timeoutMs: 180_000,
+        retryMaxRetries: 1,
+        capabilities: {
+          review: true,
+          jsonOutput: true,
+          local: true,
+          streaming: false
+        }
+      },
+      "openai-compatible": {
+        enabled: false,
+        adapter: "openai-compatible",
+        displayName: "OpenAI-compatible BYOK or gateway endpoint",
+        baseUrl: "https://example.invalid/v1",
+        model: "model-id",
+        authMode: "api-key-env",
+        apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+        contextWindowTokens: 128_000,
+        timeoutMs: 180_000,
+        retryMaxRetries: 1,
+        capabilities: {
+          review: true,
+          jsonOutput: true,
+          local: false,
+          streaming: false
+        }
+      },
+      anthropic: {
+        enabled: false,
+        adapter: "anthropic",
+        displayName: "Anthropic native adapter placeholder",
+        model: "claude-sonnet-4",
+        authMode: "api-key-env",
+        apiKeyEnv: "ANTHROPIC_API_KEY",
+        contextWindowTokens: 200_000,
+        timeoutMs: 180_000,
+        retryMaxRetries: 1,
+        capabilities: {
+          review: false,
+          jsonOutput: true,
+          local: false,
+          streaming: false
+        }
+      },
+      openai: {
+        enabled: false,
+        adapter: "openai",
+        displayName: "OpenAI native adapter placeholder",
+        model: "gpt-4.1",
+        authMode: "api-key-env",
+        apiKeyEnv: "OPENAI_API_KEY",
+        contextWindowTokens: 128_000,
+        timeoutMs: 180_000,
+        retryMaxRetries: 1,
+        capabilities: {
+          review: false,
+          jsonOutput: true,
+          local: false,
+          streaming: false
+        }
+      },
+      gemini: {
+        enabled: false,
+        adapter: "gemini",
+        displayName: "Gemini native adapter placeholder",
+        model: "gemini-2.5-pro",
+        authMode: "api-key-env",
+        apiKeyEnv: "GEMINI_API_KEY",
+        contextWindowTokens: 1_000_000,
+        timeoutMs: 180_000,
+        retryMaxRetries: 1,
+        capabilities: {
+          review: false,
+          jsonOutput: true,
+          local: false,
+          streaming: false
+        }
+      }
+    }
+  },
   commands: {
     enabled: false,
     botMentions: ["@evaos-code-review-bot"],
@@ -403,6 +514,9 @@ function validateConfig(config: BotConfig): void {
   const desktop = config.desktop ?? DEFAULT_CONFIG.desktop!;
   config.desktop = desktop;
   validateDesktopConfig(desktop, "config.desktop");
+  const providers = config.providers ?? DEFAULT_CONFIG.providers!;
+  config.providers = providers;
+  validateProviderRegistryConfig(providers, "config.providers");
   validateBoolean(config.commands.enabled, "config.commands.enabled");
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
@@ -667,8 +781,64 @@ function validateLicenseApiBaseUrl(value: unknown, label: string): void {
 }
 
 function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+  const normalized = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (normalized === "localhost" || normalized === "::1") return true;
+  if (isIP(normalized) === 4) return normalized.split(".")[0] === "127";
+  const mappedIpv4 = ipv4MappedIpv6Address(normalized);
+  return mappedIpv4 ? isLoopbackHost(mappedIpv4) : false;
+}
+
+function isUnsafeProviderHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (isLoopbackHost(hostname)) return false;
+  if (
+    normalized === "metadata" ||
+    normalized === "metadata.google.internal" ||
+    normalized === "metadata.azure.internal" ||
+    normalized === "0.0.0.0" ||
+    normalized === "169.254.169.254" ||
+    normalized === "100.100.100.200"
+  ) {
+    return true;
+  }
+  const ipVersion = isIP(normalized);
+  if (ipVersion === 4) return isPrivateOrLinkLocalIpv4(normalized);
+  if (ipVersion === 6) return isPrivateOrLinkLocalIpv6(normalized);
+  return false;
+}
+
+function isPrivateOrLinkLocalIpv4(value: string): boolean {
+  const parts = value.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [a, b] = parts;
+  return a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127);
+}
+
+function isPrivateOrLinkLocalIpv6(value: string): boolean {
+  const mappedIpv4 = ipv4MappedIpv6Address(value);
+  if (mappedIpv4) return isPrivateOrLinkLocalIpv4(mappedIpv4);
+  const firstHextet = Number.parseInt(value.split(":")[0] ?? "", 16);
+  return value === "::" ||
+    value.startsWith("fc") ||
+    value.startsWith("fd") ||
+    (Number.isInteger(firstHextet) && firstHextet >= 0xfe80 && firstHextet <= 0xfebf);
+}
+
+function ipv4MappedIpv6Address(value: string): string | undefined {
+  const normalized = value.toLowerCase();
+  if (!normalized.startsWith("::ffff:")) return undefined;
+  const suffix = normalized.slice("::ffff:".length);
+  if (isIP(suffix) === 4) return suffix;
+  const parts = suffix.split(":");
+  if (parts.length !== 2) return undefined;
+  const high = Number.parseInt(parts[0], 16);
+  const low = Number.parseInt(parts[1], 16);
+  if ([high, low].some((part) => !Number.isInteger(part) || part < 0 || part > 0xffff)) return undefined;
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
 }
 
 function validateDesktopConfig(value: unknown, label: string): void {
@@ -680,6 +850,115 @@ function validateDesktopConfig(value: unknown, label: string): void {
   }
   if (typeof value.updateChannel === "string" && value.updateChannel.trim().length === 0) {
     throw new Error(`${label}.updateChannel must not be empty`);
+  }
+}
+
+function validateProviderRegistryConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateOptionalString(value.defaultProviderId, `${label}.defaultProviderId`);
+  if (typeof value.defaultProviderId !== "string" || value.defaultProviderId.trim().length === 0) {
+    throw new Error(`${label}.defaultProviderId must be a non-empty string`);
+  }
+  if (!isRecord(value.providers)) throw new Error(`${label}.providers must be an object`);
+  if (!Object.prototype.hasOwnProperty.call(value.providers, value.defaultProviderId)) {
+    throw new Error(`${label}.defaultProviderId must reference a configured provider`);
+  }
+  for (const [providerId, provider] of Object.entries(value.providers)) {
+    validateProviderId(providerId, `${label}.providers`);
+    validateProviderRegistryEntry(provider, `${label}.providers.${providerId}`);
+  }
+}
+
+function validateProviderRegistryEntry(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (typeof value.adapter !== "string") throw new Error(`${label}.adapter must be a string`);
+  if (typeof value.authMode !== "string") throw new Error(`${label}.authMode must be a string`);
+  const adapter = value.adapter;
+  const authMode = value.authMode;
+  if (!["zcode", "openai-compatible", "anthropic", "openai", "gemini"].includes(adapter)) {
+    throw new Error(`${label}.adapter must be zcode, openai-compatible, anthropic, openai, or gemini`);
+  }
+  validateOptionalString(value.displayName, `${label}.displayName`);
+  validateOptionalString(value.baseUrl, `${label}.baseUrl`);
+  if (typeof value.baseUrl === "string") validateProviderBaseUrl(value.baseUrl, `${label}.baseUrl`);
+  validateOptionalString(value.model, `${label}.model`);
+  if (typeof value.model !== "string" || value.model.trim().length === 0) throw new Error(`${label}.model must be a non-empty string`);
+  if (!["zcode-app-config", "api-key-env", "none"].includes(authMode)) {
+    throw new Error(`${label}.authMode must be zcode-app-config, api-key-env, or none`);
+  }
+  validateProviderAdapterAuthMode(adapter, authMode, label);
+  validateOptionalString(value.apiKeyEnv, `${label}.apiKeyEnv`);
+  if (typeof value.apiKeyEnv === "string" && !isApiKeyEnvName(value.apiKeyEnv)) {
+    throw new Error(`${label}.apiKeyEnv must be an uppercase environment variable name, not a provider key`);
+  }
+  if (value.contextWindowTokens !== undefined) validatePositiveInteger(value.contextWindowTokens, `${label}.contextWindowTokens`);
+  if (value.timeoutMs !== undefined) validatePositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
+  if (value.retryMaxRetries !== undefined) validateNonNegativeInteger(value.retryMaxRetries, `${label}.retryMaxRetries`);
+  if (!isRecord(value.capabilities)) throw new Error(`${label}.capabilities must be an object`);
+  for (const capability of ["review", "jsonOutput", "local", "streaming"] as const) {
+    validateBoolean(value.capabilities[capability], `${label}.capabilities.${capability}`);
+  }
+  if (typeof value.baseUrl === "string" && isLoopbackProviderBaseUrl(value.baseUrl) && value.capabilities.local !== true) {
+    throw new Error(`${label}.capabilities.local must be true for loopback provider baseUrl`);
+  }
+  if (adapter === "openai-compatible" && value.enabled === true && typeof value.baseUrl !== "string") {
+    throw new Error(`${label}.baseUrl is required when enabled openai-compatible provider`);
+  }
+  if (authMode === "api-key-env" && value.enabled === true && typeof value.apiKeyEnv !== "string") {
+    throw new Error(`${label}.apiKeyEnv is required when enabled provider uses api-key-env`);
+  }
+}
+
+function validateProviderAdapterAuthMode(adapter: string, authMode: string, label: string): void {
+  const allowedByAdapter: Record<string, string[]> = {
+    zcode: ["zcode-app-config"],
+    "openai-compatible": ["api-key-env", "none"],
+    anthropic: ["api-key-env"],
+    openai: ["api-key-env"],
+    gemini: ["api-key-env"]
+  };
+  if (!allowedByAdapter[adapter]?.includes(authMode)) {
+    throw new Error(`${label}.authMode ${authMode} is not supported for ${adapter} provider`);
+  }
+}
+
+function validateProviderId(value: string, label: string): void {
+  if (!isProviderId(value)) {
+    throw new Error(`${label} keys must be stable provider identifiers`);
+  }
+}
+
+function validateProviderBaseUrl(value: string, label: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid URL`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error(`${label} must use http or https`);
+  if (parsed.username || parsed.password) throw new Error(`${label} must not include username or password credentials`);
+  if (containsSecretLikeText(decodeURIComponent(`${parsed.pathname}${parsed.hash}`))) {
+    throw new Error(`${label} must not include secret-like path or fragment values`);
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (/(key|token|secret|password|session|cookie)/i.test(key)) {
+      throw new Error(`${label} must not include credential query parameters`);
+    }
+  }
+  if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
+    throw new Error(`${label} must use https unless it points to localhost/loopback`);
+  }
+  if (isUnsafeProviderHost(parsed.hostname)) {
+    throw new Error(`${label} must not point to private, link-local, or cloud metadata hosts`);
+  }
+}
+
+function isLoopbackProviderBaseUrl(value: string): boolean {
+  try {
+    return isLoopbackHost(new URL(value).hostname);
+  } catch {
+    return false;
   }
 }
 

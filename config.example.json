@@ -60,6 +60,63 @@
     "openAICompatibleEndpoint": "http://localhost:8000/v1",
     "updateChannel": "dev"
   },
+  "providers": {
+    "_comment": "Provider registry metadata for operator/desktop setup. API keys stay in environment variables or provider app config, never in this JSON file.",
+    "defaultProviderId": "zcode-glm",
+    "providers": {
+      "zcode-glm": {
+        "enabled": true,
+        "adapter": "zcode",
+        "displayName": "GLM/Z.ai through ZCode",
+        "model": "GLM-5.2",
+        "authMode": "zcode-app-config",
+        "contextWindowTokens": 128000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 0,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      },
+      "ollama-local": {
+        "enabled": false,
+        "adapter": "openai-compatible",
+        "displayName": "Ollama local OpenAI-compatible endpoint",
+        "baseUrl": "http://localhost:11434/v1",
+        "model": "qwen2.5-coder:7b",
+        "authMode": "none",
+        "contextWindowTokens": 32000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 1,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": true,
+          "streaming": false
+        }
+      },
+      "openai-compatible": {
+        "enabled": false,
+        "adapter": "openai-compatible",
+        "displayName": "OpenAI-compatible BYOK or gateway endpoint",
+        "baseUrl": "https://example.invalid/v1",
+        "model": "model-id",
+        "authMode": "api-key-env",
+        "apiKeyEnv": "NEONDIFF_PROVIDER_API_KEY",
+        "contextWindowTokens": 128000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 1,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      }
+    }
+  },
   "commands": {
     "enabled": false,
     "botMentions": ["@evaos-code-review-bot"],

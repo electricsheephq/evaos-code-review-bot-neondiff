@@ -50,6 +50,8 @@ describe("desktop config CLI", () => {
     expect(output.editablePaths).toContain("zcode.model");
     expect(output.editablePaths).toContain("desktop.openAICompatibleEndpoint");
     expect(output.editablePaths).toContain("github.appId");
+    expect(output.editablePaths).toContain("providers.defaultProviderId");
+    expect(output.editablePaths).toContain("providers.providers.<provider-id>.<desktop-safe-provider-field>");
     expect(output.editablePaths).not.toContain("github.apiBaseUrl");
     expect(output.editablePaths).not.toContain("github.privateKeyPath");
     expect(output.editablePaths).not.toContain("workRoot");
@@ -137,6 +139,91 @@ describe("desktop config CLI", () => {
     expect(readFileSync(configPath, "utf8")).toBe(before);
     expect(output.config.zcode.model).toBe("GLM-5.2-Air");
     expect(output.config.desktop.openAICompatibleEndpoint).toBe("http://localhost:8001/v1");
+  });
+
+  it("dry-runs provider metadata patches without allowing provider secrets", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    const secretPatchPath = join(root, "secret-provider-patch.json");
+    const secretApiKeyEnvPatchPath = join(root, "secret-provider-env-patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+    writeConfig(patchPath, {
+      providers: {
+        defaultProviderId: "ollama-local",
+        providers: {
+          "ollama-local": {
+            enabled: true,
+            baseUrl: "http://localhost:11434/v1",
+            model: "qwen2.5-coder:14b",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true
+            }
+          },
+          "openai-compatible": {
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
+          }
+        }
+      }
+    });
+    writeConfig(secretPatchPath, {
+      providers: {
+        providers: {
+          "openai-compatible": {
+            baseUrl: "https://gateway.example.test/v1?api_key=sk-live-secret-secret-secret-secret"
+          }
+        }
+      }
+    });
+    writeConfig(secretApiKeyEnvPatchPath, {
+      providers: {
+        providers: {
+          "openai-compatible": {
+            apiKeyEnv: "sk-live-secret-secret-secret-secret"
+          }
+        }
+      }
+    });
+
+    const output = await runConfig(["config", "patch", "--config", configPath, "--input", patchPath]);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: true,
+      wrote: false,
+      changedPaths: [
+        "providers.defaultProviderId",
+        "providers.providers.ollama-local.enabled",
+        "providers.providers.ollama-local.baseUrl",
+        "providers.providers.ollama-local.model",
+        "providers.providers.ollama-local.authMode",
+        "providers.providers.ollama-local.capabilities.review",
+        "providers.providers.ollama-local.capabilities.jsonOutput",
+        "providers.providers.openai-compatible.apiKeyEnv"
+      ]
+    });
+    expect(output.config.providers.defaultProviderId).toBe("ollama-local");
+    expect(output.config.providers.providers["openai-compatible"].apiKeyEnv).toBe("NEONDIFF_PROVIDER_API_KEY");
+
+    const rejected = await runConfig(["config", "patch", "--config", configPath, "--input", secretPatchPath]);
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("secret-like text")
+    });
+    expect(JSON.stringify(rejected)).not.toContain("sk-live-secret");
+    const rejectedApiKeyEnv = await runConfig(["config", "patch", "--config", configPath, "--input", secretApiKeyEnvPatchPath]);
+    expect(rejectedApiKeyEnv).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("secret-like text")
+    });
+    expect(JSON.stringify(rejectedApiKeyEnv)).not.toContain("sk-live-secret");
   });
 
   it("requires confirm for live writes, then writes atomically while preserving unknown fields", async () => {

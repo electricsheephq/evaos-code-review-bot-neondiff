@@ -13,9 +13,10 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { loadConfig, loadConfigFromObject, type RepoProfileConfig } from "./config.js";
+import { isApiKeyEnvName } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
-const SECRET_KEY_PATTERN = /(?:token|secret|password|cookie|license|api[_-]?key|privateKey)/i;
+const SECRET_KEY_PATTERN = /(?:token|secret|password|cookie|license|api[_-]?key(?!env)|privateKey)/i;
 const REPO_PROFILE_DESKTOP_SAFE_FIELDS = [
   "enabled",
   "displayName",
@@ -47,7 +48,8 @@ const EXACT_PATCH_PATHS = new Set([
   "github.botLogin",
   "github.requestTimeoutMs",
   "desktop.openAICompatibleEndpoint",
-  "desktop.updateChannel"
+  "desktop.updateChannel",
+  "providers.defaultProviderId"
 ]);
 
 const REPO_PROFILE_FIELD_PATTERN =
@@ -55,6 +57,12 @@ const REPO_PROFILE_FIELD_PATTERN =
 
 const REPO_PROFILE_NESTED_PATTERN =
   new RegExp(`^repoProfiles\\.repos\\.(${CONFIG_NAME_SEGMENT_PATTERN}\\/${CONFIG_NAME_SEGMENT_PATTERN})\\.(?:autoReview\\.(?:baseBranches|labels)|preMergeChecks\\.(?:title|description|linkedIssue|testEvidence|docs|docstrings)\\.(?:mode|instructions|threshold)|finishingTouches\\.(?:docs|docstrings|unitTests|simplifySuggestion|changelogDraft|riskExplanation|reviewReady|stackedPr)\\.(?:enabled|instructions))$`);
+
+const PROVIDER_SAFE_FIELD_PATTERN =
+  new RegExp(`^providers\\.providers\\.(${CONFIG_NAME_SEGMENT_PATTERN})\\.(?:enabled|adapter|displayName|baseUrl|model|authMode|apiKeyEnv|contextWindowTokens|timeoutMs|retryMaxRetries)$`);
+
+const PROVIDER_CAPABILITY_PATTERN =
+  new RegExp(`^providers\\.providers\\.(${CONFIG_NAME_SEGMENT_PATTERN})\\.capabilities\\.(?:review|jsonOutput|local|streaming)$`);
 
 export interface ConfigInspectResult {
   ok: true;
@@ -161,7 +169,7 @@ export function patchConfigForDesktop(input: {
   if (unsupportedKey) {
     return failedPatch(input, configPath, inputPath, unsupportedDottedKeyError(unsupportedKey));
   }
-  const patchText = JSON.stringify(patch);
+  const patchText = JSON.stringify(maskAllowedSecretPointerFields(patch));
   if (containsSecretLikeText(patchText)) {
     return failedPatch(input, configPath, inputPath, "patch input contains secret-like text; store provider and license keys in Keychain instead");
   }
@@ -219,7 +227,9 @@ export function redactConfigObject(value: unknown): unknown {
   }
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    output[key] = SECRET_KEY_PATTERN.test(key) ? redactSecretValue(entry) : redactConfigObject(entry);
+    output[key] = key === "apiKeyEnv" && typeof entry === "string"
+      ? entry
+      : SECRET_KEY_PATTERN.test(key) ? redactSecretValue(entry) : redactConfigObject(entry);
   }
   return output;
 }
@@ -227,6 +237,8 @@ export function redactConfigObject(value: unknown): unknown {
 export function editablePatchPaths(): string[] {
   return [
     ...EXACT_PATCH_PATHS,
+    "providers.providers.<provider-id>.<desktop-safe-provider-field>",
+    "providers.providers.<provider-id>.capabilities.<capability>",
     "repoProfiles.repos.<owner/repo>.<desktop-safe-field>",
     "repoProfiles.orgFallbacks.<owner>.<desktop-safe-field>"
   ].sort();
@@ -269,7 +281,11 @@ function isPatchPathAllowed(path: string): boolean {
     return repo ? isConfigRepoName(repo) : Boolean(owner && isConfigNameSegment(owner));
   }
   const nestedMatch = path.match(REPO_PROFILE_NESTED_PATTERN);
-  return Boolean(nestedMatch?.[1] && isConfigRepoName(nestedMatch[1]));
+  if (nestedMatch?.[1] && isConfigRepoName(nestedMatch[1])) return true;
+  const providerFieldMatch = path.match(PROVIDER_SAFE_FIELD_PATTERN);
+  if (providerFieldMatch?.[1] && isConfigNameSegment(providerFieldMatch[1])) return true;
+  const providerCapabilityMatch = path.match(PROVIDER_CAPABILITY_PATTERN);
+  return Boolean(providerCapabilityMatch?.[1] && isConfigNameSegment(providerCapabilityMatch[1]));
 }
 
 function setNestedValue(target: Record<string, unknown>, path: string[], value: unknown): void {
@@ -353,6 +369,18 @@ function writeConfigAtomic(configPath: string, value: unknown, fileOps?: Partial
 function redactSecretValue(value: unknown): unknown {
   if (value === undefined || value === null) return value;
   return "[redacted-secret]";
+}
+
+function maskAllowedSecretPointerFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => maskAllowedSecretPointerFields(entry));
+  if (!isRecord(value)) return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    output[key] = key === "apiKeyEnv" && typeof entry === "string" && isApiKeyEnvName(entry)
+      ? "[env-var-name]"
+      : maskAllowedSecretPointerFields(entry);
+  }
+  return output;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
