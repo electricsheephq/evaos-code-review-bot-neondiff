@@ -53,25 +53,29 @@ describe("finishing-touch draft commands", () => {
       action: "generate_tests" as const
     };
 
-    expect(validateFinishingTouchRequest(base)).toEqual({ ok: true });
+    expect(validateFinishingTouchRequest(base)).toEqual({ ok: true, secretScan: "passed" });
     expect(validateFinishingTouchRequest({ ...base, author: "stranger" })).toMatchObject({
       ok: false,
-      reason: "untrusted_author"
+      reason: "untrusted_author",
+      secretScan: "not_scanned"
     });
     expect(validateFinishingTouchRequest({ ...base, currentHeadSha: "head-b" })).toMatchObject({
       ok: false,
-      reason: "stale_head"
+      reason: "stale_head",
+      secretScan: "not_scanned"
     });
     expect(validateFinishingTouchRequest({ ...base, worktreeClean: false })).toMatchObject({
       ok: false,
-      reason: "dirty_worktree"
+      reason: "dirty_worktree",
+      secretScan: "not_scanned"
     });
     expect(validateFinishingTouchRequest({
       ...base,
       proposedOutput: "token ghp_123456789012345678901234567890123456"
     })).toMatchObject({
       ok: false,
-      reason: "secret_detected"
+      reason: "secret_detected",
+      secretScan: "failed"
     });
   });
 
@@ -122,7 +126,7 @@ describe("finishing-touch draft commands", () => {
       currentHeadSha: "head-a",
       worktreeClean: true,
       trustedAuthors: ["100yenadmin"],
-      validation: { ok: true }
+      validation: { ok: true, secretScan: "passed" }
     });
 
     expect(contract).toMatchObject({
@@ -173,7 +177,12 @@ describe("finishing-touch draft commands", () => {
     const failureCases = [
       {
         name: "untrusted_author",
-        validation: { ok: false, reason: "untrusted_author", detail: "Author stranger is not trusted." } as const,
+        validation: {
+          ok: false,
+          reason: "untrusted_author",
+          detail: "Author stranger is not trusted.",
+          secretScan: "not_scanned"
+        } as const,
         trustedAuthors: ["maintainer"],
         currentHeadSha: "head-a",
         worktreeClean: true,
@@ -186,7 +195,12 @@ describe("finishing-touch draft commands", () => {
       },
       {
         name: "stale_head",
-        validation: { ok: false, reason: "stale_head", detail: "Command targeted head-a, but current head is head-b." } as const,
+        validation: {
+          ok: false,
+          reason: "stale_head",
+          detail: "Command targeted head-a, but current head is head-b.",
+          secretScan: "not_scanned"
+        } as const,
         trustedAuthors: ["100yenadmin"],
         currentHeadSha: "head-b",
         worktreeClean: true,
@@ -199,7 +213,12 @@ describe("finishing-touch draft commands", () => {
       },
       {
         name: "dirty_worktree",
-        validation: { ok: false, reason: "dirty_worktree", detail: "Refusing finishing-touch draft while the worktree is dirty." } as const,
+        validation: {
+          ok: false,
+          reason: "dirty_worktree",
+          detail: "Refusing finishing-touch draft while the worktree is dirty.",
+          secretScan: "not_scanned"
+        } as const,
         trustedAuthors: ["100yenadmin"],
         currentHeadSha: "head-a",
         worktreeClean: false,
@@ -212,7 +231,12 @@ describe("finishing-touch draft commands", () => {
       },
       {
         name: "secret_detected",
-        validation: { ok: false, reason: "secret_detected", detail: "Refusing finishing-touch draft because proposed output contains secret-like text." } as const,
+        validation: {
+          ok: false,
+          reason: "secret_detected",
+          detail: "Refusing finishing-touch draft because proposed output contains secret-like text.",
+          secretScan: "failed"
+        } as const,
         trustedAuthors: ["100yenadmin"],
         currentHeadSha: "head-a",
         worktreeClean: true,

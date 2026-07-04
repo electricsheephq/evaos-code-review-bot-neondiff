@@ -39,7 +39,7 @@ export interface FinishingTouchRequestValidationInput {
 }
 
 export type FinishingTouchRequestValidationResult =
-  | { ok: true }
+  | { ok: true; secretScan: "passed" }
   | {
       ok: false;
       reason:
@@ -48,6 +48,7 @@ export type FinishingTouchRequestValidationResult =
         | "dirty_worktree"
         | "secret_detected";
       detail: string;
+      secretScan: FinishingTouchSecretScanState;
     };
 
 export interface BuildFinishingTouchDraftInput {
@@ -169,31 +170,35 @@ export function validateFinishingTouchRequest(
     return {
       ok: false,
       reason: "untrusted_author",
-      detail: `Author ${input.author} is not trusted for finishing-touch commands.`
+      detail: `Author ${input.author} is not trusted for finishing-touch commands.`,
+      secretScan: "not_scanned"
     };
   }
   if (input.currentHeadSha && input.currentHeadSha !== input.headSha) {
     return {
       ok: false,
       reason: "stale_head",
-      detail: `Command targeted ${input.headSha}, but current head is ${input.currentHeadSha}.`
+      detail: `Command targeted ${input.headSha}, but current head is ${input.currentHeadSha}.`,
+      secretScan: "not_scanned"
     };
   }
   if (!input.worktreeClean) {
     return {
       ok: false,
       reason: "dirty_worktree",
-      detail: "Refusing finishing-touch draft while the worktree is dirty."
+      detail: "Refusing finishing-touch draft while the worktree is dirty.",
+      secretScan: "not_scanned"
     };
   }
   if (input.proposedOutput !== undefined && containsSecretLikeText(stringifyOutput(input.proposedOutput))) {
     return {
       ok: false,
       reason: "secret_detected",
-      detail: "Refusing finishing-touch draft because proposed output contains secret-like text."
+      detail: "Refusing finishing-touch draft because proposed output contains secret-like text.",
+      secretScan: "failed"
     };
   }
-  return { ok: true };
+  return { ok: true, secretScan: "passed" };
 }
 
 export function isFinishingTouchActionEnabled(
@@ -259,11 +264,7 @@ export function buildFinishingTouchDryRunContract(
 ): FinishingTouchDryRunContract {
   const currentHeadMatches = input.currentHeadSha === input.draft.headSha;
   const trustedAuthor = input.trustedAuthors.includes("*") || input.trustedAuthors.includes(input.draft.author);
-  const secretScan: FinishingTouchSecretScanState = input.validation.ok
-    ? "passed"
-    : input.validation.reason === "secret_detected"
-      ? "failed"
-      : "not_scanned";
+  const secretScan = input.validation.secretScan;
   const worktreeCleanState = input.worktreeCleanState ?? (input.worktreeClean ? "verified_clean" : "dirty");
   return {
     ok: input.validation.ok,

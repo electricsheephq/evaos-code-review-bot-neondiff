@@ -1118,17 +1118,17 @@ async function main(): Promise<void> {
       action,
       proposedOutput: draft
     });
-    const contract = buildFinishingTouchDryRunContract({
-      dryRun,
-      recorded: false,
-      draft,
-      currentHeadSha,
-      worktreeClean,
-      worktreeCleanState,
-      trustedAuthors,
-      validation
-    });
     if (!validation.ok) {
+      const contract = buildFinishingTouchDryRunContract({
+        dryRun,
+        recorded: false,
+        draft,
+        currentHeadSha,
+        worktreeClean,
+        worktreeCleanState,
+        trustedAuthors,
+        validation
+      });
       console.log(redactSecrets(JSON.stringify({ ok: false, dryRun, validation, contract }, null, 2)));
       process.exitCode = 1;
       return;
@@ -1153,11 +1153,21 @@ async function main(): Promise<void> {
         state.close();
       }
     }
+    const contract = buildFinishingTouchDryRunContract({
+      dryRun,
+      recorded: Boolean(stored),
+      draft,
+      currentHeadSha,
+      worktreeClean,
+      worktreeCleanState,
+      trustedAuthors,
+      validation
+    });
     console.log(redactSecrets(JSON.stringify({
       ok: true,
       dryRun,
       recorded: Boolean(stored),
-      contract: stored ? { ...contract, recorded: true } : contract,
+      contract,
       draft,
       ...(stored ? { stored } : {})
     }, null, 2)));
