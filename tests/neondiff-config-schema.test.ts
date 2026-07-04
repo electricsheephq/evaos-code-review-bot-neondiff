@@ -20,6 +20,19 @@ const invalidFixtureExpectedPaths: Record<string, string[]> = {
   ]
 };
 
+const credentialSmokePatterns: RegExp[] = [
+  /BEGIN (?:RSA |DSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY/,
+  /\bghp_[A-Za-z0-9_]{20,}\b/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
+  /\bsk-[A-Za-z0-9_-]{20,}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
+  /\bAIza[0-9A-Za-z_-]{20,}\b/,
+  /\bglpat-[0-9A-Za-z_-]{20,}\b/,
+  /\bglm-[0-9A-Za-z_-]{20,}\b/,
+  /\b[A-Za-z0-9+/]{48,}={0,2}\b/
+];
+
 function readJson(path: string): JsonRecord {
   return JSON.parse(readFileSync(path, "utf8")) as JsonRecord;
 }
@@ -73,6 +86,12 @@ function expectInvalidFixture(validate: ValidateFunction, name: string, config: 
   expect(errorPaths(errors), name).toEqual(expect.arrayContaining(invalidFixtureExpectedPaths[baseName] ?? []));
 }
 
+function expectCredentialSmokeClean(fixture: string, text: string): void {
+  for (const pattern of credentialSmokePatterns) {
+    expect(text, `${fixture} matched ${pattern}`).not.toMatch(pattern);
+  }
+}
+
 describe("NeonDiff config schema draft", () => {
   it("publishes a conservative public .neondiff.yml schema contract for issue 109", () => {
     const schema = readJson(schemaPath);
@@ -108,6 +127,11 @@ describe("NeonDiff config schema draft", () => {
     expect(get("properties.providers.properties.default.$ref", schema)).toBe("#/$defs/providerId");
     expect(get("properties.providers.properties.default.description", schema)).toMatch(/providers\.allowed/);
     expect(get("properties.providers.properties.local.properties.provider.description", schema)).toMatch(/ollama-local/);
+    expect(get("properties.providers.properties.local.properties.baseUrl.pattern", schema)).toBe(
+      "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[0-9]+/?$"
+    );
+    expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerPullRequest.minimum", schema)).toBe(1);
+    expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerFile.minimum", schema)).toBe(1);
   });
 
   it("validates JSON fixtures against the published JSON Schema", () => {
@@ -225,7 +249,73 @@ describe("NeonDiff config schema draft", () => {
     expect(errorPaths(defaultProviderErrors)).toContain("/providers/default");
   });
 
-  it("documents committed examples without secrets", () => {
+  it("keeps local provider baseUrl constrained to HTTP loopback version roots", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    for (const baseUrl of [
+      "http://localhost:11434/v1",
+      "http://127.0.0.1:8080/v2",
+      "http://[::1]/v1/"
+    ]) {
+      expectValidFixture(validate, baseUrl, {
+        ...baseConfig,
+        providers: {
+          ...asRecord(baseConfig.providers),
+          local: {
+            ...asRecord(get("providers.local", baseConfig)),
+            baseUrl
+          }
+        }
+      });
+    }
+
+    for (const baseUrl of [
+      "https://localhost:11434/v1",
+      "http://localhost:11434/v1/chat/completions",
+      "http://localhost:11434/../../admin",
+      "http://example.com/v1"
+    ]) {
+      const errors = validateConfig(validate, {
+        ...baseConfig,
+        providers: {
+          ...asRecord(baseConfig.providers),
+          local: {
+            ...asRecord(get("providers.local", baseConfig)),
+            baseUrl
+          }
+        }
+      });
+
+      expect(errorPaths(errors), baseUrl).toContain("/providers/local/baseUrl");
+    }
+  });
+
+  it("rejects zero comment caps to avoid silent no-op review output", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    for (const commentCaps of [
+      { maxPerPullRequest: 0, maxPerFile: 4 },
+      { maxPerPullRequest: 12, maxPerFile: 0 }
+    ]) {
+      const errors = validateConfig(validate, {
+        ...baseConfig,
+        safetyGates: {
+          ...asRecord(baseConfig.safetyGates),
+          commentCaps
+        }
+      });
+
+      expect(errorPaths(errors), JSON.stringify(commentCaps)).toContain(
+        commentCaps.maxPerPullRequest === 0
+          ? "/safetyGates/commentCaps/maxPerPullRequest"
+          : "/safetyGates/commentCaps/maxPerFile"
+      );
+    }
+  });
+
+  it("keeps committed examples credential-smoke-clean", () => {
     const fixtures = readdirSync(fixtureRoot)
       .filter((name) => name.endsWith(".json") || name.endsWith(".neondiff.yml"))
       .sort();
@@ -234,7 +324,7 @@ describe("NeonDiff config schema draft", () => {
       const text = readFileSync(join(fixtureRoot, fixture), "utf8");
 
       expect(text).toMatch(/"?\$schema"?:\s*"?docs\/schema\/neondiff-config\.schema\.json"?/);
-      expect(text).not.toMatch(/BEGIN (RSA|OPENSSH|PRIVATE) KEY|ghp_|github_pat_|sk-[A-Za-z0-9]/);
+      expectCredentialSmokeClean(fixture, text);
     }
   });
 });

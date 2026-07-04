@@ -166,9 +166,9 @@
               "default": "none"
             },
             "baseUrl": {
-              "description": "Loopback URL hint for local providers.",
+              "description": "HTTP loopback API root for local providers. Paths are limited to versioned API roots such as /v1.",
               "type": "string",
-              "pattern": "^https?://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?(/.*)?$",
+              "pattern": "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[0-9]+/?$",
               "default": "http://localhost:11434/v1"
             },
             "model": {
@@ -226,14 +226,16 @@
           "required": ["maxPerPullRequest", "maxPerFile"],
           "properties": {
             "maxPerPullRequest": {
+              "description": "Must be at least 1 so a valid config cannot silently suppress every inline review comment.",
               "type": "integer",
-              "minimum": 0,
+              "minimum": 1,
               "maximum": 50,
               "default": 12
             },
             "maxPerFile": {
+              "description": "Must be at least 1 so per-file caps remain explicit and non-silent.",
               "type": "integer",
-              "minimum": 0,
+              "minimum": 1,
               "maximum": 20,
               "default": 4
             }
