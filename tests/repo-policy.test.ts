@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import {
+  buildReviewSettingsProfileMatrix,
   buildPullFileFilterImpact,
   buildRepoPolicySnapshot,
   buildRepoProfilePromptSection,
   buildReviewSettingsPreview,
+  buildUnsupportedReviewSettingsMatrix,
   filterPullFilesForProfile,
   listReposToScan,
   resolveRepoProfile
@@ -410,6 +412,23 @@ describe("repo profile registry", () => {
 
     expect(buildReviewSettingsPreview(config, profile)).toEqual({
       profile: "assertive",
+      sampleProfile: {
+        id: "assertive",
+        label: "Assertive",
+        description: "Higher-signal review posture for release, runtime, and regression-sensitive repositories.",
+        repoReviewProfile: "assertive",
+        defaultSections: [
+          "reviewSummary",
+          "walkthrough",
+          "changedFiles",
+          "effortEstimate",
+          "relatedContext",
+          "suggestedLabels",
+          "suggestedReviewers",
+          "statusComment"
+        ],
+        suggestionBehavior: "suggestion_only"
+      },
       sections: [
         { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" },
         { key: "walkthrough", label: "Walkthrough", enabled: true, mode: "issue_comment" },
@@ -428,8 +447,109 @@ describe("repo profile registry", () => {
         reviewers: ["maintainer-one"],
         autoApply: false
       },
-      roadmapOnly: ["auto-apply labels", "auto-request reviewers"]
+      unsupportedSettings: [
+        {
+          key: "autoApplyLabels",
+          label: "Auto-apply labels",
+          status: "roadmap_only",
+          reason: "Requires explicit GitHub App permission, repo opt-in, and eval evidence before mutation.",
+          safeAlternative: "Emit suggestedLabels as suggestion-only preview evidence."
+        },
+        {
+          key: "autoRequestReviewers",
+          label: "Auto-request reviewers",
+          status: "roadmap_only",
+          reason: "Requires explicit GitHub App permission, repo opt-in, and reviewer-selection eval evidence before mutation.",
+          safeAlternative: "Emit suggestedReviewers as suggestion-only preview evidence."
+        },
+        {
+          key: "requiredStatusChecks",
+          label: "Required status checks",
+          status: "roadmap_only",
+          reason: "Review status comments are descriptive; this bot does not create or enforce branch-protection checks.",
+          safeAlternative: "Use reviewStatusComment.enabled for sticky descriptive status only."
+        },
+        {
+          key: "autoFixOrApplySuggestions",
+          label: "Auto-fix or apply suggestions",
+          status: "unsupported",
+          reason: "NeonDiff review previews never mutate PR code or apply patches.",
+          safeAlternative: "Open a human-reviewed follow-up PR from a separate implementation lane."
+        }
+      ],
+      roadmapOnly: ["auto-apply labels", "auto-request reviewers", "required status checks"]
     });
+  });
+
+  it("exposes deterministic conservative balanced and assertive sample profile metadata", () => {
+    expect(buildReviewSettingsProfileMatrix()).toEqual([
+      {
+        id: "conservative",
+        label: "Conservative",
+        description: "Minimal, low-noise review posture for early rollout and sensitive repositories.",
+        repoReviewProfile: "chill",
+        defaultSections: ["reviewSummary", "walkthrough", "changedFiles"],
+        suggestionBehavior: "suggestion_only"
+      },
+      {
+        id: "balanced",
+        label: "Balanced",
+        description: "Default user-facing posture with summaries, walkthrough detail, effort, and related context.",
+        repoReviewProfile: "assertive",
+        defaultSections: ["reviewSummary", "walkthrough", "changedFiles", "effortEstimate", "relatedContext"],
+        suggestionBehavior: "suggestion_only"
+      },
+      {
+        id: "assertive",
+        label: "Assertive",
+        description: "Higher-signal review posture for release, runtime, and regression-sensitive repositories.",
+        repoReviewProfile: "assertive",
+        defaultSections: [
+          "reviewSummary",
+          "walkthrough",
+          "changedFiles",
+          "effortEstimate",
+          "relatedContext",
+          "suggestedLabels",
+          "suggestedReviewers",
+          "statusComment"
+        ],
+        suggestionBehavior: "suggestion_only"
+      }
+    ]);
+  });
+
+  it("keeps unsupported CodeRabbit-like settings in a deterministic evidence matrix", () => {
+    expect(buildUnsupportedReviewSettingsMatrix()).toEqual([
+      {
+        key: "autoApplyLabels",
+        label: "Auto-apply labels",
+        status: "roadmap_only",
+        reason: "Requires explicit GitHub App permission, repo opt-in, and eval evidence before mutation.",
+        safeAlternative: "Emit suggestedLabels as suggestion-only preview evidence."
+      },
+      {
+        key: "autoRequestReviewers",
+        label: "Auto-request reviewers",
+        status: "roadmap_only",
+        reason: "Requires explicit GitHub App permission, repo opt-in, and reviewer-selection eval evidence before mutation.",
+        safeAlternative: "Emit suggestedReviewers as suggestion-only preview evidence."
+      },
+      {
+        key: "requiredStatusChecks",
+        label: "Required status checks",
+        status: "roadmap_only",
+        reason: "Review status comments are descriptive; this bot does not create or enforce branch-protection checks.",
+        safeAlternative: "Use reviewStatusComment.enabled for sticky descriptive status only."
+      },
+      {
+        key: "autoFixOrApplySuggestions",
+        label: "Auto-fix or apply suggestions",
+        status: "unsupported",
+        reason: "NeonDiff review previews never mutate PR code or apply patches.",
+        safeAlternative: "Open a human-reviewed follow-up PR from a separate implementation lane."
+      }
+    ]);
   });
 
   it("keeps review summary enabled when inline walkthrough carries the review body", () => {

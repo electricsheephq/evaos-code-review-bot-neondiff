@@ -101,6 +101,10 @@ The preview maps current config into user-facing review behavior:
 
 - `reviewProfile` becomes the visible profile, currently `chill` or
   `assertive`.
+- `sampleProfile` records the closest public sample profile metadata:
+  conservative for `chill`, assertive for `assertive`. Balanced is documented
+  as a sample user-facing midpoint for configuration examples, but it does not
+  create a third runtime prompt mode yet.
 - `walkthrough.enabled` and `walkthrough.postIssueComment` decide whether the
   walkthrough-related sections are inline review content or a sticky issue
   comment.
@@ -113,10 +117,36 @@ The preview maps current config into user-facing review behavior:
 - label and reviewer settings remain suggestions only. Auto-applying labels or
   requesting reviewers is explicitly roadmap-only until permissions and eval
   gates justify it.
+- `unsupportedSettings` records CodeRabbit-like settings that NeonDiff can show
+  as evidence but does not execute. This matrix is deterministic so dry-run
+  evidence and docs snapshots can be compared directly.
 
 The preview is descriptive evidence only. It does not change repo eligibility,
 provider selection, App permissions, live allowlists, labels, reviewers, status
 checks, or release state.
+
+### Sample Profile Matrix
+
+The policy layer exposes these sample profiles for documentation, UI previews,
+and dry-run evidence:
+
+| Sample | Runtime profile | Default visible sections | Behavior boundary |
+| --- | --- | --- | --- |
+| Conservative | `chill` | Review summary, walkthrough, changed-files table | Minimal, low-noise rollout posture. Labels and reviewers stay suggestion-only. |
+| Balanced | `assertive` | Review summary, walkthrough, changed-files table, effort estimate, related context | Default user-facing midpoint. It is sample metadata only, not a third runtime prompt mode. |
+| Assertive | `assertive` | Review summary, walkthrough, changed-files table, effort estimate, related context, suggested labels, suggested reviewers, status comment | Higher-signal posture for release, runtime, and regression-sensitive repos. Suggestions still do not mutate GitHub state. |
+
+### Unsupported Setting Matrix
+
+The unsupported-setting evidence intentionally separates safe preview surfaces
+from mutation or enforcement features:
+
+| Setting | Status | Safe alternative |
+| --- | --- | --- |
+| Auto-apply labels | Roadmap-only | Emit `suggestedLabels` as suggestion-only preview evidence. |
+| Auto-request reviewers | Roadmap-only | Emit `suggestedReviewers` as suggestion-only preview evidence. |
+| Required status checks | Roadmap-only | Use `reviewStatusComment.enabled` for sticky descriptive status only. |
+| Auto-fix or apply suggestions | Unsupported | Open a human-reviewed follow-up PR from a separate implementation lane. |
 
 ## Changed-Surface Validation
 
@@ -131,8 +161,8 @@ evidence beside the review plan:
   `REQUEST_CHANGES` decisions after schema, diff-line, secret, cap, and taxonomy
   gates.
 - `review-settings-preview.json`: mapped review-output settings, path
-  instructions, suggestion-only labels/reviewers, and roadmap-only unsafe
-  settings.
+  instructions, sample profile metadata, suggestion-only labels/reviewers, and
+  roadmap-only or unsupported unsafe settings.
 
 These selectors do not run tests, builds, project scripts, Unity, or arbitrary
 PR code. They only decide which proof a reviewer should expect and whether that
