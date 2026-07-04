@@ -47,13 +47,35 @@ export interface ReviewSettingsPreviewSection {
   mode: "inline_review" | "issue_comment" | "walkthrough" | "sticky_status" | "suggestion_only";
 }
 
+export type ReviewSettingsProfileId = "conservative" | "balanced" | "assertive";
+
+export interface ReviewSettingsProfileMetadata {
+  id: ReviewSettingsProfileId;
+  label: string;
+  description: string;
+  repoReviewProfile: NonNullable<RepoProfileConfig["reviewProfile"]>;
+  defaultSections: ReviewSettingsSectionKey[];
+  suggestionBehavior: "suggestion_only";
+}
+
 export interface ReviewSettingsPathInstruction {
   pattern: string;
   instructions: string[];
 }
 
+export type UnsupportedReviewSettingStatus = "roadmap_only" | "unsupported";
+
+export interface UnsupportedReviewSettingEvidence {
+  key: string;
+  label: string;
+  status: UnsupportedReviewSettingStatus;
+  reason: string;
+  safeAlternative: string;
+}
+
 export interface ReviewSettingsPreview {
   profile: "chill" | "assertive";
+  sampleProfile?: ReviewSettingsProfileMetadata;
   sections: ReviewSettingsPreviewSection[];
   pathInstructions: ReviewSettingsPathInstruction[];
   suggestions: {
@@ -61,6 +83,7 @@ export interface ReviewSettingsPreview {
     reviewers: string[];
     autoApply: false;
   };
+  unsupportedSettings?: UnsupportedReviewSettingEvidence[];
   roadmapOnly: string[];
 }
 
@@ -134,6 +157,81 @@ const SAFETY_INCLUDE_PATTERNS = [
   "**/*.entitlements",
   "**/*.entitlements.plist"
 ];
+
+const REVIEW_SETTINGS_PROFILE_MATRIX: ReviewSettingsProfileMetadata[] = [
+  {
+    id: "conservative",
+    label: "Conservative",
+    description: "Minimal, low-noise review posture for early rollout and sensitive repositories.",
+    repoReviewProfile: "chill",
+    defaultSections: ["reviewSummary", "walkthrough", "changedFiles"],
+    suggestionBehavior: "suggestion_only"
+  },
+  {
+    id: "balanced",
+    label: "Balanced",
+    description: "Default user-facing posture with summaries, walkthrough detail, effort, and related context.",
+    repoReviewProfile: "assertive",
+    defaultSections: ["reviewSummary", "walkthrough", "changedFiles", "effortEstimate", "relatedContext"],
+    suggestionBehavior: "suggestion_only"
+  },
+  {
+    id: "assertive",
+    label: "Assertive",
+    description: "Higher-signal review posture for release, runtime, and regression-sensitive repositories.",
+    repoReviewProfile: "assertive",
+    defaultSections: [
+      "reviewSummary",
+      "walkthrough",
+      "changedFiles",
+      "effortEstimate",
+      "relatedContext",
+      "suggestedLabels",
+      "suggestedReviewers",
+      "statusComment"
+    ],
+    suggestionBehavior: "suggestion_only"
+  }
+];
+
+const UNSUPPORTED_REVIEW_SETTINGS_MATRIX: UnsupportedReviewSettingEvidence[] = [
+  {
+    key: "autoApplyLabels",
+    label: "Auto-apply labels",
+    status: "roadmap_only",
+    reason: "Requires explicit GitHub App permission, repo opt-in, and eval evidence before mutation.",
+    safeAlternative: "Emit suggestedLabels as suggestion-only preview evidence."
+  },
+  {
+    key: "autoRequestReviewers",
+    label: "Auto-request reviewers",
+    status: "roadmap_only",
+    reason: "Requires explicit GitHub App permission, repo opt-in, and reviewer-selection eval evidence before mutation.",
+    safeAlternative: "Emit suggestedReviewers as suggestion-only preview evidence."
+  },
+  {
+    key: "requiredStatusChecks",
+    label: "Required status checks",
+    status: "roadmap_only",
+    reason: "Review status comments are descriptive; this bot does not create or enforce branch-protection checks.",
+    safeAlternative: "Use reviewStatusComment.enabled for sticky descriptive status only."
+  },
+  {
+    key: "autoFixOrApplySuggestions",
+    label: "Auto-fix or apply suggestions",
+    status: "unsupported",
+    reason: "NeonDiff review previews never mutate PR code or apply patches.",
+    safeAlternative: "Open a human-reviewed follow-up PR from a separate implementation lane."
+  }
+];
+
+export function buildReviewSettingsProfileMatrix(): ReviewSettingsProfileMetadata[] {
+  return REVIEW_SETTINGS_PROFILE_MATRIX.map(cloneReviewSettingsProfile);
+}
+
+export function buildUnsupportedReviewSettingsMatrix(): UnsupportedReviewSettingEvidence[] {
+  return UNSUPPORTED_REVIEW_SETTINGS_MATRIX.map((entry) => ({ ...entry }));
+}
 
 export function listReposToScan(config: BotConfig): string[] {
   const configured = uniqueRepos(config.pilotRepos);
@@ -212,8 +310,10 @@ export function buildReviewSettingsPreview(config: BotConfig, profile: ResolvedR
   const walkthroughMode = walkthroughPostsSeparately ? "issue_comment" : "inline_review";
   const labels = profile.suggestedLabels ?? [];
   const reviewers = profile.suggestedReviewers ?? [];
+  const unsupportedSettings = buildUnsupportedReviewSettingsMatrix();
   return {
     profile: profile.reviewProfile ?? "assertive",
+    sampleProfile: sampleProfileForReviewProfile(profile.reviewProfile ?? "assertive"),
     sections: [
       { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" },
       { key: "walkthrough", label: "Walkthrough", enabled: walkthroughEnabled, mode: walkthroughMode },
@@ -233,7 +333,10 @@ export function buildReviewSettingsPreview(config: BotConfig, profile: ResolvedR
       reviewers,
       autoApply: false
     },
-    roadmapOnly: ["auto-apply labels", "auto-request reviewers"]
+    unsupportedSettings,
+    roadmapOnly: unsupportedSettings
+      .filter((entry) => entry.status === "roadmap_only")
+      .map((entry) => entry.label.toLowerCase())
   };
 }
 
@@ -302,6 +405,20 @@ function normalizeProfile(
     canonicalRepo: canonicalRepoName(repo),
     source,
     reviewProfile: profile.reviewProfile ?? "assertive"
+  };
+}
+
+function sampleProfileForReviewProfile(reviewProfile: NonNullable<RepoProfileConfig["reviewProfile"]>): ReviewSettingsProfileMetadata {
+  const id: ReviewSettingsProfileId = reviewProfile === "chill" ? "conservative" : "assertive";
+  const profile = REVIEW_SETTINGS_PROFILE_MATRIX.find((candidate) => candidate.id === id);
+  if (!profile) throw new Error(`Missing review settings profile metadata for ${id}`);
+  return cloneReviewSettingsProfile(profile);
+}
+
+function cloneReviewSettingsProfile(profile: ReviewSettingsProfileMetadata): ReviewSettingsProfileMetadata {
+  return {
+    ...profile,
+    defaultSections: [...profile.defaultSections]
   };
 }
 
