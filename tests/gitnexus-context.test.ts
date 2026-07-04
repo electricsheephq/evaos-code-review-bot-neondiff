@@ -65,7 +65,7 @@ describe("GitNexus context packets", () => {
     expect(result.packet.markdown).toContain("Current PR diff, checkout files, and GitHub metadata remain authoritative");
   });
 
-  it("does not invoke GitNexus when context packets are disabled", () => {
+  it("hardens the inner packet builder contract when GitNexus context is disabled", () => {
     const result = buildGitNexusContextPacket({
       repo,
       pull,
@@ -93,7 +93,7 @@ describe("GitNexus context packets", () => {
   });
 
   it("includes bounded related context for a fresh matching index", () => {
-    const runner = queryRunner({
+    const runner = recordingQueryRunner({
       "src/worker.ts buildGitNexusContext reviewPull worker": "Process ReviewPull -> buildReviewPrompt -> runZCodeReview\nsrc/worker.ts coordinates review evidence writes."
     });
     const result = buildGitNexusContextPacket({
@@ -132,6 +132,18 @@ describe("GitNexus context packets", () => {
       id: "query:src/worker.ts",
       query: "src/worker.ts buildGitNexusContext reviewPull worker"
     });
+    expect(runner.calls).toEqual([
+      [
+        "query",
+        "src/worker.ts buildGitNexusContext reviewPull worker",
+        "--repo",
+        "evaos-code-review-bot",
+        "--limit",
+        "3",
+        "--max-tokens",
+        "2000"
+      ]
+    ]);
     expect(result.packet.changedFiles.find((file) => file.path === "src/worker.ts")).toMatchObject({
       path: "src/worker.ts",
       changedExportedSymbols: ["buildGitNexusContext", "reviewPull"],
@@ -338,6 +350,16 @@ function queryRunner(outputs: Record<string, string>): GitNexusCommandRunner {
       stdout: outputs[query] ?? `No context for ${query}.`
     };
   };
+}
+
+function recordingQueryRunner(outputs: Record<string, string>): GitNexusCommandRunner & { calls: string[][] } {
+  const calls: string[][] = [];
+  const runner: GitNexusCommandRunner & { calls: string[][] } = (args, options) => {
+    if (args[0] === "query") calls.push([...args]);
+    return queryRunner(outputs)(args, options);
+  };
+  runner.calls = calls;
+  return runner;
 }
 
 function failOnQueryRunner(): GitNexusCommandRunner {

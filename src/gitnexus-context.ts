@@ -146,6 +146,8 @@ export function buildGitNexusContextPacket(input: BuildGitNexusContextPacketInpu
     });
   }
 
+  // Production entrypoints gate this earlier; this keeps the packet builder's
+  // inner contract offline for future direct callers.
   if (!input.config.enabled) {
     omittedContext.push({
       id: "gitnexus:disabled",
@@ -297,10 +299,6 @@ function buildRenderedPacketResult(input: {
     changedFiles: input.changedFiles,
     omittedContext: input.omittedContext
   };
-  const budgeted = renderWithinBudget({
-    ...packetBase,
-    relatedContext: input.relatedContext
-  }, input.maxPacketBytes);
   const preRenderReport = buildRedactionReport(input.redactionSources);
   if (!preRenderReport.ok) {
     return {
@@ -311,6 +309,10 @@ function buildRenderedPacketResult(input: {
     };
   }
 
+  const budgeted = renderWithinBudget({
+    ...packetBase,
+    relatedContext: input.relatedContext
+  }, input.maxPacketBytes);
   const postRenderReport = buildRedactionReport([{ id: "packet:markdown", text: budgeted.markdown }]);
   const redactionReport = mergeRedactionReports(preRenderReport, postRenderReport);
   if (!postRenderReport.ok) {
