@@ -45,6 +45,10 @@ const VALUE_CONFIDENCE_PATTERN = new RegExp(
   String.raw`\b${CONFIDENCE_VALUE_PATTERN}(?:\s*|[-_]+)(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)\b`,
   "gi"
 );
+const CONCATENATED_VALUE_CONFIDENCE_PATTERN = new RegExp(
+  String.raw`${MARKDOWN_VALUE_START_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:0?\.\d+|1\.0+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
+  "gi"
+);
 const MARKDOWN_VALUE_CONFIDENCE_PATTERN = new RegExp(
   String.raw`${MARKDOWN_VALUE_START_PATTERN}${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:\s*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
   "gi"
@@ -103,18 +107,40 @@ export function isUsablePublicConfidenceEvidenceUrl(value: string | undefined): 
 
 export function sanitizePublicConfidenceText(value: string, policy?: PublicConfidenceDisplayPolicy): string {
   if (isPublicConfidenceDisplayAllowed(policy)) return value;
-  const boundedValue = value.length > MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH
-    ? `${value.slice(0, MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH)}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`
-    : value;
+  const boundedValue = boundPublicConfidenceText(value);
   return boundedValue
     .replace(QUALIFIED_CONFIDENCE_DECIMAL_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
     .replace(MARKDOWN_CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
     .replace(MARKDOWN_CONFIDENCE_LABEL_PATTERN, (_match, noun: string) => `${noun}: ${PUBLIC_CONFIDENCE_REPLACEMENT}`)
+    .replace(CONCATENATED_VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(MARKDOWN_VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(CONFIDENCE_LABEL_PATTERN, (_match, prefix: string) => `${prefix}${PUBLIC_CONFIDENCE_REPLACEMENT}`)
     .replace(CONFIDENCE_NOUN_VALUE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT);
+}
+
+function boundPublicConfidenceText(value: string): string {
+  if (value.length <= MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH) return value;
+  const truncated = value.slice(0, MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH);
+  const boundaryWindowStart = Math.max(0, truncated.length - 128);
+  const boundaryWindow = truncated.slice(boundaryWindowStart);
+  const danglingConfidenceValue = boundaryWindow.match(
+    /(?:^|\s)(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+))(?:\s+[A-Za-z]*)?$/i
+  );
+  if (danglingConfidenceValue?.index !== undefined) {
+    return `${truncated.slice(0, boundaryWindowStart + danglingConfidenceValue.index).trimEnd()}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
+  }
+  const lastTokenBoundary = Math.max(
+    truncated.lastIndexOf(" "),
+    truncated.lastIndexOf("\n"),
+    truncated.lastIndexOf("\r"),
+    truncated.lastIndexOf("\t")
+  );
+  const safeTruncated = lastTokenBoundary >= MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH - 128
+    ? truncated.slice(0, lastTokenBoundary).trimEnd()
+    : truncated;
+  return `${safeTruncated}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
 }
 
 function formatConfidenceLabelContinuation(_noun: string, continuation: string): string {

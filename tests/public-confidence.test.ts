@@ -34,6 +34,9 @@ describe("public confidence display policy", () => {
       "reliability: 95%",
       "sure: 99%",
       "99% reliable",
+      "0.95confident",
+      "`0.95confident`",
+      "0.95reliable",
       "confidence-95%",
       "confidence_score-95%"
     ].join("\n");
@@ -41,6 +44,9 @@ describe("public confidence display policy", () => {
     const output = sanitizePublicConfidenceText(input);
 
     expect(output).not.toContain("0.95");
+    expect(output).not.toContain("0.95confident");
+    expect(output).not.toContain("`0.95confident`");
+    expect(output).not.toContain("0.95reliable");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
     expect(output).toContain("confidence not calibrated");
     for (const token of ["99%", "95%", "99 percent", "95 percent"]) {
@@ -111,6 +117,14 @@ describe("public confidence display policy", () => {
     expect(output).toContain("[truncated before public confidence sanitization]");
     expect(output).not.toContain("95%");
     expect(output.length).toBeLessThan(129_000);
+  });
+
+  it("does not leak a partial confidence token at the truncation boundary", () => {
+    const output = sanitizePublicConfidenceText(`${"a".repeat(127_990)} 95% confident after boundary`);
+
+    expect(output).toContain("[truncated before public confidence sanitization]");
+    expect(output).not.toContain("95%");
+    expect(output).not.toContain("95% confi");
   });
 
   it("does not over-sanitize ordinary numbered review prose", () => {
