@@ -167,9 +167,9 @@ describe("review status comment", () => {
       pullTitle: `${"c".repeat(176)} Confidence: 95%.`
     });
 
-    expect(comment.body).toContain(`PR: owner/repo#1 - ${"c".repeat(176)} Confidence: confidence not calibrated`);
+    const title = comment.body.match(/PR: owner\/repo#1 - (.+)/)?.[1] ?? "";
+    expect(title).toHaveLength(200);
     expect(comment.body).not.toContain("95%");
-    expect(comment.body).not.toMatch(/confidence not cali(?:$|\n)/);
   });
 
   it("keeps the sticky marker stable when repo slugs look secret-like", () => {

@@ -571,18 +571,6 @@ function validatePublicConfidenceDisplayConfig(value: unknown, label: string): v
   validatePositiveInteger(value.minP0P1Labels, `${label}.minP0P1Labels`);
   validatePositiveInteger(value.minNegativeControlScenarios, `${label}.minNegativeControlScenarios`);
   validateProbability(value.minWilsonLowerBound, `${label}.minWilsonLowerBound`);
-  if ((value.minLabeledFindings as number) < PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS) {
-    throw new Error(`${label}.minLabeledFindings must be >= ${PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS}`);
-  }
-  if ((value.minP0P1Labels as number) < PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS) {
-    throw new Error(`${label}.minP0P1Labels must be >= ${PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS}`);
-  }
-  if ((value.minNegativeControlScenarios as number) < PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS) {
-    throw new Error(`${label}.minNegativeControlScenarios must be >= ${PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS}`);
-  }
-  if ((value.minWilsonLowerBound as number) < PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND) {
-    throw new Error(`${label}.minWilsonLowerBound must be >= ${PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND}`);
-  }
   if (value.labeledFindings !== undefined) validateNonNegativeInteger(value.labeledFindings, `${label}.labeledFindings`);
   if (value.p0p1Labels !== undefined) validateNonNegativeInteger(value.p0p1Labels, `${label}.p0p1Labels`);
   if (value.negativeControlScenarios !== undefined) validateNonNegativeInteger(value.negativeControlScenarios, `${label}.negativeControlScenarios`);

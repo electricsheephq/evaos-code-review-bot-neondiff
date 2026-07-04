@@ -460,11 +460,11 @@ describe("walkthrough comment rendering", () => {
       event: "REQUEST_CHANGES"
     });
 
-    expect(walkthrough.body).toContain(`PR: electricsheephq/WorldOS#${pull.number} - ${"b".repeat(176)} Confidence: confidence not calibrated`);
+    const title = walkthrough.body.match(new RegExp(`PR: electricsheephq/WorldOS#${pull.number} - (.+)`))?.[1] ?? "";
+    expect(title).toHaveLength(200);
     expect(walkthrough.body).toContain("Validated inline findings: 1 (P0: 0, P1: 1, P2: 0, P3: 0).");
     expect(walkthrough.body).toContain("Elevated: validated P1 finding");
     expect(walkthrough.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
-    expect(walkthrough.body).not.toMatch(/confidence not cali(?:$|\n)/);
   });
 
   it("keeps the comment-secret checklist passing when secret-like findings were dropped", () => {

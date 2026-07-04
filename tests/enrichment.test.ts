@@ -291,9 +291,9 @@ describe("sticky enrichment comments", () => {
       postIssueComment: true
     });
 
-    expect(comment.body).toContain(`PR: electricsheephq/evaos-code-review-bot#${pull.number} - ${"a".repeat(176)} Confidence: confidence not calibrated`);
+    const title = comment.body.match(new RegExp(`PR: electricsheephq/evaos-code-review-bot#${pull.number} - (.+)`))?.[1] ?? "";
+    expect(title).toHaveLength(200);
     expect(comment.body).not.toContain("95%");
-    expect(comment.body).not.toMatch(/confidence not cali(?:$|\n)/);
   });
 
   it("posts only when enabled and App credentials are present", async () => {

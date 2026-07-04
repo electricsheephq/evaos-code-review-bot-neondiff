@@ -117,8 +117,7 @@ export function sanitizePublicConfidenceText(value: string, policy?: PublicConfi
     .replace(VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT);
 }
 
-function formatConfidenceLabelContinuation(noun: string, continuation: string): string {
-  const normalizedNoun = noun.toLowerCase() === "confidence" ? "confidence" : noun;
-  if (continuation.toLowerCase() === "that") return `${normalizedNoun} is not calibrated;`;
-  return `${normalizedNoun} is not calibrated; it ${continuation}`;
+function formatConfidenceLabelContinuation(_noun: string, continuation: string): string {
+  if (continuation.toLowerCase() === "that") return "confidence is not calibrated;";
+  return `confidence is not calibrated; it ${continuation}`;
 }

@@ -68,6 +68,14 @@ describe("public confidence display policy", () => {
     expect(output).not.toContain("confidence: confidence not calibrated is");
   });
 
+  it("normalizes non-confidence label continuations to confidence wording", () => {
+    const output = sanitizePublicConfidenceText("The model certainty: 0.95 is the only signal we have.");
+
+    expect(output).toBe("The model confidence is not calibrated; it is the only signal we have.");
+    expect(output).not.toContain("certainty is not calibrated");
+    expect(output).not.toContain("0.95");
+  });
+
   it("sanitizes markdown and inline-code wrapped confidence tokens from review bodies", () => {
     const input = [
       "**Confidence**: `95%` that this is exploitable.",
@@ -124,6 +132,17 @@ describe("public confidence display policy", () => {
     expect(policy.datasetId).toBe("confidence-calibration-v1");
     expect(isPublicConfidenceDisplayAllowed(policy)).toBe(true);
     expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: 95%.");
+  });
+
+  it("sanitizes with an explicit uncalibrated policy even when evidence fields are present", () => {
+    const policy = buildPublicConfidencePolicy({
+      ...calibratedPolicyInput(),
+      mode: "uncalibrated"
+    });
+
+    expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
+    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe(sanitizePublicConfidenceText("Confidence: 95%."));
+    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: confidence not calibrated.");
   });
 
   it("does not allow percentage display when calibration evidence is blank", () => {

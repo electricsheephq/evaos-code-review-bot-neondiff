@@ -383,12 +383,15 @@ function inferIssueAcceptanceGaps(issue: GitHubRelatedIssueOrPull): string[] {
 }
 
 function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
-  const boundedText = redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]"))
+  const normalizedText = redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]"))
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^#{1,6}\s+/, "");
+  return sanitizePublicConfidenceText(normalizedText, publicConfidencePolicy)
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^#{1,6}\s+/, "")
     .slice(0, 200);
-  return sanitizePublicConfidenceText(boundedText, publicConfidencePolicy);
 }
 
 function formatPublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
