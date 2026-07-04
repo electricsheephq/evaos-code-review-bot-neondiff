@@ -347,6 +347,14 @@ larger of the configured recent-update lookback and burst window. Deferred rows
 include `nextEligibleAt` based on the configured cooldown. Per-repo throttles live under
 `issueEnrichment.repos.<owner/name>` and can cap `maxIssuesPerCycle`,
 `maxCommentsPerCycle`, burst thresholds, cooldown, and backlog behavior.
+Issue label and reviewer/owner allowlists come only from
+`issueEnrichment.allowedLabels` / `issueEnrichment.allowedReviewers` or the
+matching per-repo override. They constrain inferred issue suggestions; they do
+not create suggestions by themselves, and they intentionally do not use
+`repoProfiles.suggestedLabels` or `repoProfiles.suggestedReviewers`, which belong
+to PR review enrichment. Empty global allowlists mean no allowlist restriction.
+An empty per-repo allowlist override falls back to the global allowlist, so
+copying the example block cannot accidentally erase a non-empty global cap.
 
 When the daemon first sees a newly allowlisted issue-enrichment repo with
 `processExistingOpenIssuesOnActivation: false`, it records a per-repo activation
