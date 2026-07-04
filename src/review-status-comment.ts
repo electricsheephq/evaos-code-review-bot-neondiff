@@ -61,8 +61,8 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
   const updatedAt = (input.now ?? new Date()).toISOString();
   const title = formatInlinePublicText(input.pullTitle, input.publicConfidencePolicy);
   const details = sanitizePublicText(input.details, input.publicConfidencePolicy);
-  const pullUrl = sanitizePublicText(input.pullUrl, input.publicConfidencePolicy);
-  const reviewUrl = sanitizePublicText(input.reviewUrl, input.publicConfidencePolicy);
+  const pullUrl = sanitizePublicUrlText(input.pullUrl);
+  const reviewUrl = sanitizePublicUrlText(input.reviewUrl);
   const lines = [
     marker,
     `${REVIEW_STATUS_STATE_MARKER_PREFIX} status=${input.state} updated_at=${updatedAt} -->`,
@@ -154,6 +154,11 @@ function sanitizePublicText(value: string | undefined, publicConfidencePolicy?: 
     redactSecrets(value.replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")),
     publicConfidencePolicy
   ).trim();
+}
+
+function sanitizePublicUrlText(value: string | undefined): string {
+  if (!value) return "";
+  return redactSecrets(value.replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")).trim();
 }
 
 function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {

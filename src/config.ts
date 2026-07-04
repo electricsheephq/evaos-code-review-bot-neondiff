@@ -7,7 +7,12 @@ import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
-import { buildPublicConfidencePolicy, isPublicConfidenceDisplayAllowed, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
+import {
+  buildPublicConfidencePolicy,
+  isPublicConfidenceDisplayAllowed,
+  isUsablePublicConfidenceEvidenceUrl,
+  type PublicConfidenceDisplayPolicy
+} from "./public-confidence.js";
 import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
@@ -494,9 +499,9 @@ function validateConfig(config: BotConfig): void {
   config.reviewStatusComment = reviewStatusComment;
   validateBoolean(reviewStatusComment.enabled, "config.reviewStatusComment.enabled");
   const confidenceCalibration = config.confidenceCalibration ?? DEFAULT_CONFIG.confidenceCalibration!;
+  validatePublicConfidenceDisplayConfig(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
   confidenceCalibration.publicDisplay = buildPublicConfidencePolicy(confidenceCalibration.publicDisplay);
   config.confidenceCalibration = confidenceCalibration;
-  validatePublicConfidenceDisplayConfig(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
   const repoMemory = config.repoMemory ?? DEFAULT_CONFIG.repoMemory!;
   config.repoMemory = repoMemory;
   validateRepoMemoryConfig(repoMemory, "config.repoMemory");
@@ -561,6 +566,10 @@ function validatePublicConfidenceDisplayConfig(value: unknown, label: string): v
   validatePositiveInteger(value.minP0P1Labels, `${label}.minP0P1Labels`);
   validatePositiveInteger(value.minNegativeControlScenarios, `${label}.minNegativeControlScenarios`);
   validateProbability(value.minWilsonLowerBound, `${label}.minWilsonLowerBound`);
+  if ((value.minLabeledFindings as number) < 100) throw new Error(`${label}.minLabeledFindings must be >= 100`);
+  if ((value.minP0P1Labels as number) < 30) throw new Error(`${label}.minP0P1Labels must be >= 30`);
+  if ((value.minNegativeControlScenarios as number) < 10) throw new Error(`${label}.minNegativeControlScenarios must be >= 10`);
+  if ((value.minWilsonLowerBound as number) < 0.95) throw new Error(`${label}.minWilsonLowerBound must be >= 0.95`);
   if (value.labeledFindings !== undefined) validateNonNegativeInteger(value.labeledFindings, `${label}.labeledFindings`);
   if (value.p0p1Labels !== undefined) validateNonNegativeInteger(value.p0p1Labels, `${label}.p0p1Labels`);
   if (value.negativeControlScenarios !== undefined) validateNonNegativeInteger(value.negativeControlScenarios, `${label}.negativeControlScenarios`);
@@ -569,8 +578,8 @@ function validatePublicConfidenceDisplayConfig(value: unknown, label: string): v
   validateOptionalString(value.datasetId, `${label}.datasetId`);
   const policy = value as unknown as PublicConfidenceDisplayPolicy;
   if (value.mode === "calibrated" && !isPublicConfidenceDisplayAllowed(policy)) {
-    if (typeof value.evidenceUrl !== "string" || value.evidenceUrl.trim().length === 0) {
-      throw new Error(`${label}.evidenceUrl is required when mode=calibrated`);
+    if (!isUsablePublicConfidenceEvidenceUrl(typeof value.evidenceUrl === "string" ? value.evidenceUrl : undefined)) {
+      throw new Error(`${label}.evidenceUrl must be an http(s) URL when mode=calibrated`);
     }
     if (typeof value.datasetId !== "string" || value.datasetId.trim().length === 0) {
       throw new Error(`${label}.datasetId is required when mode=calibrated`);

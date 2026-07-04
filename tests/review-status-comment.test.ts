@@ -146,13 +146,15 @@ describe("review status comment", () => {
       headSha: HEAD_A,
       state: "completed",
       pullTitle: "Review is 95% confident",
+      pullUrl: "https://github.test/owner/repo/pull/1?tab=confidence&run=95",
       reviewUrl: "https://github.test/review/1?confidence=95%",
       details: "Confidence: 95%. Provider is 0.95 confident."
     });
 
     expect(comment.body).toContain("Review is confidence not calibrated");
     expect(comment.body).toContain("Confidence: confidence not calibrated.");
-    expect(comment.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(comment.body).toContain("PR URL: https://github.test/owner/repo/pull/1?tab=confidence&run=95");
+    expect(comment.body).toContain("Review URL: https://github.test/review/1?confidence=95%");
     expect(comment.body).not.toContain("0.95 confident");
   });
 

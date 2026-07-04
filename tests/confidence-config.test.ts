@@ -58,4 +58,48 @@ describe("confidence calibration config", () => {
       confidenceCalibration: { publicDisplay: { ...base, negativeControlScenarios: 9 } }
     })).toThrow(/negativeControlScenarios must be >= minNegativeControlScenarios/);
   });
+
+  it("rejects calibration configs that loosen hard public promotion floors", () => {
+    const base = calibratedPublicDisplay();
+
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: { publicDisplay: { ...base, minLabeledFindings: 99 } }
+    })).toThrow(/minLabeledFindings must be >= 100/);
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: { publicDisplay: { ...base, minP0P1Labels: 29 } }
+    })).toThrow(/minP0P1Labels must be >= 30/);
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: { publicDisplay: { ...base, minNegativeControlScenarios: 9 } }
+    })).toThrow(/minNegativeControlScenarios must be >= 10/);
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: { publicDisplay: { ...base, minWilsonLowerBound: 0.94 } }
+    })).toThrow(/minWilsonLowerBound must be >= 0.95/);
+  });
+
+  it("requires calibrated evidence URLs to be usable http or https URLs", () => {
+    const base = calibratedPublicDisplay();
+
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: { publicDisplay: { ...base, evidenceUrl: "todo" } }
+    })).toThrow(/evidenceUrl must be an http\(s\) URL/);
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: { publicDisplay: { ...base, evidenceUrl: "javascript:alert(1)" } }
+    })).toThrow(/evidenceUrl must be an http\(s\) URL/);
+  });
 });
+
+function calibratedPublicDisplay() {
+  return {
+    mode: "calibrated" as const,
+    evidenceUrl: "https://github.com/electricsheephq/evaos-code-review-bot/actions/runs/123",
+    datasetId: "confidence-calibration-v1",
+    labeledFindings: 100,
+    minLabeledFindings: 100,
+    p0p1Labels: 30,
+    minP0P1Labels: 30,
+    negativeControlScenarios: 10,
+    minNegativeControlScenarios: 10,
+    wilsonLowerBound: 0.95,
+    minWilsonLowerBound: 0.95
+  };
+}

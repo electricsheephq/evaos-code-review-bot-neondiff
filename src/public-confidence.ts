@@ -19,7 +19,10 @@ const DEFAULT_MIN_WILSON_LOWER_BOUND = 0.95;
 const PUBLIC_CONFIDENCE_REPLACEMENT = "confidence not calibrated";
 const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1(?:\.0+)?)\b)`;
 const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((?:confidence|certainty)\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}`, "gi");
-const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(String.raw`\bconfidence(?:\s+score)?(?:\s+of)?\s*${CONFIDENCE_VALUE_PATTERN}`, "gi");
+const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
+  String.raw`\bconfidence(?:\s+score(?:\s*(?::|=)\s*|\s+of\s+|\s+)|\s+of\s+|\s+)${CONFIDENCE_VALUE_PATTERN}`,
+  "gi"
+);
 const VALUE_CONFIDENCE_PATTERN = new RegExp(String.raw`\b${CONFIDENCE_VALUE_PATTERN}\s*(?:confident|confidence)\b`, "gi");
 const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = /\b(?:high|medium|low)\s+confidence\s*\(\s*(?:0?\.\d+|1(?:\.0+)?)\s*\)/gi;
 
@@ -28,10 +31,13 @@ export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisp
   const datasetId = input?.datasetId?.trim();
   return {
     mode: input?.mode ?? "uncalibrated",
-    minLabeledFindings: input?.minLabeledFindings ?? DEFAULT_MIN_LABELED_FINDINGS,
-    minP0P1Labels: input?.minP0P1Labels ?? DEFAULT_MIN_P0_P1_LABELS,
-    minNegativeControlScenarios: input?.minNegativeControlScenarios ?? DEFAULT_MIN_NEGATIVE_CONTROL_SCENARIOS,
-    minWilsonLowerBound: input?.minWilsonLowerBound ?? DEFAULT_MIN_WILSON_LOWER_BOUND,
+    minLabeledFindings: Math.max(input?.minLabeledFindings ?? DEFAULT_MIN_LABELED_FINDINGS, DEFAULT_MIN_LABELED_FINDINGS),
+    minP0P1Labels: Math.max(input?.minP0P1Labels ?? DEFAULT_MIN_P0_P1_LABELS, DEFAULT_MIN_P0_P1_LABELS),
+    minNegativeControlScenarios: Math.max(
+      input?.minNegativeControlScenarios ?? DEFAULT_MIN_NEGATIVE_CONTROL_SCENARIOS,
+      DEFAULT_MIN_NEGATIVE_CONTROL_SCENARIOS
+    ),
+    minWilsonLowerBound: Math.max(input?.minWilsonLowerBound ?? DEFAULT_MIN_WILSON_LOWER_BOUND, DEFAULT_MIN_WILSON_LOWER_BOUND),
     ...(evidenceUrl ? { evidenceUrl } : {}),
     ...(datasetId ? { datasetId } : {}),
     ...(input?.labeledFindings !== undefined ? { labeledFindings: input.labeledFindings } : {}),
@@ -43,17 +49,31 @@ export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisp
 
 export function isPublicConfidenceDisplayAllowed(policy?: PublicConfidenceDisplayPolicy): boolean {
   if (!policy || policy.mode !== "calibrated") return false;
-  if (!policy.evidenceUrl?.trim() || !policy.datasetId?.trim()) return false;
-  if (policy.labeledFindings === undefined || policy.labeledFindings < policy.minLabeledFindings) return false;
-  if (policy.p0p1Labels === undefined || policy.p0p1Labels < policy.minP0P1Labels) return false;
+  if (!isUsablePublicConfidenceEvidenceUrl(policy.evidenceUrl) || !policy.datasetId?.trim()) return false;
+  if (policy.labeledFindings === undefined || policy.labeledFindings < Math.max(policy.minLabeledFindings, DEFAULT_MIN_LABELED_FINDINGS)) {
+    return false;
+  }
+  if (policy.p0p1Labels === undefined || policy.p0p1Labels < Math.max(policy.minP0P1Labels, DEFAULT_MIN_P0_P1_LABELS)) return false;
   if (
     policy.negativeControlScenarios === undefined ||
-    policy.negativeControlScenarios < policy.minNegativeControlScenarios
+    policy.negativeControlScenarios < Math.max(policy.minNegativeControlScenarios, DEFAULT_MIN_NEGATIVE_CONTROL_SCENARIOS)
   ) {
     return false;
   }
-  if (policy.wilsonLowerBound === undefined || policy.wilsonLowerBound < policy.minWilsonLowerBound) return false;
+  if (policy.wilsonLowerBound === undefined || policy.wilsonLowerBound < Math.max(policy.minWilsonLowerBound, DEFAULT_MIN_WILSON_LOWER_BOUND)) {
+    return false;
+  }
   return true;
+}
+
+export function isUsablePublicConfidenceEvidenceUrl(value: string | undefined): boolean {
+  if (!value?.trim()) return false;
+  try {
+    const url = new URL(value.trim());
+    return (url.protocol === "https:" || url.protocol === "http:") && url.hostname.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function sanitizePublicConfidenceText(value: string, policy?: PublicConfidenceDisplayPolicy): string {
