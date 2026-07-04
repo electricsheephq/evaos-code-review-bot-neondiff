@@ -113,6 +113,15 @@ export async function doctorProviderRegistry(input: {
   fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
 }): Promise<ProviderDoctorResult> {
+  if (input.smoke && !input.providerId) {
+    return {
+      ok: false,
+      command: "providers doctor",
+      defaultProviderId: input.registry.defaultProviderId,
+      checks: [],
+      troubleshooting: ["--smoke true requires --provider to avoid unscoped provider network fan-out."]
+    };
+  }
   const providerIds = input.providerId
     ? [input.providerId]
     : Object.entries(input.registry.providers)
@@ -225,7 +234,7 @@ async function smokeOpenAICompatibleProvider(input: {
     return {
       ...baseCheck,
       ok: Array.isArray(parsed.data) && modelIds.includes(input.provider.model),
-      ...(Array.isArray(parsed.data) ? { modelCount: parsed.data.length } : { errorCategory: "model_output_schema" as const, error: "Models response did not contain a data array." }),
+      ...(Array.isArray(parsed.data) ? { modelCount: modelIds.length } : { errorCategory: "model_output_schema" as const, error: "Models response did not contain a data array." }),
       ...(Array.isArray(parsed.data) && !modelIds.includes(input.provider.model)
         ? {
             errorCategory: "model_output_schema" as const,

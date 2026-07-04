@@ -172,6 +172,46 @@ describe("provider registry", () => {
     expect(JSON.stringify(thrownResult)).not.toContain("token-secret");
   });
 
+  it("requires --provider for smoke to avoid unscoped provider fan-out", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "ollama-local",
+        providers: {
+          "ollama-local": {
+            enabled: true
+          },
+          "openai-compatible": {
+            enabled: true,
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      smoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      checks: [],
+      troubleshooting: ["--smoke true requires --provider to avoid unscoped provider network fan-out."]
+    });
+    expect(fetchCalls).toBe(0);
+  });
+
   it("fails smoke when the configured model is not advertised", async () => {
     const config = loadConfigFromObject({
       providers: {
@@ -191,7 +231,7 @@ describe("provider registry", () => {
       registry: config.providers!,
       providerId: "openai-compatible",
       smoke: true,
-      fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "other-model" }] }), {
+      fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "other-model" }, null, 123, { name: "missing-id" }] }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       })

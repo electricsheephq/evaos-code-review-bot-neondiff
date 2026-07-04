@@ -35,7 +35,9 @@ neondiff providers doctor \
 
 The example `ollama-local` provider is disabled by default. Enable it in
 `config.local.json` or with a dry-run-verified config patch before running the
-smoke command; otherwise the doctor exits before calling `/models`.
+smoke command; otherwise the doctor exits before calling `/models`. Smoke checks
+must include `--provider` so a single command cannot fan out authenticated
+requests to every enabled provider.
 
 ## GLM/Z.ai Through ZCode
 
