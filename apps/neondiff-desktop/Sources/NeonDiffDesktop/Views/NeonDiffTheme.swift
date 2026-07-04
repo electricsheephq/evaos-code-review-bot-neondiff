@@ -16,13 +16,13 @@ enum NeonDiffTheme {
     static let stroke = Color(red: 0.10, green: 0.58, blue: 0.25)
     static let warning = Color(red: 1.0, green: 0.34, blue: 0.30)
 
-    static let logoFont = Font.saiba(size: 26)
+    static let logoFont = Font.system(size: 26, weight: .black, design: .monospaced)
     static let headlineFont = Font.system(.headline, design: .monospaced).weight(.bold)
     static let badgeFont = Font.system(.caption, design: .monospaced).weight(.bold)
     static let commandFont = Font.system(.caption, design: .monospaced)
 
     static func displayFont(size: CGFloat) -> Font {
-        .saiba(size: size)
+        .system(size: size, weight: .black, design: .monospaced)
     }
 
     static func statusColor(_ value: String) -> Color {

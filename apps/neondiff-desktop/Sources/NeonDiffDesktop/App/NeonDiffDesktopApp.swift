@@ -8,10 +8,6 @@ struct NeonDiffDesktopApp: App {
     @StateObject private var model = NeonDiffDesktopModel()
     @StateObject private var updateController = NeonUpdateController()
 
-    init() {
-        NeonFontRegistry.registerBundledFonts()
-    }
-
     var body: some Scene {
         WindowGroup("NeonDiff Desktop") {
             ContentView(model: model, updateController: updateController)

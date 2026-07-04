@@ -1,24 +1,17 @@
 # Third-Party Notices
 
-## SAIBA-45
+## Sparkle
 
-- Project: SAIBA-45
-- Upstream: https://github.com/YuurinBee/SAIBA-45
-- Author: Formless Labs
-- Contributors: YuurinBee, JSKitty, Joshua Fern
-- Bundled file: `Sources/NeonDiffDesktop/Resources/Fonts/SAIBA-45-Regular.otf`
-- Bundled license: `Sources/NeonDiffDesktop/Resources/Legal/SAIBA-45-LICENSE.txt`
-- Source file: `Fonts/v1.1/SAIBA-45-Regular-(v1.1).otf`
-- License: GNU General Public License v3.0 with the upstream font exception.
+- Project: Sparkle
+- Upstream: https://github.com/sparkle-project/Sparkle
+- Package requirement: `from: "2.9.0"`
+- Bundled notice: `Sources/NeonDiffDesktop/Resources/Legal/SPARKLE-LICENSE.txt`
+- License: MIT-style Sparkle license plus bundled external dependency notices.
 
-The bundled font is used only for NeonDiff Desktop display text such as the
-wordmark, headings, and status badges. Operational body copy continues to use
-native system fonts for readability.
+NeonDiff Desktop links Sparkle only for the dormant update-scaffold target. Real
+update feeds, signing keys, and release-channel activation remain out of scope
+for this development MVP.
 
-The upstream project states the following special font exception:
-
-> As a special exception, if you create a document which uses this font, and
-> embed this font or unaltered portions of this font into the document, this
-> font does not by itself cause the resulting document to be covered by the GNU
-> General Public License. This exception does not however invalidate any other
-> reasons why the document might be covered by the GNU General Public License.
+This target does not bundle the SAIBA-45 font or other GPL font assets. The
+custom chrome uses native system monospaced fonts for the NeonDiff wordmark,
+headings, badges, and operator text.
