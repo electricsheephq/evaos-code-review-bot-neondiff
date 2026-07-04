@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { redactSecrets } from "./secrets.js";
+import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 export type ProviderAdapterErrorClass =
   | "auth"
@@ -48,15 +48,27 @@ export interface ProviderAdapterFixtureError {
   message: string;
 }
 
-export interface ProviderAdapterFixtureResult {
-  ok: boolean;
+export interface ProviderAdapterFixtureResultBase {
   fixtureId: string;
   providerId: string;
   adapterId: string;
   model: string;
   evidence: ProviderAdapterFixtureEvidence;
-  error?: ProviderAdapterFixtureError;
 }
+
+export interface ProviderAdapterFixtureSuccessResult extends ProviderAdapterFixtureResultBase {
+  ok: true;
+  error?: never;
+}
+
+export interface ProviderAdapterFixtureFailureResult extends ProviderAdapterFixtureResultBase {
+  ok: false;
+  error: ProviderAdapterFixtureError;
+}
+
+export type ProviderAdapterFixtureResult =
+  | ProviderAdapterFixtureSuccessResult
+  | ProviderAdapterFixtureFailureResult;
 
 export async function runProviderAdapterFixture(input: {
   adapter: ProviderRuntimeAdapter;
@@ -113,9 +125,9 @@ export async function runProviderAdapterFixture(input: {
 
 export function classifyProviderAdapterError(message: string): ProviderAdapterErrorClass {
   const normalized = message.toLowerCase();
-  if (/\b(unauthorized|forbidden|invalid api key|invalid_api_key|401|403)\b/.test(normalized)) return "auth";
-  if (/\b(rate limit|rate_limit|quota|too many requests|429|insufficient_quota|throttl(?:e|ed|ing))\b/.test(normalized)) return "throttle";
-  if (/\b(timeout|timed out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
+  if (/\b(unauthorized|forbidden|invalid[ _-]api[ _-]key|401|403)\b/.test(normalized)) return "auth";
+  if (/\b(rate[ _-]limit|quota|too many requests|429|insufficient[ _-]quota|throttl(?:e|ed|ing))\b/.test(normalized)) return "throttle";
+  if (/\b(time[ _-]?out|timed[ _-]out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
   if (/\b(econnreset|econnrefused|enotfound|eai_again|network|socket|dns|connection refused|connection reset)\b/.test(normalized)) return "network";
   if (/\b(json|schema|parseable|malformed output|invalid response|invalid output|tool call|structured output)\b/.test(normalized)) {
     return "model-output";
@@ -133,7 +145,7 @@ function buildFixtureEvidence(
     outputPreview: previewEvidenceText(execution.text),
     ...(execution.rawEvidence === undefined
       ? {}
-      : { rawEvidencePreview: previewEvidenceText(stableStringify(stripPrivateEvidenceFields(execution.rawEvidence))) })
+      : { rawEvidencePreview: previewEvidenceText(stableStringify(redactPrivateEvidenceValue(execution.rawEvidence, prompt))) })
   };
 }
 
@@ -153,8 +165,10 @@ function previewEvidenceText(value: string): string {
 function redactAdapterEvidenceText(value: string): string {
   return redactSecrets(
     value
+      .replace(/(["']?(?:x-)?api[-_]?key["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/=-]{8,}(["']?)/gi, "$1[redacted-secret]$2")
       .replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "[redacted-secret]")
       .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[redacted-secret]")
+      .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[redacted-secret]")
   );
 }
 
@@ -178,14 +192,41 @@ function sortJsonValue(value: unknown): unknown {
   return value;
 }
 
-function stripPrivateEvidenceFields(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => stripPrivateEvidenceFields(item));
+function redactPrivateEvidenceValue(value: unknown, prompt: string): unknown {
+  if (typeof value === "string") return redactPrivateEvidenceText(value, prompt);
+  if (Array.isArray(value)) return value.map((item) => redactPrivateEvidenceValue(item, prompt));
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([key]) => !/(prompt|diff|patch|content)/i.test(key))
-        .map(([key, entryValue]) => [key, stripPrivateEvidenceFields(entryValue)])
+        .map(([key, entryValue]) => {
+          if (isPrivateEvidenceKey(key)) return [key, "[redacted-private-field]"];
+          if (isSensitiveEvidenceKey(key)) return [key, "[redacted-sensitive-field]"];
+          return [key, redactPrivateEvidenceValue(entryValue, prompt)];
+        })
     );
   }
   return value;
+}
+
+function redactPrivateEvidenceText(value: string, prompt: string): string {
+  if (containsPrivateEvidenceLikeText(value, prompt)) return "[redacted-private-evidence]";
+  const redacted = redactAdapterEvidenceText(value);
+  if (redacted !== value) return redacted;
+  return value;
+}
+
+function isPrivateEvidenceKey(key: string): boolean {
+  return /(prompt|diff|patch|content|body|source|code|completion|response|message|stdout|stderr|log)/i.test(key);
+}
+
+function isSensitiveEvidenceKey(key: string): boolean {
+  return /(api[ _-]?key|authorization|auth|bearer|cookie|credential|password|secret|session|token)/i.test(key);
+}
+
+function containsPrivateEvidenceLikeText(value: string, prompt: string): boolean {
+  return (
+    containsSecretLikeText(value)
+    || /(^|\n)(diff --git|@@ |--- |\+\+\+ )/m.test(value)
+    || (prompt.length > 0 && value.includes(prompt))
+  );
 }
