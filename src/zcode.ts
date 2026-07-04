@@ -174,7 +174,12 @@ export function runZCodeReview(input: {
 
     if (result.status !== 0) {
       if (result.error) {
-        throw new Error(`ZCode failed before completion: ${result.error.message}`);
+        throw enrichZCodeProcessError({
+          error: new Error(`ZCode failed before completion: ${result.error.message}`),
+          originalError: result.error,
+          signal: result.signal,
+          status: result.status
+        });
       }
       throw new Error(`ZCode failed with status ${result.status}: ${stderr || stdout.slice(0, 1000)}`);
     }
@@ -287,6 +292,24 @@ function truncateToBudget(text: string, maxBytes: number): string {
   const bytes = Buffer.byteLength(text);
   if (bytes <= maxBytes) return text;
   return `${text.slice(0, maxBytes)}\n[patch truncated to fit prompt budget]`;
+}
+
+function enrichZCodeProcessError(input: {
+  error: Error;
+  originalError: Error;
+  signal: NodeJS.Signals | null;
+  status: number | null;
+}): Error {
+  const original = input.originalError as Error & { code?: unknown };
+  const enriched = input.error as Error & {
+    code?: unknown;
+    signal?: NodeJS.Signals | null;
+    status?: number | null;
+  };
+  if (original.code !== undefined) enriched.code = original.code;
+  enriched.signal = input.signal;
+  enriched.status = input.status;
+  return enriched;
 }
 
 export function extractZCodeResponse(stdout: string): string {

@@ -27,7 +27,7 @@ import {
   reviewPull,
   runWithProviderRetry
 } from "../src/worker.js";
-import { isZCodeTimeoutError, parseZCodeTimeoutError } from "../src/zcode-timeout.js";
+import { formatZCodeTimeoutFailureError, isZCodeTimeoutError, parseZCodeTimeoutError } from "../src/zcode-timeout.js";
 
 describe("worker review failures", () => {
   const roots: string[] = [];
@@ -110,6 +110,18 @@ describe("worker review failures", () => {
 
   it("classifies only hard ZCode timeout failures as timeout-retryable", () => {
     expect(isZCodeTimeoutError(new Error("ZCode failed before completion: spawnSync node ETIMEDOUT"))).toBe(true);
+    expect(isZCodeTimeoutError(Object.assign(
+      new Error("ZCode failed before completion: Command failed: node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"),
+      { code: "ETIMEDOUT" }
+    ))).toBe(true);
+    expect(isZCodeTimeoutError(Object.assign(
+      new Error("ZCode failed before completion: Command failed: node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"),
+      { signal: "SIGTERM", status: null }
+    ))).toBe(true);
+    expect(isZCodeTimeoutError(Object.assign(
+      new Error("ZCode failed before completion: Command failed: node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"),
+      { signal: "SIGTERM", status: 1 }
+    ))).toBe(false);
     expect(isZCodeTimeoutError(new Error("spawnSync git ETIMEDOUT"))).toBe(false);
     expect(isZCodeTimeoutError(new Error("zcode review timed out due to upstream provider rate limit"))).toBe(false);
   });
@@ -125,6 +137,29 @@ describe("worker review failures", () => {
       timeoutMs: 0,
       retryable: true
     });
+  });
+
+  it("does not treat embedded retired timeout errors as the active retry state", () => {
+    const retiredError =
+      "retired_failed_head:operator_acknowledged; previous_error=zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000; original_error=ZCode failed before completion, spawnSync node ETIMEDOUT";
+
+    expect(parseZCodeTimeoutError(retiredError)).toBeUndefined();
+    expect(formatZCodeTimeoutFailureError({
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT"),
+      previousError: retiredError,
+      timeoutMs: 1200000
+    })).toContain("retry_attempt=1");
+  });
+
+  it("keeps retry attempts when structured timeout errors receive appended metadata", () => {
+    const decoratedError =
+      "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000; original_error=ZCode failed before completion, spawnSync node ETIMEDOUT; operator_note=manual_inspection";
+
+    expect(formatZCodeTimeoutFailureError({
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT"),
+      previousError: decoratedError,
+      timeoutMs: 1200000
+    })).toContain("retry_attempt=2");
   });
 
   it("records provider rate limits as cooldown skips instead of hard failures", () => {

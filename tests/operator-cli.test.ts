@@ -1075,8 +1075,11 @@ describe("operator CLI summaries", () => {
       ok: false,
       detail: "1 ZCode timeout failed durable queue job(s); retryable=0 exhausted=1"
     });
-    expect(status.recommendedActions).toContain(
+    expect(status.recommendedActions).not.toContain(
       "npx tsx src/cli.ts retry-failed --config /config/live.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 216 --head-sha head-timeout --dry-run false --zcode true"
+    );
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts queue --config /config/live.json --state failed"
     );
   });
 

@@ -37,9 +37,12 @@ export interface ZCodeTimeoutRetryJobInput {
 export function isZCodeTimeoutError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
+  if (!normalized.includes("zcode failed before completion")) return false;
   return (
-    (normalized.includes("zcode failed before completion") && normalized.includes("etimedout")) ||
-    (normalized.includes("zcode failed before completion") && normalized.includes("timed out"))
+    normalized.includes("etimedout") ||
+    normalized.includes("timed out") ||
+    readErrorCode(error) === "etimedout" ||
+    (readErrorSignal(error) === "sigterm" && readErrorStatus(error) === null)
   );
 }
 
@@ -61,7 +64,7 @@ export function formatZCodeTimeoutFailureError(input: {
 }
 
 export function parseZCodeTimeoutError(error?: string | null): ParsedZCodeTimeoutError | undefined {
-  if (!error || !error.includes(ZCODE_TIMEOUT_ERROR_PREFIX)) return undefined;
+  if (!error || !error.trimStart().startsWith(ZCODE_TIMEOUT_ERROR_PREFIX)) return undefined;
   const fields = parseSemicolonFields(error);
   const retryAttempt = parsePositiveInteger(fields.get("retry_attempt"));
   if (retryAttempt === undefined) return undefined;
@@ -111,7 +114,8 @@ export function buildZCodeTimeoutRetryCommandsForJobs(input: {
   const commands: string[] = [];
   for (const job of input.jobs) {
     if (job.state !== "failed") continue;
-    if (!parseZCodeTimeoutError(job.lastError)) continue;
+    const parsed = parseZCodeTimeoutError(job.lastError);
+    if (!parsed?.retryable) continue;
     const key = `${job.repo}#${job.pullNumber}@${job.headSha}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -163,4 +167,22 @@ function parseNonNegativeInteger(value?: string): number | undefined {
   if (!value) return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function readErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code.toLowerCase() : undefined;
+}
+
+function readErrorSignal(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const signal = (error as { signal?: unknown }).signal;
+  return typeof signal === "string" ? signal.toLowerCase() : undefined;
+}
+
+function readErrorStatus(error: unknown): number | null | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" || status === null ? status : undefined;
 }
