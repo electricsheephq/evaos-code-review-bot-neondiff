@@ -219,6 +219,12 @@ export async function runScheduledCycleWithDeps(input: {
     });
     applyReviewStatus(result, status);
     if (status === "skipped_provider_cooldown") {
+      result.queue.providerDeferred += deferQueuedProviderJobsForProviderThrottle({
+        config,
+        state: input.state,
+        triggerJob: job,
+        now: eventClock()
+      });
       break;
     }
   }
@@ -1177,6 +1183,46 @@ function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobReco
   if (job.source !== "manual_command") return true;
   const existing = state.getReviewReadiness(job.repo, job.pullNumber, job.headSha);
   return existing?.commandAction ? isReviewCommandAction(existing.commandAction) : true;
+}
+
+function deferQueuedProviderJobsForProviderThrottle(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  triggerJob: ReviewQueueJobRecord;
+  now: Date;
+}): number {
+  const cooldown = providerThrottleCooldownFromTriggerJob(input);
+  const providerId = input.triggerJob.providerId ?? "default";
+  let deferred = 0;
+  for (const job of input.state.listReviewQueueJobs({ state: "queued" })) {
+    if (job.jobId === input.triggerJob.jobId) continue;
+    if ((job.providerId ?? "default") !== providerId) continue;
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: cooldown.cooldownUntil,
+      lastError: `provider_throttle_cycle_deferred_until=${cooldown.cooldownUntil}; reason=${cooldown.reason}; trigger_repo=${input.triggerJob.repo}`,
+      now: input.now
+    });
+    deferred += 1;
+  }
+  return deferred;
+}
+
+function providerThrottleCooldownFromTriggerJob(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  triggerJob: ReviewQueueJobRecord;
+  now: Date;
+}): { cooldownUntil: string; reason: string } {
+  const processed = input.state.getProcessedReview(input.triggerJob.repo, input.triggerJob.pullNumber, input.triggerJob.headSha);
+  const parsed = parseProviderCooldownError(processed?.error);
+  const repoCooldown = input.state.getActiveRepoProviderCooldown(input.triggerJob.repo, input.now);
+  const fallbackCooldownUntil = new Date(input.now.getTime() + input.config.providerCooldown.durationMs).toISOString();
+  return {
+    cooldownUntil: parsed?.cooldownUntil ?? repoCooldown?.cooldownUntil ?? fallbackCooldownUntil,
+    reason: parsed?.reason ?? repoCooldown?.reason ?? "provider_cooldown"
+  };
 }
 
 function readinessStateForReviewResult(

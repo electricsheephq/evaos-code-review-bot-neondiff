@@ -1536,7 +1536,7 @@ export class ReviewStateStore {
     maxRepoActive: number;
     manualCommandReserve?: number;
     excludeJobIds?: Iterable<string>;
-    reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "providerId" | "org" | "repo">>;
+    reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "jobId" | "providerId" | "org" | "repo">>;
     limit?: number;
     leaseTtlMs?: number;
     now?: Date;
@@ -1583,8 +1583,9 @@ export class ReviewStateStore {
       const eligible = jobs
         .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
         .sort(compareQueueJobsForLease);
+      const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
       const active = [
-        ...jobs.filter((job) => job.state === "leased" || job.state === "running"),
+        ...jobs.filter((job) => (job.state === "leased" || job.state === "running") && !reservedJobIds.has(job.jobId)),
         ...reservedActiveJobs
       ];
       const providerActive = countBy(active, (job) => job.providerId ?? "default");

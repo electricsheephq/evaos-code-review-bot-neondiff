@@ -568,7 +568,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("stops provider leasing after an overload without touching unstarted queued jobs", async () => {
+  it("stops provider leasing after an overload without starting unstarted provider jobs", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-overload-stop-"));
     roots.push(root);
     const config = schedulerConfig(root, []);
@@ -613,17 +613,19 @@ describe("provider-aware review scheduler", () => {
 
     expect(attempted).toEqual(["org/repo-a"]);
     expect(result.skippedProviderCooldown).toBe(1);
-    expect(result.queue.providerDeferred).toBe(1);
+    expect(result.queue.providerDeferred).toBe(2);
     expect(state.getReviewQueueJob(first.jobId)).toMatchObject({
       state: "provider_deferred",
       nextEligibleAt: "2026-07-02T00:07:00.000Z",
       lastError: expect.stringContaining("reason=provider_overloaded")
     });
     const secondAfterOverload = state.getReviewQueueJob(second.jobId);
-    expect(secondAfterOverload).toMatchObject({ state: "queued" });
+    expect(secondAfterOverload).toMatchObject({
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:07:00.000Z",
+      lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-02T00:07:00.000Z")
+    });
     expect(secondAfterOverload?.startedAt).toBeUndefined();
-    expect(secondAfterOverload?.nextEligibleAt).toBeUndefined();
-    expect(secondAfterOverload?.lastError).toBeUndefined();
     state.close();
   });
 
@@ -1627,16 +1629,28 @@ describe("provider-aware review scheduler", () => {
 
     expect(result.reviewed).toBe(0);
     expect(result.skippedProviderCooldown).toBe(1);
+    expect(result.queue.providerDeferred).toBe(3);
     expect(state.getActiveRepoProviderCooldown("org/repo-a", new Date("2026-07-01T00:00:01.000Z"))).toBeDefined();
     expect(state.getActiveRepoProviderCooldown("org/repo-b", new Date("2026-07-01T00:00:01.000Z"))).toBeUndefined();
     expect(state.listReviewQueueJobs({ state: "provider_deferred" })).toEqual([
-      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z" })
+      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z" }),
+      expect.objectContaining({
+        repo: "org/repo-b",
+        pullNumber: 1,
+        nextEligibleAt: "2026-07-01T00:01:30.000Z",
+        lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-01T00:01:30.000Z")
+      }),
+      expect.objectContaining({
+        repo: "org/repo-c",
+        pullNumber: 1,
+        nextEligibleAt: "2026-07-01T00:01:30.000Z",
+        lastError: expect.stringContaining("trigger_repo=org/repo-a")
+      })
     ]);
-    expect(state.listReviewQueueJobs({ state: "queued" })).toEqual([
-      expect.objectContaining({ repo: "org/repo-b", pullNumber: 1 }),
-      expect.objectContaining({ repo: "org/repo-c", pullNumber: 1 })
-    ]);
-    expect(state.getReviewQueueJob(state.listReviewQueueJobs({ state: "queued" })[0]!.jobId)?.startedAt).toBeUndefined();
+    expect(state.listReviewQueueJobs({ state: "queued" })).toEqual([]);
+    expect(state.listReviewQueueJobs({ state: "provider_deferred" })
+      .filter((job) => job.repo !== "org/repo-a")
+      .every((job) => job.startedAt === undefined)).toBe(true);
     state.close();
   });
 
