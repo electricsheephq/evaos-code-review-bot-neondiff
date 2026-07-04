@@ -483,6 +483,68 @@ describe("provider registry", () => {
     });
   });
 
+  it("keeps disabled provider metadata errors focused on disabled state", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: false,
+            model: "review-model",
+            authMode: "api-key-env",
+            capabilities: {
+              review: false,
+              jsonOutput: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible"
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      enabled: false,
+      error: "Provider is disabled."
+    });
+  });
+
+  it("classifies non-JSON successful models responses as output schema failures", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            model: "review-model",
+            authMode: "none",
+            baseUrl: "https://gateway.example.test/v1"
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => new Response("<html>ok</html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" }
+      })
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "model_output_schema",
+      error: "Models response was not valid JSON."
+    });
+  });
+
   it("aborts OpenAI-compatible smoke checks using provider timeoutMs", async () => {
     const config = loadConfigFromObject({
       providers: {

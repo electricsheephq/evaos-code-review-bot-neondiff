@@ -162,9 +162,12 @@ export async function doctorProviderRegistry(input: {
     if (provider.adapter !== "openai-compatible" || !input.smoke) {
       const capabilityError = providerReadinessCapabilityError(provider);
       const authError = providerAuthMetadataError(provider);
+      const error = provider.enabled
+        ? capabilityError ?? authError
+        : "Provider is disabled.";
       checks.push({
         providerId,
-        ok: provider.enabled && !capabilityError && !authError,
+        ok: !error,
         adapter: provider.adapter,
         enabled: provider.enabled,
         model: provider.model,
@@ -173,8 +176,7 @@ export async function doctorProviderRegistry(input: {
         readMode: "metadata_only",
         ...(provider.baseUrl ? { baseUrl: redactProviderUrl(provider.baseUrl) } : {}),
         ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
-        ...(provider.enabled ? {} : { error: "Provider is disabled." }),
-        ...(capabilityError || authError ? { error: capabilityError ?? authError } : {})
+        ...(error ? { error } : {})
       });
       if (!provider.enabled) troubleshooting.push(`Enable provider ${providerId} before selecting it for review.`);
       if (capabilityError) troubleshooting.push(`Provider ${providerId} must support review and JSON output before it can be selected for review.`);
@@ -245,7 +247,17 @@ async function smokeOpenAICompatibleProvider(input: {
         error
       };
     }
-    const parsed = JSON.parse(text) as { data?: unknown[] };
+    let parsed: { data?: unknown[] };
+    try {
+      parsed = JSON.parse(text) as { data?: unknown[] };
+    } catch {
+      return {
+        ...baseCheck,
+        ok: false,
+        errorCategory: "model_output_schema",
+        error: "Models response was not valid JSON."
+      };
+    }
     const modelIds = Array.isArray(parsed.data) ? extractModelIds(parsed.data) : [];
     const missingModelError = modelIds.length === 0
       ? "Models response did not advertise any usable model ids."
