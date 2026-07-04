@@ -174,6 +174,7 @@ describe("operator CLI summaries", () => {
       postIssueComment: true,
       separateAllowlist: true,
       allowlist: ["owner/issue-repo"],
+      liveThresholdsMissingRepos: [],
       throttleDefaults: {
         maxIssuesPerCycle: 5,
         maxCommentsPerCycle: 2,
@@ -221,7 +222,17 @@ describe("operator CLI summaries", () => {
       issueEnrichment: {
         enabled: true,
         postIssueComment: true,
-        allowlist: ["owner/issue-repo"]
+        allowlist: ["owner/issue-repo"],
+        repos: {
+          "owner/issue-repo": {
+            maxIssuesPerCycle: 5,
+            maxCommentsPerCycle: 1,
+            cooldownMs: 3_600_000,
+            burstWindowMs: 3_600_000,
+            maxIssuesPerBurst: 10,
+            lookbackMs: 600_000
+          }
+        }
       }
     })}\n`);
 
@@ -1728,6 +1739,7 @@ function issueEnrichmentStatus(input: Partial<IssueEnrichmentStatus> = {}): Issu
     postIssueComment: input.postIssueComment ?? false,
     separateAllowlist: true,
     allowlist: input.allowlist ?? ["owner/issue-repo"],
+    liveThresholdsMissingRepos: input.liveThresholdsMissingRepos ?? [],
     throttleDefaults: input.throttleDefaults ?? {
       maxIssuesPerCycle: 5,
       maxCommentsPerCycle: 0,

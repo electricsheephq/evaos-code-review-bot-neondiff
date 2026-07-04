@@ -1390,7 +1390,17 @@ describe("sticky enrichment comments", () => {
           globalMaxCommentsPerCycle: 2,
           cooldownMs: 60_000,
           maxIssuesPerBurst: 10,
-          processExistingOpenIssuesOnActivation: true
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 10,
+              maxCommentsPerCycle: 2,
+              cooldownMs: 60_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            }
+          }
         }
       })}\n`);
       const state = new ReviewStateStore(statePath);
@@ -1624,7 +1634,20 @@ describe("sticky enrichment comments", () => {
           maxCommentsPerCycle: 0,
           cooldownMs: 60_000,
           repos: {
+            "owner/deferred-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 0,
+              cooldownMs: 60_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            },
             "owner/failed-repo": {
+              maxIssuesPerCycle: 5,
+              cooldownMs: 60_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000,
               maxCommentsPerCycle: 1
             }
           }
@@ -1798,7 +1821,17 @@ describe("sticky enrichment comments", () => {
           allowedReviewers: ["issue-owner", "incident-reviewer"],
           maxIssuesPerCycle: 5,
           maxCommentsPerCycle: 2,
-          processExistingOpenIssuesOnActivation: true
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 2,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            }
+          }
         }
       })}\n`);
       const state = new ReviewStateStore(statePath);
@@ -1873,7 +1906,17 @@ describe("sticky enrichment comments", () => {
           allowlist: ["owner/issue-repo"],
           maxIssuesPerCycle: 5,
           maxCommentsPerCycle: 2,
-          processExistingOpenIssuesOnActivation: true
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 2,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            }
+          }
         }
       })}\n`);
       const state = new ReviewStateStore(statePath);
@@ -1926,7 +1969,17 @@ describe("sticky enrichment comments", () => {
           allowlist: ["owner/issue-repo"],
           maxIssuesPerCycle: 5,
           maxCommentsPerCycle: 2,
-          processExistingOpenIssuesOnActivation: true
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 2,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            }
+          }
         }
       })}\n`);
       const state = new ReviewStateStore(statePath);
@@ -2025,7 +2078,17 @@ describe("sticky enrichment comments", () => {
           globalMaxCommentsPerCycle: 1,
           maxActiveRuns: 1,
           leaseTtlMs: 1_200_000,
-          processExistingOpenIssuesOnActivation: true
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            }
+          }
         }
       })}\n`);
       const state = new ReviewStateStore(statePath);
@@ -2080,7 +2143,17 @@ describe("sticky enrichment comments", () => {
           globalMaxCommentsPerCycle: 1,
           maxActiveRuns: 1,
           leaseTtlMs: 1_200_000,
-          processExistingOpenIssuesOnActivation: true
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            }
+          }
         }
       })}\n`);
       const state = new ReviewStateStore(statePath);

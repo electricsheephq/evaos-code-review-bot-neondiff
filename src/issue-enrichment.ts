@@ -69,6 +69,7 @@ export interface IssueEnrichmentStatus {
   postIssueComment: boolean;
   separateAllowlist: true;
   allowlist: string[];
+  liveThresholdsMissingRepos: string[];
   throttleDefaults: IssueEnrichmentThrottlePolicy;
   globalLimits: IssueEnrichmentGlobalLimits;
   repoOverrides: Array<{ repo: string } & IssueEnrichmentRepoOverride>;
@@ -101,7 +102,8 @@ export type IssueEnrichmentBlocker =
   | "issue_enrichment_disabled"
   | "issue_enrichment_allowlist_empty"
   | "issue_enrichment_live_posting_disabled"
-  | "github_app_credentials_required_for_live_issue_comments";
+  | "github_app_credentials_required_for_live_issue_comments"
+  | "issue_enrichment_live_repo_thresholds_required";
 
 export interface IssueEnrichmentReader {
   listIssuesForEnrichment(
@@ -227,12 +229,17 @@ export function buildIssueEnrichmentStatus(input: {
   if (!config.enabled) blockers.push("issue_enrichment_disabled");
   if (config.allowlist.length === 0) blockers.push("issue_enrichment_allowlist_empty");
   if (!config.postIssueComment) blockers.push("issue_enrichment_live_posting_disabled");
+  const liveThresholdsMissingRepos = config.enabled && config.postIssueComment
+    ? reposMissingLiveIssueEnrichmentThresholds(config)
+    : [];
+  if (liveThresholdsMissingRepos.length > 0) blockers.push("issue_enrichment_live_repo_thresholds_required");
   if (config.enabled && config.postIssueComment && !input.canPostAsApp) {
     blockers.push("github_app_credentials_required_for_live_issue_comments");
   }
 
   const blocking = blockers.filter((blocker) =>
     blocker === "github_app_credentials_required_for_live_issue_comments" ||
+    blocker === "issue_enrichment_live_repo_thresholds_required" ||
     (config.enabled && blocker === "issue_enrichment_allowlist_empty")
   );
   const state = !config.enabled
@@ -251,6 +258,7 @@ export function buildIssueEnrichmentStatus(input: {
     postIssueComment: config.postIssueComment,
     separateAllowlist: true,
     allowlist: [...config.allowlist],
+    liveThresholdsMissingRepos,
     throttleDefaults: {
       maxIssuesPerCycle: config.maxIssuesPerCycle,
       maxCommentsPerCycle: config.maxCommentsPerCycle,
@@ -269,6 +277,24 @@ export function buildIssueEnrichmentStatus(input: {
     repoOverrides: Object.entries(config.repos ?? {}).map(([repo, override]) => ({ repo, ...override })),
     blockers
   };
+}
+
+const LIVE_REPO_THRESHOLD_FIELDS = [
+  "maxIssuesPerCycle",
+  "maxCommentsPerCycle",
+  "cooldownMs",
+  "burstWindowMs",
+  "maxIssuesPerBurst",
+  "lookbackMs"
+] satisfies Array<keyof IssueEnrichmentRepoOverride>;
+
+function reposMissingLiveIssueEnrichmentThresholds(config: IssueEnrichmentConfig): string[] {
+  return config.allowlist.filter((repo) => {
+    const override = config.repos?.[repo];
+    if (override?.enabled === false) return false;
+    return override === undefined ||
+      LIVE_REPO_THRESHOLD_FIELDS.some((field) => override[field] === undefined);
+  });
 }
 
 export async function collectIssueEnrichmentScan(input: {
