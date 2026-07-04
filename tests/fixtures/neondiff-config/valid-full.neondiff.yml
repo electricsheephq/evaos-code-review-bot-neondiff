@@ -1,0 +1,75 @@
+$schema: docs/schema/neondiff-config.schema.json
+version: 1
+review:
+  profile: balanced
+  maxComments: 20
+  severityThreshold: medium
+  pathInstructions:
+    - paths:
+        - "src/**/*.ts"
+      instruction: "Prioritize correctness, security, and deterministic operator output."
+    - paths:
+        - "docs/**"
+        - "*.md"
+      instruction: "Review for public source-available beta wording and avoid GA claims."
+    - paths:
+        - "apps/web/**"
+      instruction: "Check user-facing copy and accessibility-sensitive interactions."
+paths:
+  include:
+    - "src/**"
+    - "docs/**"
+    - "tests/**"
+    - ".github/**"
+  exclude:
+    - "dist/**"
+    - "coverage/**"
+    - "node_modules/**"
+    - "tests/fixtures/generated/**"
+providers:
+  default: glm
+  allowed:
+    - glm
+    - openai-compatible
+    - ollama-local
+  byok:
+    required: true
+    apiKeyEnv: NEONDIFF_PROVIDER_API_KEY
+  local:
+    enabled: true
+    provider: ollama
+    baseUrl: http://localhost:11434/v1
+    model: qwen2.5-coder:14b
+safetyGates:
+  mutation:
+    enabled: false
+  secrets:
+    blockSecretLikeText: true
+  lineCoverage:
+    requireCurrentDiffLine: true
+  commentCaps:
+    maxPerPullRequest: 20
+    maxPerFile: 5
+finishingTouches:
+  enabled: false
+  allowedCommands:
+    - none
+issueEnrichment:
+  enabled: false
+  allowlist:
+    - repo: electricsheephq/evaos-code-review-bot
+      labels:
+        - public-product
+        - agent-first
+  throttles:
+    maxIssuesPerHour: 0
+    cooldownMinutes: 120
+confidence:
+  mode: uncalibrated
+  displayPercentages: false
+  calibrationEvidence: none
+repo:
+  visibility: public
+  reviewDraftPullRequests: false
+  publicRepoMode: free-source-available-beta
+  privateRepoMode: requires-license

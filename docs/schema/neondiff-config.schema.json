@@ -1,0 +1,408 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neondiff.com/schemas/neondiff-config.schema.json",
+  "title": "NeonDiff .neondiff.yml configuration",
+  "description": "Public contract draft for electricsheephq/evaos-code-review-bot issue #109. This schema documents the intended .neondiff.yml shape for agents and editors; it is not yet wired into runtime loading, init, validate, explain, or review execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "review",
+    "paths",
+    "providers",
+    "safetyGates",
+    "finishingTouches",
+    "issueEnrichment",
+    "confidence",
+    "repo"
+  ],
+  "properties": {
+    "$schema": {
+      "description": "Optional NeonDiff-specific editor hint pointing at this draft schema. In user config this is not a JSON Schema meta-schema declaration; the meta-schema for this schema document is the top-level https://json-schema.org/draft/2020-12/schema value.",
+      "type": "string",
+      "const": "docs/schema/neondiff-config.schema.json",
+      "default": "docs/schema/neondiff-config.schema.json"
+    },
+    "version": {
+      "description": "Schema version for this public draft contract.",
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "review": {
+      "description": "Repo-level review policy defaults. Runtime support is future work.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "maxComments", "severityThreshold", "pathInstructions"],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["conservative", "balanced", "thorough"],
+          "default": "conservative"
+        },
+        "maxComments": {
+          "description": "Soft review budget for pull-request comments. Must be at least 1; when this differs from safetyGates.commentCaps.maxPerPullRequest, the stricter lower cap wins.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 12
+        },
+        "severityThreshold": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "default": "medium"
+        },
+        "pathInstructions": {
+          "description": "Optional path-specific review guidance, expressed without secrets.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["paths", "instruction"],
+            "properties": {
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "$ref": "#/$defs/glob" }
+              },
+              "instruction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 600
+              }
+            }
+          }
+        }
+      }
+    },
+    "paths": {
+      "description": "Review path filters. Exclusions win over inclusions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["include", "exclude"],
+      "properties": {
+        "include": {
+          "type": "array",
+          "minItems": 1,
+          "default": ["**/*"],
+          "items": { "$ref": "#/$defs/glob" }
+        },
+        "exclude": {
+          "type": "array",
+          "default": ["dist/**", "coverage/**", "node_modules/**"],
+          "items": { "$ref": "#/$defs/glob" }
+        }
+      }
+    },
+    "providers": {
+      "description": "Provider selection and non-secret hints. Put real credentials in local overrides or environment variables, not .neondiff.yml.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default", "allowed", "byok", "local"],
+      "allOf": [
+        {
+          "if": { "properties": { "default": { "const": "openai-compatible" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "openai-compatible" } } } }
+        },
+        {
+          "if": { "properties": { "default": { "const": "glm" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "glm" } } } }
+        },
+        {
+          "if": { "properties": { "default": { "const": "ollama-local" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "ollama-local" } } } }
+        },
+        {
+          "if": { "properties": { "default": { "const": "zcode" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "zcode" } } } }
+        },
+        {
+          "if": { "properties": { "default": { "const": "custom" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "custom" } } } }
+        }
+      ],
+      "properties": {
+        "default": {
+          "description": "Remote/provider routing id. This value must also appear in providers.allowed.",
+          "$ref": "#/$defs/providerId",
+          "default": "openai-compatible"
+        },
+        "allowed": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/providerId" },
+          "default": ["openai-compatible"]
+        },
+        "byok": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required", "apiKeyEnv"],
+          "properties": {
+            "required": {
+              "type": "boolean",
+              "default": true
+            },
+            "apiKeyEnv": {
+              "description": "Environment variable name only; never a raw key.",
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]{2,80}$",
+              "default": "NEONDIFF_PROVIDER_API_KEY"
+            }
+          }
+        },
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "provider", "baseUrl", "model"],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "enabled": { "const": true }
+                },
+                "required": ["enabled"]
+              },
+              "then": {
+                "properties": {
+                  "provider": { "not": { "const": "none" } },
+                  "model": { "minLength": 1 }
+                }
+              },
+              "else": {
+                "properties": {
+                  "provider": { "const": "none" },
+                  "model": { "const": "" }
+                }
+              }
+            }
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "provider": {
+              "description": "Local-only runtime adapter id. Remote routing ids such as openai-compatible and ollama-local are reserved for providers.default/providers.allowed.",
+              "type": "string",
+              "enum": ["ollama", "none"],
+              "default": "none"
+            },
+            "baseUrl": {
+              "description": "HTTP-only loopback API root for local providers. HTTPS loopback is intentionally rejected in this draft so local-provider hints stay scoped to cleartext loopback APIs such as Ollama; paths are limited to versioned API roots such as /v1.",
+              "type": "string",
+              "pattern": "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[1-9][0-9]*/?$",
+              "default": "http://localhost:11434/v1"
+            },
+            "model": {
+              "type": "string",
+              "default": ""
+            }
+          }
+        }
+      }
+    },
+    "safetyGates": {
+      "description": "Fail-closed safety controls for review output and mutation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mutation", "secrets", "lineCoverage", "commentCaps"],
+      "properties": {
+        "mutation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {
+              "description": "Must stay false in this draft. Runtime mutation is not part of this slice.",
+              "type": "boolean",
+              "const": false,
+              "default": false
+            }
+          }
+        },
+        "secrets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["blockSecretLikeText"],
+          "properties": {
+            "blockSecretLikeText": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "lineCoverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requireCurrentDiffLine"],
+          "properties": {
+            "requireCurrentDiffLine": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "commentCaps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxPerPullRequest", "maxPerFile"],
+          "properties": {
+            "maxPerPullRequest": {
+              "description": "Hard safety cap for pull-request comments. Must be at least 1 so a valid config cannot silently suppress every inline review comment; when review.maxComments differs, the stricter lower cap wins.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 12
+            },
+            "maxPerFile": {
+              "description": "Must be at least 1 so per-file caps remain explicit and non-silent.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "default": 4
+            }
+          }
+        }
+      }
+    },
+    "finishingTouches": {
+      "description": "Post-review edits, labels, reviewers, or command-style follow-up. Default off and not runtime-wired in this slice.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "allowedCommands"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "const": false,
+          "default": false
+        },
+        "allowedCommands": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "enum": ["format", "add-tests", "update-docs", "none"]
+          }
+        }
+      }
+    },
+    "issueEnrichment": {
+      "description": "Issue enrichment is separate from PR review and defaults off. Allowlist and throttles are explicit.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "allowlist", "throttles"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "const": false,
+          "default": false
+        },
+        "allowlist": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["repo", "labels"],
+            "properties": {
+              "repo": { "$ref": "#/$defs/repoSlug" },
+              "labels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              }
+            }
+          }
+        },
+        "throttles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxIssuesPerHour", "cooldownMinutes"],
+          "properties": {
+            "maxIssuesPerHour": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 0
+            },
+            "cooldownMinutes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1440,
+              "default": 60
+            }
+          }
+        }
+      }
+    },
+    "confidence": {
+      "description": "Public confidence is uncalibrated until evaluation evidence exists. Percentages remain off in this draft.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "displayPercentages", "calibrationEvidence"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["uncalibrated"],
+          "default": "uncalibrated"
+        },
+        "displayPercentages": {
+          "type": "boolean",
+          "const": false,
+          "default": false
+        },
+        "calibrationEvidence": {
+          "type": "string",
+          "enum": ["none"],
+          "default": "none"
+        }
+      }
+    },
+    "repo": {
+      "description": "Repository-level review settings.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["visibility", "reviewDraftPullRequests", "publicRepoMode", "privateRepoMode"],
+      "properties": {
+        "visibility": {
+          "type": "string",
+          "enum": ["public", "private", "internal"],
+          "default": "public"
+        },
+        "reviewDraftPullRequests": {
+          "type": "boolean",
+          "default": false
+        },
+        "publicRepoMode": {
+          "type": "string",
+          "enum": ["free-source-available-beta", "disabled"],
+          "default": "free-source-available-beta"
+        },
+        "privateRepoMode": {
+          "type": "string",
+          "enum": ["requires-license", "disabled"],
+          "default": "requires-license"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "glob": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "providerId": {
+      "type": "string",
+      "enum": ["openai-compatible", "glm", "ollama-local", "zcode", "custom"]
+    },
+    "repoSlug": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$"
+    }
+  }
+}
