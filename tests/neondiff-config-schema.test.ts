@@ -11,7 +11,7 @@ const providerIds = ["openai-compatible", "glm", "ollama-local", "zcode", "custo
 type JsonRecord = Record<string, unknown>;
 
 const invalidFixtureExpectedPaths: Record<string, string[]> = {
-  "invalid-provider-cross-use": ["/providers/default", "/providers/local/provider"],
+  "invalid-provider-cross-use": ["/providers/local/provider"],
   "invalid-unsafe-enabled": [
     "/safetyGates/mutation/enabled",
     "/finishingTouches/enabled",
@@ -126,7 +126,9 @@ describe("NeonDiff config schema draft", () => {
     expect(get("properties.confidence.properties.displayPercentages.default", schema)).toBe(false);
     expect(get("properties.providers.properties.default.$ref", schema)).toBe("#/$defs/providerId");
     expect(get("properties.providers.properties.default.description", schema)).toMatch(/providers\.allowed/);
+    expect(get("properties.providers.properties.local.properties.provider.description", schema)).toMatch(/openai-compatible/);
     expect(get("properties.providers.properties.local.properties.provider.description", schema)).toMatch(/ollama-local/);
+    expect(get("properties.providers.properties.local.properties.provider.enum", schema)).toEqual(["ollama", "none"]);
     expect(get("properties.providers.properties.local.properties.baseUrl.pattern", schema)).toBe(
       "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[0-9]+/?$"
     );
@@ -223,20 +225,25 @@ describe("NeonDiff config schema draft", () => {
     expect(errorPaths(unsupportedErrors)).toContain("/providers/default");
   });
 
-  it("rejects cross-use of remote provider ids and local adapter ids", () => {
+  it("rejects remote provider ids and local adapter ids in the wrong slot", () => {
     const validate = compileSchema();
     const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
 
-    const localProviderErrors = validateConfig(validate, {
-      ...baseConfig,
-      providers: {
-        ...asRecord(baseConfig.providers),
-        local: {
-          ...asRecord(get("providers.local", baseConfig)),
-          provider: "ollama-local"
+    for (const provider of ["openai-compatible", "ollama-local"]) {
+      const localProviderErrors = validateConfig(validate, {
+        ...baseConfig,
+        providers: {
+          ...asRecord(baseConfig.providers),
+          local: {
+            ...asRecord(get("providers.local", baseConfig)),
+            provider
+          }
         }
-      }
-    });
+      });
+
+      expect(errorPaths(localProviderErrors), `local.provider ${provider}`).toContain("/providers/local/provider");
+    }
+
     const defaultProviderErrors = validateConfig(validate, {
       ...baseConfig,
       providers: {
@@ -245,8 +252,49 @@ describe("NeonDiff config schema draft", () => {
       }
     });
 
-    expect(errorPaths(localProviderErrors)).toContain("/providers/local/provider");
     expect(errorPaths(defaultProviderErrors)).toContain("/providers/default");
+  });
+
+  it("keeps the invalid cross-use fixture scoped to remote ids in the local slot", () => {
+    const validate = compileSchema();
+    const fixture = readJson(join(fixtureRoot, "invalid-provider-cross-use.json"));
+    const errors = validateConfig(validate, fixture);
+
+    expect(get("providers.default", fixture)).toBe("openai-compatible");
+    expect(get("providers.local.provider", fixture)).toBe("openai-compatible");
+    expect(errorPaths(errors)).toEqual(expect.arrayContaining(["/providers/local/provider"]));
+    expect(errorPaths(errors)).not.toContain("/providers/default");
+  });
+
+  it("accepts only local-only adapter ids for providers.local.provider", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    for (const provider of ["ollama", "none"]) {
+      expectValidFixture(validate, `local provider ${provider}`, {
+        ...baseConfig,
+        providers: {
+          ...asRecord(baseConfig.providers),
+          local: {
+            ...asRecord(get("providers.local", baseConfig)),
+            provider
+          }
+        }
+      });
+    }
+
+    const remoteAliasErrors = validateConfig(validate, {
+      ...baseConfig,
+      providers: {
+        ...asRecord(baseConfig.providers),
+        local: {
+          ...asRecord(get("providers.local", baseConfig)),
+          provider: "openai-compatible"
+        }
+      }
+    });
+
+    expect(errorPaths(remoteAliasErrors)).toContain("/providers/local/provider");
   });
 
   it("keeps local provider baseUrl constrained to HTTP loopback version roots", () => {

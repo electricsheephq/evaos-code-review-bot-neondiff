@@ -13,7 +13,7 @@ paths:
     - "coverage/**"
     - "node_modules/**"
 providers:
-  default: ollama
+  default: openai-compatible
   allowed:
     - openai-compatible
   byok:
@@ -21,7 +21,7 @@ providers:
     apiKeyEnv: NEONDIFF_PROVIDER_API_KEY
   local:
     enabled: true
-    provider: ollama-local
+    provider: openai-compatible
     baseUrl: http://localhost:11434/v1
     model: qwen2.5-coder:14b
 safetyGates:

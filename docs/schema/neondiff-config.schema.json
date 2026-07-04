@@ -160,9 +160,9 @@
               "default": false
             },
             "provider": {
-              "description": "Local runtime adapter id. Use 'ollama' for an Ollama-compatible local endpoint; 'ollama-local' is reserved for providers.default/providers.allowed routing.",
+              "description": "Local-only runtime adapter id. Remote routing ids such as openai-compatible and ollama-local are reserved for providers.default/providers.allowed.",
               "type": "string",
-              "enum": ["ollama", "openai-compatible", "none"],
+              "enum": ["ollama", "none"],
               "default": "none"
             },
             "baseUrl": {
