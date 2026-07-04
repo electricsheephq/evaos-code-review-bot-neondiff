@@ -35,10 +35,15 @@ npm link
 `neondiff`. If you intentionally skip linking, substitute `./dist/src/cli.js`
 for `neondiff`.
 
-## 2. Create A GitHub App
+## 2. Create Or Install A GitHub App
 
-Create a GitHub App for NeonDiff and install it only on repos you intend to
-review.
+Use the public NeonDiff GitHub App install URL for the beta you are testing, or
+create an equivalent App while the public registration is being finalized. See
+[docs/github-app-setup.md](github-app-setup.md) for the selected-repo install
+path, uninstall path, evidence packet, and troubleshooting details.
+
+Install the App only on repos you intend to review, then put the same repos in
+your local `pilotRepos` allowlist.
 
 Required repository permissions:
 
@@ -131,13 +136,29 @@ primitive.
 
 ## 4. Check Readiness
 
-Run doctor with the config you intend to use:
+Run the GitHub-only doctor first. It verifies App installation visibility and
+repo read access without running ZCode, calling a provider, posting comments, or
+printing secrets:
+
+```bash
+neondiff doctor github --config config.local.json --json
+```
+
+Check:
+
+- `ok`
+- `github.readMode` is `app_installation`
+- `github.canPostAsApp`
+- each enabled repo in `github.readChecks[]`
+- `activeRepoChecks` is greater than zero
+
+Then run full doctor with the config you intend to use:
 
 ```bash
 neondiff doctor --config config.local.json --json
 ```
 
-The doctor output is JSON. Check:
+The full doctor output is JSON. Check:
 
 - `ok`
 - `github.readMode`
@@ -216,8 +237,15 @@ that channel as `requiredForThisRelease: false`.
 
 ## Troubleshooting
 
-- `doctor` cannot read repos: verify GitHub App installation, app ID, private
-  key path, and repo permissions.
+- `doctor github` cannot read repos: verify GitHub App installation, selected
+  repo access, app ID, private key configuration, and repo permissions.
+- `doctor github` reports `fallback_token`: token reads may work, but this does
+  not prove App-authored review posting.
+- `doctor github` reports `activeRepoChecks: 0`: enable at least one selected
+  installed repo in local config before using the output as install proof.
+- Uninstall path: remove the GitHub App installation from GitHub settings, stop
+  the local worker, remove the repo from `pilotRepos`, and then delete local App
+  keys only after confirming no worker still needs them.
 - Provider calls fail: verify local provider config outside this repository and
   inspect redacted provider errors only.
 - Review says stale head: re-fetch the PR head and rerun against the current

@@ -14,6 +14,7 @@ describe("NeonDiff public community funnel", () => {
       /local-first AI PR reviewer/i,
       /https:\/\/www\.neondiff\.com/i,
       /docs\/SETUP\.md/i,
+      /docs\/github-app-setup\.md/i,
       /CONTRIBUTING\.md/i,
       /AGENTS\.md/i,
       /SECURITY\.md/i,
@@ -104,13 +105,17 @@ describe("NeonDiff public community funnel", () => {
 
   it("setup guide gives a first-run path without hiding safety prerequisites in operator runbooks", () => {
     const setup = read("docs/SETUP.md");
+    const githubApp = read("docs/github-app-setup.md");
 
     for (const required of [
       /^# NeonDiff Setup/m,
       /Requirements/i,
       /GitHub App/i,
+      /github-app-setup\.md/i,
       /Contents: read/i,
       /Pull requests: read\/write/i,
+      /doctor github/i,
+      /app_installation/i,
       /provider/i,
       /license/i,
       /config/i,
@@ -124,6 +129,35 @@ describe("NeonDiff public community funnel", () => {
     }
 
     expect(setup).not.toMatch(/BEGIN (RSA|OPENSSH|PRIVATE) KEY|ghp_|github_pat_|sk-[A-Za-z0-9]/);
+    expect(githubApp).toMatch(/^# GitHub App Install And Onboarding/m);
+    for (const required of [
+      /Install URL/i,
+      /Selected-Repo Install Path/i,
+      /Only select repositories/i,
+      /Repository Permissions/i,
+      /Metadata: read/i,
+      /Contents: read/i,
+      /Pull requests: read\/write/i,
+      /Checks: read/i,
+      /Actions: read/i,
+      /issue-enrichment permissions are separate from PR review/i,
+      /issueEnrichment\.allowlist/i,
+      /neondiff doctor github --config config\.local\.json --json/i,
+      /activeRepoChecks/i,
+      /First Review Path/i,
+      /dry-run true/i,
+      /App bot, not the human user token/i,
+      /License Boundary/i,
+      /Public open-source repositories are free/i,
+      /Private and commercial repositories require/i,
+      /Private repo data stays local/i,
+      /Uninstall/i,
+      /Troubleshooting/i,
+      /Evidence To Save/i
+    ]) {
+      expect(githubApp).toMatch(required);
+    }
+    expect(githubApp).not.toMatch(/BEGIN (RSA|OPENSSH|PRIVATE) KEY|ghp_|github_pat_|sk-[A-Za-z0-9]/);
   });
 
   it("CONTRIBUTING and AGENTS are useful to humans and coding agents", () => {

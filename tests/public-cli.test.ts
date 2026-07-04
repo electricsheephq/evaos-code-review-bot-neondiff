@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -44,6 +47,7 @@ describe("public NeonDiff CLI surface", () => {
       "config patch",
       "pricing",
       "doctor",
+      "doctor github",
       "daemon start",
       "daemon stop",
       "daemon status",
@@ -55,6 +59,7 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("neondiff pricing");
+    expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
     expect(output.commands.existing).toContain("provider-throttle-report");
@@ -132,6 +137,99 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(stdout).toContain("does not include hosted model credits");
     expect(stdout).not.toMatch(/"includedHostedModelCredits":\s*true|bundled provider tokens included/i);
+  });
+
+  it("doctor github proves App installation reads without printing secrets", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-"));
+    roots.push(root);
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const privateKeyPath = join(root, "neondiff.private-key.pem");
+    const installationToken = "installation-token-secret";
+    writeFileSync(privateKeyPath, privateKeyPem);
+
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo/installation") {
+        response.end(JSON.stringify({ id: 42 }));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/app/installations/42/access_tokens") {
+        response.end(JSON.stringify({ token: installationToken, expires_at: "2099-01-01T00:00:00Z" }));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo/pulls") {
+        expect(request.headers.authorization).toBe(`Bearer ${installationToken}`);
+        response.end(JSON.stringify([]));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: `unexpected ${request.method} ${url.pathname}` }));
+    });
+
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        github: {
+          appId: "12345",
+          privateKeyPath,
+          apiBaseUrl: `http://127.0.0.1:${address.port}`
+        },
+        zcode: {
+          cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+          appConfigPath: join(root, "zcode-config.json"),
+          model: "GLM-5.2",
+          timeoutMs: 1000,
+          maxPatchBytes: 1000,
+          retryMaxRetries: 0
+        }
+      })}\n`);
+
+      const { stdout } = await runCli(["doctor", "github", "--config", configPath], {
+        env: {
+          EVAOS_REVIEW_BOT_APP_ID: "12345",
+          EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: privateKeyPath
+        }
+      });
+      const output = JSON.parse(stdout);
+
+      expect(output).toMatchObject({
+        ok: true,
+        command: "doctor github",
+        activeRepoChecks: 1,
+        appCredentials: {
+          appIdConfigured: true,
+          privateKeyConfigured: true,
+          fallbackTokenConfigured: false
+        },
+        github: {
+          canPostAsApp: true,
+          readMode: "app_installation",
+          readChecks: [
+            {
+              repo: "acme/demo",
+              ok: true,
+              openPullCount: 0
+            }
+          ]
+        }
+      });
+      expect(output.requiredRepositoryPermissions).toContain("Pull requests: read/write");
+      expect(output.optionalPermissions.join(" ")).toMatch(/issue-enrichment/i);
+      expect(output.licenseBoundary.privateRepoDataStaysLocal).toBe(true);
+      expect(stdout).not.toContain(privateKeyPem);
+      expect(stdout).not.toContain(privateKeyPath);
+      expect(stdout).not.toContain(installationToken);
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("rejects non-boolean public rollback ref verification values", async () => {
@@ -2036,7 +2134,7 @@ describe("public NeonDiff CLI surface", () => {
   });
 });
 
-async function runCli(args: string[], options: { cwd?: string; timeout?: number } = {}) {
+async function runCli(args: string[], options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {}) {
   return execFileAsync(process.execPath, [tsxCliPath, join(repoRoot, "src/cli.ts"), ...args], {
     cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
@@ -2044,11 +2142,31 @@ async function runCli(args: string[], options: { cwd?: string; timeout?: number 
       ...process.env,
       EVAOS_REVIEW_BOT_APP_ID: "",
       EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
-      GITHUB_TOKEN: ""
+      GITHUB_TOKEN: "",
+      ...options.env
     },
     timeout: options.timeout ?? 15_000,
     killSignal: "SIGTERM",
     maxBuffer: 1024 * 1024
+  });
+}
+
+function listen(server: ReturnType<typeof createServer>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}
+
+function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
   });
 }
 

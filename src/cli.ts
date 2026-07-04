@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadConfig, validateLicenseConfigOverride } from "./config.js";
+import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
 import { runDaemonCycle } from "./daemon.js";
@@ -160,6 +160,12 @@ async function main(): Promise<void> {
 
   if (command === "doctor") {
     const config = loadConfig(args.config);
+    if (args._[1] === "github") {
+      const result = await buildDoctorGithubReport(config);
+      console.log(stringifyRedactedJson(result));
+      if (!result.ok) process.exitCode = 1;
+      return;
+    }
     const zcode = resolveZCodeProviderEnv({
       appConfigPath: config.zcode.appConfigPath,
       model: config.zcode.model,
@@ -2105,6 +2111,90 @@ function isProviderDeferredQueueJobEligible(job: ReviewQueueJobRecord, now: Date
   return !Number.isFinite(eligibleAtMs) || eligibleAtMs <= now.getTime();
 }
 
+async function buildDoctorGithubReport(config: BotConfig) {
+  const github = new GitHubApi(config.github);
+  const monitoredRepos = listReposToScan(config);
+  const readChecks = [];
+  let activeRepoChecks = 0;
+  const appCredentialsConfigured = github.canPostAsApp();
+  const hasFallbackReadToken = Boolean(config.github.token);
+
+  for (const repo of monitoredRepos) {
+    const repoPolicy = resolveRepoProfile(config, repo);
+    const policy = buildRepoPolicySnapshot(config, repo);
+    if (!repoPolicy.allowed) {
+      readChecks.push({ repo, ok: true, policy, skippedByPolicy: repoPolicy.reason });
+      continue;
+    }
+    activeRepoChecks += 1;
+    if (!appCredentialsConfigured && !hasFallbackReadToken) {
+      readChecks.push({
+        repo,
+        ok: false,
+        policy,
+        error: "GitHub App credentials or fallback read token are required before checking repository access."
+      });
+      continue;
+    }
+    try {
+      const pulls = await github.listOpenPulls(repo);
+      readChecks.push({ repo, ok: true, policy, openPullCount: pulls.length });
+    } catch (error) {
+      readChecks.push({
+        repo,
+        ok: false,
+        policy,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  const ok = appCredentialsConfigured && activeRepoChecks > 0 && readChecks.every((check) => check.ok);
+  return {
+    ok,
+    command: "doctor github",
+    purpose: "Verify GitHub App installation visibility and repo read access without provider or ZCode checks.",
+    monitoredRepos,
+    activeRepoChecks,
+    appCredentials: {
+      appIdConfigured: Boolean(config.github.appId),
+      privateKeyConfigured: Boolean(config.github.privateKeyPath),
+      fallbackTokenConfigured: Boolean(config.github.token)
+    },
+    github: {
+      canPostAsApp: appCredentialsConfigured,
+      readMode: appCredentialsConfigured ? "app_installation" : hasFallbackReadToken ? "fallback_token" : "unconfigured",
+      botLogin: config.github.botLogin ?? "evaos-code-review-bot[bot]",
+      apiBaseUrl: config.github.apiBaseUrl ?? "https://api.github.com",
+      readChecks
+    },
+    requiredRepositoryPermissions: [
+      "Metadata: read",
+      "Contents: read",
+      "Pull requests: read/write",
+      "Checks: read",
+      "Actions: read"
+    ],
+    optionalPermissions: [
+      "Issues: read/write only for separately allowlisted issue-enrichment repos"
+    ],
+    licenseBoundary: {
+      publicReposFree: config.license?.publicReposFree ?? true,
+      privateReposRequireEntitlement: config.license?.privateReposRequireEntitlement ?? true,
+      privateRepoDataStaysLocal: true
+    },
+    nextCommands: [
+      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
+      "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff"
+    ],
+    troubleshooting: [
+      ...(appCredentialsConfigured ? [] : ["Set EVAOS_REVIEW_BOT_APP_ID and EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH, or configure github.appId/privateKeyPath outside git."]),
+      ...(activeRepoChecks > 0 ? [] : ["Add at least one enabled repo to pilotRepos or repoProfiles before using this as an install proof."]),
+      ...(readChecks.some((check) => !check.ok) ? ["Confirm the GitHub App is installed on selected repositories with the required repository permissions."] : [])
+    ]
+  };
+}
+
 function buildHelp(command?: string) {
   return {
     ok: true,
@@ -2116,6 +2206,7 @@ function buildHelp(command?: string) {
         "config patch",
         "pricing",
         "doctor",
+        "doctor github",
         "daemon start",
         "daemon stop",
         "daemon status",
@@ -2173,6 +2264,7 @@ function buildHelp(command?: string) {
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",
       "neondiff doctor --config config.local.json --json",
+      "neondiff doctor github --config config.local.json --json",
       "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff",
       "neondiff daemon start --launchd-label com.example.neondiff --dry-run true",
