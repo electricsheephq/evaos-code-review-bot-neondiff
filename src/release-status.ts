@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
 import { buildReviewBudgetStatus, type ReviewBudgetStatus } from "./review-budget.js";
 import { parseProviderCooldownError, PROVIDER_COOLDOWN_ERROR_PREFIX } from "./state.js";
-import { buildZCodeTimeoutRetryCommand, summarizeZCodeTimeoutErrors, ZCODE_TIMEOUT_ERROR_PREFIX } from "./zcode-timeout.js";
+import { buildZCodeTimeoutInspectCommand, summarizeZCodeTimeoutErrors, ZCODE_TIMEOUT_ERROR_PREFIX } from "./zcode-timeout.js";
 import type { BotConfig } from "./config.js";
 import type { ReviewQueueJobRecord } from "./state.js";
 
@@ -230,7 +230,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
     "--expired-only true --dry-run false --zcode true";
-  const retryZCodeTimeoutCommand = buildZCodeTimeoutRetryCommand({ configPath: input.configPath });
+  const inspectZCodeTimeoutCommand = buildZCodeTimeoutInspectCommand(input.configPath);
   const runtimeGates = [
     {
       name: "expected_head",
@@ -384,7 +384,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
         ? [`npx tsx src/cli.ts clear-review-queue-leases --config ${input.configPath} --dry-run true --expired-only true`]
         : []),
       ...(!zcodeTimeoutFailedQueueJobsOk
-        ? [retryZCodeTimeoutCommand]
+        ? [inspectZCodeTimeoutCommand]
         : [])
     ],
     gates,

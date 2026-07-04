@@ -27,7 +27,7 @@ import {
   reviewPull,
   runWithProviderRetry
 } from "../src/worker.js";
-import { parseZCodeTimeoutError } from "../src/zcode-timeout.js";
+import { isZCodeTimeoutError, parseZCodeTimeoutError } from "../src/zcode-timeout.js";
 
 describe("worker review failures", () => {
   const roots: string[] = [];
@@ -106,6 +106,11 @@ describe("worker review failures", () => {
       retryable: false
     });
     state.close();
+  });
+
+  it("classifies only hard ZCode timeout failures as timeout-retryable", () => {
+    expect(isZCodeTimeoutError(new Error("ZCode failed before completion: spawnSync node ETIMEDOUT"))).toBe(true);
+    expect(isZCodeTimeoutError(new Error("zcode review timed out due to upstream provider rate limit"))).toBe(false);
   });
 
   it("records provider rate limits as cooldown skips instead of hard failures", () => {

@@ -1036,7 +1036,7 @@ describe("operator CLI summaries", () => {
       detail: "1 ZCode timeout failed durable queue job(s); retryable=1 exhausted=0"
     });
     expect(status.recommendedActions).toContain(
-      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo <repo> --pr <number> --head-sha <head-sha> --dry-run false --zcode true"
+      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 216 --head-sha head-timeout --dry-run false --zcode true"
     );
   });
 
@@ -1076,7 +1076,7 @@ describe("operator CLI summaries", () => {
       detail: "1 ZCode timeout failed durable queue job(s); retryable=0 exhausted=1"
     });
     expect(status.recommendedActions).toContain(
-      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo <repo> --pr <number> --head-sha <head-sha> --dry-run false --zcode true"
+      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 216 --head-sha head-timeout --dry-run false --zcode true"
     );
   });
 

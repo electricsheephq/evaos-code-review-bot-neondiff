@@ -19,11 +19,19 @@ export interface ZCodeTimeoutCounts {
 
 export interface ZCodeTimeoutRetryCommandInput {
   configPath: string;
-  repo?: string;
-  pullNumber?: number;
-  headSha?: string;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
   dryRun?: boolean;
   zcode?: boolean;
+}
+
+export interface ZCodeTimeoutRetryJobInput {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  state?: string;
+  lastError?: string | null;
 }
 
 export function isZCodeTimeoutError(error: unknown): boolean {
@@ -31,8 +39,8 @@ export function isZCodeTimeoutError(error: unknown): boolean {
   const normalized = message.toLowerCase();
   return (
     (normalized.includes("zcode failed before completion") && normalized.includes("etimedout")) ||
-    (normalized.includes("spawnsync") && normalized.includes("etimedout")) ||
-    (normalized.includes("zcode") && normalized.includes("timed out"))
+    (normalized.includes("zcode failed before completion") && normalized.includes("timed out")) ||
+    (normalized.includes("spawnsync") && normalized.includes("etimedout"))
   );
 }
 
@@ -88,12 +96,38 @@ export function buildZCodeTimeoutRetryCommand(input: ZCodeTimeoutRetryCommandInp
   return [
     "npx tsx src/cli.ts retry-failed",
     `--config ${input.configPath}`,
-    `--repo ${input.repo ?? "<repo>"}`,
-    `--pr ${input.pullNumber ?? "<number>"}`,
-    `--head-sha ${input.headSha ?? "<head-sha>"}`,
+    `--repo ${input.repo}`,
+    `--pr ${input.pullNumber}`,
+    `--head-sha ${input.headSha}`,
     `--dry-run ${input.dryRun === true ? "true" : "false"}`,
     `--zcode ${input.zcode === false ? "false" : "true"}`
   ].join(" ");
+}
+
+export function buildZCodeTimeoutRetryCommandsForJobs(input: {
+  configPath: string;
+  jobs: ZCodeTimeoutRetryJobInput[];
+}): string[] {
+  const seen = new Set<string>();
+  const commands: string[] = [];
+  for (const job of input.jobs) {
+    if (job.state !== "failed") continue;
+    if (!parseZCodeTimeoutError(job.lastError)) continue;
+    const key = `${job.repo}#${job.pullNumber}@${job.headSha}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    commands.push(buildZCodeTimeoutRetryCommand({
+      configPath: input.configPath,
+      repo: job.repo,
+      pullNumber: job.pullNumber,
+      headSha: job.headSha
+    }));
+  }
+  return commands;
+}
+
+export function buildZCodeTimeoutInspectCommand(configPath: string): string {
+  return `npx tsx src/cli.ts queue --config ${configPath} --state failed`;
 }
 
 function nextZCodeTimeoutRetryAttempt(previousError?: string): number {
@@ -102,11 +136,11 @@ function nextZCodeTimeoutRetryAttempt(previousError?: string): number {
 }
 
 function sanitizeTimeoutError(message: string): string {
-  return redactSecrets(message)
+  return redactSecrets(redactSecrets(message)
     .replace(/\s+/g, " ")
     .replace(/;/g, ",")
     .trim()
-    .slice(0, 800);
+    .slice(0, 800));
 }
 
 function parseSemicolonFields(error: string): Map<string, string> {
