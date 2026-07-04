@@ -83,9 +83,13 @@ export interface BuildFinishingTouchDryRunContractInput {
   draft: FinishingTouchDraft;
   currentHeadSha: string;
   worktreeClean: boolean;
+  worktreeCleanState?: FinishingTouchWorktreeCleanState;
   trustedAuthors: string[];
   validation: FinishingTouchRequestValidationResult;
 }
+
+export type FinishingTouchSecretScanState = "passed" | "failed" | "not_scanned";
+export type FinishingTouchWorktreeCleanState = "verified_clean" | "dirty" | "assumed_clean";
 
 export interface FinishingTouchDryRunContract {
   ok: boolean;
@@ -104,13 +108,13 @@ export interface FinishingTouchDryRunContract {
     action: FinishingTouchAction;
     author: string;
     commentId: number;
-    trigger: string;
+    trigger?: string;
   };
   safety: {
     trustedAuthor: boolean;
     currentHeadMatches: boolean;
-    worktreeClean: boolean;
-    secretScan: "passed" | "failed";
+    worktreeClean: FinishingTouchWorktreeCleanState;
+    secretScan: FinishingTouchSecretScanState;
     mutation: {
       canPush: false;
       canCommit: false;
@@ -255,7 +259,12 @@ export function buildFinishingTouchDryRunContract(
 ): FinishingTouchDryRunContract {
   const currentHeadMatches = input.currentHeadSha === input.draft.headSha;
   const trustedAuthor = input.trustedAuthors.includes("*") || input.trustedAuthors.includes(input.draft.author);
-  const secretScan = input.validation.ok || input.validation.reason !== "secret_detected" ? "passed" : "failed";
+  const secretScan: FinishingTouchSecretScanState = input.validation.ok
+    ? "passed"
+    : input.validation.reason === "secret_detected"
+      ? "failed"
+      : "not_scanned";
+  const worktreeCleanState = input.worktreeCleanState ?? (input.worktreeClean ? "verified_clean" : "dirty");
   return {
     ok: input.validation.ok,
     mode: "draft_only",
@@ -273,12 +282,12 @@ export function buildFinishingTouchDryRunContract(
       action: input.draft.action,
       author: input.draft.author,
       commentId: input.draft.commandCommentId,
-      trigger: input.draft.trigger
+      ...(input.validation.ok ? { trigger: input.draft.trigger } : {})
     },
     safety: {
       trustedAuthor,
       currentHeadMatches,
-      worktreeClean: input.worktreeClean,
+      worktreeClean: worktreeCleanState,
       secretScan,
       mutation: {
         canPush: false,

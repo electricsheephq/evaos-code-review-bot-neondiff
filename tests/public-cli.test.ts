@@ -124,7 +124,7 @@ describe("public NeonDiff CLI surface", () => {
         safety: {
           trustedAuthor: true,
           currentHeadMatches: true,
-          worktreeClean: true,
+          worktreeClean: "assumed_clean",
           secretScan: "passed",
           mutation: {
             canPush: false,
@@ -142,6 +142,65 @@ describe("public NeonDiff CLI surface", () => {
       canCommit: false,
       canApprove: false
     });
+  });
+
+  it("omits failed finishing-touch drafts and secret-bearing triggers from CLI stdout", async () => {
+    const secretLikeToken = "ghp_123456789012345678901234567890123456";
+    let failure: unknown;
+    try {
+      await runCli([
+        "finishing-touch-dry-run",
+        "--repo",
+        "electricsheephq/evaos-code-review-bot",
+        "--pr",
+        "120",
+        "--head-sha",
+        "head-a",
+        "--current-head",
+        "head-a",
+        "--comment-id",
+        "789",
+        "--author",
+        "100yenadmin",
+        "--trusted-authors",
+        "100yenadmin",
+        "--action",
+        "changelog_draft",
+        "--body",
+        `@evaos-code-review-bot changelog draft ${secretLikeToken}`,
+        "--generated-at",
+        "2026-07-03T00:00:00.000Z"
+      ]);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ stdout: expect.any(String) });
+    const stdout = (failure as { stdout: string }).stdout;
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: false,
+      dryRun: true,
+      validation: {
+        ok: false,
+        reason: "secret_detected"
+      },
+      contract: {
+        ok: false,
+        command: {
+          action: "changelog_draft",
+          author: "100yenadmin",
+          commentId: 789
+        },
+        safety: {
+          worktreeClean: "assumed_clean",
+          secretScan: "failed"
+        }
+      }
+    });
+    expect(output.contract).not.toHaveProperty("draft");
+    expect(output.contract).not.toHaveProperty("command.trigger");
+    expect(stdout).not.toContain(secretLikeToken);
   });
 
   it("prints canonical pricing tiers without hosted model credit claims", async () => {

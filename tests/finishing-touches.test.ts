@@ -146,7 +146,7 @@ describe("finishing-touch draft commands", () => {
       safety: {
         trustedAuthor: true,
         currentHeadMatches: true,
-        worktreeClean: true,
+        worktreeClean: "verified_clean",
         secretScan: "passed",
         mutation: {
           canPush: false,
@@ -157,5 +157,99 @@ describe("finishing-touch draft commands", () => {
       }
     });
     expect(contract.draft).toBe(draft);
+  });
+
+  it("renders validation failures without drafts, skipped scan claims, or raw triggers", () => {
+    const baseDraft = buildFinishingTouchDraft({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "head-a",
+      action: "generate_tests",
+      author: "100yenadmin",
+      commentId: 789,
+      trigger: "@evaos-code-review-bot generate tests ghp_123456789012345678901234567890123456",
+      generatedAt: "2026-07-03T00:00:00.000Z"
+    });
+    const failureCases = [
+      {
+        name: "untrusted_author",
+        validation: { ok: false, reason: "untrusted_author", detail: "Author stranger is not trusted." } as const,
+        trustedAuthors: ["maintainer"],
+        currentHeadSha: "head-a",
+        worktreeClean: true,
+        expectedSafety: {
+          trustedAuthor: false,
+          currentHeadMatches: true,
+          worktreeClean: "verified_clean",
+          secretScan: "not_scanned"
+        }
+      },
+      {
+        name: "stale_head",
+        validation: { ok: false, reason: "stale_head", detail: "Command targeted head-a, but current head is head-b." } as const,
+        trustedAuthors: ["100yenadmin"],
+        currentHeadSha: "head-b",
+        worktreeClean: true,
+        expectedSafety: {
+          trustedAuthor: true,
+          currentHeadMatches: false,
+          worktreeClean: "verified_clean",
+          secretScan: "not_scanned"
+        }
+      },
+      {
+        name: "dirty_worktree",
+        validation: { ok: false, reason: "dirty_worktree", detail: "Refusing finishing-touch draft while the worktree is dirty." } as const,
+        trustedAuthors: ["100yenadmin"],
+        currentHeadSha: "head-a",
+        worktreeClean: false,
+        expectedSafety: {
+          trustedAuthor: true,
+          currentHeadMatches: true,
+          worktreeClean: "dirty",
+          secretScan: "not_scanned"
+        }
+      },
+      {
+        name: "secret_detected",
+        validation: { ok: false, reason: "secret_detected", detail: "Refusing finishing-touch draft because proposed output contains secret-like text." } as const,
+        trustedAuthors: ["100yenadmin"],
+        currentHeadSha: "head-a",
+        worktreeClean: true,
+        expectedSafety: {
+          trustedAuthor: true,
+          currentHeadMatches: true,
+          worktreeClean: "verified_clean",
+          secretScan: "failed"
+        }
+      }
+    ];
+
+    for (const failureCase of failureCases) {
+      const contract = buildFinishingTouchDryRunContract({
+        dryRun: true,
+        recorded: false,
+        draft: {
+          ...baseDraft,
+          author: failureCase.name === "untrusted_author" ? "stranger" : baseDraft.author
+        },
+        currentHeadSha: failureCase.currentHeadSha,
+        worktreeClean: failureCase.worktreeClean,
+        trustedAuthors: failureCase.trustedAuthors,
+        validation: failureCase.validation
+      });
+
+      expect(contract, failureCase.name).toMatchObject({
+        ok: false,
+        target: {
+          staleHead: failureCase.name === "stale_head"
+        },
+        safety: failureCase.expectedSafety,
+        validation: failureCase.validation
+      });
+      expect(contract, failureCase.name).not.toHaveProperty("draft");
+      expect(contract, failureCase.name).not.toHaveProperty("command.trigger");
+      expect(JSON.stringify(contract), failureCase.name).not.toContain("ghp_123456789012345678901234567890123456");
+    }
   });
 });

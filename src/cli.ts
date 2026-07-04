@@ -1087,9 +1087,14 @@ async function main(): Promise<void> {
     const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
     const commentId = parsePositiveInteger(parseSingleArg(args["comment-id"], "--comment-id"), "--comment-id");
     const trustedAuthors = parseCsv(args["trusted-authors"]);
-    const worktreeClean = args["worktree-clean"] === undefined
-      ? true
-      : parseBooleanArg(args["worktree-clean"], "--worktree-clean");
+    const worktreeCleanArg = args["worktree-clean"];
+    const worktreeCleanExplicit = worktreeCleanArg !== undefined;
+    const worktreeClean = worktreeCleanExplicit
+      ? parseBooleanArg(worktreeCleanArg, "--worktree-clean")
+      : true;
+    const worktreeCleanState = worktreeCleanExplicit
+      ? worktreeClean ? "verified_clean" : "dirty"
+      : "assumed_clean";
     const trigger = parseSingleArg(args.body ?? args.action ?? action, "--body");
     const draft = buildFinishingTouchDraft({
       repo,
@@ -1119,6 +1124,7 @@ async function main(): Promise<void> {
       draft,
       currentHeadSha,
       worktreeClean,
+      worktreeCleanState,
       trustedAuthors,
       validation
     });
