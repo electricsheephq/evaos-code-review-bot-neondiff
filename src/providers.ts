@@ -359,6 +359,9 @@ async function providerSmokeTargetError(
   if (isUnsafeSmokeHost(parsed.hostname)) {
     return "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts.";
   }
+  if (!loopback) {
+    return "Remote OpenAI-compatible smoke checks are disabled until the transport can pin the validated DNS result.";
+  }
   if (!isIP(parsed.hostname)) {
     const resolvedAddresses = await safeLookupProviderHost(parsed.hostname, lookupImpl);
     if (resolvedAddresses.some((address) => isUnsafeSmokeHost(address))) {

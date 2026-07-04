@@ -85,16 +85,22 @@ describe("provider registry", () => {
         providers: {
           "openai-compatible": {
             enabled: true,
-            baseUrl: "https://gateway.example.test/v1",
+            baseUrl: "http://127.0.0.1:8080/v1",
             model: "review-model",
             authMode: "api-key-env",
-            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: true,
+              streaming: false
+            }
           }
         }
       }
     });
     const fetchImpl: typeof fetch = async (url, init) => {
-      expect(String(url)).toBe("https://gateway.example.test/v1/models");
+      expect(String(url)).toBe("http://127.0.0.1:8080/v1/models");
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer provider-secret");
       return new Response(JSON.stringify({ data: [{ id: "review-model" }] }), {
         status: 200,
@@ -118,7 +124,7 @@ describe("provider registry", () => {
       ok: true,
       smokeAttempted: true,
       readMode: "openai_compatible_models",
-      baseUrl: "https://gateway.example.test/v1",
+      baseUrl: "http://127.0.0.1:8080/v1",
       apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
       modelCount: 1
     });
@@ -151,7 +157,13 @@ describe("provider registry", () => {
             model: "review-model",
             authMode: "api-key-env",
             apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
-            baseUrl: "https://gateway.example.test/v1"
+            baseUrl: "http://127.0.0.1:8080/v1",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: true,
+              streaming: false
+            }
           }
         }
       }
@@ -439,7 +451,7 @@ describe("provider registry", () => {
     });
     expect(resolvedPrivateResult.checks[0]).toMatchObject({
       ok: false,
-      error: "OpenAI-compatible smoke target resolved to a private, link-local, loopback, or cloud metadata address."
+      error: "Remote OpenAI-compatible smoke checks are disabled until the transport can pin the validated DNS result."
     });
     expect(fetchCalls).toBe(0);
   });
@@ -453,7 +465,13 @@ describe("provider registry", () => {
             enabled: true,
             model: "wanted-model",
             authMode: "none",
-            baseUrl: "https://gateway.example.test/v1"
+            baseUrl: "http://127.0.0.1:8080/v1",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: true,
+              streaming: false
+            }
           }
         }
       }
@@ -637,7 +655,13 @@ describe("provider registry", () => {
             enabled: true,
             model: "review-model",
             authMode: "none",
-            baseUrl: "https://gateway.example.test/v1"
+            baseUrl: "http://127.0.0.1:8080/v1",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: true,
+              streaming: false
+            }
           }
         }
       }
