@@ -131,7 +131,7 @@ describe("public NeonDiff CLI surface", () => {
       })
     ]);
     expect(stdout).toContain("does not include hosted model credits");
-    expect(stdout).not.toMatch(/includedHostedModelCredits\"\\s*:\\s*true|bundled provider tokens included/i);
+    expect(stdout).not.toMatch(/"includedHostedModelCredits":\s*true|bundled provider tokens included/i);
   });
 
   it("rejects non-boolean public rollback ref verification values", async () => {
@@ -1433,35 +1433,36 @@ describe("public NeonDiff CLI surface", () => {
       }
     })}\n`);
     const store = new ReviewStateStore(statePath);
+    const fixtureNow = new Date();
     try {
       store.enqueueReviewQueueJob({
         repo: "other/repo",
         pullNumber: 1,
         headSha: "active-head",
         providerId: "GLM-5.2",
-        now: new Date("2026-07-03T00:00:00.000Z")
+        now: new Date(fixtureNow.getTime() - 2_000)
       });
       store.leaseNextReviewQueueJobs({
         maxProviderActive: 1,
         maxOrgActive: 1,
         maxRepoActive: 1,
-        // Keep the synthetic active provider lease alive regardless of wall-clock test date.
-        leaseTtlMs: 14 * 24 * 60 * 60_000,
-        now: new Date("2026-07-03T00:00:01.000Z")
+        // Issue #195: keep the synthetic active provider lease relative to the process clock.
+        leaseTtlMs: 60 * 60_000,
+        now: new Date(fixtureNow.getTime() - 1_000)
       });
       const deferred = store.enqueueReviewQueueJob({
         repo: "owner/repo",
         pullNumber: 123,
         headSha: "head-provider-deferred",
         providerId: "GLM-5.2",
-        now: new Date("2026-07-03T00:00:02.000Z")
+        now: new Date(fixtureNow.getTime() - 500)
       }).job;
       store.updateReviewQueueJobState({
         jobId: deferred.jobId,
         state: "provider_deferred",
-        nextEligibleAt: "2026-07-03T00:00:03.000Z",
+        nextEligibleAt: new Date(fixtureNow.getTime() - 250).toISOString(),
         lastError: "provider_overloaded",
-        now: new Date("2026-07-03T00:00:04.000Z")
+        now: fixtureNow
       });
     } finally {
       store.close();
