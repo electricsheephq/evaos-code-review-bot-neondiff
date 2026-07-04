@@ -598,6 +598,9 @@ function validateLicenseConfig(value: unknown, label: string): void {
   validateBoolean(value.enabled, `${label}.enabled`);
   validateOptionalString(value.apiBaseUrl, `${label}.apiBaseUrl`);
   validateLicenseApiBaseUrl(value.apiBaseUrl, `${label}.apiBaseUrl`);
+  if (value.enabled === true && typeof value.apiBaseUrl !== "string") {
+    throw new Error(`${label}.apiBaseUrl is required when ${label}.enabled=true`);
+  }
   validateOptionalString(value.cachePath, `${label}.cachePath`);
   if (typeof value.cachePath !== "string" || value.cachePath.trim().length === 0) {
     throw new Error(`${label}.cachePath must be a non-empty string`);

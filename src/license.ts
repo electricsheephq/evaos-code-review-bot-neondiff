@@ -102,8 +102,14 @@ export async function activateLicense(input: {
     ...response.entitlement,
     licenseFingerprint: fingerprintLicenseKey(licenseKey)
   };
-  writeLicenseKey(input.config, licenseKey);
-  writeLicenseCache(input.config.cachePath, entitlement);
+  try {
+    writeLicenseKey(input.config, licenseKey);
+    writeLicenseCache(input.config.cachePath, entitlement);
+  } catch (error) {
+    deleteLicenseKey(input.config);
+    deleteLicenseCache(input.config.cachePath);
+    throw error;
+  }
   return {
     ...response,
     entitlement,
@@ -159,7 +165,10 @@ export async function getLicenseStatus(input: {
       detail: `using cached entitlement after ${response.status} license API failure`
     };
   }
-  if (response.status === "expired" || response.status === "revoked" || response.status === "invalid") {
+  if (
+    (response.status === "expired" || response.status === "revoked" || response.status === "invalid") &&
+    cachedEntitlementMatchesLicenseKey(cached, licenseKey)
+  ) {
     deleteLicenseCache(input.config.cachePath);
   }
   return response;
@@ -621,6 +630,10 @@ function safeJsonParse(text: string): unknown {
 
 function fingerprintLicenseKey(key: string): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
+
+function cachedEntitlementMatchesLicenseKey(entitlement: LicenseEntitlement | undefined, licenseKey: string): boolean {
+  return entitlement?.licenseFingerprint === fingerprintLicenseKey(licenseKey);
 }
 
 function redactSubmittedLicenseKey(text: string, licenseKey: string): string {

@@ -97,7 +97,11 @@ describe("run-once CLI reporting", () => {
   it("marks failed reviews as non-ok and requests a nonzero exit code", () => {
     const result = runOnceResult({ failed: 1 });
 
-    expect(buildRunOnceCliReport({ result, dryRun: false, useZCode: true })).toMatchObject({
+    expect(buildRunOnceCliReport({
+      result,
+      dryRun: false,
+      useZCode: true
+    })).toMatchObject({
       ok: false,
       dryRun: false,
       useZCode: true,
@@ -109,16 +113,52 @@ describe("run-once CLI reporting", () => {
     expect(runOnceCliExitCode(result)).toBe(1);
   });
 
-  it("marks one-shot license gate skips as non-ok and requests a nonzero exit code", () => {
+  it("keeps broad-scan license gate skips ok so intentional proof blocks do not fail the sweep", () => {
     const result = runOnceResult({
       skippedPolicy: 1,
       skippedLicenseGate: 1
     });
 
-    expect(buildRunOnceCliReport({ result, dryRun: false, useZCode: true })).toMatchObject({
-      ok: false,
+    expect(buildRunOnceCliReport({
+      result,
+      dryRun: false,
+      useZCode: true
+    })).toMatchObject({
+      ok: true,
       result: {
         skippedPolicy: 1,
+        skippedLicenseGate: 1
+      }
+    });
+    expect(runOnceCliExitCode(result)).toBe(0);
+  });
+
+  it("marks scoped license gate skips as non-ok and requests a nonzero exit code", () => {
+    const result = runOnceResult({
+      skippedLicenseGate: 1,
+      scopedPull: {
+        repo: "owner/private",
+        pullNumber: 123,
+        headSha: "head-123",
+        title: "private change",
+        url: "https://github.com/owner/private/pull/123"
+      }
+    });
+
+    expect(buildRunOnceCliReport({
+      result,
+      dryRun: false,
+      useZCode: true,
+      repo: "owner/private",
+      pullNumber: 123
+    })).toMatchObject({
+      ok: false,
+      scope: {
+        repo: "owner/private",
+        pullNumber: 123,
+        headSha: "head-123"
+      },
+      result: {
         skippedLicenseGate: 1
       }
     });

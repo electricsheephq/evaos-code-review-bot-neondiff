@@ -1291,28 +1291,40 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_stale_head";
     }
   }
-  const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
-  if (!licenseGate.ok) {
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-    mkdirSync(evidenceDir, { recursive: true });
-    writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
-    state.recordReviewReadiness({
-      repo,
-      pullNumber: pull.number,
-      headSha: pull.head.sha,
-      state: "blocked_on_proof",
-      reason: licenseGate.reason
-    });
-    return "skipped_license_gate";
-  }
-
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
-  if (!budget.tryStart()) return "skipped_capacity";
   let lease: ReviewRunLease | undefined;
+  let budgetStarted = false;
+  const acquireReviewCapacity = (): boolean => {
+    if (budgetStarted && lease) return true;
+    if (!budget.tryStart()) return false;
+    budgetStarted = true;
+    lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
+    if (lease) return true;
+    budget.finish();
+    budgetStarted = false;
+    return false;
+  };
 
   try {
-    lease = state.tryAcquireReviewRunLease(config.reviewConcurrency.maxActiveRuns, config.reviewConcurrency.leaseTtlMs);
-    if (!lease) return "skipped_capacity";
+    if (input.processedHeadPolicy === "retry_failed_head" && !acquireReviewCapacity()) return "skipped_capacity";
+
+    const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
+    if (!licenseGate.ok) {
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+      mkdirSync(evidenceDir, { recursive: true });
+      writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
+      state.recordReviewReadiness({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        state: "blocked_on_proof",
+        reason: licenseGate.reason
+      });
+      return "skipped_license_gate";
+    }
+
+    if (input.processedHeadPolicy !== "retry_failed_head" && !acquireReviewCapacity()) return "skipped_capacity";
+
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (commandReviewRequested) {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
@@ -1509,7 +1521,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     return commandReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
     if (lease) state.releaseReviewRunLease(lease.leaseId);
-    budget.finish();
+    if (budgetStarted) budget.finish();
   }
 }
 
@@ -1576,7 +1588,11 @@ async function getRepoVisibilityForLicenseGate(github: GitHubApi, repo: string):
   const now = Date.now();
   const cached = licenseGateRepoVisibilityCache.get(repo);
   if (cached) {
-    if (cached.expiresAtMs > now) return cached.visibility;
+    if (cached.expiresAtMs > now) {
+      licenseGateRepoVisibilityCache.delete(repo);
+      licenseGateRepoVisibilityCache.set(repo, cached);
+      return cached.visibility;
+    }
     licenseGateRepoVisibilityCache.delete(repo);
   }
 

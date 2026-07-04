@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
@@ -22,6 +23,10 @@ import { buildLicenseGateForPull, reviewPull } from "../src/worker.js";
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
+
+function testLicenseFingerprint(key: string): string {
+  return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
 
 describe("license activation and entitlement cache", () => {
   const roots: string[] = [];
@@ -198,7 +203,8 @@ describe("license activation and entitlement cache", () => {
       statePath: join(root, "state", "reviews.sqlite"),
       evidenceDir: join(root, "evidence"),
       license: {
-        enabled: true
+        enabled: true,
+        apiBaseUrl: "https://license.example.invalid"
       }
     });
 
@@ -210,7 +216,8 @@ describe("license activation and entitlement cache", () => {
       statePath: join(otherRoot, "state", "reviews.sqlite"),
       evidenceDir: join(otherRoot, "evidence"),
       license: {
-        enabled: true
+        enabled: true,
+        apiBaseUrl: "https://license.example.invalid"
       }
     });
     expect(otherConfig.license?.cachePath).toBe(join(otherRoot, "state", "license", "entitlement-cache.json"));
@@ -222,6 +229,7 @@ describe("license activation and entitlement cache", () => {
       evidenceDir: join(root, "evidence"),
       license: {
         enabled: true,
+        apiBaseUrl: "https://license.example.invalid",
         cachePath: join(process.cwd(), "license-cache.json")
       }
     })).toThrow(/config\.license\.cachePath must be outside protected checkout root/);
@@ -239,6 +247,23 @@ describe("license activation and entitlement cache", () => {
         keyPath: join(root, "license.key")
       }
     })).toThrow(/config\.license\.apiBaseUrl must use https/);
+  });
+
+  it("requires an API base URL when license enforcement is enabled", () => {
+    const root = mkRoot(roots);
+
+    expect(() => loadConfigFromObject({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: {
+        enabled: true,
+        cachePath: join(root, "entitlement.json"),
+        storageBackend: "file",
+        keyPath: join(root, "license.key")
+      }
+    })).toThrow(/config\.license\.apiBaseUrl is required when config\.license\.enabled=true/);
   });
 
   it("uses a still-active cached entitlement during transient API outage", async () => {
@@ -328,13 +353,15 @@ describe("license activation and entitlement cache", () => {
     const server = await startLicenseServer((_req, res) => writeJson(res, 410, { status: "revoked", detail: "revoked" }));
     servers.push(server);
     const config = licenseConfig(root, server.url);
-    writeFileSync(join(root, "license.key"), "LIC-revoked-cache-test-123456\n", { mode: 0o600 });
+    const licenseKey = "LIC-revoked-cache-test-123456";
+    writeFileSync(join(root, "license.key"), `${licenseKey}\n`, { mode: 0o600 });
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
       status: "active",
       checkedAt: "2026-07-04T00:00:00.000Z",
       expiresAt: "2026-08-01T00:00:00.000Z",
       repoVisibilityScope: "private",
-      updateEntitlement: true
+      updateEntitlement: true,
+      licenseFingerprint: testLicenseFingerprint(licenseKey)
     })}\n`, { mode: 0o600 });
 
     const status = await getLicenseStatus({
@@ -345,6 +372,31 @@ describe("license activation and entitlement cache", () => {
 
     expect(status).toMatchObject({ ok: false, status: "revoked", source: "api" });
     expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
+  it("keeps cached entitlement for a different stored key after terminal API denial", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => writeJson(res, 401, { status: "invalid", detail: "bad key" }));
+    servers.push(server);
+    const config = licenseConfig(root, server.url);
+    writeFileSync(join(root, "license.key"), "LIC-current-key-123456\n", { mode: 0o600 });
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true,
+      licenseFingerprint: testLicenseFingerprint("LIC-other-key-123456")
+    })}\n`, { mode: 0o600 });
+
+    const status = await getLicenseStatus({
+      config,
+      refresh: true,
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({ ok: false, status: "invalid", source: "api" });
+    expect(existsSync(join(root, "entitlement.json"))).toBe(true);
   });
 
   it("fails private repo review closed without an active private entitlement", async () => {
