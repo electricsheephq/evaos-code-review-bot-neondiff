@@ -1445,6 +1445,7 @@ describe("public NeonDiff CLI surface", () => {
         maxProviderActive: 1,
         maxOrgActive: 1,
         maxRepoActive: 1,
+        // Keep the synthetic active provider lease alive regardless of wall-clock test date.
         leaseTtlMs: 14 * 24 * 60 * 60_000,
         now: new Date("2026-07-03T00:00:01.000Z")
       });
