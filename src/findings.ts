@@ -143,13 +143,14 @@ export function formatReviewComment(
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy,
   options: { textAlreadySanitized?: boolean } = {}
 ): string {
+  const severity = SEVERITIES.has(finding.severity as Severity) ? finding.severity : "P3";
   const title = options.textAlreadySanitized ? finding.title : sanitizePublicConfidenceText(finding.title, publicConfidencePolicy);
   const body = options.textAlreadySanitized ? finding.body : sanitizePublicConfidenceText(finding.body, publicConfidencePolicy);
   const category = finding.category ? `\n\nCategory: ${categoryLabel(finding.category)}` : "";
   const why = finding.why_this_matters
     ? `\n\nWhy this matters: ${options.textAlreadySanitized ? finding.why_this_matters : sanitizePublicConfidenceText(finding.why_this_matters, publicConfidencePolicy)}`
     : "";
-  return `**${finding.severity}: ${title}**\n\n${body}${category}${why}`;
+  return `**${severity}: ${title}**\n\n${body}${category}${why}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

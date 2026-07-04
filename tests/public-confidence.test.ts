@@ -134,6 +134,18 @@ describe("public confidence display policy", () => {
     expect(output).not.toContain("95% confi");
   });
 
+  it("does not leak no-space confidence tokens at the truncation boundary", () => {
+    for (const token of ["confidence95%", "0.95confident"]) {
+      const output = sanitizePublicConfidenceText(`${"a".repeat(128_000 - token.length + 3)}${token} after boundary`);
+
+      expect(output).toContain("[truncated before public confidence sanitization]");
+      expect(output).not.toContain("95%");
+      expect(output).not.toContain("0.95");
+      expect(output).not.toContain("confidence95%");
+      expect(output).not.toContain("0.95confid");
+    }
+  });
+
   it("does not over-sanitize ordinary numbered review prose", () => {
     const input = [
       "1 likely cause is a missing guard, and 2 likely follow-ups are documented.",

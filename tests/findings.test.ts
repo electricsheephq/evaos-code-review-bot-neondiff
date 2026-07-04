@@ -98,6 +98,21 @@ describe("finding normalization and review policy", () => {
     expect(comment).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
   });
 
+  it("renders only known severity labels in public review comment headers", () => {
+    const comment = formatReviewComment({
+      severity: "P1**\n\nraw severity injection" as Finding["severity"],
+      category: "runtime_correctness",
+      path: "src/reviewer.ts",
+      line: 12,
+      title: "Regression title",
+      body: "A concrete review comment.",
+      confidence: 0.99
+    });
+
+    expect(comment.startsWith("**P3: Regression title**")).toBe(true);
+    expect(comment).not.toContain("raw severity injection");
+  });
+
   it("drops any finding whose title or body contains secret-looking material", () => {
     const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
     const result = normalizeFindingsForReview([

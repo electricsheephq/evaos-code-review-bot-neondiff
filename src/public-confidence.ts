@@ -130,11 +130,9 @@ function boundPublicConfidenceText(value: string): string {
   const truncated = value.slice(0, MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH);
   const boundaryWindowStart = Math.max(0, truncated.length - 128);
   const boundaryWindow = truncated.slice(boundaryWindowStart);
-  const danglingConfidenceValue = boundaryWindow.match(
-    /(?:^|\s)(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+))(?:\s+[A-Za-z]*)?$/i
-  );
-  if (danglingConfidenceValue?.index !== undefined) {
-    return `${truncated.slice(0, boundaryWindowStart + danglingConfidenceValue.index).trimEnd()}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
+  const danglingConfidenceTokenStart = findDanglingConfidenceTokenStart(boundaryWindow);
+  if (danglingConfidenceTokenStart !== -1) {
+    return `${truncated.slice(0, boundaryWindowStart + danglingConfidenceTokenStart).trimEnd()}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
   }
   const lastTokenBoundary = Math.max(
     truncated.lastIndexOf(" "),
@@ -146,6 +144,15 @@ function boundPublicConfidenceText(value: string): string {
     ? truncated.slice(0, lastTokenBoundary).trimEnd()
     : truncated;
   return `${safeTruncated}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
+}
+
+function findDanglingConfidenceTokenStart(value: string): number {
+  const confidenceFragment = /confidence|certainty|reliability|sure(?:ness)?|\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)/gi;
+  let lastMatchIndex = -1;
+  for (const match of value.matchAll(confidenceFragment)) {
+    lastMatchIndex = match.index;
+  }
+  return lastMatchIndex;
 }
 
 function formatConfidenceLabelContinuation(_noun: string, continuation: string): string {
