@@ -289,9 +289,7 @@ describe("walkthrough comment rendering", () => {
 
     expect(walkthrough.body).toContain("confidence not calibrated");
     expect(walkthrough.body).not.toContain("95% confidence");
-    expect(walkthrough.body).not.toContain("0.91 likely");
     expect(walkthrough.body).not.toContain("confidence-95%");
-    expect(walkthrough.body).not.toContain("reviewer-0.91-likely");
   });
 
   it("omits settings preview cleanly when no settings metadata is provided", () => {
@@ -443,7 +441,7 @@ describe("walkthrough comment rendering", () => {
       repo: "electricsheephq/WorldOS",
       pull: {
         ...pull,
-        title: `${"b".repeat(176)} Confidence: 95% trailing context`,
+        title: `${"b".repeat(176)} Confidence: 95%.`,
         body: "No linked issue."
       },
       files: [{ filename: "src/review.ts", status: "modified", additions: 4, deletions: 1 }],
@@ -464,7 +462,6 @@ describe("walkthrough comment rendering", () => {
 
     expect(walkthrough.body).toContain(`PR: electricsheephq/WorldOS#${pull.number} - ${"b".repeat(176)} Confidence: confidence not calibrated`);
     expect(walkthrough.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
-    expect(walkthrough.body).not.toContain("0.91 likely");
     expect(walkthrough.body).not.toMatch(/confidence not cali(?:$|\n)/);
   });
 

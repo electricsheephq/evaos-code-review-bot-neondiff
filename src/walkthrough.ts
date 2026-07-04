@@ -47,16 +47,16 @@ export function buildWalkthroughComment(input: {
   validateWalkthroughIdentity({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha });
   const marker = buildWalkthroughMarker({ repo: input.repo, pullNumber: input.pull.number });
   const publicComments = input.comments.map((comment) => sanitizeReviewCommentPublicText(comment, input.publicConfidencePolicy));
-  const files = input.files.map((file) => summarizeFile(file, publicComments));
+  const files = input.files.map((file) => summarizeFile(file, input.comments));
   const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);
   const omittedFileCount = Math.max(0, files.length - visibleFiles.length);
-  const effort = estimateReviewEffort(input.files, publicComments);
+  const effort = estimateReviewEffort(input.files, input.comments);
   const relatedRefs = extractRelatedRefs(`${input.pull.title}\n${input.pull.body ?? ""}`);
-  const suggestedLabels = suggestLabels(input.files, publicComments);
+  const suggestedLabels = suggestLabels(input.files, input.comments);
   const suggestedReviewers = input.pull.requested_reviewers?.map((reviewer) => reviewer.login).filter(Boolean) ?? [];
-  const severityCounts = countSeverities(publicComments);
+  const severityCounts = countSeverities(input.comments);
   const highSeverity = severityCounts.P0 + severityCounts.P1;
-  const requestChangesEligible = publicComments.filter(isRequestChangesEligible).length;
+  const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
   const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview, input.publicConfidencePolicy);
 
   const visibleBody = [
@@ -76,14 +76,14 @@ export function buildWalkthroughComment(input: {
     "",
     "### Review Signal",
     "",
-    publicComments.length === 0
+    input.comments.length === 0
       ? "No validated inline findings."
-      : `Validated inline findings: ${publicComments.length} (${formatSeverityCounts(severityCounts)}).`,
+      : `Validated inline findings: ${input.comments.length} (${formatSeverityCounts(severityCounts)}).`,
     `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
     "",
     "### Risk Taxonomy",
     "",
-    formatCategoryBreakdown(publicComments),
+    formatCategoryBreakdown(input.comments),
     "",
     "### Validation and Proof",
     "",
@@ -97,7 +97,7 @@ export function buildWalkthroughComment(input: {
     ...(settingsPreviewSection.length > 0 ? ["", ...settingsPreviewSection, ""] : [""]),
     "### Pre-merge checklist",
     "",
-    checklistItem(publicComments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
+    checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
     checklistItem(!commentsContainSecretLikeText(publicComments), "No secret-like content survived into posted inline comments."),
     checklistItem(
       input.event !== "REQUEST_CHANGES" || requestChangesEligible > 0,

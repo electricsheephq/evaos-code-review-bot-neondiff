@@ -17,13 +17,23 @@ export const PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS = 30;
 export const PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS = 10;
 export const PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND = 0.95;
 const PUBLIC_CONFIDENCE_REPLACEMENT = "confidence not calibrated";
+const MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH = 128_000;
+const PUBLIC_CONFIDENCE_TRUNCATION_NOTICE = "\n\n[truncated before public confidence sanitization]";
 const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)(?=\b|[-_]))`;
-const CONFIDENCE_NOUN_PATTERN = String.raw`(?:confidence|certainty|reliability|accuracy|likelihood|sure(?:ness)?)`;
+const CONFIDENCE_NOUN_PATTERN = String.raw`(?:confidence|certainty|reliability|sure(?:ness)?)`;
 const CONFIDENCE_SEPARATOR_PATTERN = String.raw`(?:\s+|[-_]+)`;
 const MARKDOWN_WRAPPER_PATTERN = "(?:[*_~`]+)?";
-const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}`, "gi");
+const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}(?=\s*(?:[.,;:!?)]|$))`, "gi");
+const CONFIDENCE_LABEL_CONTINUATION_PATTERN = new RegExp(
+  String.raw`\b(${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*${CONFIDENCE_VALUE_PATTERN}\s+(is|was|are|were|that)\b`,
+  "gi"
+);
 const MARKDOWN_CONFIDENCE_LABEL_PATTERN = new RegExp(
-  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}(${CONFIDENCE_NOUN_PATTERN})${MARKDOWN_WRAPPER_PATTERN}\s*[:=]\s*${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}`,
+  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}(${CONFIDENCE_NOUN_PATTERN})${MARKDOWN_WRAPPER_PATTERN}\s*[:=]\s*${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?=\s*(?:[.,;:!?)]|$))`,
+  "gi"
+);
+const MARKDOWN_CONFIDENCE_LABEL_CONTINUATION_PATTERN = new RegExp(
+  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}(${CONFIDENCE_NOUN_PATTERN})${MARKDOWN_WRAPPER_PATTERN}\s*[:=]\s*${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}\s+(is|was|are|were|that)\b`,
   "gi"
 );
 const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
@@ -31,11 +41,11 @@ const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
   "gi"
 );
 const VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_VALUE_PATTERN}(?:\s*|[-_]+)(?:confident|confidence(?:\s+in\b)?|reliable|reliability|accurate|accuracy|likely|likelihood|sure)\b`,
+  String.raw`\b${CONFIDENCE_VALUE_PATTERN}(?:\s*|[-_]+)(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)\b`,
   "gi"
 );
 const MARKDOWN_VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:\s*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:\s+in\b)?|reliable|reliability|accurate|accuracy|likely|likelihood|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
+  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:\s*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
   "gi"
 );
 const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = /\b(?:high|medium|low)\s+confidence\s*\(\s*(?:0?\.\d+|1(?:\.0+)?)\s*\)/gi;
@@ -92,11 +102,22 @@ export function isUsablePublicConfidenceEvidenceUrl(value: string | undefined): 
 
 export function sanitizePublicConfidenceText(value: string, policy?: PublicConfidenceDisplayPolicy): string {
   if (isPublicConfidenceDisplayAllowed(policy)) return value;
-  return value
+  const boundedValue = value.length > MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH
+    ? `${value.slice(0, MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH)}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`
+    : value;
+  return boundedValue
     .replace(QUALIFIED_CONFIDENCE_DECIMAL_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
+    .replace(CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
+    .replace(MARKDOWN_CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
     .replace(MARKDOWN_CONFIDENCE_LABEL_PATTERN, (_match, noun: string) => `${noun}: ${PUBLIC_CONFIDENCE_REPLACEMENT}`)
     .replace(MARKDOWN_VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(CONFIDENCE_LABEL_PATTERN, (_match, prefix: string) => `${prefix}${PUBLIC_CONFIDENCE_REPLACEMENT}`)
     .replace(CONFIDENCE_NOUN_VALUE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT);
+}
+
+function formatConfidenceLabelContinuation(noun: string, continuation: string): string {
+  const normalizedNoun = noun.toLowerCase() === "confidence" ? "confidence" : noun;
+  if (continuation.toLowerCase() === "that") return `${normalizedNoun} is not calibrated;`;
+  return `${normalizedNoun} is not calibrated; it ${continuation}`;
 }

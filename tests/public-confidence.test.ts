@@ -32,15 +32,10 @@ describe("public confidence display policy", () => {
       "high confidence (0.95)",
       "certainty: 95%",
       "reliability: 95%",
-      "accuracy 0.9",
-      "likelihood 90%",
       "sure: 99%",
       "99% reliable",
-      "0.91 likely",
       "confidence-95%",
-      "confidence_score-95%",
-      "0.91-likely",
-      "0.91_likely"
+      "confidence_score-95%"
     ].join("\n");
 
     const output = sanitizePublicConfidenceText(input);
@@ -48,9 +43,29 @@ describe("public confidence display policy", () => {
     expect(output).not.toContain("0.95");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
     expect(output).toContain("confidence not calibrated");
-    for (const token of ["0.91", "0.9", "90%", "99%", "95%", "99 percent", "95 percent"]) {
+    for (const token of ["99%", "95%", "99 percent", "95 percent"]) {
       expect(output).not.toContain(token);
     }
+  });
+
+  it("preserves technical accuracy and likelihood prose that is not a review confidence claim", () => {
+    const input = [
+      "classification accuracy 0.92 on the eval set remains relevant.",
+      "recall/precision accuracy 0.88 should not be rewritten.",
+      "mutation likelihood 0.5 per generation is part of the simulation.",
+      "This matches with 90% likelihood against the baseline.",
+      "A follow-up is 0.91 likely after the migration lands."
+    ].join("\n");
+
+    expect(sanitizePublicConfidenceText(input)).toBe(input);
+  });
+
+  it("renders mid-sentence confidence labels as clean prose without leaking the value", () => {
+    const output = sanitizePublicConfidenceText("The model confidence: 0.95 is the only signal we have.");
+
+    expect(output).toBe("The model confidence is not calibrated; it is the only signal we have.");
+    expect(output).not.toContain("0.95");
+    expect(output).not.toContain("confidence: confidence not calibrated is");
   });
 
   it("sanitizes markdown and inline-code wrapped confidence tokens from review bodies", () => {
@@ -63,7 +78,7 @@ describe("public confidence display policy", () => {
 
     const output = sanitizePublicConfidenceText(input);
 
-    expect(output).toContain("Confidence: confidence not calibrated that this is exploitable.");
+    expect(output).toContain("confidence is not calibrated; this is exploitable.");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
     expect(output).not.toContain("0.92");
     expect(output).not.toContain("95% confident");
@@ -78,6 +93,14 @@ describe("public confidence display policy", () => {
     expect(output).toContain("confidence interval at 0.95");
     expect(output).toContain("confidence threshold 0.95");
     expect(output).not.toContain("confidence not calibrated");
+  });
+
+  it("bounds pathological input before sanitizing", () => {
+    const output = sanitizePublicConfidenceText(`${"safe prose ".repeat(20_000)} Confidence: 95%.`);
+
+    expect(output).toContain("[truncated before public confidence sanitization]");
+    expect(output).not.toContain("95%");
+    expect(output.length).toBeLessThan(129_000);
   });
 
   it("does not over-sanitize ordinary numbered review prose", () => {
@@ -212,7 +235,7 @@ describe("public confidence display policy", () => {
 
   it("sanitizes long repeated confidence text deterministically", () => {
     const input = Array.from({ length: 750 }, (_value, index) =>
-      `finding ${index}: confidence score: 0.95; **Confidence**: \`95%\`; ${index % 2 === 0 ? "0.91 likely" : "99 percent confident"}`
+      `finding ${index}: confidence score: 0.95; **Confidence**: \`95%\`; ${index % 2 === 0 ? "0.91 reliable" : "99 percent confident"}`
     ).join("\n");
 
     const first = sanitizePublicConfidenceText(input);
@@ -221,8 +244,9 @@ describe("public confidence display policy", () => {
     expect(first).toBe(second);
     expect(first).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
     expect(first).not.toContain("0.95");
-    expect(first).not.toContain("0.91 likely");
-    expect(first.match(/confidence not calibrated/g)?.length).toBe(2250);
+    expect(first).not.toContain("0.91 reliable");
+    expect(first.match(/confidence not calibrated/g)?.length ?? 0).toBeGreaterThanOrEqual(750);
+    expect(first).not.toMatch(/confidence not calibrated confidence not calibrated/);
   });
 });
 

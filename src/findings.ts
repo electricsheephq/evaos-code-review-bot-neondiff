@@ -102,14 +102,15 @@ export function normalizeFindingsForReview(
   return {
     comments: kept.map((finding) => {
       const category = normalizeFindingCategory(finding);
+      const publicTitle = sanitizePublicConfidenceText(finding.title, options.publicConfidencePolicy);
       return {
         path: finding.path,
         line: finding.line,
         side: "RIGHT",
         severity: finding.severity,
         category,
-        title: sanitizePublicConfidenceText(finding.title, options.publicConfidencePolicy),
-        body: formatReviewComment({ ...finding, category }, options.publicConfidencePolicy)
+        title: publicTitle,
+        body: formatReviewComment({ ...finding, category, title: publicTitle }, options.publicConfidencePolicy, { titleAlreadySanitized: true })
       };
     }),
     dropped
@@ -129,8 +130,12 @@ export function decideReviewEvent(findings: Pick<ReviewComment, "severity" | "ca
   return findings.some((finding) => isRequestChangesEligible(finding)) ? "REQUEST_CHANGES" : "COMMENT";
 }
 
-export function formatReviewComment(finding: Finding, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
-  const title = sanitizePublicConfidenceText(finding.title, publicConfidencePolicy);
+export function formatReviewComment(
+  finding: Finding,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy,
+  options: { titleAlreadySanitized?: boolean } = {}
+): string {
+  const title = options.titleAlreadySanitized ? finding.title : sanitizePublicConfidenceText(finding.title, publicConfidencePolicy);
   const body = sanitizePublicConfidenceText(finding.body, publicConfidencePolicy);
   const category = finding.category ? `\n\nCategory: ${categoryLabel(finding.category)}` : "";
   const why = finding.why_this_matters ? `\n\nWhy this matters: ${sanitizePublicConfidenceText(finding.why_this_matters, publicConfidencePolicy)}` : "";

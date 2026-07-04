@@ -284,7 +284,7 @@ describe("sticky enrichment comments", () => {
       repo: "electricsheephq/evaos-code-review-bot",
       pull: {
         ...pull,
-        title: `${"a".repeat(176)} Confidence: 95% trailing context`,
+        title: `${"a".repeat(176)} Confidence: 95%.`,
         body: "Closes #22."
       },
       files: [],

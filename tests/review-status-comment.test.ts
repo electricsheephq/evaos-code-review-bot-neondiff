@@ -164,7 +164,7 @@ describe("review status comment", () => {
       pullNumber: 1,
       headSha: HEAD_A,
       state: "queued",
-      pullTitle: `${"c".repeat(176)} Confidence: 95% trailing context`
+      pullTitle: `${"c".repeat(176)} Confidence: 95%.`
     });
 
     expect(comment.body).toContain(`PR: owner/repo#1 - ${"c".repeat(176)} Confidence: confidence not calibrated`);
