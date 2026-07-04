@@ -227,7 +227,8 @@ async function smokeOpenAICompatibleProvider(input: {
     });
     const text = await response.text();
     if (!response.ok) {
-      const error = `OpenAI-compatible models endpoint returned ${response.status}: ${redactSecrets(text).slice(0, 300)}`;
+      const redactedText = redactProviderSmokeText(text, input.provider, input.env);
+      const error = `OpenAI-compatible models endpoint returned ${response.status}: ${redactedText.slice(0, 300)}`;
       return {
         ...baseCheck,
         ok: false,
@@ -254,11 +255,12 @@ async function smokeOpenAICompatibleProvider(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const errorCategory = classifyProviderError(message);
+    const redactedMessage = redactProviderSmokeText(message, input.provider, input.env);
     return {
       ...baseCheck,
       ok: false,
       errorCategory,
-      error: `${errorCategory}: ${redactSecrets(message)}`
+      error: `${errorCategory}: ${redactedMessage}`
     };
   }
 }
@@ -276,6 +278,19 @@ function providerReadinessCapabilityError(provider: ProviderRegistryEntry): stri
 function providerAuthMetadataError(provider: ProviderRegistryEntry): string | undefined {
   if (provider.authMode === "api-key-env" && !provider.apiKeyEnv) return "Provider requires apiKeyEnv for api-key-env auth.";
   return undefined;
+}
+
+function redactProviderSmokeText(
+  value: string,
+  provider: ProviderRegistryEntry,
+  env: Record<string, string | undefined>
+): string {
+  let redacted = redactSecrets(value);
+  const providerKey = provider.authMode === "api-key-env" && provider.apiKeyEnv
+    ? env[provider.apiKeyEnv]
+    : undefined;
+  if (providerKey) redacted = redacted.split(providerKey).join("[redacted-provider-key]");
+  return redacted;
 }
 
 function extractModelIds(data: unknown[]): string[] {

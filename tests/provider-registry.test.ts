@@ -137,7 +137,8 @@ describe("provider registry", () => {
           "openai-compatible": {
             enabled: true,
             model: "review-model",
-            authMode: "none",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
             baseUrl: "https://gateway.example.test/v1"
           }
         }
@@ -148,7 +149,10 @@ describe("provider registry", () => {
       registry: config.providers!,
       providerId: "openai-compatible",
       smoke: true,
-      fetchImpl: async () => new Response("temporary provider overload", { status: 503 })
+      fetchImpl: async () => new Response("temporary provider overload for short-provider-key", { status: 503 }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "short-provider-key"
+      }
     });
     expect(httpResult.checks[0]).toMatchObject({
       ok: false,
@@ -162,6 +166,9 @@ describe("provider registry", () => {
       smoke: true,
       fetchImpl: async () => {
         throw new Error("ECONNREFUSED http://token-secret@example.test");
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "short-provider-key"
       }
     });
     expect(thrownResult.checks[0]).toMatchObject({
@@ -169,6 +176,8 @@ describe("provider registry", () => {
       errorCategory: "transient",
       error: expect.stringContaining("transient:")
     });
+    expect(JSON.stringify(httpResult)).not.toContain("short-provider-key");
+    expect(JSON.stringify(httpResult)).toContain("[redacted-provider-key]");
     expect(JSON.stringify(thrownResult)).not.toContain("token-secret");
   });
 
