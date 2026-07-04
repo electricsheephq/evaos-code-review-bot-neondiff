@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "license": "SEE LICENSE IN LICENSE.md",
   "bin": {
     "neondiff": "dist/src/cli.js",
     "evaos-review-bot": "dist/src/cli.js"

@@ -18,6 +18,8 @@ describe("NeonDiff public community funnel", () => {
       /AGENTS\.md/i,
       /SECURITY\.md/i,
       /CODE_OF_CONDUCT\.md/i,
+      /LICENSE\.md/i,
+      /docs\/license-boundary\.md/i,
       /public open-source repos.*free/i,
       /private.*commercial.*paid/i,
       /source-available beta/i,
@@ -41,6 +43,30 @@ describe("NeonDiff public community funnel", () => {
     ]) {
       expect(readme).not.toMatch(forbidden);
     }
+  });
+
+  it("license boundary surfaces are canonical and avoid open-source claims", () => {
+    const license = read("LICENSE.md");
+    const boundary = read("docs/license-boundary.md");
+    const pkg = JSON.parse(read("package.json")) as { license?: string };
+
+    expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
+
+    for (const text of [license, boundary]) {
+      expect(text).toMatch(/source-available beta/i);
+      expect(text).toMatch(/Public open-source repositor(?:y|ies).*free/i);
+      expect(text).toMatch(/private/i);
+      expect(text).toMatch(/commercial/i);
+      expect(text).toMatch(/paid NeonDiff license/i);
+      expect(text).toMatch(/Third-party/i);
+      expect(text).toMatch(/own licenses/i);
+      expect(text).not.toMatch(/^# MIT License/im);
+      expect(text).not.toMatch(/^# Apache License/im);
+      expect(text).not.toMatch(/OSI-approved/i);
+    }
+
+    expect(boundary).toMatch(/copy these claims/i);
+    expect(boundary).toMatch(/Do not describe NeonDiff as \"open source\"|Avoid:\n\n- \"open source\"/i);
   });
 
   it("setup guide gives a first-run path without hiding safety prerequisites in operator runbooks", () => {
