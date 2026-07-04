@@ -179,7 +179,7 @@ export async function deactivateLicense(input: {
   notifyApi?: boolean;
   now?: Date;
   fetchImpl?: typeof fetch;
-}): Promise<{ ok: boolean; status: "deactivated"; checkedAt: string; apiNotified: boolean; detail: string }> {
+}): Promise<{ ok: boolean; status: "deactivated" | "deactivation_failed"; checkedAt: string; apiNotified: boolean; detail: string }> {
   const checkedAt = (input.now ?? new Date()).toISOString();
   const licenseKey = readLicenseKey(input.config);
   let apiNotified = false;
@@ -195,7 +195,7 @@ export async function deactivateLicense(input: {
     if (!response.ok) {
       return {
         ok: false,
-        status: "deactivated",
+        status: "deactivation_failed",
         checkedAt,
         apiNotified,
         detail: `license API deactivation failed; local license was kept: ${response.detail}`

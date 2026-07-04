@@ -176,6 +176,21 @@ describe("license activation and entitlement cache", () => {
     })).rejects.toMatchObject({
       stdout: expect.stringContaining("\"ok\": false")
     });
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      "src/cli.ts",
+      "license",
+      "deactivate",
+      "--config",
+      configPath,
+      "--notify-api",
+      "true"
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stdout: expect.stringContaining("\"status\": \"deactivation_failed\"")
+    });
     expect(existsSync(join(root, "license.key"))).toBe(true);
     expect(existsSync(join(root, "entitlement.json"))).toBe(true);
   });
