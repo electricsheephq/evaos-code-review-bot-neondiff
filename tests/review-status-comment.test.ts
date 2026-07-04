@@ -139,6 +139,39 @@ describe("review status comment", () => {
     expect(comment.body).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
   });
 
+  it("strips public confidence percentages from status comments by default", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "completed",
+      pullTitle: "Review is 95% confident",
+      pullUrl: "https://github.test/owner/repo/pull/1?tab=confidence&run=95",
+      reviewUrl: "https://github.test/review/1?confidence=95%",
+      details: "Confidence: 95%. Provider is 0.95 confident."
+    });
+
+    expect(comment.body).toContain("Review is [confidence not calibrated]");
+    expect(comment.body).toContain("Confidence: [confidence not calibrated].");
+    expect(comment.body).toContain("PR URL: https://github.test/owner/repo/pull/1?tab=confidence&run=95");
+    expect(comment.body).toContain("Review URL: https://github.test/review/1?confidence=95%");
+    expect(comment.body).not.toContain("0.95 confident");
+  });
+
+  it("keeps inline confidence replacement text whole when status titles lengthen", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "queued",
+      pullTitle: `${"c".repeat(176)} Confidence: 95%.`
+    });
+
+    const title = comment.body.match(/PR: owner\/repo#1 - (.+)/)?.[1] ?? "";
+    expect(title).toHaveLength(200);
+    expect(comment.body).not.toContain("95%");
+  });
+
   it("keeps the sticky marker stable when repo slugs look secret-like", () => {
     const comment = buildReviewStatusComment({
       repo: "owner/api-token-rotator",

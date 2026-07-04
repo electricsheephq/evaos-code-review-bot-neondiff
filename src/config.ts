@@ -7,6 +7,16 @@ import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
+import {
+  buildPublicConfidencePolicy,
+  isPublicConfidenceDisplayAllowed,
+  isUsablePublicConfidenceEvidenceUrl,
+  PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS,
+  PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS,
+  PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS,
+  PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND,
+  type PublicConfidenceDisplayPolicy
+} from "./public-confidence.js";
 import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
@@ -52,6 +62,9 @@ export interface BotConfig {
   };
   reviewStatusComment?: {
     enabled: boolean;
+  };
+  confidenceCalibration?: {
+    publicDisplay: PublicConfidenceDisplayPolicy;
   };
   repoMemory?: RepoMemoryConfig;
   gitnexusContext?: GitNexusContextConfig;
@@ -222,6 +235,9 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   reviewStatusComment: {
     enabled: false
+  },
+  confidenceCalibration: {
+    publicDisplay: buildPublicConfidencePolicy()
   },
   repoMemory: {
     enabled: false,
@@ -486,6 +502,17 @@ function validateConfig(config: BotConfig): void {
   const reviewStatusComment = config.reviewStatusComment ?? DEFAULT_CONFIG.reviewStatusComment!;
   config.reviewStatusComment = reviewStatusComment;
   validateBoolean(reviewStatusComment.enabled, "config.reviewStatusComment.enabled");
+  const confidenceCalibration = config.confidenceCalibration ?? DEFAULT_CONFIG.confidenceCalibration!;
+  if (!isRecord(confidenceCalibration)) {
+    throw new Error("config.confidenceCalibration must be an object");
+  }
+  if (confidenceCalibration.publicDisplay !== undefined && !isRecord(confidenceCalibration.publicDisplay)) {
+    throw new Error("config.confidenceCalibration.publicDisplay must be an object");
+  }
+  validatePublicConfidenceDisplayFloorOverrides(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
+  confidenceCalibration.publicDisplay = buildPublicConfidencePolicy(confidenceCalibration.publicDisplay);
+  validatePublicConfidenceDisplayConfig(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
+  config.confidenceCalibration = confidenceCalibration;
   const repoMemory = config.repoMemory ?? DEFAULT_CONFIG.repoMemory!;
   config.repoMemory = repoMemory;
   validateRepoMemoryConfig(repoMemory, "config.repoMemory");
@@ -539,6 +566,66 @@ function validateConfig(config: BotConfig): void {
   }
   validateProfileRecord(config.repoProfiles.repos, "repoProfiles.repos");
   validateProfileRecord(config.repoProfiles.orgFallbacks, "repoProfiles.orgFallbacks");
+}
+
+function validatePublicConfidenceDisplayConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  if (value.mode !== "uncalibrated" && value.mode !== "calibrated") {
+    throw new Error(`${label}.mode must be uncalibrated or calibrated`);
+  }
+  validatePositiveInteger(value.minLabeledFindings, `${label}.minLabeledFindings`);
+  validatePositiveInteger(value.minP0P1Labels, `${label}.minP0P1Labels`);
+  validatePositiveInteger(value.minNegativeControlScenarios, `${label}.minNegativeControlScenarios`);
+  validateProbability(value.minWilsonLowerBound, `${label}.minWilsonLowerBound`);
+  if (value.labeledFindings !== undefined) validateNonNegativeInteger(value.labeledFindings, `${label}.labeledFindings`);
+  if (value.p0p1Labels !== undefined) validateNonNegativeInteger(value.p0p1Labels, `${label}.p0p1Labels`);
+  if (value.negativeControlScenarios !== undefined) validateNonNegativeInteger(value.negativeControlScenarios, `${label}.negativeControlScenarios`);
+  if (value.wilsonLowerBound !== undefined) validateProbability(value.wilsonLowerBound, `${label}.wilsonLowerBound`);
+  validateOptionalString(value.evidenceUrl, `${label}.evidenceUrl`);
+  validateOptionalString(value.datasetId, `${label}.datasetId`);
+  const policy = value as unknown as PublicConfidenceDisplayPolicy;
+  if (value.mode === "calibrated" && !isPublicConfidenceDisplayAllowed(policy)) {
+    if (!isUsablePublicConfidenceEvidenceUrl(typeof value.evidenceUrl === "string" ? value.evidenceUrl : undefined)) {
+      throw new Error(`${label}.evidenceUrl must be an https URL when mode=calibrated`);
+    }
+    if (typeof value.datasetId !== "string" || value.datasetId.trim().length === 0) {
+      throw new Error(`${label}.datasetId is required when mode=calibrated`);
+    }
+    if (typeof value.labeledFindings !== "number" || value.labeledFindings < (value.minLabeledFindings as number)) {
+      throw new Error(`${label}.labeledFindings must be >= minLabeledFindings before public confidence display is calibrated`);
+    }
+    if (typeof value.p0p1Labels !== "number" || value.p0p1Labels < (value.minP0P1Labels as number)) {
+      throw new Error(`${label}.p0p1Labels must be >= minP0P1Labels before public confidence display is calibrated`);
+    }
+    if (
+      typeof value.negativeControlScenarios !== "number" ||
+      value.negativeControlScenarios < (value.minNegativeControlScenarios as number)
+    ) {
+      throw new Error(`${label}.negativeControlScenarios must be >= minNegativeControlScenarios before public confidence display is calibrated`);
+    }
+    if (typeof value.wilsonLowerBound !== "number" || value.wilsonLowerBound < (value.minWilsonLowerBound as number)) {
+      throw new Error(`${label}.wilsonLowerBound must be >= minWilsonLowerBound before public confidence display is calibrated`);
+    }
+  }
+}
+
+function validatePublicConfidenceDisplayFloorOverrides(value: unknown, label: string): void {
+  if (!isRecord(value)) return;
+  if (value.minLabeledFindings !== undefined && (value.minLabeledFindings as number) < PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS) {
+    throw new Error(`${label}.minLabeledFindings must be >= ${PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS}`);
+  }
+  if (value.minP0P1Labels !== undefined && (value.minP0P1Labels as number) < PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS) {
+    throw new Error(`${label}.minP0P1Labels must be >= ${PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS}`);
+  }
+  if (
+    value.minNegativeControlScenarios !== undefined &&
+    (value.minNegativeControlScenarios as number) < PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS
+  ) {
+    throw new Error(`${label}.minNegativeControlScenarios must be >= ${PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS}`);
+  }
+  if (value.minWilsonLowerBound !== undefined && (value.minWilsonLowerBound as number) < PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND) {
+    throw new Error(`${label}.minWilsonLowerBound must be >= ${PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND}`);
+  }
 }
 
 function validateRepoMemoryConfig(value: unknown, label: string): void {
@@ -1110,6 +1197,12 @@ function validatePositiveInteger(value: unknown, label: string): void {
 
 function validateNonNegativeInteger(value: unknown, label: string): void {
   if (!Number.isInteger(value) || Number(value) < 0) throw new Error(`${label} must be a non-negative integer`);
+}
+
+function validateProbability(value: unknown, label: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${label} must be a number from 0 to 1`);
+  }
 }
 
 function validatePercentage(value: unknown, label: string): void {

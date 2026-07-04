@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decideReviewEvent, normalizeFindingsForReview, parseFindings } from "../src/findings.js";
+import { decideReviewEvent, formatReviewComment, normalizeFindingsForReview, parseFindings } from "../src/findings.js";
+import type { PublicConfidenceDisplayPolicy } from "../src/public-confidence.js";
 import type { Finding } from "../src/types.js";
 
 describe("finding normalization and review policy", () => {
@@ -23,6 +24,163 @@ describe("finding normalization and review policy", () => {
     expect(result.dropped.filter((drop) => drop.reason === "comment_cap_exceeded")).toHaveLength(5);
   });
 
+  it("keeps model confidence internal and strips confidence percentages from public inline comments by default", () => {
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression with 99% confidence",
+        body: "Confidence: 99%. I am 0.99 confident this branch regresses review output.",
+        confidence: 0.99
+      }
+    ]);
+
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.title).toBe("Regression with [confidence not calibrated]");
+    expect(result.comments[0]?.body).toContain("Confidence: [confidence not calibrated].");
+    expect(result.comments[0]?.body).toContain("I am [confidence not calibrated] this branch regresses review output.");
+    expect(result.comments[0]?.title).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(result.comments[0]?.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(result.comments[0]?.body).not.toContain("0.99 confident");
+  });
+
+  it("preserves confidence text when public confidence display is calibrated and eligible", () => {
+    const publicConfidencePolicy: PublicConfidenceDisplayPolicy = {
+      mode: "calibrated",
+      evidenceUrl: "https://github.com/electricsheephq/evaos-code-review-bot/actions/runs/123",
+      datasetId: "confidence-calibration-v1",
+      minLabeledFindings: 100,
+      labeledFindings: 124,
+      minP0P1Labels: 30,
+      p0p1Labels: 31,
+      minNegativeControlScenarios: 10,
+      negativeControlScenarios: 10,
+      minWilsonLowerBound: 0.95,
+      wilsonLowerBound: 0.95
+    };
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression with 99% confidence",
+        body: "Confidence: 99%. I am 0.99 confident this branch regresses review output.",
+        confidence: 0.99
+      }
+    ], { publicConfidencePolicy });
+
+    expect(result.comments[0]?.title).toBe("Regression with 99% confidence");
+    expect(result.comments[0]?.body).toContain("Confidence: 99%.");
+    expect(result.comments[0]?.body).toContain("I am 0.99 confident this branch regresses review output.");
+  });
+
+  it("keeps sanitized review comment titles aligned with rendered body titles for batches", () => {
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression with 99% confidence",
+        body: "Confidence: 99%. This branch regresses review output.",
+        confidence: 0.99
+      },
+      {
+        severity: "P3",
+        category: "proof_gap",
+        path: "src/walkthrough.ts",
+        line: 44,
+        title: "Walkthrough has confidence95%",
+        body: "The model was 0.95 confident in this finding.",
+        confidence: 0.95
+      }
+    ]);
+
+    expect(result.comments).toHaveLength(2);
+    for (const comment of result.comments) {
+      const renderedTitle = comment.body.match(/^\*\*(P\d): (.+)\*\*/)?.[2];
+
+      expect(renderedTitle).toBe(comment.title);
+      expect(comment.title).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
+      expect(comment.body).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
+    }
+  });
+
+  it("sanitizes confidence text from dropped findings before public summaries can reuse them", () => {
+    const findings: Finding[] = [
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Kept finding",
+        body: "A concrete review comment.",
+        confidence: 0.8
+      },
+      {
+        severity: "P3",
+        category: "proof_gap",
+        path: "src/reviewer.ts",
+        line: 13,
+        title: "Dropped with 99% confidence",
+        body: "Confidence: 99%. This should be capped.",
+        why_this_matters: "The model was 0.99 confident.",
+        confidence: 0.99
+      }
+    ];
+
+    const result = normalizeFindingsForReview(findings, { maxInlineComments: 1 });
+
+    expect(result.dropped).toHaveLength(1);
+    expect(result.dropped[0]).toMatchObject({
+      reason: "comment_cap_exceeded",
+      title: "Dropped with [confidence not calibrated]"
+    });
+    expect(result.dropped[0]?.body).toBe("Confidence: [confidence not calibrated]. This should be capped.");
+    expect(result.dropped[0]?.why_this_matters).toBe("The model was [confidence not calibrated].");
+    expect(JSON.stringify(result.dropped)).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
+    expect(JSON.stringify(result.dropped)).not.toContain("0.99 confident");
+  });
+
+  it("does not re-sanitize already-public review comment text", () => {
+    const comment = formatReviewComment(
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression with [confidence not calibrated]",
+        body: "Confidence: [confidence not calibrated].",
+        why_this_matters: "Confidence: [confidence not calibrated].",
+        confidence: 0.99
+      },
+      undefined,
+      { textAlreadySanitized: true }
+    );
+
+    expect(comment.match(/confidence not calibrated/g)).toHaveLength(3);
+    expect(comment).not.toMatch(/confidence not calibrated confidence not calibrated/);
+    expect(comment).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+  });
+
+  it("renders only known severity labels in public review comment headers", () => {
+    const comment = formatReviewComment({
+      severity: "P1**\n\nraw severity injection" as Finding["severity"],
+      category: "runtime_correctness",
+      path: "src/reviewer.ts",
+      line: 12,
+      title: "Regression title",
+      body: "A concrete review comment.",
+      confidence: 0.99
+    });
+
+    expect(comment.startsWith("**P3: Regression title**")).toBe(true);
+    expect(comment).not.toContain("raw severity injection");
+  });
+
   it("drops any finding whose title or body contains secret-looking material", () => {
     const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
     const result = normalizeFindingsForReview([
@@ -40,6 +198,27 @@ describe("finding normalization and review policy", () => {
     expect(result.comments).toEqual([]);
     expect(result.dropped).toEqual([expect.objectContaining({ reason: "secret_detected" })]);
     expect(JSON.stringify(result.dropped)).not.toContain(token);
+  });
+
+  it("sanitizes confidence text from secret-dropped findings after redaction", () => {
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        category: "security_boundary",
+        path: "a.ts",
+        line: 1,
+        title: "Leaked token with 99% confidence",
+        body: `Confidence: 99%. The raw token ${token} should never be posted.`,
+        confidence: 0.99
+      }
+    ]);
+
+    expect(result.comments).toEqual([]);
+    expect(result.dropped).toEqual([expect.objectContaining({ reason: "secret_detected" })]);
+    expect(JSON.stringify(result.dropped)).not.toContain(token);
+    expect(JSON.stringify(result.dropped)).not.toContain("99%");
+    expect(JSON.stringify(result.dropped)).toContain("confidence not calibrated");
   });
 
   it("drops findings that repeat hyphenated fixture tokens", () => {

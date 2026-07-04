@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRequestChangesEligible } from "./regression-taxonomy.js";
+import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import type { ReviewSettingsPreview } from "./repo-policy.js";
 import type {
   ChangedSurfaceValidationReport,
@@ -41,9 +42,12 @@ export function buildWalkthroughComment(input: {
   proof?: ProofRequirementReport;
   settingsPreview?: ReviewSettingsPreview;
   postIssueComment?: boolean;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): WalkthroughComment {
   validateWalkthroughIdentity({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha });
   const marker = buildWalkthroughMarker({ repo: input.repo, pullNumber: input.pull.number });
+  // Keep gate/count signal on original comments; use publicComments only for public-text safety checks.
+  const publicComments = input.comments.map((comment) => sanitizeReviewCommentPublicText(comment, input.publicConfidencePolicy));
   const files = input.files.map((file) => summarizeFile(file, input.comments));
   const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);
   const omittedFileCount = Math.max(0, files.length - visibleFiles.length);
@@ -54,12 +58,12 @@ export function buildWalkthroughComment(input: {
   const severityCounts = countSeverities(input.comments);
   const highSeverity = severityCounts.P0 + severityCounts.P1;
   const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
-  const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview);
+  const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview, input.publicConfidencePolicy);
 
   const visibleBody = [
     "## Walkthrough",
     "",
-    `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title)}`,
+    `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title, input.publicConfidencePolicy)}`,
     `Head: \`${input.pull.head.sha}\` into \`${input.pull.base.ref}\`. Review event: \`${input.event}\`.`,
     "",
     `Estimated review effort: ${effort.score}/5 (~${effort.minutes} min)`,
@@ -84,7 +88,7 @@ export function buildWalkthroughComment(input: {
     "",
     "### Validation and Proof",
     "",
-    ...formatValidationSection(input.validation, input.proof),
+    ...formatValidationSection(input.validation, input.proof, input.publicConfidencePolicy),
     "",
     "### Related Context",
     "",
@@ -95,7 +99,7 @@ export function buildWalkthroughComment(input: {
     "### Pre-merge checklist",
     "",
     checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
-    checklistItem(!commentsContainSecretLikeText(input.comments), "No secret-like content survived into posted inline comments."),
+    checklistItem(!commentsContainSecretLikeText(publicComments), "No secret-like content survived into posted inline comments."),
     checklistItem(
       input.event !== "REQUEST_CHANGES" || requestChangesEligible > 0,
       "REQUEST_CHANGES is only used when eligible P0/P1 findings survive validation."
@@ -120,28 +124,34 @@ export function buildWalkthroughComment(input: {
   };
 }
 
-function formatSettingsPreviewSection(settings: ReviewSettingsPreview | undefined): string[] {
+function formatSettingsPreviewSection(
+  settings: ReviewSettingsPreview | undefined,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
+): string[] {
   if (!settings) return [];
   const enabledSections = settings.sections
     .filter((section) => section.enabled)
-    .map((section) => `${formatInlinePublicText(section.label)} (${section.mode})`);
+    .map((section) => `${formatInlinePublicText(section.label, publicConfidencePolicy)} (${section.mode})`);
   return [
     "### Review Settings Preview",
     "",
     `- Profile: ${settings.profile}`,
     `- Enabled sections: ${enabledSections.length > 0 ? enabledSections.join("; ") : "none"}`,
-    ...formatSettingsPathInstructions(settings),
-    `- Label suggestions: ${settings.suggestions.labels.length > 0 ? settings.suggestions.labels.map(formatInlinePublicText).join(", ") : "none"}`,
-    `- Reviewer suggestions: ${settings.suggestions.reviewers.length > 0 ? settings.suggestions.reviewers.map(formatInlinePublicText).join(", ") : "none"}`,
+    ...formatSettingsPathInstructions(settings, publicConfidencePolicy),
+    `- Label suggestions: ${settings.suggestions.labels.length > 0 ? settings.suggestions.labels.map((label) => formatInlinePublicText(label, publicConfidencePolicy)).join(", ") : "none"}`,
+    `- Reviewer suggestions: ${settings.suggestions.reviewers.length > 0 ? settings.suggestions.reviewers.map((reviewer) => formatInlinePublicText(reviewer, publicConfidencePolicy)).join(", ") : "none"}`,
     `- Suggestion behavior: ${settings.suggestions.autoApply ? "auto-apply enabled" : "suggestions only; labels and reviewers are not auto-applied."}`,
-    `- Roadmap-only settings: ${settings.roadmapOnly.length > 0 ? settings.roadmapOnly.map(formatInlinePublicText).join("; ") : "none"}`
+    `- Roadmap-only settings: ${settings.roadmapOnly.length > 0 ? settings.roadmapOnly.map((setting) => formatInlinePublicText(setting, publicConfidencePolicy)).join("; ") : "none"}`
   ];
 }
 
-function formatSettingsPathInstructions(settings: ReviewSettingsPreview): string[] {
+function formatSettingsPathInstructions(
+  settings: ReviewSettingsPreview,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
+): string[] {
   if (settings.pathInstructions.length === 0) return ["- Path instructions: none"];
   return settings.pathInstructions.map((entry) =>
-    `- Path instructions: \`${formatInlineCodePublicText(entry.pattern)}\` - ${entry.instructions.map(formatInlinePublicText).join("; ")}`
+    `- Path instructions: \`${formatInlineCodePublicText(entry.pattern, publicConfidencePolicy)}\` - ${entry.instructions.map((instruction) => formatInlinePublicText(instruction, publicConfidencePolicy)).join("; ")}`
   );
 }
 
@@ -175,16 +185,20 @@ function hashWalkthrough(body: string): string {
   return createHash("sha256").update(body, "utf8").digest("hex");
 }
 
-function formatInlinePublicText(value: string | undefined): string {
-  return redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]"))
+function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  const normalizedText = redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]"))
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^#{1,6}\s+/, "");
+  return sanitizePublicConfidenceText(normalizedText, publicConfidencePolicy)
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^#{1,6}\s+/, "")
     .slice(0, 200);
 }
 
-function formatInlineCodePublicText(value: string | undefined): string {
-  return formatInlinePublicText(value).replace(/`/g, "\\`");
+function formatInlineCodePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  return formatInlinePublicText(value, publicConfidencePolicy).replace(/`/g, "\\`");
 }
 
 function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {
@@ -203,6 +217,14 @@ function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {
     churn: `+${file.additions ?? 0}/-${file.deletions ?? 0}`,
     purpose: inferPurpose(file.filename),
     risk: inferRisk(file.filename, changes, maxSeverity)
+  };
+}
+
+function sanitizeReviewCommentPublicText(comment: ReviewComment, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): ReviewComment {
+  return {
+    ...comment,
+    title: sanitizePublicConfidenceText(comment.title, publicConfidencePolicy),
+    body: sanitizePublicConfidenceText(comment.body, publicConfidencePolicy)
   };
 }
 
@@ -271,22 +293,23 @@ function formatCategoryBreakdown(comments: ReviewComment[]): string {
 
 function formatValidationSection(
   validation: ChangedSurfaceValidationReport | undefined,
-  proof: ProofRequirementReport | undefined
+  proof: ProofRequirementReport | undefined,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
 ): string[] {
   if (!validation) return ["Validation selector did not run."];
-  const lines = [validation.summary];
+  const lines = [sanitizePublicConfidenceText(validation.summary, publicConfidencePolicy)];
   for (const recommendation of validation.recommendations) {
     lines.push(
-      `- ${recommendation.status}: ${recommendation.title} - ${recommendation.reason}` +
-        (recommendation.proofTypes.length > 0 ? ` Proof: ${recommendation.proofTypes.join("; ")}.` : "")
+      `- ${recommendation.status}: ${sanitizePublicConfidenceText(recommendation.title, publicConfidencePolicy)} - ${sanitizePublicConfidenceText(recommendation.reason, publicConfidencePolicy)}` +
+        (recommendation.proofTypes.length > 0 ? ` Proof: ${sanitizePublicConfidenceText(recommendation.proofTypes.join("; "), publicConfidencePolicy)}.` : "")
     );
   }
-  if (proof) lines.push(`Proof status: ${proof.status} - ${proof.summary}`);
+  if (proof) lines.push(`Proof status: ${proof.status} - ${sanitizePublicConfidenceText(proof.summary, publicConfidencePolicy)}`);
   if (validation.profileHints.validationHints.length > 0) {
-    lines.push(`Profile validation hints: ${validation.profileHints.validationHints.join("; ")}`);
+    lines.push(`Profile validation hints: ${sanitizePublicConfidenceText(validation.profileHints.validationHints.join("; "), publicConfidencePolicy)}`);
   }
   if (validation.profileHints.proofExpectations.length > 0) {
-    lines.push(`Profile proof expectations: ${validation.profileHints.proofExpectations.join("; ")}`);
+    lines.push(`Profile proof expectations: ${sanitizePublicConfidenceText(validation.profileHints.proofExpectations.join("; "), publicConfidencePolicy)}`);
   }
   return lines;
 }

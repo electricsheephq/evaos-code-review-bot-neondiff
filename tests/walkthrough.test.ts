@@ -247,6 +247,90 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("[redacted-secret]");
   });
 
+  it("sanitizes confidence settings preview metadata while preserving ordinary likely wording", () => {
+    const settingsPreview: ReviewSettingsPreview = {
+      profile: "assertive",
+      sections: [
+        { key: "reviewSummary", label: "Review summary 95% confidence", enabled: true, mode: "inline_review" }
+      ],
+      pathInstructions: [
+        {
+          pattern: "src/confidence-95%.ts",
+          instructions: ["Treat this as 0.91 likely after historical calibration."]
+        }
+      ],
+      suggestions: {
+        labels: ["confidence-95%"],
+        reviewers: ["reviewer-0.91-likely"],
+        autoApply: false
+      },
+      roadmapOnly: ["show 95% confidence after calibration"]
+    };
+
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT",
+      settingsPreview
+    });
+
+    expect(walkthrough.body).toContain("confidence not calibrated");
+    expect(walkthrough.body).not.toContain("95% confidence");
+    expect(walkthrough.body).not.toContain("confidence-95%");
+    expect(walkthrough.body).toContain("0.91 likely");
+    expect(walkthrough.body).toContain("0.91-likely");
+  });
+
+  it("does not surface raw confidence-bearing finding text in visible walkthrough prose", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        title: "Review confidence output",
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      comments: [
+        {
+          path: "src/walkthrough.ts",
+          line: 51,
+          side: "RIGHT",
+          severity: "P3",
+          category: "security_boundary",
+          title: "Confidence: 95% should never be quoted",
+          body: "The model says 0.91 reliability in raw finding prose."
+        }
+      ],
+      dropped: [],
+      event: "COMMENT"
+    });
+
+    expect(walkthrough.body).not.toContain("Confidence: 95% should never be quoted");
+    expect(walkthrough.body).not.toContain("0.91 reliability");
+    expect(walkthrough.body).toContain("Validated inline findings: 1");
+    expect(walkthrough.body).toContain("- Security boundary: 1");
+  });
+
   it("omits settings preview cleanly when no settings metadata is provided", () => {
     const walkthrough = buildWalkthroughComment({
       repo: "electricsheephq/evaos-code-review-bot",
@@ -341,6 +425,85 @@ describe("walkthrough comment rendering", () => {
 
     expect(walkthrough.body).toContain("Fix save [hidden comment removed] rollback");
     expect(walkthrough.body).not.toContain("repo=evil/repo");
+  });
+
+  it("strips public confidence percentages from walkthrough metadata by default", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull: {
+        ...pull,
+        title: "Review confidence 95%",
+        body: "No linked issue."
+      },
+      files: [{ filename: "src/review.ts", status: "modified", additions: 4, deletions: 1 }],
+      comments: [
+        {
+          path: "src/review.ts",
+          line: 4,
+          side: "RIGHT",
+          severity: "P2",
+          category: "runtime_correctness",
+          title: "Model says 88% confidence",
+          body: "Confidence: 88%. The model is 0.88 confident."
+        }
+      ],
+      dropped: [],
+      event: "COMMENT",
+      validation: {
+        summary: "Confidence 95% from validation summary.",
+        docsOnly: false,
+        recommendations: [
+          {
+            id: "focused_tests",
+            title: "Run focused tests with 90% confidence",
+            status: "recommended",
+            reason: "Confidence: 90%.",
+            matchedPaths: ["src/review.ts"],
+            proofTypes: ["unit test"]
+          }
+        ],
+        profileHints: {
+          validationHints: ["Confidence: 91%."],
+          proofExpectations: ["0.91 confident proof."]
+        }
+      }
+    });
+
+    expect(walkthrough.body).toContain("Review [confidence not calibrated]");
+    expect(walkthrough.body).toContain("Confidence: [confidence not calibrated].");
+    expect(walkthrough.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(walkthrough.body).not.toContain("0.91 confident");
+  });
+
+  it("keeps PR title replacement text whole while preserving raw comment-derived signal", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull: {
+        ...pull,
+        title: `${"b".repeat(176)} Confidence: 95%.`,
+        body: "No linked issue."
+      },
+      files: [{ filename: "src/review.ts", status: "modified", additions: 4, deletions: 1 }],
+      comments: [
+        {
+          path: "src/review.ts",
+          line: 4,
+          side: "RIGHT",
+          severity: "P1",
+          category: "runtime_correctness",
+          title: "Regression with 99% confidence",
+          body: "Model body says `0.91` likely."
+        }
+      ],
+      dropped: [],
+      event: "REQUEST_CHANGES"
+    });
+
+    const title = walkthrough.body.match(new RegExp(`PR: electricsheephq/WorldOS#${pull.number} - (.+)`))?.[1] ?? "";
+    expect(title).toHaveLength(200);
+    expect(walkthrough.body).toContain("Validated inline findings: 1 (P0: 0, P1: 1, P2: 0, P3: 0).");
+    expect(walkthrough.body).toContain("Elevated: validated P1 finding");
+    expect(walkthrough.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
   });
 
   it("keeps the comment-secret checklist passing when secret-like findings were dropped", () => {

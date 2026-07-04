@@ -1,5 +1,6 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory } from "./regression-taxonomy.js";
+import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -71,7 +72,7 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
 
 export function normalizeFindingsForReview(
   findings: Finding[],
-  options: { maxInlineComments?: number } = {}
+  options: { maxInlineComments?: number; publicConfidencePolicy?: PublicConfidenceDisplayPolicy } = {}
 ): { comments: ReviewComment[]; dropped: DroppedFinding[] } {
   const maxInlineComments = options.maxInlineComments ?? 25;
   const accepted: Finding[] = [];
@@ -79,7 +80,7 @@ export function normalizeFindingsForReview(
 
   for (const finding of findings) {
     if (containsSecretLikeText(`${finding.title}\n${finding.body}\n${finding.why_this_matters ?? ""}`)) {
-      dropped.push({ ...redactFinding(finding), reason: "secret_detected" });
+      dropped.push({ ...sanitizeDroppedFindingPublicText(redactFinding(finding), options.publicConfidencePolicy), reason: "secret_detected" });
       continue;
     }
     accepted.push(finding);
@@ -95,20 +96,29 @@ export function normalizeFindingsForReview(
 
   const kept = accepted.slice(0, maxInlineComments);
   for (const finding of accepted.slice(maxInlineComments)) {
-    dropped.push({ ...finding, reason: "comment_cap_exceeded" });
+    dropped.push({ ...sanitizeDroppedFindingPublicText(finding, options.publicConfidencePolicy), reason: "comment_cap_exceeded" });
   }
 
   return {
     comments: kept.map((finding) => {
       const category = normalizeFindingCategory(finding);
+      const publicTitle = sanitizePublicConfidenceText(finding.title, options.publicConfidencePolicy);
+      const publicBody = sanitizePublicConfidenceText(finding.body, options.publicConfidencePolicy);
+      const publicWhy = finding.why_this_matters
+        ? sanitizePublicConfidenceText(finding.why_this_matters, options.publicConfidencePolicy)
+        : undefined;
       return {
         path: finding.path,
         line: finding.line,
         side: "RIGHT",
         severity: finding.severity,
         category,
-        title: finding.title,
-        body: formatReviewComment({ ...finding, category })
+        title: publicTitle,
+        body: formatReviewComment(
+          { ...finding, category, title: publicTitle, body: publicBody, ...(publicWhy ? { why_this_matters: publicWhy } : {}) },
+          options.publicConfidencePolicy,
+          { textAlreadySanitized: true }
+        )
       };
     }),
     dropped
@@ -124,14 +134,35 @@ function redactFinding<T extends Finding>(finding: T): T {
   };
 }
 
+function sanitizeDroppedFindingPublicText<T extends Partial<Finding>>(finding: T, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): T {
+  return {
+    ...finding,
+    ...(typeof finding.title === "string" ? { title: sanitizePublicConfidenceText(finding.title, publicConfidencePolicy) } : {}),
+    ...(typeof finding.body === "string" ? { body: sanitizePublicConfidenceText(finding.body, publicConfidencePolicy) } : {}),
+    ...(typeof finding.why_this_matters === "string"
+      ? { why_this_matters: sanitizePublicConfidenceText(finding.why_this_matters, publicConfidencePolicy) }
+      : {})
+  };
+}
+
 export function decideReviewEvent(findings: Pick<ReviewComment, "severity" | "category">[]): ReviewEvent {
   return findings.some((finding) => isRequestChangesEligible(finding)) ? "REQUEST_CHANGES" : "COMMENT";
 }
 
-export function formatReviewComment(finding: Finding): string {
+export function formatReviewComment(
+  finding: Finding,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy,
+  options: { textAlreadySanitized?: boolean } = {}
+): string {
+  // textAlreadySanitized means title, body, and why_this_matters have all crossed the same public-text boundary.
+  const severity = SEVERITIES.has(finding.severity as Severity) ? finding.severity : "P3";
+  const title = options.textAlreadySanitized ? finding.title : sanitizePublicConfidenceText(finding.title, publicConfidencePolicy);
+  const body = options.textAlreadySanitized ? finding.body : sanitizePublicConfidenceText(finding.body, publicConfidencePolicy);
   const category = finding.category ? `\n\nCategory: ${categoryLabel(finding.category)}` : "";
-  const why = finding.why_this_matters ? `\n\nWhy this matters: ${finding.why_this_matters}` : "";
-  return `**${finding.severity}: ${finding.title}**\n\n${finding.body}${category}${why}`;
+  const why = finding.why_this_matters
+    ? `\n\nWhy this matters: ${options.textAlreadySanitized ? finding.why_this_matters : sanitizePublicConfidenceText(finding.why_this_matters, publicConfidencePolicy)}`
+    : "";
+  return `**${severity}: ${title}**\n\n${body}${category}${why}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
