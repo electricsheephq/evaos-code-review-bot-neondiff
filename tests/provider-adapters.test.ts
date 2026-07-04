@@ -135,7 +135,12 @@ describe("provider adapter fixtures", () => {
     expect(classifyProviderAdapterError("request timed out")).toBe("timeout");
     expect(classifyProviderAdapterError("request timed-out")).toBe("timeout");
     expect(classifyProviderAdapterError("model returned malformed JSON")).toBe("model-output");
-    expect(classifyProviderAdapterError("network reachable but returned unexpected json")).toBe("network");
+    expect(classifyProviderAdapterError("network reachable but returned unexpected json")).toBe("model-output");
+    expect(classifyProviderAdapterError("request timed out while validating structured output schema")).toBe(
+      "model-output"
+    );
+    expect(classifyProviderAdapterError("401 invalid api key while validating json schema")).toBe("auth");
+    expect(classifyProviderAdapterError("429 rate limit while parsing invalid response")).toBe("throttle");
 
     const fixture = {
       id: "runtime-error-fixture",
@@ -164,6 +169,51 @@ describe("provider adapter fixtures", () => {
     });
     expect(JSON.stringify(result)).not.toContain("provider-secret-1234567890");
   });
+
+  it.each([
+    {
+      expectedClass: "auth",
+      message: "401 invalid api key for Bearer provider-secret-1234567890"
+    },
+    {
+      expectedClass: "timeout",
+      message: "request timed out while using Bearer provider-secret-1234567890"
+    },
+    {
+      expectedClass: "network",
+      message: "ECONNRESET from gateway with Bearer provider-secret-1234567890"
+    }
+  ] as const)(
+    "redacts $expectedClass adapter errors through fixture execution",
+    async ({ expectedClass, message }) => {
+      const fixture = {
+        id: `${expectedClass}-runtime-error-fixture`,
+        providerId: "openai-compatible",
+        adapterId: "openai-compatible",
+        model: "review-model",
+        prompt: "Prompt containing provider-secret-1234567890",
+        expectJsonObject: true
+      };
+
+      const adapter: ProviderRuntimeAdapter = {
+        id: "fixture-openai-compatible",
+        async execute() {
+          throw new Error(message);
+        }
+      };
+
+      const result = await runProviderAdapterFixture({ adapter, fixture });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          class: expectedClass,
+          message: "[redacted-private-evidence]"
+        }
+      });
+      expect(JSON.stringify(result)).not.toContain("provider-secret-1234567890");
+    }
+  );
 
   it("marks schema failures as model-output without preserving raw invalid output", async () => {
     const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZGFwdGVyLWZpeHR1cmUifQ.signature12345";
@@ -221,7 +271,16 @@ describe("provider adapter fixtures", () => {
               note: input.prompt,
               metadata: {
                 label: "adapter fixture",
-                harmless: true
+                harmless: true,
+                content: "benign token-count metadata",
+                message: "provider reported finished",
+                response: {
+                  id: "response-id-only",
+                  statusCode: 200
+                }
+              },
+              rawResponse: {
+                content: "Review this private patch content before posting a comment."
               },
               transcript: "diff --git a/private.ts b/private.ts\n@@ -1 +1 @@\n-secret\n+fixed"
             }
@@ -234,7 +293,12 @@ describe("provider adapter fixtures", () => {
     const serialized = JSON.stringify(result);
     expect(result.ok).toBe(true);
     expect(serialized).toContain("[redacted-private-evidence]");
+    expect(serialized).toContain("[redacted-private-field]");
     expect(serialized).toContain("adapter fixture");
+    expect(serialized).toContain("benign token-count metadata");
+    expect(serialized).toContain("provider reported finished");
+    expect(serialized).toContain("response-id-only");
+    expect(serialized).toContain("statusCode");
     expect(serialized).not.toContain("private patch content");
     expect(serialized).not.toContain("diff --git");
     expect(serialized).not.toContain("secret");

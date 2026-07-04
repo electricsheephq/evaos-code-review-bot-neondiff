@@ -127,11 +127,11 @@ export function classifyProviderAdapterError(message: string): ProviderAdapterEr
   const normalized = message.toLowerCase();
   if (/\b(unauthorized|forbidden|invalid[ _-]api[ _-]key|401|403)\b/.test(normalized)) return "auth";
   if (/\b(rate[ _-]limit|quota|too many requests|429|insufficient[ _-]quota|throttl(?:e|ed|ing))\b/.test(normalized)) return "throttle";
-  if (/\b(time[ _-]?out|timed[ _-]out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
-  if (/\b(econnreset|econnrefused|enotfound|eai_again|network|socket|dns|connection refused|connection reset)\b/.test(normalized)) return "network";
   if (/\b(json|schema|parseable|malformed output|invalid response|invalid output|tool call|structured output)\b/.test(normalized)) {
     return "model-output";
   }
+  if (/\b(time[ _-]?out|timed[ _-]out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
+  if (/\b(econnreset|econnrefused|enotfound|eai_again|network|socket|dns|connection refused|connection reset)\b/.test(normalized)) return "network";
   return "unknown";
 }
 
@@ -215,11 +215,37 @@ function redactPrivateEvidenceText(value: string, prompt: string): string {
 }
 
 function isPrivateEvidenceKey(key: string): boolean {
-  return /(prompt|diff|patch|content|body|source|code|completion|response|message|stdout|stderr|log)/i.test(key);
+  const tokens = evidenceKeyTokens(key);
+  const normalized = tokens.join("");
+  const hasToken = (token: string) => tokens.includes(token);
+  const hasAnyToken = (candidates: readonly string[]) => candidates.some((candidate) => hasToken(candidate));
+
+  if (hasAnyToken(["prompt", "diff", "patch", "completion", "stdout", "stderr", "transcript"])) return true;
+  if (["body", "source", "code", "log"].includes(normalized)) return true;
+  if (hasToken("code") && hasAnyToken(["raw", "source", "generated", "original", "full", "unredacted"])) return true;
+  if (hasToken("log") && !hasToken("level")) return true;
+  if (
+    hasAnyToken(["raw", "original", "full", "unredacted"])
+    && hasAnyToken(["body", "content", "message", "output", "request", "response", "result"])
+  ) {
+    return true;
+  }
+  if (hasToken("text") && hasAnyToken(["body", "content", "message", "output", "request", "response", "result"])) {
+    return true;
+  }
+  return false;
 }
 
 function isSensitiveEvidenceKey(key: string): boolean {
   return /(api[ _-]?key|authorization|auth|bearer|cookie|credential|password|secret|session|token)/i.test(key);
+}
+
+function evidenceKeyTokens(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
 }
 
 function containsPrivateEvidenceLikeText(value: string, prompt: string): boolean {
