@@ -50,14 +50,11 @@ describe("provider adapter fixtures", () => {
       echoedPrompt: "Review this private patch content with sk-live-secret-secret."
     });
 
-    const fixture = {
+    const fixture = makeFixture({
       id: "review-json-fixture",
-      providerId: "openai-compatible",
-      adapterId: "openai-compatible",
-      model: "review-model",
       prompt: "Review this private patch content with sk-live-secret-secret.",
       expectJsonObject: true
-    };
+    });
 
     const first = await runProviderAdapterFixture({ adapter: firstAdapter, fixture });
     const second = await runProviderAdapterFixture({ adapter: secondAdapter, fixture });
@@ -87,14 +84,10 @@ describe("provider adapter fixtures", () => {
   });
 
   it("redacts private adapter error messages with the same evidence boundary", async () => {
-    const fixture = {
+    const fixture = makeFixture({
       id: "runtime-private-error-fixture",
-      providerId: "openai-compatible",
-      adapterId: "openai-compatible",
-      model: "review-model",
-      prompt: "Review this private patch content before posting a comment.",
       expectJsonObject: true
-    };
+    });
     const adapter: ProviderRuntimeAdapter = {
       id: "fixture-openai-compatible",
       async execute() {
@@ -116,14 +109,10 @@ describe("provider adapter fixtures", () => {
   });
 
   it("truncates raw evidence previews with an explicit sentinel without splitting redaction tokens", async () => {
-    const fixture = {
+    const fixture = makeFixture({
       id: "truncated-raw-evidence-fixture",
-      providerId: "openai-compatible",
-      adapterId: "openai-compatible",
-      model: "review-model",
-      prompt: "Review this private patch content before posting a comment.",
       expectJsonObject: true
-    };
+    });
     const result = await runProviderAdapterFixture({
       adapter: {
         id: "fixture-openai-compatible",
@@ -167,13 +156,10 @@ describe("provider adapter fixtures", () => {
           };
         }
       },
-      fixture: {
+      fixture: makeFixture({
         id: `truncated-output-${redactionToken.replace(/[^a-z]/g, "-")}`,
-        providerId: "openai-compatible",
-        adapterId: "openai-compatible",
-        model: "review-model",
         prompt: "review patch"
-      }
+      })
     });
 
     expect(result.ok).toBe(true);
@@ -184,13 +170,7 @@ describe("provider adapter fixtures", () => {
   });
 
   it("hashes redacted provider output instead of raw private output", async () => {
-    const fixture = {
-      id: "private-output-fixture",
-      providerId: "openai-compatible",
-      adapterId: "openai-compatible",
-      model: "review-model",
-      prompt: "Review this private patch content before posting a comment."
-    };
+    const fixture = makeFixture({ id: "private-output-fixture" });
     const result = await runProviderAdapterFixture({
       adapter: {
         id: "fixture-openai-compatible",
@@ -224,14 +204,11 @@ describe("provider adapter fixtures", () => {
     expect(classifyProviderAdapterError("401 invalid api key while validating json schema")).toBe("auth");
     expect(classifyProviderAdapterError("429 rate limit while parsing invalid response")).toBe("throttle");
 
-    const fixture = {
+    const fixture = makeFixture({
       id: "runtime-error-fixture",
-      providerId: "openai-compatible",
-      adapterId: "openai-compatible",
-      model: "review-model",
       prompt: "Prompt containing provider-secret-1234567890",
       expectJsonObject: true
-    };
+    });
 
     const adapter: ProviderRuntimeAdapter = {
       id: "fixture-openai-compatible",
@@ -268,14 +245,11 @@ describe("provider adapter fixtures", () => {
   ] as const)(
     "redacts $expectedClass adapter errors through fixture execution",
     async ({ expectedClass, message }) => {
-      const fixture = {
+      const fixture = makeFixture({
         id: `${expectedClass}-runtime-error-fixture`,
-        providerId: "openai-compatible",
-        adapterId: "openai-compatible",
-        model: "review-model",
         prompt: "Prompt containing provider-secret-1234567890",
         expectJsonObject: true
-      };
+      });
 
       const adapter: ProviderRuntimeAdapter = {
         id: "fixture-openai-compatible",
@@ -308,14 +282,11 @@ describe("provider adapter fixtures", () => {
           };
         }
       },
-      fixture: {
+      fixture: makeFixture({
         id: "invalid-json-fixture",
-        providerId: "openai-compatible",
-        adapterId: "openai-compatible",
-        model: "review-model",
         prompt: "review patch",
         expectJsonObject: true
-      }
+      })
     });
 
     expect(result).toMatchObject({
@@ -334,14 +305,10 @@ describe("provider adapter fixtures", () => {
   });
 
   it("fails closed for raw private evidence stored under innocuous field names", async () => {
-    const fixture = {
+    const fixture = makeFixture({
       id: "raw-evidence-fixture",
-      providerId: "openai-compatible",
-      adapterId: "openai-compatible",
-      model: "review-model",
-      prompt: "Review this private patch content before posting a comment.",
       expectJsonObject: true
-    };
+    });
 
     const result = await runProviderAdapterFixture({
       adapter: {
@@ -364,6 +331,15 @@ describe("provider adapter fixtures", () => {
               rawResponse: {
                 content: "Review this private patch content before posting a comment."
               },
+              rawAPIResponse: {
+                status: 200,
+                data: "private api response text"
+              },
+              fullJSONOutput: {
+                findings: ["private json output"]
+              },
+              originalHTTPBody: "private http body",
+              rawIDToken: "id-token-secret-value",
               transcript: "diff --git a/private.ts b/private.ts\n@@ -1 +1 @@\n-secret\n+fixed"
             }
           };
@@ -382,6 +358,10 @@ describe("provider adapter fixtures", () => {
     expect(serialized).toContain("response-id-only");
     expect(serialized).toContain("statusCode");
     expect(serialized).not.toContain("private patch content");
+    expect(serialized).not.toContain("private api response text");
+    expect(serialized).not.toContain("private json output");
+    expect(serialized).not.toContain("private http body");
+    expect(serialized).not.toContain("id-token-secret-value");
     expect(serialized).not.toContain("diff --git");
     expect(serialized).not.toContain("secret");
   });
@@ -389,4 +369,22 @@ describe("provider adapter fixtures", () => {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function makeFixture(overrides: Partial<{
+  id: string;
+  providerId: string;
+  adapterId: string;
+  model: string;
+  prompt: string;
+  expectJsonObject: boolean;
+}> = {}) {
+  return {
+    id: "fixture",
+    providerId: "openai-compatible",
+    adapterId: "openai-compatible",
+    model: "review-model",
+    prompt: "Review this private patch content before posting a comment.",
+    ...overrides
+  };
 }
