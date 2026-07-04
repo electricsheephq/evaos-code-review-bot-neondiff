@@ -99,10 +99,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["default", "allowed", "byok", "local"],
+      "allOf": [
+        {
+          "if": { "properties": { "default": { "const": "openai-compatible" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "openai-compatible" } } } }
+        },
+        {
+          "if": { "properties": { "default": { "const": "glm" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "glm" } } } }
+        },
+        {
+          "if": { "properties": { "default": { "const": "ollama-local" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "ollama-local" } } } }
+        },
+        {
+          "if": { "properties": { "default": { "const": "zcode" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "zcode" } } } }
+        },
+        {
+          "if": { "properties": { "default": { "const": "custom" } } },
+          "then": { "properties": { "allowed": { "contains": { "const": "custom" } } } }
+        }
+      ],
       "properties": {
         "default": {
-          "type": "string",
-          "minLength": 1,
+          "$ref": "#/$defs/providerId",
           "default": "openai-compatible"
         },
         "allowed": {

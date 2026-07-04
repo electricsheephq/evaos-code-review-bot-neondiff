@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const schemaPath = "docs/schema/neondiff-config.schema.json";
 const fixtureRoot = "tests/fixtures/neondiff-config";
+const providerIds = ["openai-compatible", "glm", "ollama-local", "zcode", "custom"];
 
 type JsonRecord = Record<string, unknown>;
 
@@ -19,8 +20,14 @@ function get(path: string, value: unknown): unknown {
   return path.split(".").reduce<unknown>((cursor, key) => asRecord(cursor)[key], value);
 }
 
+function isProviderId(value: unknown): value is string {
+  return typeof value === "string" && providerIds.includes(value);
+}
+
 function validateFixture(config: JsonRecord): string[] {
   const errors: string[] = [];
+  const providersDefault = get("providers.default", config);
+  const providersAllowed = get("providers.allowed", config);
 
   if (config.version !== 1) errors.push("version must be 1");
   if (!["conservative", "balanced", "thorough"].includes(String(get("review.profile", config)))) {
@@ -29,7 +36,12 @@ function validateFixture(config: JsonRecord): string[] {
   if (typeof get("review.maxComments", config) !== "number") errors.push("review.maxComments must be a number");
   if (!Array.isArray(get("paths.include", config))) errors.push("paths.include must be an array");
   if (!Array.isArray(get("paths.exclude", config))) errors.push("paths.exclude must be an array");
-  if (typeof get("providers.default", config) !== "string") errors.push("providers.default must be a string");
+  if (!isProviderId(providersDefault)) errors.push("providers.default must be a supported provider id");
+  if (!Array.isArray(providersAllowed) || !providersAllowed.every(isProviderId)) {
+    errors.push("providers.allowed must list supported provider ids");
+  } else if (isProviderId(providersDefault) && !providersAllowed.includes(providersDefault)) {
+    errors.push("providers.default must be included in providers.allowed");
+  }
   if (get("providers.byok.required", config) !== true && get("providers.byok.required", config) !== false) {
     errors.push("providers.byok.required must be a boolean");
   }
@@ -82,6 +94,8 @@ describe("NeonDiff config schema draft", () => {
     expect(get("properties.issueEnrichment.properties.enabled.default", schema)).toBe(false);
     expect(get("properties.confidence.properties.mode.default", schema)).toBe("uncalibrated");
     expect(get("properties.confidence.properties.displayPercentages.default", schema)).toBe(false);
+    expect(get("properties.providers.properties.default.$ref", schema)).toBe("#/$defs/providerId");
+    expect(JSON.stringify(get("properties.providers.allOf", schema))).toContain("\"contains\":{\"const\":\"glm\"}");
   });
 
   it("keeps valid examples inside the schema-owned public contract", () => {
@@ -113,11 +127,36 @@ describe("NeonDiff config schema draft", () => {
     ]);
   });
 
-  it("documents YAML examples without secrets", () => {
-    for (const fixture of ["valid-minimal.neondiff.yml", "valid-full.neondiff.yml", "invalid-unsafe-enabled.neondiff.yml"]) {
+  it("rejects unsupported or disallowed default providers while accepting a valid default", () => {
+    const validConfig = readJson(join(fixtureRoot, "valid-full.json"));
+
+    expect(validateFixture(validConfig)).toEqual([]);
+    expect(validateFixture({
+      ...validConfig,
+      providers: {
+        ...asRecord(validConfig.providers),
+        default: "not-a-provider"
+      }
+    })).toContain("providers.default must be a supported provider id");
+    expect(validateFixture({
+      ...validConfig,
+      providers: {
+        ...asRecord(validConfig.providers),
+        default: "glm",
+        allowed: ["openai-compatible"]
+      }
+    })).toContain("providers.default must be included in providers.allowed");
+  });
+
+  it("documents committed examples without secrets", () => {
+    const fixtures = readdirSync(fixtureRoot)
+      .filter((name) => name.endsWith(".json") || name.endsWith(".neondiff.yml"))
+      .sort();
+
+    for (const fixture of fixtures) {
       const text = readFileSync(join(fixtureRoot, fixture), "utf8");
 
-      expect(text).toMatch(/schema: docs\/schema\/neondiff-config\.schema\.json/);
+      expect(text).toMatch(/"?\$schema"?:\s*"?docs\/schema\/neondiff-config\.schema\.json"?/);
       expect(text).not.toMatch(/BEGIN (RSA|OPENSSH|PRIVATE) KEY|ghp_|github_pat_|sk-[A-Za-z0-9]/);
     }
   });
