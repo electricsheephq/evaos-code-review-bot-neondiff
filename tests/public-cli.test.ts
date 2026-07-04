@@ -42,6 +42,7 @@ describe("public NeonDiff CLI surface", () => {
       "init",
       "config inspect",
       "config patch",
+      "pricing",
       "doctor",
       "daemon start",
       "daemon stop",
@@ -53,6 +54,7 @@ describe("public NeonDiff CLI surface", () => {
       "review-pr"
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
+    expect(output.examples).toContain("neondiff pricing");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
     expect(output.commands.existing).toContain("provider-throttle-report");
@@ -66,6 +68,70 @@ describe("public NeonDiff CLI surface", () => {
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
     );
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
+  });
+
+  it("prints canonical pricing tiers without hosted model credit claims", async () => {
+    const { stdout } = await runCli(["pricing"]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      command: "pricing",
+      product: "NeonDiff",
+      currency: "USD",
+      publicOpenSourceReposFree: true,
+      providerCosts: {
+        model: "BYOK or local provider",
+        includedHostedModelCredits: false
+      },
+      entitlementShape: {
+        freeOss: {
+          repoVisibilityScope: "public",
+          requiresPaidLicense: false
+        },
+        paidSupport: {
+          repoVisibilityScope: "private",
+          requiresPaidLicense: true,
+          commercialUse: true,
+          autoUpdates: true,
+          acceptedPlanIds: ["monthly_support", "yearly_support", "lifetime_support"]
+        }
+      }
+    });
+    expect(output.plans).toEqual([
+      expect.objectContaining({
+        id: "free_oss",
+        displayPrice: "$0",
+        requiresPaidLicense: false,
+        providerCreditsIncluded: false
+      }),
+      expect.objectContaining({
+        id: "monthly_support",
+        displayPrice: "$1/mo",
+        requiresPaidLicense: true,
+        commercialUse: true,
+        autoUpdates: true,
+        providerCreditsIncluded: false
+      }),
+      expect.objectContaining({
+        id: "yearly_support",
+        displayPrice: "$10/yr",
+        requiresPaidLicense: true,
+        commercialUse: true,
+        autoUpdates: true,
+        providerCreditsIncluded: false
+      }),
+      expect.objectContaining({
+        id: "lifetime_support",
+        displayPrice: "$100 lifetime",
+        requiresPaidLicense: true,
+        commercialUse: true,
+        autoUpdates: true,
+        providerCreditsIncluded: false
+      })
+    ]);
+    expect(stdout).toContain("does not include hosted model credits");
+    expect(stdout).not.toMatch(/"includedHostedModelCredits":\s*true|bundled provider tokens included/i);
   });
 
   it("rejects non-boolean public rollback ref verification values", async () => {
@@ -1367,34 +1433,36 @@ describe("public NeonDiff CLI surface", () => {
       }
     })}\n`);
     const store = new ReviewStateStore(statePath);
+    const fixtureNow = new Date();
     try {
       store.enqueueReviewQueueJob({
         repo: "other/repo",
         pullNumber: 1,
         headSha: "active-head",
         providerId: "GLM-5.2",
-        now: new Date("2026-07-03T00:00:00.000Z")
+        now: new Date(fixtureNow.getTime() - 2_000)
       });
       store.leaseNextReviewQueueJobs({
         maxProviderActive: 1,
         maxOrgActive: 1,
         maxRepoActive: 1,
-        leaseTtlMs: 24 * 60 * 60_000,
-        now: new Date("2026-07-03T00:00:01.000Z")
+        // Issue #195: keep the synthetic active provider lease relative to the process clock.
+        leaseTtlMs: 60 * 60_000,
+        now: new Date(fixtureNow.getTime() - 1_000)
       });
       const deferred = store.enqueueReviewQueueJob({
         repo: "owner/repo",
         pullNumber: 123,
         headSha: "head-provider-deferred",
         providerId: "GLM-5.2",
-        now: new Date("2026-07-03T00:00:02.000Z")
+        now: new Date(fixtureNow.getTime() - 500)
       }).job;
       store.updateReviewQueueJobState({
         jobId: deferred.jobId,
         state: "provider_deferred",
-        nextEligibleAt: "2026-07-03T00:00:03.000Z",
+        nextEligibleAt: new Date(fixtureNow.getTime() - 250).toISOString(),
         lastError: "provider_overloaded",
-        now: new Date("2026-07-03T00:00:04.000Z")
+        now: fixtureNow
       });
     } finally {
       store.close();

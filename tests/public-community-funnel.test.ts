@@ -20,13 +20,18 @@ describe("NeonDiff public community funnel", () => {
       /CODE_OF_CONDUCT\.md/i,
       /LICENSE\.md/i,
       /docs\/license-boundary\.md/i,
+      /docs\/pricing\.md/i,
       /public open-source repos.*free/i,
+      /\$1\/month/i,
+      /\$10\/year/i,
+      /\$100 lifetime/i,
       /private.*commercial.*paid/i,
       /source-available beta/i,
       /GitHub App/i,
       /dry-run review/i,
       /electricsheephq\/evaos-code-review-bot\/issues\/103/i,
       /electricsheephq\/evaos-code-review-bot\/issues\/104/i,
+      /electricsheephq\/evaos-code-review-bot\/issues\/105/i,
       /electricsheephq\/evaos-code-review-bot\/issues\/107/i,
       /electricsheephq\/evaos-code-review-bot\/issues\/113/i
     ]) {
@@ -67,6 +72,34 @@ describe("NeonDiff public community funnel", () => {
 
     expect(boundary).toMatch(/copy these claims/i);
     expect(boundary).toMatch(/Do not describe NeonDiff as \"open source\"|Avoid:\n\n- \"open source\"/i);
+  });
+
+  it("pricing doc records support tiers, BYOK costs, and no hosted model credit bundle", () => {
+    const pricing = read("docs/pricing.md");
+    const setup = read("docs/SETUP.md");
+    const boundary = read("docs/license-boundary.md");
+    const issueTemplate = read(".github/ISSUE_TEMPLATE/license_setup_confusion.yml");
+
+    for (const text of [pricing, setup, boundary]) {
+      expect(text).toMatch(/public open-source/i);
+      expect(text).toMatch(/\$1\/mo|\$1\/month/i);
+      expect(text).toMatch(/\$10\/yr|\$10\/year/i);
+      expect(text).toMatch(/\$100 lifetime/i);
+      expect(text).toMatch(/private repo review|private.*repo/i);
+      expect(text).toMatch(/commercial/i);
+      expect(text).toMatch(/auto-updates/i);
+      expect(text).toMatch(/BYOK|provider key|local model/i);
+      const normalized = text.replace(/\s+/g, " ");
+      expect(normalized).toMatch(/hosted model credits/i);
+      expect(normalized).toMatch(/does not include|do not include|not included|no bundled/i);
+      expect(text).not.toMatch(/unlimited SaaS inference included|bundled provider tokens included/i);
+    }
+
+    expect(pricing).toMatch(/neondiff pricing/i);
+    expect(pricing).toMatch(/monthly_support/i);
+    expect(pricing).toMatch(/yearly_support/i);
+    expect(pricing).toMatch(/lifetime_support/i);
+    expect(issueTemplate).toMatch(/docs\/pricing\.md/i);
   });
 
   it("setup guide gives a first-run path without hiding safety prerequisites in operator runbooks", () => {
