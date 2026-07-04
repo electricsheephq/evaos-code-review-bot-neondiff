@@ -180,20 +180,26 @@ export async function runScheduledCycleWithDeps(input: {
   });
   result.queue.delayedByReason = result.queue.budget.delayedByReason;
 
-  const leased = input.state.leaseNextReviewQueueJobs({
-    maxProviderActive: scheduler.maxProviderActive,
-    maxOrgActive: scheduler.maxOrgActive,
-    maxRepoActive: scheduler.maxRepoActive,
-    manualCommandReserve: scheduler.manualCommandReserve,
-    // Provider capacity is the global API throttle; org/repo caps only decide which jobs can spend that budget.
-    limit: scheduler.maxProviderActive,
-    leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
-    now
-  });
-  result.queue.leased = leased.length;
-
   const budget = new ReviewRunBudget(Math.max(1, scheduler.maxProviderActive));
-  for (const [index, job] of leased.entries()) {
+  const attemptedJobIds = new Set<string>();
+  const attemptedJobs: ReviewQueueJobRecord[] = [];
+  for (let leaseAttempt = 0; leaseAttempt < scheduler.maxProviderActive; leaseAttempt += 1) {
+    const leased = input.state.leaseNextReviewQueueJobs({
+      maxProviderActive: scheduler.maxProviderActive,
+      maxOrgActive: scheduler.maxOrgActive,
+      maxRepoActive: scheduler.maxRepoActive,
+      manualCommandReserve: scheduler.manualCommandReserve,
+      excludeJobIds: attemptedJobIds,
+      reservedActiveJobs: attemptedJobs,
+      limit: 1,
+      leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
+      now: eventClock()
+    });
+    const job = leased[0];
+    if (!job) break;
+    attemptedJobIds.add(job.jobId);
+    attemptedJobs.push(job);
+    result.queue.leased += 1;
     const status = await runLeasedQueueJob({
       config,
       github: input.github,
@@ -211,13 +217,6 @@ export async function runScheduledCycleWithDeps(input: {
     });
     applyReviewStatus(result, status);
     if (status === "skipped_provider_cooldown") {
-      result.queue.providerDeferred += deferUnstartedLeasedJobsForProviderThrottle({
-        config,
-        state: input.state,
-        triggerJob: job,
-        jobs: leased.slice(index + 1),
-        now: eventClock()
-      });
       break;
     }
   }
@@ -1176,42 +1175,6 @@ function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobReco
   if (job.source !== "manual_command") return true;
   const existing = state.getReviewReadiness(job.repo, job.pullNumber, job.headSha);
   return existing?.commandAction ? isReviewCommandAction(existing.commandAction) : true;
-}
-
-function deferUnstartedLeasedJobsForProviderThrottle(input: {
-  config: BotConfig;
-  state: ReviewStateStore;
-  triggerJob: ReviewQueueJobRecord;
-  jobs: ReviewQueueJobRecord[];
-  now: Date;
-}): number {
-  const cooldown = providerThrottleCooldownFromTriggerJob(input);
-  for (const job of input.jobs) {
-    input.state.updateReviewQueueJobState({
-      jobId: job.jobId,
-      state: "provider_deferred",
-      nextEligibleAt: cooldown.cooldownUntil,
-      lastError: `provider_throttle_cycle_deferred_until=${cooldown.cooldownUntil}; reason=${cooldown.reason}; trigger_repo=${input.triggerJob.repo}`,
-      now: input.now
-    });
-  }
-  return input.jobs.length;
-}
-
-function providerThrottleCooldownFromTriggerJob(input: {
-  config: BotConfig;
-  state: ReviewStateStore;
-  triggerJob: ReviewQueueJobRecord;
-  now: Date;
-}): { cooldownUntil: string; reason: string } {
-  const processed = input.state.getProcessedReview(input.triggerJob.repo, input.triggerJob.pullNumber, input.triggerJob.headSha);
-  const parsed = parseProviderCooldownError(processed?.error);
-  const repoCooldown = input.state.getActiveRepoProviderCooldown(input.triggerJob.repo, input.now);
-  const fallbackCooldownUntil = new Date(input.now.getTime() + input.config.providerCooldown.durationMs).toISOString();
-  return {
-    cooldownUntil: parsed?.cooldownUntil ?? repoCooldown?.cooldownUntil ?? fallbackCooldownUntil,
-    reason: parsed?.reason ?? repoCooldown?.reason ?? "provider_cooldown"
-  };
 }
 
 function readinessStateForReviewResult(

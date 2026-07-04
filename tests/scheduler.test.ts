@@ -78,6 +78,63 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("leases queued jobs just in time so provider capacity does not create idle leases", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-jit-lease-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]);
+    config.reviewScheduler!.maxProviderActive = 2;
+    config.reviewScheduler!.maxOrgActive = 2;
+    config.reviewScheduler!.maxRepoActive = 1;
+    const state = new ReviewStateStore(config.statePath);
+    const observedDuringFirstReview: Array<{ repo: string; state: string; startedAt?: string }> = [];
+    const reviewed: string[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]],
+        ["org/repo-b", [pull("org/repo-b", 1, HEAD_B)]]
+      ])),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewed.push(`${repo}#${reviewPull.number}`);
+        if (repo === "org/repo-a") {
+          observedDuringFirstReview.push(...reviewState.listReviewQueueJobs()
+            .filter((job) => job.repo === "org/repo-b")
+            .map((job) => ({
+              repo: job.repo,
+              state: job.state,
+              ...(job.startedAt ? { startedAt: job.startedAt } : {})
+            })));
+        }
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.queue).toMatchObject({
+      enqueued: 2,
+      leased: 2,
+      completed: 2,
+      remainingQueued: 2
+    });
+    expect(reviewed).toEqual(["org/repo-a#1", "org/repo-b#1"]);
+    expect(observedDuringFirstReview).toEqual([
+      { repo: "org/repo-b", state: "queued" }
+    ]);
+    expect(state.listReviewQueueJobs({ state: "leased" })).toHaveLength(0);
+    expect(state.listReviewQueueJobs({ state: "running" })).toHaveLength(0);
+    state.close();
+  });
+
   it("posts a sticky status comment from queued through completed for a live queued head", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-completed-"));
     roots.push(root);
@@ -511,7 +568,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("stops the current provider batch after an overload and requeues unstarted leased jobs", async () => {
+  it("stops provider leasing after an overload without touching unstarted queued jobs", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-overload-stop-"));
     roots.push(root);
     const config = schedulerConfig(root, []);
@@ -556,17 +613,17 @@ describe("provider-aware review scheduler", () => {
 
     expect(attempted).toEqual(["org/repo-a"]);
     expect(result.skippedProviderCooldown).toBe(1);
-    expect(result.queue.providerDeferred).toBe(2);
+    expect(result.queue.providerDeferred).toBe(1);
     expect(state.getReviewQueueJob(first.jobId)).toMatchObject({
       state: "provider_deferred",
       nextEligibleAt: "2026-07-02T00:07:00.000Z",
       lastError: expect.stringContaining("reason=provider_overloaded")
     });
-    expect(state.getReviewQueueJob(second.jobId)).toMatchObject({
-      state: "provider_deferred",
-      nextEligibleAt: "2026-07-02T00:07:00.000Z",
-      lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-02T00:07:00.000Z")
-    });
+    const secondAfterOverload = state.getReviewQueueJob(second.jobId);
+    expect(secondAfterOverload).toMatchObject({ state: "queued" });
+    expect(secondAfterOverload?.startedAt).toBeUndefined();
+    expect(secondAfterOverload?.nextEligibleAt).toBeUndefined();
+    expect(secondAfterOverload?.lastError).toBeUndefined();
     state.close();
   });
 
@@ -1535,7 +1592,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("records provider throttle and stops the current leased provider batch", async () => {
+  it("records provider throttle and stops leasing more provider jobs", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-throttle-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/repo-a", "org/repo-b", "org/repo-c"]);
@@ -1573,12 +1630,13 @@ describe("provider-aware review scheduler", () => {
     expect(state.getActiveRepoProviderCooldown("org/repo-a", new Date("2026-07-01T00:00:01.000Z"))).toBeDefined();
     expect(state.getActiveRepoProviderCooldown("org/repo-b", new Date("2026-07-01T00:00:01.000Z"))).toBeUndefined();
     expect(state.listReviewQueueJobs({ state: "provider_deferred" })).toEqual([
-      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z" }),
-      expect.objectContaining({ repo: "org/repo-b", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z", lastError: expect.stringContaining("trigger_repo=org/repo-a") })
+      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z" })
     ]);
     expect(state.listReviewQueueJobs({ state: "queued" })).toEqual([
+      expect.objectContaining({ repo: "org/repo-b", pullNumber: 1 }),
       expect.objectContaining({ repo: "org/repo-c", pullNumber: 1 })
     ]);
+    expect(state.getReviewQueueJob(state.listReviewQueueJobs({ state: "queued" })[0]!.jobId)?.startedAt).toBeUndefined();
     state.close();
   });
 
@@ -2542,7 +2600,7 @@ describe("provider-aware review scheduler", () => {
       }
     };
     const state = new ReviewStateStore(config.statePath);
-    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, "a1")]]]);
+    const pullMap = new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]);
     const comments = new Map([
       ["org/repo-a#1", [comment(338, "100yenadmin", "@evaos-code-review-bot generate tests")]]
     ]);
@@ -2567,7 +2625,7 @@ describe("provider-aware review scheduler", () => {
       lastError: "manual_command_finishing_touch_draft_recorded"
     });
     expect(recordedJob?.sessionId).toBeUndefined();
-    expect(state.getReviewReadiness("org/repo-a", 1, "a1")).toMatchObject({
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
       state: "command_recorded",
       reason: "trusted_generate_tests_command",
       commandAction: "generate_tests",
@@ -2576,7 +2634,7 @@ describe("provider-aware review scheduler", () => {
     expect(state.getFinishingTouchDraft({
       repo: "org/repo-a",
       pullNumber: 1,
-      headSha: "a1",
+      headSha: HEAD_A,
       commandCommentId: 338
     })).toMatchObject({
       action: "generate_tests",
