@@ -12,6 +12,8 @@ export interface IssueEnrichmentConfig {
   enabled: boolean;
   postIssueComment: boolean;
   allowlist: string[];
+  allowedLabels: string[];
+  allowedReviewers: string[];
   maxIssuesPerCycle: number;
   maxCommentsPerCycle: number;
   globalMaxIssuesPerCycle: number;
@@ -30,6 +32,8 @@ export const DEFAULT_ISSUE_ENRICHMENT_CONFIG: IssueEnrichmentConfig = {
   enabled: false,
   postIssueComment: false,
   allowlist: [],
+  allowedLabels: [],
+  allowedReviewers: [],
   maxIssuesPerCycle: 5,
   maxCommentsPerCycle: 1,
   globalMaxIssuesPerCycle: 5,
@@ -46,6 +50,8 @@ export const DEFAULT_ISSUE_ENRICHMENT_CONFIG: IssueEnrichmentConfig = {
 
 export interface IssueEnrichmentRepoOverride {
   enabled?: boolean;
+  allowedLabels?: string[];
+  allowedReviewers?: string[];
   maxIssuesPerCycle?: number;
   maxCommentsPerCycle?: number;
   cooldownMs?: number;
@@ -77,6 +83,11 @@ export interface IssueEnrichmentThrottlePolicy {
   maxIssuesPerBurst: number;
   lookbackMs: number;
   processExistingOpenIssuesOnActivation: boolean;
+}
+
+export interface IssueEnrichmentSuggestionPolicy {
+  allowedLabels: string[];
+  allowedReviewers: string[];
 }
 
 export interface IssueEnrichmentGlobalLimits {
@@ -335,6 +346,7 @@ export async function collectIssueEnrichmentScan(input: {
       repo,
       issues,
       throttle: policy.throttle,
+      suggestions: policy.suggestions,
       postIssueComment: config.postIssueComment,
       checkedAt,
       shouldCountItem: input.shouldCountItem
@@ -633,9 +645,14 @@ export async function runIssueEnrichmentCycle(input: {
 
       try {
         if (!issue) throw new Error(`Issue metadata missing for ${item.repo}#${item.issueNumber}`);
+        const policy = resolveIssueEnrichmentRepoPolicy(config, item.repo);
         const enrichment = buildIssueEnrichmentComment({
           repo: item.repo,
           issue,
+          suggestedLabels: policy.suggestions.allowedLabels,
+          suggestedOwners: policy.suggestions.allowedReviewers,
+          allowedLabels: policy.suggestions.allowedLabels,
+          allowedOwners: policy.suggestions.allowedReviewers,
           postIssueComment: true
         });
         const post = await postEnrichmentComment({
@@ -708,6 +725,7 @@ export function resolveIssueEnrichmentRepoPolicy(
   allowed: boolean;
   reason?: "not_issue_enrichment_allowlisted" | "issue_enrichment_repo_disabled";
   throttle: IssueEnrichmentThrottlePolicy;
+  suggestions: IssueEnrichmentSuggestionPolicy;
 } {
   const override = config.repos?.[repo];
   const throttle = {
@@ -720,15 +738,20 @@ export function resolveIssueEnrichmentRepoPolicy(
     processExistingOpenIssuesOnActivation:
       override?.processExistingOpenIssuesOnActivation ?? config.processExistingOpenIssuesOnActivation
   };
-  if (!config.allowlist.includes(repo)) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle };
-  if (override?.enabled === false) return { allowed: false, reason: "issue_enrichment_repo_disabled", throttle };
-  return { allowed: true, throttle };
+  const suggestions = {
+    allowedLabels: [...(override?.allowedLabels ?? config.allowedLabels)],
+    allowedReviewers: [...(override?.allowedReviewers ?? config.allowedReviewers)]
+  };
+  if (!config.allowlist.includes(repo)) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle, suggestions };
+  if (override?.enabled === false) return { allowed: false, reason: "issue_enrichment_repo_disabled", throttle, suggestions };
+  return { allowed: true, throttle, suggestions };
 }
 
 function planRepoIssueScan(input: {
   repo: string;
   issues: GitHubRelatedIssueOrPull[];
   throttle: IssueEnrichmentThrottlePolicy;
+  suggestions: IssueEnrichmentSuggestionPolicy;
   postIssueComment: boolean;
   checkedAt: string;
   shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
@@ -736,6 +759,10 @@ function planRepoIssueScan(input: {
   const planned = input.issues.map((issue) => buildIssueEnrichmentDryRunOutput({
     repo: input.repo,
     issue,
+    suggestedLabels: input.suggestions.allowedLabels,
+    suggestedOwners: input.suggestions.allowedReviewers,
+    allowedLabels: input.suggestions.allowedLabels,
+    allowedOwners: input.suggestions.allowedReviewers,
     maxRelatedRefs: 8,
     maxSuggestions: 8
   }));

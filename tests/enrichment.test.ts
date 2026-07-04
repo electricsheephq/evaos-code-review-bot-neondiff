@@ -44,6 +44,8 @@ describe("sticky enrichment comments", () => {
       enabled: false,
       postIssueComment: false,
       allowlist: [],
+      allowedLabels: [],
+      allowedReviewers: [],
       maxIssuesPerCycle: 5,
       maxCommentsPerCycle: 1,
       globalMaxIssuesPerCycle: 5,
@@ -65,6 +67,8 @@ describe("sticky enrichment comments", () => {
           enabled: false,
           postIssueComment: false,
           allowlist: ["owner/issue-repo"],
+          allowedLabels: ["issue-label"],
+          allowedReviewers: ["issue-reviewer"],
           maxIssuesPerCycle: 2,
           maxCommentsPerCycle: 1,
           globalMaxIssuesPerCycle: 4,
@@ -78,6 +82,8 @@ describe("sticky enrichment comments", () => {
           processExistingOpenIssuesOnActivation: false,
           repos: {
             "owner/issue-repo": {
+              allowedLabels: ["repo-label"],
+              allowedReviewers: ["repo-reviewer"],
               maxIssuesPerCycle: 3,
               maxCommentsPerCycle: 2
             }
@@ -92,6 +98,8 @@ describe("sticky enrichment comments", () => {
       expect(config.pilotRepos).toEqual(["owner/pr-review-repo"]);
       expect(issueConfig?.allowlist).toEqual(["owner/issue-repo"]);
       expect(issueConfig?.allowlist).not.toContain("owner/pr-review-repo");
+      expect(issueConfig?.allowedLabels).toEqual(["issue-label"]);
+      expect(issueConfig?.allowedReviewers).toEqual(["issue-reviewer"]);
       expect(issueConfig).toMatchObject({
         globalMaxIssuesPerCycle: 4,
         globalMaxCommentsPerCycle: 1,
@@ -99,6 +107,8 @@ describe("sticky enrichment comments", () => {
         leaseTtlMs: 1_200_000
       });
       expect(issueConfig?.repos?.["owner/issue-repo"]).toMatchObject({
+        allowedLabels: ["repo-label"],
+        allowedReviewers: ["repo-reviewer"],
         maxIssuesPerCycle: 3,
         maxCommentsPerCycle: 2
       });
@@ -539,6 +549,35 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).not.toContain("Suggested labels: Bug");
     expect(comment.body).toContain("Suggested owners: owner-a, owner-b, owner-c.");
     expect(comment.body).not.toContain("owner-d");
+  });
+
+  it("filters issue label and owner suggestions through issue-enrichment allowlists", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 97,
+      title: "Bug docs support escalation #22",
+      state: "open",
+      body: "Bug docs tests support failure with acceptance criteria and owner present.",
+      labels: [{ name: "support" }]
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedLabels: ["triage", "security", "docs"],
+      suggestedOwners: ["pr-reviewer", "issue-owner"],
+      allowedLabels: ["security"],
+      allowedOwners: ["issue-owner"],
+      maxSuggestions: 5
+    });
+
+    const suggestedLabelsLine = comment.body.split("\n").find((line) => line.startsWith("Suggested labels:"));
+    const suggestedOwnersLine = comment.body.split("\n").find((line) => line.startsWith("Suggested owners:"));
+    expect(suggestedLabelsLine).toBe("Suggested labels: security.");
+    expect(suggestedLabelsLine).not.toContain("triage");
+    expect(suggestedLabelsLine).not.toContain("docs");
+    expect(suggestedLabelsLine).not.toContain("bug");
+    expect(suggestedOwnersLine).toBe("Suggested owners: issue-owner.");
+    expect(suggestedOwnersLine).not.toContain("pr-reviewer");
   });
 
   it("dry-run scans only the issue-enrichment allowlist and skips closed issues and PR-shaped issues", async () => {

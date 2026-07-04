@@ -17,6 +17,10 @@
     "enabled": false,
     "postIssueComment": false,
     "allowlist": [],
+    "_allowedLabelsComment": "Issue-enrichment label suggestions are separate from PR review repoProfiles.suggestedLabels. Keep empty until each repo has an approved issue-triage label list.",
+    "allowedLabels": [],
+    "_allowedReviewersComment": "Issue-enrichment reviewer/owner suggestions are separate from PR review repoProfiles.suggestedReviewers. Keep empty until each repo has an approved issue-triage reviewer list.",
+    "allowedReviewers": [],
     "maxIssuesPerCycle": 5,
     "maxCommentsPerCycle": 1,
     "globalMaxIssuesPerCycle": 5,
@@ -33,6 +37,8 @@
     "repos": {
       "electricsheephq/evaos-code-review-bot": {
         "enabled": false,
+        "allowedLabels": [],
+        "allowedReviewers": [],
         "maxIssuesPerCycle": 3,
         "maxCommentsPerCycle": 1,
         "maxIssuesPerBurst": 8,

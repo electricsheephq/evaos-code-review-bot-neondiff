@@ -541,6 +541,8 @@ function validateIssueEnrichmentConfig(value: unknown, label: string): void {
   validateStringArray(value.allowlist, `${label}.allowlist`);
   const allowlist = value.allowlist as string[];
   for (const repo of allowlist) validateRepoName(repo, `${label}.allowlist`);
+  validateStringArray(value.allowedLabels, `${label}.allowedLabels`);
+  validateStringArray(value.allowedReviewers, `${label}.allowedReviewers`);
   validatePositiveInteger(value.maxIssuesPerCycle, `${label}.maxIssuesPerCycle`);
   validateNonNegativeInteger(value.maxCommentsPerCycle, `${label}.maxCommentsPerCycle`);
   validatePositiveInteger(value.globalMaxIssuesPerCycle, `${label}.globalMaxIssuesPerCycle`);
@@ -575,6 +577,8 @@ function validateIssueEnrichmentConfig(value: unknown, label: string): void {
 function validateIssueEnrichmentRepoOverride(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   if (value.enabled !== undefined) validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalStringArray(value.allowedLabels, `${label}.allowedLabels`);
+  validateOptionalStringArray(value.allowedReviewers, `${label}.allowedReviewers`);
   if (value.maxIssuesPerCycle !== undefined) validatePositiveInteger(value.maxIssuesPerCycle, `${label}.maxIssuesPerCycle`);
   if (value.maxCommentsPerCycle !== undefined) validateNonNegativeInteger(value.maxCommentsPerCycle, `${label}.maxCommentsPerCycle`);
   if (value.cooldownMs !== undefined) validatePositiveInteger(value.cooldownMs, `${label}.cooldownMs`);
