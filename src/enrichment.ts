@@ -151,10 +151,10 @@ export function buildIssueEnrichmentComment(input: {
   const relatedRefs = extractRelatedRefs(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`).slice(0, input.maxRelatedRefs ?? 8);
   const existingLabels = uniqueCaseInsensitive(normalizeIssueLabels(input.issue.labels));
   const existingLabelKeys = new Set(existingLabels.map(normalizedSuggestionKey));
-  const allowedLabelKeys = input.allowedLabels === undefined
+  const allowedLabelKeys = input.allowedLabels === undefined || input.allowedLabels.length === 0
     ? undefined
     : new Set(uniqueCaseInsensitive(input.allowedLabels).map(normalizedSuggestionKey));
-  const allowedOwnerKeys = input.allowedOwners === undefined
+  const allowedOwnerKeys = input.allowedOwners === undefined || input.allowedOwners.length === 0
     ? undefined
     : new Set(uniqueCaseInsensitive(input.allowedOwners).map(normalizedSuggestionKey));
   const suggestedLabels = uniqueCaseInsensitive([
@@ -164,7 +164,7 @@ export function buildIssueEnrichmentComment(input: {
     const key = normalizedSuggestionKey(label);
     return !existingLabelKeys.has(key) && (allowedLabelKeys === undefined || allowedLabelKeys.has(key));
   }).slice(0, input.maxSuggestions ?? 8);
-  const owners = unique(input.suggestedOwners ?? []).filter((owner) => {
+  const owners = uniqueCaseInsensitive(input.suggestedOwners ?? []).filter((owner) => {
     return allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(owner));
   }).slice(0, input.maxSuggestions ?? 8);
   const validationSuggestions = unique(input.validationSuggestions ?? []).slice(0, input.maxSuggestions ?? 8);

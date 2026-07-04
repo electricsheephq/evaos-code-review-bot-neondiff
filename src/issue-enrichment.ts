@@ -748,12 +748,17 @@ export function resolveIssueEnrichmentRepoPolicy(
       override?.processExistingOpenIssuesOnActivation ?? config.processExistingOpenIssuesOnActivation
   };
   const suggestions = {
-    allowedLabels: [...(override?.allowedLabels ?? config.allowedLabels)],
-    allowedReviewers: [...(override?.allowedReviewers ?? config.allowedReviewers)]
+    allowedLabels: resolveIssueSuggestionAllowlist(config.allowedLabels, override?.allowedLabels),
+    allowedReviewers: resolveIssueSuggestionAllowlist(config.allowedReviewers, override?.allowedReviewers)
   };
   if (!config.allowlist.includes(repo)) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle, suggestions };
   if (override?.enabled === false) return { allowed: false, reason: "issue_enrichment_repo_disabled", throttle, suggestions };
   return { allowed: true, throttle, suggestions };
+}
+
+function resolveIssueSuggestionAllowlist(globalAllowlist: string[], repoOverride: string[] | undefined): string[] {
+  if (repoOverride !== undefined && repoOverride.length > 0) return [...repoOverride];
+  return [...globalAllowlist];
 }
 
 function planRepoIssueScan(input: {

@@ -14,7 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
-import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, runIssueEnrichmentCycle } from "../src/issue-enrichment.js";
+import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle } from "../src/issue-enrichment.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 
@@ -578,6 +578,72 @@ describe("sticky enrichment comments", () => {
     expect(suggestedLabelsLine).not.toContain("bug");
     expect(suggestedOwnersLine).toBe("Suggested owners: issue-owner.");
     expect(suggestedOwnersLine).not.toContain("pr-reviewer");
+  });
+
+  it("treats empty issue suggestion allowlists as unrestricted", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 197,
+      title: "Bug docs test support escalation #22",
+      state: "open",
+      body: "Bug docs tests support failure with acceptance criteria and owner present.",
+      labels: [{ name: "support" }]
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedOwners: ["runtime-owner"],
+      allowedLabels: [],
+      allowedOwners: [],
+      maxSuggestions: 5
+    });
+
+    const suggestedLabelsLine = comment.body.split("\n").find((line) => line.startsWith("Suggested labels:"));
+    const suggestedOwnersLine = comment.body.split("\n").find((line) => line.startsWith("Suggested owners:"));
+    expect(suggestedLabelsLine).toBe("Suggested labels: bug, docs, tests.");
+    expect(suggestedOwnersLine).toBe("Suggested owners: runtime-owner.");
+  });
+
+  it("dedupes issue owner suggestions case-insensitively", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 198,
+      title: "Runtime owner handoff",
+      state: "open",
+      body: "Acceptance criteria and owner present."
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedOwners: ["Runtime-Owner", "runtime-owner", "incident-owner"],
+      allowedOwners: ["runtime-owner", "incident-owner"],
+      maxSuggestions: 5
+    });
+
+    const suggestedOwnersLine = comment.body.split("\n").find((line) => line.startsWith("Suggested owners:"));
+    expect(suggestedOwnersLine).toBe("Suggested owners: Runtime-Owner, incident-owner.");
+  });
+
+  it("falls back to global issue suggestion allowlists for empty per-repo overrides", () => {
+    const config = loadConfig();
+    config.issueEnrichment = {
+      ...config.issueEnrichment!,
+      enabled: true,
+      allowlist: ["owner/issue-repo"],
+      allowedLabels: ["docs"],
+      allowedReviewers: ["global-owner"],
+      repos: {
+        "owner/issue-repo": {
+          allowedLabels: [],
+          allowedReviewers: []
+        }
+      }
+    };
+
+    const policy = resolveIssueEnrichmentRepoPolicy(config.issueEnrichment, "owner/issue-repo");
+    expect(policy.allowed).toBe(true);
+    expect(policy.suggestions.allowedLabels).toEqual(["docs"]);
+    expect(policy.suggestions.allowedReviewers).toEqual(["global-owner"]);
   });
 
   it("infers issue label suggestions before applying allowlists without inventing owners", () => {
