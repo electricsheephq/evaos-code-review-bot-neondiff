@@ -183,6 +183,7 @@ export async function runScheduledCycleWithDeps(input: {
   const budget = new ReviewRunBudget(Math.max(1, scheduler.maxProviderActive));
   const attemptedJobIds = new Set<string>();
   const attemptedJobs: ReviewQueueJobRecord[] = [];
+  const repoActiveLimitOverrides = buildRepoActiveLimitOverrides(config, input.state.listReviewQueueJobs());
   // Lease just before execution to avoid idle active rows. This intentionally
   // performs a bounded scan per provider slot, not one bulk pre-lease.
   for (let leaseAttempt = 0; leaseAttempt < scheduler.maxProviderActive; leaseAttempt += 1) {
@@ -190,7 +191,7 @@ export async function runScheduledCycleWithDeps(input: {
       maxProviderActive: scheduler.maxProviderActive,
       maxOrgActive: scheduler.maxOrgActive,
       maxRepoActive: scheduler.maxRepoActive,
-      maxRepoActiveByRepo: buildRepoActiveLimitOverrides(config, input.state.listReviewQueueJobs()),
+      maxRepoActiveByRepo: repoActiveLimitOverrides,
       manualCommandReserve: scheduler.manualCommandReserve,
       excludeJobIds: attemptedJobIds,
       reservedActiveJobs: attemptedJobs,
@@ -406,25 +407,27 @@ async function enqueuePullIfEligible(input: {
       });
       return "skipped_capacity";
     }
-    recordReadinessTransition({
-      state: input.state,
-      repo: input.repo,
-      pull: input.pull,
-      readinessState: "provider_deferred",
-      reason: "repo_queue_capacity_full",
-      now: input.now
-    });
-    await syncReviewStatusComment({
-      config: input.config,
-      github: input.github,
-      dryRun: input.dryRun,
-      repo: input.repo,
-      pull: input.pull,
-      state: "provider_deferred",
-      details: deferredDetails,
-      onStatusCommentFailure: input.onStatusCommentFailure,
-      now: input.now
-    });
+    if (!isCapacityDeferredReadiness(input.state, input.repo, input.pull)) {
+      recordReadinessTransition({
+        state: input.state,
+        repo: input.repo,
+        pull: input.pull,
+        readinessState: "provider_deferred",
+        reason: "repo_queue_capacity_full",
+        now: input.now
+      });
+      await syncReviewStatusComment({
+        config: input.config,
+        github: input.github,
+        dryRun: input.dryRun,
+        repo: input.repo,
+        pull: input.pull,
+        state: "provider_deferred",
+        details: deferredDetails,
+        onStatusCommentFailure: input.onStatusCommentFailure,
+        now: input.now
+      });
+    }
     return "skipped_capacity";
   }
 
@@ -577,6 +580,15 @@ function buildRepoActiveLimitOverrides(
     if (maxActiveHeads !== undefined) overrides[job.repo.toLowerCase()] = maxActiveHeads;
   }
   return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+function isCapacityDeferredReadiness(
+  state: ReviewStateStore,
+  repo: string,
+  pull: PullRequestSummary
+): boolean {
+  const readiness = state.getReviewReadiness(repo, pull.number, pull.head.sha);
+  return readiness?.state === "provider_deferred" && readiness.reason === "repo_queue_capacity_full";
 }
 
 function recordReadinessForEnqueue(input: {

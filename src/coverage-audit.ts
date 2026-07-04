@@ -53,7 +53,7 @@ export interface CoverageUnprocessedEntry extends CoverageAuditPullEntry {
 }
 
 export interface CoverageProviderDeferredEntry extends CoverageProcessedEntry {
-  cooldownUntil: string;
+  cooldownUntil?: string;
   reason?: string;
   updatedAt: string;
 }
@@ -545,7 +545,6 @@ function pushProcessedOrUnprocessed(
       error: readiness.reason,
       createdAt: readiness.createdAt,
       updatedAt: readiness.updatedAt,
-      cooldownUntil: readiness.updatedAt,
       reason: readiness.reason
     });
     report.summary.providerDeferred += 1;
