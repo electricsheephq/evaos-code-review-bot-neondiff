@@ -148,6 +148,10 @@ describe("NeonDiff config schema draft", () => {
       /stricter lower cap wins/
     );
     expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerFile.minimum", schema)).toBe(1);
+    expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerFile.maximum", schema)).toBe(20);
+    expect(get("$defs.repoSlug.pattern", schema)).toBe(
+      "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$"
+    );
   });
 
   it("validates JSON fixtures against the published JSON Schema", () => {
@@ -284,18 +288,31 @@ describe("NeonDiff config schema draft", () => {
     const validate = compileSchema();
     const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
 
-    for (const provider of ["ollama", "none"]) {
-      expectValidFixture(validate, `local provider ${provider}`, {
-        ...baseConfig,
-        providers: {
-          ...asRecord(baseConfig.providers),
-          local: {
-            ...asRecord(get("providers.local", baseConfig)),
-            provider
-          }
+    expectValidFixture(validate, "enabled local provider ollama", {
+      ...baseConfig,
+      providers: {
+        ...asRecord(baseConfig.providers),
+        local: {
+          ...asRecord(get("providers.local", baseConfig)),
+          enabled: true,
+          provider: "ollama",
+          model: "qwen2.5-coder:14b"
         }
-      });
-    }
+      }
+    });
+
+    expectValidFixture(validate, "disabled local provider none", {
+      ...baseConfig,
+      providers: {
+        ...asRecord(baseConfig.providers),
+        local: {
+          ...asRecord(get("providers.local", baseConfig)),
+          enabled: false,
+          provider: "none",
+          model: ""
+        }
+      }
+    });
 
     const remoteAliasErrors = validateConfig(validate, {
       ...baseConfig,
@@ -324,6 +341,26 @@ describe("NeonDiff config schema draft", () => {
           enabled: true,
           provider: "none",
           model: ""
+        }
+      }
+    });
+
+    expect(errorPaths(errors)).toEqual(expect.arrayContaining(["/providers/local/model", "/providers/local/provider"]));
+  });
+
+  it("requires disabled local providers to clear adapter and model hints", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    const errors = validateConfig(validate, {
+      ...baseConfig,
+      providers: {
+        ...asRecord(baseConfig.providers),
+        local: {
+          ...asRecord(get("providers.local", baseConfig)),
+          enabled: false,
+          provider: "ollama",
+          model: "qwen2.5-coder:14b"
         }
       }
     });
@@ -391,7 +428,9 @@ describe("NeonDiff config schema draft", () => {
 
     for (const commentCaps of [
       { maxPerPullRequest: 0, maxPerFile: 4 },
-      { maxPerPullRequest: 12, maxPerFile: 0 }
+      { maxPerPullRequest: 12, maxPerFile: 0 },
+      { maxPerPullRequest: 12, maxPerFile: 21 },
+      { maxPerPullRequest: 51, maxPerFile: 4 }
     ]) {
       const errors = validateConfig(validate, {
         ...baseConfig,
@@ -402,10 +441,50 @@ describe("NeonDiff config schema draft", () => {
       });
 
       expect(errorPaths(errors), JSON.stringify(commentCaps)).toContain(
-        commentCaps.maxPerPullRequest === 0
+        commentCaps.maxPerPullRequest === 0 || commentCaps.maxPerPullRequest > 50
           ? "/safetyGates/commentCaps/maxPerPullRequest"
           : "/safetyGates/commentCaps/maxPerFile"
       );
+    }
+  });
+
+  it("keeps issue enrichment repo slugs GitHub-shaped", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    for (const repoSlug of [
+      "electricsheephq/evaos-code-review-bot",
+      "100yenadmin/evaOS-GUI",
+      "a/b"
+    ]) {
+      expectValidFixture(validate, repoSlug, {
+        ...baseConfig,
+        issueEnrichment: {
+          ...asRecord(baseConfig.issueEnrichment),
+          allowlist: [{ repo: repoSlug, labels: [] }]
+        }
+      });
+    }
+
+    for (const repoSlug of [
+      "../repo",
+      "owner/..",
+      ".../repo",
+      "owner/.repo",
+      "owner/repo.",
+      "owner-/repo",
+      "owner/repo/",
+      "owner//repo"
+    ]) {
+      const errors = validateConfig(validate, {
+        ...baseConfig,
+        issueEnrichment: {
+          ...asRecord(baseConfig.issueEnrichment),
+          allowlist: [{ repo: repoSlug, labels: [] }]
+        }
+      });
+
+      expect(errorPaths(errors), repoSlug).toContain("/issueEnrichment/allowlist/0/repo");
     }
   });
 
