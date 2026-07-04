@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildFinishingTouchDryRunContract,
   buildFinishingTouchDraft,
   parseFinishingTouchCommand,
   validateFinishingTouchRequest
@@ -100,5 +101,61 @@ describe("finishing-touch draft commands", () => {
     });
     expect(draft.markdown).toContain("Draft only");
     expect(draft.markdown).toContain("No branch was pushed");
+  });
+
+  it("renders a dry-run contract with explicit default-off mutation guards", () => {
+    const draft = buildFinishingTouchDraft({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "head-a",
+      action: "changelog_draft",
+      author: "100yenadmin",
+      commentId: 789,
+      trigger: "@evaos-code-review-bot changelog draft",
+      generatedAt: "2026-07-03T00:00:00.000Z"
+    });
+
+    const contract = buildFinishingTouchDryRunContract({
+      dryRun: true,
+      recorded: false,
+      draft,
+      currentHeadSha: "head-a",
+      worktreeClean: true,
+      trustedAuthors: ["100yenadmin"],
+      validation: { ok: true }
+    });
+
+    expect(contract).toMatchObject({
+      ok: true,
+      mode: "draft_only",
+      defaultOff: true,
+      dryRun: true,
+      recorded: false,
+      target: {
+        repo: "electricsheephq/evaos-code-review-bot",
+        pullNumber: 157,
+        headSha: "head-a",
+        currentHeadSha: "head-a",
+        staleHead: false
+      },
+      command: {
+        action: "changelog_draft",
+        author: "100yenadmin",
+        commentId: 789
+      },
+      safety: {
+        trustedAuthor: true,
+        currentHeadMatches: true,
+        worktreeClean: true,
+        secretScan: "passed",
+        mutation: {
+          canPush: false,
+          canCommit: false,
+          canApprove: false,
+          directProtectedBranchCommit: false
+        }
+      }
+    });
+    expect(contract.draft).toBe(draft);
   });
 });

@@ -80,6 +80,70 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
   });
 
+  it("prints finishing-touch dry-run output as a default-off draft-only contract", async () => {
+    const { stdout } = await runCli([
+      "finishing-touch-dry-run",
+      "--repo",
+      "electricsheephq/evaos-code-review-bot",
+      "--pr",
+      "120",
+      "--head-sha",
+      "head-a",
+      "--current-head",
+      "head-a",
+      "--comment-id",
+      "789",
+      "--author",
+      "100yenadmin",
+      "--trusted-authors",
+      "100yenadmin",
+      "--body",
+      "@evaos-code-review-bot changelog draft",
+      "--generated-at",
+      "2026-07-03T00:00:00.000Z"
+    ]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: true,
+      recorded: false,
+      contract: {
+        ok: true,
+        mode: "draft_only",
+        defaultOff: true,
+        dryRun: true,
+        recorded: false,
+        target: {
+          repo: "electricsheephq/evaos-code-review-bot",
+          pullNumber: 120,
+          headSha: "head-a",
+          currentHeadSha: "head-a",
+          staleHead: false
+        },
+        safety: {
+          trustedAuthor: true,
+          currentHeadMatches: true,
+          worktreeClean: true,
+          secretScan: "passed",
+          mutation: {
+            canPush: false,
+            canCommit: false,
+            canApprove: false,
+            directProtectedBranchCommit: false
+          }
+        }
+      }
+    });
+    expect(output.contract.draft).toMatchObject({
+      mode: "draft_only",
+      action: "changelog_draft",
+      canPush: false,
+      canCommit: false,
+      canApprove: false
+    });
+  });
+
   it("prints canonical pricing tiers without hosted model credit claims", async () => {
     const { stdout } = await runCli(["pricing"]);
     const output = JSON.parse(stdout);

@@ -77,6 +77,51 @@ export interface FinishingTouchDraft {
   markdown: string;
 }
 
+export interface BuildFinishingTouchDryRunContractInput {
+  dryRun: boolean;
+  recorded: boolean;
+  draft: FinishingTouchDraft;
+  currentHeadSha: string;
+  worktreeClean: boolean;
+  trustedAuthors: string[];
+  validation: FinishingTouchRequestValidationResult;
+}
+
+export interface FinishingTouchDryRunContract {
+  ok: boolean;
+  mode: "draft_only";
+  defaultOff: true;
+  dryRun: boolean;
+  recorded: boolean;
+  target: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    currentHeadSha: string;
+    staleHead: boolean;
+  };
+  command: {
+    action: FinishingTouchAction;
+    author: string;
+    commentId: number;
+    trigger: string;
+  };
+  safety: {
+    trustedAuthor: boolean;
+    currentHeadMatches: boolean;
+    worktreeClean: boolean;
+    secretScan: "passed" | "failed";
+    mutation: {
+      canPush: false;
+      canCommit: false;
+      canApprove: false;
+      directProtectedBranchCommit: false;
+    };
+  };
+  validation: FinishingTouchRequestValidationResult;
+  draft?: FinishingTouchDraft;
+}
+
 const COMMAND_PHRASES: Array<[FinishingTouchAction, string[]]> = [
   ["generate_tests", ["generate tests", "generate unit tests"]],
   ["generate_docs", ["generate docs", "generate documentation", "docs draft"]],
@@ -202,6 +247,48 @@ export function buildFinishingTouchDraft(input: BuildFinishingTouchDraftInput): 
     canCommit: false,
     canApprove: false,
     markdown
+  };
+}
+
+export function buildFinishingTouchDryRunContract(
+  input: BuildFinishingTouchDryRunContractInput
+): FinishingTouchDryRunContract {
+  const currentHeadMatches = input.currentHeadSha === input.draft.headSha;
+  const trustedAuthor = input.trustedAuthors.includes("*") || input.trustedAuthors.includes(input.draft.author);
+  const secretScan = input.validation.ok || input.validation.reason !== "secret_detected" ? "passed" : "failed";
+  return {
+    ok: input.validation.ok,
+    mode: "draft_only",
+    defaultOff: true,
+    dryRun: input.dryRun,
+    recorded: input.recorded,
+    target: {
+      repo: input.draft.repo,
+      pullNumber: input.draft.pullNumber,
+      headSha: input.draft.headSha,
+      currentHeadSha: input.currentHeadSha,
+      staleHead: !currentHeadMatches
+    },
+    command: {
+      action: input.draft.action,
+      author: input.draft.author,
+      commentId: input.draft.commandCommentId,
+      trigger: input.draft.trigger
+    },
+    safety: {
+      trustedAuthor,
+      currentHeadMatches,
+      worktreeClean: input.worktreeClean,
+      secretScan,
+      mutation: {
+        canPush: false,
+        canCommit: false,
+        canApprove: false,
+        directProtectedBranchCommit: false
+      }
+    },
+    validation: input.validation,
+    ...(input.validation.ok ? { draft: input.draft } : {})
   };
 }
 

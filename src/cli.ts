@@ -17,6 +17,7 @@ import {
 import { inspectConfigForDesktop, patchConfigForDesktop } from "./config-cli.js";
 import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
 import {
+  buildFinishingTouchDryRunContract,
   buildFinishingTouchDraft,
   FINISHING_TOUCH_ACTIONS,
   parseFinishingTouchCommand,
@@ -1076,6 +1077,7 @@ async function main(): Promise<void> {
     if (dryRun && record) throw new Error("--record true requires --dry-run false");
     const repo = parseSingleArg(args.repo, "--repo");
     const headSha = parseSingleArg(args["head-sha"], "--head-sha");
+    const currentHeadSha = parseSingleArg(args["current-head"], "--current-head");
     const author = parseSingleArg(args.author, "--author");
     const action = resolveFinishingTouchAction({
       action: args.action,
@@ -1103,7 +1105,7 @@ async function main(): Promise<void> {
       repo,
       pullNumber,
       headSha,
-      currentHeadSha: parseSingleArg(args["current-head"], "--current-head"),
+      currentHeadSha,
       commentId,
       author,
       trustedAuthors,
@@ -1111,8 +1113,17 @@ async function main(): Promise<void> {
       action,
       proposedOutput: draft
     });
+    const contract = buildFinishingTouchDryRunContract({
+      dryRun,
+      recorded: false,
+      draft,
+      currentHeadSha,
+      worktreeClean,
+      trustedAuthors,
+      validation
+    });
     if (!validation.ok) {
-      console.log(redactSecrets(JSON.stringify({ ok: false, dryRun, validation }, null, 2)));
+      console.log(redactSecrets(JSON.stringify({ ok: false, dryRun, validation, contract }, null, 2)));
       process.exitCode = 1;
       return;
     }
@@ -1140,6 +1151,7 @@ async function main(): Promise<void> {
       ok: true,
       dryRun,
       recorded: Boolean(stored),
+      contract: stored ? { ...contract, recorded: true } : contract,
       draft,
       ...(stored ? { stored } : {})
     }, null, 2)));
