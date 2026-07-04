@@ -53,7 +53,11 @@ describe("finishing-touch draft commands", () => {
       action: "generate_tests" as const
     };
 
-    expect(validateFinishingTouchRequest(base)).toEqual({ ok: true, secretScan: "passed" });
+    expect(validateFinishingTouchRequest(base)).toEqual({ ok: true, secretScan: "not_scanned" });
+    expect(validateFinishingTouchRequest({
+      ...base,
+      proposedOutput: "Draft output with no credential material."
+    })).toEqual({ ok: true, secretScan: "passed" });
     expect(validateFinishingTouchRequest({ ...base, author: "stranger" })).toMatchObject({
       ok: false,
       reason: "untrusted_author",
@@ -161,6 +165,41 @@ describe("finishing-touch draft commands", () => {
       }
     });
     expect(contract.draft).toBe(draft);
+  });
+
+  it("treats missing current head evidence as stale instead of a match", () => {
+    const draft = buildFinishingTouchDraft({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "head-a",
+      action: "changelog_draft",
+      author: "100yenadmin",
+      commentId: 789,
+      trigger: "@evaos-code-review-bot changelog draft",
+      generatedAt: "2026-07-03T00:00:00.000Z"
+    });
+
+    const contract = buildFinishingTouchDryRunContract({
+      dryRun: true,
+      recorded: false,
+      draft,
+      currentHeadSha: "",
+      worktreeClean: true,
+      trustedAuthors: ["100yenadmin"],
+      validation: { ok: true, secretScan: "not_scanned" }
+    });
+
+    expect(contract).toMatchObject({
+      ok: true,
+      target: {
+        currentHeadSha: "",
+        staleHead: true
+      },
+      safety: {
+        currentHeadMatches: false,
+        secretScan: "not_scanned"
+      }
+    });
   });
 
   it("renders validation failures without drafts, skipped scan claims, or raw triggers", () => {

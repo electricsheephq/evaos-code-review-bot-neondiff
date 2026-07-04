@@ -39,7 +39,7 @@ export interface FinishingTouchRequestValidationInput {
 }
 
 export type FinishingTouchRequestValidationResult =
-  | { ok: true; secretScan: "passed" }
+  | { ok: true; secretScan: "passed" | "not_scanned" }
   | {
       ok: false;
       reason:
@@ -190,15 +190,18 @@ export function validateFinishingTouchRequest(
       secretScan: "not_scanned"
     };
   }
-  if (input.proposedOutput !== undefined && containsSecretLikeText(stringifyOutput(input.proposedOutput))) {
-    return {
-      ok: false,
-      reason: "secret_detected",
-      detail: "Refusing finishing-touch draft because proposed output contains secret-like text.",
-      secretScan: "failed"
-    };
+  if (input.proposedOutput !== undefined) {
+    if (containsSecretLikeText(stringifyOutput(input.proposedOutput))) {
+      return {
+        ok: false,
+        reason: "secret_detected",
+        detail: "Refusing finishing-touch draft because proposed output contains secret-like text.",
+        secretScan: "failed"
+      };
+    }
+    return { ok: true, secretScan: "passed" };
   }
-  return { ok: true, secretScan: "passed" };
+  return { ok: true, secretScan: "not_scanned" };
 }
 
 export function isFinishingTouchActionEnabled(
@@ -262,7 +265,10 @@ export function buildFinishingTouchDraft(input: BuildFinishingTouchDraftInput): 
 export function buildFinishingTouchDryRunContract(
   input: BuildFinishingTouchDryRunContractInput
 ): FinishingTouchDryRunContract {
-  const currentHeadMatches = input.currentHeadSha === input.draft.headSha;
+  const currentHeadSha = input.currentHeadSha.trim();
+  const draftHeadSha = input.draft.headSha.trim();
+  const currentHeadMatches =
+    currentHeadSha.length > 0 && draftHeadSha.length > 0 && currentHeadSha === draftHeadSha;
   const trustedAuthor = input.trustedAuthors.includes("*") || input.trustedAuthors.includes(input.draft.author);
   const secretScan = input.validation.secretScan;
   const worktreeCleanState = input.worktreeCleanState ?? (input.worktreeClean ? "verified_clean" : "dirty");
