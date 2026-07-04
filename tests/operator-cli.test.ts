@@ -1302,6 +1302,33 @@ describe("operator CLI summaries", () => {
     ]);
   });
 
+  it("omits oldest waiting age when durable queue timestamps are malformed", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table review_queue_jobs (job_id text primary key, attempt_id text not null unique, source text not null, lane text not null, repo text not null, org text not null, pull_number integer not null, head_sha text not null, base_sha text, provider_id text, priority integer not null, state text not null, next_eligible_at text, lease_id text, session_id text, comment_id integer, review_url text, last_error text, created_at text not null, updated_at text not null, started_at text, finished_at text)");
+      insertQueueJob(db, "queued", "owner/repo", 1, "head-queued");
+      db.prepare("update review_queue_jobs set created_at = 'not-a-date' where pull_number = 1").run();
+    } finally {
+      db.close();
+    }
+
+    const queue = collectOperatorReviewQueue(statePath, {
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+
+    expect(queue.summary).toMatchObject({
+      oldestWaitingRepo: "owner/repo",
+      oldestWaitingAt: "not-a-date"
+    });
+    expect(queue.summary.oldestWaitingAgeMs).toBeUndefined();
+    expect(queue.byRepo[0]).toMatchObject({
+      repo: "owner/repo",
+      oldestWaitingAt: "not-a-date"
+    });
+    expect(queue.byRepo[0]?.oldestWaitingAgeMs).toBeUndefined();
+  });
+
   it("builds queue buckets from coverage audit output", () => {
     const queue = buildOperatorQueue(coverageReport({
       processed: [processedEntry(1, "head-posted", "posted")],

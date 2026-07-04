@@ -1547,6 +1547,7 @@ function buildDurableQueueSnapshot(
 
 function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): OperatorDurableQueueSnapshot["summary"] {
   const oldestWaiting = oldestWaitingQueueJob(jobs);
+  const oldestWaitingAgeMs = oldestWaiting ? waitingAgeMs(oldestWaiting.createdAt, now) : undefined;
   return {
     total: jobs.length,
     queued: jobs.filter((job) => job.state === "queued").length,
@@ -1562,7 +1563,7 @@ function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): Ope
       ? {
           oldestWaitingRepo: oldestWaiting.repo,
           oldestWaitingAt: oldestWaiting.createdAt,
-          oldestWaitingAgeMs: Math.max(0, now.getTime() - Date.parse(oldestWaiting.createdAt))
+          ...(oldestWaitingAgeMs !== undefined ? { oldestWaitingAgeMs } : {})
         }
       : {})
   };
@@ -1576,6 +1577,12 @@ function oldestWaitingQueueJob(jobs: ReviewQueueJobRecord[]): ReviewQueueJobReco
       job.state === "blocked_on_proof"
     )
     .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))[0];
+}
+
+function waitingAgeMs(createdAt: string, now: Date): number | undefined {
+  const createdAtMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdAtMs)) return undefined;
+  return Math.max(0, now.getTime() - createdAtMs);
 }
 
 function isRetryableQueueJob(job: ReviewQueueJobRecord, now: Date): boolean {

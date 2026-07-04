@@ -3055,6 +3055,78 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("treats repo-profile skip overflow as an explicit terminal skip for the exact head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-profile-capacity-skip-"));
+    roots.push(root);
+    const repo = "100yenadmin/Lossless-Codex-Orchestrator-LCO";
+    const config = schedulerConfig(root, [repo]);
+    config.reviewStatusComment!.enabled = true;
+    config.reviewScheduler!.maxProviderActive = 2;
+    config.reviewScheduler!.maxQueuedPerRepo = 10;
+    config.repoProfiles = {
+      repos: {
+        [repo]: {
+          reviewScheduler: {
+            maxQueuedHeads: 1,
+            overflowAction: "skip"
+          }
+        }
+      }
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+
+    const first = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        [repo, [pull(repo, 461, HEAD_A), pull(repo, 462, HEAD_B)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo: reviewRepo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo: reviewRepo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-04T12:00:00.000Z")
+    });
+
+    expect(first.queue.enqueued).toBe(1);
+    expect(first.skippedCapacity).toBe(1);
+    expect(state.getProcessedReview(repo, 462, HEAD_B)).toMatchObject({
+      status: "skipped",
+      error: "repo_queue_capacity_full"
+    });
+    expect(state.getReviewReadiness(repo, 462, HEAD_B)).toMatchObject({
+      state: "skipped",
+      reason: "repo_queue_capacity_full"
+    });
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "skipped", "in_progress", "completed"]);
+
+    const second = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        [repo, [pull(repo, 462, HEAD_B)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("terminal skip overflow heads must not be re-enqueued automatically");
+      },
+      now: new Date("2026-07-04T12:05:00.000Z")
+    });
+
+    expect(second.skippedProcessed).toBe(1);
+    expect(state.listReviewQueueJobs({ repo }).filter((job) => job.pullNumber === 462)).toHaveLength(0);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "skipped", "in_progress", "completed"]);
+    state.close();
+  });
+
   it("skips pre-activation PRs when their head changes after repo activation", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-preactivation-head-"));
     roots.push(root);
