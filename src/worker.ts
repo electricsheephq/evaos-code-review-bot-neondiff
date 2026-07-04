@@ -1424,6 +1424,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
     });
     const comments = gate.comments;
+    // Gate output is already public-safe; this second pass keeps evidence redacted
+    // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
     const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
     const event = gate.event;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });

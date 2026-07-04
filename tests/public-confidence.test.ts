@@ -61,6 +61,31 @@ describe("public confidence display policy", () => {
     }
   });
 
+  it("redacts residual confidence values near confidence nouns as a final safety pass", () => {
+    const input = [
+      "Reliability after the model pass lands near 0.95 even though phrased oddly.",
+      "Confidence after all that prose eventually sits around 95%.",
+      "Reviewer certainty after manual labeling sits near 0.91."
+    ].join("\n");
+    const output = sanitizePublicConfidenceText(input);
+
+    expect(output).toContain("confidence not calibrated");
+    expect(output).not.toContain("95 percent");
+    expect(output).not.toContain("0.95");
+    expect(output).not.toContain("95%");
+    expect(output).not.toContain("0.91");
+  });
+
+  it("preserves ordinary numeric values near common reliability wording", () => {
+    const input = [
+      "Make sure the lock timeout of 0.5 s is reliable.",
+      "A reliable retry backoff of 0.75 seconds avoids churn.",
+      "This path is 100 percent deterministic and reliable in the fixture."
+    ].join("\n");
+
+    expect(sanitizePublicConfidenceText(input)).toBe(input);
+  });
+
   it("preserves technical accuracy and likelihood prose that is not a review confidence claim", () => {
     const input = [
       "classification accuracy 0.92 on the eval set remains relevant.",
@@ -118,6 +143,28 @@ describe("public confidence display policy", () => {
     expect(output).not.toContain("confidence not calibrated");
   });
 
+  it("redacts ambiguous statistical confidence phrasing unless explicitly carved out", () => {
+    const output = sanitizePublicConfidenceText([
+      "The confidence level 0.95 should not be public before calibration.",
+      "Bayesian confidence posterior 0.91 is ambiguous in review prose."
+    ].join("\n"));
+
+    expect(output).not.toContain("confidence level 0.95");
+    expect(output).not.toContain("posterior 0.91");
+    expect(output).toContain("confidence not calibrated");
+  });
+
+  it("preserves version-like decimals and metric percentages near confidence context", () => {
+    const input = [
+      "Reliability improved after upgrading dependency 1.0.5.",
+      "Confidence calibration target met; precision held at 95% on the eval set.",
+      "Confidence calibration target met; recall held at 94 percent on the eval set.",
+      "Confidence calibration target met; accuracy held at 0.97 on the eval set."
+    ].join("\n");
+
+    expect(sanitizePublicConfidenceText(input)).toBe(input);
+  });
+
   it("bounds pathological input before sanitizing", () => {
     const output = sanitizePublicConfidenceText(`${"safe prose ".repeat(20_000)} Confidence: 95%.`);
 
@@ -148,6 +195,19 @@ describe("public confidence display policy", () => {
     expect(output).toContain(tailMarker);
     expect(output).toContain("[truncated before public confidence sanitization]");
     expect(output).not.toContain("Confidence: 95%");
+  });
+
+  it("does not drop legitimate oversized prose after a complete in-window confidence mention", () => {
+    const claim = "reliability score is stable.";
+    const tailMarker = "legitimate prose survives after the confidence-like mention";
+    const fillerBeforeClaim = "a".repeat(124_000);
+    const fillerAfterClaim = "b".repeat(2_000);
+    const input = `${fillerBeforeClaim} ${claim} ${fillerAfterClaim} ${tailMarker} ${"c".repeat(4_500)}`;
+    const output = sanitizePublicConfidenceText(input);
+
+    expect(output).toContain(claim);
+    expect(output).toContain(tailMarker);
+    expect(output).toContain("[truncated before public confidence sanitization]");
   });
 
   it("does not leak a partial confidence token at the truncation boundary", () => {
@@ -198,6 +258,13 @@ describe("public confidence display policy", () => {
     expect(policy.datasetId).toBe("confidence-calibration-v1");
     expect(isPublicConfidenceDisplayAllowed(policy)).toBe(true);
     expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: 95%.");
+  });
+
+  it("still bounds oversized text when calibrated display is allowed", () => {
+    const output = sanitizePublicConfidenceText(`${"safe prose ".repeat(20_000)} Confidence: 95%.`, buildPublicConfidencePolicy(calibratedPolicyInput()));
+
+    expect(output).toContain("[truncated before public confidence sanitization]");
+    expect(output.length).toBeLessThan(129_000);
   });
 
   it("sanitizes with an explicit uncalibrated policy even when evidence fields are present", () => {
@@ -359,6 +426,12 @@ describe("public confidence display policy", () => {
     expect(first).not.toContain("0.91 reliable");
     expect(first.match(/confidence not calibrated/g)?.length ?? 0).toBeGreaterThanOrEqual(750);
     expect(first).not.toMatch(/confidence not calibrated confidence not calibrated/);
+  });
+
+  it("is idempotent for already-sanitized public comments", () => {
+    const once = sanitizePublicConfidenceText("Confidence: 95%. This has 0.91 reliability after review.");
+
+    expect(sanitizePublicConfidenceText(once)).toBe(once);
   });
 });
 

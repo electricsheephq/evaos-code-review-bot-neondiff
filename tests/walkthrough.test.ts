@@ -294,6 +294,43 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("0.91-likely");
   });
 
+  it("does not surface raw confidence-bearing finding text in visible walkthrough prose", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        title: "Review confidence output",
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      comments: [
+        {
+          path: "src/walkthrough.ts",
+          line: 51,
+          side: "RIGHT",
+          severity: "P3",
+          category: "security_boundary",
+          title: "Confidence: 95% should never be quoted",
+          body: "The model says 0.91 reliability in raw finding prose."
+        }
+      ],
+      dropped: [],
+      event: "COMMENT"
+    });
+
+    expect(walkthrough.body).not.toContain("Confidence: 95% should never be quoted");
+    expect(walkthrough.body).not.toContain("0.91 reliability");
+    expect(walkthrough.body).toContain("Validated inline findings: 1");
+    expect(walkthrough.body).toContain("- Security boundary: 1");
+  });
+
   it("omits settings preview cleanly when no settings metadata is provided", () => {
     const walkthrough = buildWalkthroughComment({
       repo: "electricsheephq/evaos-code-review-bot",

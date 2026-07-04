@@ -19,6 +19,8 @@ export const PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND = 0.95;
 const PUBLIC_CONFIDENCE_REPLACEMENT = "[confidence not calibrated]";
 const MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH = 128_000;
 const PUBLIC_CONFIDENCE_BOUNDARY_SCAN_LENGTH = 4_096;
+const DANGLING_CONFIDENCE_FRAGMENT_MAX_TRAILING_CHARS = 64;
+const DANGLING_CONFIDENCE_VALUE_CONTEXT_CHARS = 256;
 const PUBLIC_CONFIDENCE_TRUNCATION_NOTICE = "\n\n[truncated before public confidence sanitization]";
 const HORIZONTAL_WHITESPACE_PATTERN = String.raw`[^\S\r\n]`;
 const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?${HORIZONTAL_WHITESPACE_PATTERN}*(?:%|percent\b)|(?:0?\.\d+|1\.0+)(?=\b|[-_]))`;
@@ -66,8 +68,14 @@ const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = new RegExp(
   String.raw`\b(?:high|medium|low)${HORIZONTAL_WHITESPACE_PATTERN}+confidence${HORIZONTAL_WHITESPACE_PATTERN}*\(${HORIZONTAL_WHITESPACE_PATTERN}*(?:0?\.\d+|1(?:\.0+)?)${HORIZONTAL_WHITESPACE_PATTERN}*\)`,
   "gi"
 );
+const RESIDUAL_CONFIDENCE_VALUE_PATTERN = new RegExp(CONFIDENCE_VALUE_PATTERN, "gi");
 const CONFIDENCE_SANITIZER_CONTEXT_PREFILTER = /confidence|certainty|reliability|sure|confident|reliable/i;
 const CONFIDENCE_SANITIZER_VALUE_PREFILTER = /\d/;
+const RESIDUAL_CONFIDENCE_CONTEXT_PATTERN = /confidence|certainty|reliability/i;
+// Keep this carve-out deliberately narrow: until calibrated evidence is present,
+// review-confidence redaction wins over ambiguous statistical phrasing.
+const PRESERVED_TECHNICAL_CONFIDENCE_CONTEXT_PATTERN = /\bconfidence\s+(?:interval|threshold|calibration)\b|\b(?:precision|recall|accuracy|coverage|pass rate|success rate|uptime)\b/i;
+const RESIDUAL_CONFIDENCE_CONTEXT_WINDOW = 80;
 
 export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisplayPolicy>): PublicConfidenceDisplayPolicy {
   const evidenceUrl = input?.evidenceUrl?.trim();
@@ -140,12 +148,12 @@ export function isUsablePublicConfidenceEvidenceUrl(value: string | undefined): 
 }
 
 export function sanitizePublicConfidenceText(value: string, policy?: PublicConfidenceDisplayPolicy): string {
-  if (isPublicConfidenceDisplayAllowed(policy)) return value;
   const boundedValue = boundPublicConfidenceText(value);
+  if (isPublicConfidenceDisplayAllowed(policy)) return boundedValue;
   if (!CONFIDENCE_SANITIZER_CONTEXT_PREFILTER.test(boundedValue) || !CONFIDENCE_SANITIZER_VALUE_PREFILTER.test(boundedValue)) {
     return boundedValue;
   }
-  return boundedValue
+  const sanitized = boundedValue
     .replace(QUALIFIED_CONFIDENCE_DECIMAL_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
     .replace(MARKDOWN_CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
@@ -156,6 +164,46 @@ export function sanitizePublicConfidenceText(value: string, policy?: PublicConfi
     .replace(CONFIDENCE_LABEL_PATTERN, (_match, prefix: string) => `${prefix}${PUBLIC_CONFIDENCE_REPLACEMENT}`)
     .replace(CONFIDENCE_NOUN_VALUE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT);
+  return redactResidualPublicConfidenceValues(sanitized);
+}
+
+function redactResidualPublicConfidenceValues(value: string): string {
+  let output = "";
+  let cursor = 0;
+  for (const match of value.matchAll(RESIDUAL_CONFIDENCE_VALUE_PATTERN)) {
+    const token = match[0];
+    const offset = match.index;
+    if (offset === undefined) continue;
+    const lineStart = value.lastIndexOf("\n", offset - 1) + 1;
+    const nextLineBreak = value.indexOf("\n", offset + token.length);
+    const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
+    const context = value.slice(
+      Math.max(lineStart, offset - RESIDUAL_CONFIDENCE_CONTEXT_WINDOW),
+      Math.min(lineEnd, offset + token.length + RESIDUAL_CONFIDENCE_CONTEXT_WINDOW)
+    );
+    const replacement =
+      !isVersionLikeDecimalFragment(value, offset, token) &&
+      RESIDUAL_CONFIDENCE_CONTEXT_PATTERN.test(context) &&
+      !PRESERVED_TECHNICAL_CONFIDENCE_CONTEXT_PATTERN.test(context)
+        ? PUBLIC_CONFIDENCE_REPLACEMENT
+        : token;
+    output += value.slice(cursor, offset) + replacement;
+    cursor = offset + token.length;
+  }
+  return `${output}${value.slice(cursor)}`;
+}
+
+function isVersionLikeDecimalFragment(value: string, offset: number, token: string): boolean {
+  if (!token.includes(".")) return false;
+  const previous = value[offset - 1];
+  const previousPrevious = value[offset - 2];
+  const next = value[offset + token.length];
+  const nextNext = value[offset + token.length + 1];
+  return (
+    (token.startsWith(".") && /\d/.test(previous ?? "")) ||
+    (previous === "." && /\d/.test(previousPrevious ?? "")) ||
+    (next === "." && /\d/.test(nextNext ?? ""))
+  );
 }
 
 function boundPublicConfidenceText(value: string): string {
@@ -180,9 +228,23 @@ function boundPublicConfidenceText(value: string): string {
 
 function findDanglingConfidenceTokenStart(value: string): number {
   const confidenceFragment = /confidence|certainty|reliability|sure(?:ness)?|\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)/gi;
+  let lastConfidenceWordIndex = -1;
   let lastMatchIndex = -1;
   for (const match of value.matchAll(confidenceFragment)) {
-    lastMatchIndex = match.index;
+    const token = match[0];
+    const isConfidenceWord = /^(?:confidence|certainty|reliability|sure)/i.test(token);
+    if (isConfidenceWord) lastConfidenceWordIndex = match.index;
+    const matchEnd = match.index + match[0].length;
+    const trailingChars = value.length - matchEnd;
+    if (isConfidenceWord && trailingChars <= DANGLING_CONFIDENCE_VALUE_CONTEXT_CHARS) {
+      lastMatchIndex = match.index;
+    } else if (trailingChars <= DANGLING_CONFIDENCE_FRAGMENT_MAX_TRAILING_CHARS) {
+      const shouldIncludeConfidenceWord =
+        !isConfidenceWord &&
+        lastConfidenceWordIndex !== -1 &&
+        match.index - lastConfidenceWordIndex <= DANGLING_CONFIDENCE_VALUE_CONTEXT_CHARS;
+      lastMatchIndex = shouldIncludeConfidenceWord ? lastConfidenceWordIndex : match.index;
+    }
   }
   return lastMatchIndex;
 }
