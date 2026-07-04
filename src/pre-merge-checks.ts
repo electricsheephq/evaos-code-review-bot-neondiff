@@ -106,6 +106,7 @@ export interface PreMergeCheckEvaluation {
 const CUSTOM_NAME_PATTERN = /^[a-z][a-z0-9-]{1,63}$/;
 const NON_DETERMINISTIC_INSTRUCTION_PATTERN =
   /\b(ask\s+(?:the\s+)?(?:model|llm)|model\s+(?:should|must|can)|llm|ai\s+judg|judge\s+whether|best\s+judg(?:e)?ment|probably|seems\s+safe|looks\s+safe)\b/i;
+const MAX_CUSTOM_REGEX_INPUT_CHARS = 2048;
 
 export function evaluatePreMergeChecks(input: {
   pull: PreMergePullInput;
@@ -114,7 +115,7 @@ export function evaluatePreMergeChecks(input: {
   const validation = validatePreMergeCheckPolicy(input.policy);
   if (!validation.ok) {
     const blockingErrors = validation.errors.map(validationErrorToCheck);
-    return summarizeChecks([...skippedChecksForOffModes(input.policy), ...blockingErrors], validation);
+    return summarizeChecks([...skippedChecksForInvalidPolicy(input.policy), ...blockingErrors], validation);
   }
 
   const checks: PreMergeCheckResult[] = [];
@@ -268,11 +269,11 @@ function evaluateMatcher(pull: PreMergePullInput, matcher: PreMergeCustomMatcher
   }
   if (matcher.matches !== undefined) {
     const regex = new RegExp(matcher.matches);
-    const matched = values.find((value) => regex.test(value));
+    const matched = values.find((value) => regex.test(capCustomRegexInput(value)));
     return {
       passed: matched !== undefined,
       value: matched !== undefined ? "matched" : "not_matched",
-      detail: `operator=matches; source=${matcher.source}`
+      detail: `operator=matches; source=${matcher.source}; max_input_chars=${MAX_CUSTOM_REGEX_INPUT_CHARS}`
     };
   }
   return { passed: false, value: "not_matched", detail: "operator=missing" };
@@ -419,6 +420,35 @@ function skippedChecksForOffModes(policy: PreMergeCheckPolicy): PreMergeCheckRes
   return checks;
 }
 
+function skippedChecksForInvalidPolicy(policy: PreMergeCheckPolicy): PreMergeCheckResult[] {
+  const checks: PreMergeCheckResult[] = [];
+  if (policy.title) {
+    checks.push(skippedCheck("title", "Title", policy.title.mode, skippedForInvalidPolicySummary("Title", policy.title.mode)));
+  }
+  if (policy.description) {
+    checks.push(skippedCheck("description", "Description", policy.description.mode, skippedForInvalidPolicySummary("Description", policy.description.mode)));
+  }
+  if (policy.linkedIssue) {
+    checks.push(skippedCheck("linked_issue", "Linked issue", policy.linkedIssue.mode, skippedForInvalidPolicySummary("Linked issue", policy.linkedIssue.mode)));
+  }
+  for (const custom of policy.customChecks ?? []) {
+    checks.push(
+      skippedCheck(
+        `custom:${custom.name}`,
+        custom.name,
+        custom.mode,
+        skippedForInvalidPolicySummary(`Custom check ${custom.name}`, custom.mode),
+        custom.instructions
+      )
+    );
+  }
+  return checks;
+}
+
+function skippedForInvalidPolicySummary(name: string, mode: PreMergeCheckMode): string {
+  return mode === "off" ? `${name} check is disabled.` : `${name} check was not evaluated because policy validation failed.`;
+}
+
 function validateMode(
   check: string,
   mode: unknown,
@@ -488,6 +518,14 @@ function validateMatcher(
       new RegExp(matcher.matches);
     } catch {
       errors.push({ check, field: "match.matches", message: "matches must be a valid JavaScript regular expression." });
+      return;
+    }
+    if (isPotentiallyUnsafeRegex(matcher.matches)) {
+      errors.push({
+        check,
+        field: "match.matches",
+        message: "matches must avoid nested quantifiers, quantified alternation groups, backreferences, and lookaround assertions."
+      });
     }
   }
 }
@@ -534,4 +572,27 @@ function normalizeIssueRef(ref: string): string | undefined {
 
 function normalizeText(text: string | null | undefined): string {
   return (text ?? "").replace(/\s+/g, " ").trim();
+}
+
+function capCustomRegexInput(value: string): string {
+  return value.length > MAX_CUSTOM_REGEX_INPUT_CHARS ? value.slice(0, MAX_CUSTOM_REGEX_INPUT_CHARS) : value;
+}
+
+function isPotentiallyUnsafeRegex(pattern: string): boolean {
+  const stripped = stripEscapedRegexCharacters(pattern);
+  if (/\\[1-9]/.test(pattern)) return true;
+  if (/\(\?<([=!]|!)/.test(pattern) || /\(\?[=!]/.test(pattern)) return true;
+  return hasNestedQuantifiedGroup(stripped) || hasQuantifiedAlternationGroup(stripped);
+}
+
+function stripEscapedRegexCharacters(pattern: string): string {
+  return pattern.replace(/\\./g, "");
+}
+
+function hasNestedQuantifiedGroup(pattern: string): boolean {
+  return /\((?:[^()]|\([^()]*\))*[*+][^()]*\)(?:[*+]|\{\d+(?:,\d*)?\})/.test(pattern);
+}
+
+function hasQuantifiedAlternationGroup(pattern: string): boolean {
+  return /\([^()]*\|[^()]*\)(?:[*+]|\{\d+(?:,\d*)?\})/.test(pattern);
 }

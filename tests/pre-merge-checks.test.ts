@@ -133,6 +133,28 @@ describe("pre-merge checks", () => {
         expect.objectContaining({ key: "linked_issue.open_state", value: "closed", passed: false })
       ])
     );
+
+    const mixedIssues = evaluatePreMergeChecks({
+      pull: {
+        title: "Add pre-merge checks",
+        body: "Validation: focused tests passed.",
+        linkedIssues: [
+          { number: 42, state: "open" },
+          { number: 43, state: "closed" }
+        ]
+      },
+      policy: {
+        linkedIssue: { mode: "error", requireOpen: true }
+      }
+    });
+
+    expect(mixedIssues.ok).toBe(false);
+    expect(mixedIssues.checks.find((check) => check.id === "linked_issue")?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "linked_issue.references", value: "#42, #43", passed: true }),
+        expect.objectContaining({ key: "linked_issue.open_state", value: "open,closed", passed: false })
+      ])
+    );
   });
 
   it("evaluates custom checks with deterministic matchers", () => {
@@ -175,6 +197,88 @@ describe("pre-merge checks", () => {
       status: "pass",
       blocking: false
     });
+  });
+
+  it("supports title_or_description and normalized linked issue refs", () => {
+    const result = evaluatePreMergeChecks({
+      pull: {
+        title: "Add runtime policy",
+        body: "Closes electricsheephq/evaos-code-review-bot#118 and refs #123.",
+        linkedIssueRefs: ["100yenadmin/evaOS-GUI#497", "456"],
+        changedFiles: ["src/pre-merge-checks.ts"]
+      },
+      policy: {
+        linkedIssue: { mode: "error" },
+        customChecks: [
+          {
+            name: "runtime-wording",
+            mode: "error",
+            instructions: "Require runtime wording in the title or description.",
+            match: { source: "title_or_description", includes: "runtime" }
+          },
+          {
+            name: "tracked-issue",
+            mode: "error",
+            instructions: "Require a deterministic linked issue reference.",
+            match: { source: "linked_issue_refs", includes: "#497" }
+          }
+        ]
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.find((check) => check.id === "linked_issue")?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "linked_issue.references", value: "#118, #123, #456, #497", passed: true })
+      ])
+    );
+    expect(result.checks.find((check) => check.id === "custom:runtime-wording")).toMatchObject({ status: "pass" });
+    expect(result.checks.find((check) => check.id === "custom:tracked-issue")).toMatchObject({ status: "pass" });
+  });
+
+  it("honors draft-prefix opt-out and title minLength boundaries", () => {
+    const atMinimum = evaluatePreMergeChecks({
+      pull: { title: "Draft: okay", body: "Closes #42", linkedIssues: [42] },
+      policy: { title: { mode: "error", minLength: 11, rejectDraftPrefixes: false } }
+    });
+    const oneBelow = evaluatePreMergeChecks({
+      pull: { title: "Draft: bad", body: "Closes #42", linkedIssues: [42] },
+      policy: { title: { mode: "error", minLength: 11, rejectDraftPrefixes: false } }
+    });
+
+    expect(atMinimum.ok).toBe(true);
+    expect(atMinimum.checks.find((check) => check.id === "title")?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "title.length", value: "11", passed: true }),
+        expect.objectContaining({ key: "title.not_draft_prefix", value: "true", passed: true })
+      ])
+    );
+    expect(oneBelow.ok).toBe(false);
+    expect(oneBelow.checks.find((check) => check.id === "title")?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "title.length", value: "10", passed: false })
+      ])
+    );
+  });
+
+  it("blocks explicit wip draft and tmp title prefixes", () => {
+    for (const title of ["[wip] Add pre-merge checks", "draft: Add pre-merge checks", "tmp- Add pre-merge checks"]) {
+      const result = evaluatePreMergeChecks({
+        pull: {
+          title,
+          body: "Closes #42\n\nValidation: focused tests passed.",
+          linkedIssues: [42]
+        },
+        policy: { title: { mode: "error" } }
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((check) => check.id === "title")?.evidence).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "title.not_draft_prefix", value: "false", passed: false })
+        ])
+      );
+    }
   });
 
   it("does not echo raw PR title body or changed-file values in custom matcher evidence", () => {
@@ -282,5 +386,93 @@ describe("pre-merge checks", () => {
         expect.objectContaining({ check: "custom:ambiguous-match", field: "match" })
       ])
     );
+  });
+
+  it("rejects unsafe custom regex patterns and caps regex input evidence", () => {
+    const validation = validatePreMergeCheckPolicy({
+      customChecks: [
+        {
+          name: "nested-quantifier",
+          mode: "warning",
+          instructions: "Require safe deterministic regex patterns.",
+          match: { source: "description", matches: "^(a+)+$" }
+        },
+        {
+          name: "alternation-loop",
+          mode: "warning",
+          instructions: "Require safe deterministic regex patterns.",
+          match: { source: "description", matches: "(a|a)*b" }
+        }
+      ]
+    });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ check: "custom:nested-quantifier", field: "match.matches" }),
+        expect.objectContaining({ check: "custom:alternation-loop", field: "match.matches" })
+      ])
+    );
+
+    const result = evaluatePreMergeChecks({
+      pull: { body: `${"a".repeat(3000)}MATCH_AT_END` },
+      policy: {
+        customChecks: [
+          {
+            name: "capped-body",
+            mode: "warning",
+            instructions: "Require bounded regex input when evaluating descriptions.",
+            match: { source: "description", matches: "MATCH_AT_END$" }
+          }
+        ]
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.find((check) => check.id === "custom:capped-body")).toMatchObject({
+      status: "warning",
+      evidence: [
+        expect.objectContaining({
+          value: "not_matched",
+          detail: "operator=matches; source=description; max_input_chars=2048"
+        })
+      ]
+    });
+  });
+
+  it("keeps configured checks visible when policy validation fails", () => {
+    const result = evaluatePreMergeChecks({
+      pull: {
+        title: "Add pre-merge checks",
+        body: "Closes #42\n\nValidation: focused tests passed.",
+        linkedIssues: [{ number: 42, state: "open" }]
+      },
+      policy: {
+        title: { mode: "error", minLength: 0 },
+        description: { mode: "warning" },
+        linkedIssue: { mode: "error", requireOpen: true },
+        customChecks: [
+          {
+            name: "body-marker",
+            mode: "warning",
+            instructions: "Require release notes marker in the PR body.",
+            match: { source: "description", includes: "" }
+          }
+        ]
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "title", status: "skipped", summary: "Title check was not evaluated because policy validation failed." }),
+        expect.objectContaining({ id: "description", status: "skipped", summary: "Description check was not evaluated because policy validation failed." }),
+        expect.objectContaining({ id: "linked_issue", status: "skipped", summary: "Linked issue check was not evaluated because policy validation failed." }),
+        expect.objectContaining({ id: "custom:body-marker", status: "skipped", summary: "Custom check body-marker check was not evaluated because policy validation failed." }),
+        expect.objectContaining({ id: "policy_validation:title:minLength", status: "fail" }),
+        expect.objectContaining({ id: "policy_validation:custom:body-marker:match.includes", status: "fail" })
+      ])
+    );
+    expect(result.summary.total).toBe(6);
   });
 });
