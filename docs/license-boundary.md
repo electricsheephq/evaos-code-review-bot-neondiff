@@ -8,8 +8,8 @@ CLI help, package metadata, and release notes instead of inventing new wording.
 
 NeonDiff is source-available beta software, not open-source software. Public
 open-source repository review is free. Private, internal, commercial,
-proprietary, hosted, marketplace, binary redistribution, and access to auto-updates
-requires an active paid NeonDiff license.
+proprietary, hosted, marketplace, binary redistribution, and auto-updates require
+an active paid NeonDiff license.
 
 Public open-source repositories are free. Private and commercial repository
 review requires a paid NeonDiff support license: $1/month, $10/year, or $100
@@ -30,7 +30,7 @@ SaaS inference, or bundled provider tokens.
 - Using NeonDiff in a company, agency, consulting, or paid-support workflow.
 - Shipping NeonDiff binaries, installers, update channels, marketplace
   packages, or hosted services.
-- Enabling private-repo entitlement or access to auto-updates.
+- Enabling private-repo entitlement or auto-updates.
 
 ## Public Repo Grant
 

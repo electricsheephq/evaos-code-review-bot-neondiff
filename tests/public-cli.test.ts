@@ -54,7 +54,7 @@ describe("public NeonDiff CLI surface", () => {
       "review-pr"
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
-    expect(output.examples).toContain("neondiff pricing --json");
+    expect(output.examples).toContain("neondiff pricing");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
     expect(output.commands.existing).toContain("provider-throttle-report");
@@ -71,7 +71,7 @@ describe("public NeonDiff CLI surface", () => {
   });
 
   it("prints canonical pricing tiers without hosted model credit claims", async () => {
-    const { stdout } = await runCli(["pricing", "--json"]);
+    const { stdout } = await runCli(["pricing"]);
     const output = JSON.parse(stdout);
 
     expect(output).toMatchObject({

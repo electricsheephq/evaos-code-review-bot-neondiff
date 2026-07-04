@@ -23,10 +23,10 @@ Use the CLI to inspect the canonical pricing and entitlement shape that docs,
 license copy, and website copy should follow:
 
 ```bash
-neondiff pricing --json
+neondiff pricing
 ```
 
-The pricing command is deterministic and does not call the network. It reports:
+The pricing command emits JSON by default and does not call the network. It reports:
 
 - public open-source repositories are free
 - paid support tiers are `$1/mo`, `$10/yr`, and `$100 lifetime`

@@ -93,7 +93,7 @@ describe("NeonDiff public community funnel", () => {
       expect(text).not.toMatch(/unlimited SaaS inference included|bundled provider tokens included/i);
     }
 
-    expect(pricing).toMatch(/neondiff pricing --json/i);
+    expect(pricing).toMatch(/neondiff pricing/i);
     expect(pricing).toMatch(/monthly_support/i);
     expect(pricing).toMatch(/yearly_support/i);
     expect(pricing).toMatch(/lifetime_support/i);

@@ -105,7 +105,7 @@ neondiff license status --config config.local.json --json
 Inspect the canonical support-tier pricing without making a network call:
 
 ```bash
-neondiff pricing --json
+neondiff pricing
 ```
 
 Remove the local key and cache:
