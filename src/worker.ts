@@ -41,6 +41,7 @@ import {
 import { applyDeterministicReviewGate } from "./review-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
+import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import {
   postReviewStatusComment,
   type ReviewStatusCommentGithub,
@@ -1423,7 +1424,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
     });
     const comments = gate.comments;
-    const dropped = sanitizeDroppedFindings(gate.dropped);
+    const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
     const event = gate.event;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
     const summary = buildSummary({
@@ -2433,13 +2434,13 @@ export function localDateFolder(now = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
-function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"]): ReviewPlan["dropped"] {
+function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"], publicConfidencePolicy?: PublicConfidenceDisplayPolicy): ReviewPlan["dropped"] {
   return dropped.map((finding) => ({
     ...finding,
-    ...(typeof finding.title === "string" ? { title: redactSecrets(finding.title) } : {}),
-    ...(typeof finding.body === "string" ? { body: redactSecrets(finding.body) } : {}),
+    ...(typeof finding.title === "string" ? { title: sanitizePublicConfidenceText(redactSecrets(finding.title), publicConfidencePolicy) } : {}),
+    ...(typeof finding.body === "string" ? { body: sanitizePublicConfidenceText(redactSecrets(finding.body), publicConfidencePolicy) } : {}),
     ...(typeof finding.why_this_matters === "string"
-      ? { why_this_matters: redactSecrets(finding.why_this_matters) }
+      ? { why_this_matters: sanitizePublicConfidenceText(redactSecrets(finding.why_this_matters), publicConfidencePolicy) }
       : {})
   }));
 }

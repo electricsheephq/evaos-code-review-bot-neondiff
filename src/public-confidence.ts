@@ -148,11 +148,9 @@ export function sanitizePublicConfidenceText(value: string, policy?: PublicConfi
 function boundPublicConfidenceText(value: string): string {
   if (value.length <= MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH) return value;
   const truncated = value.slice(0, MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH);
-  const boundaryWindowStart = Math.max(0, truncated.length - 128);
-  const boundaryWindow = truncated.slice(boundaryWindowStart);
-  const danglingConfidenceTokenStart = findDanglingConfidenceTokenStart(boundaryWindow);
+  const danglingConfidenceTokenStart = findDanglingConfidenceTokenStart(truncated);
   if (danglingConfidenceTokenStart !== -1) {
-    return `${truncated.slice(0, boundaryWindowStart + danglingConfidenceTokenStart).trimEnd()}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
+    return `${truncated.slice(0, danglingConfidenceTokenStart).trimEnd()}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
   }
   const lastTokenBoundary = Math.max(
     truncated.lastIndexOf(" "),
@@ -160,9 +158,7 @@ function boundPublicConfidenceText(value: string): string {
     truncated.lastIndexOf("\r"),
     truncated.lastIndexOf("\t")
   );
-  const safeTruncated = lastTokenBoundary >= MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH - 128
-    ? truncated.slice(0, lastTokenBoundary).trimEnd()
-    : truncated;
+  const safeTruncated = lastTokenBoundary === -1 ? truncated : truncated.slice(0, lastTokenBoundary).trimEnd();
   return `${safeTruncated}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
 }
 

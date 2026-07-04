@@ -80,7 +80,7 @@ export function normalizeFindingsForReview(
 
   for (const finding of findings) {
     if (containsSecretLikeText(`${finding.title}\n${finding.body}\n${finding.why_this_matters ?? ""}`)) {
-      dropped.push({ ...redactFinding(finding), reason: "secret_detected" });
+      dropped.push({ ...sanitizeDroppedFindingPublicText(redactFinding(finding), options.publicConfidencePolicy), reason: "secret_detected" });
       continue;
     }
     accepted.push(finding);
@@ -96,7 +96,7 @@ export function normalizeFindingsForReview(
 
   const kept = accepted.slice(0, maxInlineComments);
   for (const finding of accepted.slice(maxInlineComments)) {
-    dropped.push({ ...finding, reason: "comment_cap_exceeded" });
+    dropped.push({ ...sanitizeDroppedFindingPublicText(finding, options.publicConfidencePolicy), reason: "comment_cap_exceeded" });
   }
 
   return {
@@ -131,6 +131,17 @@ function redactFinding<T extends Finding>(finding: T): T {
     title: redactSecrets(finding.title),
     body: redactSecrets(finding.body),
     ...(finding.why_this_matters ? { why_this_matters: redactSecrets(finding.why_this_matters) } : {})
+  };
+}
+
+function sanitizeDroppedFindingPublicText<T extends Partial<Finding>>(finding: T, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): T {
+  return {
+    ...finding,
+    ...(typeof finding.title === "string" ? { title: sanitizePublicConfidenceText(finding.title, publicConfidencePolicy) } : {}),
+    ...(typeof finding.body === "string" ? { body: sanitizePublicConfidenceText(finding.body, publicConfidencePolicy) } : {}),
+    ...(typeof finding.why_this_matters === "string"
+      ? { why_this_matters: sanitizePublicConfidenceText(finding.why_this_matters, publicConfidencePolicy) }
+      : {})
   };
 }
 

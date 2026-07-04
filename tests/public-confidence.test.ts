@@ -146,6 +146,15 @@ describe("public confidence display policy", () => {
     }
   });
 
+  it("drops confidence fragments that begin before the trailing truncation window", () => {
+    const token = `confidence score ${"x".repeat(140)} 95%`;
+    const output = sanitizePublicConfidenceText(`${"a".repeat(128_000 - token.length + 3)}${token} after boundary`);
+
+    expect(output).toContain("[truncated before public confidence sanitization]");
+    expect(output).not.toContain("95%");
+    expect(output).not.toContain("confidence score");
+  });
+
   it("does not over-sanitize ordinary numbered review prose", () => {
     const input = [
       "1 likely cause is a missing guard, and 2 likely follow-ups are documented.",

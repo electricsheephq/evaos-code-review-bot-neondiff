@@ -109,6 +109,42 @@ describe("finding normalization and review policy", () => {
     }
   });
 
+  it("sanitizes confidence text from dropped findings before public summaries can reuse them", () => {
+    const findings: Finding[] = [
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Kept finding",
+        body: "A concrete review comment.",
+        confidence: 0.8
+      },
+      {
+        severity: "P3",
+        category: "proof_gap",
+        path: "src/reviewer.ts",
+        line: 13,
+        title: "Dropped with 99% confidence",
+        body: "Confidence: 99%. This should be capped.",
+        why_this_matters: "The model was 0.99 confident.",
+        confidence: 0.99
+      }
+    ];
+
+    const result = normalizeFindingsForReview(findings, { maxInlineComments: 1 });
+
+    expect(result.dropped).toHaveLength(1);
+    expect(result.dropped[0]).toMatchObject({
+      reason: "comment_cap_exceeded",
+      title: "Dropped with confidence not calibrated"
+    });
+    expect(result.dropped[0]?.body).toBe("Confidence: confidence not calibrated. This should be capped.");
+    expect(result.dropped[0]?.why_this_matters).toBe("The model was confidence not calibrated.");
+    expect(JSON.stringify(result.dropped)).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
+    expect(JSON.stringify(result.dropped)).not.toContain("0.99 confident");
+  });
+
   it("does not re-sanitize already-public review comment text", () => {
     const comment = formatReviewComment(
       {
@@ -162,6 +198,27 @@ describe("finding normalization and review policy", () => {
     expect(result.comments).toEqual([]);
     expect(result.dropped).toEqual([expect.objectContaining({ reason: "secret_detected" })]);
     expect(JSON.stringify(result.dropped)).not.toContain(token);
+  });
+
+  it("sanitizes confidence text from secret-dropped findings after redaction", () => {
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        category: "security_boundary",
+        path: "a.ts",
+        line: 1,
+        title: "Leaked token with 99% confidence",
+        body: `Confidence: 99%. The raw token ${token} should never be posted.`,
+        confidence: 0.99
+      }
+    ]);
+
+    expect(result.comments).toEqual([]);
+    expect(result.dropped).toEqual([expect.objectContaining({ reason: "secret_detected" })]);
+    expect(JSON.stringify(result.dropped)).not.toContain(token);
+    expect(JSON.stringify(result.dropped)).not.toContain("99%");
+    expect(JSON.stringify(result.dropped)).toContain("confidence not calibrated");
   });
 
   it("drops findings that repeat hyphenated fixture tokens", () => {
