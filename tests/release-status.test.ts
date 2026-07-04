@@ -3216,7 +3216,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
       detail: "1 ZCode timeout failed durable queue job(s); retryable=1 exhausted=0"
     });
     expect(status.recommendedActions).toContain(
-      "inspect timed-out ZCode queue jobs and retry exact current heads with retry-failed"
+      "npx tsx src/cli.ts retry-failed --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --repo <repo> --pr <number> --head-sha <head-sha> --dry-run false --zcode true"
     );
   });
 

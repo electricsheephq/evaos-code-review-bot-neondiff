@@ -27,7 +27,7 @@ import {
   type ReviewQueueJobState,
   type RepoProviderCooldownRecord
 } from "./state.js";
-import { summarizeZCodeTimeoutErrors } from "./zcode-timeout.js";
+import { buildZCodeTimeoutRetryCommand, summarizeZCodeTimeoutErrors } from "./zcode-timeout.js";
 
 export interface OperatorStatus {
   ok: boolean;
@@ -375,6 +375,7 @@ export function buildOperatorStatus(input: {
   const failedRows = input.release.database.errorCount;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
+  const zcodeTimeoutRetryCommand = buildZCodeTimeoutRetryCommand({ configPath: input.release.releaseUnit.configPath });
   const budget = input.release.budget;
   const retryableProviderDeferredJobs = actionableProviderDeferredJobs(
     budget,
@@ -460,7 +461,7 @@ export function buildOperatorStatus(input: {
     ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : []),
     ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(zcodeTimeoutQueue.total > 0
-      ? ["inspect timed-out ZCode queue jobs and retry exact current heads with retry-failed"]
+      ? [zcodeTimeoutRetryCommand]
       : []),
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
     ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : []),
@@ -549,6 +550,7 @@ export function buildRuntimeInventory(input: {
     Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
+  const zcodeTimeoutRetryCommand = buildZCodeTimeoutRetryCommand({ configPath: input.release.releaseUnit.configPath });
   const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
   const readFailures = queue?.summary.readFailures ?? 0;
   const staleHeads = queue?.summary.staleHeads ?? 0;
@@ -662,7 +664,7 @@ export function buildRuntimeInventory(input: {
     ...(input.agents.summary.staleLeases > 0 ? ["inspect stale leases before restarting launchd"] : []),
     ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(zcodeTimeoutQueue.total > 0
-      ? ["inspect timed-out ZCode queue jobs and retry exact current heads with retry-failed"]
+      ? [zcodeTimeoutRetryCommand]
       : []),
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
     ...(retryableExpiredProviderCooldowns > 0 ? ["retry expired provider cooldowns or inspect provider health"] : []),

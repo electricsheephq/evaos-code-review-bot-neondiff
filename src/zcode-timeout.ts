@@ -17,6 +17,15 @@ export interface ZCodeTimeoutCounts {
   exhausted: number;
 }
 
+export interface ZCodeTimeoutRetryCommandInput {
+  configPath: string;
+  repo?: string;
+  pullNumber?: number;
+  headSha?: string;
+  dryRun?: boolean;
+  zcode?: boolean;
+}
+
 export function isZCodeTimeoutError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
@@ -73,6 +82,18 @@ export function summarizeZCodeTimeoutErrors(errors: Array<string | null | undefi
     },
     { total: 0, retryable: 0, exhausted: 0 }
   );
+}
+
+export function buildZCodeTimeoutRetryCommand(input: ZCodeTimeoutRetryCommandInput): string {
+  return [
+    "npx tsx src/cli.ts retry-failed",
+    `--config ${input.configPath}`,
+    `--repo ${input.repo ?? "<repo>"}`,
+    `--pr ${input.pullNumber ?? "<number>"}`,
+    `--head-sha ${input.headSha ?? "<head-sha>"}`,
+    `--dry-run ${input.dryRun === true ? "true" : "false"}`,
+    `--zcode ${input.zcode === false ? "false" : "true"}`
+  ].join(" ");
 }
 
 function nextZCodeTimeoutRetryAttempt(previousError?: string): number {

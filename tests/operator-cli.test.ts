@@ -1036,7 +1036,47 @@ describe("operator CLI summaries", () => {
       detail: "1 ZCode timeout failed durable queue job(s); retryable=1 exhausted=0"
     });
     expect(status.recommendedActions).toContain(
-      "inspect timed-out ZCode queue jobs and retry exact current heads with retry-failed"
+      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo <repo> --pr <number> --head-sha <head-sha> --dry-run false --zcode true"
+    );
+  });
+
+  it("surfaces exhausted ZCode timeout failed queue jobs through durable queue fallback counts", () => {
+    const timeoutJob = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 216,
+      headSha: "head-timeout",
+      state: "failed",
+      priority: 1,
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=2; timeout_ms=1200000; original_error=ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          errorCount: 1,
+          failedReviewQueueJobCount: 1
+        }
+      }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({
+        summary: { total: 1, queued: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 1 },
+        jobs: [timeoutJob]
+      }),
+      checkedAt: "2026-07-04T13:15:00.000Z"
+    });
+
+    expect(status.summary).toMatchObject({
+      zcodeTimeoutFailedQueueJobs: 1,
+      retryableZCodeTimeoutFailedQueueJobs: 0,
+      exhaustedZCodeTimeoutFailedQueueJobs: 1
+    });
+    expect(status.gates).toContainEqual({
+      name: "durable_queue_no_zcode_timeout_failed_jobs",
+      ok: false,
+      detail: "1 ZCode timeout failed durable queue job(s); retryable=0 exhausted=1"
+    });
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo <repo> --pr <number> --head-sha <head-sha> --dry-run false --zcode true"
     );
   });
 
