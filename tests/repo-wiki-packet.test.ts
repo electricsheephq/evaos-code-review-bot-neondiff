@@ -93,10 +93,17 @@ describe("repo wiki packets", () => {
     const token = "ghp_123456789012345678901234";
     const packet = buildRepoWikiPacket({
       repo: {
-        fullName: "electricsheephq/evaos-code-review-bot",
+        fullName: `electricsheephq/${token}`,
+        defaultBranch: `release-${token}`,
         remoteUrl: `https://${token}@github.com/electricsheephq/evaos-code-review-bot.git`
       },
-      source: { ref: "main", status: "fresh" },
+      source: {
+        ref: `refs/heads/${token}`,
+        headSha: token,
+        checkedAt: generatedAt,
+        status: "fresh",
+        staleReason: `stale source mentions ${token}`
+      },
       generatedAt,
       budget: { maxBytes: 12_000, maxTokens: 3_000 },
       sections: [
@@ -112,9 +119,17 @@ describe("repo wiki packets", () => {
     const json = formatRepoWikiPacketJson(packet);
 
     expect(packet.redaction.status).toBe("redacted");
-    expect(packet.redaction.replacementCount).toBeGreaterThanOrEqual(4);
+    expect(packet.redaction.replacementCount).toBeGreaterThanOrEqual(9);
+    expect(packet.repo.fullName).toContain("[redacted-secret]");
+    expect(packet.repo.fullName).not.toContain(token);
+    expect(packet.repo.defaultBranch).toContain("[redacted-secret]");
+    expect(packet.repo.defaultBranch).not.toContain(token);
     expect(packet.repo.remoteUrl).toContain("[redacted-secret]");
     expect(packet.repo.remoteUrl).not.toContain(token);
+    expect(packet.source.ref).toContain("[redacted-secret]");
+    expect(packet.source.ref).not.toContain(token);
+    expect(packet.source.headSha).toBe("[redacted-secret]");
+    expect(packet.source.staleReason).toContain("[redacted-secret]");
     expect(packet.includedSections[0]?.sourceFiles).toContain("README.md");
     expect(packet.includedSections[0]?.sourceFiles.join("\n")).toContain("[redacted-secret]");
     expect(packet.includedFiles.map((file) => file.path)).toContain("README.md");
@@ -125,6 +140,29 @@ describe("repo wiki packets", () => {
     expect(json).not.toContain("person@example.com");
     expect(markdown).toContain("[redacted-secret]");
     expect(JSON.parse(json).packetSha).toBe(packet.packetSha);
+  });
+
+  it("dedupes included files when redaction collapses distinct source paths", () => {
+    const token = "ghp_123456789012345678901234";
+    const packet = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 12_000, maxTokens: 3_000 },
+      sections: [
+        section({ id: "one", title: "One", body: "First body.", sourceFiles: [token] }),
+        section({ id: "two", title: "Two", body: "Second body.", sourceFiles: ["person@example.com"] })
+      ]
+    });
+
+    expect(packet.includedFiles).toContainEqual({
+      path: "[redacted-secret]",
+      sections: ["one", "two"]
+    });
+    expect(packet.includedSections.map((included) => included.sourceFiles)).toEqual([
+      ["[redacted-secret]"],
+      ["[redacted-secret]"]
+    ]);
   });
 
   it("counts real replacements when input already contains the literal redaction marker", () => {
@@ -200,6 +238,24 @@ describe("repo wiki packets", () => {
     expect(Buffer.byteLength(markdown, "utf8")).toBe(packet.byteBudget.usedBytes);
     expect(packet.byteBudget.usedBytes).toBeLessThanOrEqual(packet.byteBudget.maxBytes);
     expect(packet.tokenBudget.usedTokens).toBeLessThanOrEqual(packet.tokenBudget.maxTokens);
+  });
+
+  it("converges packet size at decimal digit boundaries", () => {
+    const base = {
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" as const },
+      generatedAt,
+      sections: [section({ id: "digit-boundary", title: "Digit boundary", body: "x".repeat(80) })]
+    };
+
+    for (let maxBytes = 510; maxBytes <= 620; maxBytes += 1) {
+      const packet = buildRepoWikiPacket({
+        ...base,
+        budget: { maxBytes, maxTokens: 200, maxSectionBytes: 80 }
+      });
+      expect(Buffer.byteLength(formatRepoWikiPacketMarkdown(packet), "utf8")).toBe(packet.byteBudget.usedBytes);
+      expect(packet.byteBudget.usedBytes).toBeLessThanOrEqual(maxBytes);
+    }
   });
 
   it("binds packet byte and token budgets to the markdown emitter only", () => {

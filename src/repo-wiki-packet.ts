@@ -355,10 +355,11 @@ function buildIncludedFiles(sections: RepoWikiIncludedSection[]): RepoWikiInclud
 }
 
 function normalizeRepo(repo: RepoWikiIdentity, counter: { count: number }): RepoWikiIdentity {
+  const fullName = redactAndCount(repo.fullName, counter).text;
   const defaultBranch = repo.defaultBranch ? redactAndCount(repo.defaultBranch, counter).text : undefined;
   const remoteUrl = repo.remoteUrl ? redactAndCount(repo.remoteUrl, counter).text : undefined;
   return {
-    fullName: repo.fullName,
+    fullName,
     ...(defaultBranch ? { defaultBranch } : {}),
     ...(remoteUrl ? { remoteUrl } : {})
   };
@@ -368,11 +369,14 @@ function normalizeSource(
   source: RepoWikiSourceFreshness,
   counter: { count: number }
 ): RepoWikiSourceFreshness {
+  const ref = redactAndCount(source.ref, counter).text;
+  const headSha = source.headSha ? redactAndCount(source.headSha, counter).text : undefined;
+  const checkedAt = source.checkedAt ? redactAndCount(source.checkedAt, counter).text : undefined;
   const staleReason = source.staleReason ? redactAndCount(source.staleReason, counter).text : undefined;
   return {
-    ref: source.ref,
-    ...(source.headSha ? { headSha: source.headSha } : {}),
-    ...(source.checkedAt ? { checkedAt: source.checkedAt } : {}),
+    ref,
+    ...(headSha ? { headSha } : {}),
+    ...(checkedAt ? { checkedAt } : {}),
     status: source.status,
     ...(staleReason ? { staleReason } : {})
   };
