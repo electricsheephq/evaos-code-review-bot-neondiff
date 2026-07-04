@@ -425,6 +425,10 @@ describe("repo profile registry", () => {
       {
         repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
         files: [
+          "openclaw.plugin.json",
+          "skills/lossless-openclaw-orchestrator/SKILL.md",
+          "evals/scenarios/v1/codex-collaboration-cockpit.json",
+          "evals/scorecards/v1.0/local-agent-usability-review.json",
           "packages/runtime/src/review-runner.ts",
           "packages/runtime/tests/review-runner.test.ts",
           "src/index.ts"
