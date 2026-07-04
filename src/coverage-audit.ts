@@ -8,6 +8,8 @@ import {
   parseProviderCooldownError,
   type RepoActivationRecord,
   type ReviewQueueJobState,
+  type ReviewReadinessRecord,
+  type ReviewReadinessState,
   type RepoProviderCooldownRecord,
   type StoredProcessedReviewRecord
 } from "./state.js";
@@ -123,6 +125,7 @@ export interface CoverageStateLookup {
     now: Date,
     leaseTtlMs: number
   ): CoverageQueueJobCoverage | undefined;
+  getReviewReadiness?(repo: string, pullNumber: number, headSha: string): ReviewReadinessRecord | undefined;
   getActiveRepoProviderCooldown?(repo: string, now?: Date): RepoProviderCooldownRecord | undefined;
   getActiveProviderCooldown?(now?: Date): RepoProviderCooldownRecord | undefined;
 }
@@ -205,6 +208,21 @@ export class CoverageStateReader implements CoverageStateLookup {
     return row ? mapReviewQueueJobCoverageRow(row) : undefined;
   }
 
+  getReviewReadiness(repo: string, pullNumber: number, headSha: string): ReviewReadinessRecord | undefined {
+    if (!this.db) return undefined;
+    if (!this.hasReviewReadinessTable()) return undefined;
+    const row = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, state, reason, event, review_url,
+                command_action, command_comment_id, created_at, updated_at
+         from review_readiness
+         where repo = ? and pull_number = ? and head_sha = ?
+         limit 1`
+      )
+      .get(repo, pullNumber, headSha) as ReviewReadinessRow | undefined;
+    return row ? mapReviewReadinessRow(row) : undefined;
+  }
+
   getActiveRepoProviderCooldown(repo: string, now = new Date()): RepoProviderCooldownRecord | undefined {
     if (!this.db) return undefined;
     if (!this.hasRepoProviderCooldownTable()) return undefined;
@@ -268,6 +286,15 @@ export class CoverageStateReader implements CoverageStateLookup {
     return Boolean(
       this.db
         .prepare("select 1 from sqlite_master where type = 'table' and name = 'repo_activation_watermarks' limit 1")
+        .get()
+    );
+  }
+
+  private hasReviewReadinessTable(): boolean {
+    if (!this.db) return false;
+    return Boolean(
+      this.db
+        .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_readiness' limit 1")
         .get()
     );
   }
@@ -510,6 +537,21 @@ function pushProcessedOrUnprocessed(
     return;
   }
 
+  const readiness = state.getReviewReadiness?.(repo, pull.number, pull.head.sha);
+  if (isCapacityDeferredReadiness(readiness)) {
+    report.providerDeferred.push({
+      ...pullEntry(repo, pull),
+      status: "skipped",
+      error: readiness.reason,
+      createdAt: readiness.createdAt,
+      updatedAt: readiness.updatedAt,
+      cooldownUntil: readiness.updatedAt,
+      reason: readiness.reason
+    });
+    report.summary.providerDeferred += 1;
+    return;
+  }
+
   const providerCooldown = state.getActiveProviderCooldown?.(now);
   if (providerCooldown) {
     report.providerDeferred.push({
@@ -660,6 +702,20 @@ interface ReviewQueueJobCoverageRow {
   updated_at: string;
 }
 
+interface ReviewReadinessRow {
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  state: ReviewReadinessState;
+  reason: string | null;
+  event: "COMMENT" | "REQUEST_CHANGES" | null;
+  review_url: string | null;
+  command_action: string | null;
+  command_comment_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface CoverageQueueJobCoverage {
   queueState: ReviewQueueJobState;
   source: string;
@@ -703,6 +759,26 @@ function mapReviewQueueJobCoverageRow(row: ReviewQueueJobCoverageRow): CoverageQ
     ...(row.next_eligible_at ? { nextEligibleAt: row.next_eligible_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {})
   };
+}
+
+function mapReviewReadinessRow(row: ReviewReadinessRow): ReviewReadinessRecord {
+  return {
+    repo: row.repo,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    state: row.state,
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.event ? { event: row.event } : {}),
+    ...(row.review_url ? { reviewUrl: row.review_url } : {}),
+    ...(row.command_action ? { commandAction: row.command_action as ReviewReadinessRecord["commandAction"] } : {}),
+    ...(row.command_comment_id ? { commandCommentId: row.command_comment_id } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function isCapacityDeferredReadiness(readiness: ReviewReadinessRecord | undefined): readiness is ReviewReadinessRecord {
+  return readiness?.state === "provider_deferred" && readiness.reason === "repo_queue_capacity_full";
 }
 
 function isCoverageQueueJobCurrent(

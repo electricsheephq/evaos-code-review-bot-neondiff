@@ -335,6 +335,49 @@ describe("coverage audit", () => {
     reader.close();
   });
 
+  it("reports capacity-deferred readiness rows in the provider-deferred bucket without a queue row", async () => {
+    const { root, state } = createState();
+    state.recordReviewReadiness({
+      repo: "owner/allowed",
+      pullNumber: 26,
+      headSha: "head-capacity-deferred",
+      state: "provider_deferred",
+      reason: "repo_queue_capacity_full",
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+    state.close();
+    const reader = CoverageStateReader.open(join(root, "state.sqlite"));
+
+    const audit = await collectCoverageAudit({
+      config: minimalConfig(root),
+      github: {
+        listOpenPulls: async () => [pull(26, "head-capacity-deferred")]
+      } as unknown as GitHubApi,
+      state: reader,
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
+
+    expect(audit.ok).toBe(true);
+    expect(audit.summary).toMatchObject({
+      providerDeferred: 1,
+      queued: 0,
+      unprocessed: 0
+    });
+    expect(audit.providerDeferred).toEqual([
+      expect.objectContaining({
+        repo: "owner/allowed",
+        pullNumber: 26,
+        headSha: "head-capacity-deferred",
+        status: "skipped",
+        error: "repo_queue_capacity_full",
+        reason: "repo_queue_capacity_full",
+        createdAt: "2026-07-01T00:01:00.000Z",
+        updatedAt: "2026-07-01T00:01:00.000Z"
+      })
+    ]);
+    reader.close();
+  });
+
   it("falls back to a stable reason for provider-deferred queue rows with raw errors", async () => {
     const { root, state } = createState();
     state.enqueueReviewQueueJob({
