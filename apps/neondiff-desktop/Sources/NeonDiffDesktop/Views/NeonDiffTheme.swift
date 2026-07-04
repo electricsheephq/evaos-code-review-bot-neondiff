@@ -1,22 +1,29 @@
 import SwiftUI
 
 enum NeonDiffTheme {
-    static let shell = Color(red: 0.015, green: 0.018, blue: 0.016)
-    static let sidebar = Color(red: 0.025, green: 0.032, blue: 0.028)
-    static let panel = Color(red: 0.035, green: 0.052, blue: 0.043)
-    static let panelActive = Color(red: 0.05, green: 0.095, blue: 0.065)
-    static let panelRaised = Color(red: 0.055, green: 0.071, blue: 0.061)
-    static let accent = Color(red: 0.22, green: 1.0, blue: 0.12)
-    static let accentSoft = Color(red: 0.50, green: 1.0, blue: 0.42)
-    static let textPrimary = Color(red: 0.91, green: 0.98, blue: 0.91)
-    static let textSecondary = Color(red: 0.56, green: 0.70, blue: 0.57)
-    static let stroke = Color(red: 0.16, green: 0.55, blue: 0.18)
+    static let shell = Color(red: 0.020, green: 0.024, blue: 0.031)
+    static let chrome = Color(red: 0.008, green: 0.014, blue: 0.012)
+    static let sidebar = Color(red: 0.018, green: 0.030, blue: 0.025)
+    static let panel = Color(red: 0.030, green: 0.047, blue: 0.039)
+    static let panelActive = Color(red: 0.035, green: 0.082, blue: 0.055)
+    static let panelRaised = Color(red: 0.050, green: 0.066, blue: 0.058)
+    static let accent = Color(red: 0.224, green: 1.0, blue: 0.533)
+    static let accentSoft = Color(red: 0.68, green: 0.91, blue: 0.78)
+    static let cyan = Color(red: 0.0, green: 0.898, blue: 1.0)
+    static let magenta = Color(red: 1.0, green: 0.169, blue: 0.839)
+    static let textPrimary = Color(red: 0.90, green: 1.0, blue: 0.97)
+    static let textSecondary = Color(red: 0.55, green: 0.70, blue: 0.62)
+    static let stroke = Color(red: 0.10, green: 0.58, blue: 0.25)
     static let warning = Color(red: 1.0, green: 0.34, blue: 0.30)
 
-    static let logoFont = Font.system(size: 24, weight: .black, design: .monospaced)
+    static let logoFont = Font.system(size: 26, weight: .black, design: .monospaced)
     static let headlineFont = Font.system(.headline, design: .monospaced).weight(.bold)
     static let badgeFont = Font.system(.caption, design: .monospaced).weight(.bold)
     static let commandFont = Font.system(.caption, design: .monospaced)
+
+    static func displayFont(size: CGFloat) -> Font {
+        .system(size: size, weight: .black, design: .monospaced)
+    }
 
     static func statusColor(_ value: String) -> Color {
         let normalized = value.lowercased()
@@ -214,22 +221,34 @@ struct OperatorCommandText: View {
 }
 
 struct OperatorButtonStyle: ButtonStyle {
+    var solid = false
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.callout.weight(.semibold))
             .lineLimit(1)
             .minimumScaleFactor(0.82)
-            .foregroundStyle(configuration.isPressed ? NeonDiffTheme.shell : NeonDiffTheme.accent)
+            .foregroundStyle(foreground(isPressed: configuration.isPressed))
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
             .background(
                 AngularRectangle(corner: 7)
-                    .fill(configuration.isPressed ? NeonDiffTheme.accent : NeonDiffTheme.accent.opacity(0.08))
+                    .fill(fill(isPressed: configuration.isPressed))
             )
             .overlay {
                 AngularRectangle(corner: 7)
-                    .stroke(NeonDiffTheme.accent.opacity(configuration.isPressed ? 0.95 : 0.68), lineWidth: 0.8)
+                    .stroke(NeonDiffTheme.accent.opacity(configuration.isPressed ? 0.95 : 0.72), lineWidth: 0.8)
             }
+    }
+
+    private func foreground(isPressed: Bool) -> Color {
+        if solid { return NeonDiffTheme.chrome }
+        return isPressed ? NeonDiffTheme.shell : NeonDiffTheme.accent
+    }
+
+    private func fill(isPressed: Bool) -> Color {
+        if solid { return NeonDiffTheme.accent.opacity(isPressed ? 0.78 : 1.0) }
+        return isPressed ? NeonDiffTheme.accent : NeonDiffTheme.accent.opacity(0.08)
     }
 }
 

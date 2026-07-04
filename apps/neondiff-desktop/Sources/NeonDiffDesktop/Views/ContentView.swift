@@ -3,20 +3,32 @@ import NeonDiffDesktopCore
 
 struct ContentView: View {
     @ObservedObject var model: NeonDiffDesktopModel
+    @ObservedObject var updateController: NeonUpdateController
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             OperatorBackdrop()
-            HStack(spacing: 0) {
-                SidebarView(selection: $model.selectedSection)
-                    .frame(width: 230)
+            Rectangle()
+                .fill(NeonDiffTheme.accent)
+                .frame(height: 34)
+                .shadow(color: NeonDiffTheme.accent.opacity(0.80), radius: 8, y: 1)
+                .ignoresSafeArea(.container, edges: .top)
 
-                Rectangle()
-                    .fill(NeonDiffTheme.stroke.opacity(0.55))
-                    .frame(width: 1)
+            VStack(spacing: 0) {
+                NeonChromeStrip(model: model, updateController: updateController)
+                    .ignoresSafeArea(.container, edges: .top)
 
-                DetailView(model: model)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                HStack(spacing: 0) {
+                    SidebarView(selection: $model.selectedSection)
+                        .frame(width: 230)
+
+                    Rectangle()
+                        .fill(NeonDiffTheme.stroke.opacity(0.55))
+                        .frame(width: 1)
+
+                    DetailView(model: model, updateController: updateController)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .tint(NeonDiffTheme.accent)
@@ -27,14 +39,14 @@ struct ContentView: View {
 
 private struct DetailView: View {
     @ObservedObject var model: NeonDiffDesktopModel
+    @ObservedObject var updateController: NeonUpdateController
 
     var body: some View {
         ZStack {
-            OperatorBackdrop()
             VStack(spacing: 0) {
                 OperatorSectionHeader(title: model.selectedSection.title, status: model.status.healthState)
                     .padding(.horizontal, 22)
-                    .padding(.top, 20)
+                    .padding(.top, 18)
                     .padding(.bottom, 8)
 
                 Group {
@@ -45,10 +57,110 @@ private struct DetailView: View {
                     case .license: LicenseView(model: model)
                     case .logs: LogsView(model: model)
                     case .policy: PolicyView(model: model)
-                    case .settings: SettingsPane(model: model)
+                    case .settings: SettingsPane(model: model, updateController: updateController)
                     }
                 }
             }
         }
+    }
+}
+
+private struct NeonChromeStrip: View {
+    @ObservedObject var model: NeonDiffDesktopModel
+    @ObservedObject var updateController: NeonUpdateController
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(NeonDiffTheme.accent)
+                .frame(height: 28)
+                .shadow(color: NeonDiffTheme.accent.opacity(0.54), radius: 8, y: 1)
+
+            HStack(spacing: 14) {
+                Color.clear
+                    .frame(width: 78)
+
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    Text("NEON")
+                        .foregroundStyle(NeonDiffTheme.chrome)
+                    Text("DIFF")
+                        .foregroundStyle(NeonDiffTheme.shell)
+                }
+                .font(NeonDiffTheme.displayFont(size: 20))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+                Text("[ DESKTOP OPERATOR ]")
+                    .font(NeonDiffTheme.badgeFont)
+                    .foregroundStyle(NeonDiffTheme.chrome.opacity(0.76))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+
+                Rectangle()
+                    .fill(NeonDiffTheme.chrome.opacity(0.45))
+                    .frame(width: 1, height: 24)
+
+                OperatorBadge(text: model.status.healthState, color: NeonDiffTheme.statusColor(model.status.healthState))
+
+                Spacer(minLength: 10)
+
+                HStack(spacing: 10) {
+                    OperatorBadge(text: updateController.badgeText, color: updateController.isConfigured ? NeonDiffTheme.cyan : NeonDiffTheme.textSecondary)
+
+                    Button {
+                        updateController.checkForUpdates()
+                    } label: {
+                        Label("Check", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(OperatorButtonStyle())
+                    .disabled(!updateController.canCheckForUpdates)
+                    .help(updateController.statusText)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background {
+                    AngularRectangle(corner: 8)
+                        .fill(NeonDiffTheme.chrome.opacity(0.92))
+                }
+            }
+            .padding(.trailing, 16)
+            .frame(height: 54)
+            .background {
+                ZStack {
+                    NeonDiffTheme.accent
+                    ChromeCircuitBackdrop()
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(NeonDiffTheme.chrome.opacity(0.82))
+                    .frame(height: 2)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+private struct ChromeCircuitBackdrop: View {
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            path.move(to: CGPoint(x: size.width * 0.62, y: 0))
+            path.addLine(to: CGPoint(x: size.width * 0.71, y: size.height))
+            path.move(to: CGPoint(x: size.width * 0.80, y: 0))
+            path.addLine(to: CGPoint(x: size.width * 0.98, y: size.height))
+            context.stroke(path, with: .color(NeonDiffTheme.chrome.opacity(0.20)), lineWidth: 0.8)
+
+            var ticks = Path()
+            let spacing: CGFloat = 34
+            var x: CGFloat = 0
+            while x < size.width {
+                ticks.move(to: CGPoint(x: x, y: size.height - 8))
+                ticks.addLine(to: CGPoint(x: x + 12, y: size.height - 8))
+                x += spacing
+            }
+            context.stroke(ticks, with: .color(NeonDiffTheme.chrome.opacity(0.18)), lineWidth: 0.7)
+        }
+        .allowsHitTesting(false)
     }
 }

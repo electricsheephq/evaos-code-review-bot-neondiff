@@ -6,11 +6,13 @@ import NeonDiffDesktopCore
 struct NeonDiffDesktopApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = NeonDiffDesktopModel()
+    @StateObject private var updateController = NeonUpdateController()
 
     var body: some Scene {
         WindowGroup("NeonDiff Desktop") {
-            ContentView(model: model)
+            ContentView(model: model, updateController: updateController)
                 .frame(minWidth: 1040, minHeight: 680)
+                .background(NeonWindowConfigurator().allowsHitTesting(false))
         }
         .commands {
             CommandMenu("NeonDiff") {
@@ -23,13 +25,21 @@ struct NeonDiffDesktopApp: App {
                     model.copyCommand(model.statusCommand)
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Check for Updates...") {
+                    updateController.checkForUpdates()
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .disabled(!updateController.canCheckForUpdates)
             }
         }
 
         Settings {
             ZStack {
                 OperatorBackdrop()
-                SettingsPane(model: model)
+                SettingsPane(model: model, updateController: updateController)
             }
             .buttonStyle(OperatorButtonStyle())
             .tint(NeonDiffTheme.accent)
