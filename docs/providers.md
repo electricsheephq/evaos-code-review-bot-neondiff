@@ -146,6 +146,23 @@ Provider checks normalize common failures into these categories:
 Retries and cooldowns must stay bounded and observable. A transient provider
 error should not kill the daemon or globally pause unrelated providers.
 
+Adapter fixture execution uses a narrower provider-runtime classification for
+mocked adapter runs:
+
+- `auth`
+- `throttle`
+- `network`
+- `timeout`
+- `model-output`
+- `unknown`
+
+Fixture evidence is deterministic and public-safe by default: it records fixture,
+provider, adapter, model, prompt/output hashes, redacted output previews, and
+redacted raw-evidence previews with prompt/diff/patch/content fields removed.
+Fixtures prove adapter contract behavior and evidence boundaries. They do not
+prove live provider parity, provider quality, cooldown behavior, or production
+runtime selection.
+
 ## Proof Boundary
 
 This registry does not claim CodeRabbit parity, calibrated review accuracy, or
