@@ -1271,11 +1271,22 @@ describe("operator CLI summaries", () => {
       running: 1,
       providerDeferred: 2,
       retryableProviderDeferred: 1,
-      failed: 1
+      failed: 1,
+      oldestWaitingRepo: "owner/repo",
+      oldestWaitingAt: "2026-07-01T00:00:00.000Z",
+      oldestWaitingAgeMs: 5 * 60_000
     });
     expect(queue.byRepo).toEqual([
       expect.objectContaining({ repo: "owner/other", total: 2, providerDeferred: 1, retryableProviderDeferred: 0, failed: 1 }),
-      expect.objectContaining({ repo: "owner/repo", total: 3, queued: 1, running: 1, retryableProviderDeferred: 1 })
+      expect.objectContaining({
+        repo: "owner/repo",
+        total: 3,
+        queued: 1,
+        running: 1,
+        retryableProviderDeferred: 1,
+        oldestWaitingAt: "2026-07-01T00:00:00.000Z",
+        oldestWaitingAgeMs: 5 * 60_000
+      })
     ]);
     expect(collectOperatorReviewQueue(statePath, { repo: "owner/repo" }).jobs).toHaveLength(3);
 
@@ -1289,6 +1300,68 @@ describe("operator CLI summaries", () => {
       expect.objectContaining({ repo: "owner/other", total: 2, failed: 1 }),
       expect.objectContaining({ repo: "owner/repo", total: 3, queued: 1 })
     ]);
+  });
+
+  it("omits oldest waiting age when durable queue timestamps are malformed", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table review_queue_jobs (job_id text primary key, attempt_id text not null unique, source text not null, lane text not null, repo text not null, org text not null, pull_number integer not null, head_sha text not null, base_sha text, provider_id text, priority integer not null, state text not null, next_eligible_at text, lease_id text, session_id text, comment_id integer, review_url text, last_error text, created_at text not null, updated_at text not null, started_at text, finished_at text)");
+      insertQueueJob(db, "queued", "owner/repo", 1, "head-queued");
+      db.prepare("update review_queue_jobs set created_at = 'not-a-date' where pull_number = 1").run();
+    } finally {
+      db.close();
+    }
+
+    const queue = collectOperatorReviewQueue(statePath, {
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+
+    expect(queue.summary).toMatchObject({
+      oldestWaitingRepo: "owner/repo",
+      oldestWaitingAt: "not-a-date",
+      oldestWaitingAtMalformed: true
+    });
+    expect(queue.summary.oldestWaitingAgeMs).toBeUndefined();
+    expect(queue.byRepo[0]).toMatchObject({
+      repo: "owner/repo",
+      oldestWaitingAt: "not-a-date",
+      oldestWaitingAtMalformed: true
+    });
+    expect(queue.byRepo[0]?.oldestWaitingAgeMs).toBeUndefined();
+  });
+
+  it("selects the oldest valid durable queue timestamp before malformed timestamps", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table review_queue_jobs (job_id text primary key, attempt_id text not null unique, source text not null, lane text not null, repo text not null, org text not null, pull_number integer not null, head_sha text not null, base_sha text, provider_id text, priority integer not null, state text not null, next_eligible_at text, lease_id text, session_id text, comment_id integer, review_url text, last_error text, created_at text not null, updated_at text not null, started_at text, finished_at text)");
+      insertQueueJob(db, "queued", "owner/repo", 1, "head-invalid");
+      insertQueueJob(db, "queued", "owner/repo", 2, "head-old");
+      insertQueueJob(db, "queued", "owner/repo", 3, "head-recent");
+      db.prepare("update review_queue_jobs set created_at = 'not-a-date' where pull_number = 1").run();
+      db.prepare("update review_queue_jobs set created_at = '2026-07-01T00:00:00.000Z' where pull_number = 2").run();
+      db.prepare("update review_queue_jobs set created_at = '2026-07-01T00:04:00.000Z' where pull_number = 3").run();
+    } finally {
+      db.close();
+    }
+
+    const queue = collectOperatorReviewQueue(statePath, {
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+
+    expect(queue.summary).toMatchObject({
+      oldestWaitingRepo: "owner/repo",
+      oldestWaitingAt: "2026-07-01T00:00:00.000Z",
+      oldestWaitingAgeMs: 5 * 60_000
+    });
+    expect(queue.summary.oldestWaitingAtMalformed).toBeUndefined();
+    expect(queue.byRepo[0]).toMatchObject({
+      repo: "owner/repo",
+      oldestWaitingAt: "2026-07-01T00:00:00.000Z",
+      oldestWaitingAgeMs: 5 * 60_000
+    });
+    expect(queue.byRepo[0]?.oldestWaitingAtMalformed).toBeUndefined();
   });
 
   it("builds queue buckets from coverage audit output", () => {

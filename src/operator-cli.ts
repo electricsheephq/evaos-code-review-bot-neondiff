@@ -304,6 +304,10 @@ export interface OperatorDurableQueueSnapshot {
     posted: number;
     failed: number;
     retired: number;
+    oldestWaitingRepo?: string;
+    oldestWaitingAt?: string;
+    oldestWaitingAgeMs?: number;
+    oldestWaitingAtMalformed?: boolean;
   };
   jobs: ReviewQueueJobRecord[];
   byRepo: Array<{
@@ -318,6 +322,9 @@ export interface OperatorDurableQueueSnapshot {
     posted: number;
     failed: number;
     retired: number;
+    oldestWaitingAt?: string;
+    oldestWaitingAgeMs?: number;
+    oldestWaitingAtMalformed?: boolean;
   }>;
 }
 
@@ -1541,6 +1548,9 @@ function buildDurableQueueSnapshot(
 }
 
 function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): OperatorDurableQueueSnapshot["summary"] {
+  const oldestWaiting = oldestWaitingQueueJob(jobs);
+  const oldestWaitingAgeMs = oldestWaiting ? waitingAgeMs(oldestWaiting.createdAt, now) : undefined;
+  const oldestWaitingAtMalformed = oldestWaiting ? !isParseableTimestamp(oldestWaiting.createdAt) : false;
   return {
     total: jobs.length,
     queued: jobs.filter((job) => job.state === "queued").length,
@@ -1551,8 +1561,48 @@ function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): Ope
     commandRecorded: jobs.filter((job) => job.state === "command_recorded").length,
     posted: jobs.filter((job) => job.state === "posted").length,
     failed: jobs.filter((job) => job.state === "failed").length,
-    retired: jobs.filter((job) => job.state === "stale_retired" || job.state === "closed_retired").length
+    retired: jobs.filter((job) => job.state === "stale_retired" || job.state === "closed_retired").length,
+    ...(oldestWaiting
+      ? {
+          oldestWaitingRepo: oldestWaiting.repo,
+          oldestWaitingAt: oldestWaiting.createdAt,
+          ...(oldestWaitingAgeMs !== undefined ? { oldestWaitingAgeMs } : {}),
+          ...(oldestWaitingAtMalformed ? { oldestWaitingAtMalformed: true } : {})
+        }
+      : {})
   };
+}
+
+function oldestWaitingQueueJob(jobs: ReviewQueueJobRecord[]): ReviewQueueJobRecord | undefined {
+  return jobs
+    .filter((job) =>
+      job.state === "queued" ||
+      job.state === "provider_deferred" ||
+      job.state === "blocked_on_proof"
+    )
+    .sort(compareWaitingQueueJobCreatedAt)[0];
+}
+
+function compareWaitingQueueJobCreatedAt(left: ReviewQueueJobRecord, right: ReviewQueueJobRecord): number {
+  const leftMs = createdAtSortMs(left.createdAt);
+  const rightMs = createdAtSortMs(right.createdAt);
+  if (leftMs !== rightMs) return leftMs - rightMs;
+  return left.jobId.localeCompare(right.jobId);
+}
+
+function createdAtSortMs(createdAt: string): number {
+  const createdAtMs = Date.parse(createdAt);
+  return Number.isFinite(createdAtMs) ? createdAtMs : Number.POSITIVE_INFINITY;
+}
+
+function isParseableTimestamp(value: string): boolean {
+  return Number.isFinite(Date.parse(value));
+}
+
+function waitingAgeMs(createdAt: string, now: Date): number | undefined {
+  const createdAtMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdAtMs)) return undefined;
+  return Math.max(0, now.getTime() - createdAtMs);
 }
 
 function isRetryableQueueJob(job: ReviewQueueJobRecord, now: Date): boolean {

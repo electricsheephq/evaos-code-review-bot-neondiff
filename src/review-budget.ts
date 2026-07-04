@@ -1,4 +1,5 @@
 import type { BotConfig } from "./config.js";
+import { resolveRepoProfile } from "./repo-policy.js";
 import type { ReviewQueueJobRecord } from "./state.js";
 
 export type ReviewQueueDelayReason =
@@ -165,6 +166,15 @@ export function buildReviewBudgetStatus(input: {
   const jobs = input.jobs.map((job) =>
     normalizeExpiredLeaseJob(job, now, input.config.reviewConcurrency.leaseTtlMs)
   );
+  const repoActiveLimitCache = new Map<string, number>();
+  const cachedRepoActiveLimit = (repo: string): number => {
+    const key = repo.toLowerCase();
+    const cached = repoActiveLimitCache.get(key);
+    if (cached !== undefined) return cached;
+    const limit = repoActiveLimitFor(input.config, scheduler, repo);
+    repoActiveLimitCache.set(key, limit);
+    return limit;
+  };
   const active = jobs.filter((job) => isActiveQueueJob(job));
   const activeProvider = countBy(active, (job) => providerKey(job));
   const activeOrg = countBy(active, (job) => job.org);
@@ -197,11 +207,13 @@ export function buildReviewBudgetStatus(input: {
     const providerCount = simulatedProviderActive.get(provider) ?? 0;
     const orgCount = simulatedOrgActive.get(job.org) ?? 0;
     const repoCount = simulatedRepoActive.get(job.repo) ?? 0;
+    const repoActiveLimit = cachedRepoActiveLimit(job.repo);
     const capacityReason = capacityDelayReason(job, {
       scheduler,
       providerCount,
       orgCount,
       repoCount,
+      repoActiveLimit,
       hasManualAfter: hasManualAfter[index] ?? false
     });
     if (capacityReason) {
@@ -259,7 +271,7 @@ export function buildReviewBudgetStatus(input: {
       background: active.filter((job) => job.lane === "background").length,
       byProvider: capacityRows(activeProvider, scheduler.maxProviderActive),
       byOrg: capacityRows(activeOrg, scheduler.maxOrgActive),
-      byRepo: capacityRows(activeRepo, scheduler.maxRepoActive)
+      byRepo: capacityRows(activeRepo, cachedRepoActiveLimit)
     },
     queued: {
       total: queued.length,
@@ -363,12 +375,13 @@ function capacityDelayReason(
     providerCount: number;
     orgCount: number;
     repoCount: number;
+    repoActiveLimit: number;
     hasManualAfter: boolean;
   }
 ): ReviewQueueDelayReason | undefined {
   if (input.providerCount >= input.scheduler.maxProviderActive) return "provider_capacity";
   if (input.orgCount >= input.scheduler.maxOrgActive) return "org_capacity";
-  if (input.repoCount >= input.scheduler.maxRepoActive) return "repo_capacity";
+  if (input.repoCount >= input.repoActiveLimit) return "repo_capacity";
   if (
     job.lane === "background" &&
     input.hasManualAfter &&
@@ -415,15 +428,28 @@ function delay(job: ReviewQueueJobRecord, reason: ReviewQueueDelayReason): Revie
   };
 }
 
-function capacityRows(counts: Map<string, number>, limit: number): ReviewBudgetCapacity[] {
+function repoActiveLimitFor(
+  config: BotConfig,
+  scheduler: NonNullable<BotConfig["reviewScheduler"]>,
+  repo: string
+): number {
+  const resolution = resolveRepoProfile(config, repo);
+  if (!resolution.allowed) return scheduler.maxRepoActive;
+  return resolution.profile.reviewScheduler?.maxActiveHeads ?? scheduler.maxRepoActive;
+}
+
+function capacityRows(counts: Map<string, number>, limit: number | ((name: string) => number)): ReviewBudgetCapacity[] {
   return [...counts.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, active]) => ({
-      name,
-      active,
-      limit,
-      remaining: Math.max(0, limit - active)
-    }));
+    .map(([name, active]) => {
+      const resolvedLimit = typeof limit === "function" ? limit(name) : limit;
+      return {
+        name,
+        active,
+        limit: resolvedLimit,
+        remaining: Math.max(0, resolvedLimit - active)
+      };
+    });
 }
 
 function applyDetailLimit<T>(items: T[], limit?: number): T[] {

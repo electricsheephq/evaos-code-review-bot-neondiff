@@ -38,6 +38,8 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   has the scheduler table. The command reports both `coverageOk` and
   `runtimeOk`; `coverageOk: true` can still pair with `runtimeOk: false` when
   every PR head is covered but a durable queue row is failed or ready to retry.
+  Durable queue summaries include the oldest waiting repo/head age so burst
+  backlogs can be diagnosed without hand-querying SQLite.
 - `dashboard`: read-only PR review dashboard over coverage, durable queue,
   readiness lifecycle rows, GitHub PR links, and local evidence-path hints.
   Filter with `--repo`, `--status`, `--priority`, `--stale-head-reason`, and
@@ -54,7 +56,8 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   such as `provider_cooldown`, `provider_capacity`, `org_capacity`,
   `repo_capacity`, `manual_reserve`, and `lease_limit`. Broad status commands
   include only compact budget counts and reason histograms; use this command for
-  capped row-level details.
+  capped row-level details. Repo profiles may lower effective active/queued
+  scheduler caps for bursty repositories without changing global capacity.
 - `review-head-gate --repo <owner/name> --pr <number> --head-sha <sha>`:
   read-only pre-merge guard for self-repo and release-critical PRs. It checks
   the exact `{repo, pr, head_sha}` against processed reviews, durable queue
