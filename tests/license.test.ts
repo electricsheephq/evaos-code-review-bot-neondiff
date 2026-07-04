@@ -493,6 +493,24 @@ describe("license activation and entitlement cache", () => {
       status: "missing",
       reason: expect.stringContaining("public repo review requires active entitlement")
     });
+
+    writeFileSync(join(paidPublicRoot, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+    const paidPublicWithPrivateScope = await evaluateLicenseReviewGate({
+      config: paidPublicConfig,
+      repo: "owner/public",
+      visibility: "public",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+    expect(paidPublicWithPrivateScope).toMatchObject({
+      ok: true,
+      reason: "active entitlement covers public repo review"
+    });
   });
 
   it("rejects malformed API success responses and reports missing env vars clearly", async () => {
@@ -673,7 +691,7 @@ describe("license activation and entitlement cache", () => {
     config.license = licenseConfig(root, server.url);
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
       status: "active",
-      checkedAt: "2026-07-04T00:00:00.000Z",
+      checkedAt: new Date().toISOString(),
       expiresAt: "2026-08-01T00:00:00.000Z",
       repoVisibilityScope: "private",
       updateEntitlement: true
