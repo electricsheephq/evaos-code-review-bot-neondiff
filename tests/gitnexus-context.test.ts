@@ -66,7 +66,7 @@ describe("GitNexus context packets", () => {
   });
 
   it("hardens the inner packet builder contract when GitNexus context is disabled", () => {
-    const result = buildGitNexusContextPacket({
+    const input = {
       repo,
       pull,
       files: [{ filename: "src/worker.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
@@ -75,10 +75,14 @@ describe("GitNexus context packets", () => {
       commandRunner: () => {
         throw new Error("disabled GitNexus context must not invoke commands");
       }
-    });
+    };
+    const result = buildGitNexusContextPacket(input);
+    const repeated = buildGitNexusContextPacket(input);
 
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected disabled packet build to pass");
+    expect(repeated.ok).toBe(true);
+    if (!result.ok || !repeated.ok) throw new Error("expected disabled packet builds to pass");
+    expect(result.packet.sha256).toBe(repeated.packet.sha256);
     expect(result.packet.gitnexus).toMatchObject({
       freshness: "missing",
       degradedMode: true,
