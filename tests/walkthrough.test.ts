@@ -6,6 +6,7 @@ import {
   WALKTHROUGH_SCHEMA_VERSION,
   WALKTHROUGH_STATE_MARKER_PREFIX
 } from "../src/walkthrough.js";
+import type { ReviewSettingsPreview } from "../src/repo-policy.js";
 import type { PullFilePatch, PullRequestSummary, ReviewComment } from "../src/types.js";
 
 const HEAD_A = "a".repeat(40);
@@ -144,6 +145,57 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("Proof status: missing");
     expect(walkthrough.body).toContain("Pre-merge checklist");
     expect(walkthrough.body).toContain("REQUEST_CHANGES");
+  });
+
+  it("renders CodeRabbit-style settings parity as preview-only walkthrough metadata", () => {
+    const settingsPreview: ReviewSettingsPreview = {
+      profile: "assertive",
+      sections: [
+        { key: "highLevelSummary", label: "High-level summary", enabled: true, mode: "inline_review" },
+        { key: "walkthrough", label: "Walkthrough", enabled: true, mode: "issue_comment" },
+        { key: "changedFiles", label: "Changed-files table", enabled: true, mode: "walkthrough" },
+        { key: "effortEstimate", label: "Effort estimate", enabled: true, mode: "walkthrough" },
+        { key: "statusComment", label: "Review status comment", enabled: true, mode: "sticky_status" }
+      ],
+      pathInstructions: [
+        { pattern: "src/**", instructions: ["Prioritize runtime correctness and duplicate-posting regressions."] }
+      ],
+      suggestions: {
+        labels: ["review-settings"],
+        reviewers: ["maintainer-one"],
+        autoApply: false
+      },
+      roadmapOnly: ["auto-apply labels", "auto-request reviewers"]
+    };
+
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/worker.ts", status: "modified", additions: 5, deletions: 1, changes: 6 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT",
+      settingsPreview
+    });
+
+    expect(walkthrough.body).toContain("### Review Settings Preview");
+    expect(walkthrough.body).toContain("- Profile: assertive");
+    expect(walkthrough.body).toContain("- Enabled sections: High-level summary (inline_review); Walkthrough (issue_comment); Changed-files table (walkthrough); Effort estimate (walkthrough); Review status comment (sticky_status)");
+    expect(walkthrough.body).toContain("- Path instructions: `src/**` - Prioritize runtime correctness and duplicate-posting regressions.");
+    expect(walkthrough.body).toContain("- Label suggestions: review-settings");
+    expect(walkthrough.body).toContain("- Reviewer suggestions: maintainer-one");
+    expect(walkthrough.body).toContain("- Suggestion behavior: suggestions only; labels and reviewers are not auto-applied.");
+    expect(walkthrough.body).toContain("- Roadmap-only settings: auto-apply labels; auto-request reviewers");
   });
 
   it("uses one sticky walkthrough marker per PR while updating head-specific state metadata", () => {

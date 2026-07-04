@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRequestChangesEligible } from "./regression-taxonomy.js";
+import type { ReviewSettingsPreview } from "./repo-policy.js";
 import type {
   ChangedSurfaceValidationReport,
   DroppedFinding,
@@ -38,6 +39,7 @@ export function buildWalkthroughComment(input: {
   event: ReviewEvent;
   validation?: ChangedSurfaceValidationReport;
   proof?: ProofRequirementReport;
+  settingsPreview?: ReviewSettingsPreview;
   postIssueComment?: boolean;
 }): WalkthroughComment {
   validateWalkthroughIdentity({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha });
@@ -89,6 +91,8 @@ export function buildWalkthroughComment(input: {
     `Suggested labels: ${suggestedLabels.length > 0 ? suggestedLabels.join(", ") : "none"}.`,
     `Suggested reviewers: ${suggestedReviewers.length > 0 ? suggestedReviewers.join(", ") : "none from current metadata"}.`,
     "",
+    ...formatSettingsPreviewSection(input.settingsPreview),
+    "",
     "### Pre-merge checklist",
     "",
     checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
@@ -115,6 +119,31 @@ export function buildWalkthroughComment(input: {
     body: [marker, stateMarker, redactedBody].join("\n"),
     postIssueComment: input.postIssueComment ?? false
   };
+}
+
+function formatSettingsPreviewSection(settings: ReviewSettingsPreview | undefined): string[] {
+  if (!settings) return [];
+  const enabledSections = settings.sections
+    .filter((section) => section.enabled)
+    .map((section) => `${formatInlinePublicText(section.label)} (${section.mode})`);
+  return [
+    "### Review Settings Preview",
+    "",
+    `- Profile: ${settings.profile}`,
+    `- Enabled sections: ${enabledSections.length > 0 ? enabledSections.join("; ") : "none"}`,
+    ...formatSettingsPathInstructions(settings),
+    `- Label suggestions: ${settings.suggestions.labels.length > 0 ? settings.suggestions.labels.map(formatInlinePublicText).join(", ") : "none"}`,
+    `- Reviewer suggestions: ${settings.suggestions.reviewers.length > 0 ? settings.suggestions.reviewers.map(formatInlinePublicText).join(", ") : "none"}`,
+    `- Suggestion behavior: ${settings.suggestions.autoApply ? "auto-apply enabled" : "suggestions only; labels and reviewers are not auto-applied."}`,
+    `- Roadmap-only settings: ${settings.roadmapOnly.length > 0 ? settings.roadmapOnly.map(formatInlinePublicText).join("; ") : "none"}`
+  ];
+}
+
+function formatSettingsPathInstructions(settings: ReviewSettingsPreview): string[] {
+  if (settings.pathInstructions.length === 0) return ["- Path instructions: none"];
+  return settings.pathInstructions.map((entry) =>
+    `- Path instructions: \`${formatInlinePublicText(entry.pattern)}\` - ${entry.instructions.map(formatInlinePublicText).join("; ")}`
+  );
 }
 
 function buildWalkthroughStateMarker(input: {

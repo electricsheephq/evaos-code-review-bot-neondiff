@@ -90,6 +90,34 @@ evidence are recorded.
 - `suggestedLabels` / `suggestedReviewers`: reserved for later enrichment; they
   do not auto-apply labels or reviewers.
 
+## Review Settings Preview
+
+Each review now records a `review-settings-preview.json` evidence file and, when
+walkthroughs are enabled, renders a `Review Settings Preview` section in the
+walkthrough body. This is the first narrow settings-parity slice for users who
+expect CodeRabbit-style knobs to be visible before live posting.
+
+The preview maps current config into user-facing review behavior:
+
+- `reviewProfile` becomes the visible profile, currently `chill` or
+  `assertive`.
+- `walkthrough.enabled` and `walkthrough.postIssueComment` decide whether the
+  walkthrough-related sections are inline review content or a sticky issue
+  comment.
+- changed-file table, effort estimate, related issues/PRs, suggested labels,
+  and suggested reviewers are reported as enabled sections when the configured
+  review output can render them.
+- `reviewStatusComment.enabled` is shown as a sticky-status section when on.
+- `pathInstructions` are listed with their glob and instructions so maintainers
+  can confirm path-specific guidance before enabling broader review coverage.
+- label and reviewer settings remain suggestions only. Auto-applying labels or
+  requesting reviewers is explicitly roadmap-only until permissions and eval
+  gates justify it.
+
+The preview is descriptive evidence only. It does not change repo eligibility,
+provider selection, App permissions, live allowlists, labels, reviewers, status
+checks, or release state.
+
 ## Changed-Surface Validation
 
 For every review, the worker now writes deterministic validation and proof
@@ -102,6 +130,9 @@ evidence beside the review plan:
 - `deterministic-gate.json`: final inline comment, drop-reason, category, and
   `REQUEST_CHANGES` decisions after schema, diff-line, secret, cap, and taxonomy
   gates.
+- `review-settings-preview.json`: mapped review-output settings, path
+  instructions, suggestion-only labels/reviewers, and roadmap-only unsafe
+  settings.
 
 These selectors do not run tests, builds, project scripts, Unity, or arbitrary
 PR code. They only decide which proof a reviewer should expect and whether that
