@@ -152,6 +152,37 @@ describe("provider adapter fixtures", () => {
     expect(JSON.stringify(result)).not.toContain("private patch content");
   });
 
+  it.each([
+    "[redacted-private-evidence]",
+    "[redacted-private-field]",
+    "[redacted-secret]",
+    "[redacted-sensitive-field]"
+  ])("truncates output previews without splitting the %s token", async (redactionToken) => {
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "fixture-openai-compatible",
+        async execute() {
+          return {
+            text: `${"x".repeat(480)}${redactionToken.repeat(40)}`
+          };
+        }
+      },
+      fixture: {
+        id: `truncated-output-${redactionToken.replace(/[^a-z]/g, "-")}`,
+        providerId: "openai-compatible",
+        adapterId: "openai-compatible",
+        model: "review-model",
+        prompt: "review patch"
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toBeDefined();
+    expect(result.evidence.outputPreview?.length).toBeLessThanOrEqual(500);
+    expect(result.evidence.outputPreview).toMatch(/\.\.\.\[truncated\]$/);
+    expect(result.evidence.outputPreview).not.toMatch(/\[redacted-[^\]]*$/);
+  });
+
   it("hashes redacted provider output instead of raw private output", async () => {
     const fixture = {
       id: "private-output-fixture",

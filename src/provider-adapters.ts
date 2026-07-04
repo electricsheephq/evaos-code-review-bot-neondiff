@@ -4,6 +4,12 @@ import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const EVIDENCE_PREVIEW_LIMIT = 500;
 const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
+const REDACTION_TOKENS = [
+  "[redacted-private-evidence]",
+  "[redacted-private-field]",
+  "[redacted-secret]",
+  "[redacted-sensitive-field]"
+] as const;
 
 export type ProviderAdapterErrorClass =
   | "auth"
@@ -173,20 +179,30 @@ function previewEvidenceText(value: string): string {
 }
 
 function trimDanglingRedactionToken(value: string): string {
-  const redactionStart = value.lastIndexOf("[redacted-");
-  if (redactionStart === -1) return value;
+  const danglingStart = findDanglingRedactionTokenStart(value);
+  return danglingStart === undefined ? value : value.slice(0, danglingStart);
+}
 
-  const redactionEnd = value.indexOf("]", redactionStart);
-  return redactionEnd === -1 ? value.slice(0, redactionStart) : value;
+function findDanglingRedactionTokenStart(value: string): number | undefined {
+  for (const token of REDACTION_TOKENS) {
+    for (let length = 1; length < token.length; length += 1) {
+      const prefix = token.slice(0, length);
+      if (value.endsWith(prefix)) return value.length - prefix.length;
+    }
+  }
+  return undefined;
 }
 
 function redactAdapterEvidenceText(value: string): string {
   return redactSecrets(
     value
-      .replace(/(["']?(?:x-)?api[-_]?key["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/=-]{8,}(["']?)/gi, "$1[redacted-secret]$2")
-      .replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "[redacted-secret]")
-      .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[redacted-secret]")
-      .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[redacted-secret]")
+      .replace(
+        /(["']?(?:x-)?api[-_]?key["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/=-]{8,}(["']?)/gi,
+        `$1${REDACTION_TOKENS[2]}$2`
+      )
+      .replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, REDACTION_TOKENS[2])
+      .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, REDACTION_TOKENS[2])
+      .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, REDACTION_TOKENS[2])
   );
 }
 
@@ -211,6 +227,7 @@ function sortJsonValue(value: unknown): unknown {
 }
 
 function compareStableJsonKey(left: string, right: string): number {
+  // UTF-8 byte order keeps evidence output and hashing deterministic across locales and Node ICU builds.
   if (left === right) return 0;
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
@@ -222,8 +239,8 @@ function redactPrivateEvidenceValue(value: unknown, prompt: string): unknown {
     return Object.fromEntries(
       Object.entries(value)
         .map(([key, entryValue]) => {
-          if (isPrivateEvidenceKey(key)) return [key, "[redacted-private-field]"];
-          if (isSensitiveEvidenceKey(key)) return [key, "[redacted-sensitive-field]"];
+          if (isPrivateEvidenceKey(key)) return [key, REDACTION_TOKENS[1]];
+          if (isSensitiveEvidenceKey(key)) return [key, REDACTION_TOKENS[3]];
           return [key, redactPrivateEvidenceValue(entryValue, prompt)];
         })
     );
@@ -232,7 +249,7 @@ function redactPrivateEvidenceValue(value: unknown, prompt: string): unknown {
 }
 
 function redactPrivateEvidenceText(value: string, prompt: string): string {
-  if (containsPrivateEvidenceLikeText(value, prompt)) return "[redacted-private-evidence]";
+  if (containsPrivateEvidenceLikeText(value, prompt)) return REDACTION_TOKENS[0];
   return redactAdapterEvidenceText(value);
 }
 
