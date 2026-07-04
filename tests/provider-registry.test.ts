@@ -172,6 +172,38 @@ describe("provider registry", () => {
     expect(JSON.stringify(thrownResult)).not.toContain("token-secret");
   });
 
+  it("doctors multiple enabled providers in metadata mode without smoking network endpoints", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "zcode-glm",
+        providers: {
+          "zcode-glm": {
+            enabled: true
+          },
+          "openai-compatible": {
+            enabled: true,
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({ registry: config.providers! });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.map((check) => check.providerId)).toEqual(["zcode-glm", "openai-compatible"]);
+    expect(result.checks.every((check) => check.readMode === "metadata_only" && !check.smokeAttempted)).toBe(true);
+  });
+
   it("requires --provider for smoke to avoid unscoped provider fan-out", async () => {
     const config = loadConfigFromObject({
       providers: {
@@ -243,6 +275,22 @@ describe("provider registry", () => {
       errorCategory: "model_output_schema",
       error: "Models response did not advertise configured model wanted-model."
     });
+
+    const emptyResult = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    });
+    expect(emptyResult.checks[0]).toMatchObject({
+      ok: false,
+      modelCount: 0,
+      errorCategory: "model_output_schema",
+      error: "Models response did not advertise any usable model ids."
+    });
   });
 
   it("fails provider doctor for providers that cannot review JSON", async () => {
@@ -280,6 +328,52 @@ describe("provider registry", () => {
     });
   });
 
+  it("requires api-key-env providers to declare apiKeyEnv before metadata readiness passes", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: false,
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: undefined
+          }
+        }
+      }
+    });
+
+    const providerWithoutKey = {
+      ...config.providers!.providers["openai-compatible"],
+      enabled: true
+    };
+    delete providerWithoutKey.apiKeyEnv;
+    const result = await doctorProviderRegistry({
+      registry: {
+        ...config.providers!,
+        providers: {
+          ...config.providers!.providers,
+          "openai-compatible": providerWithoutKey
+        }
+      },
+      providerId: "openai-compatible"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      checks: [
+        expect.objectContaining({
+          providerId: "openai-compatible",
+          ok: false,
+          error: "Provider requires apiKeyEnv for api-key-env auth."
+        })
+      ],
+      troubleshooting: [
+        "Provider openai-compatible must declare an API key environment variable before it can be selected for review."
+      ]
+    });
+  });
+
   it("aborts OpenAI-compatible smoke checks using provider timeoutMs", async () => {
     const config = loadConfigFromObject({
       providers: {
@@ -307,6 +401,37 @@ describe("provider registry", () => {
       ok: false,
       errorCategory: "timeout",
       error: expect.stringContaining("timeout:")
+    });
+  });
+
+  it("always binds OpenAI-compatible smoke requests to an abort signal", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "ollama-local",
+        providers: {
+          "ollama-local": {
+            enabled: true
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "ollama-local",
+      smoke: true,
+      fetchImpl: async (_url, init) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        return new Response(JSON.stringify({ data: [{ id: config.providers!.providers["ollama-local"].model }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: true,
+      modelCount: 1
     });
   });
 

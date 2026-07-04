@@ -1,5 +1,7 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
+const DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS = 30_000;
+
 export type ProviderAdapter = "zcode" | "openai-compatible" | "anthropic" | "openai" | "gemini";
 export type ProviderAuthMode = "zcode-app-config" | "api-key-env" | "none";
 
@@ -152,9 +154,10 @@ export async function doctorProviderRegistry(input: {
 
     if (provider.adapter !== "openai-compatible" || !input.smoke) {
       const capabilityError = providerReadinessCapabilityError(provider);
+      const authError = providerAuthMetadataError(provider);
       checks.push({
         providerId,
-        ok: provider.enabled && !capabilityError,
+        ok: provider.enabled && !capabilityError && !authError,
         adapter: provider.adapter,
         enabled: provider.enabled,
         model: provider.model,
@@ -164,10 +167,11 @@ export async function doctorProviderRegistry(input: {
         ...(provider.baseUrl ? { baseUrl: redactProviderUrl(provider.baseUrl) } : {}),
         ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
         ...(provider.enabled ? {} : { error: "Provider is disabled." }),
-        ...(capabilityError ? { error: capabilityError } : {})
+        ...(capabilityError || authError ? { error: capabilityError ?? authError } : {})
       });
       if (!provider.enabled) troubleshooting.push(`Enable provider ${providerId} before selecting it for review.`);
       if (capabilityError) troubleshooting.push(`Provider ${providerId} must support review and JSON output before it can be selected for review.`);
+      if (authError) troubleshooting.push(`Provider ${providerId} must declare an API key environment variable before it can be selected for review.`);
       continue;
     }
 
@@ -204,6 +208,8 @@ async function smokeOpenAICompatibleProvider(input: {
   if (!input.provider.enabled) return { ...baseCheck, ok: false, error: "Provider is disabled." };
   const capabilityError = providerReadinessCapabilityError(input.provider);
   if (capabilityError) return { ...baseCheck, ok: false, error: capabilityError };
+  const authError = providerAuthMetadataError(input.provider);
+  if (authError) return { ...baseCheck, ok: false, error: authError };
   if (!input.provider.baseUrl) return { ...baseCheck, ok: false, error: "OpenAI-compatible provider requires baseUrl for smoke checks." };
   if (input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv && !input.env[input.provider.apiKeyEnv]) {
     return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
@@ -231,6 +237,9 @@ async function smokeOpenAICompatibleProvider(input: {
     }
     const parsed = JSON.parse(text) as { data?: unknown[] };
     const modelIds = Array.isArray(parsed.data) ? extractModelIds(parsed.data) : [];
+    const missingModelError = modelIds.length === 0
+      ? "Models response did not advertise any usable model ids."
+      : `Models response did not advertise configured model ${input.provider.model}.`;
     return {
       ...baseCheck,
       ok: Array.isArray(parsed.data) && modelIds.includes(input.provider.model),
@@ -238,7 +247,7 @@ async function smokeOpenAICompatibleProvider(input: {
       ...(Array.isArray(parsed.data) && !modelIds.includes(input.provider.model)
         ? {
             errorCategory: "model_output_schema" as const,
-            error: `Models response did not advertise configured model ${input.provider.model}.`
+            error: missingModelError
           }
         : {})
     };
@@ -255,13 +264,17 @@ async function smokeOpenAICompatibleProvider(input: {
 }
 
 function signalWithTimeout(timeoutMs: number | undefined): AbortSignal | undefined {
-  if (!timeoutMs || timeoutMs <= 0) return undefined;
-  return AbortSignal.timeout(timeoutMs);
+  return AbortSignal.timeout(timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS);
 }
 
 function providerReadinessCapabilityError(provider: ProviderRegistryEntry): string | undefined {
   if (!provider.capabilities.review) return "Provider is not review-capable.";
   if (!provider.capabilities.jsonOutput) return "Provider does not declare JSON output support.";
+  return undefined;
+}
+
+function providerAuthMetadataError(provider: ProviderRegistryEntry): string | undefined {
+  if (provider.authMode === "api-key-env" && !provider.apiKeyEnv) return "Provider requires apiKeyEnv for api-key-env auth.";
   return undefined;
 }
 
