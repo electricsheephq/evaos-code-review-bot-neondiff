@@ -73,7 +73,7 @@ describe("provider registry", () => {
         providers: {
           "openai-compatible": {
             enabled: true,
-            baseUrl: "https://gateway.example.test/v1?token=do-not-leak",
+            baseUrl: "https://gateway.example.test/v1",
             model: "review-model",
             authMode: "api-key-env",
             apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
@@ -82,7 +82,7 @@ describe("provider registry", () => {
       }
     });
     const fetchImpl: typeof fetch = async (url, init) => {
-      expect(String(url)).toBe("https://gateway.example.test/v1/models?token=do-not-leak");
+      expect(String(url)).toBe("https://gateway.example.test/v1/models");
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer provider-secret");
       return new Response(JSON.stringify({ data: [{ id: "review-model" }] }), {
         status: 200,
@@ -106,12 +106,11 @@ describe("provider registry", () => {
       ok: true,
       smokeAttempted: true,
       readMode: "openai_compatible_models",
-      baseUrl: "https://gateway.example.test/v1?token=%5Bredacted-secret%5D",
+      baseUrl: "https://gateway.example.test/v1",
       apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
       modelCount: 1
     });
     expect(JSON.stringify(result)).not.toContain("provider-secret");
-    expect(JSON.stringify(result)).not.toContain("do-not-leak");
   });
 
   it("classifies provider failures and redacts provider URLs", () => {
@@ -171,6 +170,74 @@ describe("provider registry", () => {
       error: expect.stringContaining("transient:")
     });
     expect(JSON.stringify(thrownResult)).not.toContain("token-secret");
+  });
+
+  it("fails smoke when the configured model is not advertised", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            model: "wanted-model",
+            authMode: "none",
+            baseUrl: "https://gateway.example.test/v1"
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "other-model" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      modelCount: 1,
+      errorCategory: "model_output_schema",
+      error: "Models response did not advertise configured model wanted-model."
+    });
+  });
+
+  it("fails provider doctor for providers that cannot review JSON", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "anthropic",
+        providers: {
+          anthropic: {
+            enabled: true,
+            capabilities: {
+              review: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "anthropic"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      checks: [
+        expect.objectContaining({
+          providerId: "anthropic",
+          ok: false,
+          error: "Provider is not review-capable."
+        })
+      ],
+      troubleshooting: [
+        "Provider anthropic must support review and JSON output before it can be selected for review."
+      ]
+    });
   });
 
   it("aborts OpenAI-compatible smoke checks using provider timeoutMs", async () => {
@@ -245,6 +312,70 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/apiKeyEnv is required/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "leaky-url",
+        providers: {
+          "leaky-url": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://user:password@gateway.example.test/v1",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/must not include username or password credentials/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "leaky-query",
+        providers: {
+          "leaky-query": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1?api_key=short",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/must not include credential query parameters/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "secret-env",
+        providers: {
+          "secret-env": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "ghp_123456789012345678901234567890123456",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/apiKeyEnv must be an uppercase environment variable name, not a provider key/);
 
     expect(() => loadConfigFromObject({
       providers: {

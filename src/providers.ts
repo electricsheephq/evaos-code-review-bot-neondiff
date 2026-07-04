@@ -142,9 +142,10 @@ export async function doctorProviderRegistry(input: {
     }
 
     if (provider.adapter !== "openai-compatible" || !input.smoke) {
+      const capabilityError = providerReadinessCapabilityError(provider);
       checks.push({
         providerId,
-        ok: provider.enabled,
+        ok: provider.enabled && !capabilityError,
         adapter: provider.adapter,
         enabled: provider.enabled,
         model: provider.model,
@@ -153,9 +154,11 @@ export async function doctorProviderRegistry(input: {
         readMode: "metadata_only",
         ...(provider.baseUrl ? { baseUrl: redactProviderUrl(provider.baseUrl) } : {}),
         ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
-        ...(provider.enabled ? {} : { error: "Provider is disabled." })
+        ...(provider.enabled ? {} : { error: "Provider is disabled." }),
+        ...(capabilityError ? { error: capabilityError } : {})
       });
       if (!provider.enabled) troubleshooting.push(`Enable provider ${providerId} before selecting it for review.`);
+      if (capabilityError) troubleshooting.push(`Provider ${providerId} must support review and JSON output before it can be selected for review.`);
       continue;
     }
 
@@ -190,6 +193,8 @@ async function smokeOpenAICompatibleProvider(input: {
     ...(input.provider.apiKeyEnv ? { apiKeyEnv: input.provider.apiKeyEnv } : {})
   };
   if (!input.provider.enabled) return { ...baseCheck, ok: false, error: "Provider is disabled." };
+  const capabilityError = providerReadinessCapabilityError(input.provider);
+  if (capabilityError) return { ...baseCheck, ok: false, error: capabilityError };
   if (!input.provider.baseUrl) return { ...baseCheck, ok: false, error: "OpenAI-compatible provider requires baseUrl for smoke checks." };
   if (input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv && !input.env[input.provider.apiKeyEnv]) {
     return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
@@ -216,10 +221,17 @@ async function smokeOpenAICompatibleProvider(input: {
       };
     }
     const parsed = JSON.parse(text) as { data?: unknown[] };
+    const modelIds = Array.isArray(parsed.data) ? extractModelIds(parsed.data) : [];
     return {
       ...baseCheck,
-      ok: Array.isArray(parsed.data),
-      ...(Array.isArray(parsed.data) ? { modelCount: parsed.data.length } : { error: "Models response did not contain a data array." })
+      ok: Array.isArray(parsed.data) && modelIds.includes(input.provider.model),
+      ...(Array.isArray(parsed.data) ? { modelCount: parsed.data.length } : { errorCategory: "model_output_schema" as const, error: "Models response did not contain a data array." }),
+      ...(Array.isArray(parsed.data) && !modelIds.includes(input.provider.model)
+        ? {
+            errorCategory: "model_output_schema" as const,
+            error: `Models response did not advertise configured model ${input.provider.model}.`
+          }
+        : {})
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -236,6 +248,22 @@ async function smokeOpenAICompatibleProvider(input: {
 function signalWithTimeout(timeoutMs: number | undefined): AbortSignal | undefined {
   if (!timeoutMs || timeoutMs <= 0) return undefined;
   return AbortSignal.timeout(timeoutMs);
+}
+
+function providerReadinessCapabilityError(provider: ProviderRegistryEntry): string | undefined {
+  if (!provider.capabilities.review) return "Provider is not review-capable.";
+  if (!provider.capabilities.jsonOutput) return "Provider does not declare JSON output support.";
+  return undefined;
+}
+
+function extractModelIds(data: unknown[]): string[] {
+  return data.flatMap((entry) => {
+    if (typeof entry === "string") return [entry];
+    if (entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string") {
+      return [(entry as { id: string }).id];
+    }
+    return [];
+  });
 }
 
 export function buildOpenAIModelsUrl(baseUrl: string): string {
@@ -257,6 +285,10 @@ export function classifyProviderError(message: string): ProviderErrorCategory {
 
 export function isProviderId(value: string): boolean {
   return /^[A-Za-z0-9_.:-]+$/.test(value) && value !== "." && value !== ".." && !containsSecretLikeText(value);
+}
+
+export function isApiKeyEnvName(value: string): boolean {
+  return /^[A-Z_][A-Z0-9_]*$/.test(value) && !/^(?:gh[pousr]_|github_pat_|sk-|xox[baprs]-)/i.test(value);
 }
 
 export function redactProviderUrl(value: string): string {

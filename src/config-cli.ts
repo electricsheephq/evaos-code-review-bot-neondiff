@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { loadConfig, loadConfigFromObject, type RepoProfileConfig } from "./config.js";
+import { isApiKeyEnvName } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const SECRET_KEY_PATTERN = /(?:token|secret|password|cookie|license|api[_-]?key(?!env)|privateKey)/i;
@@ -375,15 +376,11 @@ function maskAllowedSecretPointerFields(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    output[key] = key === "apiKeyEnv" && typeof entry === "string" && isEnvVarName(entry)
+    output[key] = key === "apiKeyEnv" && typeof entry === "string" && isApiKeyEnvName(entry)
       ? "[env-var-name]"
       : maskAllowedSecretPointerFields(entry);
   }
   return output;
-}
-
-function isEnvVarName(value: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -6,7 +6,7 @@ import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
-import { isProviderId, type ProviderRegistryConfig } from "./providers.js";
+import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
 const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
@@ -829,8 +829,8 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
   }
   validateProviderAdapterAuthMode(adapter, authMode, label);
   validateOptionalString(value.apiKeyEnv, `${label}.apiKeyEnv`);
-  if (typeof value.apiKeyEnv === "string" && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.apiKeyEnv)) {
-    throw new Error(`${label}.apiKeyEnv must be an environment variable name`);
+  if (typeof value.apiKeyEnv === "string" && !isApiKeyEnvName(value.apiKeyEnv)) {
+    throw new Error(`${label}.apiKeyEnv must be an uppercase environment variable name, not a provider key`);
   }
   if (value.contextWindowTokens !== undefined) validatePositiveInteger(value.contextWindowTokens, `${label}.contextWindowTokens`);
   if (value.timeoutMs !== undefined) validatePositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
@@ -874,6 +874,12 @@ function validateProviderBaseUrl(value: string, label: string): void {
     throw new Error(`${label} must be a valid URL`);
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error(`${label} must use http or https`);
+  if (parsed.username || parsed.password) throw new Error(`${label} must not include username or password credentials`);
+  for (const key of parsed.searchParams.keys()) {
+    if (/(key|token|secret|password|session|cookie)/i.test(key)) {
+      throw new Error(`${label} must not include credential query parameters`);
+    }
+  }
   if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
     throw new Error(`${label} must use https unless it points to localhost/loopback`);
   }

@@ -94,8 +94,8 @@ does not need an API key:
 }
 ```
 
-For BYOK gateways, store only the environment variable name in config. This
-field must not store the API key:
+For BYOK gateways, store only an uppercase environment variable name in config.
+This field must not store the API key:
 
 ```json
 {
