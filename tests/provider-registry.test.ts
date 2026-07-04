@@ -414,6 +414,34 @@ describe("provider registry", () => {
       error: "OpenAI-compatible smoke target must not include credential query parameters."
     });
     expect(fetchCalls).toBe(0);
+
+    const resolvedPrivateResult = await doctorProviderRegistry({
+      registry: {
+        ...config.providers!,
+        providers: {
+          ...config.providers!.providers,
+          "openai-compatible": {
+            ...config.providers!.providers["openai-compatible"],
+            baseUrl: "https://metadata-proxy.example.test/v1"
+          }
+        }
+      },
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      lookupImpl: async () => [{ address: "169.254.169.254" }],
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "short-provider-key"
+      }
+    });
+    expect(resolvedPrivateResult.checks[0]).toMatchObject({
+      ok: false,
+      error: "OpenAI-compatible smoke target resolved to a private, link-local, loopback, or cloud metadata address."
+    });
+    expect(fetchCalls).toBe(0);
   });
 
   it("fails smoke when the configured model is not advertised", async () => {

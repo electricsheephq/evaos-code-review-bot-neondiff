@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { lookup } from "node:dns/promises";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS = 30_000;
@@ -31,6 +32,8 @@ export interface ProviderRegistryConfig {
   defaultProviderId: string;
   providers: Record<string, ProviderRegistryEntry>;
 }
+
+type ProviderDnsLookup = (hostname: string) => Promise<{ address: string }[]>;
 
 export type ProviderErrorCategory =
   | "auth"
@@ -119,6 +122,7 @@ export async function doctorProviderRegistry(input: {
   providerId?: string;
   smoke?: boolean;
   fetchImpl?: typeof fetch;
+  lookupImpl?: ProviderDnsLookup;
   env?: Record<string, string | undefined>;
 }): Promise<ProviderDoctorResult> {
   if (input.smoke && !input.providerId) {
@@ -187,7 +191,7 @@ export async function doctorProviderRegistry(input: {
       continue;
     }
 
-    checks.push(await smokeOpenAICompatibleProvider({ providerId, provider, fetchImpl, env }));
+    checks.push(await smokeOpenAICompatibleProvider({ providerId, provider, fetchImpl, lookupImpl: input.lookupImpl ?? lookupProviderHost, env }));
   }
 
   return {
@@ -204,10 +208,12 @@ async function smokeOpenAICompatibleProvider(input: {
   providerId: string;
   provider: ProviderRegistryEntry;
   fetchImpl: typeof fetch;
+  lookupImpl: ProviderDnsLookup;
   env: Record<string, string | undefined>;
 }): Promise<ProviderDoctorCheck> {
+  const safeProviderId = safeProviderIdForOutput(input.providerId);
   const baseCheck = {
-    providerId: input.providerId,
+    providerId: safeProviderId,
     adapter: input.provider.adapter,
     enabled: input.provider.enabled,
     model: input.provider.model,
@@ -223,7 +229,7 @@ async function smokeOpenAICompatibleProvider(input: {
   const authError = providerAuthMetadataError(input.provider);
   if (authError) return { ...baseCheck, ok: false, error: authError };
   if (!input.provider.baseUrl) return { ...baseCheck, ok: false, error: "OpenAI-compatible provider requires baseUrl for smoke checks." };
-  const targetError = providerSmokeTargetError(input.provider.baseUrl, input.provider);
+  const targetError = await providerSmokeTargetError(input.provider.baseUrl, input.provider, input.lookupImpl);
   if (targetError) return { ...baseCheck, ok: false, error: targetError };
   if (input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv && !input.env[input.provider.apiKeyEnv]) {
     return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
@@ -291,7 +297,6 @@ async function smokeOpenAICompatibleProvider(input: {
 
 function signalWithTimeout(timeoutMs: number | undefined): AbortSignal | undefined {
   const timeout = timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS;
-  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(timeout);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const maybeUnref = timer as { unref?: () => void };
@@ -327,7 +332,11 @@ function safeProviderIdForOutput(value: string): string {
   return isProviderId(value) ? value : "[invalid-provider-id]";
 }
 
-function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEntry): string | undefined {
+async function providerSmokeTargetError(
+  baseUrl: string,
+  provider: ProviderRegistryEntry,
+  lookupImpl: ProviderDnsLookup
+): Promise<string | undefined> {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -350,7 +359,25 @@ function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEnt
   if (isUnsafeSmokeHost(parsed.hostname)) {
     return "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts.";
   }
+  if (!isIP(parsed.hostname)) {
+    const resolvedAddresses = await safeLookupProviderHost(parsed.hostname, lookupImpl);
+    if (resolvedAddresses.some((address) => isUnsafeSmokeHost(address))) {
+      return "OpenAI-compatible smoke target resolved to a private, link-local, loopback, or cloud metadata address.";
+    }
+  }
   return undefined;
+}
+
+async function lookupProviderHost(hostname: string): Promise<{ address: string }[]> {
+  return lookup(hostname, { all: true, verbatim: true });
+}
+
+async function safeLookupProviderHost(hostname: string, lookupImpl: ProviderDnsLookup): Promise<string[]> {
+  try {
+    return (await lookupImpl(hostname)).map((entry) => entry.address);
+  } catch {
+    return [];
+  }
 }
 
 function isLoopbackHost(hostname: string): boolean {
