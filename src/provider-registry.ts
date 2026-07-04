@@ -41,7 +41,10 @@ export interface ProviderFamily {
   };
 }
 
+const publicProviderFamilyBrand: unique symbol = Symbol("PublicProviderFamily");
+
 export interface PublicProviderFamily extends Omit<ProviderFamily, "authHints" | "riskNotes" | "byok"> {
+  readonly [publicProviderFamilyBrand]: true;
   authHints: readonly ProviderAuthHint[];
   riskNotes: readonly string[];
   byok: {
@@ -259,6 +262,7 @@ export function toPublicProviderFamilies(
 
 export function toPublicProviderFamily(provider: ProviderFamily): PublicProviderFamily {
   return {
+    [publicProviderFamilyBrand]: true,
     id: provider.id,
     displayName: redactProviderPublicText(provider.displayName),
     aliases: provider.aliases.map((alias) => redactProviderPublicText(alias)),

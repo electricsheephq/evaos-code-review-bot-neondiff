@@ -33,6 +33,11 @@ describe("provider family catalog", () => {
   });
 
   it("validates duplicate provider ids and aliases across custom catalogs", () => {
+    expect(validateProviderFamilyCatalog(PROVIDER_FAMILY_CATALOG)).toEqual({
+      ok: true,
+      duplicates: []
+    });
+
     const aliasValidation = validateProviderFamilyCatalog([
       ...PROVIDER_FAMILY_CATALOG,
       {
@@ -68,7 +73,7 @@ describe("provider family catalog", () => {
       authHints: [
         {
           envVar: "OPENAI_API_KEY",
-          description: "OpenAI API key",
+          description: "OpenAI API key sk-live-accidental-secret",
           secretValue: "sk-live-accidental-secret"
         }
       ],
