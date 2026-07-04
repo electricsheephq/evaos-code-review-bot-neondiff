@@ -33,6 +33,10 @@ neondiff providers doctor \
   --json
 ```
 
+The example `ollama-local` provider is disabled by default. Enable it in
+`config.local.json` or with a dry-run-verified config patch before running the
+smoke command; otherwise the doctor exits before calling `/models`.
+
 ## GLM/Z.ai Through ZCode
 
 The default beta provider is `zcode-glm`. It delegates auth and endpoint

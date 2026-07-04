@@ -4,6 +4,7 @@ import {
   buildProviderRegistrySummary,
   classifyProviderError,
   doctorProviderRegistry,
+  isProviderId,
   redactProviderUrl
 } from "../src/providers.js";
 
@@ -32,6 +33,23 @@ describe("provider registry", () => {
       authMode: "api-key-env",
       apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
     });
+    const secondZCode = buildProviderRegistrySummary({
+      registry: {
+        ...config.providers!,
+        providers: {
+          ...config.providers!.providers,
+          "zcode-glm-canary": {
+            ...config.providers!.providers["zcode-glm"],
+            enabled: false
+          }
+        }
+      },
+      currentZCode: {
+        model: "GLM-5.2"
+      }
+    });
+    expect(secondZCode.providers.find((provider) => provider.id === "zcode-glm")).toMatchObject({ currentRuntime: true });
+    expect(secondZCode.providers.find((provider) => provider.id === "zcode-glm-canary")).toMatchObject({ currentRuntime: false });
 
     const doctor = await doctorProviderRegistry({ registry: config.providers! });
     expect(doctor).toMatchObject({
@@ -108,6 +126,81 @@ describe("provider registry", () => {
     expect(redactProviderUrl("https://user:pass@example.test/v1?api_key=secret&safe=1")).toBe(
       "https://%5Bredacted%5D:%5Bredacted-secret%5D@example.test/v1?api_key=%5Bredacted-secret%5D&safe=1"
     );
+    expect(isProviderId("openai-compatible")).toBe(true);
+    expect(isProviderId("sk-live-secret-secret")).toBe(false);
+  });
+
+  it("reports HTTP and thrown smoke failures with category and redacted detail", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            model: "review-model",
+            authMode: "none",
+            baseUrl: "https://gateway.example.test/v1"
+          }
+        }
+      }
+    });
+
+    const httpResult = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => new Response("temporary provider overload", { status: 503 })
+    });
+    expect(httpResult.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "transient",
+      error: expect.stringContaining("OpenAI-compatible models endpoint returned 503")
+    });
+
+    const thrownResult = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => {
+        throw new Error("ECONNREFUSED http://token-secret@example.test");
+      }
+    });
+    expect(thrownResult.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "transient",
+      error: expect.stringContaining("transient:")
+    });
+    expect(JSON.stringify(thrownResult)).not.toContain("token-secret");
+  });
+
+  it("aborts OpenAI-compatible smoke checks using provider timeoutMs", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "ollama-local",
+        providers: {
+          "ollama-local": {
+            enabled: true,
+            timeoutMs: 1
+          }
+        }
+      }
+    });
+    const fetchImpl: typeof fetch = async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("The operation was aborted.")), { once: true });
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "ollama-local",
+      smoke: true,
+      fetchImpl
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "timeout",
+      error: expect.stringContaining("timeout:")
+    });
   });
 
   it("rejects unsafe enabled provider config", () => {
@@ -152,5 +245,25 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/apiKeyEnv is required/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "zcode-bad",
+        providers: {
+          "zcode-bad": {
+            enabled: true,
+            adapter: "zcode",
+            model: "GLM-5.2",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/authMode none is not supported for zcode provider/);
   });
 });

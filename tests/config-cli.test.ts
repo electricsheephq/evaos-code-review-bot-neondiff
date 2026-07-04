@@ -146,6 +146,7 @@ describe("desktop config CLI", () => {
     const configPath = join(root, "config.json");
     const patchPath = join(root, "patch.json");
     const secretPatchPath = join(root, "secret-provider-patch.json");
+    const secretApiKeyEnvPatchPath = join(root, "secret-provider-env-patch.json");
     writeConfig(configPath, {
       pilotRepos: ["owner/repo"],
       workRoot: join(root, "runtime"),
@@ -181,6 +182,15 @@ describe("desktop config CLI", () => {
         }
       }
     });
+    writeConfig(secretApiKeyEnvPatchPath, {
+      providers: {
+        providers: {
+          "openai-compatible": {
+            apiKeyEnv: "sk-live-secret-secret-secret-secret"
+          }
+        }
+      }
+    });
 
     const output = await runConfig(["config", "patch", "--config", configPath, "--input", patchPath]);
 
@@ -208,6 +218,12 @@ describe("desktop config CLI", () => {
       error: expect.stringContaining("secret-like text")
     });
     expect(JSON.stringify(rejected)).not.toContain("sk-live-secret");
+    const rejectedApiKeyEnv = await runConfig(["config", "patch", "--config", configPath, "--input", secretApiKeyEnvPatchPath]);
+    expect(rejectedApiKeyEnv).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("secret-like text")
+    });
+    expect(JSON.stringify(rejectedApiKeyEnv)).not.toContain("sk-live-secret");
   });
 
   it("requires confirm for live writes, then writes atomically while preserving unknown fields", async () => {

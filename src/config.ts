@@ -6,7 +6,7 @@ import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
-import type { ProviderRegistryConfig } from "./providers.js";
+import { isProviderId, type ProviderRegistryConfig } from "./providers.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
 const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
@@ -814,7 +814,9 @@ function validateProviderRegistryConfig(value: unknown, label: string): void {
 function validateProviderRegistryEntry(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validateBoolean(value.enabled, `${label}.enabled`);
-  if (!["zcode", "openai-compatible", "anthropic", "openai", "gemini"].includes(String(value.adapter))) {
+  const adapter = String(value.adapter);
+  const authMode = String(value.authMode);
+  if (!["zcode", "openai-compatible", "anthropic", "openai", "gemini"].includes(adapter)) {
     throw new Error(`${label}.adapter must be zcode, openai-compatible, anthropic, openai, or gemini`);
   }
   validateOptionalString(value.displayName, `${label}.displayName`);
@@ -822,9 +824,10 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
   if (typeof value.baseUrl === "string") validateProviderBaseUrl(value.baseUrl, `${label}.baseUrl`);
   validateOptionalString(value.model, `${label}.model`);
   if (typeof value.model !== "string" || value.model.trim().length === 0) throw new Error(`${label}.model must be a non-empty string`);
-  if (!["zcode-app-config", "api-key-env", "none"].includes(String(value.authMode))) {
+  if (!["zcode-app-config", "api-key-env", "none"].includes(authMode)) {
     throw new Error(`${label}.authMode must be zcode-app-config, api-key-env, or none`);
   }
+  validateProviderAdapterAuthMode(adapter, authMode, label);
   validateOptionalString(value.apiKeyEnv, `${label}.apiKeyEnv`);
   if (typeof value.apiKeyEnv === "string" && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.apiKeyEnv)) {
     throw new Error(`${label}.apiKeyEnv must be an environment variable name`);
@@ -836,16 +839,29 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
   for (const capability of ["review", "jsonOutput", "local", "streaming"] as const) {
     validateBoolean(value.capabilities[capability], `${label}.capabilities.${capability}`);
   }
-  if (value.adapter === "openai-compatible" && value.enabled === true && typeof value.baseUrl !== "string") {
+  if (adapter === "openai-compatible" && value.enabled === true && typeof value.baseUrl !== "string") {
     throw new Error(`${label}.baseUrl is required when enabled openai-compatible provider`);
   }
-  if (value.authMode === "api-key-env" && value.enabled === true && typeof value.apiKeyEnv !== "string") {
+  if (authMode === "api-key-env" && value.enabled === true && typeof value.apiKeyEnv !== "string") {
     throw new Error(`${label}.apiKeyEnv is required when enabled provider uses api-key-env`);
   }
 }
 
+function validateProviderAdapterAuthMode(adapter: string, authMode: string, label: string): void {
+  const allowedByAdapter: Record<string, string[]> = {
+    zcode: ["zcode-app-config"],
+    "openai-compatible": ["api-key-env", "none"],
+    anthropic: ["api-key-env"],
+    openai: ["api-key-env"],
+    gemini: ["api-key-env"]
+  };
+  if (!allowedByAdapter[adapter]?.includes(authMode)) {
+    throw new Error(`${label}.authMode ${authMode} is not supported for ${adapter} provider`);
+  }
+}
+
 function validateProviderId(value: string, label: string): void {
-  if (!/^[A-Za-z0-9_.:-]+$/.test(value) || value === "." || value === "..") {
+  if (!isProviderId(value)) {
     throw new Error(`${label} keys must be stable provider identifiers`);
   }
 }

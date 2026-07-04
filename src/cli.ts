@@ -49,7 +49,7 @@ import {
   type OperatorQueueSnapshot
 } from "./operator-cli.js";
 import { buildPricingOutput } from "./pricing.js";
-import { buildProviderRegistrySummary, doctorProviderRegistry } from "./providers.js";
+import { buildProviderRegistrySummary, doctorProviderRegistry, isProviderId } from "./providers.js";
 import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
@@ -141,9 +141,19 @@ async function main(): Promise<void> {
       return;
     }
     if (action === "doctor") {
+      const providerId = args.provider ? parseSingleArg(args.provider, "--provider") : undefined;
+      if (providerId && !isProviderId(providerId)) {
+        console.log(stringifyProviderOutput({
+          ok: false,
+          command: "providers doctor",
+          error: "--provider must be a stable provider identifier"
+        }));
+        process.exitCode = 1;
+        return;
+      }
       const result = await doctorProviderRegistry({
         registry: config.providers!,
-        ...(args.provider ? { providerId: parseSingleArg(args.provider, "--provider") } : {}),
+        ...(providerId ? { providerId } : {}),
         smoke: args.smoke === undefined ? false : parseBooleanArg(args.smoke, "--smoke")
       });
       console.log(stringifyProviderOutput({

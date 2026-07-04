@@ -1,4 +1,4 @@
-import { redactSecrets } from "./secrets.js";
+import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 export type ProviderAdapter = "zcode" | "openai-compatible" | "anthropic" | "openai" | "gemini";
 export type ProviderAuthMode = "zcode-app-config" | "api-key-env" | "none";
@@ -75,6 +75,7 @@ export interface ProviderDoctorCheck {
   readMode: "metadata_only" | "openai_compatible_models";
   baseUrl?: string;
   apiKeyEnv?: string;
+  errorCategory?: ProviderErrorCategory;
   error?: string;
   modelCount?: number;
 }
@@ -100,7 +101,7 @@ export function buildProviderRegistrySummary(input: {
       ...(provider.retryMaxRetries !== undefined ? { retryMaxRetries: provider.retryMaxRetries } : {}),
       capabilities: provider.capabilities,
       currentRuntime: provider.adapter === "zcode" &&
-        (id === input.registry.defaultProviderId || id === input.currentZCode?.providerId || provider.model === input.currentZCode?.model)
+        id === (input.currentZCode?.providerId ?? input.registry.defaultProviderId)
     }))
   };
 }
@@ -196,6 +197,7 @@ async function smokeOpenAICompatibleProvider(input: {
 
   try {
     const response = await input.fetchImpl(buildOpenAIModelsUrl(input.provider.baseUrl), {
+      signal: signalWithTimeout(input.provider.timeoutMs),
       headers: {
         Accept: "application/json",
         ...(input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv
@@ -205,10 +207,12 @@ async function smokeOpenAICompatibleProvider(input: {
     });
     const text = await response.text();
     if (!response.ok) {
+      const error = `OpenAI-compatible models endpoint returned ${response.status}: ${redactSecrets(text).slice(0, 300)}`;
       return {
         ...baseCheck,
         ok: false,
-        error: `OpenAI-compatible models endpoint returned ${response.status}: ${redactSecrets(text).slice(0, 300)}`
+        errorCategory: classifyProviderError(`${response.status} ${text}`),
+        error
       };
     }
     const parsed = JSON.parse(text) as { data?: unknown[] };
@@ -218,12 +222,20 @@ async function smokeOpenAICompatibleProvider(input: {
       ...(Array.isArray(parsed.data) ? { modelCount: parsed.data.length } : { error: "Models response did not contain a data array." })
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const errorCategory = classifyProviderError(message);
     return {
       ...baseCheck,
       ok: false,
-      error: classifyProviderError(error instanceof Error ? error.message : String(error))
+      errorCategory,
+      error: `${errorCategory}: ${redactSecrets(message)}`
     };
   }
+}
+
+function signalWithTimeout(timeoutMs: number | undefined): AbortSignal | undefined {
+  if (!timeoutMs || timeoutMs <= 0) return undefined;
+  return AbortSignal.timeout(timeoutMs);
 }
 
 export function buildOpenAIModelsUrl(baseUrl: string): string {
@@ -236,11 +248,15 @@ export function classifyProviderError(message: string): ProviderErrorCategory {
   const normalized = message.toLowerCase();
   if (/\b(unauthorized|forbidden|invalid api key|401|403)\b/.test(normalized)) return "auth";
   if (/\b(rate limit|quota|too many requests|429|insufficient_quota)\b/.test(normalized)) return "quota_or_rate_limit";
-  if (/\b(timeout|timed out|etimedout|abort)\b/.test(normalized)) return "timeout";
+  if (/\b(timeout|timed out|etimedout|abort(?:ed)?)\b/.test(normalized)) return "timeout";
   if (/\b(context length|context window|maximum context|token limit|too many tokens)\b/.test(normalized)) return "context_limit";
   if (/\b(json|schema|parseable|malformed output|invalid response)\b/.test(normalized)) return "model_output_schema";
   if (/\b(econnreset|econnrefused|refused|5\d\d|temporarily|unavailable|overload)\b/.test(normalized)) return "transient";
   return "unknown";
+}
+
+export function isProviderId(value: string): boolean {
+  return /^[A-Za-z0-9_.:-]+$/.test(value) && value !== "." && value !== ".." && !containsSecretLikeText(value);
 }
 
 export function redactProviderUrl(value: string): string {

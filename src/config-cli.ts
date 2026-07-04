@@ -375,9 +375,15 @@ function maskAllowedSecretPointerFields(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    output[key] = key === "apiKeyEnv" && typeof entry === "string" ? "[env-var-name]" : maskAllowedSecretPointerFields(entry);
+    output[key] = key === "apiKeyEnv" && typeof entry === "string" && isEnvVarName(entry)
+      ? "[env-var-name]"
+      : maskAllowedSecretPointerFields(entry);
   }
   return output;
+}
+
+function isEnvVarName(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
