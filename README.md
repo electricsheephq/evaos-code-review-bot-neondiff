@@ -8,13 +8,14 @@ with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
 Public open-source repos are free. Private and commercial repos require a paid
-NeonDiff license. NeonDiff is a source-available beta, not an open-source or
-GA release.
+NeonDiff support license: $1/month, $10/year, or $100 lifetime. NeonDiff is a
+source-available beta, not an open-source or GA release.
 
 [Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
 [Contributing](CONTRIBUTING.md) · [Agent Instructions](AGENTS.md) ·
 [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
 [License](LICENSE.md) · [License Boundary](docs/license-boundary.md) ·
+[Pricing](docs/pricing.md) ·
 [Roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
 
 ## Why It Matters
@@ -123,6 +124,7 @@ Useful public-product issues:
 
 - [#103 NeonDiff public product roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
 - [#104 license and commercial boundary](https://github.com/electricsheephq/evaos-code-review-bot/issues/104)
+- [#105 pricing implementation](https://github.com/electricsheephq/evaos-code-review-bot/issues/105)
 - [#107 CLI package and local daemon public install flow](https://github.com/electricsheephq/evaos-code-review-bot/issues/107)
 - [#113 agent-first CLI and API documentation contract](https://github.com/electricsheephq/evaos-code-review-bot/issues/113)
 

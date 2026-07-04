@@ -3,7 +3,8 @@
 This guide is the first-run path for the current source-available beta. After
 `npm run build`, the source checkout exposes the beta `neondiff` binary. See
 [LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
-for the public/private repo license boundary.
+for the public/private repo license boundary, and [docs/pricing.md](pricing.md)
+for the support-tier pricing contract.
 
 ## Requirements
 
@@ -14,7 +15,11 @@ for the public/private repo license boundary.
 - optional NeonDiff license key for private or commercial repo use
 
 Public open-source repos are free. Private and commercial repos require a paid
-license.
+support license: $1/month, $10/year, or $100 lifetime. Paid support includes
+private repo review, commercial usage, and auto-updates. Provider/model costs
+remain external through your own provider key or local model; NeonDiff does not
+include hosted model credits, unlimited SaaS inference, or bundled provider
+tokens.
 
 ## 1. Install From Source
 
@@ -95,6 +100,12 @@ Check entitlement cache state:
 
 ```bash
 neondiff license status --config config.local.json --json
+```
+
+Inspect the canonical support-tier pricing without making a network call:
+
+```bash
+neondiff pricing --json
 ```
 
 Remove the local key and cache:

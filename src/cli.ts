@@ -48,6 +48,7 @@ import {
   type OperatorDurableQueueSnapshot,
   type OperatorQueueSnapshot
 } from "./operator-cli.js";
+import { buildPricingOutput } from "./pricing.js";
 import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
@@ -113,6 +114,11 @@ async function main(): Promise<void> {
       return;
     }
     throw new Error("config subcommand must be one of: inspect, patch");
+  }
+
+  if (command === "pricing") {
+    console.log(stringifyRedactedJson(buildPricingOutput()));
+    return;
   }
 
   if (command === "license") {
@@ -2108,6 +2114,7 @@ function buildHelp(command?: string) {
         "init",
         "config inspect",
         "config patch",
+        "pricing",
         "doctor",
         "daemon start",
         "daemon stop",
@@ -2161,6 +2168,7 @@ function buildHelp(command?: string) {
       "neondiff config inspect --config config.local.json",
       "neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true",
       "desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}",
+      "neondiff pricing --json",
       "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",

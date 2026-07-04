@@ -42,6 +42,7 @@ describe("public NeonDiff CLI surface", () => {
       "init",
       "config inspect",
       "config patch",
+      "pricing",
       "doctor",
       "daemon start",
       "daemon stop",
@@ -53,6 +54,7 @@ describe("public NeonDiff CLI surface", () => {
       "review-pr"
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
+    expect(output.examples).toContain("neondiff pricing --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
     expect(output.commands.existing).toContain("provider-throttle-report");
@@ -66,6 +68,70 @@ describe("public NeonDiff CLI surface", () => {
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
     );
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
+  });
+
+  it("prints canonical pricing tiers without hosted model credit claims", async () => {
+    const { stdout } = await runCli(["pricing", "--json"]);
+    const output = JSON.parse(stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      command: "pricing",
+      product: "NeonDiff",
+      currency: "USD",
+      publicOpenSourceReposFree: true,
+      providerCosts: {
+        model: "BYOK or local provider",
+        includedHostedModelCredits: false
+      },
+      entitlementShape: {
+        freeOss: {
+          repoVisibilityScope: "public",
+          requiresPaidLicense: false
+        },
+        paidSupport: {
+          repoVisibilityScope: "private",
+          requiresPaidLicense: true,
+          commercialUse: true,
+          autoUpdates: true,
+          acceptedPlanIds: ["monthly_support", "yearly_support", "lifetime_support"]
+        }
+      }
+    });
+    expect(output.plans).toEqual([
+      expect.objectContaining({
+        id: "free_oss",
+        displayPrice: "$0",
+        requiresPaidLicense: false,
+        providerCreditsIncluded: false
+      }),
+      expect.objectContaining({
+        id: "monthly_support",
+        displayPrice: "$1/mo",
+        requiresPaidLicense: true,
+        commercialUse: true,
+        autoUpdates: true,
+        providerCreditsIncluded: false
+      }),
+      expect.objectContaining({
+        id: "yearly_support",
+        displayPrice: "$10/yr",
+        requiresPaidLicense: true,
+        commercialUse: true,
+        autoUpdates: true,
+        providerCreditsIncluded: false
+      }),
+      expect.objectContaining({
+        id: "lifetime_support",
+        displayPrice: "$100 lifetime",
+        requiresPaidLicense: true,
+        commercialUse: true,
+        autoUpdates: true,
+        providerCreditsIncluded: false
+      })
+    ]);
+    expect(stdout).toContain("does not include hosted model credits");
+    expect(stdout).not.toMatch(/includedHostedModelCredits\"\\s*:\\s*true|bundled provider tokens included/i);
   });
 
   it("rejects non-boolean public rollback ref verification values", async () => {
@@ -1379,7 +1445,7 @@ describe("public NeonDiff CLI surface", () => {
         maxProviderActive: 1,
         maxOrgActive: 1,
         maxRepoActive: 1,
-        leaseTtlMs: 24 * 60 * 60_000,
+        leaseTtlMs: 14 * 24 * 60 * 60_000,
         now: new Date("2026-07-03T00:00:01.000Z")
       });
       const deferred = store.enqueueReviewQueueJob({
