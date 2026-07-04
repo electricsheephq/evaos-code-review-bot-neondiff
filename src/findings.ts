@@ -154,6 +154,7 @@ export function formatReviewComment(
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy,
   options: { textAlreadySanitized?: boolean } = {}
 ): string {
+  // textAlreadySanitized means title, body, and why_this_matters have all crossed the same public-text boundary.
   const severity = SEVERITIES.has(finding.severity as Severity) ? finding.severity : "P3";
   const title = options.textAlreadySanitized ? finding.title : sanitizePublicConfidenceText(finding.title, publicConfidencePolicy);
   const body = options.textAlreadySanitized ? finding.body : sanitizePublicConfidenceText(finding.body, publicConfidencePolicy);
