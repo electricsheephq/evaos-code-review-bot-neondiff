@@ -39,3 +39,13 @@ Keep new rollouts dry-run first:
 ```
 
 Operator status exposes `issueEnrichment.liveThresholdsMissingRepos` and the `issue_enrichment_live_repo_thresholds_required` blocker before live comments can become ready. This is intentional: repo-specific thresholds must be visible in config before any active rollout.
+
+When more than one live rollout blocker applies, operator status reports blockers in deterministic policy order:
+
+1. feature disabled
+2. empty issue enrichment allowlist
+3. live posting disabled
+4. missing per-repo live thresholds
+5. missing GitHub App posting credentials
+
+Threshold blockers intentionally appear before credential blockers so operators fix unsafe rollout scope before debugging App identity.

@@ -65,6 +65,64 @@ describe("issue enrichment rollout policy", () => {
     });
   });
 
+  it("reports threshold blockers before missing App credentials for live operator triage", () => {
+    const config = loadConfigFromObject({
+      issueEnrichment: {
+        enabled: true,
+        postIssueComment: true,
+        allowlist: ["owner/issue-repo"]
+      }
+    });
+
+    const status = buildIssueEnrichmentStatus({
+      config,
+      canPostAsApp: false,
+      checkedAt: "2026-07-04T11:30:00.000Z"
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      state: "blocked",
+      blockers: [
+        "issue_enrichment_live_repo_thresholds_required",
+        "github_app_credentials_required_for_live_issue_comments"
+      ],
+      liveThresholdsMissingRepos: ["owner/issue-repo"]
+    });
+  });
+
+  it("treats partial repo thresholds as incomplete but exempts disabled repos", () => {
+    const config = loadConfigFromObject({
+      issueEnrichment: {
+        enabled: true,
+        postIssueComment: true,
+        allowlist: ["owner/partial-repo", "owner/disabled-repo"],
+        repos: {
+          "owner/partial-repo": {
+            enabled: true,
+            maxIssuesPerCycle: 3
+          },
+          "owner/disabled-repo": {
+            enabled: false
+          }
+        }
+      }
+    });
+
+    const status = buildIssueEnrichmentStatus({
+      config,
+      canPostAsApp: true,
+      checkedAt: "2026-07-04T11:30:00.000Z"
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      state: "blocked",
+      blockers: ["issue_enrichment_live_repo_thresholds_required"],
+      liveThresholdsMissingRepos: ["owner/partial-repo"]
+    });
+  });
+
   it("allows live issue comments only after repo-specific throttle thresholds are configured", () => {
     const config = loadConfigFromObject({
       issueEnrichment: {
