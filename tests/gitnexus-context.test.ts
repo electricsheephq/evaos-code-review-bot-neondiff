@@ -65,6 +65,33 @@ describe("GitNexus context packets", () => {
     expect(result.packet.markdown).toContain("Current PR diff, checkout files, and GitHub metadata remain authoritative");
   });
 
+  it("does not invoke GitNexus when context packets are disabled", () => {
+    const result = buildGitNexusContextPacket({
+      repo,
+      pull,
+      files: [{ filename: "src/worker.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      config: config({ enabled: false }),
+      generatedAt,
+      commandRunner: () => {
+        throw new Error("disabled GitNexus context must not invoke commands");
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected disabled packet build to pass");
+    expect(result.packet.gitnexus).toMatchObject({
+      freshness: "missing",
+      degradedMode: true,
+      degradedReason: "GitNexus context is disabled by configuration."
+    });
+    expect(result.packet.relatedContext).toEqual([]);
+    expect(result.packet.omittedContext).toContainEqual({
+      id: "gitnexus:disabled",
+      reason: "disabled",
+      detail: "GitNexus context is disabled by configuration."
+    });
+  });
+
   it("includes bounded related context for a fresh matching index", () => {
     const runner = queryRunner({
       "src/worker.ts buildGitNexusContext reviewPull worker": "Process ReviewPull -> buildReviewPrompt -> runZCodeReview\nsrc/worker.ts coordinates review evidence writes."

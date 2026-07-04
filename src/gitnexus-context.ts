@@ -50,7 +50,7 @@ export interface GitNexusRelatedContext {
 
 export interface GitNexusOmittedContext {
   id: string;
-  reason: "generated_path" | "budget_exceeded" | "query_failed" | "stale_index" | "missing_index";
+  reason: "disabled" | "generated_path" | "budget_exceeded" | "query_failed" | "stale_index" | "missing_index";
   detail: string;
 }
 
@@ -133,13 +133,6 @@ export function buildGitNexusContextPacket(input: BuildGitNexusContextPacketInpu
   const generatedAtMs = Date.parse(generatedAt);
   if (!Number.isFinite(generatedAtMs)) throw new Error("generatedAt must be an ISO timestamp");
 
-  const commandRunner = input.commandRunner ?? runGitNexusCommand;
-  const listResult = input.gitnexusListText !== undefined
-    ? { ok: true, stdout: input.gitnexusListText }
-    : commandRunner(["list"], {
-      timeoutMs: input.config.commandTimeoutMs,
-      maxOutputBytes: input.config.maxCommandOutputBytes
-    });
   const redactionSources: Array<{ id: string; text: string }> = [];
   const omittedContext: GitNexusOmittedContext[] = [];
   const changedFiles = input.files
@@ -152,6 +145,39 @@ export function buildGitNexusContextPacket(input: BuildGitNexusContextPacketInpu
       detail: "Generated/build artifact path excluded from GitNexus query selection."
     });
   }
+
+  if (!input.config.enabled) {
+    omittedContext.push({
+      id: "gitnexus:disabled",
+      reason: "disabled",
+      detail: "GitNexus context is disabled by configuration."
+    });
+    return buildRenderedPacketResult({
+      repo: input.repo,
+      pull: input.pull,
+      packetVersion: input.config.packetVersion,
+      generatedAt,
+      maxPacketBytes: input.config.maxPacketBytes,
+      advisory: GITNEXUS_CONTEXT_ADVISORY_LINE,
+      gitnexus: {
+        freshness: "missing",
+        degradedMode: true,
+        degradedReason: "GitNexus context is disabled by configuration."
+      },
+      changedFiles,
+      relatedContext: [],
+      omittedContext,
+      redactionSources
+    });
+  }
+
+  const commandRunner = input.commandRunner ?? runGitNexusCommand;
+  const listResult = input.gitnexusListText !== undefined
+    ? { ok: true, stdout: input.gitnexusListText }
+    : commandRunner(["list"], {
+      timeoutMs: input.config.commandTimeoutMs,
+      maxOutputBytes: input.config.maxCommandOutputBytes
+    });
 
   let indexes: GitNexusIndexRecord[] = [];
   let alias: string | undefined;
@@ -223,23 +249,12 @@ export function buildGitNexusContextPacket(input: BuildGitNexusContextPacketInpu
     }
   }
 
-  const preRenderReport = buildRedactionReport(redactionSources);
-  if (!preRenderReport.ok) {
-    return {
-      ok: false,
-      error: "GitNexus context packet blocked: secret-like text detected in GitNexus output.",
-      redactionReport: preRenderReport,
-      omittedContext
-    };
-  }
-
-  const packetBase = {
+  return buildRenderedPacketResult({
     repo: input.repo,
-    pullNumber: input.pull.number,
-    headSha: input.pull.head.sha,
-    baseSha: input.pull.base.sha,
+    pull: input.pull,
     packetVersion: input.config.packetVersion,
     generatedAt,
+    maxPacketBytes: input.config.maxPacketBytes,
     advisory: GITNEXUS_CONTEXT_ADVISORY_LINE,
     gitnexus: {
       ...(alias ? { alias } : {}),
@@ -251,13 +266,51 @@ export function buildGitNexusContextPacket(input: BuildGitNexusContextPacketInpu
       ...(degradedReason ? { degradedReason } : {})
     },
     changedFiles,
-    omittedContext
-  };
+    relatedContext,
+    omittedContext,
+    redactionSources
+  });
+}
 
+function buildRenderedPacketResult(input: {
+  repo: string;
+  pull: PullRequestSummary;
+  packetVersion: string;
+  generatedAt: string;
+  maxPacketBytes: number;
+  advisory: string;
+  gitnexus: GitNexusContextPacket["gitnexus"];
+  changedFiles: GitNexusChangedFileContext[];
+  relatedContext: GitNexusRelatedContext[];
+  omittedContext: GitNexusOmittedContext[];
+  redactionSources: Array<{ id: string; text: string }>;
+}): GitNexusContextBuildResult {
+  const packetBase = {
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    baseSha: input.pull.base.sha,
+    packetVersion: input.packetVersion,
+    generatedAt: input.generatedAt,
+    advisory: input.advisory,
+    gitnexus: input.gitnexus,
+    changedFiles: input.changedFiles,
+    omittedContext: input.omittedContext
+  };
   const budgeted = renderWithinBudget({
     ...packetBase,
-    relatedContext
-  }, input.config.maxPacketBytes);
+    relatedContext: input.relatedContext
+  }, input.maxPacketBytes);
+  const preRenderReport = buildRedactionReport(input.redactionSources);
+  if (!preRenderReport.ok) {
+    return {
+      ok: false,
+      error: "GitNexus context packet blocked: secret-like text detected in GitNexus output.",
+      redactionReport: preRenderReport,
+      omittedContext: input.omittedContext
+    };
+  }
+
   const postRenderReport = buildRedactionReport([{ id: "packet:markdown", text: budgeted.markdown }]);
   const redactionReport = mergeRedactionReports(preRenderReport, postRenderReport);
   if (!postRenderReport.ok) {
@@ -268,7 +321,7 @@ export function buildGitNexusContextPacket(input: BuildGitNexusContextPacketInpu
       omittedContext: budgeted.omittedContext
     };
   }
-  if (Buffer.byteLength(budgeted.markdown, "utf8") > input.config.maxPacketBytes) {
+  if (Buffer.byteLength(budgeted.markdown, "utf8") > input.maxPacketBytes) {
     const budgetExceeded: GitNexusOmittedContext = {
       id: "packet:markdown",
       reason: "budget_exceeded",
@@ -276,7 +329,7 @@ export function buildGitNexusContextPacket(input: BuildGitNexusContextPacketInpu
     };
     return {
       ok: false,
-      error: `GitNexus context packet exceeded maxPacketBytes (${Buffer.byteLength(budgeted.markdown, "utf8")} > ${input.config.maxPacketBytes}).`,
+      error: `GitNexus context packet exceeded maxPacketBytes (${Buffer.byteLength(budgeted.markdown, "utf8")} > ${input.maxPacketBytes}).`,
       redactionReport,
       omittedContext: [...budgeted.omittedContext, budgetExceeded].sort(compareOmittedContext)
     };
