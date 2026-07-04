@@ -145,7 +145,8 @@ describe("provider adapter fixtures", () => {
     "[redacted-private-evidence]",
     "[redacted-private-field]",
     "[redacted-secret]",
-    "[redacted-sensitive-field]"
+    "[redacted-sensitive-field]",
+    "[redacted-unserializable-evidence]"
   ])("truncates output previews without splitting the %s token", async (redactionToken) => {
     const result = await runProviderAdapterFixture({
       adapter: {
@@ -189,6 +190,28 @@ describe("provider adapter fixtures", () => {
     expect(result.evidence.outputSha256).not.toBe(sha256("Review this private patch content before posting a comment."));
   });
 
+  it("omits raw evidence preview when adapter returns no raw evidence", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "fixture-openai-compatible",
+        async execute() {
+          return {
+            text: '{"findings":[]}'
+          };
+        }
+      },
+      fixture: makeFixture({ id: "no-raw-evidence-fixture" })
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: {
+        outputPreview: '{"findings":[]}'
+      }
+    });
+    expect(result.evidence).not.toHaveProperty("rawEvidencePreview");
+  });
+
   it("classifies adapter runtime errors into provider-safe categories with redacted evidence", async () => {
     expect(classifyProviderAdapterError("401 invalid api key")).toBe("auth");
     expect(classifyProviderAdapterError("429 rate limit exceeded")).toBe("throttle");
@@ -201,6 +224,7 @@ describe("provider adapter fixtures", () => {
     expect(classifyProviderAdapterError("network-error while parsing invalid response")).toBe("network");
     expect(classifyProviderAdapterError("request timed out while validating structured output schema")).toBe("timeout");
     expect(classifyProviderAdapterError("ECONNRESET before structured output completed")).toBe("network");
+    expect(classifyProviderAdapterError("ECONNRESET after request timed out")).toBe("timeout");
     expect(classifyProviderAdapterError("401 invalid api key while validating json schema")).toBe("auth");
     expect(classifyProviderAdapterError("429 rate limit while parsing invalid response")).toBe("throttle");
 
@@ -364,6 +388,90 @@ describe("provider adapter fixtures", () => {
     expect(serialized).not.toContain("id-token-secret-value");
     expect(serialized).not.toContain("diff --git");
     expect(serialized).not.toContain("secret");
+  });
+
+  it("redacts provider token, base64, and split PEM shapes from raw evidence values", async () => {
+    const anthropicToken = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890";
+    const googleToken = "ya29.a0AfH6SMDabcdefghijklmnopqrstuvwxyz1234567890";
+    const base64Blob = "VGhpcy1sb29rcy1saWtlLWVuY29kZWQtcHJvdmlkZXItZXZpZGVuY2UtdGhhdC1zaG91bGQtYmUtcmVkYWN0ZWQ=";
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "fixture-openai-compatible",
+        async execute() {
+          return {
+            text: '{"findings":[]}',
+            rawEvidence: {
+              providerText: `anthropic ${anthropicToken}`,
+              googleText: `google ${googleToken}`,
+              encodedPayload: base64Blob,
+              pemParts: ["-----BEGIN ", "PRIVATE KEY-----", "abc123", "-----END PRIVATE KEY-----"]
+            }
+          };
+        }
+      },
+      fixture: makeFixture({ id: "provider-token-raw-evidence-fixture" })
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(result.ok).toBe(true);
+    expect(serialized).toContain("[redacted-secret]");
+    expect(serialized).not.toContain(anthropicToken);
+    expect(serialized).not.toContain(googleToken);
+    expect(serialized).not.toContain(base64Blob);
+    expect(serialized).not.toContain("PRIVATE KEY");
+  });
+
+  it("does not throw when raw evidence contains non-json primitives", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "fixture-openai-compatible",
+        async execute() {
+          return {
+            text: '{"findings":[]}',
+            rawEvidence: {
+              bigint: BigInt(1),
+              missing: undefined,
+              notANumber: Number.NaN,
+              positiveInfinity: Number.POSITIVE_INFINITY
+            }
+          };
+        }
+      },
+      fixture: makeFixture({ id: "non-json-raw-evidence-fixture" })
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: {
+        rawEvidencePreview: "[redacted-unserializable-evidence]"
+      }
+    });
+  });
+
+  it("redacts root-level array raw evidence", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "fixture-openai-compatible",
+        async execute(input) {
+          return {
+            text: '{"findings":[]}',
+            rawEvidence: [
+              "public marker",
+              input.prompt,
+              "diff --git a/private.ts b/private.ts\n@@ -1 +1 @@\n-secret\n+fixed"
+            ]
+          };
+        }
+      },
+      fixture: makeFixture({ id: "array-raw-evidence-fixture" })
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(result.ok).toBe(true);
+    expect(serialized).toContain("public marker");
+    expect(serialized).toContain("[redacted-private-evidence]");
+    expect(serialized).not.toContain("private patch content");
+    expect(serialized).not.toContain("diff --git");
   });
 });
 

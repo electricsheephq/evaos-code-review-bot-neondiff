@@ -8,7 +8,8 @@ const REDACTION_TOKENS = [
   "[redacted-private-evidence]",
   "[redacted-private-field]",
   "[redacted-secret]",
-  "[redacted-sensitive-field]"
+  "[redacted-sensitive-field]",
+  "[redacted-unserializable-evidence]"
 ] as const;
 
 export type ProviderAdapterErrorClass =
@@ -137,6 +138,7 @@ export function classifyProviderAdapterError(message: string): ProviderAdapterEr
   const normalized = message.toLowerCase();
   if (/\b(unauthorized|forbidden|invalid[ _-]api[ _-]key|401|403)\b/.test(normalized)) return "auth";
   if (/\b(rate[ _-]limit|quota|too many requests|429|insufficient[ _-]quota|throttl(?:e|ed|ing))\b/.test(normalized)) return "throttle";
+  // Provider timeout wording wins over network codes in combined messages to keep cooldown evidence deterministic.
   if (/\b(time[ _-]?out|timed[ _-]out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
   if (/\b(econnreset|econnrefused|enotfound|eai_again|socket|dns|connection[ _-]refused|connection[ _-]reset|network[ _-](?:error|failure|failed|unreachable|unavailable|down))\b/.test(normalized)) return "network";
   if (/\b(json|schema|parseable|malformed output|invalid response|invalid output|tool call|structured output)\b/.test(normalized)) {
@@ -201,8 +203,13 @@ function redactAdapterEvidenceText(value: string): string {
         `$1${REDACTION_TOKENS[2]}$2`
       )
       .replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, REDACTION_TOKENS[2])
+      .replace(/\bsk-ant-[A-Za-z0-9._-]{8,}\b/g, REDACTION_TOKENS[2])
       .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, REDACTION_TOKENS[2])
+      .replace(/\bya29\.[A-Za-z0-9._-]{16,}\b/g, REDACTION_TOKENS[2])
       .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, REDACTION_TOKENS[2])
+      .replace(/-----BEGIN\s*$/g, REDACTION_TOKENS[2])
+      .replace(/(?:[A-Z ]*PRIVATE KEY-----|-----END [A-Z ]*PRIVATE KEY-----)/g, REDACTION_TOKENS[2])
+      .replace(/(?:[A-Za-z0-9+/]{48,}={0,2}|[A-Za-z0-9_-]{48,})/g, REDACTION_TOKENS[2])
   );
 }
 
@@ -211,7 +218,11 @@ function sha256(value: string): string {
 }
 
 function stableStringify(value: unknown): string {
-  return JSON.stringify(sortJsonValue(value));
+  try {
+    return JSON.stringify(sortJsonValue(value)) ?? REDACTION_TOKENS[4];
+  } catch {
+    return REDACTION_TOKENS[4];
+  }
 }
 
 function sortJsonValue(value: unknown): unknown {
