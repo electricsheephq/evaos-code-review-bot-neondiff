@@ -115,6 +115,43 @@ describe("provider adapter fixtures", () => {
     expect(JSON.stringify(result)).not.toContain("private patch content");
   });
 
+  it("truncates raw evidence previews with an explicit sentinel without splitting redaction tokens", async () => {
+    const fixture = {
+      id: "truncated-raw-evidence-fixture",
+      providerId: "openai-compatible",
+      adapterId: "openai-compatible",
+      model: "review-model",
+      prompt: "Review this private patch content before posting a comment.",
+      expectJsonObject: true
+    };
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "fixture-openai-compatible",
+        async execute() {
+          return {
+            text: '{"findings":[]}',
+            rawEvidence: Object.fromEntries(
+              Array.from({ length: 40 }, (_, index) => [
+                `rawResponse${String(index).padStart(2, "0")}`,
+                {
+                  message: "Review this private patch content before posting a comment."
+                }
+              ])
+            )
+          };
+        }
+      },
+      fixture
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.rawEvidencePreview).toBeDefined();
+    expect(result.evidence.rawEvidencePreview?.length).toBeLessThanOrEqual(500);
+    expect(result.evidence.rawEvidencePreview).toMatch(/\.\.\.\[truncated\]$/);
+    expect(result.evidence.rawEvidencePreview).not.toMatch(/\[redacted-[^\]]*$/);
+    expect(JSON.stringify(result)).not.toContain("private patch content");
+  });
+
   it("hashes redacted provider output instead of raw private output", async () => {
     const fixture = {
       id: "private-output-fixture",
@@ -150,9 +187,9 @@ describe("provider adapter fixtures", () => {
     expect(classifyProviderAdapterError("request timed-out")).toBe("timeout");
     expect(classifyProviderAdapterError("model returned malformed JSON")).toBe("model-output");
     expect(classifyProviderAdapterError("network reachable but returned unexpected json")).toBe("model-output");
-    expect(classifyProviderAdapterError("request timed out while validating structured output schema")).toBe(
-      "model-output"
-    );
+    expect(classifyProviderAdapterError("network-error while parsing invalid response")).toBe("network");
+    expect(classifyProviderAdapterError("request timed out while validating structured output schema")).toBe("timeout");
+    expect(classifyProviderAdapterError("ECONNRESET before structured output completed")).toBe("network");
     expect(classifyProviderAdapterError("401 invalid api key while validating json schema")).toBe("auth");
     expect(classifyProviderAdapterError("429 rate limit while parsing invalid response")).toBe("throttle");
 

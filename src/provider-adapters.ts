@@ -2,6 +2,9 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
+const EVIDENCE_PREVIEW_LIMIT = 500;
+const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
+
 export type ProviderAdapterErrorClass =
   | "auth"
   | "throttle"
@@ -128,11 +131,11 @@ export function classifyProviderAdapterError(message: string): ProviderAdapterEr
   const normalized = message.toLowerCase();
   if (/\b(unauthorized|forbidden|invalid[ _-]api[ _-]key|401|403)\b/.test(normalized)) return "auth";
   if (/\b(rate[ _-]limit|quota|too many requests|429|insufficient[ _-]quota|throttl(?:e|ed|ing))\b/.test(normalized)) return "throttle";
+  if (/\b(time[ _-]?out|timed[ _-]out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
+  if (/\b(econnreset|econnrefused|enotfound|eai_again|socket|dns|connection[ _-]refused|connection[ _-]reset|network[ _-](?:error|failure|failed|unreachable|unavailable|down))\b/.test(normalized)) return "network";
   if (/\b(json|schema|parseable|malformed output|invalid response|invalid output|tool call|structured output)\b/.test(normalized)) {
     return "model-output";
   }
-  if (/\b(time[ _-]?out|timed[ _-]out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
-  if (/\b(econnreset|econnrefused|enotfound|eai_again|network|socket|dns|connection refused|connection reset)\b/.test(normalized)) return "network";
   return "unknown";
 }
 
@@ -144,7 +147,7 @@ function buildFixtureEvidence(
   return {
     promptSha256: sha256(prompt),
     outputSha256: sha256(redactedOutput),
-    outputPreview: redactedOutput.slice(0, 500),
+    outputPreview: previewEvidenceText(redactedOutput),
     ...(execution.rawEvidence === undefined
       ? {}
       : { rawEvidencePreview: previewEvidenceText(stableStringify(redactPrivateEvidenceValue(execution.rawEvidence, prompt))) })
@@ -161,7 +164,20 @@ function isJsonObject(value: string): boolean {
 }
 
 function previewEvidenceText(value: string): string {
-  return redactAdapterEvidenceText(value).slice(0, 500);
+  const redacted = redactAdapterEvidenceText(value);
+  if (redacted.length <= EVIDENCE_PREVIEW_LIMIT) return redacted;
+
+  const targetLength = EVIDENCE_PREVIEW_LIMIT - EVIDENCE_PREVIEW_TRUNCATED_SENTINEL.length;
+  const preview = trimDanglingRedactionToken(redacted.slice(0, targetLength));
+  return `${preview}${EVIDENCE_PREVIEW_TRUNCATED_SENTINEL}`;
+}
+
+function trimDanglingRedactionToken(value: string): string {
+  const redactionStart = value.lastIndexOf("[redacted-");
+  if (redactionStart === -1) return value;
+
+  const redactionEnd = value.indexOf("]", redactionStart);
+  return redactionEnd === -1 ? value.slice(0, redactionStart) : value;
 }
 
 function redactAdapterEvidenceText(value: string): string {
