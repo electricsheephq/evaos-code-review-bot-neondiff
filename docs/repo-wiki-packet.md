@@ -57,6 +57,11 @@ multi-byte character. It then drops lower-priority sections until the rendered
 packet fits the byte and token-ish budgets. Budgets smaller than the fixed
 packet header fail closed instead of returning an over-budget packet.
 
+`maxBytes` and `maxTokens` bind the Markdown emitter because that is the prompt
+context form. JSON output is an evidence-safe machine payload, but callers that
+persist or transmit JSON must measure `formatRepoWikiPacketJson(packet)` against
+their own storage or transport limits.
+
 Secret-like text is passed through the repository's shared redaction helper
 before packet emission, including remote URLs and section provenance strings.
 Generated markdown and JSON must not contain raw tokens, API keys,

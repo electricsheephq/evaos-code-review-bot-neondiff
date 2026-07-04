@@ -279,11 +279,14 @@ export function formatRepoWikiPacketJson(packet: RepoWikiPacket): string {
 }
 
 export function redactRepoWikiText(input: string): { text: string; replacementCount: number } {
-  const text = redactSecrets(input);
-  const replacementCount = countNeedles(text, "[redacted-secret]") - countNeedles(input, "[redacted-secret]");
+  const marker = "[redacted-secret]";
+  const sentinel = chooseRedactionSentinel(input);
+  const shieldedInput = input.split(marker).join(sentinel);
+  const shieldedText = redactSecrets(shieldedInput);
+  const replacementCount = Math.max(0, countNeedles(shieldedText, marker) - countNeedles(shieldedInput, marker));
   return {
-    text,
-    replacementCount: Math.max(0, replacementCount)
+    text: shieldedText.split(sentinel).join(marker),
+    replacementCount
   };
 }
 
@@ -326,13 +329,13 @@ function finalizePacket(
     };
     const nextSha = sha256(canonicalStringify(nextWithoutSha));
     if (usedBytes === withoutSha.byteBudget.usedBytes && usedTokens === withoutSha.tokenBudget.usedTokens) {
-      return { ...nextWithoutSha, packetSha: nextSha };
+      return assertFinalPacketSize({ ...nextWithoutSha, packetSha: nextSha });
     }
     withoutSha = nextWithoutSha;
     packetSha = nextSha;
   }
 
-  return { ...withoutSha, packetSha };
+  return assertFinalPacketSize({ ...withoutSha, packetSha });
 }
 
 function buildIncludedFiles(sections: RepoWikiIncludedSection[]): RepoWikiIncludedFile[] {
@@ -345,8 +348,8 @@ function buildIncludedFiles(sections: RepoWikiIncludedSection[]): RepoWikiInclud
     }
   }
   return [...byPath.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([path, sectionIds]) => ({ path, sections: [...sectionIds].sort() }));
+    .sort(([left], [right]) => codeUnitCompare(left, right))
+    .map(([path, sectionIds]) => ({ path, sections: [...sectionIds].sort(codeUnitCompare) }));
 }
 
 function normalizeRepo(repo: RepoWikiIdentity, counter: { count: number }): RepoWikiIdentity {
@@ -394,15 +397,15 @@ function normalizeSourceFiles(files: string[]): string[] {
 
 function compareSections(left: RepoWikiNormalizedSection, right: RepoWikiNormalizedSection): number {
   if (left.order !== right.order) return left.order - right.order;
-  const id = left.id.localeCompare(right.id);
+  const id = codeUnitCompare(left.id, right.id);
   if (id !== 0) return id;
-  const title = left.title.localeCompare(right.title);
+  const title = codeUnitCompare(left.title, right.title);
   if (title !== 0) return title;
-  const body = left.body.localeCompare(right.body);
+  const body = codeUnitCompare(left.body, right.body);
   if (body !== 0) return body;
-  const sourceFiles = left.sourceFiles.join("\0").localeCompare(right.sourceFiles.join("\0"));
+  const sourceFiles = codeUnitCompare(left.sourceFiles.join("\0"), right.sourceFiles.join("\0"));
   if (sourceFiles !== 0) return sourceFiles;
-  return (left.sourceSha ?? "").localeCompare(right.sourceSha ?? "");
+  return codeUnitCompare(left.sourceSha ?? "", right.sourceSha ?? "");
 }
 
 function makeSectionIdsUnique(sections: RepoWikiNormalizedSection[]): RepoWikiNormalizedSection[] {
@@ -416,8 +419,8 @@ function makeSectionIdsUnique(sections: RepoWikiNormalizedSection[]): RepoWikiNo
 }
 
 function compareExcluded(left: RepoWikiExcludedSection, right: RepoWikiExcludedSection): number {
-  const id = left.id.localeCompare(right.id);
-  return id !== 0 ? id : left.reason.localeCompare(right.reason);
+  const id = codeUnitCompare(left.id, right.id);
+  return id !== 0 ? id : codeUnitCompare(left.reason, right.reason);
 }
 
 function assertRepoName(repo: string): void {
@@ -451,6 +454,12 @@ function tokenEstimateForBytes(bytes: number): number {
   return Math.max(1, Math.ceil(bytes / 4));
 }
 
+function chooseRedactionSentinel(input: string): string {
+  let sentinel = "__repo_wiki_existing_redaction_marker__";
+  while (input.includes(sentinel)) sentinel = `_${sentinel}`;
+  return sentinel;
+}
+
 function countNeedles(input: string, needle: string): number {
   return input.split(needle).length - 1;
 }
@@ -468,9 +477,26 @@ function sortJson(input: unknown): unknown {
   if (input && typeof input === "object") {
     return Object.fromEntries(
       Object.entries(input)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => codeUnitCompare(left, right))
         .map(([key, value]) => [key, sortJson(value)])
     );
   }
   return input;
+}
+
+function assertFinalPacketSize(packet: RepoWikiPacket): RepoWikiPacket {
+  const usedBytes = Buffer.byteLength(formatRepoWikiPacketMarkdown(packet), "utf8");
+  const usedTokens = tokenEstimateForBytes(usedBytes);
+  if (usedBytes !== packet.byteBudget.usedBytes || usedTokens !== packet.tokenBudget.usedTokens) {
+    throw new Error(
+      `repo wiki packet size invariant failed (${usedBytes}/${packet.byteBudget.usedBytes} bytes, ${usedTokens}/${packet.tokenBudget.usedTokens} token-ish)`
+    );
+  }
+  return packet;
+}
+
+function codeUnitCompare(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildRepoWikiPacket,
@@ -126,6 +127,28 @@ describe("repo wiki packets", () => {
     expect(JSON.parse(json).packetSha).toBe(packet.packetSha);
   });
 
+  it("counts real replacements when input already contains the literal redaction marker", () => {
+    const token = "ghp_123456789012345678901234";
+    const packet = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 12_000, maxTokens: 3_000 },
+      sections: [
+        section({
+          id: "marker",
+          title: "Marker",
+          body: `Document literal [redacted-secret] while scrubbing https://${token}@github.com/[redacted-secret]/repo.git.`
+        })
+      ]
+    });
+
+    expect(packet.redaction.status).toBe("redacted");
+    expect(packet.redaction.replacementCount).toBeGreaterThan(0);
+    expect(packet.includedSections[0]).toMatchObject({ redacted: true });
+    expect(formatRepoWikiPacketMarkdown(packet)).not.toContain(token);
+  });
+
   it("rejects budgets that cannot fit the fixed packet header", () => {
     expect(() =>
       buildRepoWikiPacket({
@@ -151,6 +174,23 @@ describe("repo wiki packets", () => {
     expect(Buffer.byteLength(markdown, "utf8")).toBe(packet.byteBudget.usedBytes);
     expect(packet.byteBudget.usedBytes).toBeLessThanOrEqual(packet.byteBudget.maxBytes);
     expect(packet.tokenBudget.usedTokens).toBeLessThanOrEqual(packet.tokenBudget.maxTokens);
+  });
+
+  it("binds packet byte and token budgets to the markdown emitter only", () => {
+    const packet = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 620, maxTokens: 155 },
+      sections: [section({ id: "json-budget", title: "JSON budget", body: "JSON callers must re-check serialized size." })]
+    });
+    const markdownBytes = Buffer.byteLength(formatRepoWikiPacketMarkdown(packet), "utf8");
+    const jsonBytes = Buffer.byteLength(formatRepoWikiPacketJson(packet), "utf8");
+
+    expect(packet.byteBudget.usedBytes).toBe(markdownBytes);
+    expect(packet.tokenBudget.usedTokens).toBe(Math.ceil(markdownBytes / 4));
+    expect(markdownBytes).toBeLessThanOrEqual(packet.byteBudget.maxBytes);
+    expect(jsonBytes).toBeGreaterThan(packet.byteBudget.maxBytes);
   });
 
   it("normalizes sections with stable ids, source files, and empty exclusions", () => {
@@ -200,6 +240,49 @@ describe("repo wiki packets", () => {
     expect(first.includedSections.map((included) => included.id)).toEqual(["api-docs", "api-docs-2"]);
   });
 
+  it("uses locale-independent code-unit ordering for packet hash inputs", () => {
+    const packet = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 12_000, maxTokens: 3_000 },
+      sections: [
+        section({ id: "same", title: "alpha", body: "lower title", order: 1, sourceFiles: ["a.md"] }),
+        section({ id: "same", title: "Zed", body: "upper title", order: 1, sourceFiles: ["Z.md"] })
+      ]
+    });
+
+    expect(packet.includedSections.map((included) => included.title)).toEqual(["Zed", "alpha"]);
+    expect(packet.includedFiles.map((file) => file.path)).toEqual(["Z.md", "a.md"]);
+  });
+
+  it("hashes canonical packet content without self-referential packetSha", () => {
+    const common = {
+      source: { status: "fresh" as const, ref: "main", checkedAt: generatedAt },
+      generatedAt,
+      budget: { maxBytes: 12_000, maxTokens: 3_000 },
+      sections: [section({ id: "hash", title: "Hash", body: "Stable hash input." })]
+    };
+    const first = buildRepoWikiPacket({
+      ...common,
+      repo: { remoteUrl: "https://github.com/electricsheephq/evaos-code-review-bot", fullName: "electricsheephq/evaos-code-review-bot" }
+    });
+    const second = buildRepoWikiPacket({
+      ...common,
+      repo: { fullName: "electricsheephq/evaos-code-review-bot", remoteUrl: "https://github.com/electricsheephq/evaos-code-review-bot" }
+    });
+    const parsed = JSON.parse(formatRepoWikiPacketJson(first)) as Record<string, unknown>;
+    const packetSha = parsed.packetSha;
+    delete parsed.packetSha;
+
+    expect(first.packetSha).toBe(second.packetSha);
+    expect(packetSha).toBe(first.packetSha);
+    expect(sha256(canonicalStringifyForTest(parsed))).toBe(first.packetSha);
+    expect(Object.keys(JSON.parse(formatRepoWikiPacketJson(first)))).toEqual([...Object.keys(JSON.parse(formatRepoWikiPacketJson(first)))].sort(codeUnitCompare));
+    expect(Object.keys((JSON.parse(formatRepoWikiPacketJson(first)) as { byteBudget: Record<string, unknown> }).byteBudget)).toEqual(["maxBytes", "usedBytes"]);
+    expect(Object.keys((JSON.parse(formatRepoWikiPacketJson(first)) as { tokenBudget: Record<string, unknown> }).tokenBudget)).toEqual(["maxTokens", "usedTokens"]);
+  });
+
   it("marks stale and missing source context as degraded advisory packets", () => {
     const stale = buildRepoWikiPacket({
       repo: { fullName: "electricsheephq/evaos-code-review-bot" },
@@ -236,6 +319,10 @@ describe("repo wiki packets", () => {
       text: "[redacted-secret]",
       replacementCount: 1
     });
+    expect(redactRepoWikiText("-----BEGIN PRIVATE KEY-----\n[redacted-secret]\nabc\n-----END PRIVATE KEY-----")).toEqual({
+      text: "[redacted-secret]",
+      replacementCount: 1
+    });
   });
 });
 
@@ -253,4 +340,30 @@ function section(input: {
     order: input.order,
     sourceFiles: input.sourceFiles ?? ["README.md", "AGENTS.md", "src/worker.ts", "src/cli.ts", "tests/repo-wiki-packet.test.ts"]
   };
+}
+
+function sha256(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+function canonicalStringifyForTest(input: unknown): string {
+  return JSON.stringify(sortJsonForTest(input));
+}
+
+function sortJsonForTest(input: unknown): unknown {
+  if (Array.isArray(input)) return input.map((item) => sortJsonForTest(item));
+  if (input && typeof input === "object") {
+    return Object.fromEntries(
+      Object.entries(input)
+        .sort(([left], [right]) => codeUnitCompare(left, right))
+        .map(([key, value]) => [key, sortJsonForTest(value)])
+    );
+  }
+  return input;
+}
+
+function codeUnitCompare(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
