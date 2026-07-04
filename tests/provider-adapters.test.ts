@@ -68,7 +68,7 @@ describe("provider adapter fixtures", () => {
       model: "review-model",
       evidence: {
         promptSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-        outputSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        redactedOutputSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         outputPreview: '{"findings":[]}',
         rawEvidencePreview:
           '{"A":"upper-a","Aa":"upper-aa","Z":"upper-z","_":"underscore","a":1,"aA":"lower-upper","aa":"lower-aa","authorization":"[redacted-sensitive-field]","b":2,"echoedPrompt":"[redacted-private-field]","note":"[redacted-private-evidence]","providerUrl":"[redacted-private-evidence]"}'
@@ -186,8 +186,9 @@ describe("provider adapter fixtures", () => {
 
     expect(result.ok).toBe(true);
     expect(result.evidence.outputPreview).toBe("[redacted-private-evidence]");
-    expect(result.evidence.outputSha256).toBe(sha256("[redacted-private-evidence]"));
-    expect(result.evidence.outputSha256).not.toBe(sha256("Review this private patch content before posting a comment."));
+    expect(result.evidence.redactedOutputSha256).toBe(sha256("[redacted-private-evidence]"));
+    expect(result.evidence.redactedOutputSha256).not.toBe(sha256("Review this private patch content before posting a comment."));
+    expect(result.evidence).not.toHaveProperty("outputSha256");
   });
 
   it("omits raw evidence preview when adapter returns no raw evidence", async () => {
@@ -419,6 +420,35 @@ describe("provider adapter fixtures", () => {
     expect(serialized).not.toContain(googleToken);
     expect(serialized).not.toContain(base64Blob);
     expect(serialized).not.toContain("PRIVATE KEY");
+  });
+
+  it("preserves benign long hashes and request ids while redacting high-risk base64 blobs", async () => {
+    const sha256Hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const requestId = "req_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const base64Blob = "VGhpcy1sb29rcy1saWtlLWVuY29kZWQtcHJvdmlkZXItZXZpZGVuY2UtdGhhdC1zaG91bGQtYmUtcmVkYWN0ZWQ=";
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "fixture-openai-compatible",
+        async execute() {
+          return {
+            text: '{"findings":[]}',
+            rawEvidence: {
+              sha256Hex,
+              requestId,
+              encodedPayload: base64Blob
+            }
+          };
+        }
+      },
+      fixture: makeFixture({ id: "benign-long-id-raw-evidence-fixture" })
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(result.ok).toBe(true);
+    expect(serialized).toContain(sha256Hex);
+    expect(serialized).toContain(requestId);
+    expect(serialized).toContain("[redacted-secret]");
+    expect(serialized).not.toContain(base64Blob);
   });
 
   it("does not throw when raw evidence contains non-json primitives", async () => {

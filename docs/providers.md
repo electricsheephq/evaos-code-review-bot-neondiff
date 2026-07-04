@@ -157,14 +157,16 @@ mocked adapter runs:
 - `unknown`
 
 Fixture evidence is deterministic after redaction: it records fixture, provider,
-adapter, model, prompt/output hashes, redacted output previews, and bounded
-raw-evidence previews. Raw-evidence previews remove or replace private-looking
-keys and fail closed for secret-like values, fixture prompts, and diff-shaped
-text. Treat the preview as an operator debugging aid, not as a blanket
-public-safe guarantee for arbitrary provider payloads. Fixtures prove adapter
-contract behavior and evidence boundary handling. They do not prove live
-provider parity, provider quality, cooldown behavior, production runtime
-selection, or exhaustive redaction of every possible private value.
+adapter, model, prompt hashes, redacted-output hashes, redacted output previews,
+and bounded raw-evidence previews. Redacted-output hashes fingerprint only the
+operator-visible redacted projection, not raw provider output. Raw-evidence
+previews remove or replace private-looking keys and fail closed for secret-like
+values, fixture prompts, and diff-shaped text. Treat the preview as an operator
+debugging aid, not as a blanket public-safe guarantee for arbitrary provider
+payloads. Fixtures prove adapter contract behavior and evidence boundary
+handling. They do not prove live provider parity, provider quality, cooldown
+behavior, production runtime selection, or exhaustive redaction of every
+possible private value.
 
 ## Proof Boundary
 

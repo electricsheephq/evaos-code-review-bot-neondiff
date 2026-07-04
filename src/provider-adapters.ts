@@ -49,7 +49,7 @@ export interface ProviderRuntimeAdapter {
 
 export interface ProviderAdapterFixtureEvidence {
   promptSha256: string;
-  outputSha256?: string;
+  redactedOutputSha256?: string;
   outputPreview?: string;
   rawEvidencePreview?: string;
 }
@@ -154,7 +154,7 @@ function buildFixtureEvidence(
   const redactedOutput = redactPrivateEvidenceText(execution.text, prompt);
   return {
     promptSha256: sha256(prompt),
-    outputSha256: sha256(redactedOutput),
+    redactedOutputSha256: sha256(redactedOutput),
     outputPreview: previewEvidenceText(redactedOutput),
     ...(execution.rawEvidence === undefined
       ? {}
@@ -209,8 +209,19 @@ function redactAdapterEvidenceText(value: string): string {
       .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, REDACTION_TOKENS[2])
       .replace(/-----BEGIN\s*$/g, REDACTION_TOKENS[2])
       .replace(/(?:[A-Z ]*PRIVATE KEY-----|-----END [A-Z ]*PRIVATE KEY-----)/g, REDACTION_TOKENS[2])
-      .replace(/(?:[A-Za-z0-9+/]{48,}={0,2}|[A-Za-z0-9_-]{48,})/g, REDACTION_TOKENS[2])
+      .replace(/[A-Za-z0-9][A-Za-z0-9_+/=-]{47,}/g, (candidate) =>
+        isHighRiskLongEvidenceToken(candidate) ? REDACTION_TOKENS[2] : candidate
+      )
   );
+}
+
+function isHighRiskLongEvidenceToken(candidate: string): boolean {
+  if (/^[a-f0-9]{40,128}$/i.test(candidate)) return false;
+  if (/^(?:req|request|trace|span|run|job|evt|msg|resp|thread|file|batch)_[A-Za-z0-9_-]{16,}$/i.test(candidate)) {
+    return false;
+  }
+  if (/[+/=]/.test(candidate)) return true;
+  return candidate.length >= 64 && /[a-z]/.test(candidate) && /[A-Z]/.test(candidate) && /\d/.test(candidate);
 }
 
 function sha256(value: string): string {
