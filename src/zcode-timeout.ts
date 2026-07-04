@@ -39,8 +39,7 @@ export function isZCodeTimeoutError(error: unknown): boolean {
   const normalized = message.toLowerCase();
   return (
     (normalized.includes("zcode failed before completion") && normalized.includes("etimedout")) ||
-    (normalized.includes("zcode failed before completion") && normalized.includes("timed out")) ||
-    (normalized.includes("spawnsync") && normalized.includes("etimedout"))
+    (normalized.includes("zcode failed before completion") && normalized.includes("timed out"))
   );
 }
 
@@ -64,9 +63,9 @@ export function formatZCodeTimeoutFailureError(input: {
 export function parseZCodeTimeoutError(error?: string | null): ParsedZCodeTimeoutError | undefined {
   if (!error || !error.includes(ZCODE_TIMEOUT_ERROR_PREFIX)) return undefined;
   const fields = parseSemicolonFields(error);
-  const retryAttempt = parsePositiveInteger(fields.get("retry_attempt")) ?? 0;
-  if (retryAttempt <= 0) return undefined;
-  const timeoutMs = parsePositiveInteger(fields.get("timeout_ms"));
+  const retryAttempt = parsePositiveInteger(fields.get("retry_attempt"));
+  if (retryAttempt === undefined) return undefined;
+  const timeoutMs = parseNonNegativeInteger(fields.get("timeout_ms"));
   const parsed: ParsedZCodeTimeoutError = {
     reason: fields.get("reason") ?? "zcode_hard_timeout",
     retryAttempt,
@@ -155,6 +154,12 @@ function parseSemicolonFields(error: string): Map<string, string> {
 }
 
 function parsePositiveInteger(value?: string): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseNonNegativeInteger(value?: string): number | undefined {
   if (!value) return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;

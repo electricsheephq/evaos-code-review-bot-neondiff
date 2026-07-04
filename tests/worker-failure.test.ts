@@ -110,7 +110,21 @@ describe("worker review failures", () => {
 
   it("classifies only hard ZCode timeout failures as timeout-retryable", () => {
     expect(isZCodeTimeoutError(new Error("ZCode failed before completion: spawnSync node ETIMEDOUT"))).toBe(true);
+    expect(isZCodeTimeoutError(new Error("spawnSync git ETIMEDOUT"))).toBe(false);
     expect(isZCodeTimeoutError(new Error("zcode review timed out due to upstream provider rate limit"))).toBe(false);
+  });
+
+  it("rejects malformed ZCode timeout retry attempts", () => {
+    expect(parseZCodeTimeoutError(
+      "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=0; timeout_ms=0; original_error=ZCode failed before completion, spawnSync node ETIMEDOUT"
+    )).toBeUndefined();
+    expect(parseZCodeTimeoutError(
+      "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=0; original_error=ZCode failed before completion, spawnSync node ETIMEDOUT"
+    )).toMatchObject({
+      retryAttempt: 1,
+      timeoutMs: 0,
+      retryable: true
+    });
   });
 
   it("records provider rate limits as cooldown skips instead of hard failures", () => {
