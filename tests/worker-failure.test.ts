@@ -27,6 +27,7 @@ import {
   reviewPull,
   runWithProviderRetry
 } from "../src/worker.js";
+import { formatZCodeTimeoutFailureError, isZCodeTimeoutError, parseZCodeTimeoutError } from "../src/zcode-timeout.js";
 
 describe("worker review failures", () => {
   const roots: string[] = [];
@@ -58,6 +59,107 @@ describe("worker review failures", () => {
     expect(evidence).toContain("ETIMEDOUT");
     expect(evidence).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
     state.close();
+  });
+
+  it("records ZCode hard timeouts with bounded retry metadata instead of anonymous failure text", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-zcode-timeout-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(215, "head-timeout");
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pull,
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT with ghp_1234567890abcdefghijklmnopqrstuvwx")
+    });
+
+    const first = state.getProcessedReview("electricsheephq/evaos-code-review-bot-neondiff", 215, "head-timeout");
+    expect(first).toMatchObject({
+      status: "failed"
+    });
+    expect(first?.error).toContain("zcode_timeout_retryable");
+    expect(first?.error).toContain("reason=zcode_hard_timeout");
+    expect(first?.error).toContain("retry_attempt=1");
+    expect(first?.error).toContain("timeout_ms=1");
+    expect(first?.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(parseZCodeTimeoutError(first?.error)).toMatchObject({
+      retryAttempt: 1,
+      timeoutMs: 1,
+      retryable: true
+    });
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pull,
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT")
+    });
+
+    const second = state.getProcessedReview("electricsheephq/evaos-code-review-bot-neondiff", 215, "head-timeout");
+    expect(second?.error).toContain("retry_attempt=2");
+    expect(parseZCodeTimeoutError(second?.error)).toMatchObject({
+      retryAttempt: 2,
+      retryable: false
+    });
+    state.close();
+  });
+
+  it("classifies only hard ZCode timeout failures as timeout-retryable", () => {
+    expect(isZCodeTimeoutError(new Error("ZCode failed before completion: spawnSync node ETIMEDOUT"))).toBe(true);
+    expect(isZCodeTimeoutError(Object.assign(
+      new Error("ZCode failed before completion: Command failed: node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"),
+      { code: "ETIMEDOUT" }
+    ))).toBe(true);
+    expect(isZCodeTimeoutError(Object.assign(
+      new Error("ZCode failed before completion: Command failed: node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"),
+      { signal: "SIGTERM", status: null }
+    ))).toBe(true);
+    expect(isZCodeTimeoutError(Object.assign(
+      new Error("ZCode failed before completion: Command failed: node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs"),
+      { signal: "SIGTERM", status: 1 }
+    ))).toBe(false);
+    expect(isZCodeTimeoutError(new Error("spawnSync git ETIMEDOUT"))).toBe(false);
+    expect(isZCodeTimeoutError(new Error("zcode review timed out due to upstream provider rate limit"))).toBe(false);
+  });
+
+  it("rejects malformed ZCode timeout retry attempts", () => {
+    expect(parseZCodeTimeoutError(
+      "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=0; timeout_ms=0; original_error=ZCode failed before completion, spawnSync node ETIMEDOUT"
+    )).toBeUndefined();
+    expect(parseZCodeTimeoutError(
+      "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=0; original_error=ZCode failed before completion, spawnSync node ETIMEDOUT"
+    )).toMatchObject({
+      retryAttempt: 1,
+      timeoutMs: 0,
+      retryable: true
+    });
+  });
+
+  it("does not treat embedded retired timeout errors as the active retry state", () => {
+    const retiredError =
+      "retired_failed_head:operator_acknowledged; previous_error=zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000; original_error=ZCode failed before completion, spawnSync node ETIMEDOUT";
+
+    expect(parseZCodeTimeoutError(retiredError)).toBeUndefined();
+    expect(formatZCodeTimeoutFailureError({
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT"),
+      previousError: retiredError,
+      timeoutMs: 1200000
+    })).toContain("retry_attempt=1");
+  });
+
+  it("keeps retry attempts when structured timeout errors receive appended metadata", () => {
+    const decoratedError =
+      "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000; original_error=ZCode failed before completion, spawnSync node ETIMEDOUT; operator_note=manual_inspection";
+
+    expect(formatZCodeTimeoutFailureError({
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT"),
+      previousError: decoratedError,
+      timeoutMs: 1200000
+    })).toContain("retry_attempt=2");
   });
 
   it("records provider rate limits as cooldown skips instead of hard failures", () => {

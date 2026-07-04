@@ -996,6 +996,93 @@ describe("operator CLI summaries", () => {
     ]);
   });
 
+  it("surfaces ZCode timeout failed queue jobs with timeout-specific operator actions", () => {
+    const timeoutJob = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 216,
+      headSha: "head-timeout",
+      state: "failed",
+      priority: 1,
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000; original_error=ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          errorCount: 1,
+          failedReviewQueueJobCount: 1,
+          zcodeTimeoutFailedReviewQueueJobCount: 1,
+          retryableZCodeTimeoutFailedReviewQueueJobCount: 1,
+          exhaustedZCodeTimeoutFailedReviewQueueJobCount: 0
+        }
+      }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({
+        summary: { total: 1, queued: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 1 },
+        jobs: [timeoutJob]
+      }),
+      checkedAt: "2026-07-04T13:15:00.000Z"
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.summary).toMatchObject({
+      failedQueueJobs: 1,
+      zcodeTimeoutFailedQueueJobs: 1,
+      retryableZCodeTimeoutFailedQueueJobs: 1
+    });
+    expect(status.gates).toContainEqual({
+      name: "durable_queue_no_zcode_timeout_failed_jobs",
+      ok: false,
+      detail: "1 ZCode timeout failed durable queue job(s); retryable=1 exhausted=0"
+    });
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 216 --head-sha head-timeout --dry-run false --zcode true"
+    );
+  });
+
+  it("surfaces exhausted ZCode timeout failed queue jobs through durable queue fallback counts", () => {
+    const timeoutJob = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 216,
+      headSha: "head-timeout",
+      state: "failed",
+      priority: 1,
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=2; timeout_ms=1200000; original_error=ZCode failed before completion: spawnSync node ETIMEDOUT"
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          errorCount: 1,
+          failedReviewQueueJobCount: 1
+        }
+      }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({
+        summary: { total: 1, queued: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 1 },
+        jobs: [timeoutJob]
+      }),
+      checkedAt: "2026-07-04T13:15:00.000Z"
+    });
+
+    expect(status.summary).toMatchObject({
+      zcodeTimeoutFailedQueueJobs: 1,
+      retryableZCodeTimeoutFailedQueueJobs: 0,
+      exhaustedZCodeTimeoutFailedQueueJobs: 1
+    });
+    expect(status.gates).toContainEqual({
+      name: "durable_queue_no_zcode_timeout_failed_jobs",
+      ok: false,
+      detail: "1 ZCode timeout failed durable queue job(s); retryable=0 exhausted=1"
+    });
+    expect(status.recommendedActions).not.toContain(
+      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 216 --head-sha head-timeout --dry-run false --zcode true"
+    );
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts queue --config /config/live.json --state failed"
+    );
+  });
+
   it("keeps blocked-on-proof readiness above processed coverage for the same head", () => {
     const dashboard = buildOperatorDashboard({
       coverage: coverageReport({ ok: true, processed: [processedEntry(8, "head-proof", "posted")] }),

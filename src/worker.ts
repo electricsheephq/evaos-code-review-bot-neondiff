@@ -64,6 +64,7 @@ import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
+import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
 import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan } from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
@@ -1965,9 +1966,15 @@ export function recordFailedReview(input: {
   repo: string;
   pull: PullRequestSummary;
   error: unknown;
-}): void {
+}): string {
   const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
-  const errorMessage = redactSecrets(input.error instanceof Error ? input.error.message : String(input.error));
+  const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  const rawErrorMessage = redactSecrets(input.error instanceof Error ? input.error.message : String(input.error));
+  const errorMessage = formatZCodeTimeoutFailureError({
+    error: input.error,
+    previousError: previous?.error,
+    timeoutMs: input.config.zcode.timeoutMs ?? 180_000
+  }) ?? rawErrorMessage;
   mkdirSync(evidenceDir, { recursive: true });
   writeFileSync(join(evidenceDir, "review-error.json"), `${JSON.stringify({
     repo: input.repo,
@@ -1983,6 +1990,7 @@ export function recordFailedReview(input: {
     status: "failed",
     error: errorMessage
   });
+  return errorMessage;
 }
 
 export function recordProviderRateLimitCooldownIfNeeded(input: {

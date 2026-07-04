@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
 import { buildReviewBudgetStatus, type ReviewBudgetStatus } from "./review-budget.js";
 import { parseProviderCooldownError, PROVIDER_COOLDOWN_ERROR_PREFIX } from "./state.js";
+import { buildZCodeTimeoutInspectCommand, summarizeZCodeTimeoutErrors, ZCODE_TIMEOUT_ERROR_PREFIX } from "./zcode-timeout.js";
 import type { BotConfig } from "./config.js";
 import type { ReviewQueueJobRecord } from "./state.js";
 
@@ -47,6 +48,9 @@ export interface ReleaseDatabaseStatus {
   providerDeferredReviewQueueJobCount?: number;
   retryableProviderDeferredReviewQueueJobCount?: number;
   failedReviewQueueJobCount?: number;
+  zcodeTimeoutFailedReviewQueueJobCount?: number;
+  retryableZCodeTimeoutFailedReviewQueueJobCount?: number;
+  exhaustedZCodeTimeoutFailedReviewQueueJobCount?: number;
   reviewRunLeaseCount?: number;
   staleReviewRunLeaseCount?: number;
   staleActiveReviewQueueJobCount?: number;
@@ -150,6 +154,9 @@ export interface ReleaseStatus {
     providerDeferredQueueJobs: number;
     retryableProviderDeferredQueueJobs: number;
     readyToRetryProviderDeferredJobs: number;
+    zcodeTimeoutFailedQueueJobs?: number;
+    retryableZCodeTimeoutFailedQueueJobs?: number;
+    exhaustedZCodeTimeoutFailedQueueJobs?: number;
     expiredProviderCooldowns: number;
     retryableExpiredProviderCooldowns: number;
     activeProviderCooldowns: number;
@@ -208,6 +215,10 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     );
   const expiredProviderCooldownOk = retryableExpiredProviderCooldownCount === 0;
   const failedQueueJobsOk = (input.database.failedReviewQueueJobCount ?? 0) === 0;
+  const zcodeTimeoutFailedQueueJobCount = input.database.zcodeTimeoutFailedReviewQueueJobCount ?? 0;
+  const retryableZCodeTimeoutFailedQueueJobCount = input.database.retryableZCodeTimeoutFailedReviewQueueJobCount ?? 0;
+  const exhaustedZCodeTimeoutFailedQueueJobCount = input.database.exhaustedZCodeTimeoutFailedReviewQueueJobCount ?? 0;
+  const zcodeTimeoutFailedQueueJobsOk = zcodeTimeoutFailedQueueJobCount === 0;
   const staleReviewLeaseCount = (input.database.staleReviewRunLeaseCount ?? 0) +
     (input.database.staleActiveReviewQueueJobCount ?? 0);
   const staleReviewLeasesOk = staleReviewLeaseCount === 0;
@@ -219,6 +230,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
     "--expired-only true --dry-run false --zcode true";
+  const inspectZCodeTimeoutCommand = buildZCodeTimeoutInspectCommand(input.configPath);
   const runtimeGates = [
     {
       name: "expected_head",
@@ -272,6 +284,13 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       name: "queue_no_failed_jobs",
       ok: failedQueueJobsOk,
       detail: `${input.database.failedReviewQueueJobCount ?? 0} failed durable queue job(s)`
+    },
+    {
+      name: "queue_no_zcode_timeout_failed_jobs",
+      ok: zcodeTimeoutFailedQueueJobsOk,
+      detail:
+        `${zcodeTimeoutFailedQueueJobCount} ZCode timeout failed durable queue job(s); ` +
+        `retryable=${retryableZCodeTimeoutFailedQueueJobCount} exhausted=${exhaustedZCodeTimeoutFailedQueueJobCount}`
     },
     {
       name: "queue_no_stale_review_leases",
@@ -330,6 +349,9 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       providerDeferredQueueJobs: input.database.providerDeferredReviewQueueJobCount ?? 0,
       retryableProviderDeferredQueueJobs: input.database.retryableProviderDeferredReviewQueueJobCount ?? 0,
       readyToRetryProviderDeferredJobs: actionableProviderDeferredQueueJobs,
+      zcodeTimeoutFailedQueueJobs: zcodeTimeoutFailedQueueJobCount,
+      retryableZCodeTimeoutFailedQueueJobs: retryableZCodeTimeoutFailedQueueJobCount,
+      exhaustedZCodeTimeoutFailedQueueJobs: exhaustedZCodeTimeoutFailedQueueJobCount,
       expiredProviderCooldowns: input.database.expiredProviderCooldownCount ?? 0,
       retryableExpiredProviderCooldowns: retryableExpiredProviderCooldownCount,
       activeProviderCooldowns: input.database.activeProviderCooldownCount ?? 0
@@ -360,6 +382,9 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
           ]),
       ...(!staleReviewLeasesOk
         ? [`npx tsx src/cli.ts clear-review-queue-leases --config ${input.configPath} --dry-run true --expired-only true`]
+        : []),
+      ...(!zcodeTimeoutFailedQueueJobsOk
+        ? [inspectZCodeTimeoutCommand]
         : [])
     ],
     gates,
@@ -1019,6 +1044,9 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       providerDeferredReviewQueueJobCount: reviewQueue.providerDeferred,
       retryableProviderDeferredReviewQueueJobCount: reviewQueue.retryableProviderDeferred,
       failedReviewQueueJobCount: reviewQueue.failed,
+      zcodeTimeoutFailedReviewQueueJobCount: reviewQueue.zcodeTimeoutFailed,
+      retryableZCodeTimeoutFailedReviewQueueJobCount: reviewQueue.retryableZCodeTimeoutFailed,
+      exhaustedZCodeTimeoutFailedReviewQueueJobCount: reviewQueue.exhaustedZCodeTimeoutFailed,
       reviewRunLeaseCount: reviewRunLeases.total,
       staleReviewRunLeaseCount: reviewRunLeases.stale,
       staleActiveReviewQueueJobCount,
@@ -1041,13 +1069,28 @@ function readReviewQueueCounts(
   providerDeferred: number;
   retryableProviderDeferred: number;
   failed: number;
+  zcodeTimeoutFailed: number;
+  retryableZCodeTimeoutFailed: number;
+  exhaustedZCodeTimeoutFailed: number;
   byRepo: ReviewQueueRepoStatus[];
 } {
   const hasTable = db
     .prepare("select 1 from sqlite_master where type = 'table' and name = 'review_queue_jobs' limit 1")
     .get();
   if (!hasTable) {
-    return { total: 0, queued: 0, leased: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 0, byRepo: [] };
+    return {
+      total: 0,
+      queued: 0,
+      leased: 0,
+      running: 0,
+      providerDeferred: 0,
+      retryableProviderDeferred: 0,
+      failed: 0,
+      zcodeTimeoutFailed: 0,
+      retryableZCodeTimeoutFailed: 0,
+      exhaustedZCodeTimeoutFailed: 0,
+      byRepo: []
+    };
   }
   const nowIso = now.toISOString();
   const row = db
@@ -1079,6 +1122,14 @@ function readReviewQueueCounts(
        order by repo`
     )
     .all(nowIso) as unknown as Array<QueueCountRow & { repo: string }>;
+  const timeoutRows = db
+    .prepare(
+      `select last_error
+       from review_queue_jobs
+       where state = 'failed' and last_error like ?`
+    )
+    .all(`${ZCODE_TIMEOUT_ERROR_PREFIX}%`) as unknown as Array<{ last_error: string | null }>;
+  const timeoutCounts = summarizeZCodeTimeoutErrors(timeoutRows.map((timeoutRow) => timeoutRow.last_error));
   return {
     total: row.total ?? 0,
     queued: row.queued ?? 0,
@@ -1087,6 +1138,9 @@ function readReviewQueueCounts(
     providerDeferred: row.providerDeferred ?? 0,
     retryableProviderDeferred: row.retryableProviderDeferred ?? 0,
     failed: row.failed ?? 0,
+    zcodeTimeoutFailed: timeoutCounts.total,
+    retryableZCodeTimeoutFailed: timeoutCounts.retryable,
+    exhaustedZCodeTimeoutFailed: timeoutCounts.exhausted,
     byRepo: byRepoRows.map((repoRow) => ({
       repo: repoRow.repo,
       total: repoRow.total ?? 0,
