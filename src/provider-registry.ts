@@ -65,7 +65,7 @@ export const PROVIDER_FAMILY_CATALOG = [
   {
     id: "glm",
     displayName: "GLM / Z.ai",
-    aliases: ["z.ai", "zai", "zcode", "glm-5", "glm-5.2"],
+    aliases: ["z.ai", "zai", "zcode", "zcode-glm", "glm-5", "glm-5.2"],
     transport: "zai-chat-completions",
     apiShape: "Z.ai GLM chat-completions style API, currently reached through the local ZCode path.",
     authHints: [
@@ -227,21 +227,21 @@ export function findProviderFamily(
 export function validateProviderFamilyCatalog(
   catalog: readonly ProviderFamily[] = PROVIDER_FAMILY_CATALOG
 ): ProviderCatalogValidation {
-  const seen = new Map<string, string>();
+  const seen = new Map<string, { providerId: string; entryIndex: number }>();
   const duplicates: ProviderCatalogDuplicate[] = [];
 
-  for (const provider of catalog) {
+  for (const [entryIndex, provider] of catalog.entries()) {
     for (const key of providerLookupKeys(provider)) {
-      const firstProviderId = seen.get(key);
-      if (firstProviderId && firstProviderId !== provider.id) {
+      const first = seen.get(key);
+      if (first && first.entryIndex !== entryIndex) {
         duplicates.push({
           value: key,
-          firstProviderId,
+          firstProviderId: first.providerId,
           duplicateProviderId: provider.id
         });
         continue;
       }
-      seen.set(key, provider.id);
+      seen.set(key, { providerId: provider.id, entryIndex });
     }
   }
 
@@ -288,7 +288,9 @@ function normalizeProviderKey(value: string): string {
 }
 
 function redactProviderPublicText(value: string): string {
-  return redactSecrets(value).replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "[redacted-secret]");
+  return redactSecrets(value)
+    .replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "[redacted-secret]")
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[redacted-secret]");
 }
 
 function cloneProviderFamily(provider: ProviderFamily): ProviderFamily {

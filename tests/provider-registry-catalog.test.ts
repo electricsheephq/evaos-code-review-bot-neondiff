@@ -22,6 +22,7 @@ describe("provider family catalog", () => {
 
   it("finds providers by id and alias without case-sensitive caller coupling", () => {
     expect(findProviderFamily("glm")?.displayName).toBe("GLM / Z.ai");
+    expect(findProviderFamily("zcode-glm")?.id).toBe("glm");
     expect(findProviderFamily("z.ai")?.id).toBe("glm");
     expect(findProviderFamily("ZCODE")?.id).toBe("glm");
     expect(findProviderFamily("openai-compatible-api")?.id).toBe("openai-compatible");
@@ -32,7 +33,7 @@ describe("provider family catalog", () => {
   });
 
   it("validates duplicate provider ids and aliases across custom catalogs", () => {
-    const validation = validateProviderFamilyCatalog([
+    const aliasValidation = validateProviderFamilyCatalog([
       ...PROVIDER_FAMILY_CATALOG,
       {
         ...PROVIDER_FAMILY_CATALOG[0],
@@ -41,10 +42,24 @@ describe("provider family catalog", () => {
       }
     ]);
 
-    expect(validation.ok).toBe(false);
-    expect(validation.duplicates).toEqual([
+    expect(aliasValidation.ok).toBe(false);
+    expect(aliasValidation.duplicates).toEqual([
       { value: "z.ai", firstProviderId: "glm", duplicateProviderId: "glm-canary" }
     ]);
+
+    const idValidation = validateProviderFamilyCatalog([
+      ...PROVIDER_FAMILY_CATALOG,
+      {
+        ...PROVIDER_FAMILY_CATALOG[0],
+        aliases: ["glm-canary"]
+      }
+    ]);
+    expect(idValidation.ok).toBe(false);
+    expect(idValidation.duplicates).toContainEqual({
+      value: "glm",
+      firstProviderId: "glm",
+      duplicateProviderId: "glm"
+    });
   });
 
   it("keeps public metadata free of secret-looking auth values", () => {
@@ -70,5 +85,15 @@ describe("provider family catalog", () => {
     expect(serialized).toContain("OPENAI_API_KEY");
     expect(serialized).not.toContain("sk-live-accidental-secret");
     expect(serialized).toContain("[redacted-secret]");
+
+    const geminiProvider = {
+      ...PROVIDER_FAMILY_CATALOG.find((provider) => provider.id === "gemini")!,
+      riskNotes: [
+        "Accidental Google key AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx must not leak."
+      ]
+    };
+    const geminiSerialized = JSON.stringify(toPublicProviderFamily(geminiProvider));
+    expect(geminiSerialized).not.toContain("AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    expect(geminiSerialized).toContain("[redacted-secret]");
   });
 });
