@@ -30,6 +30,40 @@ export interface RepoPolicySnapshot {
   skippedByPolicy?: RepoProfileSkipReason;
 }
 
+export type ReviewSettingsSectionKey =
+  | "reviewSummary"
+  | "walkthrough"
+  | "changedFiles"
+  | "effortEstimate"
+  | "relatedContext"
+  | "suggestedLabels"
+  | "suggestedReviewers"
+  | "statusComment";
+
+export interface ReviewSettingsPreviewSection {
+  key: ReviewSettingsSectionKey;
+  label: string;
+  enabled: boolean;
+  mode: "inline_review" | "issue_comment" | "walkthrough" | "sticky_status" | "suggestion_only";
+}
+
+export interface ReviewSettingsPathInstruction {
+  pattern: string;
+  instructions: string[];
+}
+
+export interface ReviewSettingsPreview {
+  profile: "chill" | "assertive";
+  sections: ReviewSettingsPreviewSection[];
+  pathInstructions: ReviewSettingsPathInstruction[];
+  suggestions: {
+    labels: string[];
+    reviewers: string[];
+    autoApply: false;
+  };
+  roadmapOnly: string[];
+}
+
 export type PullFileFilterReason =
   | "no_profile_filters"
   | "matched_profile_include"
@@ -169,6 +203,37 @@ export function buildRepoPolicySnapshot(config: BotConfig, repo: string): RepoPo
     finishingTouches: profile.finishingTouches,
     suggestedLabels: profile.suggestedLabels,
     suggestedReviewers: profile.suggestedReviewers
+  };
+}
+
+export function buildReviewSettingsPreview(config: BotConfig, profile: ResolvedRepoProfile): ReviewSettingsPreview {
+  const walkthroughEnabled = config.walkthrough.enabled;
+  const walkthroughPostsSeparately = config.walkthrough.postIssueComment;
+  const walkthroughMode = walkthroughPostsSeparately ? "issue_comment" : "inline_review";
+  const labels = profile.suggestedLabels ?? [];
+  const reviewers = profile.suggestedReviewers ?? [];
+  return {
+    profile: profile.reviewProfile ?? "assertive",
+    sections: [
+      { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" },
+      { key: "walkthrough", label: "Walkthrough", enabled: walkthroughEnabled, mode: walkthroughMode },
+      { key: "changedFiles", label: "Changed-files table", enabled: walkthroughEnabled, mode: "walkthrough" },
+      { key: "effortEstimate", label: "Effort estimate", enabled: walkthroughEnabled, mode: "walkthrough" },
+      { key: "relatedContext", label: "Related issues/PRs", enabled: walkthroughEnabled, mode: "walkthrough" },
+      { key: "suggestedLabels", label: "Suggested labels", enabled: labels.length > 0, mode: "suggestion_only" },
+      { key: "suggestedReviewers", label: "Suggested reviewers", enabled: reviewers.length > 0, mode: "suggestion_only" },
+      { key: "statusComment", label: "Review status comment", enabled: config.reviewStatusComment?.enabled === true, mode: "sticky_status" }
+    ],
+    pathInstructions: Object.entries(profile.pathInstructions ?? {}).map(([pattern, instructions]) => ({
+      pattern,
+      instructions
+    })),
+    suggestions: {
+      labels,
+      reviewers,
+      autoApply: false
+    },
+    roadmapOnly: ["auto-apply labels", "auto-request reviewers"]
   };
 }
 

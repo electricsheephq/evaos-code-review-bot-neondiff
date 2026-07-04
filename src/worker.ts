@@ -33,6 +33,7 @@ import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
   buildPullFileFilterImpact,
+  buildReviewSettingsPreview,
   filterPullFilesForProfile,
   listReposToScan,
   resolveRepoProfile
@@ -1386,6 +1387,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     });
     writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
     writeFileSync(join(evidenceDir, "filter-impact.json"), `${JSON.stringify(filterImpact, null, 2)}\n`);
+    const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
+    writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
       writeFileSync(join(evidenceDir, "command.json"), `${JSON.stringify(commandDecision.command, null, 2)}\n`);
     }
@@ -1441,6 +1444,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           event,
           validation,
           proof,
+          settingsPreview,
           postIssueComment: config.walkthrough.postIssueComment,
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })

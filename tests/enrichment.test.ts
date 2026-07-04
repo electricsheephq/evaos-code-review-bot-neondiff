@@ -14,7 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
-import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, runIssueEnrichmentCycle } from "../src/issue-enrichment.js";
+import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle } from "../src/issue-enrichment.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 
@@ -44,6 +44,8 @@ describe("sticky enrichment comments", () => {
       enabled: false,
       postIssueComment: false,
       allowlist: [],
+      allowedLabels: [],
+      allowedReviewers: [],
       maxIssuesPerCycle: 5,
       maxCommentsPerCycle: 1,
       globalMaxIssuesPerCycle: 5,
@@ -65,6 +67,8 @@ describe("sticky enrichment comments", () => {
           enabled: false,
           postIssueComment: false,
           allowlist: ["owner/issue-repo"],
+          allowedLabels: ["issue-label"],
+          allowedReviewers: ["issue-reviewer"],
           maxIssuesPerCycle: 2,
           maxCommentsPerCycle: 1,
           globalMaxIssuesPerCycle: 4,
@@ -78,6 +82,8 @@ describe("sticky enrichment comments", () => {
           processExistingOpenIssuesOnActivation: false,
           repos: {
             "owner/issue-repo": {
+              allowedLabels: ["repo-label"],
+              allowedReviewers: ["repo-reviewer"],
               maxIssuesPerCycle: 3,
               maxCommentsPerCycle: 2
             }
@@ -92,6 +98,8 @@ describe("sticky enrichment comments", () => {
       expect(config.pilotRepos).toEqual(["owner/pr-review-repo"]);
       expect(issueConfig?.allowlist).toEqual(["owner/issue-repo"]);
       expect(issueConfig?.allowlist).not.toContain("owner/pr-review-repo");
+      expect(issueConfig?.allowedLabels).toEqual(["issue-label"]);
+      expect(issueConfig?.allowedReviewers).toEqual(["issue-reviewer"]);
       expect(issueConfig).toMatchObject({
         globalMaxIssuesPerCycle: 4,
         globalMaxCommentsPerCycle: 1,
@@ -99,6 +107,8 @@ describe("sticky enrichment comments", () => {
         leaseTtlMs: 1_200_000
       });
       expect(issueConfig?.repos?.["owner/issue-repo"]).toMatchObject({
+        allowedLabels: ["repo-label"],
+        allowedReviewers: ["repo-reviewer"],
         maxIssuesPerCycle: 3,
         maxCommentsPerCycle: 2
       });
@@ -562,6 +572,125 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).not.toContain("Suggested labels: Bug");
     expect(comment.body).toContain("Suggested owners: owner-a, owner-b, owner-c.");
     expect(comment.body).not.toContain("owner-d");
+  });
+
+  it("filters issue label and owner suggestions through issue-enrichment allowlists", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 97,
+      title: "Bug docs support escalation #22",
+      state: "open",
+      body: "Bug docs tests support failure with acceptance criteria and owner present.",
+      labels: [{ name: "support" }]
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedLabels: ["triage", "security", "docs"],
+      suggestedOwners: ["pr-reviewer", "issue-owner"],
+      allowedLabels: ["security"],
+      allowedOwners: ["issue-owner"],
+      maxSuggestions: 5
+    });
+
+    const suggestedLabelsLine = comment.body.split("\n").find((line) => line.startsWith("Suggested labels:"));
+    const suggestedOwnersLine = comment.body.split("\n").find((line) => line.startsWith("Suggested owners:"));
+    expect(suggestedLabelsLine).toBe("Suggested labels: security.");
+    expect(suggestedLabelsLine).not.toContain("triage");
+    expect(suggestedLabelsLine).not.toContain("docs");
+    expect(suggestedLabelsLine).not.toContain("bug");
+    expect(suggestedOwnersLine).toBe("Suggested owners: issue-owner.");
+    expect(suggestedOwnersLine).not.toContain("pr-reviewer");
+  });
+
+  it("treats empty issue suggestion allowlists as unrestricted", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 197,
+      title: "Bug docs test support escalation #22",
+      state: "open",
+      body: "Bug docs tests support failure with acceptance criteria and owner present.",
+      labels: [{ name: "support" }]
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedOwners: ["runtime-owner"],
+      allowedLabels: [],
+      allowedOwners: [],
+      maxSuggestions: 5
+    });
+
+    const suggestedLabelsLine = comment.body.split("\n").find((line) => line.startsWith("Suggested labels:"));
+    const suggestedOwnersLine = comment.body.split("\n").find((line) => line.startsWith("Suggested owners:"));
+    expect(suggestedLabelsLine).toBe("Suggested labels: bug, docs, tests.");
+    expect(suggestedOwnersLine).toBe("Suggested owners: runtime-owner.");
+  });
+
+  it("dedupes issue owner suggestions case-insensitively", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 198,
+      title: "Runtime owner handoff",
+      state: "open",
+      body: "Acceptance criteria and owner present."
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      suggestedOwners: ["Runtime-Owner", "runtime-owner", "incident-owner"],
+      allowedOwners: ["runtime-owner", "incident-owner"],
+      maxSuggestions: 5
+    });
+
+    const suggestedOwnersLine = comment.body.split("\n").find((line) => line.startsWith("Suggested owners:"));
+    expect(suggestedOwnersLine).toBe("Suggested owners: Runtime-Owner, incident-owner.");
+  });
+
+  it("falls back to global issue suggestion allowlists for empty per-repo overrides", () => {
+    const config = loadConfig();
+    config.issueEnrichment = {
+      ...config.issueEnrichment!,
+      enabled: true,
+      allowlist: ["owner/issue-repo"],
+      allowedLabels: ["docs"],
+      allowedReviewers: ["global-owner"],
+      repos: {
+        "owner/issue-repo": {
+          allowedLabels: [],
+          allowedReviewers: []
+        }
+      }
+    };
+
+    const policy = resolveIssueEnrichmentRepoPolicy(config.issueEnrichment, "owner/issue-repo");
+    expect(policy.allowed).toBe(true);
+    expect(policy.suggestions.allowedLabels).toEqual(["docs"]);
+    expect(policy.suggestions.allowedReviewers).toEqual(["global-owner"]);
+  });
+
+  it("infers issue label suggestions before applying allowlists without inventing owners", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 98,
+      title: "Docs runbook gap #22",
+      state: "open",
+      body: "Acceptance criteria and owner are present. Update the runbook docs before rollout.",
+      labels: [{ name: "support" }]
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      allowedLabels: ["docs", "security"],
+      allowedOwners: ["issue-owner", "incident-reviewer"],
+      maxSuggestions: 5
+    });
+
+    const suggestedLabelsLine = comment.body.split("\n").find((line) => line.startsWith("Suggested labels:"));
+    const suggestedOwnersLine = comment.body.split("\n").find((line) => line.startsWith("Suggested owners:"));
+    expect(suggestedLabelsLine).toBe("Suggested labels: docs.");
+    expect(suggestedLabelsLine).not.toContain("security");
+    expect(suggestedOwnersLine).toBe("Suggested owners: none.");
   });
 
   it("dry-run scans only the issue-enrichment allowlist and skips closed issues and PR-shaped issues", async () => {
@@ -1688,6 +1817,8 @@ describe("sticky enrichment comments", () => {
           enabled: true,
           postIssueComment: true,
           allowlist: ["owner/issue-repo"],
+          allowedLabels: ["docs", "security"],
+          allowedReviewers: ["issue-owner", "incident-reviewer"],
           maxIssuesPerCycle: 5,
           maxCommentsPerCycle: 2,
           processExistingOpenIssuesOnActivation: true
@@ -1702,7 +1833,7 @@ describe("sticky enrichment comments", () => {
           state: "open",
           updated_at: "2026-07-03T02:00:00.000Z",
           html_url: "https://github.test/owner/issue-repo/issues/41",
-          body: "Acceptance criteria and owner present."
+          body: "Acceptance criteria and owner present. Update the docs runbook."
         };
         const github = {
           listIssuesForEnrichment: async () => [issue],
@@ -1734,6 +1865,11 @@ describe("sticky enrichment comments", () => {
       expect(posts).toHaveLength(1);
         expect(posts[0]!.marker).toContain("issue=41");
         expect(posts[0]!.body).toContain("## evaOS issue enrichment");
+        expect(posts[0]!.body).toContain("Suggested labels: docs.");
+        expect(posts[0]!.body).not.toContain("Suggested labels: docs, security");
+        expect(posts[0]!.body).toContain("Suggested owners: none.");
+        expect(posts[0]!.body).not.toContain("issue-owner");
+        expect(posts[0]!.body).not.toContain("incident-reviewer");
         expect(state.getIssueEnrichmentRecord("owner/issue-repo", 41)).toMatchObject({
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:00:00.000Z",

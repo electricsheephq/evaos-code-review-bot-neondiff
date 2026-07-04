@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRequestChangesEligible } from "./regression-taxonomy.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
+import type { ReviewSettingsPreview } from "./repo-policy.js";
 import type {
   ChangedSurfaceValidationReport,
   DroppedFinding,
@@ -39,6 +40,7 @@ export function buildWalkthroughComment(input: {
   event: ReviewEvent;
   validation?: ChangedSurfaceValidationReport;
   proof?: ProofRequirementReport;
+  settingsPreview?: ReviewSettingsPreview;
   postIssueComment?: boolean;
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): WalkthroughComment {
@@ -54,6 +56,7 @@ export function buildWalkthroughComment(input: {
   const severityCounts = countSeverities(input.comments);
   const highSeverity = severityCounts.P0 + severityCounts.P1;
   const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
+  const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview);
 
   const visibleBody = [
     "## Walkthrough",
@@ -90,7 +93,7 @@ export function buildWalkthroughComment(input: {
     `Related issues/PRs: ${relatedRefs.length > 0 ? relatedRefs.join(", ") : "none detected from PR metadata"}.`,
     `Suggested labels: ${suggestedLabels.length > 0 ? suggestedLabels.join(", ") : "none"}.`,
     `Suggested reviewers: ${suggestedReviewers.length > 0 ? suggestedReviewers.join(", ") : "none from current metadata"}.`,
-    "",
+    ...(settingsPreviewSection.length > 0 ? ["", ...settingsPreviewSection, ""] : [""]),
     "### Pre-merge checklist",
     "",
     checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
@@ -117,6 +120,31 @@ export function buildWalkthroughComment(input: {
     body: [marker, stateMarker, redactedBody].join("\n"),
     postIssueComment: input.postIssueComment ?? false
   };
+}
+
+function formatSettingsPreviewSection(settings: ReviewSettingsPreview | undefined): string[] {
+  if (!settings) return [];
+  const enabledSections = settings.sections
+    .filter((section) => section.enabled)
+    .map((section) => `${formatInlinePublicText(section.label)} (${section.mode})`);
+  return [
+    "### Review Settings Preview",
+    "",
+    `- Profile: ${settings.profile}`,
+    `- Enabled sections: ${enabledSections.length > 0 ? enabledSections.join("; ") : "none"}`,
+    ...formatSettingsPathInstructions(settings),
+    `- Label suggestions: ${settings.suggestions.labels.length > 0 ? settings.suggestions.labels.map((label) => formatInlinePublicText(label)).join(", ") : "none"}`,
+    `- Reviewer suggestions: ${settings.suggestions.reviewers.length > 0 ? settings.suggestions.reviewers.map((reviewer) => formatInlinePublicText(reviewer)).join(", ") : "none"}`,
+    `- Suggestion behavior: ${settings.suggestions.autoApply ? "auto-apply enabled" : "suggestions only; labels and reviewers are not auto-applied."}`,
+    `- Roadmap-only settings: ${settings.roadmapOnly.length > 0 ? settings.roadmapOnly.map((setting) => formatInlinePublicText(setting)).join("; ") : "none"}`
+  ];
+}
+
+function formatSettingsPathInstructions(settings: ReviewSettingsPreview): string[] {
+  if (settings.pathInstructions.length === 0) return ["- Path instructions: none"];
+  return settings.pathInstructions.map((entry) =>
+    `- Path instructions: \`${formatInlineCodePublicText(entry.pattern)}\` - ${entry.instructions.map((instruction) => formatInlinePublicText(instruction)).join("; ")}`
+  );
 }
 
 function buildWalkthroughStateMarker(input: {
@@ -158,6 +186,10 @@ function formatInlinePublicText(value: string | undefined, publicConfidencePolic
     .trim()
     .replace(/^#{1,6}\s+/, "")
     .slice(0, 200);
+}
+
+function formatInlineCodePublicText(value: string | undefined): string {
+  return formatInlinePublicText(value).replace(/`/g, "\\`");
 }
 
 function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {

@@ -26,7 +26,7 @@ import {
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
-import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan } from "./issue-enrichment.js";
+import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
 import { buildReviewBudgetStatus } from "./review-budget.js";
 import {
@@ -899,11 +899,12 @@ async function main(): Promise<void> {
       const issueNumber = parsePositiveInteger(parseSingleArg(args.issue, "--issue"), "--issue");
       const issue = await github.getIssueOrPull(repo, issueNumber, { tolerateUnreadable: true });
       if (!issue) throw new Error(`Issue ${repo}#${issueNumber} was not found or is not readable`);
+      const issuePolicy = resolveIssueEnrichmentRepoPolicy(config.issueEnrichment!, repo);
       const output = buildIssueEnrichmentDryRunOutput({
         repo,
         issue,
-        suggestedLabels: repoPolicy.allowed ? repoPolicy.profile.suggestedLabels : undefined,
-        suggestedOwners: repoPolicy.allowed ? repoPolicy.profile.suggestedReviewers : undefined,
+        allowedLabels: issuePolicy.suggestions.allowedLabels,
+        allowedOwners: issuePolicy.suggestions.allowedReviewers,
         validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
         maxRelatedRefs: enrichmentConfig.maxRelatedRefs,
         maxSuggestions: enrichmentConfig.maxSuggestions,

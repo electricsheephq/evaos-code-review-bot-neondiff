@@ -138,6 +138,8 @@ export function buildIssueEnrichmentComment(input: {
   issue: GitHubRelatedIssueOrPull;
   suggestedLabels?: string[];
   suggestedOwners?: string[];
+  allowedLabels?: string[];
+  allowedOwners?: string[];
   validationSuggestions?: string[];
   maxRelatedRefs?: number;
   maxSuggestions?: number;
@@ -152,11 +154,22 @@ export function buildIssueEnrichmentComment(input: {
   const relatedRefs = extractRelatedRefs(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`).slice(0, input.maxRelatedRefs ?? 8);
   const existingLabels = uniqueCaseInsensitive(normalizeIssueLabels(input.issue.labels));
   const existingLabelKeys = new Set(existingLabels.map(normalizedSuggestionKey));
+  const allowedLabelKeys = input.allowedLabels === undefined || input.allowedLabels.length === 0
+    ? undefined
+    : new Set(uniqueCaseInsensitive(input.allowedLabels).map(normalizedSuggestionKey));
+  const allowedOwnerKeys = input.allowedOwners === undefined || input.allowedOwners.length === 0
+    ? undefined
+    : new Set(uniqueCaseInsensitive(input.allowedOwners).map(normalizedSuggestionKey));
   const suggestedLabels = uniqueCaseInsensitive([
     ...(input.suggestedLabels ?? []),
     ...suggestLabelsFromIssue(input.issue)
-  ]).filter((label) => !existingLabelKeys.has(normalizedSuggestionKey(label))).slice(0, input.maxSuggestions ?? 8);
-  const owners = unique(input.suggestedOwners ?? []).slice(0, input.maxSuggestions ?? 8);
+  ]).filter((label) => {
+    const key = normalizedSuggestionKey(label);
+    return !existingLabelKeys.has(key) && (allowedLabelKeys === undefined || allowedLabelKeys.has(key));
+  }).slice(0, input.maxSuggestions ?? 8);
+  const owners = uniqueCaseInsensitive(input.suggestedOwners ?? []).filter((owner) => {
+    return allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(owner));
+  }).slice(0, input.maxSuggestions ?? 8);
   const validationSuggestions = unique(input.validationSuggestions ?? []).slice(0, input.maxSuggestions ?? 8);
   const gaps = inferIssueAcceptanceGaps(input.issue);
   const visibleBody = [
@@ -200,6 +213,8 @@ export function buildIssueEnrichmentDryRunOutput(input: {
   issue: GitHubRelatedIssueOrPull;
   suggestedLabels?: string[];
   suggestedOwners?: string[];
+  allowedLabels?: string[];
+  allowedOwners?: string[];
   validationSuggestions?: string[];
   maxRelatedRefs?: number;
   maxSuggestions?: number;
@@ -225,6 +240,8 @@ export function buildIssueEnrichmentDryRunOutput(input: {
     issue: input.issue,
     suggestedLabels: input.suggestedLabels,
     suggestedOwners: input.suggestedOwners,
+    allowedLabels: input.allowedLabels,
+    allowedOwners: input.allowedOwners,
     validationSuggestions: input.validationSuggestions,
     maxRelatedRefs: input.maxRelatedRefs,
     maxSuggestions: input.maxSuggestions,

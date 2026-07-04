@@ -42,8 +42,16 @@ describe("build-enrichment-comment issue CLI", () => {
       expect(parsed).toMatchObject({ ok: true, skipped: false, repo: "owner/repo", issueNumber: 17 });
       expect(readFileSync(join(outputDir, "enrichment-comment.json"), "utf8")).toContain("\"issueNumber\": 17");
       const markdown = readFileSync(join(outputDir, "enrichment.md"), "utf8");
+      const suggestedLabelsLine = markdown.split("\n").find((line) => line.startsWith("Suggested labels:"));
+      const suggestedOwnersLine = markdown.split("\n").find((line) => line.startsWith("Suggested owners:"));
       expect(markdown).toContain("## evaOS issue enrichment");
       expect(markdown).toContain("Confirm owner, acceptance criteria, and validation evidence before implementation.");
+      expect(suggestedLabelsLine).toBe("Suggested labels: none.");
+      expect(suggestedOwnersLine).toBe("Suggested owners: none.");
+      expect(suggestedLabelsLine).not.toContain("issue-policy");
+      expect(suggestedOwnersLine).not.toContain("issue-owner");
+      expect(suggestedLabelsLine).not.toContain("triage");
+      expect(suggestedOwnersLine).not.toContain("owner-a");
       expect(markdown).not.toContain("Proof status:");
       expect(requests).toContainEqual({
         method: "GET",
@@ -324,6 +332,13 @@ function writeConfig(root: string, apiBaseUrl: string): string {
       packetVersion: "enrichment-comment-v0.1",
       maxRelatedRefs: 2,
       maxSuggestions: 2
+    },
+    issueEnrichment: {
+      enabled: false,
+      postIssueComment: false,
+      allowlist: ["owner/repo"],
+      allowedLabels: ["issue-policy"],
+      allowedReviewers: ["issue-owner"]
     },
     repoProfiles: {
       repos: {

@@ -7,6 +7,7 @@ import {
   buildPullFileFilterImpact,
   buildRepoPolicySnapshot,
   buildRepoProfilePromptSection,
+  buildReviewSettingsPreview,
   filterPullFilesForProfile,
   listReposToScan,
   resolveRepoProfile
@@ -380,6 +381,121 @@ describe("repo profile registry", () => {
     });
   });
 
+  it("maps CodeRabbit-style repo settings into a preview without enabling auto-apply behavior", () => {
+    const config = loadConfig(
+      writeConfig({
+        walkthrough: {
+          enabled: true,
+          postIssueComment: true
+        },
+        reviewStatusComment: {
+          enabled: true
+        },
+        repoProfiles: {
+          repos: {
+            "electricsheephq/evaos-code-review-bot": {
+              displayName: "Review bot",
+              reviewProfile: "assertive",
+              pathInstructions: {
+                "src/**": ["Prioritize runtime correctness and duplicate-posting regressions."]
+              },
+              suggestedLabels: ["review-settings"],
+              suggestedReviewers: ["maintainer-one"]
+            }
+          }
+        }
+      })
+    );
+    const profile = expectAllowed(resolveRepoProfile(config, "electricsheephq/evaos-code-review-bot"));
+
+    expect(buildReviewSettingsPreview(config, profile)).toEqual({
+      profile: "assertive",
+      sections: [
+        { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" },
+        { key: "walkthrough", label: "Walkthrough", enabled: true, mode: "issue_comment" },
+        { key: "changedFiles", label: "Changed-files table", enabled: true, mode: "walkthrough" },
+        { key: "effortEstimate", label: "Effort estimate", enabled: true, mode: "walkthrough" },
+        { key: "relatedContext", label: "Related issues/PRs", enabled: true, mode: "walkthrough" },
+        { key: "suggestedLabels", label: "Suggested labels", enabled: true, mode: "suggestion_only" },
+        { key: "suggestedReviewers", label: "Suggested reviewers", enabled: true, mode: "suggestion_only" },
+        { key: "statusComment", label: "Review status comment", enabled: true, mode: "sticky_status" }
+      ],
+      pathInstructions: [
+        { pattern: "src/**", instructions: ["Prioritize runtime correctness and duplicate-posting regressions."] }
+      ],
+      suggestions: {
+        labels: ["review-settings"],
+        reviewers: ["maintainer-one"],
+        autoApply: false
+      },
+      roadmapOnly: ["auto-apply labels", "auto-request reviewers"]
+    });
+  });
+
+  it("keeps review summary enabled when inline walkthrough carries the review body", () => {
+    const config = loadConfig(
+      writeConfig({
+        walkthrough: {
+          enabled: true,
+          postIssueComment: false
+        },
+        repoProfiles: {
+          repos: {
+            "electricsheephq/evaos-code-review-bot": {
+              displayName: "Review bot"
+            }
+          }
+        }
+      })
+    );
+    const profile = expectAllowed(resolveRepoProfile(config, "electricsheephq/evaos-code-review-bot"));
+
+    const preview = buildReviewSettingsPreview(config, profile);
+
+    expect(preview.sections).toContainEqual({
+      key: "reviewSummary",
+      label: "Review summary",
+      enabled: true,
+      mode: "inline_review"
+    });
+    expect(preview.sections).toContainEqual({
+      key: "walkthrough",
+      label: "Walkthrough",
+      enabled: true,
+      mode: "inline_review"
+    });
+  });
+
+  it("preserves chill profile and disabled status comment defaults in settings preview", () => {
+    const config = loadConfig(
+      writeConfig({
+        walkthrough: {
+          enabled: true,
+          postIssueComment: true
+        },
+        repoProfiles: {
+          repos: {
+            "electricsheephq/evaos-code-review-bot": {
+              displayName: "Review bot",
+              reviewProfile: "chill"
+            }
+          }
+        }
+      })
+    );
+    const profile = expectAllowed(resolveRepoProfile(config, "electricsheephq/evaos-code-review-bot"));
+
+    const preview = buildReviewSettingsPreview(config, profile);
+
+    expect(preview.profile).toBe("chill");
+    expect(preview.sections).toContainEqual({
+      key: "statusComment",
+      label: "Review status comment",
+      enabled: false,
+      mode: "sticky_status"
+    });
+  });
+
   it("keeps the active monitor profile template explicit and non-executing", () => {
     const template = JSON.parse(readFileSync(new URL("../config.active-profiles.example.json", import.meta.url), "utf8"));
     const config = loadConfig(writeConfig(template));
@@ -425,6 +541,10 @@ describe("repo profile registry", () => {
       {
         repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
         files: [
+          "openclaw.plugin.json",
+          "skills/lossless-openclaw-orchestrator/SKILL.md",
+          "evals/scenarios/v1/codex-collaboration-cockpit.json",
+          "evals/scorecards/v1.0/local-agent-usability-review.json",
           "packages/runtime/src/review-runner.ts",
           "packages/runtime/tests/review-runner.test.ts",
           "src/index.ts"
