@@ -70,6 +70,7 @@ describe("provider family catalog", () => {
   it("keeps public metadata free of secret-looking auth values", () => {
     const providerWithAccidentalSecret = {
       ...PROVIDER_FAMILY_CATALOG.find((provider) => provider.id === "openai")!,
+      id: "custom-sk-live-accidental-secret",
       authHints: [
         {
           envVar: "OPENAI_API_KEY",

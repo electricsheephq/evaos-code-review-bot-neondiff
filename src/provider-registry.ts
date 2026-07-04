@@ -263,7 +263,7 @@ export function toPublicProviderFamilies(
 export function toPublicProviderFamily(provider: ProviderFamily): PublicProviderFamily {
   return {
     [publicProviderFamilyBrand]: true,
-    id: provider.id,
+    id: redactProviderPublicText(provider.id),
     displayName: redactProviderPublicText(provider.displayName),
     aliases: provider.aliases.map((alias) => redactProviderPublicText(alias)),
     transport: provider.transport,
