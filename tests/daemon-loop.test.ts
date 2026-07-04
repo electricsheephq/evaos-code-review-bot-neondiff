@@ -350,6 +350,7 @@ function successfulIssueEnrichmentCycleResult(): IssueEnrichmentCycleResult {
       postIssueComment: false,
       separateAllowlist: true,
       allowlist: ["owner/repo"],
+      liveThresholdsMissingRepos: [],
       throttleDefaults: {
         maxIssuesPerCycle: 5,
         maxCommentsPerCycle: 0,
