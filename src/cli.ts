@@ -858,8 +858,6 @@ async function main(): Promise<void> {
       const output = buildIssueEnrichmentDryRunOutput({
         repo,
         issue,
-        suggestedLabels: issuePolicy.suggestions.allowedLabels,
-        suggestedOwners: issuePolicy.suggestions.allowedReviewers,
         allowedLabels: issuePolicy.suggestions.allowedLabels,
         allowedOwners: issuePolicy.suggestions.allowedReviewers,
         validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],

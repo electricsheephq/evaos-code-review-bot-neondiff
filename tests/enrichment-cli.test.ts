@@ -46,8 +46,10 @@ describe("build-enrichment-comment issue CLI", () => {
       const suggestedOwnersLine = markdown.split("\n").find((line) => line.startsWith("Suggested owners:"));
       expect(markdown).toContain("## evaOS issue enrichment");
       expect(markdown).toContain("Confirm owner, acceptance criteria, and validation evidence before implementation.");
-      expect(suggestedLabelsLine).toBe("Suggested labels: issue-policy.");
-      expect(suggestedOwnersLine).toBe("Suggested owners: issue-owner.");
+      expect(suggestedLabelsLine).toBe("Suggested labels: none.");
+      expect(suggestedOwnersLine).toBe("Suggested owners: none.");
+      expect(suggestedLabelsLine).not.toContain("issue-policy");
+      expect(suggestedOwnersLine).not.toContain("issue-owner");
       expect(suggestedLabelsLine).not.toContain("triage");
       expect(suggestedOwnersLine).not.toContain("owner-a");
       expect(markdown).not.toContain("Proof status:");

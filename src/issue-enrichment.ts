@@ -207,6 +207,16 @@ const DEFAULT_REPO_SCAN_OPTIONS = {
   pageLimit: 1
 };
 
+function issueSuggestionAllowlists(policy: IssueEnrichmentSuggestionPolicy): {
+  allowedLabels: string[];
+  allowedOwners: string[];
+} {
+  return {
+    allowedLabels: policy.allowedLabels,
+    allowedOwners: policy.allowedReviewers
+  };
+}
+
 export function buildIssueEnrichmentStatus(input: {
   config: { issueEnrichment?: IssueEnrichmentConfig };
   canPostAsApp: boolean;
@@ -646,13 +656,12 @@ export async function runIssueEnrichmentCycle(input: {
       try {
         if (!issue) throw new Error(`Issue metadata missing for ${item.repo}#${item.issueNumber}`);
         const policy = resolveIssueEnrichmentRepoPolicy(config, item.repo);
+        const allowlists = issueSuggestionAllowlists(policy.suggestions);
         const enrichment = buildIssueEnrichmentComment({
           repo: item.repo,
           issue,
-          suggestedLabels: policy.suggestions.allowedLabels,
-          suggestedOwners: policy.suggestions.allowedReviewers,
-          allowedLabels: policy.suggestions.allowedLabels,
-          allowedOwners: policy.suggestions.allowedReviewers,
+          allowedLabels: allowlists.allowedLabels,
+          allowedOwners: allowlists.allowedOwners,
           postIssueComment: true
         });
         const post = await postEnrichmentComment({
@@ -756,13 +765,12 @@ function planRepoIssueScan(input: {
   checkedAt: string;
   shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
 }): IssueEnrichmentScanItem[] {
+  const allowlists = issueSuggestionAllowlists(input.suggestions);
   const planned = input.issues.map((issue) => buildIssueEnrichmentDryRunOutput({
     repo: input.repo,
     issue,
-    suggestedLabels: input.suggestions.allowedLabels,
-    suggestedOwners: input.suggestions.allowedReviewers,
-    allowedLabels: input.suggestions.allowedLabels,
-    allowedOwners: input.suggestions.allowedReviewers,
+    allowedLabels: allowlists.allowedLabels,
+    allowedOwners: allowlists.allowedOwners,
     maxRelatedRefs: 8,
     maxSuggestions: 8
   }));

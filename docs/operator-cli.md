@@ -347,9 +347,10 @@ larger of the configured recent-update lookback and burst window. Deferred rows
 include `nextEligibleAt` based on the configured cooldown. Per-repo throttles live under
 `issueEnrichment.repos.<owner/name>` and can cap `maxIssuesPerCycle`,
 `maxCommentsPerCycle`, burst thresholds, cooldown, and backlog behavior.
-Issue label and reviewer/owner suggestions come only from
+Issue label and reviewer/owner allowlists come only from
 `issueEnrichment.allowedLabels` / `issueEnrichment.allowedReviewers` or the
-matching per-repo override. They intentionally do not use
+matching per-repo override. They constrain inferred issue suggestions; they do
+not create suggestions by themselves, and they intentionally do not use
 `repoProfiles.suggestedLabels` or `repoProfiles.suggestedReviewers`, which belong
 to PR review enrichment.
 

@@ -580,6 +580,30 @@ describe("sticky enrichment comments", () => {
     expect(suggestedOwnersLine).not.toContain("pr-reviewer");
   });
 
+  it("infers issue label suggestions before applying allowlists without inventing owners", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 98,
+      title: "Docs runbook gap #22",
+      state: "open",
+      body: "Acceptance criteria and owner are present. Update the runbook docs before rollout.",
+      labels: [{ name: "support" }]
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      allowedLabels: ["docs", "security"],
+      allowedOwners: ["issue-owner", "incident-reviewer"],
+      maxSuggestions: 5
+    });
+
+    const suggestedLabelsLine = comment.body.split("\n").find((line) => line.startsWith("Suggested labels:"));
+    const suggestedOwnersLine = comment.body.split("\n").find((line) => line.startsWith("Suggested owners:"));
+    expect(suggestedLabelsLine).toBe("Suggested labels: docs.");
+    expect(suggestedLabelsLine).not.toContain("security");
+    expect(suggestedOwnersLine).toBe("Suggested owners: none.");
+  });
+
   it("dry-run scans only the issue-enrichment allowlist and skips closed issues and PR-shaped issues", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-scan-"));
     try {
@@ -1704,6 +1728,8 @@ describe("sticky enrichment comments", () => {
           enabled: true,
           postIssueComment: true,
           allowlist: ["owner/issue-repo"],
+          allowedLabels: ["docs", "security"],
+          allowedReviewers: ["issue-owner", "incident-reviewer"],
           maxIssuesPerCycle: 5,
           maxCommentsPerCycle: 2,
           processExistingOpenIssuesOnActivation: true
@@ -1718,7 +1744,7 @@ describe("sticky enrichment comments", () => {
           state: "open",
           updated_at: "2026-07-03T02:00:00.000Z",
           html_url: "https://github.test/owner/issue-repo/issues/41",
-          body: "Acceptance criteria and owner present."
+          body: "Acceptance criteria and owner present. Update the docs runbook."
         };
         const github = {
           listIssuesForEnrichment: async () => [issue],
@@ -1750,6 +1776,11 @@ describe("sticky enrichment comments", () => {
       expect(posts).toHaveLength(1);
         expect(posts[0]!.marker).toContain("issue=41");
         expect(posts[0]!.body).toContain("## evaOS issue enrichment");
+        expect(posts[0]!.body).toContain("Suggested labels: docs.");
+        expect(posts[0]!.body).not.toContain("Suggested labels: docs, security");
+        expect(posts[0]!.body).toContain("Suggested owners: none.");
+        expect(posts[0]!.body).not.toContain("issue-owner");
+        expect(posts[0]!.body).not.toContain("incident-reviewer");
         expect(state.getIssueEnrichmentRecord("owner/issue-repo", 41)).toMatchObject({
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:00:00.000Z",
