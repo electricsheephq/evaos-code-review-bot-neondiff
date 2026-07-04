@@ -162,8 +162,11 @@ export async function doctorProviderRegistry(input: {
     if (provider.adapter !== "openai-compatible" || !input.smoke) {
       const capabilityError = providerReadinessCapabilityError(provider);
       const authError = providerAuthMetadataError(provider);
+      const smokeUnsupportedError = input.smoke && provider.adapter !== "openai-compatible"
+        ? `Smoke checks are not implemented for ${provider.adapter} providers.`
+        : undefined;
       const error = provider.enabled
-        ? capabilityError ?? authError
+        ? smokeUnsupportedError ?? capabilityError ?? authError
         : "Provider is disabled.";
       checks.push({
         providerId,
@@ -290,7 +293,9 @@ function signalWithTimeout(timeoutMs: number | undefined): AbortSignal | undefin
   const timeout = timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS;
   if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(timeout);
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), timeout);
+  const timer = setTimeout(() => controller.abort(), timeout);
+  const maybeUnref = timer as { unref?: () => void };
+  if (typeof maybeUnref.unref === "function") maybeUnref.unref();
   return controller.signal;
 }
 
@@ -328,6 +333,17 @@ function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEnt
     parsed = new URL(baseUrl);
   } catch {
     return "OpenAI-compatible provider baseUrl must be a valid URL for smoke checks.";
+  }
+  if (parsed.username || parsed.password) {
+    return "OpenAI-compatible smoke target must not include username or password credentials.";
+  }
+  if (containsSecretLikeText(decodeURIComponent(`${parsed.pathname}${parsed.hash}`))) {
+    return "OpenAI-compatible smoke target must not include secret-like path or fragment values.";
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (/(key|token|secret|password|session|cookie)/i.test(key)) {
+      return "OpenAI-compatible smoke target must not include credential query parameters.";
+    }
   }
   const loopback = isLoopbackHost(parsed.hostname);
   if (loopback && provider.capabilities.local) return undefined;

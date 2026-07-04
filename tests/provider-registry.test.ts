@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import {
   buildProviderRegistrySummary,
@@ -384,6 +384,33 @@ describe("provider registry", () => {
       });
     }
     expect(fetchCalls).toBe(0);
+
+    const credentialResult = await doctorProviderRegistry({
+      registry: {
+        ...config.providers!,
+        providers: {
+          ...config.providers!.providers,
+          "openai-compatible": {
+            ...config.providers!.providers["openai-compatible"],
+            baseUrl: "https://gateway.example.test/v1?api_key=short-provider-key"
+          }
+        }
+      },
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "short-provider-key"
+      }
+    });
+    expect(credentialResult.checks[0]).toMatchObject({
+      ok: false,
+      error: "OpenAI-compatible smoke target must not include credential query parameters."
+    });
+    expect(fetchCalls).toBe(0);
   });
 
   it("fails smoke when the configured model is not advertised", async () => {
@@ -546,6 +573,23 @@ describe("provider registry", () => {
     });
   });
 
+  it("reports unsupported smoke requests for non-OpenAI-compatible adapters", async () => {
+    const config = loadConfigFromObject({});
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "zcode-glm",
+      smoke: true
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      providerId: "zcode-glm",
+      ok: false,
+      smokeAttempted: false,
+      error: "Smoke checks are not implemented for zcode providers."
+    });
+  });
+
   it("classifies non-JSON successful models responses as output schema failures", async () => {
     const config = loadConfigFromObject({
       providers: {
@@ -637,6 +681,50 @@ describe("provider registry", () => {
       ok: true,
       modelCount: 1
     });
+  });
+
+  it("unrefs fallback smoke timeout timers on runtimes without AbortSignal.timeout", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "ollama-local",
+        providers: {
+          "ollama-local": {
+            enabled: true
+          }
+        }
+      }
+    });
+    const originalAbortTimeout = AbortSignal.timeout;
+    const unref = vi.fn();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((() => ({ unref })) as unknown as typeof setTimeout);
+    Object.defineProperty(AbortSignal, "timeout", {
+      configurable: true,
+      value: undefined
+    });
+
+    try {
+      const result = await doctorProviderRegistry({
+        registry: config.providers!,
+        providerId: "ollama-local",
+        smoke: true,
+        fetchImpl: async (_url, init) => {
+          expect(init?.signal).toBeInstanceOf(AbortSignal);
+          return new Response(JSON.stringify({ data: [{ id: config.providers!.providers["ollama-local"].model }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+      });
+
+      expect(result.checks[0]).toMatchObject({ ok: true });
+      expect(unref).toHaveBeenCalledTimes(1);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      Object.defineProperty(AbortSignal, "timeout", {
+        configurable: true,
+        value: originalAbortTimeout
+      });
+    }
   });
 
   it("rejects unsafe enabled provider config", () => {
