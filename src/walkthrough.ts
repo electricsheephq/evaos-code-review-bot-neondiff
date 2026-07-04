@@ -56,7 +56,7 @@ export function buildWalkthroughComment(input: {
   const severityCounts = countSeverities(input.comments);
   const highSeverity = severityCounts.P0 + severityCounts.P1;
   const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
-  const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview);
+  const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview, input.publicConfidencePolicy);
 
   const visibleBody = [
     "## Walkthrough",
@@ -122,28 +122,34 @@ export function buildWalkthroughComment(input: {
   };
 }
 
-function formatSettingsPreviewSection(settings: ReviewSettingsPreview | undefined): string[] {
+function formatSettingsPreviewSection(
+  settings: ReviewSettingsPreview | undefined,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
+): string[] {
   if (!settings) return [];
   const enabledSections = settings.sections
     .filter((section) => section.enabled)
-    .map((section) => `${formatInlinePublicText(section.label)} (${section.mode})`);
+    .map((section) => `${formatInlinePublicText(section.label, publicConfidencePolicy)} (${section.mode})`);
   return [
     "### Review Settings Preview",
     "",
     `- Profile: ${settings.profile}`,
     `- Enabled sections: ${enabledSections.length > 0 ? enabledSections.join("; ") : "none"}`,
-    ...formatSettingsPathInstructions(settings),
-    `- Label suggestions: ${settings.suggestions.labels.length > 0 ? settings.suggestions.labels.map((label) => formatInlinePublicText(label)).join(", ") : "none"}`,
-    `- Reviewer suggestions: ${settings.suggestions.reviewers.length > 0 ? settings.suggestions.reviewers.map((reviewer) => formatInlinePublicText(reviewer)).join(", ") : "none"}`,
+    ...formatSettingsPathInstructions(settings, publicConfidencePolicy),
+    `- Label suggestions: ${settings.suggestions.labels.length > 0 ? settings.suggestions.labels.map((label) => formatInlinePublicText(label, publicConfidencePolicy)).join(", ") : "none"}`,
+    `- Reviewer suggestions: ${settings.suggestions.reviewers.length > 0 ? settings.suggestions.reviewers.map((reviewer) => formatInlinePublicText(reviewer, publicConfidencePolicy)).join(", ") : "none"}`,
     `- Suggestion behavior: ${settings.suggestions.autoApply ? "auto-apply enabled" : "suggestions only; labels and reviewers are not auto-applied."}`,
-    `- Roadmap-only settings: ${settings.roadmapOnly.length > 0 ? settings.roadmapOnly.map((setting) => formatInlinePublicText(setting)).join("; ") : "none"}`
+    `- Roadmap-only settings: ${settings.roadmapOnly.length > 0 ? settings.roadmapOnly.map((setting) => formatInlinePublicText(setting, publicConfidencePolicy)).join("; ") : "none"}`
   ];
 }
 
-function formatSettingsPathInstructions(settings: ReviewSettingsPreview): string[] {
+function formatSettingsPathInstructions(
+  settings: ReviewSettingsPreview,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
+): string[] {
   if (settings.pathInstructions.length === 0) return ["- Path instructions: none"];
   return settings.pathInstructions.map((entry) =>
-    `- Path instructions: \`${formatInlineCodePublicText(entry.pattern)}\` - ${entry.instructions.map((instruction) => formatInlinePublicText(instruction)).join("; ")}`
+    `- Path instructions: \`${formatInlineCodePublicText(entry.pattern, publicConfidencePolicy)}\` - ${entry.instructions.map((instruction) => formatInlinePublicText(instruction, publicConfidencePolicy)).join("; ")}`
   );
 }
 
@@ -188,8 +194,8 @@ function formatInlinePublicText(value: string | undefined, publicConfidencePolic
     .slice(0, 200);
 }
 
-function formatInlineCodePublicText(value: string | undefined): string {
-  return formatInlinePublicText(value).replace(/`/g, "\\`");
+function formatInlineCodePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  return formatInlinePublicText(value, publicConfidencePolicy).replace(/`/g, "\\`");
 }
 
 function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {

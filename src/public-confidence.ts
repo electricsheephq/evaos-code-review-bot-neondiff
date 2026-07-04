@@ -17,15 +17,16 @@ const DEFAULT_MIN_P0_P1_LABELS = 30;
 const DEFAULT_MIN_NEGATIVE_CONTROL_SCENARIOS = 10;
 const DEFAULT_MIN_WILSON_LOWER_BOUND = 0.95;
 const PUBLIC_CONFIDENCE_REPLACEMENT = "confidence not calibrated";
-const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)\b)`;
+const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)(?=\b|[-_]))`;
 const CONFIDENCE_NOUN_PATTERN = String.raw`(?:confidence|certainty|reliability|accuracy|likelihood|sure(?:ness)?)`;
+const CONFIDENCE_SEPARATOR_PATTERN = String.raw`(?:\s+|[-_]+)`;
 const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}`, "gi");
 const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_NOUN_PATTERN}(?:\s+score(?:\s*(?::|=)\s*|\s+of\s+|\s+(?:is|was|at)\s+|\s+)|\s+of\s+|\s+(?:is|was|at|in)\s+|\s+)${CONFIDENCE_VALUE_PATTERN}`,
+  String.raw`\b${CONFIDENCE_NOUN_PATTERN}(?:${CONFIDENCE_SEPARATOR_PATTERN}score(?:\s*(?::|=)\s*|\s+of\s+|\s+(?:is|was|at)\s+|${CONFIDENCE_SEPARATOR_PATTERN})|\s+of\s+|\s+(?:is|was|at|in)\s+|${CONFIDENCE_SEPARATOR_PATTERN})${CONFIDENCE_VALUE_PATTERN}`,
   "gi"
 );
 const VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_VALUE_PATTERN}\s*(?:confident|confidence(?:\s+in\b)?|reliable|reliability|accurate|accuracy|likely|likelihood|sure)\b`,
+  String.raw`\b${CONFIDENCE_VALUE_PATTERN}(?:\s*|[-_]+)(?:confident|confidence(?:\s+in\b)?|reliable|reliability|accurate|accuracy|likely|likelihood|sure)\b`,
   "gi"
 );
 const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = /\b(?:high|medium|low)\s+confidence\s*\(\s*(?:0?\.\d+|1(?:\.0+)?)\s*\)/gi;

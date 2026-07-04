@@ -36,14 +36,18 @@ describe("public confidence display policy", () => {
       "likelihood 90%",
       "sure: 99%",
       "99% reliable",
-      "0.91 likely"
+      "0.91 likely",
+      "confidence-95%",
+      "confidence_score-95%",
+      "0.91-likely",
+      "0.91_likely"
     ].join("\n");
 
     const output = sanitizePublicConfidenceText(input);
 
     expect(output).not.toContain("0.95");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
-    expect(output.match(/confidence not calibrated/g)).toHaveLength(20);
+    expect(output.match(/confidence not calibrated/g)).toHaveLength(24);
   });
 
   it("does not corrupt unrelated confidence interval or threshold decimals", () => {

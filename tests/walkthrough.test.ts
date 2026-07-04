@@ -247,6 +247,53 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("[redacted-secret]");
   });
 
+  it("sanitizes confidence-like settings preview metadata unless calibrated display is enabled", () => {
+    const settingsPreview: ReviewSettingsPreview = {
+      profile: "assertive",
+      sections: [
+        { key: "reviewSummary", label: "Review summary 95% confidence", enabled: true, mode: "inline_review" }
+      ],
+      pathInstructions: [
+        {
+          pattern: "src/confidence-95%.ts",
+          instructions: ["Treat this as 0.91 likely after historical calibration."]
+        }
+      ],
+      suggestions: {
+        labels: ["confidence-95%"],
+        reviewers: ["reviewer-0.91-likely"],
+        autoApply: false
+      },
+      roadmapOnly: ["show 95% confidence after calibration"]
+    };
+
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT",
+      settingsPreview
+    });
+
+    expect(walkthrough.body).toContain("confidence not calibrated");
+    expect(walkthrough.body).not.toContain("95% confidence");
+    expect(walkthrough.body).not.toContain("0.91 likely");
+    expect(walkthrough.body).not.toContain("confidence-95%");
+    expect(walkthrough.body).not.toContain("reviewer-0.91-likely");
+  });
+
   it("omits settings preview cleanly when no settings metadata is provided", () => {
     const walkthrough = buildWalkthroughComment({
       repo: "electricsheephq/evaos-code-review-bot",
