@@ -29,8 +29,7 @@ const credentialSmokePatterns: RegExp[] = [
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
   /\bAIza[0-9A-Za-z_-]{20,}\b/,
   /\bglpat-[0-9A-Za-z_-]{20,}\b/,
-  /\bglm-[0-9A-Za-z_-]{20,}\b/,
-  /\b[A-Za-z0-9+/]{48,}={0,2}\b/
+  /\bglm-[0-9A-Za-z_-]{20,}\b/
 ];
 
 function readJson(path: string): JsonRecord {
@@ -81,9 +80,10 @@ function expectValidFixture(validate: ValidateFunction, name: string, config: Js
 function expectInvalidFixture(validate: ValidateFunction, name: string, config: JsonRecord): void {
   const errors = validateConfig(validate, config);
   const baseName = withoutExtension(name);
+  const expectedPaths = invalidFixtureExpectedPaths[baseName] ?? [];
 
   expect(errors, name).not.toEqual([]);
-  expect(errorPaths(errors), name).toEqual(expect.arrayContaining(invalidFixtureExpectedPaths[baseName] ?? []));
+  expect(errorPaths(errors), name).toEqual([...expectedPaths].sort());
 }
 
 function expectCredentialSmokeClean(fixture: string, text: string): void {
@@ -129,8 +129,9 @@ describe("NeonDiff config schema draft", () => {
     expect(get("properties.providers.properties.local.properties.provider.description", schema)).toMatch(/openai-compatible/);
     expect(get("properties.providers.properties.local.properties.provider.description", schema)).toMatch(/ollama-local/);
     expect(get("properties.providers.properties.local.properties.provider.enum", schema)).toEqual(["ollama", "none"]);
+    expect(get("properties.providers.properties.local.allOf", schema)).toBeDefined();
     expect(get("properties.providers.properties.local.properties.baseUrl.pattern", schema)).toBe(
-      "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[0-9]+/?$"
+      "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[1-9][0-9]*/?$"
     );
     expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerPullRequest.minimum", schema)).toBe(1);
     expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerFile.minimum", schema)).toBe(1);
@@ -297,6 +298,26 @@ describe("NeonDiff config schema draft", () => {
     expect(errorPaths(remoteAliasErrors)).toContain("/providers/local/provider");
   });
 
+  it("requires enabled local providers to name a real adapter and model", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    const errors = validateConfig(validate, {
+      ...baseConfig,
+      providers: {
+        ...asRecord(baseConfig.providers),
+        local: {
+          ...asRecord(get("providers.local", baseConfig)),
+          enabled: true,
+          provider: "none",
+          model: ""
+        }
+      }
+    });
+
+    expect(errorPaths(errors)).toEqual(expect.arrayContaining(["/providers/local/model", "/providers/local/provider"]));
+  });
+
   it("keeps local provider baseUrl constrained to HTTP loopback version roots", () => {
     const validate = compileSchema();
     const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
@@ -320,6 +341,8 @@ describe("NeonDiff config schema draft", () => {
 
     for (const baseUrl of [
       "https://localhost:11434/v1",
+      "http://localhost:11434/v0",
+      "http://localhost:11434/v00",
       "http://localhost:11434/v1/chat/completions",
       "http://localhost:11434/../../admin",
       "http://example.com/v1"

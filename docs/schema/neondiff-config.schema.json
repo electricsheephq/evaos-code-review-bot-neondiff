@@ -154,6 +154,22 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["enabled", "provider", "baseUrl", "model"],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "enabled": { "const": true }
+                },
+                "required": ["enabled"]
+              },
+              "then": {
+                "properties": {
+                  "provider": { "not": { "const": "none" } },
+                  "model": { "minLength": 1 }
+                }
+              }
+            }
+          ],
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -168,7 +184,7 @@
             "baseUrl": {
               "description": "HTTP loopback API root for local providers. Paths are limited to versioned API roots such as /v1.",
               "type": "string",
-              "pattern": "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[0-9]+/?$",
+              "pattern": "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[1-9][0-9]*/?$",
               "default": "http://localhost:11434/v1"
             },
             "model": {
