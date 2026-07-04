@@ -89,7 +89,7 @@ repo:
 
 ## Provider Notes
 
-`providers.byok.apiKeyEnv` names an environment variable; it is not a value slot for a raw key. Local provider hints are allowed for loopback URLs such as Ollama, but committed config should still avoid machine-specific secrets and credentials. Machine-specific provider settings belong in local overrides once runtime support exists.
+`providers.byok.apiKeyEnv` names an environment variable; it is not a value slot for a raw key. Local provider hints are limited to HTTP loopback version roots such as `http://localhost:11434/v1`; HTTPS loopback and arbitrary path suffixes are intentionally rejected in this draft. Committed config should still avoid machine-specific secrets and credentials. Machine-specific provider settings belong in local overrides once runtime support exists.
 
 ## Safety Defaults
 

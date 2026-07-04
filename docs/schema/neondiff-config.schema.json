@@ -182,7 +182,7 @@
               "default": "none"
             },
             "baseUrl": {
-              "description": "HTTP loopback API root for local providers. Paths are limited to versioned API roots such as /v1.",
+              "description": "HTTP-only loopback API root for local providers. HTTPS loopback is intentionally rejected in this draft so local-provider hints stay scoped to cleartext loopback APIs such as Ollama; paths are limited to versioned API roots such as /v1.",
               "type": "string",
               "pattern": "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[1-9][0-9]*/?$",
               "default": "http://localhost:11434/v1"

@@ -81,10 +81,11 @@ function expectValidFixture(validate: ValidateFunction, name: string, config: Js
 function expectInvalidFixture(validate: ValidateFunction, name: string, config: JsonRecord): void {
   const errors = validateConfig(validate, config);
   const baseName = withoutExtension(name);
-  const expectedPaths = invalidFixtureExpectedPaths[baseName] ?? [];
+  const expectedPaths = invalidFixtureExpectedPaths[baseName];
 
+  expect(expectedPaths, `${baseName} declares expected schema paths`).toBeDefined();
   expect(errors, name).not.toEqual([]);
-  expect(errorPaths(errors), name).toEqual([...expectedPaths].sort());
+  expect(errorPaths(errors), name).toEqual([...(expectedPaths ?? [])].sort());
 }
 
 function expectCredentialSmokeClean(fixture: string, text: string): void {
@@ -133,6 +134,10 @@ describe("NeonDiff config schema draft", () => {
     expect(get("properties.providers.properties.local.properties.provider.description", schema)).toMatch(/ollama-local/);
     expect(get("properties.providers.properties.local.properties.provider.enum", schema)).toEqual(["ollama", "none"]);
     expect(get("properties.providers.properties.local.allOf", schema)).toBeDefined();
+    expect(get("properties.providers.properties.local.properties.baseUrl.description", schema)).toMatch(/HTTP-only loopback/);
+    expect(get("properties.providers.properties.local.properties.baseUrl.description", schema)).toMatch(
+      /HTTPS loopback is intentionally rejected/
+    );
     expect(get("properties.providers.properties.local.properties.baseUrl.pattern", schema)).toBe(
       "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[1-9][0-9]*/?$"
     );
