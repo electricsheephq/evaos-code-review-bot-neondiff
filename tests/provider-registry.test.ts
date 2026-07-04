@@ -50,6 +50,17 @@ describe("provider registry", () => {
     });
     expect(secondZCode.providers.find((provider) => provider.id === "zcode-glm")).toMatchObject({ currentRuntime: true });
     expect(secondZCode.providers.find((provider) => provider.id === "zcode-glm-canary")).toMatchObject({ currentRuntime: false });
+    const zcodeRuntimeWithAlternateDefault = buildProviderRegistrySummary({
+      registry: {
+        ...config.providers!,
+        defaultProviderId: "ollama-local"
+      },
+      currentZCode: {
+        model: config.zcode.model
+      }
+    });
+    expect(zcodeRuntimeWithAlternateDefault.providers.find((provider) => provider.id === "zcode-glm")).toMatchObject({ currentRuntime: true });
+    expect(zcodeRuntimeWithAlternateDefault.providers.find((provider) => provider.id === "ollama-local")).toMatchObject({ currentRuntime: false });
 
     const doctor = await doctorProviderRegistry({ registry: config.providers! });
     expect(doctor).toMatchObject({
@@ -288,6 +299,58 @@ describe("provider registry", () => {
       troubleshooting: ["Add provider [invalid-provider-id] to providers.providers or choose an existing provider id."]
     });
     expect(JSON.stringify(result)).not.toContain("sk-live-secret-secret");
+  });
+
+  it("fails smoke checks for unsafe provider targets even when config validation was bypassed", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: {
+        ...config.providers!,
+        providers: {
+          ...config.providers!.providers,
+          "openai-compatible": {
+            ...config.providers!.providers["openai-compatible"],
+            baseUrl: "https://169.254.169.254/latest"
+          }
+        }
+      },
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "short-provider-key"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts."
+    });
+    expect(fetchCalls).toBe(0);
   });
 
   it("fails smoke when the configured model is not advertised", async () => {
@@ -565,6 +628,27 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/must not include credential query parameters/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "leaky-path",
+        providers: {
+          "leaky-path": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/proxy/sk-live-secret-secret-secret/v1#github_pat_secretsecretsecretsecretsecretsecretsecretsecret",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/must not include secret-like path or fragment values/);
 
     expect(() => loadConfigFromObject({
       providers: {

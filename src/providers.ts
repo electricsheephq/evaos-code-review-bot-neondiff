@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS = 30_000;
@@ -86,6 +87,8 @@ export function buildProviderRegistrySummary(input: {
   registry: ProviderRegistryConfig;
   currentZCode?: { providerId?: string; model?: string };
 }): { defaultProviderId: string; providers: ProviderRegistrySummaryEntry[] } {
+  const currentZCodeProviderId = input.currentZCode?.providerId;
+  const currentZCodeModel = input.currentZCode?.model;
   return {
     defaultProviderId: input.registry.defaultProviderId,
     providers: Object.entries(input.registry.providers).map(([id, provider]) => ({
@@ -102,8 +105,11 @@ export function buildProviderRegistrySummary(input: {
       ...(provider.timeoutMs ? { timeoutMs: provider.timeoutMs } : {}),
       ...(provider.retryMaxRetries !== undefined ? { retryMaxRetries: provider.retryMaxRetries } : {}),
       capabilities: provider.capabilities,
-      currentRuntime: provider.adapter === "zcode" &&
-        id === (input.currentZCode?.providerId ?? input.registry.defaultProviderId)
+      currentRuntime: provider.adapter === "zcode" && (
+        currentZCodeProviderId
+          ? id === currentZCodeProviderId
+          : Boolean(provider.enabled && currentZCodeModel && provider.model === currentZCodeModel)
+      )
     }))
   };
 }
@@ -212,6 +218,8 @@ async function smokeOpenAICompatibleProvider(input: {
   const authError = providerAuthMetadataError(input.provider);
   if (authError) return { ...baseCheck, ok: false, error: authError };
   if (!input.provider.baseUrl) return { ...baseCheck, ok: false, error: "OpenAI-compatible provider requires baseUrl for smoke checks." };
+  const targetError = providerSmokeTargetError(input.provider.baseUrl, input.provider);
+  if (targetError) return { ...baseCheck, ok: false, error: targetError };
   if (input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv && !input.env[input.provider.apiKeyEnv]) {
     return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
   }
@@ -296,6 +304,62 @@ function redactProviderSmokeText(
 
 function safeProviderIdForOutput(value: string): string {
   return isProviderId(value) ? value : "[invalid-provider-id]";
+}
+
+function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEntry): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return "OpenAI-compatible provider baseUrl must be a valid URL for smoke checks.";
+  }
+  const loopback = isLoopbackHost(parsed.hostname);
+  if (loopback && provider.capabilities.local) return undefined;
+  if (isUnsafeSmokeHost(parsed.hostname)) {
+    return "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts.";
+  }
+  return undefined;
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+}
+
+function isUnsafeSmokeHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (
+    isLoopbackHost(hostname) ||
+    normalized === "metadata" ||
+    normalized === "metadata.google.internal" ||
+    normalized === "metadata.azure.internal" ||
+    normalized === "169.254.169.254" ||
+    normalized === "100.100.100.200"
+  ) {
+    return true;
+  }
+  const ipVersion = isIP(normalized);
+  if (ipVersion === 4) return isPrivateOrLinkLocalIpv4(normalized);
+  if (ipVersion === 6) return isPrivateOrLinkLocalIpv6(normalized);
+  return false;
+}
+
+function isPrivateOrLinkLocalIpv4(value: string): boolean {
+  const parts = value.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [a, b] = parts;
+  return a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127);
+}
+
+function isPrivateOrLinkLocalIpv6(value: string): boolean {
+  return value === "::" ||
+    value.startsWith("fc") ||
+    value.startsWith("fd") ||
+    value.startsWith("fe80:");
 }
 
 function extractModelIds(data: unknown[]): string[] {
