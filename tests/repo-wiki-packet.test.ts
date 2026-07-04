@@ -91,7 +91,10 @@ describe("repo wiki packets", () => {
   it("redacts token-like strings from markdown and JSON payloads", () => {
     const token = "ghp_123456789012345678901234";
     const packet = buildRepoWikiPacket({
-      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      repo: {
+        fullName: "electricsheephq/evaos-code-review-bot",
+        remoteUrl: `https://${token}@github.com/electricsheephq/evaos-code-review-bot.git`
+      },
       source: { ref: "main", status: "fresh" },
       generatedAt,
       budget: { maxBytes: 12_000, maxTokens: 3_000 },
@@ -99,7 +102,8 @@ describe("repo wiki packets", () => {
         section({
           id: "security",
           title: "Security notes",
-          body: `Never paste ${token} into repo wiki context.`
+          body: `Never paste ${token} into repo wiki context.`,
+          sourceFiles: [`docs/person@example.com/${token}.md`, "README.md"]
         })
       ]
     });
@@ -107,11 +111,46 @@ describe("repo wiki packets", () => {
     const json = formatRepoWikiPacketJson(packet);
 
     expect(packet.redaction.status).toBe("redacted");
-    expect(packet.redaction.replacementCount).toBe(1);
+    expect(packet.redaction.replacementCount).toBeGreaterThanOrEqual(4);
+    expect(packet.repo.remoteUrl).toContain("[redacted-secret]");
+    expect(packet.repo.remoteUrl).not.toContain(token);
+    expect(packet.includedSections[0]?.sourceFiles).toContain("README.md");
+    expect(packet.includedSections[0]?.sourceFiles.join("\n")).toContain("[redacted-secret]");
+    expect(packet.includedFiles.map((file) => file.path)).toContain("README.md");
+    expect(packet.includedFiles.map((file) => file.path).join("\n")).toContain("[redacted-secret]");
     expect(markdown).not.toContain(token);
     expect(json).not.toContain(token);
+    expect(markdown).not.toContain("person@example.com");
+    expect(json).not.toContain("person@example.com");
     expect(markdown).toContain("[redacted-secret]");
     expect(JSON.parse(json).packetSha).toBe(packet.packetSha);
+  });
+
+  it("rejects budgets that cannot fit the fixed packet header", () => {
+    expect(() =>
+      buildRepoWikiPacket({
+        repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+        source: { ref: "main", status: "fresh" },
+        generatedAt,
+        budget: { maxBytes: 10, maxTokens: 3 },
+        sections: []
+      })
+    ).toThrow(/fixed packet header exceeds budget/);
+  });
+
+  it("measures final packet size after budget fields stabilize", () => {
+    const packet = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 520, maxTokens: 130 },
+      sections: [section({ id: "tight", title: "Tight", body: "This section must be dropped near the header budget." })]
+    });
+    const markdown = formatRepoWikiPacketMarkdown(packet);
+
+    expect(Buffer.byteLength(markdown, "utf8")).toBe(packet.byteBudget.usedBytes);
+    expect(packet.byteBudget.usedBytes).toBeLessThanOrEqual(packet.byteBudget.maxBytes);
+    expect(packet.tokenBudget.usedTokens).toBeLessThanOrEqual(packet.tokenBudget.maxTokens);
   });
 
   it("normalizes sections with stable ids, source files, and empty exclusions", () => {
@@ -134,6 +173,31 @@ describe("repo wiki packets", () => {
       sourceFiles: ["README.md", "src/worker.ts"]
     });
     expect(normalized.excluded).toEqual([{ id: "empty", reason: "empty" }]);
+  });
+
+  it("makes normalized section ID collisions deterministic across input order", () => {
+    const colliding = [
+      section({ id: "API Docs", title: "Second title", body: "Second body.", order: 10 }),
+      section({ id: "api_docs", title: "First title", body: "First body.", order: 10 })
+    ];
+
+    const first = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 12_000, maxTokens: 3_000 },
+      sections: colliding
+    });
+    const second = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 12_000, maxTokens: 3_000 },
+      sections: [...colliding].reverse()
+    });
+
+    expect(first.packetSha).toBe(second.packetSha);
+    expect(first.includedSections.map((included) => included.id)).toEqual(["api-docs", "api-docs-2"]);
   });
 
   it("marks stale and missing source context as degraded advisory packets", () => {

@@ -14,7 +14,8 @@ under review.
 
 `src/repo-wiki-packet.ts` builds a packet with:
 
-- repo identity: `owner/repo`, optional default branch, optional remote URL
+- repo identity: `owner/repo`, optional default branch, optional redacted
+  remote URL
 - source freshness: ref, head SHA, checked-at timestamp, and `fresh`, `stale`,
   or `missing` status
 - included sections: normalized codebase-map sections with source files, byte
@@ -42,7 +43,8 @@ Sections should be small, review-useful summaries such as:
 
 Inputs are normalized deterministically:
 
-- IDs are trimmed, lowercased, and slugged.
+- IDs are trimmed, lowercased, slugged, and made unique with deterministic
+  suffixes when normalized IDs collide.
 - CRLF text becomes LF text.
 - empty sections are excluded with reason `empty`.
 - source file lists are trimmed, de-duplicated, and sorted.
@@ -52,12 +54,14 @@ Inputs are normalized deterministically:
 
 The builder caps section bodies by UTF-8 byte length without splitting a
 multi-byte character. It then drops lower-priority sections until the rendered
-packet fits the byte and token-ish budgets.
+packet fits the byte and token-ish budgets. Budgets smaller than the fixed
+packet header fail closed instead of returning an over-budget packet.
 
 Secret-like text is passed through the repository's shared redaction helper
-before packet emission. Generated markdown and JSON must not contain raw tokens,
-API keys, cookie/session values, private keys, email addresses, or customer data
-matched by that helper.
+before packet emission, including remote URLs and section provenance strings.
+Generated markdown and JSON must not contain raw tokens, API keys,
+cookie/session values, private keys, email addresses, or customer data matched
+by that helper.
 
 ## Degraded Mode
 

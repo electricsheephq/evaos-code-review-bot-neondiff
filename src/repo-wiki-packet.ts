@@ -118,17 +118,17 @@ export function normalizeRepoWikiSections(input: RepoWikiSectionInput[]): {
   excluded: RepoWikiExcludedSection[];
 } {
   const excluded: RepoWikiExcludedSection[] = [];
-  const sections = input
+  const sortedSections = input
     .map((section) => {
-      const id = normalizeSectionId(section.id);
+      const baseId = normalizeSectionId(section.id);
       const body = normalizeText(section.body);
       if (!body) {
-        excluded.push({ id, reason: "empty" });
+        excluded.push({ id: baseId, reason: "empty" });
         return undefined;
       }
       return {
-        id,
-        title: normalizeText(section.title) || id,
+        id: baseId,
+        title: normalizeText(section.title) || baseId,
         body,
         order: Number.isFinite(section.order) ? Number(section.order) : 0,
         sourceFiles: normalizeSourceFiles(section.sourceFiles ?? []),
@@ -138,7 +138,7 @@ export function normalizeRepoWikiSections(input: RepoWikiSectionInput[]): {
     .filter((section): section is RepoWikiNormalizedSection => section !== undefined)
     .sort(compareSections);
 
-  return { sections, excluded };
+  return { sections: makeSectionIdsUnique(sortedSections), excluded };
 }
 
 export function buildRepoWikiPacket(input: BuildRepoWikiPacketInput): RepoWikiPacket {
@@ -162,25 +162,32 @@ export function buildRepoWikiPacket(input: BuildRepoWikiPacketInput): RepoWikiPa
   for (const section of normalized.sections) {
     const redactedTitle = redactAndCount(section.title, redactionCounter);
     const redactedBody = redactAndCount(section.body, redactionCounter);
+    const redactedSourceFileResults = section.sourceFiles.map((file) => redactAndCount(file, redactionCounter));
+    const redactedSourceFiles = normalizeSourceFiles(redactedSourceFileResults.map((file) => file.text));
+    const redactedSourceShaResult = section.sourceSha ? redactAndCount(section.sourceSha, redactionCounter) : undefined;
+    const redactedSourceSha = redactedSourceShaResult?.text;
     const cappedBody = truncateUtf8Bytes(redactedBody.text, maxSectionBytes);
+    const provenanceReplacementCount =
+      redactedSourceFileResults.reduce((count, file) => count + file.replacementCount, 0) +
+      (redactedSourceShaResult?.replacementCount ?? 0);
     const included: RepoWikiIncludedSection = {
       id: section.id,
       title: redactedTitle.text,
       body: cappedBody,
       order: section.order,
-      sourceFiles: section.sourceFiles,
-      ...(section.sourceSha ? { sourceSha: section.sourceSha } : {}),
+      sourceFiles: redactedSourceFiles,
+      ...(redactedSourceSha ? { sourceSha: redactedSourceSha } : {}),
       byteLength: Buffer.byteLength(cappedBody, "utf8"),
       tokenEstimate: tokenEstimateForBytes(Buffer.byteLength(cappedBody, "utf8")),
       truncated: cappedBody !== redactedBody.text,
-      redacted: redactedTitle.replacementCount + redactedBody.replacementCount > 0
+      redacted: redactedTitle.replacementCount + redactedBody.replacementCount + provenanceReplacementCount > 0
     };
     includedSections.push(included);
   }
 
   const packetBase = {
     packetVersion: input.packetVersion ?? REPO_WIKI_PACKET_VERSION,
-    repo: normalizeRepo(input.repo),
+    repo: normalizeRepo(input.repo, redactionCounter),
     source: normalizeSource(input.source, redactionCounter),
     generatedAt,
     advisory: REPO_WIKI_ADVISORY_LINE,
@@ -204,7 +211,13 @@ export function buildRepoWikiPacket(input: BuildRepoWikiPacketInput): RepoWikiPa
     if (dropped) acceptedExcluded = [{ id: dropped.id, reason: "packet_budget_exceeded" }, ...acceptedExcluded];
   }
 
-  return finalizePacket(packetBase, acceptedSections, acceptedExcluded);
+  const emptyPacket = finalizePacket(packetBase, acceptedSections, acceptedExcluded);
+  if (emptyPacket.byteBudget.usedBytes > maxBytes || emptyPacket.tokenBudget.usedTokens > maxTokens) {
+    throw new Error(
+      `fixed packet header exceeds budget (${emptyPacket.byteBudget.usedBytes}/${maxBytes} bytes, ${emptyPacket.tokenBudget.usedTokens}/${maxTokens} token-ish)`
+    );
+  }
+  return emptyPacket;
 }
 
 export function formatRepoWikiPacketMarkdown(packet: RepoWikiPacket): string {
@@ -294,25 +307,32 @@ function finalizePacket(
   excludedSections: RepoWikiExcludedSection[]
 ): RepoWikiPacket {
   const includedFiles = buildIncludedFiles(includedSections);
-  const withoutSha: Omit<RepoWikiPacket, "packetSha"> = {
+  let withoutSha: Omit<RepoWikiPacket, "packetSha"> = {
     ...base,
     includedSections,
     excludedSections: [...excludedSections].sort(compareExcluded),
     includedFiles
   };
-  const packetSha = sha256(canonicalStringify(withoutSha));
-  const packet: RepoWikiPacket = { ...withoutSha, packetSha };
-  const usedBytes = Buffer.byteLength(formatRepoWikiPacketMarkdown(packet), "utf8");
-  const usedTokens = tokenEstimateForBytes(usedBytes);
-  const measuredWithoutSha: Omit<RepoWikiPacket, "packetSha"> = {
-    ...withoutSha,
-    byteBudget: { ...withoutSha.byteBudget, usedBytes },
-    tokenBudget: { ...withoutSha.tokenBudget, usedTokens }
-  };
-  return {
-    ...measuredWithoutSha,
-    packetSha: sha256(canonicalStringify(measuredWithoutSha))
-  };
+  let packetSha = sha256(canonicalStringify(withoutSha));
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const packet: RepoWikiPacket = { ...withoutSha, packetSha };
+    const usedBytes = Buffer.byteLength(formatRepoWikiPacketMarkdown(packet), "utf8");
+    const usedTokens = tokenEstimateForBytes(usedBytes);
+    const nextWithoutSha: Omit<RepoWikiPacket, "packetSha"> = {
+      ...withoutSha,
+      byteBudget: { ...withoutSha.byteBudget, usedBytes },
+      tokenBudget: { ...withoutSha.tokenBudget, usedTokens }
+    };
+    const nextSha = sha256(canonicalStringify(nextWithoutSha));
+    if (usedBytes === withoutSha.byteBudget.usedBytes && usedTokens === withoutSha.tokenBudget.usedTokens) {
+      return { ...nextWithoutSha, packetSha: nextSha };
+    }
+    withoutSha = nextWithoutSha;
+    packetSha = nextSha;
+  }
+
+  return { ...withoutSha, packetSha };
 }
 
 function buildIncludedFiles(sections: RepoWikiIncludedSection[]): RepoWikiIncludedFile[] {
@@ -329,11 +349,13 @@ function buildIncludedFiles(sections: RepoWikiIncludedSection[]): RepoWikiInclud
     .map(([path, sectionIds]) => ({ path, sections: [...sectionIds].sort() }));
 }
 
-function normalizeRepo(repo: RepoWikiIdentity): RepoWikiIdentity {
+function normalizeRepo(repo: RepoWikiIdentity, counter: { count: number }): RepoWikiIdentity {
+  const defaultBranch = repo.defaultBranch ? redactAndCount(repo.defaultBranch, counter).text : undefined;
+  const remoteUrl = repo.remoteUrl ? redactAndCount(repo.remoteUrl, counter).text : undefined;
   return {
     fullName: repo.fullName,
-    ...(repo.defaultBranch ? { defaultBranch: repo.defaultBranch } : {}),
-    ...(repo.remoteUrl ? { remoteUrl: repo.remoteUrl } : {})
+    ...(defaultBranch ? { defaultBranch } : {}),
+    ...(remoteUrl ? { remoteUrl } : {})
   };
 }
 
@@ -358,7 +380,7 @@ function redactAndCount(input: string, counter: { count: number }): { text: stri
 }
 
 function normalizeSectionId(id: string): string {
-  const normalized = id.trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
+  const normalized = id.trim().toLowerCase().replace(/[^a-z0-9.-]+/g, "-").replace(/^-+|-+$/g, "");
   return normalized || "section";
 }
 
@@ -372,7 +394,25 @@ function normalizeSourceFiles(files: string[]): string[] {
 
 function compareSections(left: RepoWikiNormalizedSection, right: RepoWikiNormalizedSection): number {
   if (left.order !== right.order) return left.order - right.order;
-  return left.id.localeCompare(right.id);
+  const id = left.id.localeCompare(right.id);
+  if (id !== 0) return id;
+  const title = left.title.localeCompare(right.title);
+  if (title !== 0) return title;
+  const body = left.body.localeCompare(right.body);
+  if (body !== 0) return body;
+  const sourceFiles = left.sourceFiles.join("\0").localeCompare(right.sourceFiles.join("\0"));
+  if (sourceFiles !== 0) return sourceFiles;
+  return (left.sourceSha ?? "").localeCompare(right.sourceSha ?? "");
+}
+
+function makeSectionIdsUnique(sections: RepoWikiNormalizedSection[]): RepoWikiNormalizedSection[] {
+  const seen = new Map<string, number>();
+  return sections.map((section) => {
+    const count = (seen.get(section.id) ?? 0) + 1;
+    seen.set(section.id, count);
+    if (count === 1) return section;
+    return { ...section, id: `${section.id}-${count}` };
+  });
 }
 
 function compareExcluded(left: RepoWikiExcludedSection, right: RepoWikiExcludedSection): number {
