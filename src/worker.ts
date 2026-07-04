@@ -703,7 +703,8 @@ async function syncRetryReviewStatusComment(input: {
     pullTitle: input.pull.title,
     pullUrl: input.pull.html_url,
     ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-    ...(state === "failed" ? { details: "Review failed; see bot evidence for operator-only details." } : {})
+    ...(state === "failed" ? { details: "Review failed; see bot evidence for operator-only details." } : {}),
+    publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
   });
 }
 
@@ -1415,7 +1416,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       files: reviewFiles,
       droppedFromSchema: zcodeResult.droppedFromSchema,
       maxInlineComments: 25,
-      repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints
+      repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
+      publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
     });
     const comments = gate.comments;
     const dropped = sanitizeDroppedFindings(gate.dropped);
@@ -1439,7 +1441,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           event,
           validation,
           proof,
-          postIssueComment: config.walkthrough.postIssueComment
+          postIssueComment: config.walkthrough.postIssueComment,
+          publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })
       : undefined;
     const enrichment = config.enrichment?.enabled

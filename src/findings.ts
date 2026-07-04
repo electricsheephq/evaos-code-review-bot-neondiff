@@ -1,5 +1,6 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory } from "./regression-taxonomy.js";
+import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -71,7 +72,7 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
 
 export function normalizeFindingsForReview(
   findings: Finding[],
-  options: { maxInlineComments?: number } = {}
+  options: { maxInlineComments?: number; publicConfidencePolicy?: PublicConfidenceDisplayPolicy } = {}
 ): { comments: ReviewComment[]; dropped: DroppedFinding[] } {
   const maxInlineComments = options.maxInlineComments ?? 25;
   const accepted: Finding[] = [];
@@ -108,7 +109,7 @@ export function normalizeFindingsForReview(
         severity: finding.severity,
         category,
         title: finding.title,
-        body: formatReviewComment({ ...finding, category })
+        body: formatReviewComment({ ...finding, category }, options.publicConfidencePolicy)
       };
     }),
     dropped
@@ -128,10 +129,12 @@ export function decideReviewEvent(findings: Pick<ReviewComment, "severity" | "ca
   return findings.some((finding) => isRequestChangesEligible(finding)) ? "REQUEST_CHANGES" : "COMMENT";
 }
 
-export function formatReviewComment(finding: Finding): string {
+export function formatReviewComment(finding: Finding, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  const title = sanitizePublicConfidenceText(finding.title, publicConfidencePolicy);
+  const body = sanitizePublicConfidenceText(finding.body, publicConfidencePolicy);
   const category = finding.category ? `\n\nCategory: ${categoryLabel(finding.category)}` : "";
-  const why = finding.why_this_matters ? `\n\nWhy this matters: ${finding.why_this_matters}` : "";
-  return `**${finding.severity}: ${finding.title}**\n\n${finding.body}${category}${why}`;
+  const why = finding.why_this_matters ? `\n\nWhy this matters: ${sanitizePublicConfidenceText(finding.why_this_matters, publicConfidencePolicy)}` : "";
+  return `**${finding.severity}: ${title}**\n\n${body}${category}${why}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

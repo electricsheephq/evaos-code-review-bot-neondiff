@@ -23,6 +23,27 @@ describe("finding normalization and review policy", () => {
     expect(result.dropped.filter((drop) => drop.reason === "comment_cap_exceeded")).toHaveLength(5);
   });
 
+  it("keeps model confidence internal and strips confidence percentages from public inline comments by default", () => {
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression with 99% confidence",
+        body: "Confidence: 99%. I am 0.99 confident this branch regresses review output.",
+        confidence: 0.99
+      }
+    ]);
+
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.title).toBe("Regression with 99% confidence");
+    expect(result.comments[0]?.body).toContain("Confidence: uncalibrated.");
+    expect(result.comments[0]?.body).toContain("I am uncalibrated confident this branch regresses review output.");
+    expect(result.comments[0]?.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(result.comments[0]?.body).not.toContain("0.99 confident");
+  });
+
   it("drops any finding whose title or body contains secret-looking material", () => {
     const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
     const result = normalizeFindingsForReview([

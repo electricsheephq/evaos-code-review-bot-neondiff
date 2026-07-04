@@ -139,6 +139,23 @@ describe("review status comment", () => {
     expect(comment.body).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
   });
 
+  it("strips public confidence percentages from status comments by default", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "completed",
+      pullTitle: "Review is 95% confident",
+      reviewUrl: "https://github.test/review/1?confidence=95%",
+      details: "Confidence: 95%. Provider is 0.95 confident."
+    });
+
+    expect(comment.body).toContain("Review is uncalibrated confident");
+    expect(comment.body).toContain("Confidence: uncalibrated.");
+    expect(comment.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(comment.body).not.toContain("0.95 confident");
+  });
+
   it("keeps the sticky marker stable when repo slugs look secret-like", () => {
     const comment = buildReviewStatusComment({
       repo: "owner/api-token-rotator",

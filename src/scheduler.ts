@@ -1017,7 +1017,8 @@ async function syncReviewStatusComment(input: {
     pullUrl: input.pull.html_url,
     ...(input.reviewUrl ? { reviewUrl: input.reviewUrl } : {}),
     ...(input.details ? { details: input.details } : {}),
-    now: input.now
+    now: input.now,
+    publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
   });
   if (isStatusCommentFailure(result)) input.onStatusCommentFailure?.();
 }

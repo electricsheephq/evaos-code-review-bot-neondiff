@@ -217,6 +217,54 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).not.toContain("repo=evil/repo");
   });
 
+  it("strips public confidence percentages from walkthrough metadata by default", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull: {
+        ...pull,
+        title: "Review confidence 95%",
+        body: "No linked issue."
+      },
+      files: [{ filename: "src/review.ts", status: "modified", additions: 4, deletions: 1 }],
+      comments: [
+        {
+          path: "src/review.ts",
+          line: 4,
+          side: "RIGHT",
+          severity: "P2",
+          category: "runtime_correctness",
+          title: "Model says 88% confidence",
+          body: "Confidence: 88%. The model is 0.88 confident."
+        }
+      ],
+      dropped: [],
+      event: "COMMENT",
+      validation: {
+        summary: "Confidence 95% from validation summary.",
+        docsOnly: false,
+        recommendations: [
+          {
+            id: "focused_tests",
+            title: "Run focused tests with 90% confidence",
+            status: "recommended",
+            reason: "Confidence: 90%.",
+            matchedPaths: ["src/review.ts"],
+            proofTypes: ["unit test"]
+          }
+        ],
+        profileHints: {
+          validationHints: ["Confidence: 91%."],
+          proofExpectations: ["0.91 confident proof."]
+        }
+      }
+    });
+
+    expect(walkthrough.body).toContain("Review confidence uncalibrated");
+    expect(walkthrough.body).toContain("Confidence: uncalibrated.");
+    expect(walkthrough.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(walkthrough.body).not.toContain("0.91 confident");
+  });
+
   it("keeps the comment-secret checklist passing when secret-like findings were dropped", () => {
     const walkthrough = buildWalkthroughComment({
       repo: "100yenadmin/evaOS-GUI",

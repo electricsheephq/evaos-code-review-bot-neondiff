@@ -1,4 +1,5 @@
 import { redactSecrets } from "./secrets.js";
+import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 
 export type ReviewStatusCommentState =
   | "queued"
@@ -34,6 +35,7 @@ export interface BuildReviewStatusCommentInput {
   reviewUrl?: string;
   details?: string;
   now?: Date;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }
 
 export const REVIEW_STATUS_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-status";
@@ -57,10 +59,10 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
 } {
   const marker = buildReviewStatusMarker(input);
   const updatedAt = (input.now ?? new Date()).toISOString();
-  const title = formatInlinePublicText(input.pullTitle);
-  const details = sanitizePublicText(input.details);
-  const pullUrl = sanitizePublicText(input.pullUrl);
-  const reviewUrl = sanitizePublicText(input.reviewUrl);
+  const title = formatInlinePublicText(input.pullTitle, input.publicConfidencePolicy);
+  const details = sanitizePublicText(input.details, input.publicConfidencePolicy);
+  const pullUrl = sanitizePublicText(input.pullUrl, input.publicConfidencePolicy);
+  const reviewUrl = sanitizePublicText(input.reviewUrl, input.publicConfidencePolicy);
   const lines = [
     marker,
     `${REVIEW_STATUS_STATE_MARKER_PREFIX} status=${input.state} updated_at=${updatedAt} -->`,
@@ -98,6 +100,7 @@ export async function postReviewStatusComment(input: {
   reviewUrl?: string;
   details?: string;
   now?: Date;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): Promise<ReviewStatusCommentPostResult> {
   if (!input.enabled) return { posted: false, reason: "disabled", state: input.state };
   if (input.dryRun) return { posted: false, reason: "dry_run", state: input.state };
@@ -145,13 +148,16 @@ function validateMarkerIdentity(input: { repo: string; pullNumber: number; headS
   if (!HEAD_SHA_PATTERN.test(input.headSha)) throw new Error(`Invalid review status head SHA: ${input.headSha}`);
 }
 
-function sanitizePublicText(value: string | undefined): string {
+function sanitizePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
   if (!value) return "";
-  return redactSecrets(value.replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")).trim();
+  return sanitizePublicConfidenceText(
+    redactSecrets(value.replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")),
+    publicConfidencePolicy
+  ).trim();
 }
 
-function formatInlinePublicText(value: string | undefined): string {
-  return sanitizePublicText(value)
+function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  return sanitizePublicText(value, publicConfidencePolicy)
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^#{1,6}\s+/, "")

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRequestChangesEligible } from "./regression-taxonomy.js";
+import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import type {
   ChangedSurfaceValidationReport,
   DroppedFinding,
@@ -39,6 +40,7 @@ export function buildWalkthroughComment(input: {
   validation?: ChangedSurfaceValidationReport;
   proof?: ProofRequirementReport;
   postIssueComment?: boolean;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): WalkthroughComment {
   validateWalkthroughIdentity({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha });
   const marker = buildWalkthroughMarker({ repo: input.repo, pullNumber: input.pull.number });
@@ -56,7 +58,7 @@ export function buildWalkthroughComment(input: {
   const visibleBody = [
     "## Walkthrough",
     "",
-    `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title)}`,
+    `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title, input.publicConfidencePolicy)}`,
     `Head: \`${input.pull.head.sha}\` into \`${input.pull.base.ref}\`. Review event: \`${input.event}\`.`,
     "",
     `Estimated review effort: ${effort.score}/5 (~${effort.minutes} min)`,
@@ -81,7 +83,7 @@ export function buildWalkthroughComment(input: {
     "",
     "### Validation and Proof",
     "",
-    ...formatValidationSection(input.validation, input.proof),
+    ...formatValidationSection(input.validation, input.proof, input.publicConfidencePolicy),
     "",
     "### Related Context",
     "",
@@ -147,8 +149,11 @@ function hashWalkthrough(body: string): string {
   return createHash("sha256").update(body, "utf8").digest("hex");
 }
 
-function formatInlinePublicText(value: string | undefined): string {
-  return redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]"))
+function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  return sanitizePublicConfidenceText(
+    redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")),
+    publicConfidencePolicy
+  )
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^#{1,6}\s+/, "")
@@ -239,22 +244,23 @@ function formatCategoryBreakdown(comments: ReviewComment[]): string {
 
 function formatValidationSection(
   validation: ChangedSurfaceValidationReport | undefined,
-  proof: ProofRequirementReport | undefined
+  proof: ProofRequirementReport | undefined,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
 ): string[] {
   if (!validation) return ["Validation selector did not run."];
-  const lines = [validation.summary];
+  const lines = [sanitizePublicConfidenceText(validation.summary, publicConfidencePolicy)];
   for (const recommendation of validation.recommendations) {
     lines.push(
-      `- ${recommendation.status}: ${recommendation.title} - ${recommendation.reason}` +
-        (recommendation.proofTypes.length > 0 ? ` Proof: ${recommendation.proofTypes.join("; ")}.` : "")
+      `- ${recommendation.status}: ${sanitizePublicConfidenceText(recommendation.title, publicConfidencePolicy)} - ${sanitizePublicConfidenceText(recommendation.reason, publicConfidencePolicy)}` +
+        (recommendation.proofTypes.length > 0 ? ` Proof: ${sanitizePublicConfidenceText(recommendation.proofTypes.join("; "), publicConfidencePolicy)}.` : "")
     );
   }
-  if (proof) lines.push(`Proof status: ${proof.status} - ${proof.summary}`);
+  if (proof) lines.push(`Proof status: ${proof.status} - ${sanitizePublicConfidenceText(proof.summary, publicConfidencePolicy)}`);
   if (validation.profileHints.validationHints.length > 0) {
-    lines.push(`Profile validation hints: ${validation.profileHints.validationHints.join("; ")}`);
+    lines.push(`Profile validation hints: ${sanitizePublicConfidenceText(validation.profileHints.validationHints.join("; "), publicConfidencePolicy)}`);
   }
   if (validation.profileHints.proofExpectations.length > 0) {
-    lines.push(`Profile proof expectations: ${validation.profileHints.proofExpectations.join("; ")}`);
+    lines.push(`Profile proof expectations: ${sanitizePublicConfidenceText(validation.profileHints.proofExpectations.join("; "), publicConfidencePolicy)}`);
   }
   return lines;
 }

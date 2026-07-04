@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { validateFindingLocations } from "./diff.js";
 import { decideReviewEvent, normalizeFindingsForReview } from "./findings.js";
+import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { countCategories, isRequestChangesEligible } from "./regression-taxonomy.js";
 import type {
   DeterministicReviewGateSummary,
@@ -24,6 +25,7 @@ export function applyDeterministicReviewGate(input: {
   droppedFromSchema?: DroppedFinding[];
   maxInlineComments?: number;
   repoMemoryFalsePositiveFingerprints?: string[];
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): DeterministicReviewGateResult {
   const located = validateFindingLocations(input.findings, input.files);
   // Memory suppression intentionally precedes normalization; dropReasonCounts reflects that ordering.
@@ -31,7 +33,10 @@ export function applyDeterministicReviewGate(input: {
     located.valid,
     input.repoMemoryFalsePositiveFingerprints ?? []
   );
-  const normalized = normalizeFindingsForReview(repoMemoryFiltered.findings, { maxInlineComments: input.maxInlineComments });
+  const normalized = normalizeFindingsForReview(repoMemoryFiltered.findings, {
+    maxInlineComments: input.maxInlineComments,
+    publicConfidencePolicy: input.publicConfidencePolicy
+  });
   const dropped = [
     ...(input.droppedFromSchema ?? []),
     ...located.dropped,
