@@ -117,7 +117,7 @@ export async function runProviderAdapterFixture(input: {
       ...baseResult,
       error: {
         class: classifyProviderAdapterError(message),
-        message: redactAdapterEvidenceText(message)
+        message: redactPrivateEvidenceText(message, fixture.prompt)
       }
     };
   }
@@ -139,10 +139,11 @@ function buildFixtureEvidence(
   prompt: string,
   execution: ProviderAdapterExecutionResult
 ): ProviderAdapterFixtureEvidence {
+  const redactedOutput = redactPrivateEvidenceText(execution.text, prompt);
   return {
     promptSha256: sha256(prompt),
-    outputSha256: sha256(execution.text),
-    outputPreview: previewEvidenceText(execution.text),
+    outputSha256: sha256(redactedOutput),
+    outputPreview: redactedOutput.slice(0, 500),
     ...(execution.rawEvidence === undefined
       ? {}
       : { rawEvidencePreview: previewEvidenceText(stableStringify(redactPrivateEvidenceValue(execution.rawEvidence, prompt))) })
@@ -210,9 +211,7 @@ function redactPrivateEvidenceValue(value: unknown, prompt: string): unknown {
 
 function redactPrivateEvidenceText(value: string, prompt: string): string {
   if (containsPrivateEvidenceLikeText(value, prompt)) return "[redacted-private-evidence]";
-  const redacted = redactAdapterEvidenceText(value);
-  if (redacted !== value) return redacted;
-  return value;
+  return redactAdapterEvidenceText(value);
 }
 
 function isPrivateEvidenceKey(key: string): boolean {
@@ -226,7 +225,7 @@ function isSensitiveEvidenceKey(key: string): boolean {
 function containsPrivateEvidenceLikeText(value: string, prompt: string): boolean {
   return (
     containsSecretLikeText(value)
-    || /(^|\n)(diff --git|@@ |--- |\+\+\+ )/m.test(value)
+    || /(^|\n|\s)(diff --git|@@ |--- |\+\+\+ )/m.test(value)
     || (prompt.length > 0 && value.includes(prompt))
   );
 }
