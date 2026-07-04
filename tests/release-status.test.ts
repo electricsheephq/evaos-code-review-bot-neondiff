@@ -3126,6 +3126,100 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     });
   });
 
+  it("surfaces failed ZCode timeout queue jobs separately from provider cooldowns", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-zcode-timeout-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          lease_expires_at text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 1, 'failed', ?, ?, ?)`
+      ).run(
+        "timeout-failed",
+        "automatic:electricsheephq/evaos-code-review-bot-neondiff#216@head-timeout",
+        "electricsheephq/evaos-code-review-bot-neondiff",
+        "electricsheephq",
+        216,
+        "head-timeout",
+        "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000; original_error=ZCode failed before completion: spawnSync node ETIMEDOUT",
+        "2026-07-04T13:12:57.000Z",
+        "2026-07-04T13:12:57.000Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-04T13:15:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.summary).toMatchObject({
+      failedQueueJobs: 1,
+      zcodeTimeoutFailedQueueJobs: 1,
+      retryableZCodeTimeoutFailedQueueJobs: 1
+    });
+    expect(status.database).toMatchObject({
+      zcodeTimeoutFailedReviewQueueJobCount: 1,
+      retryableZCodeTimeoutFailedReviewQueueJobCount: 1,
+      exhaustedZCodeTimeoutFailedReviewQueueJobCount: 0
+    });
+    expect(status.gates).toContainEqual({
+      name: "queue_no_zcode_timeout_failed_jobs",
+      ok: false,
+      detail: "1 ZCode timeout failed durable queue job(s); retryable=1 exhausted=0"
+    });
+    expect(status.recommendedActions).toContain(
+      "inspect timed-out ZCode queue jobs and retry exact current heads with retry-failed"
+    );
+  });
+
   it("treats malformed provider cooldown timestamps as actionable backlog", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-db-invalid-cooldown-"));
     roots.push(root);

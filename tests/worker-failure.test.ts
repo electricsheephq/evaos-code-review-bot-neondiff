@@ -27,6 +27,7 @@ import {
   reviewPull,
   runWithProviderRetry
 } from "../src/worker.js";
+import { parseZCodeTimeoutError } from "../src/zcode-timeout.js";
 
 describe("worker review failures", () => {
   const roots: string[] = [];
@@ -57,6 +58,53 @@ describe("worker review failures", () => {
     );
     expect(evidence).toContain("ETIMEDOUT");
     expect(evidence).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    state.close();
+  });
+
+  it("records ZCode hard timeouts with bounded retry metadata instead of anonymous failure text", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-zcode-timeout-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(215, "head-timeout");
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pull,
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT with ghp_1234567890abcdefghijklmnopqrstuvwx")
+    });
+
+    const first = state.getProcessedReview("electricsheephq/evaos-code-review-bot-neondiff", 215, "head-timeout");
+    expect(first).toMatchObject({
+      status: "failed"
+    });
+    expect(first?.error).toContain("zcode_timeout_retryable");
+    expect(first?.error).toContain("reason=zcode_hard_timeout");
+    expect(first?.error).toContain("retry_attempt=1");
+    expect(first?.error).toContain("timeout_ms=1");
+    expect(first?.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(parseZCodeTimeoutError(first?.error)).toMatchObject({
+      retryAttempt: 1,
+      timeoutMs: 1,
+      retryable: true
+    });
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pull,
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT")
+    });
+
+    const second = state.getProcessedReview("electricsheephq/evaos-code-review-bot-neondiff", 215, "head-timeout");
+    expect(second?.error).toContain("retry_attempt=2");
+    expect(parseZCodeTimeoutError(second?.error)).toMatchObject({
+      retryAttempt: 2,
+      retryable: false
+    });
     state.close();
   });
 

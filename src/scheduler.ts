@@ -1063,14 +1063,13 @@ async function runLeasedQueueJob(input: {
       updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "assigned");
       return "skipped_provider_cooldown";
     }
-    recordFailedReview({
+    const errorMessage = recordFailedReview({
       config: input.config,
       state: input.state,
       repo: input.job.repo,
       pull,
       error
     });
-    const errorMessage = error instanceof Error ? error.message : String(error);
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "failed",
