@@ -932,8 +932,74 @@ describe("sticky enrichment comments", () => {
       expect(calls).toEqual([{
         repo: "owner/issue-repo",
         since: "2026-07-03T11:00:00.000Z",
-        pageLimit: 2
+        pageLimit: 10
       }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("requests open issue-only pages so PR-heavy repositories cannot starve issue enrichment", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-issue-only-scan-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["owner/pr-heavy-repo"],
+          maxIssuesPerCycle: 3,
+          maxCommentsPerCycle: 0,
+          cooldownMs: 600_000,
+          burstWindowMs: 3_600_000,
+          maxIssuesPerBurst: 10,
+          lookbackMs: 300_000,
+          processExistingOpenIssuesOnActivation: false
+        }
+      })}\n`);
+      const calls: Array<{
+        repo: string;
+        state?: string;
+        pageLimit?: number;
+        excludePullRequests?: boolean;
+        minIssueResults?: number;
+      }> = [];
+
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath),
+        dryRun: true,
+        checkedAt: "2026-07-03T12:00:00.000Z",
+        reader: {
+          listIssuesForEnrichment: async (repo, options) => {
+            calls.push({
+              repo,
+              state: options?.state,
+              pageLimit: options?.pageLimit,
+              excludePullRequests: options?.excludePullRequests,
+              minIssueResults: options?.minIssueResults
+            });
+            return [
+              {
+                number: 101,
+                title: "Real issue behind a PR-heavy first page",
+                state: "open",
+                updated_at: "2026-07-03T11:59:00.000Z",
+                body: "Acceptance criteria and owner present."
+              }
+            ];
+          }
+        }
+      });
+
+      expect(scan.ok).toBe(true);
+      expect(calls).toEqual([{
+        repo: "owner/pr-heavy-repo",
+        state: "open",
+        pageLimit: 10,
+        excludePullRequests: true,
+        minIssueResults: 11
+      }]);
+      expect(scan.summary).toMatchObject({ issuesSeen: 1, eligible: 1, skipped: 0 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
