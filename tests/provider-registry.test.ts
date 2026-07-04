@@ -179,6 +179,21 @@ describe("provider registry", () => {
     expect(JSON.stringify(httpResult)).not.toContain("short-provider-key");
     expect(JSON.stringify(httpResult)).toContain("[redacted-provider-key]");
     expect(JSON.stringify(thrownResult)).not.toContain("token-secret");
+
+    const categoryResult = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => new Response("gateway echoed overload", { status: 400 }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "overload"
+      }
+    });
+    expect(categoryResult.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "unknown"
+    });
+    expect(JSON.stringify(categoryResult)).not.toContain("overload");
   });
 
   it("doctors multiple enabled providers in metadata mode without smoking network endpoints", async () => {
@@ -251,6 +266,28 @@ describe("provider registry", () => {
       troubleshooting: ["--smoke true requires --provider to avoid unscoped provider network fan-out."]
     });
     expect(fetchCalls).toBe(0);
+  });
+
+  it("does not reflect unsafe unknown provider ids into doctor output", async () => {
+    const config = loadConfigFromObject({});
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "sk-live-secret-secret"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      providerId: "[invalid-provider-id]",
+      checks: [
+        expect.objectContaining({
+          providerId: "[invalid-provider-id]",
+          error: "Provider [invalid-provider-id] is not configured."
+        })
+      ],
+      troubleshooting: ["Add provider [invalid-provider-id] to providers.providers or choose an existing provider id."]
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-live-secret-secret");
   });
 
   it("fails smoke when the configured model is not advertised", async () => {
@@ -528,6 +565,90 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/must not include credential query parameters/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "metadata-host",
+        providers: {
+          "metadata-host": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://169.254.169.254/latest",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/must not point to private, link-local, or cloud metadata hosts/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "metadata-name",
+        providers: {
+          "metadata-name": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://metadata.google.internal/computeMetadata/v1",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/must not point to private, link-local, or cloud metadata hosts/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "bad-adapter-type",
+        providers: {
+          "bad-adapter-type": {
+            enabled: true,
+            adapter: { toString: () => "openai-compatible" },
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/adapter must be a string/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "bad-auth-type",
+        providers: {
+          "bad-auth-type": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: { toString: () => "none" },
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/authMode must be a string/);
 
     expect(() => loadConfigFromObject({
       providers: {

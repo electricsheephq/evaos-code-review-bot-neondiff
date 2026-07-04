@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { dirname, join } from "node:path";
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
@@ -783,6 +784,42 @@ function isLoopbackHost(hostname: string): boolean {
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
 }
 
+function isUnsafeProviderHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (isLoopbackHost(hostname)) return false;
+  if (
+    normalized === "metadata" ||
+    normalized === "metadata.google.internal" ||
+    normalized === "metadata.azure.internal" ||
+    normalized === "169.254.169.254" ||
+    normalized === "100.100.100.200"
+  ) {
+    return true;
+  }
+  const ipVersion = isIP(normalized);
+  if (ipVersion === 4) return isPrivateOrLinkLocalIpv4(normalized);
+  if (ipVersion === 6) return isPrivateOrLinkLocalIpv6(normalized);
+  return false;
+}
+
+function isPrivateOrLinkLocalIpv4(value: string): boolean {
+  const parts = value.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [a, b] = parts;
+  return a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127);
+}
+
+function isPrivateOrLinkLocalIpv6(value: string): boolean {
+  return value === "::" ||
+    value.startsWith("fc") ||
+    value.startsWith("fd") ||
+    value.startsWith("fe80:");
+}
+
 function validateDesktopConfig(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validateOptionalString(value.openAICompatibleEndpoint, `${label}.openAICompatibleEndpoint`);
@@ -814,8 +851,10 @@ function validateProviderRegistryConfig(value: unknown, label: string): void {
 function validateProviderRegistryEntry(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validateBoolean(value.enabled, `${label}.enabled`);
-  const adapter = String(value.adapter);
-  const authMode = String(value.authMode);
+  if (typeof value.adapter !== "string") throw new Error(`${label}.adapter must be a string`);
+  if (typeof value.authMode !== "string") throw new Error(`${label}.authMode must be a string`);
+  const adapter = value.adapter;
+  const authMode = value.authMode;
   if (!["zcode", "openai-compatible", "anthropic", "openai", "gemini"].includes(adapter)) {
     throw new Error(`${label}.adapter must be zcode, openai-compatible, anthropic, openai, or gemini`);
   }
@@ -882,6 +921,9 @@ function validateProviderBaseUrl(value: string, label: string): void {
   }
   if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
     throw new Error(`${label} must use https unless it points to localhost/loopback`);
+  }
+  if (isUnsafeProviderHost(parsed.hostname)) {
+    throw new Error(`${label} must not point to private, link-local, or cloud metadata hosts`);
   }
 }
 

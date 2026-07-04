@@ -136,9 +136,10 @@ export async function doctorProviderRegistry(input: {
 
   for (const providerId of providerIds) {
     const provider = input.registry.providers[providerId];
+    const safeProviderId = safeProviderIdForOutput(providerId);
     if (!provider) {
       checks.push({
-        providerId,
+        providerId: safeProviderId,
         ok: false,
         adapter: "openai-compatible",
         enabled: false,
@@ -146,9 +147,9 @@ export async function doctorProviderRegistry(input: {
         authMode: "none",
         smokeAttempted: false,
         readMode: "metadata_only",
-        error: `Provider ${providerId} is not configured.`
+        error: `Provider ${safeProviderId} is not configured.`
       });
-      troubleshooting.push(`Add provider ${providerId} to providers.providers or choose an existing provider id.`);
+      troubleshooting.push(`Add provider ${safeProviderId} to providers.providers or choose an existing provider id.`);
       continue;
     }
 
@@ -181,7 +182,7 @@ export async function doctorProviderRegistry(input: {
   return {
     ok: checks.every((check) => check.ok),
     command: "providers doctor",
-    ...(input.providerId ? { providerId: input.providerId } : {}),
+    ...(input.providerId ? { providerId: safeProviderIdForOutput(input.providerId) } : {}),
     defaultProviderId: input.registry.defaultProviderId,
     checks,
     troubleshooting
@@ -232,7 +233,7 @@ async function smokeOpenAICompatibleProvider(input: {
       return {
         ...baseCheck,
         ok: false,
-        errorCategory: classifyProviderError(`${response.status} ${text}`),
+        errorCategory: classifyProviderError(`${response.status} ${redactedText}`),
         error
       };
     }
@@ -291,6 +292,10 @@ function redactProviderSmokeText(
     : undefined;
   if (providerKey) redacted = redacted.split(providerKey).join("[redacted-provider-key]");
   return redacted;
+}
+
+function safeProviderIdForOutput(value: string): string {
+  return isProviderId(value) ? value : "[invalid-provider-id]";
 }
 
 function extractModelIds(data: unknown[]): string[] {
