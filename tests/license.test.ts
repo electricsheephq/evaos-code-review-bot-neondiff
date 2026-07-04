@@ -210,6 +210,41 @@ describe("license activation and entitlement cache", () => {
     expect(JSON.stringify(result)).not.toContain(key);
   });
 
+  it("rolls back server activation when local entitlement persistence fails", async () => {
+    const root = mkRoot(roots);
+    const blockedParent = join(root, "not-a-directory");
+    writeFileSync(blockedParent, "blocks cache directory creation");
+    const config = licenseConfig(root, undefined);
+    config.apiBaseUrl = undefined;
+    config.cachePath = join(blockedParent, "entitlement.json");
+    const seenUrls: string[] = [];
+    const server = await startLicenseServer((req, res) => {
+      seenUrls.push(req.url ?? "");
+      if (req.url === "/v1/license/deactivate") {
+        writeJson(res, 200, {});
+        return;
+      }
+      writeJson(res, 200, {
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        updateEntitlement: true
+      });
+    });
+    servers.push(server);
+    config.apiBaseUrl = server.url;
+
+    await expect(activateLicense({
+      config,
+      licenseKey: "LIC-rollback-persistence-test-123456",
+      repo: "owner/private"
+    })).rejects.toThrow();
+
+    expect(seenUrls).toEqual(["/v1/license/activate", "/v1/license/deactivate"]);
+    expect(existsSync(join(root, "license.key"))).toBe(false);
+    expect(existsSync(config.cachePath)).toBe(false);
+  });
+
   it("derives cache path from statePath and rejects license artifacts inside the checkout", () => {
     const root = mkRoot(roots);
     const config = loadConfigFromObject({
@@ -338,7 +373,7 @@ describe("license activation and entitlement cache", () => {
     const server = await startLicenseServer((_req, res) => writeJson(res, 200, {
       status: "active",
       checkedAt: "2026-07-04T00:00:00.000Z",
-      expiresAt: "2026-08-01T00:00:00.000Z",
+      expiresAt: "2999-08-01T00:00:00.000Z",
       repoVisibilityScope: "private",
       updateEntitlement: true
     }));
@@ -707,7 +742,7 @@ describe("license activation and entitlement cache", () => {
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
       status: "active",
       checkedAt: new Date().toISOString(),
-      expiresAt: "2026-08-01T00:00:00.000Z",
+      expiresAt: "2999-08-01T00:00:00.000Z",
       repoVisibilityScope: "private",
       updateEntitlement: true
     })}\n`, { mode: 0o600 });

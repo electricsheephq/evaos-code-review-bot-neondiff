@@ -106,6 +106,14 @@ export async function activateLicense(input: {
     writeLicenseKey(input.config, licenseKey);
     writeLicenseCache(input.config.cachePath, entitlement);
   } catch (error) {
+    await callLicenseApi({
+      config: input.config,
+      path: "/v1/license/deactivate",
+      licenseKey,
+      repo: input.repo,
+      now,
+      fetchImpl: input.fetchImpl
+    });
     deleteLicenseKey(input.config);
     deleteLicenseCache(input.config.cachePath);
     throw error;

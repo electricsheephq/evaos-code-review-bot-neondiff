@@ -1737,7 +1737,7 @@ export class ReviewStateStore {
                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
          where substr(attempt_id, 1, ?) = ?
-           and state in ('queued', 'leased', 'running', 'provider_deferred')
+           and state in ('queued', 'leased', 'running', 'provider_deferred', 'blocked_on_proof')
          order by datetime(created_at) desc
          limit 1`
       )

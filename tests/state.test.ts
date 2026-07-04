@@ -817,14 +817,6 @@ describe("review state store", () => {
       baseSha: "base-a",
       now: new Date("2026-07-01T00:02:00.000Z")
     });
-    const third = store.enqueueReviewQueueJob({
-      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
-      pullNumber: 220,
-      headSha: "head-a",
-      baseSha: "base-a",
-      now: new Date("2026-07-01T00:03:00.000Z")
-    });
-
     expect(second).toMatchObject({
       enqueued: true,
       job: {
@@ -835,6 +827,20 @@ describe("review state store", () => {
       }
     });
     expect(second.job.attemptId).toContain(":after-terminal:");
+    store.updateReviewQueueJobState({
+      jobId: second.job.jobId,
+      state: "blocked_on_proof",
+      nextEligibleAt: "2026-07-01T00:20:00.000Z",
+      lastError: "license proof required",
+      now: new Date("2026-07-01T00:02:30.000Z")
+    });
+    const third = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      baseSha: "base-a",
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
     expect(third).toMatchObject({
       enqueued: false,
       reason: "already_queued",
