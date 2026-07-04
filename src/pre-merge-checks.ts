@@ -161,7 +161,7 @@ function evaluateTitleCheck(pull: PreMergePullInput, config: PreMergeTitleCheckC
   const minLength = config.minLength ?? 8;
   const rejectDraftPrefixes = config.rejectDraftPrefixes ?? true;
   const lengthPassed = title.length >= minLength;
-  const draftPassed = !rejectDraftPrefixes || !/^\s*(?:\[?\s*)?(?:wip|draft|tmp|test)(?:\s*\]?|[:\-\s]|$)/i.test(title);
+  const draftPassed = !rejectDraftPrefixes || !isExplicitDraftTitle(title);
   const passed = lengthPassed && draftPassed;
 
   return checkFromOutcome({
@@ -203,8 +203,10 @@ function evaluateDescriptionCheck(pull: PreMergePullInput, config: PreMergeDescr
 function evaluateLinkedIssueCheck(pull: PreMergePullInput, config: PreMergeLinkedIssueCheckConfig): PreMergeCheckResult {
   if (config.mode === "off") return skippedCheck("linked_issue", "Linked issue", config.mode, "Linked issue check is disabled.");
   const refs = collectLinkedIssueRefs(pull);
+  const linkedIssues = collectLinkedIssues(pull);
   const hasRefs = refs.length > 0;
-  const openStatePassed = !config.requireOpen || collectLinkedIssues(pull).every((issue) => !issue.state || issue.state === "OPEN" || issue.state === "open");
+  const openState = evaluateOpenLinkedIssueState(linkedIssues, config.requireOpen === true);
+  const openStatePassed = openState.passed;
   const passed = hasRefs && openStatePassed;
 
   return checkFromOutcome({
@@ -222,9 +224,9 @@ function evaluateLinkedIssueCheck(pull: PreMergePullInput, config: PreMergeLinke
       },
       {
         key: "linked_issue.open_state",
-        value: String(openStatePassed),
+        value: openState.value,
         passed: openStatePassed,
-        detail: config.requireOpen ? "open issue required" : "not required"
+        detail: openState.detail
       }
     ]
   });
@@ -260,8 +262,8 @@ function evaluateMatcher(pull: PreMergePullInput, matcher: PreMergeCustomMatcher
     const passed = values.some((value) => value.toLowerCase().includes(needle));
     return {
       passed,
-      value: passed ? matcher.includes : "not found",
-      detail: `required substring in ${matcher.source}`
+      value: passed ? "matched" : "not_matched",
+      detail: `operator=includes; source=${matcher.source}`
     };
   }
   if (matcher.matches !== undefined) {
@@ -269,11 +271,42 @@ function evaluateMatcher(pull: PreMergePullInput, matcher: PreMergeCustomMatcher
     const matched = values.find((value) => regex.test(value));
     return {
       passed: matched !== undefined,
-      value: matched ?? "not matched",
-      detail: `required regex /${matcher.matches}/ in ${matcher.source}`
+      value: matched !== undefined ? "matched" : "not_matched",
+      detail: `operator=matches; source=${matcher.source}`
     };
   }
-  return { passed: false, value: "no matcher", detail: "custom matcher has no includes or matches rule" };
+  return { passed: false, value: "not_matched", detail: "operator=missing" };
+}
+
+function isExplicitDraftTitle(title: string): boolean {
+  return /^\s*(?:\[(?:wip|draft|tmp)\]|(?:wip|draft|tmp)\s*[:\-]|(?:wip|draft|tmp)$)/i.test(title);
+}
+
+function evaluateOpenLinkedIssueState(
+  linkedIssues: PreMergeLinkedIssue[],
+  requireOpen: boolean
+): { passed: boolean; value: string; detail: string } {
+  if (!requireOpen) return { passed: true, value: "not_required", detail: "open issue state is not required" };
+  if (linkedIssues.length === 0) {
+    return {
+      passed: false,
+      value: "not_applicable",
+      detail: "open issue state requires structured linked issue metadata"
+    };
+  }
+
+  const states = linkedIssues.map((issue) => normalizeIssueState(issue.state));
+  const passed = states.every((state) => state === "open");
+  return {
+    passed,
+    value: passed ? "open" : [...new Set(states)].join(","),
+    detail: "open issue required"
+  };
+}
+
+function normalizeIssueState(state: string | undefined): string {
+  if (!state?.trim()) return "unknown";
+  return state.trim().toLowerCase();
 }
 
 function valuesForMatcherSource(pull: PreMergePullInput, source: PreMergeCustomMatchSource): string[] {
@@ -443,6 +476,9 @@ function validateMatcher(
   }
   if (matcher.includes === undefined && matcher.matches === undefined) {
     errors.push({ check, field: "match", message: "Custom match requires includes or matches." });
+  }
+  if (matcher.includes !== undefined && matcher.matches !== undefined) {
+    errors.push({ check, field: "match", message: "Custom match must set exactly one of includes or matches." });
   }
   if (matcher.includes !== undefined && matcher.includes.trim().length === 0) {
     errors.push({ check, field: "match.includes", message: "includes must not be empty." });

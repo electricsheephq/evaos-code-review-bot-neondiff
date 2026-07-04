@@ -70,6 +70,71 @@ describe("pre-merge checks", () => {
     );
   });
 
+  it("does not treat normal Test or Testing titles as draft markers", () => {
+    for (const title of ["Test runner config updates", "Testing infra improvements"]) {
+      const result = evaluatePreMergeChecks({
+        pull: {
+          title,
+          body: "Closes #42\n\nValidation: focused tests passed.",
+          linkedIssues: [42]
+        },
+        policy: {
+          title: { mode: "error" }
+        }
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.blockingErrors).toEqual([]);
+      expect(result.checks.find((check) => check.id === "title")).toMatchObject({
+        status: "pass",
+        evidence: expect.arrayContaining([
+          expect.objectContaining({ key: "title.not_draft_prefix", value: "true", passed: true })
+        ])
+      });
+    }
+  });
+
+  it("requires structured open issue evidence when requireOpen is enabled", () => {
+    const noRefs = evaluatePreMergeChecks({
+      pull: {
+        title: "Add pre-merge checks",
+        body: "Validation: focused tests passed.",
+        linkedIssues: []
+      },
+      policy: {
+        linkedIssue: { mode: "error", requireOpen: true }
+      }
+    });
+
+    expect(noRefs.ok).toBe(false);
+    expect(noRefs.blockingErrors).toEqual([expect.objectContaining({ id: "linked_issue" })]);
+    expect(noRefs.checks.find((check) => check.id === "linked_issue")?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "linked_issue.references", value: "none", passed: false }),
+        expect.objectContaining({ key: "linked_issue.open_state", value: "not_applicable", passed: false })
+      ])
+    );
+
+    const closedIssue = evaluatePreMergeChecks({
+      pull: {
+        title: "Add pre-merge checks",
+        body: "Validation: focused tests passed.",
+        linkedIssues: [{ number: 42, state: "closed" }]
+      },
+      policy: {
+        linkedIssue: { mode: "error", requireOpen: true }
+      }
+    });
+
+    expect(closedIssue.ok).toBe(false);
+    expect(closedIssue.checks.find((check) => check.id === "linked_issue")?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "linked_issue.references", value: "#42", passed: true }),
+        expect.objectContaining({ key: "linked_issue.open_state", value: "closed", passed: false })
+      ])
+    );
+  });
+
   it("evaluates custom checks with deterministic matchers", () => {
     const policy: PreMergeCheckPolicy = {
       customChecks: [
@@ -110,6 +175,48 @@ describe("pre-merge checks", () => {
       status: "pass",
       blocking: false
     });
+  });
+
+  it("does not echo raw PR title body or changed-file values in custom matcher evidence", () => {
+    const bodySecret = "Release notes: customer private rollout detail";
+    const titleSecret = "Customer private launch checklist";
+    const fileSecret = "docs/customer-private-rollout-plan.md";
+    const result = evaluatePreMergeChecks({
+      pull: {
+        title: titleSecret,
+        body: bodySecret,
+        changedFiles: [fileSecret]
+      },
+      policy: {
+        customChecks: [
+          {
+            name: "body-marker",
+            mode: "warning",
+            instructions: "Require release notes marker in the PR body.",
+            match: { source: "description", includes: "Release notes:" }
+          },
+          {
+            name: "title-marker",
+            mode: "warning",
+            instructions: "Require private launch wording in the title.",
+            match: { source: "title", includes: "private launch" }
+          },
+          {
+            name: "file-marker",
+            mode: "warning",
+            instructions: "Require matching docs path without echoing it.",
+            match: { source: "changed_files", matches: "customer-private" }
+          }
+        ]
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    const evidenceJson = JSON.stringify(result.checks.flatMap((check) => check.evidence));
+    expect(evidenceJson).not.toContain(bodySecret);
+    expect(evidenceJson).not.toContain(titleSecret);
+    expect(evidenceJson).not.toContain(fileSecret);
+    expect(result.checks.map((check) => check.evidence[0]?.value)).toEqual(["matched", "matched", "matched"]);
   });
 
   it("treats off checks as skipped without producing warnings or errors", () => {
@@ -155,6 +262,12 @@ describe("pre-merge checks", () => {
           mode: "error",
           instructions: "Require a literal marker in the title.",
           match: { source: "title", matches: "[" }
+        },
+        {
+          name: "ambiguous-match",
+          mode: "warning",
+          instructions: "Require exactly one custom matcher operator.",
+          match: { source: "description", includes: "Release notes:", matches: "Release notes:" }
         }
       ]
     });
@@ -165,7 +278,8 @@ describe("pre-merge checks", () => {
         expect.objectContaining({ check: "custom:Bad Name", field: "name" }),
         expect.objectContaining({ check: "custom:Bad Name", field: "instructions" }),
         expect.objectContaining({ check: "custom:Bad Name", field: "match.includes" }),
-        expect.objectContaining({ check: "custom:good-name", field: "match.matches" })
+        expect.objectContaining({ check: "custom:good-name", field: "match.matches" }),
+        expect.objectContaining({ check: "custom:ambiguous-match", field: "match" })
       ])
     );
   });

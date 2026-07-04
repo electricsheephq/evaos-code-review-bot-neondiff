@@ -89,6 +89,10 @@ Supported matcher operators:
 - `includes`: case-insensitive substring check.
 - `matches`: JavaScript regular expression.
 
+Set exactly one matcher operator. A custom check with both `includes` and
+`matches` is rejected during policy validation so operators do not accidentally
+believe both rules are enforced.
+
 Custom instructions are descriptive only. The pass/fail decision comes from the
 matcher, not from model judgment or a human-style interpretation of the prose.
 
