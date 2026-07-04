@@ -1605,7 +1605,15 @@ export class ReviewStateStore {
         this.db
           .prepare(
             `update review_queue_jobs
-             set state = 'leased', lease_id = ?, lease_expires_at = ?, updated_at = ?
+             set state = 'leased',
+                 lease_id = ?,
+                 lease_expires_at = ?,
+                 last_error = case
+                   when state = 'blocked_on_proof' and (last_error is null or last_error not like '%blocked_on_proof%')
+                     then 'blocked_on_proof; ' || coalesce(last_error, '')
+                   else last_error
+                 end,
+                 updated_at = ?
              where job_id = ? and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
           )
           .run(leaseId, leaseExpiresAt, nowIso, job.jobId);

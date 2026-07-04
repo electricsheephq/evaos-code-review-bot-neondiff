@@ -715,7 +715,7 @@ describe("license activation and entitlement cache", () => {
       config,
       github,
       repo: "owner/private",
-      pull: pullSummary(8, "dry-run-head"),
+      pull: privatePullSummary(8, "dry-run-head"),
       dryRun: true
     })).resolves.toMatchObject({
       ok: false,
@@ -753,7 +753,7 @@ describe("license activation and entitlement cache", () => {
       config,
       github,
       repo: "owner/private",
-      pull: pullSummary(15, "dry-run-cache-head"),
+      pull: privatePullSummary(15, "dry-run-cache-head"),
       dryRun: true
     })).resolves.toMatchObject({
       ok: true,
@@ -772,7 +772,7 @@ describe("license activation and entitlement cache", () => {
       config,
       github,
       repo: "owner/private",
-      pull: pullSummary(16, "dry-run-stale-cache-head"),
+      pull: privatePullSummary(16, "dry-run-stale-cache-head"),
       dryRun: true
     })).resolves.toMatchObject({
       ok: false,
@@ -840,6 +840,27 @@ describe("license activation and entitlement cache", () => {
       ok: true,
       visibility: "unknown",
       reason: "repo visibility does not require entitlement"
+    });
+  });
+
+  it("does not fetch repo metadata for unknown visibility during dry-run license gates", async () => {
+    const root = mkRoot(roots);
+    const config = minimalConfig(root);
+    const github = new GitHubApi({});
+    github.getRepo = async () => {
+      throw new Error("getRepo should not run");
+    };
+
+    await expect(buildLicenseGateForPull({
+      config,
+      github,
+      repo: "owner/private",
+      pull: pullSummary(18, "dry-run-unknown-visibility"),
+      dryRun: true
+    })).resolves.toMatchObject({
+      ok: false,
+      visibility: "unknown",
+      reason: "repo visibility is unknown; private repo entitlement gate fails closed"
     });
   });
 
@@ -1104,6 +1125,17 @@ function pullSummary(number: number, headSha: string): PullRequestSummary {
       repo: { full_name: "owner/private" }
     },
     html_url: `https://github.com/owner/private/pull/${number}`
+  };
+}
+
+function privatePullSummary(number: number, headSha: string): PullRequestSummary {
+  const pull = pullSummary(number, headSha);
+  return {
+    ...pull,
+    base: {
+      ...pull.base,
+      repo: { full_name: "owner/private", private: true, visibility: "private" }
+    }
   };
 }
 

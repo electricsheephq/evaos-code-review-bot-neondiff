@@ -1548,6 +1548,14 @@ export async function buildLicenseGateForPull(input: {
       visibility
     });
   }
+  if (visibility === "unknown" && input.dryRun) {
+    return evaluateLicenseReviewGate({
+      config: license,
+      repo: input.repo,
+      visibility,
+      refresh: false
+    });
+  }
   if (visibility === "unknown") {
     try {
       visibility = await getRepoVisibilityForLicenseGate(input.github, input.repo);

@@ -85,8 +85,8 @@ export async function activateLicense(input: {
     };
   }
   const licenseKey = input.licenseKey.trim();
-  if (!licenseKey) return missingResult(input.now, "license key is empty");
-  if (!input.config.apiBaseUrl) return serverResult(input.now, "license API base URL is not configured");
+  if (!licenseKey) return missingResult(now, "license key is empty");
+  if (!input.config.apiBaseUrl) return serverResult(now, "license API base URL is not configured");
 
   const response = await callLicenseApi({
     config: input.config,
