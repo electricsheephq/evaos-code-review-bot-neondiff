@@ -1,0 +1,60 @@
+{
+  "$schema": "docs/schema/neondiff-config.schema.json",
+  "version": 1,
+  "review": {
+    "profile": "conservative",
+    "maxComments": 12,
+    "severityThreshold": "medium",
+    "pathInstructions": []
+  },
+  "paths": {
+    "include": ["**/*"],
+    "exclude": ["dist/**", "coverage/**", "node_modules/**"]
+  },
+  "providers": {
+    "default": "ollama",
+    "allowed": ["openai-compatible"],
+    "byok": {
+      "required": true,
+      "apiKeyEnv": "NEONDIFF_PROVIDER_API_KEY"
+    },
+    "local": {
+      "enabled": true,
+      "provider": "ollama-local",
+      "baseUrl": "http://localhost:11434/v1",
+      "model": "qwen2.5-coder:14b"
+    }
+  },
+  "safetyGates": {
+    "mutation": { "enabled": false },
+    "secrets": { "blockSecretLikeText": true },
+    "lineCoverage": { "requireCurrentDiffLine": true },
+    "commentCaps": {
+      "maxPerPullRequest": 12,
+      "maxPerFile": 4
+    }
+  },
+  "finishingTouches": {
+    "enabled": false,
+    "allowedCommands": []
+  },
+  "issueEnrichment": {
+    "enabled": false,
+    "allowlist": [],
+    "throttles": {
+      "maxIssuesPerHour": 0,
+      "cooldownMinutes": 60
+    }
+  },
+  "confidence": {
+    "mode": "uncalibrated",
+    "displayPercentages": false,
+    "calibrationEvidence": "none"
+  },
+  "repo": {
+    "visibility": "public",
+    "reviewDraftPullRequests": false,
+    "publicRepoMode": "free-source-available-beta",
+    "privateRepoMode": "requires-license"
+  }
+}

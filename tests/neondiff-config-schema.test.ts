@@ -1,15 +1,31 @@
+import { Ajv2020, type ErrorObject, type ValidateFunction } from "ajv/dist/2020.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 
 const schemaPath = "docs/schema/neondiff-config.schema.json";
 const fixtureRoot = "tests/fixtures/neondiff-config";
-const providerIds = ["openai-compatible", "glm", "ollama-local", "zcode", "custom"];
+const providerIds = ["openai-compatible", "glm", "ollama-local", "zcode", "custom"] as const;
 
 type JsonRecord = Record<string, unknown>;
 
+const invalidFixtureExpectedPaths: Record<string, string[]> = {
+  "invalid-provider-cross-use": ["/providers/default", "/providers/local/provider"],
+  "invalid-unsafe-enabled": [
+    "/safetyGates/mutation/enabled",
+    "/finishingTouches/enabled",
+    "/issueEnrichment/enabled",
+    "/confidence/displayPercentages"
+  ]
+};
+
 function readJson(path: string): JsonRecord {
   return JSON.parse(readFileSync(path, "utf8")) as JsonRecord;
+}
+
+function readYaml(path: string): JsonRecord {
+  return parseYaml(readFileSync(path, "utf8")) as JsonRecord;
 }
 
 function asRecord(value: unknown): JsonRecord {
@@ -20,46 +36,41 @@ function get(path: string, value: unknown): unknown {
   return path.split(".").reduce<unknown>((cursor, key) => asRecord(cursor)[key], value);
 }
 
-function isProviderId(value: unknown): value is string {
-  return typeof value === "string" && providerIds.includes(value);
+function compileSchema(): ValidateFunction {
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  return ajv.compile(readJson(schemaPath));
 }
 
-function validateFixture(config: JsonRecord): string[] {
-  const errors: string[] = [];
-  const providersDefault = get("providers.default", config);
-  const providersAllowed = get("providers.allowed", config);
+function validateConfig(validate: ValidateFunction, config: JsonRecord): ErrorObject[] {
+  const valid = validate(config);
+  return valid ? [] : [...(validate.errors ?? [])];
+}
 
-  if (config.version !== 1) errors.push("version must be 1");
-  if (!["conservative", "balanced", "thorough"].includes(String(get("review.profile", config)))) {
-    errors.push("review.profile must be conservative, balanced, or thorough");
-  }
-  if (typeof get("review.maxComments", config) !== "number") errors.push("review.maxComments must be a number");
-  if (!Array.isArray(get("paths.include", config))) errors.push("paths.include must be an array");
-  if (!Array.isArray(get("paths.exclude", config))) errors.push("paths.exclude must be an array");
-  if (!isProviderId(providersDefault)) errors.push("providers.default must be a supported provider id");
-  if (!Array.isArray(providersAllowed) || !providersAllowed.every(isProviderId)) {
-    errors.push("providers.allowed must list supported provider ids");
-  } else if (isProviderId(providersDefault) && !providersAllowed.includes(providersDefault)) {
-    errors.push("providers.default must be included in providers.allowed");
-  }
-  if (get("providers.byok.required", config) !== true && get("providers.byok.required", config) !== false) {
-    errors.push("providers.byok.required must be a boolean");
-  }
-  if (get("providers.local.enabled", config) !== true && get("providers.local.enabled", config) !== false) {
-    errors.push("providers.local.enabled must be a boolean");
-  }
-  if (get("safetyGates.mutation.enabled", config) !== false) errors.push("safetyGates.mutation.enabled must default false");
-  if (get("finishingTouches.enabled", config) !== false) errors.push("finishingTouches.enabled must default false");
-  if (get("issueEnrichment.enabled", config) !== false) errors.push("issueEnrichment.enabled must default false");
-  if (!Array.isArray(get("issueEnrichment.allowlist", config))) errors.push("issueEnrichment.allowlist must be an array");
-  if (get("confidence.mode", config) !== "uncalibrated") errors.push("confidence.mode must be uncalibrated");
-  if (get("confidence.displayPercentages", config) !== false) errors.push("confidence.displayPercentages must default false");
-  if (typeof get("repo.visibility", config) !== "string") errors.push("repo.visibility must be a string");
-  if (typeof get("repo.reviewDraftPullRequests", config) !== "boolean") {
-    errors.push("repo.reviewDraftPullRequests must be a boolean");
-  }
+function errorPaths(errors: ErrorObject[]): string[] {
+  return [...new Set(errors.map((error) => error.instancePath))].sort();
+}
 
-  return errors;
+function fixtureNames(prefix: "valid" | "invalid", extension: ".json" | ".neondiff.yml"): string[] {
+  return readdirSync(fixtureRoot)
+    .filter((name) => name.startsWith(`${prefix}-`) && name.endsWith(extension))
+    .sort();
+}
+
+function withoutExtension(name: string): string {
+  return name.replace(/(?:\.neondiff\.yml|\.json)$/, "");
+}
+
+function expectValidFixture(validate: ValidateFunction, name: string, config: JsonRecord): void {
+  const errors = validateConfig(validate, config);
+  expect(errorPaths(errors), name).toEqual([]);
+}
+
+function expectInvalidFixture(validate: ValidateFunction, name: string, config: JsonRecord): void {
+  const errors = validateConfig(validate, config);
+  const baseName = withoutExtension(name);
+
+  expect(errors, name).not.toEqual([]);
+  expect(errorPaths(errors), name).toEqual(expect.arrayContaining(invalidFixtureExpectedPaths[baseName] ?? []));
 }
 
 describe("NeonDiff config schema draft", () => {
@@ -95,57 +106,123 @@ describe("NeonDiff config schema draft", () => {
     expect(get("properties.confidence.properties.mode.default", schema)).toBe("uncalibrated");
     expect(get("properties.confidence.properties.displayPercentages.default", schema)).toBe(false);
     expect(get("properties.providers.properties.default.$ref", schema)).toBe("#/$defs/providerId");
-    expect(JSON.stringify(get("properties.providers.allOf", schema))).toContain("\"contains\":{\"const\":\"glm\"}");
+    expect(get("properties.providers.properties.default.description", schema)).toMatch(/providers\.allowed/);
+    expect(get("properties.providers.properties.local.properties.provider.description", schema)).toMatch(/ollama-local/);
   });
 
-  it("keeps valid examples inside the schema-owned public contract", () => {
-    const validFixtures = readdirSync(fixtureRoot)
-      .filter((name) => name.startsWith("valid-") && name.endsWith(".json"))
-      .sort();
+  it("validates JSON fixtures against the published JSON Schema", () => {
+    const validate = compileSchema();
+    const validFixtures = fixtureNames("valid", ".json");
 
     expect(validFixtures).toEqual(["valid-full.json", "valid-minimal.json"]);
 
     for (const fixture of validFixtures) {
-      const errors = validateFixture(readJson(join(fixtureRoot, fixture)));
-      expect(errors, fixture).toEqual([]);
+      expectValidFixture(validate, fixture, readJson(join(fixtureRoot, fixture)));
     }
   });
 
-  it("keeps invalid examples invalid for clear user-facing reasons", () => {
-    const invalidFixtures = readdirSync(fixtureRoot)
-      .filter((name) => name.startsWith("invalid-") && name.endsWith(".json"))
-      .sort();
+  it("rejects invalid JSON fixtures with expected schema paths", () => {
+    const validate = compileSchema();
+    const invalidFixtures = fixtureNames("invalid", ".json");
 
-    expect(invalidFixtures).toEqual(["invalid-unsafe-enabled.json"]);
+    expect(invalidFixtures).toEqual(["invalid-provider-cross-use.json", "invalid-unsafe-enabled.json"]);
 
-    const errors = validateFixture(readJson(join(fixtureRoot, invalidFixtures[0]!)));
-    expect(errors).toEqual([
-      "safetyGates.mutation.enabled must default false",
-      "finishingTouches.enabled must default false",
-      "issueEnrichment.enabled must default false",
-      "confidence.displayPercentages must default false"
-    ]);
+    for (const fixture of invalidFixtures) {
+      expectInvalidFixture(validate, fixture, readJson(join(fixtureRoot, fixture)));
+    }
   });
 
-  it("rejects unsupported or disallowed default providers while accepting a valid default", () => {
-    const validConfig = readJson(join(fixtureRoot, "valid-full.json"));
+  it("validates YAML fixtures against the same published JSON Schema", () => {
+    const validate = compileSchema();
+    const validFixtures = fixtureNames("valid", ".neondiff.yml");
+    const invalidFixtures = fixtureNames("invalid", ".neondiff.yml");
 
-    expect(validateFixture(validConfig)).toEqual([]);
-    expect(validateFixture({
-      ...validConfig,
+    expect(validFixtures).toEqual(["valid-full.neondiff.yml", "valid-minimal.neondiff.yml"]);
+    expect(invalidFixtures).toEqual(["invalid-provider-cross-use.neondiff.yml", "invalid-unsafe-enabled.neondiff.yml"]);
+
+    for (const fixture of validFixtures) {
+      expectValidFixture(validate, fixture, readYaml(join(fixtureRoot, fixture)));
+    }
+
+    for (const fixture of invalidFixtures) {
+      expectInvalidFixture(validate, fixture, readYaml(join(fixtureRoot, fixture)));
+    }
+  });
+
+  it("keeps YAML fixtures structurally aligned with their JSON twins", () => {
+    const jsonFixtures = readdirSync(fixtureRoot)
+      .filter((name) => name.endsWith(".json"))
+      .sort();
+
+    for (const jsonFixture of jsonFixtures) {
+      const baseName = withoutExtension(jsonFixture);
+      const yamlFixture = `${baseName}.neondiff.yml`;
+
+      expect(readYaml(join(fixtureRoot, yamlFixture)), yamlFixture).toEqual(readJson(join(fixtureRoot, jsonFixture)));
+    }
+  });
+
+  it("enforces providers.default as a supported provider id included in providers.allowed", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    for (const providerId of providerIds) {
+      expectValidFixture(validate, `${providerId} default`, {
+        ...baseConfig,
+        providers: {
+          ...asRecord(baseConfig.providers),
+          default: providerId,
+          allowed: [providerId]
+        }
+      });
+
+      const disallowedErrors = validateConfig(validate, {
+        ...baseConfig,
+        providers: {
+          ...asRecord(baseConfig.providers),
+          default: providerId,
+          allowed: providerId === "openai-compatible" ? ["glm"] : ["openai-compatible"]
+        }
+      });
+
+      expect(errorPaths(disallowedErrors), `${providerId} must be allowed`).toContain("/providers/allowed");
+    }
+
+    const unsupportedErrors = validateConfig(validate, {
+      ...baseConfig,
       providers: {
-        ...asRecord(validConfig.providers),
+        ...asRecord(baseConfig.providers),
         default: "not-a-provider"
       }
-    })).toContain("providers.default must be a supported provider id");
-    expect(validateFixture({
-      ...validConfig,
+    });
+
+    expect(errorPaths(unsupportedErrors)).toContain("/providers/default");
+  });
+
+  it("rejects cross-use of remote provider ids and local adapter ids", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    const localProviderErrors = validateConfig(validate, {
+      ...baseConfig,
       providers: {
-        ...asRecord(validConfig.providers),
-        default: "glm",
-        allowed: ["openai-compatible"]
+        ...asRecord(baseConfig.providers),
+        local: {
+          ...asRecord(get("providers.local", baseConfig)),
+          provider: "ollama-local"
+        }
       }
-    })).toContain("providers.default must be included in providers.allowed");
+    });
+    const defaultProviderErrors = validateConfig(validate, {
+      ...baseConfig,
+      providers: {
+        ...asRecord(baseConfig.providers),
+        default: "ollama"
+      }
+    });
+
+    expect(errorPaths(localProviderErrors)).toContain("/providers/local/provider");
+    expect(errorPaths(defaultProviderErrors)).toContain("/providers/default");
   });
 
   it("documents committed examples without secrets", () => {
