@@ -158,6 +158,7 @@ function sanitizePublicText(value: string | undefined, publicConfidencePolicy?: 
 
 function sanitizePublicUrlText(value: string | undefined): string {
   if (!value) return "";
+  // URLs skip confidence sanitization so query strings stay intact.
   return redactSecrets(value.replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")).trim();
 }
 

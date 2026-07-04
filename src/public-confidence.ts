@@ -38,11 +38,15 @@ const MARKDOWN_CONFIDENCE_LABEL_CONTINUATION_PATTERN = new RegExp(
   "gi"
 );
 const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_NOUN_PATTERN}(?:${CONFIDENCE_SEPARATOR_PATTERN}score(?:\s*(?::|=)\s*|\s+of\s+|\s+(?:is|was|at)\s+|${CONFIDENCE_SEPARATOR_PATTERN})|\s+of\s+|\s+(?:is|was|at|in)\s+|${CONFIDENCE_SEPARATOR_PATTERN})${CONFIDENCE_VALUE_PATTERN}`,
+  String.raw`\b${CONFIDENCE_NOUN_PATTERN}(?:${CONFIDENCE_SEPARATOR_PATTERN}score(?:\s*(?::|=)\s*|\s+of\s+|\s+(?:is|was|at)\s+|${CONFIDENCE_SEPARATOR_PATTERN})|\s+of\s+|\s+(?:is|was|at|in)\s+|${CONFIDENCE_SEPARATOR_PATTERN}|(?=\d))${CONFIDENCE_VALUE_PATTERN}`,
   "gi"
 );
 const VALUE_CONFIDENCE_PATTERN = new RegExp(
   String.raw`\b${CONFIDENCE_VALUE_PATTERN}(?:\s*|[-_]+)(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)\b`,
+  "gi"
+);
+const VALUE_IN_CONFIDENCE_PATTERN = new RegExp(
+  String.raw`\b${CONFIDENCE_VALUE_PATTERN}\s+in\s+${CONFIDENCE_NOUN_PATTERN}\b`,
   "gi"
 );
 const CONCATENATED_VALUE_CONFIDENCE_PATTERN = new RegExp(
@@ -113,6 +117,7 @@ export function sanitizePublicConfidenceText(value: string, policy?: PublicConfi
     .replace(CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
     .replace(MARKDOWN_CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
     .replace(MARKDOWN_CONFIDENCE_LABEL_PATTERN, (_match, noun: string) => `${noun}: ${PUBLIC_CONFIDENCE_REPLACEMENT}`)
+    .replace(VALUE_IN_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(CONCATENATED_VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(MARKDOWN_VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(CONFIDENCE_LABEL_PATTERN, (_match, prefix: string) => `${prefix}${PUBLIC_CONFIDENCE_REPLACEMENT}`)

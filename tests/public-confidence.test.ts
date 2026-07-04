@@ -26,6 +26,10 @@ describe("public confidence display policy", () => {
       "confidence is 0.95",
       "confidence was 95%",
       "confidence at 95%",
+      "confidence in 0.95",
+      "0.95 in confidence",
+      "model confidence in 0.95",
+      "X confidence in 0.95",
       "99 percent confident",
       "95 percent confidence",
       "I have 0.95 confidence in this",
@@ -37,6 +41,7 @@ describe("public confidence display policy", () => {
       "0.95confident",
       "`0.95confident`",
       "0.95reliable",
+      "confidence95%",
       "confidence-95%",
       "confidence_score-95%"
     ].join("\n");
@@ -47,6 +52,8 @@ describe("public confidence display policy", () => {
     expect(output).not.toContain("0.95confident");
     expect(output).not.toContain("`0.95confident`");
     expect(output).not.toContain("0.95reliable");
+    expect(output).not.toContain("0.95 in confidence");
+    expect(output).not.toContain("confidence95%");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
     expect(output).toContain("confidence not calibrated");
     for (const token of ["99%", "95%", "99 percent", "95 percent"]) {

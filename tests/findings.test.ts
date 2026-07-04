@@ -45,6 +45,38 @@ describe("finding normalization and review policy", () => {
     expect(result.comments[0]?.body).not.toContain("0.99 confident");
   });
 
+  it("keeps sanitized review comment titles aligned with rendered body titles for batches", () => {
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression with 99% confidence",
+        body: "Confidence: 99%. This branch regresses review output.",
+        confidence: 0.99
+      },
+      {
+        severity: "P3",
+        category: "proof_gap",
+        path: "src/walkthrough.ts",
+        line: 44,
+        title: "Walkthrough has confidence95%",
+        body: "The model was 0.95 confident in this finding.",
+        confidence: 0.95
+      }
+    ]);
+
+    expect(result.comments).toHaveLength(2);
+    for (const comment of result.comments) {
+      const renderedTitle = comment.body.match(/^\*\*(P\d): (.+)\*\*/)?.[2];
+
+      expect(renderedTitle).toBe(comment.title);
+      expect(comment.title).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
+      expect(comment.body).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
+    }
+  });
+
   it("does not re-sanitize already-public review comment text", () => {
     const comment = formatReviewComment(
       {
