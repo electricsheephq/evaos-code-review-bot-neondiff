@@ -1387,7 +1387,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
     writeFileSync(join(evidenceDir, "filter-impact.json"), `${JSON.stringify(filterImpact, null, 2)}\n`);
     const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
-    writeFileSync(join(evidenceDir, "review-settings-preview.json"), `${JSON.stringify(settingsPreview, null, 2)}\n`);
+    writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
       writeFileSync(join(evidenceDir, "command.json"), `${JSON.stringify(commandDecision.command, null, 2)}\n`);
     }

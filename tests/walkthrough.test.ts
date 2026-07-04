@@ -196,6 +196,9 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("- Reviewer suggestions: maintainer-one");
     expect(walkthrough.body).toContain("- Suggestion behavior: suggestions only; labels and reviewers are not auto-applied.");
     expect(walkthrough.body).toContain("- Roadmap-only settings: auto-apply labels; auto-request reviewers");
+    expect(walkthrough.body).not.toContain("auto-apply enabled");
+    expect(walkthrough.body).not.toContain("auto-request reviewers enabled");
+    expect(walkthrough.body).not.toContain("labels were auto-applied");
   });
 
   it("uses one sticky walkthrough marker per PR while updating head-specific state metadata", () => {

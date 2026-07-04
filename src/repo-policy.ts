@@ -208,13 +208,15 @@ export function buildRepoPolicySnapshot(config: BotConfig, repo: string): RepoPo
 
 export function buildReviewSettingsPreview(config: BotConfig, profile: ResolvedRepoProfile): ReviewSettingsPreview {
   const walkthroughEnabled = config.walkthrough.enabled;
-  const walkthroughMode = config.walkthrough.postIssueComment ? "issue_comment" : "inline_review";
+  const walkthroughPostsSeparately = config.walkthrough.postIssueComment;
+  const walkthroughMode = walkthroughPostsSeparately ? "issue_comment" : "inline_review";
+  const highLevelSummaryVisibleInReview = !walkthroughEnabled || walkthroughPostsSeparately;
   const labels = profile.suggestedLabels ?? [];
   const reviewers = profile.suggestedReviewers ?? [];
   return {
     profile: profile.reviewProfile ?? "assertive",
     sections: [
-      { key: "highLevelSummary", label: "High-level summary", enabled: true, mode: "inline_review" },
+      { key: "highLevelSummary", label: "High-level summary", enabled: highLevelSummaryVisibleInReview, mode: "inline_review" },
       { key: "walkthrough", label: "Walkthrough", enabled: walkthroughEnabled, mode: walkthroughMode },
       { key: "changedFiles", label: "Changed-files table", enabled: walkthroughEnabled, mode: "walkthrough" },
       { key: "effortEstimate", label: "Effort estimate", enabled: walkthroughEnabled, mode: "walkthrough" },

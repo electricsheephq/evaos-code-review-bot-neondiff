@@ -432,6 +432,40 @@ describe("repo profile registry", () => {
     });
   });
 
+  it("marks high-level summary disabled when inline walkthrough replaces the review body", () => {
+    const config = loadConfig(
+      writeConfig({
+        walkthrough: {
+          enabled: true,
+          postIssueComment: false
+        },
+        repoProfiles: {
+          repos: {
+            "electricsheephq/evaos-code-review-bot": {
+              displayName: "Review bot"
+            }
+          }
+        }
+      })
+    );
+    const profile = expectAllowed(resolveRepoProfile(config, "electricsheephq/evaos-code-review-bot"));
+
+    const preview = buildReviewSettingsPreview(config, profile);
+
+    expect(preview.sections).toContainEqual({
+      key: "highLevelSummary",
+      label: "High-level summary",
+      enabled: false,
+      mode: "inline_review"
+    });
+    expect(preview.sections).toContainEqual({
+      key: "walkthrough",
+      label: "Walkthrough",
+      enabled: true,
+      mode: "inline_review"
+    });
+  });
+
   it("keeps the active monitor profile template explicit and non-executing", () => {
     const template = JSON.parse(readFileSync(new URL("../config.active-profiles.example.json", import.meta.url), "utf8"));
     const config = loadConfig(writeConfig(template));
