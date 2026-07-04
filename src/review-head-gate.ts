@@ -118,6 +118,8 @@ function decisionFromQueueJob(job: ReviewQueueJobRecord): ReviewHeadGateDecision
       return "reviewing";
     case "provider_deferred":
       return "provider_deferred";
+    case "blocked_on_proof":
+      return "blocked";
     case "failed":
       return "failed";
     case "stale_retired":

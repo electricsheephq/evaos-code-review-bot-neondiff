@@ -46,10 +46,14 @@ describe("public NeonDiff CLI surface", () => {
       "daemon start",
       "daemon stop",
       "daemon status",
+      "license activate",
+      "license status",
+      "license deactivate",
       "status",
       "review-pr"
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
+    expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
     expect(output.commands.existing).toContain("provider-throttle-report");
     expect(output.examples).toContain(

@@ -222,7 +222,7 @@ export async function runScheduledCycleWithDeps(input: {
     }
   }
 
-  result.queue.remainingQueued = input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred"] }).length;
+  result.queue.remainingQueued = input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "blocked_on_proof"] }).length;
   return result;
 }
 
@@ -478,6 +478,7 @@ function automaticQueuePriority(config: BotConfig, repo: string): number | undef
 }
 
 const SELF_REPO = "electricsheephq/evaos-code-review-bot";
+const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 
 function reprioritizeExistingSelfRepoQueueJobs(input: {
   config: BotConfig;
@@ -487,7 +488,7 @@ function reprioritizeExistingSelfRepoQueueJobs(input: {
   const targetPriority = automaticQueuePriority(input.config, SELF_REPO);
   if (targetPriority === undefined) return 0;
   let updated = 0;
-  for (const job of input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred"] })) {
+  for (const job of input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "blocked_on_proof"] })) {
     if (job.repo.toLowerCase() !== SELF_REPO) continue;
     if (job.source !== "automatic" || job.lane !== "background") continue;
     if (job.priority <= targetPriority) continue;
@@ -574,7 +575,7 @@ async function retireSupersededQueueJobsForPull(input: {
   const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
     pullNumber: input.pull.number,
-    states: ["queued", "provider_deferred"]
+    states: ["queued", "provider_deferred", "blocked_on_proof"]
   }).filter((job) => job.headSha !== input.pull.head.sha);
 
   for (const job of jobs) {
@@ -620,7 +621,7 @@ async function retireQueuedJobsForClosedPull(input: {
   const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
     pullNumber: input.pull.number,
-    states: ["queued", "provider_deferred"]
+    states: ["queued", "provider_deferred", "blocked_on_proof"]
   });
 
   for (const job of jobs) {
@@ -868,7 +869,7 @@ async function runLeasedQueueJob(input: {
 
   const sessionId = ensureReviewerSessionForLeasedJob(input, now);
   updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "running");
-  if (input.job.source !== "manual_command") {
+  if (input.job.source !== "manual_command" && shouldPostInProgressStatusForLeasedJob(input.job)) {
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -891,11 +892,11 @@ async function runLeasedQueueJob(input: {
       dryRun: input.dryRun,
       useZCode: input.useZCode,
       budget: input.budget,
-      processedHeadPolicy: isProviderDeferredRetryJob(input.job) ? "retry_failed_head" : "normal",
+      processedHeadPolicy: processedHeadPolicyForQueueJob(input.state, input.job, pull),
       allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
-    updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun });
+    updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun, now });
     syncReadinessForReviewResult({
       state: input.state,
       job: input.job,
@@ -1056,6 +1057,15 @@ async function syncReviewStatusCommentForReviewResult(input: {
   });
 }
 
+function shouldPostInProgressStatusForLeasedJob(job: ReviewQueueJobRecord): boolean {
+  return !isProofBlockedQueueJob(job);
+}
+
+function isProofBlockedQueueJob(job: ReviewQueueJobRecord): boolean {
+  if (job.state === "blocked_on_proof") return true;
+  return Boolean(job.lastError && /license_entitlement_required|review requires active entitlement|blocked_on_proof/i.test(job.lastError));
+}
+
 function reviewResultStatusCommentState(
   status: ReviewPullResult,
   processed?: { status: ProcessedStatus; error?: string }
@@ -1075,6 +1085,7 @@ function reviewResultStatusCommentState(
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
       return "skipped";
     case "skipped_command_stop":
     case "skipped_command_explain":
@@ -1095,12 +1106,17 @@ function syncReadinessForReviewResult(input: {
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
   const readinessState = readinessStateForReviewResult(input.status, processed);
   if (!readinessState) return;
+  const existing = input.status === "skipped_license_gate"
+    ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)
+    : undefined;
   recordReadinessTransition({
     state: input.state,
     repo: input.job.repo,
     pull: input.pull,
     readinessState,
-    reason: readinessReasonForReviewResult(input.status, processed),
+    reason: input.status === "skipped_license_gate" && existing?.state === "blocked_on_proof" && existing.reason
+      ? existing.reason
+      : readinessReasonForReviewResult(input.status, processed),
     ...(processed?.event ? { event: processed.event } : {}),
     ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
     now: input.now
@@ -1219,6 +1235,8 @@ function readinessStateForReviewResult(
       return "skipped";
     case "skipped_policy":
       return "failed";
+    case "skipped_license_gate":
+      return "blocked_on_proof";
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
       return undefined;
@@ -1249,6 +1267,8 @@ function readinessReasonForReviewResult(
       return "canary_policy";
     case "skipped_policy":
       return "unexpected_scheduler_review_status=skipped_policy";
+    case "skipped_license_gate":
+      return processed?.error ?? "license_entitlement_required";
     case "skipped_command_stop":
       return "manual_command_stop";
     case "skipped_command_explain":
@@ -1436,6 +1456,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
     case "skipped_command_stop":
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
@@ -1467,6 +1488,7 @@ function updateQueueJobAfterReviewStatus(input: {
   pull: PullRequestSummary;
   status: ReviewPullResult;
   dryRun: boolean;
+  now: Date;
 }): void {
   switch (input.status) {
     case "reviewed":
@@ -1513,10 +1535,14 @@ function updateQueueJobAfterReviewStatus(input: {
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
+    case "skipped_license_gate":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: "failed",
-        lastError: `unexpected_scheduler_review_status=${input.status}`
+        state: input.status === "skipped_license_gate" ? "blocked_on_proof" : "failed",
+        ...(input.status === "skipped_license_gate" ? { nextEligibleAt: nextLicenseGateRetryAt(input.now) } : {}),
+        lastError: input.status === "skipped_license_gate"
+          ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)?.reason ?? "license_entitlement_required"
+          : `unexpected_scheduler_review_status=${input.status}`
       });
       return;
     case "skipped_command_stop":
@@ -1681,25 +1707,40 @@ function getActiveQueueJobForHead(
 ): ReviewQueueJobRecord | undefined {
   return state.listReviewQueueJobs({
     repo,
-    states: ["queued", "leased", "running", "provider_deferred"]
+    states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"]
   }).find((job) => job.pullNumber === pullNumber && job.headSha === headSha);
 }
 
 function hasRepoQueueCapacity(state: ReviewStateStore, repo: string, maxQueuedPerRepo: number): boolean {
   const active = state.listReviewQueueJobs({
     repo,
-    states: ["queued", "leased", "running", "provider_deferred"]
-  });
+    states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"]
+  }).filter((job) => job.state !== "blocked_on_proof");
   return active.length < maxQueuedPerRepo;
 }
 
 function isProviderDeferredRetryJob(job: ReviewQueueJobRecord): boolean {
   return Boolean(
-    job.nextEligibleAt ||
     parseProviderCooldownError(job.lastError) ||
     job.lastError?.includes("repo_provider_cooldown_until=") ||
     job.lastError === "provider_deferred_without_cooldown"
   );
+}
+
+function processedHeadPolicyForQueueJob(
+  state: ReviewStateStore,
+  job: ReviewQueueJobRecord,
+  pull: PullRequestSummary
+): ReviewPullInput["processedHeadPolicy"] {
+  if (isProviderDeferredRetryJob(job)) return "retry_failed_head";
+  const processed = state.getProcessedReview(job.repo, pull.number, pull.head.sha);
+  return processed?.status === "failed" || parseProviderCooldownError(processed?.error)
+    ? "retry_failed_head"
+    : "normal";
+}
+
+function nextLicenseGateRetryAt(now = new Date()): string {
+  return new Date(now.getTime() + LICENSE_GATE_RETRY_DELAY_MS).toISOString();
 }
 
 function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): void {
@@ -1755,7 +1796,9 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       result.skippedCanary += 1;
       break;
     case "skipped_policy":
+    case "skipped_license_gate":
       result.skippedPolicy += 1;
+      if (status === "skipped_license_gate") result.skippedLicenseGate += 1;
       break;
     case "skipped_command_stop":
       result.skippedCommandStop += 1;
@@ -1803,6 +1846,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
     skippedDraft: 0,
     skippedCanary: 0,
     skippedPolicy: 0,
+    skippedLicenseGate: 0,
     skippedCommandStop: 0,
     skippedCommandExplain: 0,
     skippedFinishingTouchDraft: 0,

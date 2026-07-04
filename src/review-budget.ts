@@ -7,6 +7,7 @@ export type ReviewQueueDelayReason =
   | "org_capacity"
   | "repo_capacity"
   | "manual_reserve"
+  | "proof_cooldown"
   | "lease_limit";
 
 export interface ReviewBudgetDelay {
@@ -168,19 +169,22 @@ export function buildReviewBudgetStatus(input: {
   const activeProvider = countBy(active, (job) => providerKey(job));
   const activeOrg = countBy(active, (job) => job.org);
   const activeRepo = countBy(active, (job) => job.repo);
-  const queued = jobs.filter((job) => job.state === "queued" || job.state === "provider_deferred");
+  const queued = jobs.filter((job) => job.state === "queued" || job.state === "provider_deferred" || job.state === "blocked_on_proof");
   const manualQueued = queued.filter((job) => job.lane === "manual").length;
   const activeManual = active.filter((job) => job.lane === "manual").length;
 
   const delayed: ReviewBudgetDelay[] = [];
   for (const job of queued) {
+    if (job.state === "blocked_on_proof" && !isRetryEligibleByNextEligibleAt(job, now)) {
+      delayed.push(delay(job, "proof_cooldown"));
+    }
     if (job.state === "provider_deferred" && !isProviderDeferredEligible(job, now)) {
       delayed.push(delay(job, "provider_cooldown"));
     }
   }
 
   const eligible = queued
-    .filter((job) => job.state === "queued" || isProviderDeferredEligible(job, now))
+    .filter((job) => job.state === "queued" || isRetryEligibleByNextEligibleAt(job, now))
     .sort(compareQueueJobsForBudget);
   const hasManualAfter = buildManualEligibilitySuffix(eligible);
   const wouldLease: ReviewBudgetCandidate[] = [];
@@ -336,6 +340,10 @@ function providerKey(job: ReviewQueueJobRecord): string {
 
 function isProviderDeferredEligible(job: ReviewQueueJobRecord, now: Date): boolean {
   if (job.state !== "provider_deferred") return true;
+  return isRetryEligibleByNextEligibleAt(job, now);
+}
+
+function isRetryEligibleByNextEligibleAt(job: ReviewQueueJobRecord, now: Date): boolean {
   if (!job.nextEligibleAt) return true;
   const eligibleAtMs = Date.parse(job.nextEligibleAt);
   return !Number.isFinite(eligibleAtMs) || eligibleAtMs <= now.getTime();

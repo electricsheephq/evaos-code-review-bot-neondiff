@@ -817,14 +817,6 @@ describe("review state store", () => {
       baseSha: "base-a",
       now: new Date("2026-07-01T00:02:00.000Z")
     });
-    const third = store.enqueueReviewQueueJob({
-      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
-      pullNumber: 220,
-      headSha: "head-a",
-      baseSha: "base-a",
-      now: new Date("2026-07-01T00:03:00.000Z")
-    });
-
     expect(second).toMatchObject({
       enqueued: true,
       job: {
@@ -835,6 +827,20 @@ describe("review state store", () => {
       }
     });
     expect(second.job.attemptId).toContain(":after-terminal:");
+    store.updateReviewQueueJobState({
+      jobId: second.job.jobId,
+      state: "blocked_on_proof",
+      nextEligibleAt: "2026-07-01T00:20:00.000Z",
+      lastError: "license proof required",
+      now: new Date("2026-07-01T00:02:30.000Z")
+    });
+    const third = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 220,
+      headSha: "head-a",
+      baseSha: "base-a",
+      now: new Date("2026-07-01T00:03:00.000Z")
+    });
     expect(third).toMatchObject({
       enqueued: false,
       reason: "already_queued",
@@ -1040,6 +1046,41 @@ describe("review state store", () => {
       lastError: "queue_lease_operator_requeued:expired"
     });
     expect(store.getReviewQueueJob(job.jobId)?.leaseId).toBeUndefined();
+    store.close();
+  });
+
+  it("marks proof-blocked queue jobs when leasing so status suppression is stable", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-proof-lease-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const job = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 174,
+      headSha: "head-proof",
+      providerId: "zai",
+      now: new Date("2026-07-03T08:00:00.000Z")
+    }).job;
+    store.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "blocked_on_proof",
+      nextEligibleAt: "2026-07-03T08:00:01.000Z",
+      lastError: "repo visibility is unknown; private repo entitlement gate fails closed",
+      now: new Date("2026-07-03T08:00:00.500Z")
+    });
+
+    const leased = store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      leaseTtlMs: 60_000,
+      now: new Date("2026-07-03T08:00:02.000Z")
+    })[0]!;
+
+    expect(leased).toMatchObject({
+      jobId: job.jobId,
+      state: "leased",
+      lastError: expect.stringContaining("blocked_on_proof")
+    });
     store.close();
   });
 

@@ -79,6 +79,33 @@ describe("GitHub App read authentication", () => {
     expect(calls.some((url) => url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=2"))).toBe(true);
   });
 
+  it("normalizes PR repo visibility from private flags on read payloads", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-pr-visibility-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) {
+        return jsonResponse({ id: 123 });
+      }
+      if (String(url).endsWith("/app/installations/123/access_tokens")) {
+        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (String(url).endsWith("/repos/owner/repo/pulls/42")) {
+        return jsonResponse(pull(42, { private: true }));
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    const result = await github.getPull("owner/repo", 42);
+
+    expect(result.base.repo.private).toBe(true);
+    expect(result.base.repo.visibility).toBe("private");
+  });
+
   it("uses installation tokens for related issue reads", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-related-issue-"));
     roots.push(root);
@@ -342,7 +369,7 @@ function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
   });
 }
 
-function pull(number: number) {
+function pull(number: number, repo: { private?: boolean; visibility?: "public" | "private" | "internal" } = {}) {
   return {
     number,
     title: `PR ${number}`,
@@ -355,7 +382,8 @@ function pull(number: number) {
       sha: "base",
       ref: "main",
       repo: {
-        full_name: "owner/repo"
+        full_name: "owner/repo",
+        ...repo
       }
     },
     html_url: `https://github.test/owner/repo/pull/${number}`

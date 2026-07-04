@@ -24,6 +24,7 @@ export type ReviewQueueJobState =
   | "leased"
   | "running"
   | "provider_deferred"
+  | "blocked_on_proof"
   | "stale_retired"
   | "closed_retired"
   | "command_recorded"
@@ -1604,8 +1605,16 @@ export class ReviewStateStore {
         this.db
           .prepare(
             `update review_queue_jobs
-             set state = 'leased', lease_id = ?, lease_expires_at = ?, updated_at = ?
-             where job_id = ? and state in ('queued', 'provider_deferred')`
+             set state = 'leased',
+                 lease_id = ?,
+                 lease_expires_at = ?,
+                 last_error = case
+                   when state = 'blocked_on_proof' and (last_error is null or last_error not like '%blocked_on_proof%')
+                     then 'blocked_on_proof; ' || coalesce(last_error, '')
+                   else last_error
+                 end,
+                 updated_at = ?
+             where job_id = ? and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
           )
           .run(leaseId, leaseExpiresAt, nowIso, job.jobId);
         providerActive.set(provider, providerCount + 1);
@@ -1641,7 +1650,8 @@ export class ReviewStateStore {
     const clearLease = input.clearLease ?? (
       terminal ||
       input.state === "queued" ||
-      input.state === "provider_deferred"
+      input.state === "provider_deferred" ||
+      input.state === "blocked_on_proof"
     );
     this.db
       .prepare(
@@ -1735,7 +1745,7 @@ export class ReviewStateStore {
                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
          where substr(attempt_id, 1, ?) = ?
-           and state in ('queued', 'leased', 'running', 'provider_deferred')
+           and state in ('queued', 'leased', 'running', 'provider_deferred', 'blocked_on_proof')
          order by datetime(created_at) desc
          limit 1`
       )
@@ -2688,7 +2698,7 @@ function repoOrg(repo: string): string {
 
 function isQueueJobEligible(job: ReviewQueueJobRecord, nowIso: string): boolean {
   if (job.state === "queued") return true;
-  if (job.state !== "provider_deferred") return false;
+  if (job.state !== "provider_deferred" && job.state !== "blocked_on_proof") return false;
   if (!job.nextEligibleAt) return true;
   const nextEligibleAtMs = Date.parse(job.nextEligibleAt);
   if (!Number.isFinite(nextEligibleAtMs)) return true;

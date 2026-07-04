@@ -162,6 +162,41 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("preserves the worker-recorded license gate reason when scheduler syncs readiness", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-license-gate-reason-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    const reason = "license API network failure: visibility lookup denied";
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordReviewReadiness({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          state: "blocked_on_proof",
+          reason
+        });
+        return "skipped_license_gate";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.skippedPolicy).toBe(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "blocked_on_proof",
+      reason
+    });
+    state.close();
+  });
+
   it("preserves readiness state on duplicate processed-head scheduler cycles", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-duplicate-"));
     roots.push(root);
@@ -1333,6 +1368,38 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("sets blocked proof readiness when a queued job becomes license-skipped after in-progress", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-license-skip-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => "skipped_license_gate",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.skippedPolicy).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
+    expect(state.listReviewQueueJobs({ state: "blocked_on_proof" })).toHaveLength(1);
+    expect(state.listReviewQueueJobs({ state: "blocked_on_proof" })[0]).toMatchObject({
+      nextEligibleAt: "2026-07-02T00:15:00.000Z"
+    });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "blocked_on_proof",
+      reason: "license_entitlement_required"
+    });
+    state.close();
+  });
+
   it("moves in-progress status to provider_deferred when legacy capacity is busy", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-capacity-"));
     roots.push(root);
@@ -1610,6 +1677,107 @@ describe("provider-aware review scheduler", () => {
     expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
       state: "posted",
       reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-2"
+    });
+    state.close();
+  });
+
+  it("retries blocked_on_proof queue jobs after entitlement activation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-blocked-proof-retry-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+    const job = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      baseSha: "base",
+      providerId: "zai",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "blocked_on_proof",
+      lastError: "license_entitlement_required",
+      nextEligibleAt: "2026-07-01T00:00:30.000Z",
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+    const policies: Array<ReviewPullInput["processedHeadPolicy"]> = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, processedHeadPolicy }) => {
+        policies.push(processedHeadPolicy);
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: `https://github.com/${repo}/pull/${reviewPull.number}#pullrequestreview-blocked-proof-retry`
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(1);
+    expect(policies).toEqual(["normal"]);
+    expect(statusCalls.map(statusFromBody)).not.toContain("in_progress");
+    expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-blocked-proof-retry"
+    });
+    state.close();
+  });
+
+  it("does not retry blocked_on_proof queue jobs before their proof cooldown expires", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-blocked-proof-cooldown-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    const job = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      baseSha: "base",
+      providerId: "zai",
+      now: new Date("2026-07-01T00:00:00.000Z")
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "blocked_on_proof",
+      lastError: "license_entitlement_required",
+      nextEligibleAt: "2026-07-01T00:15:00.000Z",
+      now: new Date("2026-07-01T00:00:01.000Z")
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("blocked_on_proof cooldown must not call reviewPull");
+      },
+      now: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(0);
+    expect(result.queue.leased).toBe(0);
+    expect(result.queue.remainingQueued).toBe(1);
+    expect(result.queue.delayedByReason).toMatchObject({ proof_cooldown: 1 });
+    expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "blocked_on_proof",
+      nextEligibleAt: "2026-07-01T00:15:00.000Z"
     });
     state.close();
   });

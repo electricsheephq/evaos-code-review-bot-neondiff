@@ -47,7 +47,7 @@ export function buildRunOnceCliReport(input: {
   commandName?: "run-once" | "review-pr";
 }): RunOnceCliReport {
   return {
-    ok: runOnceCliExitCode(input.result) === 0,
+    ok: runOnceCliExitCode(input.result, { dryRun: input.dryRun }) === 0,
     command: input.commandName ?? "run-once",
     dryRun: input.dryRun,
     useZCode: input.useZCode,
@@ -61,8 +61,8 @@ export function buildRunOnceCliReport(input: {
   };
 }
 
-export function runOnceCliExitCode(result: RunOnceResult): 0 | 1 {
-  return result.failed > 0 ? 1 : 0;
+export function runOnceCliExitCode(result: RunOnceResult, input: { dryRun?: boolean } = {}): 0 | 1 {
+  return result.failed > 0 || (!input.dryRun && Boolean(result.scopedPull) && (result.skippedLicenseGate ?? 0) > 0) ? 1 : 0;
 }
 
 export function serializeRunOnceCliReport(report: RunOnceCliReport): string {
@@ -103,7 +103,7 @@ export async function runOnceCliCommand(input: {
   return {
     report,
     output: serializeRunOnceCliReport(report),
-    exitCode: runOnceCliExitCode(result)
+    exitCode: runOnceCliExitCode(result, { dryRun: input.options.dryRun })
   };
 }
 

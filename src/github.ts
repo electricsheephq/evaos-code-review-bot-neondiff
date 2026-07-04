@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import { redactSecrets } from "./secrets.js";
-import type { PullFilePatch, PullRequestSummary, ReviewComment, ReviewEvent } from "./types.js";
+import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 
 export interface GitHubApiOptions {
   appId?: string;
@@ -42,13 +42,20 @@ export class GitHubApi {
       const chunk = await this.request<PullRequestSummary[]>(`/repos/${repo}/pulls?state=open&per_page=100&page=${page}`, {
         token: await this.getReadToken(repo)
       });
-      pulls.push(...chunk);
+      pulls.push(...chunk.map(normalizePullRequestSummary));
       if (chunk.length < 100) return pulls;
     }
   }
 
   async getPull(repo: string, pullNumber: number): Promise<PullRequestSummary> {
-    return this.request<PullRequestSummary>(`/repos/${repo}/pulls/${pullNumber}`, {
+    const pull = await this.request<PullRequestSummary>(`/repos/${repo}/pulls/${pullNumber}`, {
+      token: await this.getReadToken(repo)
+    });
+    return normalizePullRequestSummary(pull);
+  }
+
+  async getRepo(repo: string): Promise<RepositorySummary> {
+    return this.request<RepositorySummary>(`/repos/${repo}`, {
       token: await this.getReadToken(repo)
     });
   }
@@ -258,6 +265,28 @@ export class GitHubApi {
 
     return (await response.json()) as T;
   }
+}
+
+function normalizePullRequestSummary(pull: PullRequestSummary): PullRequestSummary {
+  return {
+    ...pull,
+    head: {
+      ...pull.head,
+      ...(pull.head.repo ? { repo: normalizePullRepoSummary(pull.head.repo) } : {})
+    },
+    base: {
+      ...pull.base,
+      repo: normalizePullRepoSummary(pull.base.repo)
+    }
+  };
+}
+
+function normalizePullRepoSummary<T extends PullRequestSummary["base"]["repo"]>(repo: T): T {
+  const visibility = repo.visibility ?? (repo.private === true ? "private" : repo.private === false ? "public" : undefined);
+  return {
+    ...repo,
+    ...(visibility ? { visibility } : {})
+  };
 }
 
 function isIssueLookupMissingOrUnreadable(message: string, path: string): boolean {

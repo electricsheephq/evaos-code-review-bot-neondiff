@@ -58,6 +58,8 @@ export interface PullRequestSummary {
     repo?: {
       full_name: string;
       clone_url?: string;
+      private?: boolean;
+      visibility?: "public" | "private" | "internal";
     } | null;
   };
   base: {
@@ -66,11 +68,19 @@ export interface PullRequestSummary {
     repo: {
       full_name: string;
       clone_url?: string;
+      private?: boolean;
+      visibility?: "public" | "private" | "internal";
     };
   };
   html_url: string;
   requested_reviewers?: Array<{ login: string }>;
   labels?: Array<{ name: string }>;
+}
+
+export interface RepositorySummary {
+  full_name: string;
+  private: boolean;
+  visibility?: "public" | "private" | "internal";
 }
 
 export interface ReviewComment {

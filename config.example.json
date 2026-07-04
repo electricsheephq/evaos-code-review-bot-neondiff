@@ -40,6 +40,22 @@
       }
     }
   },
+  "license": {
+    "_enabledComment": "Enable this for public/private license enforcement. Public repos may remain free; private repos fail closed without active entitlement.",
+    "enabled": false,
+    "_apiBaseUrlComment": "Set apiBaseUrl when enabling license enforcement.",
+    "_cachePathComment": "Defaults to a license/entitlement-cache.json file next to statePath when omitted.",
+    "_keyPathComment": "For the beta file backend, keyPath defaults to license/license-key.txt next to statePath when omitted. The file is written with 0600 permissions.",
+    "storageBackend": "file",
+    "keychainService": "com.electricsheephq.neondiff.license",
+    "keychainAccount": "default",
+    "requestTimeoutMs": 10000,
+    "_offlineGraceMsComment": "Private-repo entitlement cache grace is capped at 15 minutes to limit revoked-license exposure during API outages.",
+    "offlineGraceMs": 900000,
+    "publicReposFree": true,
+    "privateReposRequireEntitlement": true,
+    "updateEntitlementRequiresLicense": true
+  },
   "desktop": {
     "openAICompatibleEndpoint": "http://localhost:8000/v1",
     "updateChannel": "dev"

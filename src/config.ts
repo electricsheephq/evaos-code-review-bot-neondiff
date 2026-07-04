@@ -1,10 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
+import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
+
+const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
 
 export interface BotConfig {
   pilotRepos: string[];
@@ -52,6 +56,7 @@ export interface BotConfig {
   skillPacks?: SkillPackContextConfig;
   enrichment?: EnrichmentConfig;
   issueEnrichment?: IssueEnrichmentConfig;
+  license?: LicenseConfig;
   desktop?: DesktopConfig;
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
@@ -269,6 +274,20 @@ const DEFAULT_CONFIG: BotConfig = {
     maxSuggestions: 8
   },
   issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG,
+  license: {
+    enabled: false,
+    apiBaseUrl: undefined,
+    cachePath: "",
+    storageBackend: "file",
+    keyPath: undefined,
+    keychainService: "com.electricsheephq.neondiff.license",
+    keychainAccount: "default",
+    requestTimeoutMs: 10_000,
+    offlineGraceMs: MAX_LICENSE_OFFLINE_GRACE_MS,
+    publicReposFree: true,
+    privateReposRequireEntitlement: true,
+    updateEntitlementRequiresLicense: true
+  },
   desktop: {
     openAICompatibleEndpoint: "http://localhost:8000/v1",
     updateChannel: "dev"
@@ -374,6 +393,13 @@ function validateConfig(config: BotConfig): void {
   const issueEnrichment = config.issueEnrichment ?? DEFAULT_CONFIG.issueEnrichment!;
   config.issueEnrichment = issueEnrichment;
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
+  const license = { ...DEFAULT_CONFIG.license!, ...(config.license ?? {}) };
+  license.cachePath = license.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
+  if (license.storageBackend === "file" && !license.keyPath) {
+    license.keyPath = join(dirname(config.statePath), "license", "license-key.txt");
+  }
+  config.license = license;
+  validateLicenseConfig(license, "config.license");
   const desktop = config.desktop ?? DEFAULT_CONFIG.desktop!;
   config.desktop = desktop;
   validateDesktopConfig(desktop, "config.desktop");
@@ -565,6 +591,84 @@ function validateIssueEnrichmentRepoOverride(value: unknown, label: string): voi
   ) {
     throw new Error(`${label}.maxCommentsPerCycle must be <= ${label}.maxIssuesPerCycle`);
   }
+}
+
+function validateLicenseConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.apiBaseUrl, `${label}.apiBaseUrl`);
+  validateLicenseApiBaseUrl(value.apiBaseUrl, `${label}.apiBaseUrl`);
+  if (value.enabled === true && typeof value.apiBaseUrl !== "string") {
+    throw new Error(`${label}.apiBaseUrl is required when ${label}.enabled=true`);
+  }
+  validateOptionalString(value.cachePath, `${label}.cachePath`);
+  if (typeof value.cachePath !== "string" || value.cachePath.trim().length === 0) {
+    throw new Error(`${label}.cachePath must be a non-empty string`);
+  }
+  assertPathOutsideProtectedRoot({
+    path: value.cachePath,
+    protectedRoot: process.cwd(),
+    protectedRoots: getProtectedCheckoutRoots(),
+    pathLabel: `${label}.cachePath`,
+    protectedRootLabel: "protected checkout root"
+  });
+  validateOptionalString(value.storageBackend, `${label}.storageBackend`);
+  if (value.storageBackend !== "keychain" && value.storageBackend !== "file") {
+    throw new Error(`${label}.storageBackend must be keychain or file`);
+  }
+  validateOptionalString(value.keyPath, `${label}.keyPath`);
+  if (value.storageBackend === "file" && (typeof value.keyPath !== "string" || value.keyPath.trim().length === 0)) {
+    throw new Error(`${label}.keyPath is required when ${label}.storageBackend=file`);
+  }
+  if (typeof value.keyPath === "string" && value.keyPath.trim().length > 0) {
+    assertPathOutsideProtectedRoot({
+      path: value.keyPath,
+      protectedRoot: process.cwd(),
+      protectedRoots: getProtectedCheckoutRoots(),
+      pathLabel: `${label}.keyPath`,
+      protectedRootLabel: "protected checkout root"
+    });
+  }
+  validateOptionalString(value.keychainService, `${label}.keychainService`);
+  validateOptionalString(value.keychainAccount, `${label}.keychainAccount`);
+  if (typeof value.keychainService !== "string" || value.keychainService.trim().length === 0) {
+    throw new Error(`${label}.keychainService must be a non-empty string`);
+  }
+  if (typeof value.keychainAccount !== "string" || value.keychainAccount.trim().length === 0) {
+    throw new Error(`${label}.keychainAccount must be a non-empty string`);
+  }
+  validatePositiveInteger(value.requestTimeoutMs, `${label}.requestTimeoutMs`);
+  validateNonNegativeInteger(value.offlineGraceMs, `${label}.offlineGraceMs`);
+  const offlineGraceMs = value.offlineGraceMs as number;
+  if (offlineGraceMs > MAX_LICENSE_OFFLINE_GRACE_MS) {
+    throw new Error(`${label}.offlineGraceMs must be <= ${MAX_LICENSE_OFFLINE_GRACE_MS}`);
+  }
+  validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
+  validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
+  validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);
+}
+
+export function validateLicenseConfigOverride(value: LicenseConfig, label = "config.license"): void {
+  validateLicenseConfig(value, label);
+}
+
+function validateLicenseApiBaseUrl(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} must be a non-empty string`);
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid URL`);
+  }
+  if (parsed.protocol === "https:") return;
+  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) return;
+  throw new Error(`${label} must use https unless it points to localhost/loopback for local testing`);
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
 }
 
 function validateDesktopConfig(value: unknown, label: string): void {
