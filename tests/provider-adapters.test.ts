@@ -26,12 +26,24 @@ describe("provider adapter fixtures", () => {
       note: "Review this private patch content with sk-live-secret-secret.",
       providerUrl: "https://gateway.example.test/v1?api_key=secret-provider-key-123456",
       authorization: "Bearer provider-secret-1234567890",
+      Z: "upper-z",
+      A: "upper-a",
+      Aa: "upper-aa",
+      _: "underscore",
+      aA: "lower-upper",
+      aa: "lower-aa",
       b: 2,
       a: 1
     });
     const secondAdapter = makeAdapter({
       a: 1,
       b: 2,
+      aa: "lower-aa",
+      aA: "lower-upper",
+      _: "underscore",
+      Aa: "upper-aa",
+      A: "upper-a",
+      Z: "upper-z",
       authorization: "Bearer provider-secret-1234567890",
       providerUrl: "https://gateway.example.test/v1?api_key=secret-provider-key-123456",
       note: "Review this private patch content with sk-live-secret-secret.",
@@ -60,7 +72,9 @@ describe("provider adapter fixtures", () => {
       evidence: {
         promptSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         outputSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-        outputPreview: '{"findings":[]}'
+        outputPreview: '{"findings":[]}',
+        rawEvidencePreview:
+          '{"A":"upper-a","Aa":"upper-aa","Z":"upper-z","_":"underscore","a":1,"aA":"lower-upper","aa":"lower-aa","authorization":"[redacted-sensitive-field]","b":2,"echoedPrompt":"[redacted-private-field]","note":"[redacted-private-evidence]","providerUrl":"[redacted-private-evidence]"}'
       }
     });
     const serialized = JSON.stringify(first);
