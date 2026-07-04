@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import {
+  buildOpenAIModelsUrl,
   buildProviderRegistrySummary,
   classifyProviderError,
   doctorProviderRegistry,
@@ -355,6 +356,8 @@ describe("provider registry", () => {
     for (const unsafeBaseUrl of [
       "https://[::ffff:169.254.169.254]/latest",
       "https://[::ffff:10.0.0.1]/v1",
+      "https://127.0.0.2/v1",
+      "https://[::ffff:127.0.0.2]/v1",
       "https://0.0.0.0/v1"
     ]) {
       const unsafeResult = await doctorProviderRegistry({
@@ -460,6 +463,13 @@ describe("provider registry", () => {
       errorCategory: "model_output_schema",
       error: "Models response did not advertise any usable model ids."
     });
+  });
+
+  it("builds OpenAI-compatible models URLs without duplicating existing models suffix", () => {
+    expect(buildOpenAIModelsUrl("https://gateway.example.test/v1")).toBe("https://gateway.example.test/v1/models");
+    expect(buildOpenAIModelsUrl("https://gateway.example.test/v1/")).toBe("https://gateway.example.test/v1/models");
+    expect(buildOpenAIModelsUrl("https://gateway.example.test/v1/models")).toBe("https://gateway.example.test/v1/models");
+    expect(buildOpenAIModelsUrl("https://gateway.example.test/v1/models/")).toBe("https://gateway.example.test/v1/models");
   });
 
   it("fails provider doctor for providers that cannot review JSON", async () => {
@@ -916,6 +926,48 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/must not point to private, link-local, or cloud metadata hosts/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "loopback-range",
+        providers: {
+          "loopback-range": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "http://127.0.0.2/v1",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/capabilities\.local must be true for loopback provider baseUrl/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "mapped-loopback",
+        providers: {
+          "mapped-loopback": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "http://[::ffff:127.0.0.2]/v1",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/capabilities\.local must be true for loopback provider baseUrl/);
 
     expect(() => loadConfigFromObject({
       providers: {

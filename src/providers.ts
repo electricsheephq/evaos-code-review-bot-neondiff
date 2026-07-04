@@ -354,8 +354,11 @@ function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEnt
 }
 
 function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+  const normalized = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (normalized === "localhost" || normalized === "::1") return true;
+  if (isIP(normalized) === 4) return normalized.split(".")[0] === "127";
+  const mappedIpv4 = ipv4MappedIpv6Address(normalized);
+  return mappedIpv4 ? isLoopbackHost(mappedIpv4) : false;
 }
 
 function isUnsafeSmokeHost(hostname: string): boolean {
@@ -422,7 +425,8 @@ function extractModelIds(data: unknown[]): string[] {
 
 export function buildOpenAIModelsUrl(baseUrl: string): string {
   const parsed = new URL(baseUrl);
-  parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/models`;
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+  parsed.pathname = pathname.endsWith("/models") ? pathname : `${pathname}/models`;
   return parsed.toString();
 }
 
