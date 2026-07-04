@@ -1193,10 +1193,11 @@ function deferQueuedProviderJobsForProviderThrottle(input: {
 }): number {
   const cooldown = providerThrottleCooldownFromTriggerJob(input);
   const providerId = input.triggerJob.providerId ?? "default";
+  const backgroundPriority = input.config.reviewScheduler?.backgroundPriority ?? 50;
   let deferred = 0;
   for (const job of input.state.listReviewQueueJobs({ state: "queued" })) {
-    if (job.jobId === input.triggerJob.jobId) continue;
     if ((job.providerId ?? "default") !== providerId) continue;
+    if (job.source === "manual_command" || job.lane === "manual" || job.priority < backgroundPriority) continue;
     input.state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: "provider_deferred",

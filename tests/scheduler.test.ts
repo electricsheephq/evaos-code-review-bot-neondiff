@@ -590,9 +590,20 @@ describe("provider-aware review scheduler", () => {
       pullNumber: 2,
       headSha: HEAD_B,
       baseSha: "base",
-      priority: 20,
+      priority: 50,
       providerId: "zai-coding-plan",
       now: new Date("2026-07-02T00:00:01.000Z")
+    }).job;
+    const manual = state.enqueueReviewQueueJob({
+      repo: "org/repo-c",
+      pullNumber: 3,
+      headSha: HEAD_C,
+      baseSha: "base",
+      source: "manual_command",
+      priority: 99,
+      providerId: "zai-coding-plan",
+      commentId: 123,
+      now: new Date("2026-07-02T00:00:02.000Z")
     }).job;
     const attempted: string[] = [];
 
@@ -600,7 +611,8 @@ describe("provider-aware review scheduler", () => {
       config,
       github: githubFromMap(new Map([
         ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]],
-        ["org/repo-b", [pull("org/repo-b", 2, HEAD_B)]]
+        ["org/repo-b", [pull("org/repo-b", 2, HEAD_B)]],
+        ["org/repo-c", [pull("org/repo-c", 3, HEAD_C)]]
       ])),
       state,
       options: { dryRun: false, useZCode: true },
@@ -626,6 +638,7 @@ describe("provider-aware review scheduler", () => {
       lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-02T00:07:00.000Z")
     });
     expect(secondAfterOverload?.startedAt).toBeUndefined();
+    expect(state.getReviewQueueJob(manual.jobId)).toMatchObject({ state: "queued" });
     state.close();
   });
 
