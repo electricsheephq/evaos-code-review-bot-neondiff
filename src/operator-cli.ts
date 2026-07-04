@@ -307,6 +307,7 @@ export interface OperatorDurableQueueSnapshot {
     oldestWaitingRepo?: string;
     oldestWaitingAt?: string;
     oldestWaitingAgeMs?: number;
+    oldestWaitingAtMalformed?: boolean;
   };
   jobs: ReviewQueueJobRecord[];
   byRepo: Array<{
@@ -323,6 +324,7 @@ export interface OperatorDurableQueueSnapshot {
     retired: number;
     oldestWaitingAt?: string;
     oldestWaitingAgeMs?: number;
+    oldestWaitingAtMalformed?: boolean;
   }>;
 }
 
@@ -1548,6 +1550,7 @@ function buildDurableQueueSnapshot(
 function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): OperatorDurableQueueSnapshot["summary"] {
   const oldestWaiting = oldestWaitingQueueJob(jobs);
   const oldestWaitingAgeMs = oldestWaiting ? waitingAgeMs(oldestWaiting.createdAt, now) : undefined;
+  const oldestWaitingAtMalformed = oldestWaiting ? !isParseableTimestamp(oldestWaiting.createdAt) : false;
   return {
     total: jobs.length,
     queued: jobs.filter((job) => job.state === "queued").length,
@@ -1563,7 +1566,8 @@ function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): Ope
       ? {
           oldestWaitingRepo: oldestWaiting.repo,
           oldestWaitingAt: oldestWaiting.createdAt,
-          ...(oldestWaitingAgeMs !== undefined ? { oldestWaitingAgeMs } : {})
+          ...(oldestWaitingAgeMs !== undefined ? { oldestWaitingAgeMs } : {}),
+          ...(oldestWaitingAtMalformed ? { oldestWaitingAtMalformed: true } : {})
         }
       : {})
   };
@@ -1589,6 +1593,10 @@ function compareWaitingQueueJobCreatedAt(left: ReviewQueueJobRecord, right: Revi
 function createdAtSortMs(createdAt: string): number {
   const createdAtMs = Date.parse(createdAt);
   return Number.isFinite(createdAtMs) ? createdAtMs : Number.POSITIVE_INFINITY;
+}
+
+function isParseableTimestamp(value: string): boolean {
+  return Number.isFinite(Date.parse(value));
 }
 
 function waitingAgeMs(createdAt: string, now: Date): number | undefined {

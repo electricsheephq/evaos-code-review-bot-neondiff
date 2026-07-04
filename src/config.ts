@@ -130,6 +130,7 @@ export interface RepoProfileConfig {
 export interface RepoReviewSchedulerConfig {
   maxActiveHeads?: number;
   maxQueuedHeads?: number;
+  /** Terminal for the exact PR head when set to "skip"; use "defer" for transient bursts. */
   overflowAction?: "defer" | "skip";
 }
 

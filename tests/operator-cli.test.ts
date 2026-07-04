@@ -1319,12 +1319,14 @@ describe("operator CLI summaries", () => {
 
     expect(queue.summary).toMatchObject({
       oldestWaitingRepo: "owner/repo",
-      oldestWaitingAt: "not-a-date"
+      oldestWaitingAt: "not-a-date",
+      oldestWaitingAtMalformed: true
     });
     expect(queue.summary.oldestWaitingAgeMs).toBeUndefined();
     expect(queue.byRepo[0]).toMatchObject({
       repo: "owner/repo",
-      oldestWaitingAt: "not-a-date"
+      oldestWaitingAt: "not-a-date",
+      oldestWaitingAtMalformed: true
     });
     expect(queue.byRepo[0]?.oldestWaitingAgeMs).toBeUndefined();
   });
@@ -1353,11 +1355,13 @@ describe("operator CLI summaries", () => {
       oldestWaitingAt: "2026-07-01T00:00:00.000Z",
       oldestWaitingAgeMs: 5 * 60_000
     });
+    expect(queue.summary.oldestWaitingAtMalformed).toBeUndefined();
     expect(queue.byRepo[0]).toMatchObject({
       repo: "owner/repo",
       oldestWaitingAt: "2026-07-01T00:00:00.000Z",
       oldestWaitingAgeMs: 5 * 60_000
     });
+    expect(queue.byRepo[0]?.oldestWaitingAtMalformed).toBeUndefined();
   });
 
   it("builds queue buckets from coverage audit output", () => {

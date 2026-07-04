@@ -379,6 +379,8 @@ async function enqueuePullIfEligible(input: {
     const overflowAction = repoScheduler?.overflowAction ?? "defer";
     const deferredDetails = `Repo review queue capacity is full for this repo (limit ${maxQueuedHeads}).`;
     if (overflowAction === "skip") {
+      // Explicit policy escape hatch: "skip" is terminal for this exact head.
+      // The default "defer" path keeps transient burst heads eligible once capacity frees.
       input.state.recordProcessed({
         repo: input.repo,
         pullNumber: input.pull.number,
@@ -576,10 +578,27 @@ function buildRepoActiveLimitOverrides(
 ): Record<string, number> | undefined {
   const overrides: Record<string, number> = {};
   for (const job of jobs) {
+    const repo = job.repo.toLowerCase();
+    if (!isValidRepoName(repo)) continue;
     const maxActiveHeads = resolveRepoReviewScheduler(config, job.repo)?.maxActiveHeads;
-    if (maxActiveHeads !== undefined) overrides[job.repo.toLowerCase()] = maxActiveHeads;
+    if (maxActiveHeads !== undefined) overrides[repo] = maxActiveHeads;
   }
   return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+function isValidRepoName(repo: string): boolean {
+  const [owner, name, extra] = repo.split("/");
+  return (
+    extra === undefined &&
+    Boolean(owner) &&
+    Boolean(name) &&
+    owner !== "." &&
+    owner !== ".." &&
+    name !== "." &&
+    name !== ".." &&
+    /^[A-Za-z0-9_.-]+$/.test(owner) &&
+    /^[A-Za-z0-9_.-]+$/.test(name)
+  );
 }
 
 function isCapacityDeferredReadiness(
