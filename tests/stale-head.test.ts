@@ -12,6 +12,9 @@ import { detectStalePullHead, reviewPull } from "../src/worker.js";
 
 describe("exact-head stale guards", () => {
   const roots: string[] = [];
+  const headA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const oldHead = "1111111111111111111111111111111111111111";
+  const newHead = "2222222222222222222222222222222222222222";
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -50,7 +53,7 @@ describe("exact-head stale guards", () => {
           user: { login: "100yenadmin", type: "User" }
         }
       ],
-      getPull: async () => pull(1213, "new-head", "base-a"),
+      getPull: async () => pull(1213, newHead, "base-a"),
       listPullFiles: async () => {
         throw new Error("stale command review should not fetch files");
       },
@@ -62,13 +65,13 @@ describe("exact-head stale guards", () => {
       github,
       state: store,
       repo: "electricsheephq/WorldOS",
-      pull: pull(1213, "old-head", "base-a"),
+      pull: pull(1213, oldHead, "base-a"),
       dryRun: true,
       useZCode: false,
       budget: new ReviewRunBudget(1)
     })).resolves.toBe("skipped_stale_head");
 
-    expect(store.hasProcessed("electricsheephq/WorldOS", 1213, "old-head")).toBe(true);
+    expect(store.hasProcessed("electricsheephq/WorldOS", 1213, oldHead)).toBe(true);
     store.close();
   });
 
@@ -86,7 +89,7 @@ describe("exact-head stale guards", () => {
           user: { login: "100yenadmin", type: "User" }
         }
       ],
-      getPull: async () => pull(1214, "head-a", "base-a"),
+      getPull: async () => pull(1214, headA, "base-a"),
       listPullFiles: async () => {
         throw new Error("finishing-touch drafts must not fetch files or enter review work");
       },
@@ -112,17 +115,17 @@ describe("exact-head stale guards", () => {
       github,
       state: store,
       repo: "electricsheephq/WorldOS",
-      pull: pull(1214, "head-a", "base-a"),
+      pull: pull(1214, headA, "base-a"),
       dryRun: false,
       useZCode: false,
       budget: new ReviewRunBudget(1)
     })).resolves.toBe("skipped_finishing_touch_draft");
 
-    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1214, "head-a", 9002)).toBe(true);
+    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1214, headA, 9002)).toBe(true);
     expect(store.getFinishingTouchDraft({
       repo: "electricsheephq/WorldOS",
       pullNumber: 1214,
-      headSha: "head-a",
+      headSha: headA,
       commandCommentId: 9002
     })).toMatchObject({
       action: "explain_risk",
@@ -165,7 +168,7 @@ describe("exact-head stale guards", () => {
           user: { login: "100yenadmin", type: "User" }
         }
       ],
-      getPull: async () => pull(1214, "head-a", "base-a"),
+      getPull: async () => pull(1214, headA, "base-a"),
       listPullFiles: async () => {
         throw new Error("finishing-touch drafts must not fetch files or enter review work");
       },
@@ -177,19 +180,19 @@ describe("exact-head stale guards", () => {
       github,
       state: store,
       repo: "electricsheephq/WorldOS",
-      pull: pull(1214, "head-a", "base-a"),
+      pull: pull(1214, headA, "base-a"),
       dryRun: false,
       useZCode: false,
       budget: new ReviewRunBudget(1),
       commandCommentId: 9005
     })).resolves.toBe("skipped_finishing_touch_draft");
 
-    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1214, "head-a", 9005)).toBe(true);
-    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1214, "head-a", 9006)).toBe(false);
+    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1214, headA, 9005)).toBe(true);
+    expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1214, headA, 9006)).toBe(false);
     expect(store.getFinishingTouchDraft({
       repo: "electricsheephq/WorldOS",
       pullNumber: 1214,
-      headSha: "head-a",
+      headSha: headA,
       commandCommentId: 9005
     })).toMatchObject({
       action: "explain_risk",
@@ -198,7 +201,7 @@ describe("exact-head stale guards", () => {
     expect(store.getFinishingTouchDraft({
       repo: "electricsheephq/WorldOS",
       pullNumber: 1214,
-      headSha: "head-a",
+      headSha: headA,
       commandCommentId: 9006
     })).toBeUndefined();
     store.close();
@@ -321,7 +324,7 @@ describe("exact-head stale guards", () => {
     const planned = planPullWorktreePaths({
       repo: "electricsheephq/WorldOS",
       pullNumber: 1216,
-      expectedHeadSha: "head-a",
+      expectedHeadSha: headA,
       workRoot: config.workRoot
     });
     mkdirSync(planned.worktreePath, { recursive: true });
@@ -334,7 +337,7 @@ describe("exact-head stale guards", () => {
           user: { login: "100yenadmin", type: "User" }
         }
       ],
-      getPull: async () => pull(1216, "head-a", "base-a"),
+      getPull: async () => pull(1216, headA, "base-a"),
       listPullFiles: async () => {
         throw new Error("dirty finishing-touch command should not fetch files");
       },
@@ -346,7 +349,7 @@ describe("exact-head stale guards", () => {
       github,
       state: store,
       repo: "electricsheephq/WorldOS",
-      pull: pull(1216, "head-a", "base-a"),
+      pull: pull(1216, headA, "base-a"),
       dryRun: false,
       useZCode: false,
       budget: new ReviewRunBudget(1)
@@ -355,7 +358,7 @@ describe("exact-head stale guards", () => {
     expect(store.getFinishingTouchDraft({
       repo: "electricsheephq/WorldOS",
       pullNumber: 1216,
-      headSha: "head-a",
+      headSha: headA,
       commandCommentId: 9004
     })).toMatchObject({
       action: "explain_risk",

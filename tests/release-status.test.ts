@@ -2280,8 +2280,8 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         "expired-lease-head",
         "lease-expired",
         "2026-07-01T00:04:00.000Z",
-        "2026-07-01T00:00:00.000Z",
-        "2026-07-01T00:00:00.000Z"
+        "2026-06-30T23:00:00.000Z",
+        "2026-06-30T23:00:00.000Z"
       );
     } finally {
       db.close();
@@ -2369,8 +2369,8 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         1127,
         "stale-null-lease-head",
         "lease-without-expiry",
-        "2026-07-01T00:00:00.000Z",
-        "2026-07-01T00:00:00.000Z"
+        "2026-06-30T23:00:00.000Z",
+        "2026-06-30T23:00:00.000Z"
       );
     } finally {
       db.close();
