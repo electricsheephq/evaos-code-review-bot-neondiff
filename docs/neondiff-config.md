@@ -95,6 +95,8 @@ repo:
 
 Mutation, finishing touches, issue enrichment, and public confidence percentages are default-off in this draft. A future runtime loader should fail before review starts when a repo config tries to enable unsupported unsafe behavior.
 
+`review.maxComments` and `safetyGates.commentCaps.maxPerPullRequest` both have a nonzero floor. `review.maxComments` is a soft review budget, while `safetyGates.commentCaps.maxPerPullRequest` is the hard safety cap; if they differ, the stricter lower value wins.
+
 ## Proof Boundary
 
 The current proof is limited to schema structure, docs, and fixtures. Runtime behavior remains future work for #109:

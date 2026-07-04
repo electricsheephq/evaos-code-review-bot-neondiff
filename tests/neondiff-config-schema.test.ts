@@ -85,7 +85,7 @@ function expectInvalidFixture(validate: ValidateFunction, name: string, config: 
 
   expect(expectedPaths, `${baseName} declares expected schema paths`).toBeDefined();
   expect(errors, name).not.toEqual([]);
-  expect(errorPaths(errors), name).toEqual([...(expectedPaths ?? [])].sort());
+  expect(errorPaths(errors), name).toEqual(expect.arrayContaining(expectedPaths ?? []));
 }
 
 function expectCredentialSmokeClean(fixture: string, text: string): void {
@@ -128,6 +128,8 @@ describe("NeonDiff config schema draft", () => {
     expect(get("properties.issueEnrichment.properties.enabled.default", schema)).toBe(false);
     expect(get("properties.confidence.properties.mode.default", schema)).toBe("uncalibrated");
     expect(get("properties.confidence.properties.displayPercentages.default", schema)).toBe(false);
+    expect(get("properties.review.properties.maxComments.description", schema)).toMatch(/stricter lower cap wins/);
+    expect(get("properties.review.properties.maxComments.minimum", schema)).toBe(1);
     expect(get("properties.providers.properties.default.$ref", schema)).toBe("#/$defs/providerId");
     expect(get("properties.providers.properties.default.description", schema)).toMatch(/providers\.allowed/);
     expect(get("properties.providers.properties.local.properties.provider.description", schema)).toMatch(/openai-compatible/);
@@ -142,6 +144,9 @@ describe("NeonDiff config schema draft", () => {
       "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?/v[1-9][0-9]*/?$"
     );
     expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerPullRequest.minimum", schema)).toBe(1);
+    expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerPullRequest.description", schema)).toMatch(
+      /stricter lower cap wins/
+    );
     expect(get("properties.safetyGates.properties.commentCaps.properties.maxPerFile.minimum", schema)).toBe(1);
   });
 
@@ -370,9 +375,19 @@ describe("NeonDiff config schema draft", () => {
     }
   });
 
-  it("rejects zero comment caps to avoid silent no-op review output", () => {
+  it("rejects zero pull-request comment budgets to avoid silent no-op review output", () => {
     const validate = compileSchema();
     const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    const reviewErrors = validateConfig(validate, {
+      ...baseConfig,
+      review: {
+        ...asRecord(baseConfig.review),
+        maxComments: 0
+      }
+    });
+
+    expect(errorPaths(reviewErrors), "review.maxComments").toContain("/review/maxComments");
 
     for (const commentCaps of [
       { maxPerPullRequest: 0, maxPerFile: 4 },

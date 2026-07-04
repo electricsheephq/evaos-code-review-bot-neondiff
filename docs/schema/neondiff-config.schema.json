@@ -41,8 +41,9 @@
           "default": "conservative"
         },
         "maxComments": {
+          "description": "Soft review budget for pull-request comments. Must be at least 1; when this differs from safetyGates.commentCaps.maxPerPullRequest, the stricter lower cap wins.",
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1,
           "maximum": 50,
           "default": 12
         },
@@ -242,7 +243,7 @@
           "required": ["maxPerPullRequest", "maxPerFile"],
           "properties": {
             "maxPerPullRequest": {
-              "description": "Must be at least 1 so a valid config cannot silently suppress every inline review comment.",
+              "description": "Hard safety cap for pull-request comments. Must be at least 1 so a valid config cannot silently suppress every inline review comment; when review.maxComments differs, the stricter lower cap wins.",
               "type": "integer",
               "minimum": 1,
               "maximum": 50,
