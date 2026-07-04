@@ -1576,7 +1576,19 @@ function oldestWaitingQueueJob(jobs: ReviewQueueJobRecord[]): ReviewQueueJobReco
       job.state === "provider_deferred" ||
       job.state === "blocked_on_proof"
     )
-    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))[0];
+    .sort(compareWaitingQueueJobCreatedAt)[0];
+}
+
+function compareWaitingQueueJobCreatedAt(left: ReviewQueueJobRecord, right: ReviewQueueJobRecord): number {
+  const leftMs = createdAtSortMs(left.createdAt);
+  const rightMs = createdAtSortMs(right.createdAt);
+  if (leftMs !== rightMs) return leftMs - rightMs;
+  return left.jobId.localeCompare(right.jobId);
+}
+
+function createdAtSortMs(createdAt: string): number {
+  const createdAtMs = Date.parse(createdAt);
+  return Number.isFinite(createdAtMs) ? createdAtMs : Number.POSITIVE_INFINITY;
 }
 
 function waitingAgeMs(createdAt: string, now: Date): number | undefined {

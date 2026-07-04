@@ -74,6 +74,17 @@ describe("review scheduler config", () => {
         repos: {
           "owner/repo": {
             reviewScheduler: {
+              maxActiveHeads: 0
+            }
+          }
+        }
+      }
+    }))).toThrow("repoProfiles.repos.owner/repo.reviewScheduler.maxActiveHeads must be a positive integer");
+    expect(() => loadConfig(writeConfig({
+      repoProfiles: {
+        repos: {
+          "owner/repo": {
+            reviewScheduler: {
               overflowAction: "park"
             }
           }

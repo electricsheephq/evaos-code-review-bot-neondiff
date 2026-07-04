@@ -3087,6 +3087,8 @@ describe("provider-aware review scheduler", () => {
     expect(state.listReviewQueueJobs({ repo })).toEqual([
       expect.objectContaining({ pullNumber: 461, headSha: HEAD_A })
     ]);
+    expect(result.queue.remainingQueued).toBe(0);
+    expect(result.queue.budget?.queued.total).toBe(1);
     expect(state.getReviewReadiness(repo, 462, HEAD_B)).toMatchObject({
       state: "provider_deferred",
       reason: "repo_queue_capacity_full"

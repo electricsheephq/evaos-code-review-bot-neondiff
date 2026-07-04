@@ -166,6 +166,15 @@ export function buildReviewBudgetStatus(input: {
   const jobs = input.jobs.map((job) =>
     normalizeExpiredLeaseJob(job, now, input.config.reviewConcurrency.leaseTtlMs)
   );
+  const repoActiveLimitCache = new Map<string, number>();
+  const cachedRepoActiveLimit = (repo: string): number => {
+    const key = repo.toLowerCase();
+    const cached = repoActiveLimitCache.get(key);
+    if (cached !== undefined) return cached;
+    const limit = repoActiveLimitFor(input.config, scheduler, repo);
+    repoActiveLimitCache.set(key, limit);
+    return limit;
+  };
   const active = jobs.filter((job) => isActiveQueueJob(job));
   const activeProvider = countBy(active, (job) => providerKey(job));
   const activeOrg = countBy(active, (job) => job.org);
@@ -198,7 +207,7 @@ export function buildReviewBudgetStatus(input: {
     const providerCount = simulatedProviderActive.get(provider) ?? 0;
     const orgCount = simulatedOrgActive.get(job.org) ?? 0;
     const repoCount = simulatedRepoActive.get(job.repo) ?? 0;
-    const repoActiveLimit = repoActiveLimitFor(input.config, scheduler, job.repo);
+    const repoActiveLimit = cachedRepoActiveLimit(job.repo);
     const capacityReason = capacityDelayReason(job, {
       scheduler,
       providerCount,
@@ -262,7 +271,7 @@ export function buildReviewBudgetStatus(input: {
       background: active.filter((job) => job.lane === "background").length,
       byProvider: capacityRows(activeProvider, scheduler.maxProviderActive),
       byOrg: capacityRows(activeOrg, scheduler.maxOrgActive),
-      byRepo: capacityRows(activeRepo, (repo) => repoActiveLimitFor(input.config, scheduler, repo))
+      byRepo: capacityRows(activeRepo, cachedRepoActiveLimit)
     },
     queued: {
       total: queued.length,
