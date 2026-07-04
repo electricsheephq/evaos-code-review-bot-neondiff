@@ -1148,7 +1148,7 @@ describe("worker review failures", () => {
 
     await expect(reviewPull({
       config,
-      github: {} as unknown as GitHubApi,
+      github: { getPull: async () => pull } as unknown as GitHubApi,
       state,
       repo: "electricsheephq/WorldOS",
       pull,

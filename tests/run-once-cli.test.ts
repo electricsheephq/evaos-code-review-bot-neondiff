@@ -165,6 +165,34 @@ describe("run-once CLI reporting", () => {
     expect(runOnceCliExitCode(result)).toBe(1);
   });
 
+  it("keeps scoped dry-run license gate skips ok for operator proof commands", () => {
+    const result = runOnceResult({
+      skippedLicenseGate: 1,
+      scopedPull: {
+        repo: "owner/private",
+        pullNumber: 123,
+        headSha: "head-123",
+        title: "private dry run",
+        url: "https://github.com/owner/private/pull/123"
+      }
+    });
+
+    expect(buildRunOnceCliReport({
+      result,
+      dryRun: true,
+      useZCode: false,
+      repo: "owner/private",
+      pullNumber: 123
+    })).toMatchObject({
+      ok: true,
+      dryRun: true,
+      result: {
+        skippedLicenseGate: 1
+      }
+    });
+    expect(runOnceCliExitCode(result, { dryRun: true })).toBe(0);
+  });
+
   it("returns nonzero command output when an injected runOnce implementation reports failures", async () => {
     const command = await runOnceCliCommand({
       options: {

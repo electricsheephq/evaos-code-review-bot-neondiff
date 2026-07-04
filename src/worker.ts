@@ -1306,8 +1306,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   };
 
   try {
-    if (input.processedHeadPolicy === "retry_failed_head" && !acquireReviewCapacity()) return "skipped_capacity";
-
     const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
     if (!licenseGate.ok) {
       const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
@@ -1323,7 +1321,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_license_gate";
     }
 
-    if (input.processedHeadPolicy !== "retry_failed_head" && !acquireReviewCapacity()) return "skipped_capacity";
+    if (!acquireReviewCapacity()) return "skipped_capacity";
 
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
     if (commandReviewRequested) {
