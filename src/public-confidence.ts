@@ -20,10 +20,13 @@ const PUBLIC_CONFIDENCE_REPLACEMENT = "confidence not calibrated";
 const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1(?:\.0+)?)\b)`;
 const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((?:confidence|certainty)\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}`, "gi");
 const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
-  String.raw`\bconfidence(?:\s+score(?:\s*(?::|=)\s*|\s+of\s+|\s+)|\s+of\s+|\s+)${CONFIDENCE_VALUE_PATTERN}`,
+  String.raw`\bconfidence(?:\s+score(?:\s*(?::|=)\s*|\s+of\s+|\s+(?:is|was|at)\s+|\s+)|\s+of\s+|\s+(?:is|was|at|in)\s+|\s+)${CONFIDENCE_VALUE_PATTERN}`,
   "gi"
 );
-const VALUE_CONFIDENCE_PATTERN = new RegExp(String.raw`\b${CONFIDENCE_VALUE_PATTERN}\s*(?:confident|confidence)\b`, "gi");
+const VALUE_CONFIDENCE_PATTERN = new RegExp(
+  String.raw`\b${CONFIDENCE_VALUE_PATTERN}\s*(?:confident|confidence(?:\s+in\b)?)`,
+  "gi"
+);
 const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = /\b(?:high|medium|low)\s+confidence\s*\(\s*(?:0?\.\d+|1(?:\.0+)?)\s*\)/gi;
 
 export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisplayPolicy>): PublicConfidenceDisplayPolicy {

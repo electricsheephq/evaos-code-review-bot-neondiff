@@ -23,8 +23,12 @@ describe("public confidence display policy", () => {
       "confidence score: 0.95",
       "confidence score = 95%",
       "confidence score=95%",
+      "confidence is 0.95",
+      "confidence was 95%",
+      "confidence at 95%",
       "99 percent confident",
       "95 percent confidence",
+      "I have 0.95 confidence in this",
       "high confidence (0.95)",
       "certainty: 95%"
     ].join("\n");
@@ -33,7 +37,7 @@ describe("public confidence display policy", () => {
 
     expect(output).not.toContain("0.95");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
-    expect(output.match(/confidence not calibrated/g)).toHaveLength(10);
+    expect(output.match(/confidence not calibrated/g)).toHaveLength(14);
   });
 
   it("does not corrupt unrelated confidence interval or threshold decimals", () => {
@@ -136,8 +140,12 @@ describe("public confidence display policy", () => {
       "confidence score: 0.95",
       "confidence score = 95%",
       "confidence score=95%",
+      "confidence is 0.95",
+      "confidence was 95%",
+      "confidence at 95%",
       "99 percent confident",
       "95 percent confidence",
+      "I have 0.95 confidence in this",
       "high confidence (0.95)",
       "certainty: 95%"
     ].join("\n");
