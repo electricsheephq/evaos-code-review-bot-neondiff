@@ -27,7 +27,12 @@ import {
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
-import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy } from "./issue-enrichment.js";
+import {
+  buildIssueEnrichmentStatus,
+  collectIssueEnrichmentScan,
+  resolveIssueEnrichmentRepoPolicy,
+  type IssueEnrichmentRepoReadCheck
+} from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
 import { buildReviewBudgetStatus } from "./review-budget.js";
 import {
@@ -241,7 +246,8 @@ async function main(): Promise<void> {
     }
     const issueEnrichment = buildIssueEnrichmentStatus({
       config,
-      canPostAsApp: github.canPostAsApp()
+      canPostAsApp: github.canPostAsApp(),
+      issueReadChecks: await collectIssueEnrichmentReadChecks(config, github)
     });
     const ok = readChecks.every((check) => check.ok) && issueEnrichment.ok;
     console.log(JSON.stringify({
@@ -2225,7 +2231,13 @@ async function buildDoctorGithubReport(config: BotConfig) {
     }
   }
 
-  const ok = appCredentialsConfigured && activeRepoChecks > 0 && readChecks.every((check) => check.ok);
+  const issueReadChecks = await collectIssueEnrichmentReadChecks(config, github);
+  const issueEnrichment = buildIssueEnrichmentStatus({
+    config,
+    canPostAsApp: appCredentialsConfigured,
+    issueReadChecks
+  });
+  const ok = appCredentialsConfigured && activeRepoChecks > 0 && readChecks.every((check) => check.ok) && issueEnrichment.ok;
   return {
     ok,
     command: "doctor github",
@@ -2243,6 +2255,10 @@ async function buildDoctorGithubReport(config: BotConfig) {
       botLogin: config.github.botLogin ?? "evaos-code-review-bot[bot]",
       apiBaseUrl: config.github.apiBaseUrl ?? "https://api.github.com",
       readChecks
+    },
+    issueEnrichment: {
+      ...issueEnrichment,
+      readChecks: issueReadChecks
     },
     requiredRepositoryPermissions: [
       "Metadata: read",
@@ -2269,6 +2285,48 @@ async function buildDoctorGithubReport(config: BotConfig) {
       ...(readChecks.some((check) => !check.ok) ? ["Confirm the GitHub App is installed on selected repositories with the required repository permissions."] : [])
     ]
   };
+}
+
+async function collectIssueEnrichmentReadChecks(
+  config: BotConfig,
+  github: GitHubApi
+): Promise<IssueEnrichmentRepoReadCheck[]> {
+  const issueConfig = config.issueEnrichment;
+  if (!issueConfig || issueConfig.allowlist.length === 0) return [];
+  const canRead = github.canPostAsApp() || Boolean(config.github.token);
+  const checks: IssueEnrichmentRepoReadCheck[] = [];
+  for (const repo of issueConfig.allowlist) {
+    const policy = resolveIssueEnrichmentRepoPolicy(issueConfig, repo);
+    if (!policy.allowed) {
+      checks.push({ repo, ok: true, skippedByPolicy: policy.reason });
+      continue;
+    }
+    if (!canRead) {
+      checks.push({
+        repo,
+        ok: false,
+        error: "GitHub App credentials or fallback read token are required before checking issue-enrichment repository access."
+      });
+      continue;
+    }
+    try {
+      const issues = await github.listIssuesForEnrichment(repo, {
+        state: "open",
+        perPage: 1,
+        pageLimit: 1,
+        excludePullRequests: true,
+        minIssueResults: 1
+      });
+      checks.push({ repo, ok: true, readableIssueCount: issues.length });
+    } catch (error) {
+      checks.push({
+        repo,
+        ok: false,
+        error: redactSecrets(error instanceof Error ? error.message : String(error))
+      });
+    }
+  }
+  return checks;
 }
 
 function buildHelp(command?: string) {

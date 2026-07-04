@@ -399,6 +399,12 @@ describe("public NeonDiff CLI surface", () => {
         response.end(JSON.stringify([]));
         return;
       }
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo/issues") {
+        expect(request.headers.authorization).toBe(`Bearer ${installationToken}`);
+        expect(url.searchParams.get("state")).toBe("open");
+        response.end(JSON.stringify([]));
+        return;
+      }
       response.statusCode = 404;
       response.end(JSON.stringify({ message: `unexpected ${request.method} ${url.pathname}` }));
     });
@@ -424,6 +430,18 @@ describe("public NeonDiff CLI surface", () => {
           timeoutMs: 1000,
           maxPatchBytes: 1000,
           retryMaxRetries: 0
+        },
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: false,
+          allowlist: ["acme/demo"],
+          maxIssuesPerCycle: 1,
+          maxCommentsPerCycle: 0,
+          cooldownMs: 3_600_000,
+          burstWindowMs: 3_600_000,
+          maxIssuesPerBurst: 3,
+          lookbackMs: 600_000,
+          processExistingOpenIssuesOnActivation: false
         }
       })}\n`);
 
@@ -455,6 +473,16 @@ describe("public NeonDiff CLI surface", () => {
             }
           ]
         }
+      });
+      expect(output.issueEnrichment).toMatchObject({
+        state: "dry_run_only",
+        readChecks: [
+          {
+            repo: "acme/demo",
+            ok: true,
+            readableIssueCount: 0
+          }
+        ]
       });
       expect(output.requiredRepositoryPermissions).toContain("Pull requests: read/write");
       expect(output.optionalPermissions.join(" ")).toMatch(/issue-enrichment/i);

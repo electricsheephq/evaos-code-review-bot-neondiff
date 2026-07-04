@@ -73,7 +73,16 @@ export interface IssueEnrichmentStatus {
   throttleDefaults: IssueEnrichmentThrottlePolicy;
   globalLimits: IssueEnrichmentGlobalLimits;
   repoOverrides: Array<{ repo: string } & IssueEnrichmentRepoOverride>;
+  issueReadChecks?: IssueEnrichmentRepoReadCheck[];
   blockers: IssueEnrichmentBlocker[];
+}
+
+export interface IssueEnrichmentRepoReadCheck {
+  repo: string;
+  ok: boolean;
+  readableIssueCount?: number;
+  skippedByPolicy?: "not_issue_enrichment_allowlisted" | "issue_enrichment_repo_disabled";
+  error?: string;
 }
 
 export interface IssueEnrichmentThrottlePolicy {
@@ -103,6 +112,7 @@ export type IssueEnrichmentBlocker =
   | "issue_enrichment_allowlist_empty"
   | "issue_enrichment_live_posting_disabled"
   | "github_app_credentials_required_for_live_issue_comments"
+  | "github_app_issues_permission_required"
   | "issue_enrichment_live_repo_thresholds_required";
 
 export interface IssueEnrichmentReader {
@@ -113,6 +123,8 @@ export interface IssueEnrichmentReader {
       since?: string;
       perPage?: number;
       pageLimit?: number;
+      excludePullRequests?: boolean;
+      minIssueResults?: number;
     }
   ): Promise<GitHubRelatedIssueOrPull[]>;
 }
@@ -204,9 +216,9 @@ export interface IssueEnrichmentScanItem {
 }
 
 const DEFAULT_REPO_SCAN_OPTIONS = {
-  state: "all" as const,
+  state: "open" as const,
   perPage: 100,
-  pageLimit: 1
+  pageLimit: 10
 };
 
 function issueSuggestionAllowlists(policy: IssueEnrichmentSuggestionPolicy): {
@@ -223,9 +235,15 @@ export function buildIssueEnrichmentStatus(input: {
   config: { issueEnrichment?: IssueEnrichmentConfig };
   canPostAsApp: boolean;
   checkedAt?: string;
+  issueReadChecks?: IssueEnrichmentRepoReadCheck[];
 }): IssueEnrichmentStatus {
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
   const blockers: IssueEnrichmentBlocker[] = [];
+  const issueReadChecks = (input.issueReadChecks ?? []).map((check) => ({
+    ...check,
+    ...(check.error ? { error: redactSecrets(check.error) } : {})
+  }));
+  const issueReadFailures = issueReadChecks.filter((check) => !check.ok);
   if (!config.enabled) blockers.push("issue_enrichment_disabled");
   if (config.allowlist.length === 0) blockers.push("issue_enrichment_allowlist_empty");
   if (!config.postIssueComment) blockers.push("issue_enrichment_live_posting_disabled");
@@ -236,9 +254,13 @@ export function buildIssueEnrichmentStatus(input: {
   if (config.enabled && config.postIssueComment && !input.canPostAsApp) {
     blockers.push("github_app_credentials_required_for_live_issue_comments");
   }
+  if (config.enabled && issueReadFailures.length > 0) {
+    blockers.push("github_app_issues_permission_required");
+  }
 
   const blocking = blockers.filter((blocker) =>
     blocker === "github_app_credentials_required_for_live_issue_comments" ||
+    blocker === "github_app_issues_permission_required" ||
     blocker === "issue_enrichment_live_repo_thresholds_required" ||
     (config.enabled && blocker === "issue_enrichment_allowlist_empty")
   );
@@ -275,6 +297,7 @@ export function buildIssueEnrichmentStatus(input: {
       leaseTtlMs: config.leaseTtlMs
     },
     repoOverrides: Object.entries(config.repos ?? {}).map(([repo, override]) => ({ repo, ...override })),
+    issueReadChecks,
     blockers
   };
 }
@@ -351,11 +374,14 @@ export async function collectIssueEnrichmentScan(input: {
     });
     const pageLimit = buildIssueScanPageLimit(policy.throttle);
     const perPage = DEFAULT_REPO_SCAN_OPTIONS.perPage;
+    const minIssueResults = buildIssueScanMinIssueResults(policy.throttle);
     let issues: GitHubRelatedIssueOrPull[] = [];
     try {
       issues = await input.reader.listIssuesForEnrichment(repo, {
         ...DEFAULT_REPO_SCAN_OPTIONS,
         pageLimit,
+        excludePullRequests: true,
+        minIssueResults,
         ...(since ? { since } : {})
       });
     } catch (error) {
@@ -402,7 +428,7 @@ export async function collectIssueEnrichmentScan(input: {
       wouldEnrich: issueItems.filter((item) => item.action === "would_enrich" || item.action === "would_comment").length,
       wouldComment: issueItems.filter((item) => item.action === "would_comment").length,
       deferred: issueItems.filter((item) => item.action === "deferred").length,
-      truncated: issues.length >= pageLimit * perPage
+      truncated: issues.length >= minIssueResults || issues.length >= pageLimit * perPage
     });
   }
 
@@ -889,7 +915,11 @@ function buildIssueScanSince(input: {
 
 function buildIssueScanPageLimit(throttle: IssueEnrichmentThrottlePolicy): number {
   const threshold = Math.max(throttle.maxIssuesPerCycle, throttle.maxIssuesPerBurst) + 1;
-  return Math.max(1, Math.min(10, Math.ceil(threshold / DEFAULT_REPO_SCAN_OPTIONS.perPage)));
+  return Math.max(DEFAULT_REPO_SCAN_OPTIONS.pageLimit, Math.min(10, Math.ceil(threshold / DEFAULT_REPO_SCAN_OPTIONS.perPage)));
+}
+
+function buildIssueScanMinIssueResults(throttle: IssueEnrichmentThrottlePolicy): number {
+  return Math.max(throttle.maxIssuesPerCycle, throttle.maxIssuesPerBurst) + 1;
 }
 
 function nextEligibleAt(input: { checkedAt: string; throttle: IssueEnrichmentThrottlePolicy }): string {

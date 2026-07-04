@@ -162,9 +162,9 @@ describe("build-enrichment-comment issue CLI", () => {
 
       expect(parsed.summary).toMatchObject({
         reposScanned: 1,
-        issuesSeen: 4,
+        issuesSeen: 3,
         eligible: 2,
-        skipped: 2,
+        skipped: 1,
         wouldComment: 1,
         deferred: 1
       });
@@ -176,12 +176,6 @@ describe("build-enrichment-comment issue CLI", () => {
       }));
       expect(parsed.items).toContainEqual(expect.objectContaining({
         repo: "owner/issue-repo",
-        issueNumber: 19,
-        action: "skipped",
-        reason: "issue_is_pull_request"
-      }));
-      expect(parsed.items).toContainEqual(expect.objectContaining({
-        repo: "owner/issue-repo",
         issueNumber: 20,
         action: "deferred",
         reason: "repo_max_comments_per_cycle"
@@ -189,6 +183,70 @@ describe("build-enrichment-comment issue CLI", () => {
       expect(readFileSync(join(outputDir, "issue-enrichment-scan.json"), "utf8")).toContain("\"repo\": \"owner/issue-repo\"");
       expect(requests.some((request) => request.path.startsWith("/repos/owner/issue-repo/issues?"))).toBe(true);
       expect(requests.some((request) => request.path.startsWith("/repos/owner/pr-review-repo/issues?"))).toBe(false);
+      const issueScanRequest = requests.find((request) => request.path.startsWith("/repos/owner/issue-repo/issues?"));
+      expect(issueScanRequest?.path).toContain("state=open");
+    });
+  });
+
+  it("continues past PR-shaped issue pages until it finds real issues", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueScanConfig(root, apiBaseUrl);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-scan",
+        "--config",
+        configPath,
+        "--dry-run",
+        "true",
+        "--include-existing",
+        "true"
+      ]);
+      const parsed = JSON.parse(stdout);
+
+      expect(parsed.summary).toMatchObject({
+        reposScanned: 1,
+        issuesSeen: 3,
+        eligible: 2,
+        skipped: 1,
+        wouldComment: 1
+      });
+      expect(parsed.items.some((item: { issueNumber: number }) => item.issueNumber === 20)).toBe(true);
+      expect(requests.filter((request) => request.path.startsWith("/repos/owner/issue-repo/issues?"))).toHaveLength(2);
+    }, {
+      issuePages: [
+        Array.from({ length: 100 }, (_, index) => ({
+          number: index + 1,
+          title: `PR shaped issue ${index + 1}`,
+          state: "open",
+          html_url: `https://github.test/owner/issue-repo/pull/${index + 1}`,
+          pull_request: {},
+          body: "Pull request record."
+        })),
+        [
+          {
+            number: 17,
+            title: "Open issue",
+            state: "open",
+            html_url: "https://github.test/owner/issue-repo/issues/17",
+            body: "Acceptance criteria and owner are present."
+          },
+          {
+            number: 18,
+            title: "Closed issue",
+            state: "closed",
+            html_url: "https://github.test/owner/issue-repo/issues/18",
+            body: "Done."
+          },
+          {
+            number: 20,
+            title: "Another open issue",
+            state: "open",
+            html_url: "https://github.test/owner/issue-repo/issues/20",
+            body: "Acceptance criteria and owner are present."
+          }
+        ]
+      ]
     });
   });
 
@@ -380,14 +438,15 @@ function writeIssueScanConfig(root: string, apiBaseUrl: string): string {
 }
 
 async function withMockGitHub(
-  callback: (input: { apiBaseUrl: string; requests: Array<{ method: string; path: string; authorization?: string }> }) => Promise<void>
+  callback: (input: { apiBaseUrl: string; requests: Array<{ method: string; path: string; authorization?: string }> }) => Promise<void>,
+  options: { issuePages?: unknown[][] } = {}
 ): Promise<void> {
   const requests: Array<{ method: string; path: string; authorization?: string }> = [];
   const server = createServer((request, response) => {
     const method = request.method ?? "GET";
     const path = request.url ?? "/";
     requests.push({ method, path, authorization: request.headers.authorization });
-    routeMockGitHub(request, response);
+    routeMockGitHub(request, response, options);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -399,7 +458,11 @@ async function withMockGitHub(
   }
 }
 
-function routeMockGitHub(request: IncomingMessage, response: ServerResponse): void {
+function routeMockGitHub(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: { issuePages?: unknown[][] } = {}
+): void {
   if (request.method !== "GET") {
     respondJson(response, 405, { message: "method not allowed" });
     return;
@@ -431,6 +494,11 @@ function routeMockGitHub(request: IncomingMessage, response: ServerResponse): vo
   }
   const parsed = new URL(request.url ?? "/", "https://github.test");
   if (parsed.pathname === "/repos/owner/issue-repo/issues") {
+    if (options.issuePages) {
+      const page = Number(parsed.searchParams.get("page") ?? "1");
+      respondJson(response, 200, options.issuePages[page - 1] ?? []);
+      return;
+    }
     respondJson(response, 200, [
       {
         number: 17,

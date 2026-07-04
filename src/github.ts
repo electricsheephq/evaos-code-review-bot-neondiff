@@ -108,12 +108,16 @@ export class GitHubApi {
       since?: string;
       perPage?: number;
       pageLimit?: number;
+      excludePullRequests?: boolean;
+      minIssueResults?: number;
     } = {}
   ): Promise<GitHubRelatedIssueOrPull[]> {
     const issues: GitHubRelatedIssueOrPull[] = [];
     const state = options.state ?? "all";
     const perPage = options.perPage ?? 100;
     const pageLimit = options.pageLimit ?? 1;
+    const excludePullRequests = options.excludePullRequests === true;
+    const minIssueResults = Math.max(0, options.minIssueResults ?? 0);
     for (let page = 1; page <= pageLimit; page += 1) {
       const params = new URLSearchParams({
         state,
@@ -126,8 +130,9 @@ export class GitHubApi {
       const chunk = await this.request<GitHubRelatedIssueOrPull[]>(`/repos/${repo}/issues?${params.toString()}`, {
         token: await this.getReadToken(repo)
       });
-      issues.push(...chunk);
+      issues.push(...(excludePullRequests ? chunk.filter((issue) => !issue.pull_request) : chunk));
       if (chunk.length < perPage) return issues;
+      if (minIssueResults > 0 && issues.length >= minIssueResults) return issues;
     }
     return issues;
   }
