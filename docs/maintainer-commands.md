@@ -74,6 +74,15 @@ npx tsx src/cli.ts finishing-touch-dry-run \
   --body '@evaos-code-review-bot explain risk'
 ```
 
+The dry-run JSON includes a `contract` object with the target repo/PR/head,
+trusted-author status, stale-head check, clean-worktree state
+(`verified_clean`, `dirty`, or `assumed_clean`), secret-scan state (`passed`,
+`failed`, or `not_scanned`), and explicit mutation booleans. All mutation
+booleans remain `false`; the command is `defaultOff: true` and
+`mode: "draft_only"` even when validation passes. When `--worktree-clean` is
+omitted, the dry-run contract reports `assumed_clean` rather than claiming an
+explicit Git clean check was performed.
+
 ## Trust Boundary
 
 Only authors listed in `commands.trustedAuthors` are executable in this MVP.
