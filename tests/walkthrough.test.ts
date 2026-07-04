@@ -438,6 +438,36 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).not.toContain("0.91 confident");
   });
 
+  it("sanitizes raw walkthrough comments defensively and keeps inline replacement text whole", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS",
+      pull: {
+        ...pull,
+        title: `${"b".repeat(176)} Confidence: 95% trailing context`,
+        body: "No linked issue."
+      },
+      files: [{ filename: "src/review.ts", status: "modified", additions: 4, deletions: 1 }],
+      comments: [
+        {
+          path: "src/review.ts",
+          line: 4,
+          side: "RIGHT",
+          severity: "P1",
+          category: "runtime_correctness",
+          title: "Regression with 99% confidence",
+          body: "Model body says `0.91` likely."
+        }
+      ],
+      dropped: [],
+      event: "REQUEST_CHANGES"
+    });
+
+    expect(walkthrough.body).toContain(`PR: electricsheephq/WorldOS#${pull.number} - ${"b".repeat(176)} Confidence: confidence not calibrated`);
+    expect(walkthrough.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(walkthrough.body).not.toContain("0.91 likely");
+    expect(walkthrough.body).not.toMatch(/confidence not cali(?:$|\n)/);
+  });
+
   it("keeps the comment-secret checklist passing when secret-like findings were dropped", () => {
     const walkthrough = buildWalkthroughComment({
       repo: "100yenadmin/evaOS-GUI",

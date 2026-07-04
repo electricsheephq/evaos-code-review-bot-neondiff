@@ -46,16 +46,17 @@ export function buildWalkthroughComment(input: {
 }): WalkthroughComment {
   validateWalkthroughIdentity({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha });
   const marker = buildWalkthroughMarker({ repo: input.repo, pullNumber: input.pull.number });
-  const files = input.files.map((file) => summarizeFile(file, input.comments));
+  const publicComments = input.comments.map((comment) => sanitizeReviewCommentPublicText(comment, input.publicConfidencePolicy));
+  const files = input.files.map((file) => summarizeFile(file, publicComments));
   const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);
   const omittedFileCount = Math.max(0, files.length - visibleFiles.length);
-  const effort = estimateReviewEffort(input.files, input.comments);
+  const effort = estimateReviewEffort(input.files, publicComments);
   const relatedRefs = extractRelatedRefs(`${input.pull.title}\n${input.pull.body ?? ""}`);
-  const suggestedLabels = suggestLabels(input.files, input.comments);
+  const suggestedLabels = suggestLabels(input.files, publicComments);
   const suggestedReviewers = input.pull.requested_reviewers?.map((reviewer) => reviewer.login).filter(Boolean) ?? [];
-  const severityCounts = countSeverities(input.comments);
+  const severityCounts = countSeverities(publicComments);
   const highSeverity = severityCounts.P0 + severityCounts.P1;
-  const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
+  const requestChangesEligible = publicComments.filter(isRequestChangesEligible).length;
   const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview, input.publicConfidencePolicy);
 
   const visibleBody = [
@@ -75,14 +76,14 @@ export function buildWalkthroughComment(input: {
     "",
     "### Review Signal",
     "",
-    input.comments.length === 0
+    publicComments.length === 0
       ? "No validated inline findings."
-      : `Validated inline findings: ${input.comments.length} (${formatSeverityCounts(severityCounts)}).`,
+      : `Validated inline findings: ${publicComments.length} (${formatSeverityCounts(severityCounts)}).`,
     `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
     "",
     "### Risk Taxonomy",
     "",
-    formatCategoryBreakdown(input.comments),
+    formatCategoryBreakdown(publicComments),
     "",
     "### Validation and Proof",
     "",
@@ -96,8 +97,8 @@ export function buildWalkthroughComment(input: {
     ...(settingsPreviewSection.length > 0 ? ["", ...settingsPreviewSection, ""] : [""]),
     "### Pre-merge checklist",
     "",
-    checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
-    checklistItem(!commentsContainSecretLikeText(input.comments), "No secret-like content survived into posted inline comments."),
+    checklistItem(publicComments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
+    checklistItem(!commentsContainSecretLikeText(publicComments), "No secret-like content survived into posted inline comments."),
     checklistItem(
       input.event !== "REQUEST_CHANGES" || requestChangesEligible > 0,
       "REQUEST_CHANGES is only used when eligible P0/P1 findings survive validation."
@@ -184,14 +185,12 @@ function hashWalkthrough(body: string): string {
 }
 
 function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
-  return sanitizePublicConfidenceText(
-    redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")),
-    publicConfidencePolicy
-  )
+  const boundedText = redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]"))
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^#{1,6}\s+/, "")
     .slice(0, 200);
+  return sanitizePublicConfidenceText(boundedText, publicConfidencePolicy);
 }
 
 function formatInlineCodePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
@@ -214,6 +213,14 @@ function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {
     churn: `+${file.additions ?? 0}/-${file.deletions ?? 0}`,
     purpose: inferPurpose(file.filename),
     risk: inferRisk(file.filename, changes, maxSeverity)
+  };
+}
+
+function sanitizeReviewCommentPublicText(comment: ReviewComment, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): ReviewComment {
+  return {
+    ...comment,
+    title: sanitizePublicConfidenceText(comment.title, publicConfidencePolicy),
+    body: sanitizePublicConfidenceText(comment.body, publicConfidencePolicy)
   };
 }
 

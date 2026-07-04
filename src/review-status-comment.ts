@@ -162,11 +162,12 @@ function sanitizePublicUrlText(value: string | undefined): string {
 }
 
 function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
-  return sanitizePublicText(value, publicConfidencePolicy)
+  const boundedText = redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]"))
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^#{1,6}\s+/, "")
     .slice(0, 200);
+  return sanitizePublicConfidenceText(boundedText, publicConfidencePolicy);
 }
 
 function statusMessage(input: BuildReviewStatusCommentInput): string {

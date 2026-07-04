@@ -279,6 +279,23 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).not.toContain("0.95");
   });
 
+  it("keeps inline confidence replacement text whole when sanitized titles lengthen", () => {
+    const comment = buildEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        title: `${"a".repeat(176)} Confidence: 95% trailing context`,
+        body: "Closes #22."
+      },
+      files: [],
+      postIssueComment: true
+    });
+
+    expect(comment.body).toContain(`PR: electricsheephq/evaos-code-review-bot#${pull.number} - ${"a".repeat(176)} Confidence: confidence not calibrated`);
+    expect(comment.body).not.toContain("95%");
+    expect(comment.body).not.toMatch(/confidence not cali(?:$|\n)/);
+  });
+
   it("posts only when enabled and App credentials are present", async () => {
     const calls: unknown[] = [];
     const comment = buildEnrichmentComment({

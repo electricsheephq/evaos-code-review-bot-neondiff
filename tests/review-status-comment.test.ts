@@ -158,6 +158,20 @@ describe("review status comment", () => {
     expect(comment.body).not.toContain("0.95 confident");
   });
 
+  it("keeps inline confidence replacement text whole when status titles lengthen", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "queued",
+      pullTitle: `${"c".repeat(176)} Confidence: 95% trailing context`
+    });
+
+    expect(comment.body).toContain(`PR: owner/repo#1 - ${"c".repeat(176)} Confidence: confidence not calibrated`);
+    expect(comment.body).not.toContain("95%");
+    expect(comment.body).not.toMatch(/confidence not cali(?:$|\n)/);
+  });
+
   it("keeps the sticky marker stable when repo slugs look secret-like", () => {
     const comment = buildReviewStatusComment({
       repo: "owner/api-token-rotator",
