@@ -304,6 +304,9 @@ export interface OperatorDurableQueueSnapshot {
     posted: number;
     failed: number;
     retired: number;
+    oldestWaitingRepo?: string;
+    oldestWaitingAt?: string;
+    oldestWaitingAgeMs?: number;
   };
   jobs: ReviewQueueJobRecord[];
   byRepo: Array<{
@@ -318,6 +321,8 @@ export interface OperatorDurableQueueSnapshot {
     posted: number;
     failed: number;
     retired: number;
+    oldestWaitingAt?: string;
+    oldestWaitingAgeMs?: number;
   }>;
 }
 
@@ -1541,6 +1546,7 @@ function buildDurableQueueSnapshot(
 }
 
 function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): OperatorDurableQueueSnapshot["summary"] {
+  const oldestWaiting = oldestWaitingQueueJob(jobs);
   return {
     total: jobs.length,
     queued: jobs.filter((job) => job.state === "queued").length,
@@ -1551,8 +1557,25 @@ function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): Ope
     commandRecorded: jobs.filter((job) => job.state === "command_recorded").length,
     posted: jobs.filter((job) => job.state === "posted").length,
     failed: jobs.filter((job) => job.state === "failed").length,
-    retired: jobs.filter((job) => job.state === "stale_retired" || job.state === "closed_retired").length
+    retired: jobs.filter((job) => job.state === "stale_retired" || job.state === "closed_retired").length,
+    ...(oldestWaiting
+      ? {
+          oldestWaitingRepo: oldestWaiting.repo,
+          oldestWaitingAt: oldestWaiting.createdAt,
+          oldestWaitingAgeMs: Math.max(0, now.getTime() - Date.parse(oldestWaiting.createdAt))
+        }
+      : {})
   };
+}
+
+function oldestWaitingQueueJob(jobs: ReviewQueueJobRecord[]): ReviewQueueJobRecord | undefined {
+  return jobs
+    .filter((job) =>
+      job.state === "queued" ||
+      job.state === "provider_deferred" ||
+      job.state === "blocked_on_proof"
+    )
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))[0];
 }
 
 function isRetryableQueueJob(job: ReviewQueueJobRecord, now: Date): boolean {

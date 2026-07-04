@@ -1271,11 +1271,22 @@ describe("operator CLI summaries", () => {
       running: 1,
       providerDeferred: 2,
       retryableProviderDeferred: 1,
-      failed: 1
+      failed: 1,
+      oldestWaitingRepo: "owner/repo",
+      oldestWaitingAt: "2026-07-01T00:00:00.000Z",
+      oldestWaitingAgeMs: 5 * 60_000
     });
     expect(queue.byRepo).toEqual([
       expect.objectContaining({ repo: "owner/other", total: 2, providerDeferred: 1, retryableProviderDeferred: 0, failed: 1 }),
-      expect.objectContaining({ repo: "owner/repo", total: 3, queued: 1, running: 1, retryableProviderDeferred: 1 })
+      expect.objectContaining({
+        repo: "owner/repo",
+        total: 3,
+        queued: 1,
+        running: 1,
+        retryableProviderDeferred: 1,
+        oldestWaitingAt: "2026-07-01T00:00:00.000Z",
+        oldestWaitingAgeMs: 5 * 60_000
+      })
     ]);
     expect(collectOperatorReviewQueue(statePath, { repo: "owner/repo" }).jobs).toHaveLength(3);
 

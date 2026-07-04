@@ -1,5 +1,5 @@
 import { isPreActivationExistingPull } from "./activation-policy.js";
-import { loadConfig, type BotConfig } from "./config.js";
+import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./config.js";
 import {
   collectTrustedReviewCommands,
   decideCommandAction,
@@ -190,6 +190,7 @@ export async function runScheduledCycleWithDeps(input: {
       maxProviderActive: scheduler.maxProviderActive,
       maxOrgActive: scheduler.maxOrgActive,
       maxRepoActive: scheduler.maxRepoActive,
+      maxRepoActiveByRepo: buildRepoActiveLimitOverrides(config, input.state.listReviewQueueJobs()),
       manualCommandReserve: scheduler.manualCommandReserve,
       excludeJobIds: attemptedJobIds,
       reservedActiveJobs: attemptedJobs,
@@ -371,13 +372,57 @@ async function enqueuePullIfEligible(input: {
     backfillReadinessFromActiveQueueJob(input.state, input.repo, input.pull, activeQueueJob, input.now);
     return "already_queued";
   }
-  if (!hasRepoQueueCapacity(input.state, input.repo, input.config.reviewScheduler?.maxQueuedPerRepo ?? 10)) {
+  const repoScheduler = resolveRepoReviewScheduler(input.config, input.repo);
+  const maxQueuedHeads = repoScheduler?.maxQueuedHeads ?? input.config.reviewScheduler?.maxQueuedPerRepo ?? 10;
+  if (!hasRepoQueueCapacity(input.state, input.repo, maxQueuedHeads)) {
+    const overflowAction = repoScheduler?.overflowAction ?? "defer";
+    const deferredDetails = `Repo review queue capacity is full for this repo (limit ${maxQueuedHeads}).`;
+    if (overflowAction === "skip") {
+      input.state.recordProcessed({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        status: "skipped",
+        error: "repo_queue_capacity_full"
+      });
+      recordReadinessTransition({
+        state: input.state,
+        repo: input.repo,
+        pull: input.pull,
+        readinessState: "skipped",
+        reason: "repo_queue_capacity_full",
+        now: input.now
+      });
+      await syncReviewStatusComment({
+        config: input.config,
+        github: input.github,
+        dryRun: input.dryRun,
+        repo: input.repo,
+        pull: input.pull,
+        state: "skipped",
+        details: `${deferredDetails} Repo policy skips excess burst heads.`,
+        onStatusCommentFailure: input.onStatusCommentFailure,
+        now: input.now
+      });
+      return "skipped_capacity";
+    }
     recordReadinessTransition({
       state: input.state,
       repo: input.repo,
       pull: input.pull,
       readinessState: "provider_deferred",
       reason: "repo_queue_capacity_full",
+      now: input.now
+    });
+    await syncReviewStatusComment({
+      config: input.config,
+      github: input.github,
+      dryRun: input.dryRun,
+      repo: input.repo,
+      pull: input.pull,
+      state: "provider_deferred",
+      details: deferredDetails,
+      onStatusCommentFailure: input.onStatusCommentFailure,
       now: input.now
     });
     return "skipped_capacity";
@@ -480,24 +525,31 @@ function enqueueReviewJob(input: {
 
 function automaticQueuePriority(config: BotConfig, repo: string): number | undefined {
   const backgroundPriority = config.reviewScheduler?.backgroundPriority;
-  if (repo.toLowerCase() !== SELF_REPO) return backgroundPriority;
+  if (!isSelfRepo(repo)) return backgroundPriority;
   return Math.min(backgroundPriority ?? 50, 1);
 }
 
-const SELF_REPO = "electricsheephq/evaos-code-review-bot";
+const SELF_REPOS = new Set([
+  "electricsheephq/evaos-code-review-bot",
+  "electricsheephq/evaos-code-review-bot-neondiff"
+]);
 const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
+
+function isSelfRepo(repo: string): boolean {
+  return SELF_REPOS.has(repo.toLowerCase());
+}
 
 function reprioritizeExistingSelfRepoQueueJobs(input: {
   config: BotConfig;
   state: ReviewStateStore;
   now: Date;
 }): number {
-  const targetPriority = automaticQueuePriority(input.config, SELF_REPO);
-  if (targetPriority === undefined) return 0;
   let updated = 0;
   for (const job of input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "blocked_on_proof"] })) {
-    if (job.repo.toLowerCase() !== SELF_REPO) continue;
+    if (!isSelfRepo(job.repo)) continue;
     if (job.source !== "automatic" || job.lane !== "background") continue;
+    const targetPriority = automaticQueuePriority(input.config, job.repo);
+    if (targetPriority === undefined) continue;
     if (job.priority <= targetPriority) continue;
     input.state.updateReviewQueueJobPriority({
       jobId: job.jobId,
@@ -507,6 +559,24 @@ function reprioritizeExistingSelfRepoQueueJobs(input: {
     updated += 1;
   }
   return updated;
+}
+
+function resolveRepoReviewScheduler(config: BotConfig, repo: string): RepoReviewSchedulerConfig | undefined {
+  const resolution = resolveRepoProfile(config, repo);
+  if (!resolution.allowed) return undefined;
+  return resolution.profile.reviewScheduler;
+}
+
+function buildRepoActiveLimitOverrides(
+  config: BotConfig,
+  jobs: Pick<ReviewQueueJobRecord, "repo">[]
+): Record<string, number> | undefined {
+  const overrides: Record<string, number> = {};
+  for (const job of jobs) {
+    const maxActiveHeads = resolveRepoReviewScheduler(config, job.repo)?.maxActiveHeads;
+    if (maxActiveHeads !== undefined) overrides[job.repo.toLowerCase()] = maxActiveHeads;
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
 function recordReadinessForEnqueue(input: {

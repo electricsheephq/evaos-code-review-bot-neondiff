@@ -231,6 +231,62 @@ describe("review run budget", () => {
     ]);
   });
 
+  it("uses repo-profile scheduler active caps in budget projection", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-repo-profile-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 3,
+        maxOrgActive: 10,
+        maxRepoActive: 3,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 0,
+        backgroundPriority: 50
+      },
+      repoProfiles: {
+        repos: {
+          "100yenadmin/Lossless-Codex-Orchestrator-LCO": {
+            reviewScheduler: {
+              maxActiveHeads: 1
+            }
+          }
+        }
+      }
+    };
+
+    const status = buildReviewBudgetStatus({
+      config,
+      now: new Date("2026-07-04T00:00:00.000Z"),
+      jobs: [
+        queueJob("lco-active", {
+          repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+          state: "running",
+          priority: 1,
+          updatedAt: "2026-07-04T00:00:00.000Z"
+        }),
+        queueJob("lco-queued", { repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO", state: "queued", priority: 2 }),
+        queueJob("self-queued", { repo: "electricsheephq/evaos-code-review-bot-neondiff", state: "queued", priority: 3 })
+      ]
+    });
+
+    expect(status.active.byRepo).toEqual([
+      expect.objectContaining({
+        name: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+        active: 1,
+        limit: 1,
+        remaining: 0
+      })
+    ]);
+    expect(status.delayed).toEqual([
+      expect.objectContaining({ jobId: "lco-queued", reason: "repo_capacity" })
+    ]);
+    expect(status.wouldLease).toEqual([
+      expect.objectContaining({ jobId: "self-queued" })
+    ]);
+  });
+
   it("does not count expired leased or running jobs against active capacity", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-expired-lease-"));
     roots.push(root);

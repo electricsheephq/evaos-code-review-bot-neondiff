@@ -122,8 +122,15 @@ export interface RepoProfileConfig {
   autoReview?: RepoAutoReviewConfig;
   preMergeChecks?: RepoPreMergeChecksConfig;
   finishingTouches?: RepoFinishingTouchesConfig;
+  reviewScheduler?: RepoReviewSchedulerConfig;
   suggestedLabels?: string[];
   suggestedReviewers?: string[];
+}
+
+export interface RepoReviewSchedulerConfig {
+  maxActiveHeads?: number;
+  maxQueuedHeads?: number;
+  overflowAction?: "defer" | "skip";
 }
 
 export interface RepoAutoReviewConfig {
@@ -1081,6 +1088,17 @@ function validateProfileRecord(record: Record<string, RepoProfileConfig> | undef
     validateAutoReview(profile.autoReview, `${label}.${key}.autoReview`);
     validatePreMergeChecks(profile.preMergeChecks, `${label}.${key}.preMergeChecks`);
     validateFinishingTouches(profile.finishingTouches, `${label}.${key}.finishingTouches`);
+    validateRepoReviewSchedulerConfig(profile.reviewScheduler, `${label}.${key}.reviewScheduler`);
+  }
+}
+
+function validateRepoReviewSchedulerConfig(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  if (value.maxActiveHeads !== undefined) validatePositiveInteger(value.maxActiveHeads, `${label}.maxActiveHeads`);
+  if (value.maxQueuedHeads !== undefined) validatePositiveInteger(value.maxQueuedHeads, `${label}.maxQueuedHeads`);
+  if (value.overflowAction !== undefined && value.overflowAction !== "defer" && value.overflowAction !== "skip") {
+    throw new Error(`${label}.overflowAction must be "defer" or "skip"`);
   }
 }
 

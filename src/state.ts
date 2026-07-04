@@ -1534,6 +1534,7 @@ export class ReviewStateStore {
     maxProviderActive: number;
     maxOrgActive: number;
     maxRepoActive: number;
+    maxRepoActiveByRepo?: Record<string, number>;
     manualCommandReserve?: number;
     excludeJobIds?: Iterable<string>;
     reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "jobId" | "providerId" | "org" | "repo">>;
@@ -1544,6 +1545,7 @@ export class ReviewStateStore {
     validatePositiveQueueLimit(input.maxProviderActive, "maxProviderActive");
     validatePositiveQueueLimit(input.maxOrgActive, "maxOrgActive");
     validatePositiveQueueLimit(input.maxRepoActive, "maxRepoActive");
+    const maxRepoActiveByRepo = normalizeRepoActiveLimitOverrides(input.maxRepoActiveByRepo);
     const manualCommandReserve = input.manualCommandReserve ?? 0;
     if (!Number.isInteger(manualCommandReserve) || manualCommandReserve < 0) {
       throw new Error("manualCommandReserve must be a non-negative integer");
@@ -1599,7 +1601,8 @@ export class ReviewStateStore {
         const providerCount = (providerActive.get(provider) ?? 0);
         if (providerCount >= input.maxProviderActive) continue;
         if ((orgActive.get(job.org) ?? 0) >= input.maxOrgActive) continue;
-        if ((repoActive.get(job.repo) ?? 0) >= input.maxRepoActive) continue;
+        const repoActiveLimit = maxRepoActiveByRepo.get(job.repo.toLowerCase()) ?? input.maxRepoActive;
+        if ((repoActive.get(job.repo) ?? 0) >= repoActiveLimit) continue;
         if (
           job.lane === "background" &&
           hasManualAfter[index] &&
@@ -2684,6 +2687,17 @@ function validateRepoName(repo: string, label: string): void {
 
 function validatePositiveQueueLimit(value: number, label: string): void {
   if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`);
+}
+
+function normalizeRepoActiveLimitOverrides(value: Record<string, number> | undefined): Map<string, number> {
+  const result = new Map<string, number>();
+  if (!value) return result;
+  for (const [repo, limit] of Object.entries(value)) {
+    validateRepoName(repo, "maxRepoActiveByRepo");
+    validatePositiveQueueLimit(limit, `maxRepoActiveByRepo.${repo}`);
+    result.set(repo.toLowerCase(), limit);
+  }
+  return result;
 }
 
 function buildReviewQueueAttemptId(input: {

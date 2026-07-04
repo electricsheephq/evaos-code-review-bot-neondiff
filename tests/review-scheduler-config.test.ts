@@ -38,6 +38,50 @@ describe("review scheduler config", () => {
     }))).toThrow("config.reviewScheduler.manualCommandReserve must be <= config.reviewScheduler.maxProviderActive");
   });
 
+  it("loads and validates repo-profile scheduler burst overrides", () => {
+    const config = loadConfig(writeConfig({
+      repoProfiles: {
+        repos: {
+          "100yenadmin/Lossless-Codex-Orchestrator-LCO": {
+            reviewScheduler: {
+              maxActiveHeads: 1,
+              maxQueuedHeads: 3,
+              overflowAction: "defer"
+            }
+          }
+        }
+      }
+    }));
+
+    expect(config.repoProfiles?.repos?.["100yenadmin/Lossless-Codex-Orchestrator-LCO"]?.reviewScheduler).toEqual({
+      maxActiveHeads: 1,
+      maxQueuedHeads: 3,
+      overflowAction: "defer"
+    });
+    expect(() => loadConfig(writeConfig({
+      repoProfiles: {
+        repos: {
+          "owner/repo": {
+            reviewScheduler: {
+              maxQueuedHeads: 0
+            }
+          }
+        }
+      }
+    }))).toThrow("repoProfiles.repos.owner/repo.reviewScheduler.maxQueuedHeads must be a positive integer");
+    expect(() => loadConfig(writeConfig({
+      repoProfiles: {
+        repos: {
+          "owner/repo": {
+            reviewScheduler: {
+              overflowAction: "park"
+            }
+          }
+        }
+      }
+    }))).toThrow('repoProfiles.repos.owner/repo.reviewScheduler.overflowAction must be "defer" or "skip"');
+  });
+
   it("validates provider overload backoff settings", () => {
     expect(() => loadConfig(writeConfig({
       providerCooldown: {

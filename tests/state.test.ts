@@ -942,6 +942,53 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("honors repo-specific active caps while leasing queued work", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-repo-specific-lease-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-07-04T00:00:00.000Z");
+
+    const firstLco = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 461,
+      headSha: "lco-head-a",
+      providerId: "zai",
+      now
+    }).job;
+    const secondLco = store.enqueueReviewQueueJob({
+      repo: "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      pullNumber: 462,
+      headSha: "lco-head-b",
+      providerId: "zai",
+      now: new Date("2026-07-04T00:00:01.000Z")
+    }).job;
+    const otherRepo = store.enqueueReviewQueueJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 218,
+      headSha: "self-head",
+      providerId: "zai",
+      now: new Date("2026-07-04T00:00:02.000Z")
+    }).job;
+
+    const leased = store.leaseNextReviewQueueJobs({
+      maxProviderActive: 3,
+      maxOrgActive: 3,
+      maxRepoActive: 3,
+      maxRepoActiveByRepo: {
+        "100yenadmin/lossless-codex-orchestrator-lco": 1
+      },
+      manualCommandReserve: 0,
+      limit: 3,
+      now: new Date("2026-07-04T00:00:10.000Z")
+    });
+
+    expect(leased.map((job) => job.jobId)).toEqual([firstLco.jobId, otherRepo.jobId]);
+    expect(store.getReviewQueueJob(firstLco.jobId)).toMatchObject({ state: "leased" });
+    expect(store.getReviewQueueJob(secondLco.jobId)).toMatchObject({ state: "queued" });
+    expect(store.getReviewQueueJob(otherRepo.jobId)).toMatchObject({ state: "leased" });
+    store.close();
+  });
+
   it("requeues expired durable queue leases before leasing new work", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-expired-lease-"));
     roots.push(root);
