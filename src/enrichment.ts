@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import type {
@@ -81,6 +82,7 @@ export function buildEnrichmentComment(input: {
   maxRelatedRefs?: number;
   maxSuggestions?: number;
   postIssueComment?: boolean;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): EnrichmentComment {
   validateIdentity({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha });
   const marker = buildEnrichmentMarker({ repo: input.repo, pullNumber: input.pull.number });
@@ -99,7 +101,7 @@ export function buildEnrichmentComment(input: {
   const visibleBody = [
     "## evaOS enrichment",
     "",
-    `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title)}`,
+    `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title, input.publicConfidencePolicy)}`,
     `Head: \`${input.pull.head.sha}\` into \`${input.pull.base.ref}\``,
     "",
     `Related issues/PRs: ${relatedRefs.length ? relatedRefs.join(", ") : "none detected from PR metadata"}.`,
@@ -108,7 +110,7 @@ export function buildEnrichmentComment(input: {
     "",
     "### Validation suggestions",
     "",
-    ...(validationSuggestions.length ? validationSuggestions.map((item) => `- ${formatPublicText(item)}`) : ["- No extra validation suggestions."]),
+    ...(validationSuggestions.length ? validationSuggestions.map((item) => `- ${formatPublicText(item, input.publicConfidencePolicy)}`) : ["- No extra validation suggestions."]),
     "",
     "### Triage gaps",
     "",
@@ -140,6 +142,7 @@ export function buildIssueEnrichmentComment(input: {
   maxRelatedRefs?: number;
   maxSuggestions?: number;
   postIssueComment?: boolean;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): EnrichmentComment {
   validateRepoIssue({ repo: input.repo, issueNumber: input.issue.number });
   const eligibility = getIssueEnrichmentEligibility(input.issue);
@@ -159,8 +162,8 @@ export function buildIssueEnrichmentComment(input: {
   const visibleBody = [
     "## evaOS issue enrichment",
     "",
-    `Issue: ${input.repo}#${input.issue.number} - ${formatInlinePublicText(input.issue.title ?? "(untitled)")}`,
-    `State: \`${state}\`${input.issue.milestone?.title ? `; milestone: \`${formatInlinePublicText(input.issue.milestone.title)}\`` : ""}`,
+    `Issue: ${input.repo}#${input.issue.number} - ${formatInlinePublicText(input.issue.title ?? "(untitled)", input.publicConfidencePolicy)}`,
+    `State: \`${state}\`${input.issue.milestone?.title ? `; milestone: \`${formatInlinePublicText(input.issue.milestone.title, input.publicConfidencePolicy)}\`` : ""}`,
     "",
     `Related issues/PRs: ${relatedRefs.length ? relatedRefs.join(", ") : "none detected from issue metadata"}.`,
     `Existing labels: ${existingLabels.length ? existingLabels.join(", ") : "none"}.`,
@@ -169,7 +172,7 @@ export function buildIssueEnrichmentComment(input: {
     "",
     "### Validation suggestions",
     "",
-    ...(validationSuggestions.length ? validationSuggestions.map((item) => `- ${formatPublicText(item)}`) : ["- Confirm owner, acceptance criteria, and validation evidence before implementation."]),
+    ...(validationSuggestions.length ? validationSuggestions.map((item) => `- ${formatPublicText(item, input.publicConfidencePolicy)}`) : ["- Confirm owner, acceptance criteria, and validation evidence before implementation."]),
     "",
     "### Triage gaps",
     "",
@@ -200,6 +203,7 @@ export function buildIssueEnrichmentDryRunOutput(input: {
   validationSuggestions?: string[];
   maxRelatedRefs?: number;
   maxSuggestions?: number;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): IssueEnrichmentDryRunOutput {
   validateRepoIssue({ repo: input.repo, issueNumber: input.issue.number });
   const eligibility = getIssueEnrichmentEligibility(input.issue);
@@ -224,6 +228,7 @@ export function buildIssueEnrichmentDryRunOutput(input: {
     validationSuggestions: input.validationSuggestions,
     maxRelatedRefs: input.maxRelatedRefs,
     maxSuggestions: input.maxSuggestions,
+    publicConfidencePolicy: input.publicConfidencePolicy,
     postIssueComment: false
   });
   return {
@@ -360,12 +365,15 @@ function inferIssueAcceptanceGaps(issue: GitHubRelatedIssueOrPull): string[] {
   return gaps;
 }
 
-function formatInlinePublicText(value: string | undefined): string {
-  return formatPublicText(value).replace(/\s+/g, " ").replace(/^#{1,6}\s+/, "").slice(0, 200);
+function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  return formatPublicText(value, publicConfidencePolicy).replace(/\s+/g, " ").replace(/^#{1,6}\s+/, "").slice(0, 200);
 }
 
-function formatPublicText(value: string | undefined): string {
-  return redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")).trim();
+function formatPublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  return sanitizePublicConfidenceText(
+    redactSecrets((value ?? "").replace(HTML_COMMENT_PATTERN, "[hidden comment removed]")),
+    publicConfidencePolicy
+  ).trim();
 }
 
 function unique(values: string[]): string[] {

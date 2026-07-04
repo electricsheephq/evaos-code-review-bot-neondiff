@@ -558,8 +558,12 @@ function validatePublicConfidenceDisplayConfig(value: unknown, label: string): v
     throw new Error(`${label}.mode must be uncalibrated or calibrated`);
   }
   validatePositiveInteger(value.minLabeledFindings, `${label}.minLabeledFindings`);
+  validatePositiveInteger(value.minP0P1Labels, `${label}.minP0P1Labels`);
+  validatePositiveInteger(value.minNegativeControlScenarios, `${label}.minNegativeControlScenarios`);
   validateProbability(value.minWilsonLowerBound, `${label}.minWilsonLowerBound`);
   if (value.labeledFindings !== undefined) validateNonNegativeInteger(value.labeledFindings, `${label}.labeledFindings`);
+  if (value.p0p1Labels !== undefined) validateNonNegativeInteger(value.p0p1Labels, `${label}.p0p1Labels`);
+  if (value.negativeControlScenarios !== undefined) validateNonNegativeInteger(value.negativeControlScenarios, `${label}.negativeControlScenarios`);
   if (value.wilsonLowerBound !== undefined) validateProbability(value.wilsonLowerBound, `${label}.wilsonLowerBound`);
   validateOptionalString(value.evidenceUrl, `${label}.evidenceUrl`);
   validateOptionalString(value.datasetId, `${label}.datasetId`);
@@ -573,6 +577,15 @@ function validatePublicConfidenceDisplayConfig(value: unknown, label: string): v
     }
     if (typeof value.labeledFindings !== "number" || value.labeledFindings < (value.minLabeledFindings as number)) {
       throw new Error(`${label}.labeledFindings must be >= minLabeledFindings before public confidence display is calibrated`);
+    }
+    if (typeof value.p0p1Labels !== "number" || value.p0p1Labels < (value.minP0P1Labels as number)) {
+      throw new Error(`${label}.p0p1Labels must be >= minP0P1Labels before public confidence display is calibrated`);
+    }
+    if (
+      typeof value.negativeControlScenarios !== "number" ||
+      value.negativeControlScenarios < (value.minNegativeControlScenarios as number)
+    ) {
+      throw new Error(`${label}.negativeControlScenarios must be >= minNegativeControlScenarios before public confidence display is calibrated`);
     }
     if (typeof value.wilsonLowerBound !== "number" || value.wilsonLowerBound < (value.minWilsonLowerBound as number)) {
       throw new Error(`${label}.wilsonLowerBound must be >= minWilsonLowerBound before public confidence display is calibrated`);

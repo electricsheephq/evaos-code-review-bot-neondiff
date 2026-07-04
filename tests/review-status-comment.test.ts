@@ -150,8 +150,8 @@ describe("review status comment", () => {
       details: "Confidence: 95%. Provider is 0.95 confident."
     });
 
-    expect(comment.body).toContain("Review is uncalibrated confident");
-    expect(comment.body).toContain("Confidence: uncalibrated.");
+    expect(comment.body).toContain("Review is confidence not calibrated");
+    expect(comment.body).toContain("Confidence: confidence not calibrated.");
     expect(comment.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(comment.body).not.toContain("0.95 confident");
   });

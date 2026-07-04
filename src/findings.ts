@@ -108,7 +108,7 @@ export function normalizeFindingsForReview(
         side: "RIGHT",
         severity: finding.severity,
         category,
-        title: finding.title,
+        title: sanitizePublicConfidenceText(finding.title, options.publicConfidencePolicy),
         body: formatReviewComment({ ...finding, category }, options.publicConfidencePolicy)
       };
     }),

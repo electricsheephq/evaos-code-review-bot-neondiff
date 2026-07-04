@@ -37,9 +37,10 @@ describe("finding normalization and review policy", () => {
     ]);
 
     expect(result.comments).toHaveLength(1);
-    expect(result.comments[0]?.title).toBe("Regression with 99% confidence");
-    expect(result.comments[0]?.body).toContain("Confidence: uncalibrated.");
-    expect(result.comments[0]?.body).toContain("I am uncalibrated confident this branch regresses review output.");
+    expect(result.comments[0]?.title).toBe("Regression with confidence not calibrated");
+    expect(result.comments[0]?.body).toContain("Confidence: confidence not calibrated.");
+    expect(result.comments[0]?.body).toContain("I am confidence not calibrated this branch regresses review output.");
+    expect(result.comments[0]?.title).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(result.comments[0]?.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(result.comments[0]?.body).not.toContain("0.99 confident");
   });

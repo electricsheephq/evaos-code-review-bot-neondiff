@@ -259,8 +259,8 @@ describe("walkthrough comment rendering", () => {
       }
     });
 
-    expect(walkthrough.body).toContain("Review confidence uncalibrated");
-    expect(walkthrough.body).toContain("Confidence: uncalibrated.");
+    expect(walkthrough.body).toContain("Review confidence not calibrated");
+    expect(walkthrough.body).toContain("Confidence: confidence not calibrated.");
     expect(walkthrough.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(walkthrough.body).not.toContain("0.91 confident");
   });

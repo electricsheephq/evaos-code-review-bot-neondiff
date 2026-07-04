@@ -906,7 +906,8 @@ async function main(): Promise<void> {
         suggestedOwners: repoPolicy.allowed ? repoPolicy.profile.suggestedReviewers : undefined,
         validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
         maxRelatedRefs: enrichmentConfig.maxRelatedRefs,
-        maxSuggestions: enrichmentConfig.maxSuggestions
+        maxSuggestions: enrichmentConfig.maxSuggestions,
+        publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
       if (args["output-dir"]) {
         const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
@@ -941,7 +942,8 @@ async function main(): Promise<void> {
       ],
       maxRelatedRefs: enrichmentConfig.maxRelatedRefs,
       maxSuggestions: enrichmentConfig.maxSuggestions,
-      postIssueComment: false
+      postIssueComment: false,
+      publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
     });
     const output = {
       ok: true,

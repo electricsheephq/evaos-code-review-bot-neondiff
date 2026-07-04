@@ -1455,7 +1455,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           validationSuggestions: validation.recommendations.map((recommendation) => `${recommendation.title}: ${recommendation.reason}`),
           maxRelatedRefs: config.enrichment.maxRelatedRefs,
           maxSuggestions: config.enrichment.maxSuggestions,
-          postIssueComment: config.enrichment.postIssueComment
+          postIssueComment: config.enrichment.postIssueComment,
+          publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })
       : undefined;
     const plan: ReviewPlan = {

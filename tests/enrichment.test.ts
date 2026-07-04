@@ -246,6 +246,29 @@ describe("sticky enrichment comments", () => {
     expect(extractStateHash(first.body)).not.toBe(extractStateHash(changedSuggestion.body));
   });
 
+  it("strips uncalibrated confidence claims from PR enrichment comments", () => {
+    const comment = buildEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        title: "Review confidence 95%",
+        body: "Closes #22."
+      },
+      files: [],
+      validationSuggestions: [
+        "Run focused tests with confidence score of 0.95.",
+        "Proof status: confidence 0.95."
+      ],
+      postIssueComment: true
+    });
+
+    expect(comment.body).toContain("Review confidence not calibrated");
+    expect(comment.body).toContain("Run focused tests with confidence not calibrated.");
+    expect(comment.body).toContain("Proof status: confidence not calibrated.");
+    expect(comment.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+    expect(comment.body).not.toContain("0.95");
+  });
+
   it("posts only when enabled and App credentials are present", async () => {
     const calls: unknown[] = [];
     const comment = buildEnrichmentComment({
