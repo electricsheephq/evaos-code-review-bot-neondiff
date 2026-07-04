@@ -7,6 +7,9 @@ import {
 } from "../src/finishing-touches.js";
 
 describe("finishing-touch draft commands", () => {
+  const fullHeadSha = "0123456789abcdef0123456789abcdef01234567";
+  const otherFullHeadSha = "89abcdef0123456789abcdef0123456789abcdef";
+
   it("parses trusted bot-mentioned finishing-touch commands", () => {
     expect(parseFinishingTouchCommand({
       body: "@evaos-code-review-bot generate tests",
@@ -44,8 +47,8 @@ describe("finishing-touch draft commands", () => {
     const base = {
       repo: "electricsheephq/evaos-code-review-bot",
       pullNumber: 157,
-      headSha: "head-a",
-      currentHeadSha: "head-a",
+      headSha: fullHeadSha,
+      currentHeadSha: fullHeadSha,
       commentId: 123,
       author: "100yenadmin",
       trustedAuthors: ["100yenadmin"],
@@ -63,7 +66,7 @@ describe("finishing-touch draft commands", () => {
       reason: "untrusted_author",
       secretScan: "not_scanned"
     });
-    expect(validateFinishingTouchRequest({ ...base, currentHeadSha: "head-b" })).toMatchObject({
+    expect(validateFinishingTouchRequest({ ...base, currentHeadSha: otherFullHeadSha })).toMatchObject({
       ok: false,
       reason: "stale_head",
       secretScan: "not_scanned"
@@ -87,7 +90,7 @@ describe("finishing-touch draft commands", () => {
     const draft = buildFinishingTouchDraft({
       repo: "electricsheephq/evaos-code-review-bot",
       pullNumber: 157,
-      headSha: "head-a",
+      headSha: fullHeadSha,
       action: "explain_risk",
       author: "100yenadmin",
       commentId: 456,
@@ -99,7 +102,7 @@ describe("finishing-touch draft commands", () => {
       mode: "draft_only",
       repo: "electricsheephq/evaos-code-review-bot",
       pullNumber: 157,
-      headSha: "head-a",
+      headSha: fullHeadSha,
       action: "explain_risk",
       author: "100yenadmin",
       commandCommentId: 456,
@@ -115,7 +118,7 @@ describe("finishing-touch draft commands", () => {
     const draft = buildFinishingTouchDraft({
       repo: "electricsheephq/evaos-code-review-bot",
       pullNumber: 157,
-      headSha: "head-a",
+      headSha: fullHeadSha,
       action: "changelog_draft",
       author: "100yenadmin",
       commentId: 789,
@@ -127,7 +130,7 @@ describe("finishing-touch draft commands", () => {
       dryRun: true,
       recorded: false,
       draft,
-      currentHeadSha: "head-a",
+      currentHeadSha: fullHeadSha,
       worktreeClean: true,
       trustedAuthors: ["100yenadmin"],
       validation: { ok: true, secretScan: "passed" }
@@ -142,8 +145,8 @@ describe("finishing-touch draft commands", () => {
       target: {
         repo: "electricsheephq/evaos-code-review-bot",
         pullNumber: 157,
-        headSha: "head-a",
-        currentHeadSha: "head-a",
+        headSha: fullHeadSha,
+        currentHeadSha: fullHeadSha,
         staleHead: false
       },
       command: {
@@ -171,7 +174,7 @@ describe("finishing-touch draft commands", () => {
     const draft = buildFinishingTouchDraft({
       repo: "electricsheephq/evaos-code-review-bot",
       pullNumber: 157,
-      headSha: "head-a",
+      headSha: fullHeadSha,
       action: "changelog_draft",
       author: "100yenadmin",
       commentId: 789,
@@ -202,11 +205,44 @@ describe("finishing-touch draft commands", () => {
     });
   });
 
+  it("treats placeholder head values as stale instead of current-head evidence", () => {
+    const draft = buildFinishingTouchDraft({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pullNumber: 157,
+      headSha: "HEAD",
+      action: "changelog_draft",
+      author: "100yenadmin",
+      commentId: 789,
+      trigger: "@evaos-code-review-bot changelog draft",
+      generatedAt: "2026-07-03T00:00:00.000Z"
+    });
+
+    const contract = buildFinishingTouchDryRunContract({
+      dryRun: true,
+      recorded: false,
+      draft,
+      currentHeadSha: "HEAD",
+      worktreeClean: true,
+      trustedAuthors: ["100yenadmin"],
+      validation: { ok: true, secretScan: "not_scanned" }
+    });
+
+    expect(contract).toMatchObject({
+      target: {
+        currentHeadSha: "HEAD",
+        staleHead: true
+      },
+      safety: {
+        currentHeadMatches: false
+      }
+    });
+  });
+
   it("renders validation failures without drafts, skipped scan claims, or raw triggers", () => {
     const baseDraft = buildFinishingTouchDraft({
       repo: "electricsheephq/evaos-code-review-bot",
       pullNumber: 157,
-      headSha: "head-a",
+      headSha: fullHeadSha,
       action: "generate_tests",
       author: "100yenadmin",
       commentId: 789,
@@ -223,7 +259,7 @@ describe("finishing-touch draft commands", () => {
           secretScan: "not_scanned"
         } as const,
         trustedAuthors: ["maintainer"],
-        currentHeadSha: "head-a",
+        currentHeadSha: fullHeadSha,
         worktreeClean: true,
         expectedSafety: {
           trustedAuthor: false,
@@ -237,11 +273,11 @@ describe("finishing-touch draft commands", () => {
         validation: {
           ok: false,
           reason: "stale_head",
-          detail: "Command targeted head-a, but current head is head-b.",
+          detail: `Command targeted ${fullHeadSha}, but current head is ${otherFullHeadSha}.`,
           secretScan: "not_scanned"
         } as const,
         trustedAuthors: ["100yenadmin"],
-        currentHeadSha: "head-b",
+        currentHeadSha: otherFullHeadSha,
         worktreeClean: true,
         expectedSafety: {
           trustedAuthor: true,
@@ -259,7 +295,7 @@ describe("finishing-touch draft commands", () => {
           secretScan: "not_scanned"
         } as const,
         trustedAuthors: ["100yenadmin"],
-        currentHeadSha: "head-a",
+        currentHeadSha: fullHeadSha,
         worktreeClean: false,
         expectedSafety: {
           trustedAuthor: true,
@@ -277,7 +313,7 @@ describe("finishing-touch draft commands", () => {
           secretScan: "failed"
         } as const,
         trustedAuthors: ["100yenadmin"],
-        currentHeadSha: "head-a",
+        currentHeadSha: fullHeadSha,
         worktreeClean: true,
         expectedSafety: {
           trustedAuthor: true,

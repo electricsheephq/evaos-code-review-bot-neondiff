@@ -268,7 +268,7 @@ export function buildFinishingTouchDryRunContract(
   const currentHeadSha = input.currentHeadSha.trim();
   const draftHeadSha = input.draft.headSha.trim();
   const currentHeadMatches =
-    currentHeadSha.length > 0 && draftHeadSha.length > 0 && currentHeadSha === draftHeadSha;
+    isFullGitSha(currentHeadSha) && isFullGitSha(draftHeadSha) && currentHeadSha === draftHeadSha;
   const trustedAuthor = input.trustedAuthors.includes("*") || input.trustedAuthors.includes(input.draft.author);
   const secretScan = input.validation.secretScan;
   const worktreeCleanState = input.worktreeCleanState ?? (input.worktreeClean ? "verified_clean" : "dirty");
@@ -306,6 +306,10 @@ export function buildFinishingTouchDryRunContract(
     validation: input.validation,
     ...(input.validation.ok ? { draft: input.draft } : {})
   };
+}
+
+function isFullGitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value);
 }
 
 function titleForAction(action: FinishingTouchAction): string {

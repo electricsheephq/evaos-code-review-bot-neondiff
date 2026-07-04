@@ -88,9 +88,9 @@ describe("public NeonDiff CLI surface", () => {
       "--pr",
       "120",
       "--head-sha",
-      "head-a",
+      "0123456789abcdef0123456789abcdef01234567",
       "--current-head",
-      "head-a",
+      "0123456789abcdef0123456789abcdef01234567",
       "--comment-id",
       "789",
       "--author",
@@ -117,8 +117,8 @@ describe("public NeonDiff CLI surface", () => {
         target: {
           repo: "electricsheephq/evaos-code-review-bot",
           pullNumber: 120,
-          headSha: "head-a",
-          currentHeadSha: "head-a",
+          headSha: "0123456789abcdef0123456789abcdef01234567",
+          currentHeadSha: "0123456789abcdef0123456789abcdef01234567",
           staleHead: false
         },
         safety: {
