@@ -12,10 +12,10 @@ NeonDiff support license: $1/month, $10/year, or $100 lifetime. NeonDiff is a
 source-available beta, not an open-source or GA release.
 
 [Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
-[Contributing](CONTRIBUTING.md) · [Agent Instructions](AGENTS.md) ·
-[Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
-[License](LICENSE.md) · [License Boundary](docs/license-boundary.md) ·
-[Pricing](docs/pricing.md) ·
+[GitHub App Install](docs/github-app-setup.md) · [Contributing](CONTRIBUTING.md) ·
+[Agent Instructions](AGENTS.md) · [Security](SECURITY.md) ·
+[Code of Conduct](CODE_OF_CONDUCT.md) · [License](LICENSE.md) ·
+[License Boundary](docs/license-boundary.md) · [Pricing](docs/pricing.md) ·
 [Roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
 
 ## Why It Matters
@@ -85,6 +85,7 @@ version is:
 neondiff init --config config.local.json
 export EVAOS_REVIEW_BOT_APP_ID="<github-app-id>"
 export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+neondiff doctor github --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
