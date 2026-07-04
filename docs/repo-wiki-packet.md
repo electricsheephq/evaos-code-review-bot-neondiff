@@ -1,0 +1,84 @@
+# Repo Wiki Packet
+
+Repo wiki packets are deterministic, evidence-safe context bundles for future
+codebase-map and repo-wiki review prompts. The MVP is library-only and dry-run:
+it does not change live worker behavior, prompt construction, GitHub comments,
+checks, queueing, or runtime state.
+
+This context is advisory. GitHub diff, current checkout files, current review
+evidence, and configured repo policy remain truth. A stale or missing wiki
+packet must degrade to a low-confidence context hint, not override the code
+under review.
+
+## Packet Model
+
+`src/repo-wiki-packet.ts` builds a packet with:
+
+- repo identity: `owner/repo`, optional default branch, optional redacted
+  remote URL
+- source freshness: ref, head SHA, checked-at timestamp, and `fresh`, `stale`,
+  or `missing` status
+- included sections: normalized codebase-map sections with source files, byte
+  length, token-ish estimate, truncation state, and redaction state
+- included files: stable file-to-section provenance
+- budget: max and used byte budget plus token-ish budget
+- redaction result: `passed` or `redacted` with replacement count
+- degraded mode: true when the source is stale or missing
+- generated timestamp
+- deterministic `packetSha`
+
+The packet SHA is derived from canonical JSON with sorted object keys. Markdown
+and JSON emitters are evidence-safe presentation formats over that packet.
+
+## Section Inputs
+
+Sections should be small, review-useful summaries such as:
+
+- architecture overview
+- key entrypoints
+- domain map
+- test commands
+- review rules
+- known risky areas
+
+Inputs are normalized deterministically:
+
+- IDs are trimmed, lowercased, slugged, and made unique with deterministic
+  suffixes when normalized IDs collide.
+- CRLF text becomes LF text.
+- empty sections are excluded with reason `empty`.
+- source file lists are trimmed, de-duplicated, and sorted.
+- sections sort by `order`, then `id`.
+
+## Budgets And Redaction
+
+The builder caps section bodies by UTF-8 byte length without splitting a
+multi-byte character. It then drops lower-priority sections until the rendered
+packet fits the byte and token-ish budgets. Budgets smaller than the fixed
+packet header fail closed instead of returning an over-budget packet.
+
+`maxBytes` and `maxTokens` bind the Markdown emitter because that is the prompt
+context form. JSON output is an evidence-safe machine payload, but callers that
+persist or transmit JSON must measure `formatRepoWikiPacketJson(packet)` against
+their own storage or transport limits.
+
+Secret-like text is passed through the repository's shared redaction helper
+before packet emission, including remote URLs and section provenance strings.
+Generated markdown and JSON must not contain raw tokens, API keys,
+cookie/session values, private keys, email addresses, or customer data matched
+by that helper.
+
+## Degraded Mode
+
+Use `source.status = "stale"` when the packet was generated from an older ref or
+checkout. Use `source.status = "missing"` when no repo wiki/codebase map exists
+yet. Both statuses set `degraded: true` and should be treated as context hints
+only. Missing source with no sections records an excluded `packet:sections`
+entry with reason `missing_source`.
+
+## Runtime Boundary
+
+This MVP intentionally does not wire packets into `src/worker.ts`,
+`src/walkthrough.ts`, `src/config.ts`, `src/cli.ts`, or `src/state.ts`.
+Future integration should add a separate feature flag, evidence files, and
+review-prompt caps before any live prompt use.
