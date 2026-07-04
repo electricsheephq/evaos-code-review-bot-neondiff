@@ -39,7 +39,7 @@ export interface FinishingTouchRequestValidationInput {
 }
 
 export type FinishingTouchRequestValidationResult =
-  | { ok: true }
+  | { ok: true; secretScan: "passed" | "not_scanned" }
   | {
       ok: false;
       reason:
@@ -48,6 +48,7 @@ export type FinishingTouchRequestValidationResult =
         | "dirty_worktree"
         | "secret_detected";
       detail: string;
+      secretScan: FinishingTouchSecretScanState;
     };
 
 export interface BuildFinishingTouchDraftInput {
@@ -75,6 +76,55 @@ export interface FinishingTouchDraft {
   canCommit: false;
   canApprove: false;
   markdown: string;
+}
+
+export interface BuildFinishingTouchDryRunContractInput {
+  dryRun: boolean;
+  recorded: boolean;
+  draft: FinishingTouchDraft;
+  currentHeadSha: string;
+  worktreeClean: boolean;
+  worktreeCleanState?: FinishingTouchWorktreeCleanState;
+  trustedAuthors: string[];
+  validation: FinishingTouchRequestValidationResult;
+}
+
+export type FinishingTouchSecretScanState = "passed" | "failed" | "not_scanned";
+export type FinishingTouchWorktreeCleanState = "verified_clean" | "dirty" | "assumed_clean";
+
+export interface FinishingTouchDryRunContract {
+  ok: boolean;
+  mode: "draft_only";
+  defaultOff: true;
+  dryRun: boolean;
+  recorded: boolean;
+  target: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    currentHeadSha: string;
+    staleHead: boolean;
+  };
+  command: {
+    action: FinishingTouchAction;
+    author: string;
+    commentId: number;
+    trigger?: string;
+  };
+  safety: {
+    trustedAuthor: boolean;
+    currentHeadMatches: boolean;
+    worktreeClean: FinishingTouchWorktreeCleanState;
+    secretScan: FinishingTouchSecretScanState;
+    mutation: {
+      canPush: false;
+      canCommit: false;
+      canApprove: false;
+      directProtectedBranchCommit: false;
+    };
+  };
+  validation: FinishingTouchRequestValidationResult;
+  draft?: FinishingTouchDraft;
 }
 
 const COMMAND_PHRASES: Array<[FinishingTouchAction, string[]]> = [
@@ -120,31 +170,38 @@ export function validateFinishingTouchRequest(
     return {
       ok: false,
       reason: "untrusted_author",
-      detail: `Author ${input.author} is not trusted for finishing-touch commands.`
+      detail: `Author ${input.author} is not trusted for finishing-touch commands.`,
+      secretScan: "not_scanned"
     };
   }
   if (input.currentHeadSha && input.currentHeadSha !== input.headSha) {
     return {
       ok: false,
       reason: "stale_head",
-      detail: `Command targeted ${input.headSha}, but current head is ${input.currentHeadSha}.`
+      detail: `Command targeted ${input.headSha}, but current head is ${input.currentHeadSha}.`,
+      secretScan: "not_scanned"
     };
   }
   if (!input.worktreeClean) {
     return {
       ok: false,
       reason: "dirty_worktree",
-      detail: "Refusing finishing-touch draft while the worktree is dirty."
+      detail: "Refusing finishing-touch draft while the worktree is dirty.",
+      secretScan: "not_scanned"
     };
   }
-  if (input.proposedOutput !== undefined && containsSecretLikeText(stringifyOutput(input.proposedOutput))) {
-    return {
-      ok: false,
-      reason: "secret_detected",
-      detail: "Refusing finishing-touch draft because proposed output contains secret-like text."
-    };
+  if (input.proposedOutput !== undefined) {
+    if (containsSecretLikeText(stringifyOutput(input.proposedOutput))) {
+      return {
+        ok: false,
+        reason: "secret_detected",
+        detail: "Refusing finishing-touch draft because proposed output contains secret-like text.",
+        secretScan: "failed"
+      };
+    }
+    return { ok: true, secretScan: "passed" };
   }
-  return { ok: true };
+  return { ok: true, secretScan: "not_scanned" };
 }
 
 export function isFinishingTouchActionEnabled(
@@ -203,6 +260,56 @@ export function buildFinishingTouchDraft(input: BuildFinishingTouchDraftInput): 
     canApprove: false,
     markdown
   };
+}
+
+export function buildFinishingTouchDryRunContract(
+  input: BuildFinishingTouchDryRunContractInput
+): FinishingTouchDryRunContract {
+  const currentHeadSha = input.currentHeadSha.trim();
+  const draftHeadSha = input.draft.headSha.trim();
+  const currentHeadMatches =
+    isFullGitSha(currentHeadSha) && isFullGitSha(draftHeadSha) && currentHeadSha === draftHeadSha;
+  const trustedAuthor = input.trustedAuthors.includes("*") || input.trustedAuthors.includes(input.draft.author);
+  const secretScan = input.validation.secretScan;
+  const worktreeCleanState = input.worktreeCleanState ?? (input.worktreeClean ? "verified_clean" : "dirty");
+  return {
+    ok: input.validation.ok,
+    mode: "draft_only",
+    defaultOff: true,
+    dryRun: input.dryRun,
+    recorded: input.recorded,
+    target: {
+      repo: input.draft.repo,
+      pullNumber: input.draft.pullNumber,
+      headSha: input.draft.headSha,
+      currentHeadSha: input.currentHeadSha,
+      staleHead: !currentHeadMatches
+    },
+    command: {
+      action: input.draft.action,
+      author: input.draft.author,
+      commentId: input.draft.commandCommentId,
+      ...(input.validation.ok ? { trigger: input.draft.trigger } : {})
+    },
+    safety: {
+      trustedAuthor,
+      currentHeadMatches,
+      worktreeClean: worktreeCleanState,
+      secretScan,
+      mutation: {
+        canPush: false,
+        canCommit: false,
+        canApprove: false,
+        directProtectedBranchCommit: false
+      }
+    },
+    validation: input.validation,
+    ...(input.validation.ok ? { draft: input.draft } : {})
+  };
+}
+
+function isFullGitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value);
 }
 
 function titleForAction(action: FinishingTouchAction): string {

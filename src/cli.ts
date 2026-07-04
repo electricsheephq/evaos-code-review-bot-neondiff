@@ -17,6 +17,7 @@ import {
 import { inspectConfigForDesktop, patchConfigForDesktop } from "./config-cli.js";
 import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
 import {
+  buildFinishingTouchDryRunContract,
   buildFinishingTouchDraft,
   FINISHING_TOUCH_ACTIONS,
   parseFinishingTouchCommand,
@@ -1077,6 +1078,7 @@ async function main(): Promise<void> {
     if (dryRun && record) throw new Error("--record true requires --dry-run false");
     const repo = parseSingleArg(args.repo, "--repo");
     const headSha = parseSingleArg(args["head-sha"], "--head-sha");
+    const currentHeadSha = parseSingleArg(args["current-head"], "--current-head");
     const author = parseSingleArg(args.author, "--author");
     const action = resolveFinishingTouchAction({
       action: args.action,
@@ -1086,9 +1088,14 @@ async function main(): Promise<void> {
     const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
     const commentId = parsePositiveInteger(parseSingleArg(args["comment-id"], "--comment-id"), "--comment-id");
     const trustedAuthors = parseCsv(args["trusted-authors"]);
-    const worktreeClean = args["worktree-clean"] === undefined
-      ? true
-      : parseBooleanArg(args["worktree-clean"], "--worktree-clean");
+    const worktreeCleanArg = args["worktree-clean"];
+    const worktreeCleanExplicit = worktreeCleanArg !== undefined;
+    const worktreeClean = worktreeCleanExplicit
+      ? parseBooleanArg(worktreeCleanArg, "--worktree-clean")
+      : true;
+    const worktreeCleanState = worktreeCleanExplicit
+      ? worktreeClean ? "verified_clean" : "dirty"
+      : "assumed_clean";
     const trigger = parseSingleArg(args.body ?? args.action ?? action, "--body");
     const draft = buildFinishingTouchDraft({
       repo,
@@ -1104,7 +1111,7 @@ async function main(): Promise<void> {
       repo,
       pullNumber,
       headSha,
-      currentHeadSha: parseSingleArg(args["current-head"], "--current-head"),
+      currentHeadSha,
       commentId,
       author,
       trustedAuthors,
@@ -1113,7 +1120,17 @@ async function main(): Promise<void> {
       proposedOutput: draft
     });
     if (!validation.ok) {
-      console.log(redactSecrets(JSON.stringify({ ok: false, dryRun, validation }, null, 2)));
+      const contract = buildFinishingTouchDryRunContract({
+        dryRun,
+        recorded: false,
+        draft,
+        currentHeadSha,
+        worktreeClean,
+        worktreeCleanState,
+        trustedAuthors,
+        validation
+      });
+      console.log(redactSecrets(JSON.stringify({ ok: false, dryRun, validation, contract }, null, 2)));
       process.exitCode = 1;
       return;
     }
@@ -1137,10 +1154,21 @@ async function main(): Promise<void> {
         state.close();
       }
     }
+    const contract = buildFinishingTouchDryRunContract({
+      dryRun,
+      recorded: Boolean(stored),
+      draft,
+      currentHeadSha,
+      worktreeClean,
+      worktreeCleanState,
+      trustedAuthors,
+      validation
+    });
     console.log(redactSecrets(JSON.stringify({
       ok: true,
       dryRun,
       recorded: Boolean(stored),
+      contract,
       draft,
       ...(stored ? { stored } : {})
     }, null, 2)));
