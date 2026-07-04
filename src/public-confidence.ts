@@ -16,37 +16,42 @@ export const PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS = 100;
 export const PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS = 30;
 export const PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS = 10;
 export const PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND = 0.95;
-const PUBLIC_CONFIDENCE_REPLACEMENT = "confidence not calibrated";
+const PUBLIC_CONFIDENCE_REPLACEMENT = "[confidence not calibrated]";
 const MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH = 128_000;
+const PUBLIC_CONFIDENCE_BOUNDARY_SCAN_LENGTH = 4_096;
 const PUBLIC_CONFIDENCE_TRUNCATION_NOTICE = "\n\n[truncated before public confidence sanitization]";
-const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)(?=\b|[-_]))`;
+const HORIZONTAL_WHITESPACE_PATTERN = String.raw`[^\S\r\n]`;
+const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?${HORIZONTAL_WHITESPACE_PATTERN}*(?:%|percent\b)|(?:0?\.\d+|1\.0+)(?=\b|[-_]))`;
 const CONFIDENCE_NOUN_PATTERN = String.raw`(?:confidence|certainty|reliability|sure(?:ness)?)`;
-const CONFIDENCE_SEPARATOR_PATTERN = String.raw`(?:\s+|[-_]+)`;
+const CONFIDENCE_SEPARATOR_PATTERN = String.raw`(?:${HORIZONTAL_WHITESPACE_PATTERN}+|[-_]+)`;
 const MARKDOWN_WRAPPER_PATTERN = "(?:[*_~`]+)?";
 const MARKDOWN_VALUE_START_PATTERN = "(?:\\b|(?<=[*_~`]))";
-const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}(?=\s*(?:[.,;:!?)]|$))`, "gi");
+const CONFIDENCE_LABEL_PATTERN = new RegExp(
+  String.raw`\b((${CONFIDENCE_NOUN_PATTERN})${HORIZONTAL_WHITESPACE_PATTERN}*[:=]${HORIZONTAL_WHITESPACE_PATTERN}*)${CONFIDENCE_VALUE_PATTERN}(?=${HORIZONTAL_WHITESPACE_PATTERN}*(?:[.,;:!?)]|$|\r?\n))`,
+  "gi"
+);
 const CONFIDENCE_LABEL_CONTINUATION_PATTERN = new RegExp(
-  String.raw`\b(${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*${CONFIDENCE_VALUE_PATTERN}\s+(is|was|are|were|that)\b`,
+  String.raw`\b(${CONFIDENCE_NOUN_PATTERN})${HORIZONTAL_WHITESPACE_PATTERN}*[:=]${HORIZONTAL_WHITESPACE_PATTERN}*${CONFIDENCE_VALUE_PATTERN}${HORIZONTAL_WHITESPACE_PATTERN}+(is|was|are|were|that)\b`,
   "gi"
 );
 const MARKDOWN_CONFIDENCE_LABEL_PATTERN = new RegExp(
-  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}(${CONFIDENCE_NOUN_PATTERN})${MARKDOWN_WRAPPER_PATTERN}\s*[:=]\s*${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?=\s*(?:[.,;:!?)]|$))`,
+  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}(${CONFIDENCE_NOUN_PATTERN})${MARKDOWN_WRAPPER_PATTERN}${HORIZONTAL_WHITESPACE_PATTERN}*[:=]${HORIZONTAL_WHITESPACE_PATTERN}*${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?=${HORIZONTAL_WHITESPACE_PATTERN}*(?:[.,;:!?)]|$|\r?\n))`,
   "gi"
 );
 const MARKDOWN_CONFIDENCE_LABEL_CONTINUATION_PATTERN = new RegExp(
-  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}(${CONFIDENCE_NOUN_PATTERN})${MARKDOWN_WRAPPER_PATTERN}\s*[:=]\s*${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}\s+(is|was|are|were|that)\b`,
+  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}(${CONFIDENCE_NOUN_PATTERN})${MARKDOWN_WRAPPER_PATTERN}${HORIZONTAL_WHITESPACE_PATTERN}*[:=]${HORIZONTAL_WHITESPACE_PATTERN}*${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}${HORIZONTAL_WHITESPACE_PATTERN}+(is|was|are|were|that)\b`,
   "gi"
 );
 const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_NOUN_PATTERN}(?:${CONFIDENCE_SEPARATOR_PATTERN}score(?:\s*(?::|=)\s*|\s+of\s+|\s+(?:is|was|at)\s+|${CONFIDENCE_SEPARATOR_PATTERN})|\s+of\s+|\s+(?:is|was|at|in)\s+|${CONFIDENCE_SEPARATOR_PATTERN}|(?=\d))${CONFIDENCE_VALUE_PATTERN}`,
+  String.raw`\b${CONFIDENCE_NOUN_PATTERN}(?:${CONFIDENCE_SEPARATOR_PATTERN}score(?:${HORIZONTAL_WHITESPACE_PATTERN}*(?::|=)${HORIZONTAL_WHITESPACE_PATTERN}*|${HORIZONTAL_WHITESPACE_PATTERN}+of${HORIZONTAL_WHITESPACE_PATTERN}+|${HORIZONTAL_WHITESPACE_PATTERN}+(?:is|was|at)${HORIZONTAL_WHITESPACE_PATTERN}+|${CONFIDENCE_SEPARATOR_PATTERN})|${HORIZONTAL_WHITESPACE_PATTERN}+of${HORIZONTAL_WHITESPACE_PATTERN}+|${HORIZONTAL_WHITESPACE_PATTERN}+(?:is|was|at|in)${HORIZONTAL_WHITESPACE_PATTERN}+|${CONFIDENCE_SEPARATOR_PATTERN}|(?=\d))${CONFIDENCE_VALUE_PATTERN}`,
   "gi"
 );
 const VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_VALUE_PATTERN}(?:\s*|[-_]+)(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)\b`,
+  String.raw`\b${CONFIDENCE_VALUE_PATTERN}(?:${HORIZONTAL_WHITESPACE_PATTERN}*|[-_]+)(?:confident|confidence(?:${HORIZONTAL_WHITESPACE_PATTERN}+in\b)?|reliable|reliability|sure)\b`,
   "gi"
 );
 const VALUE_IN_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_VALUE_PATTERN}\s+in\s+${CONFIDENCE_NOUN_PATTERN}\b`,
+  String.raw`\b${CONFIDENCE_VALUE_PATTERN}${HORIZONTAL_WHITESPACE_PATTERN}+in${HORIZONTAL_WHITESPACE_PATTERN}+${CONFIDENCE_NOUN_PATTERN}\b`,
   "gi"
 );
 const CONCATENATED_VALUE_CONFIDENCE_PATTERN = new RegExp(
@@ -54,10 +59,15 @@ const CONCATENATED_VALUE_CONFIDENCE_PATTERN = new RegExp(
   "gi"
 );
 const MARKDOWN_VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`${MARKDOWN_VALUE_START_PATTERN}${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:\s*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
+  String.raw`${MARKDOWN_VALUE_START_PATTERN}${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:${HORIZONTAL_WHITESPACE_PATTERN}*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:${HORIZONTAL_WHITESPACE_PATTERN}+in\b)?|reliable|reliability|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
   "gi"
 );
-const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = /\b(?:high|medium|low)\s+confidence\s*\(\s*(?:0?\.\d+|1(?:\.0+)?)\s*\)/gi;
+const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = new RegExp(
+  String.raw`\b(?:high|medium|low)${HORIZONTAL_WHITESPACE_PATTERN}+confidence${HORIZONTAL_WHITESPACE_PATTERN}*\(${HORIZONTAL_WHITESPACE_PATTERN}*(?:0?\.\d+|1(?:\.0+)?)${HORIZONTAL_WHITESPACE_PATTERN}*\)`,
+  "gi"
+);
+const CONFIDENCE_SANITIZER_CONTEXT_PREFILTER = /confidence|certainty|reliability|sure|confident|reliable/i;
+const CONFIDENCE_SANITIZER_VALUE_PREFILTER = /\d/;
 
 export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisplayPolicy>): PublicConfidenceDisplayPolicy {
   const evidenceUrl = input?.evidenceUrl?.trim();
@@ -132,6 +142,9 @@ export function isUsablePublicConfidenceEvidenceUrl(value: string | undefined): 
 export function sanitizePublicConfidenceText(value: string, policy?: PublicConfidenceDisplayPolicy): string {
   if (isPublicConfidenceDisplayAllowed(policy)) return value;
   const boundedValue = boundPublicConfidenceText(value);
+  if (!CONFIDENCE_SANITIZER_CONTEXT_PREFILTER.test(boundedValue) || !CONFIDENCE_SANITIZER_VALUE_PREFILTER.test(boundedValue)) {
+    return boundedValue;
+  }
   return boundedValue
     .replace(QUALIFIED_CONFIDENCE_DECIMAL_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(CONFIDENCE_LABEL_CONTINUATION_PATTERN, (_match, noun: string, continuation: string) => formatConfidenceLabelContinuation(noun, continuation))
@@ -148,17 +161,20 @@ export function sanitizePublicConfidenceText(value: string, policy?: PublicConfi
 function boundPublicConfidenceText(value: string): string {
   if (value.length <= MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH) return value;
   const truncated = value.slice(0, MAX_PUBLIC_CONFIDENCE_TEXT_LENGTH);
-  const danglingConfidenceTokenStart = findDanglingConfidenceTokenStart(truncated);
+  const boundaryWindowStart = Math.max(0, truncated.length - PUBLIC_CONFIDENCE_BOUNDARY_SCAN_LENGTH);
+  const boundaryWindow = truncated.slice(boundaryWindowStart);
+  const danglingConfidenceTokenStart = findDanglingConfidenceTokenStart(boundaryWindow);
   if (danglingConfidenceTokenStart !== -1) {
-    return `${truncated.slice(0, danglingConfidenceTokenStart).trimEnd()}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
+    return `${truncated.slice(0, boundaryWindowStart + danglingConfidenceTokenStart).trimEnd()}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
   }
-  const lastTokenBoundary = Math.max(
-    truncated.lastIndexOf(" "),
-    truncated.lastIndexOf("\n"),
-    truncated.lastIndexOf("\r"),
-    truncated.lastIndexOf("\t")
+  const lastTokenBoundaryInWindow = Math.max(
+    boundaryWindow.lastIndexOf(" "),
+    boundaryWindow.lastIndexOf("\n"),
+    boundaryWindow.lastIndexOf("\r"),
+    boundaryWindow.lastIndexOf("\t")
   );
-  const safeTruncated = lastTokenBoundary === -1 ? truncated : truncated.slice(0, lastTokenBoundary).trimEnd();
+  const safeTruncated =
+    lastTokenBoundaryInWindow === -1 ? truncated : truncated.slice(0, boundaryWindowStart + lastTokenBoundaryInWindow).trimEnd();
   return `${safeTruncated}${PUBLIC_CONFIDENCE_TRUNCATION_NOTICE}`;
 }
 
@@ -172,6 +188,6 @@ function findDanglingConfidenceTokenStart(value: string): number {
 }
 
 function formatConfidenceLabelContinuation(_noun: string, continuation: string): string {
-  if (continuation.toLowerCase() === "that") return "confidence is not calibrated;";
-  return `confidence is not calibrated; it ${continuation}`;
+  if (continuation.toLowerCase() === "that") return `${PUBLIC_CONFIDENCE_REPLACEMENT};`;
+  return `${PUBLIC_CONFIDENCE_REPLACEMENT}; it ${continuation}`;
 }

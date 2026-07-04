@@ -272,9 +272,9 @@ describe("sticky enrichment comments", () => {
       postIssueComment: true
     });
 
-    expect(comment.body).toContain("Review confidence not calibrated");
-    expect(comment.body).toContain("Run focused tests with confidence not calibrated.");
-    expect(comment.body).toContain("Proof status: confidence not calibrated.");
+    expect(comment.body).toContain("Review [confidence not calibrated]");
+    expect(comment.body).toContain("Run focused tests with [confidence not calibrated].");
+    expect(comment.body).toContain("Proof status: [confidence not calibrated].");
     expect(comment.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(comment.body).not.toContain("0.95");
   });

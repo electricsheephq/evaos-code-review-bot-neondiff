@@ -9,8 +9,8 @@ describe("public confidence display policy", () => {
   it("defaults to uncalibrated wording and removes confidence percentages from public text", () => {
     const output = sanitizePublicConfidenceText("Confidence: 95%. I am 0.92 confident this is a bug.");
 
-    expect(output).toContain("Confidence: confidence not calibrated.");
-    expect(output).toContain("I am confidence not calibrated this is a bug.");
+    expect(output).toContain("Confidence: [confidence not calibrated].");
+    expect(output).toContain("I am [confidence not calibrated] this is a bug.");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(output).not.toContain("0.92 confident");
   });
@@ -76,15 +76,15 @@ describe("public confidence display policy", () => {
   it("renders mid-sentence confidence labels as clean prose without leaking the value", () => {
     const output = sanitizePublicConfidenceText("The model confidence: 0.95 is the only signal we have.");
 
-    expect(output).toBe("The model confidence is not calibrated; it is the only signal we have.");
+    expect(output).toBe("The model [confidence not calibrated]; it is the only signal we have.");
     expect(output).not.toContain("0.95");
-    expect(output).not.toContain("confidence: confidence not calibrated is");
+    expect(output).not.toContain("confidence: [confidence not calibrated] is");
   });
 
   it("normalizes non-confidence label continuations to confidence wording", () => {
     const output = sanitizePublicConfidenceText("The model certainty: 0.95 is the only signal we have.");
 
-    expect(output).toBe("The model confidence is not calibrated; it is the only signal we have.");
+    expect(output).toBe("The model [confidence not calibrated]; it is the only signal we have.");
     expect(output).not.toContain("certainty is not calibrated");
     expect(output).not.toContain("0.95");
   });
@@ -100,7 +100,7 @@ describe("public confidence display policy", () => {
 
     const output = sanitizePublicConfidenceText(input);
 
-    expect(output).toContain("confidence is not calibrated; this is exploitable.");
+    expect(output).toContain("[confidence not calibrated]; this is exploitable.");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
     expect(output).not.toContain("0.92");
     expect(output).not.toContain("`95%` reliable");
@@ -124,6 +124,30 @@ describe("public confidence display policy", () => {
     expect(output).toContain("[truncated before public confidence sanitization]");
     expect(output).not.toContain("95%");
     expect(output.length).toBeLessThan(129_000);
+  });
+
+  it("leaves marker-free oversized input on the bounded prefilter path", () => {
+    const input = `${"safe prose ".repeat(20_000)}complete tail marker`;
+    const output = sanitizePublicConfidenceText(input);
+
+    expect(output).toContain("[truncated before public confidence sanitization]");
+    expect(output).toContain("safe prose");
+    expect(output).not.toContain("[confidence not calibrated]");
+    expect(output.length).toBeLessThan(129_000);
+  });
+
+  it("does not drop oversized prose after an early preserved confidence mention", () => {
+    const early = "The confidence interval at 0.95 remains statistically meaningful. ";
+    const tailMarker = "legitimate review prose near the truncation boundary survives";
+    const confidenceClaim = " Confidence: 95%.";
+    const filler = "x".repeat(128_000 - early.length - tailMarker.length - confidenceClaim.length - 12);
+    const input = `${early}${filler} ${tailMarker}${confidenceClaim} after boundary`;
+    const output = sanitizePublicConfidenceText(input);
+
+    expect(output).toContain("confidence interval at 0.95");
+    expect(output).toContain(tailMarker);
+    expect(output).toContain("[truncated before public confidence sanitization]");
+    expect(output).not.toContain("Confidence: 95%");
   });
 
   it("does not leak a partial confidence token at the truncation boundary", () => {
@@ -184,7 +208,7 @@ describe("public confidence display policy", () => {
 
     expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
     expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe(sanitizePublicConfidenceText("Confidence: 95%."));
-    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: confidence not calibrated.");
+    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: [confidence not calibrated].");
   });
 
   it("does not allow percentage display when calibration evidence is blank", () => {
@@ -200,7 +224,7 @@ describe("public confidence display policy", () => {
     });
 
     expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
-    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: confidence not calibrated.");
+    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: [confidence not calibrated].");
   });
 
   it("does not allow percentage display when calibration evidence is not an http URL", () => {
@@ -210,7 +234,7 @@ describe("public confidence display policy", () => {
     });
 
     expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
-    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: confidence not calibrated.");
+    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: [confidence not calibrated].");
   });
 
   it("requires calibration evidence to use https", () => {
@@ -220,7 +244,7 @@ describe("public confidence display policy", () => {
     });
 
     expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
-    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: confidence not calibrated.");
+    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: [confidence not calibrated].");
   });
 
   it("requires every eval promotion threshold before enabling public percentages", () => {
@@ -254,7 +278,7 @@ describe("public confidence display policy", () => {
       const policy = { ...basePolicy, ...override };
 
       expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
-      expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: confidence not calibrated.");
+      expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: [confidence not calibrated].");
     }
   });
 

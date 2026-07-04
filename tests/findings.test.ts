@@ -38,9 +38,9 @@ describe("finding normalization and review policy", () => {
     ]);
 
     expect(result.comments).toHaveLength(1);
-    expect(result.comments[0]?.title).toBe("Regression with confidence not calibrated");
-    expect(result.comments[0]?.body).toContain("Confidence: confidence not calibrated.");
-    expect(result.comments[0]?.body).toContain("I am confidence not calibrated this branch regresses review output.");
+    expect(result.comments[0]?.title).toBe("Regression with [confidence not calibrated]");
+    expect(result.comments[0]?.body).toContain("Confidence: [confidence not calibrated].");
+    expect(result.comments[0]?.body).toContain("I am [confidence not calibrated] this branch regresses review output.");
     expect(result.comments[0]?.title).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(result.comments[0]?.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(result.comments[0]?.body).not.toContain("0.99 confident");
@@ -137,10 +137,10 @@ describe("finding normalization and review policy", () => {
     expect(result.dropped).toHaveLength(1);
     expect(result.dropped[0]).toMatchObject({
       reason: "comment_cap_exceeded",
-      title: "Dropped with confidence not calibrated"
+      title: "Dropped with [confidence not calibrated]"
     });
-    expect(result.dropped[0]?.body).toBe("Confidence: confidence not calibrated. This should be capped.");
-    expect(result.dropped[0]?.why_this_matters).toBe("The model was confidence not calibrated.");
+    expect(result.dropped[0]?.body).toBe("Confidence: [confidence not calibrated]. This should be capped.");
+    expect(result.dropped[0]?.why_this_matters).toBe("The model was [confidence not calibrated].");
     expect(JSON.stringify(result.dropped)).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
     expect(JSON.stringify(result.dropped)).not.toContain("0.99 confident");
   });
@@ -152,9 +152,9 @@ describe("finding normalization and review policy", () => {
         category: "runtime_correctness",
         path: "src/reviewer.ts",
         line: 12,
-        title: "Regression with confidence not calibrated",
-        body: "Confidence: confidence not calibrated.",
-        why_this_matters: "Confidence: confidence not calibrated.",
+        title: "Regression with [confidence not calibrated]",
+        body: "Confidence: [confidence not calibrated].",
+        why_this_matters: "Confidence: [confidence not calibrated].",
         confidence: 0.99
       },
       undefined,
