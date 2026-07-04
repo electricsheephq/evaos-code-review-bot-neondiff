@@ -3098,6 +3098,57 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("applies repo-profile active caps to freshly enqueued jobs in the same cycle", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-profile-active-cap-"));
+    roots.push(root);
+    const repo = "100yenadmin/Lossless-Codex-Orchestrator-LCO";
+    const config = schedulerConfig(root, [repo]);
+    config.reviewScheduler!.maxProviderActive = 2;
+    config.reviewScheduler!.maxRepoActive = 2;
+    config.repoProfiles = {
+      repos: {
+        [repo]: {
+          reviewScheduler: {
+            maxActiveHeads: 1,
+            maxQueuedHeads: 10,
+            overflowAction: "defer"
+          }
+        }
+      }
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const reviewed: number[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        [repo, [pull(repo, 461, HEAD_A), pull(repo, 462, HEAD_B)]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo: reviewRepo, pull: reviewPull }) => {
+        reviewed.push(reviewPull.number);
+        reviewState.recordProcessed({
+          repo: reviewRepo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-04T12:00:00.000Z")
+    });
+
+    expect(result.queue.enqueued).toBe(2);
+    expect(result.reviewed).toBe(1);
+    expect(reviewed).toEqual([461]);
+    expect(state.listReviewQueueJobs({ repo, state: "queued" })).toEqual([
+      expect.objectContaining({ pullNumber: 462, headSha: HEAD_B })
+    ]);
+    state.close();
+  });
+
   it("does not re-post capacity-deferred status when a repo stays at queue capacity", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-profile-capacity-idempotent-"));
     roots.push(root);
@@ -3175,6 +3226,41 @@ describe("provider-aware review scheduler", () => {
     expect(second.skippedCapacity).toBe(1);
     expect(statusCalls.map(statusFromBody)).toEqual(["provider_deferred"]);
     expect(state.getReviewReadiness(repo, 462, HEAD_B)).toEqual(readiness);
+
+    state.updateReviewQueueJobState({
+      jobId: blocking.jobId,
+      state: "posted",
+      reviewUrl: "https://github.com/100yenadmin/Lossless-Codex-Orchestrator-LCO/pull/460#pullrequestreview-1",
+      lastError: "reviewed",
+      now: new Date("2026-07-04T12:02:30.000Z")
+    });
+    const third = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        [repo, [pull(repo, 462, HEAD_B)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo: reviewRepo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo: reviewRepo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-04T12:03:00.000Z")
+    });
+
+    expect(third.queue.enqueued).toBe(1);
+    expect(third.reviewed).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["provider_deferred", "queued", "in_progress", "completed"]);
+    expect(state.getReviewReadiness(repo, 462, HEAD_B)).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted"
+    });
     state.close();
   });
 
