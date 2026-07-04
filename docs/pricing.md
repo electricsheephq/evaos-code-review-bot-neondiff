@@ -44,9 +44,9 @@ usage, and auto-updates:
 - `yearly_support`
 - `lifetime_support`
 
-Private-repo review should fail closed before worktree prep, provider calls, or
-GitHub review posting when license enforcement is enabled and no active paid
-entitlement covers private repositories.
+Runtime license enforcement is outside this pricing command. This document only
+defines the pricing and entitlement vocabulary that enforcement code and setup
+docs should use.
 
 ## Tracking
 

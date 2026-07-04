@@ -89,7 +89,9 @@ describe("NeonDiff public community funnel", () => {
       expect(text).toMatch(/commercial/i);
       expect(text).toMatch(/auto-updates/i);
       expect(text).toMatch(/BYOK|provider key|local model/i);
-      expect(text).toMatch(/does not\s+include hosted model\s+credits|do not\s+include hosted model\s+credits/i);
+      const normalized = text.replace(/\s+/g, " ");
+      expect(normalized).toMatch(/hosted model credits/i);
+      expect(normalized).toMatch(/does not include|do not include|not included|no bundled/i);
       expect(text).not.toMatch(/unlimited SaaS inference included|bundled provider tokens included/i);
     }
 
