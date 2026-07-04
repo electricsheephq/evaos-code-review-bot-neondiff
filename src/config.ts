@@ -579,7 +579,7 @@ function validatePublicConfidenceDisplayConfig(value: unknown, label: string): v
   const policy = value as unknown as PublicConfidenceDisplayPolicy;
   if (value.mode === "calibrated" && !isPublicConfidenceDisplayAllowed(policy)) {
     if (!isUsablePublicConfidenceEvidenceUrl(typeof value.evidenceUrl === "string" ? value.evidenceUrl : undefined)) {
-      throw new Error(`${label}.evidenceUrl must be an http(s) URL when mode=calibrated`);
+      throw new Error(`${label}.evidenceUrl must be an https URL when mode=calibrated`);
     }
     if (typeof value.datasetId !== "string" || value.datasetId.trim().length === 0) {
       throw new Error(`${label}.datasetId is required when mode=calibrated`);

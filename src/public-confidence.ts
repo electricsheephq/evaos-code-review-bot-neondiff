@@ -18,13 +18,14 @@ const DEFAULT_MIN_NEGATIVE_CONTROL_SCENARIOS = 10;
 const DEFAULT_MIN_WILSON_LOWER_BOUND = 0.95;
 const PUBLIC_CONFIDENCE_REPLACEMENT = "confidence not calibrated";
 const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1(?:\.0+)?)\b)`;
-const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((?:confidence|certainty)\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}`, "gi");
+const CONFIDENCE_NOUN_PATTERN = String.raw`(?:confidence|certainty|reliability|accuracy|likelihood|sure(?:ness)?)`;
+const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}`, "gi");
 const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
-  String.raw`\bconfidence(?:\s+score(?:\s*(?::|=)\s*|\s+of\s+|\s+(?:is|was|at)\s+|\s+)|\s+of\s+|\s+(?:is|was|at|in)\s+|\s+)${CONFIDENCE_VALUE_PATTERN}`,
+  String.raw`\b${CONFIDENCE_NOUN_PATTERN}(?:\s+score(?:\s*(?::|=)\s*|\s+of\s+|\s+(?:is|was|at)\s+|\s+)|\s+of\s+|\s+(?:is|was|at|in)\s+|\s+)${CONFIDENCE_VALUE_PATTERN}`,
   "gi"
 );
 const VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_VALUE_PATTERN}\s*(?:confident|confidence(?:\s+in\b)?)`,
+  String.raw`\b${CONFIDENCE_VALUE_PATTERN}\s*(?:confident|confidence(?:\s+in\b)?|reliable|reliability|accurate|accuracy|likely|likelihood|sure)\b`,
   "gi"
 );
 const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = /\b(?:high|medium|low)\s+confidence\s*\(\s*(?:0?\.\d+|1(?:\.0+)?)\s*\)/gi;
@@ -73,7 +74,7 @@ export function isUsablePublicConfidenceEvidenceUrl(value: string | undefined): 
   if (!value?.trim()) return false;
   try {
     const url = new URL(value.trim());
-    return (url.protocol === "https:" || url.protocol === "http:") && url.hostname.length > 0;
+    return url.protocol === "https:" && url.hostname.length > 0;
   } catch {
     return false;
   }

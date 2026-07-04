@@ -30,14 +30,20 @@ describe("public confidence display policy", () => {
       "95 percent confidence",
       "I have 0.95 confidence in this",
       "high confidence (0.95)",
-      "certainty: 95%"
+      "certainty: 95%",
+      "reliability: 95%",
+      "accuracy 0.9",
+      "likelihood 90%",
+      "sure: 99%",
+      "99% reliable",
+      "0.91 likely"
     ].join("\n");
 
     const output = sanitizePublicConfidenceText(input);
 
     expect(output).not.toContain("0.95");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
-    expect(output.match(/confidence not calibrated/g)).toHaveLength(14);
+    expect(output.match(/confidence not calibrated/g)).toHaveLength(20);
   });
 
   it("does not corrupt unrelated confidence interval or threshold decimals", () => {
@@ -80,6 +86,16 @@ describe("public confidence display policy", () => {
     const policy = buildPublicConfidencePolicy({
       ...calibratedPolicyInput(),
       evidenceUrl: "javascript:alert(1)"
+    });
+
+    expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
+    expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: confidence not calibrated.");
+  });
+
+  it("requires calibration evidence to use https", () => {
+    const policy = buildPublicConfidencePolicy({
+      ...calibratedPolicyInput(),
+      evidenceUrl: "http://github.com/electricsheephq/evaos-code-review-bot/actions/runs/123"
     });
 
     expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
@@ -147,7 +163,13 @@ describe("public confidence display policy", () => {
       "95 percent confidence",
       "I have 0.95 confidence in this",
       "high confidence (0.95)",
-      "certainty: 95%"
+      "certainty: 95%",
+      "reliability: 95%",
+      "accuracy 0.9",
+      "likelihood 90%",
+      "sure: 99%",
+      "99% reliable",
+      "0.91 likely"
     ].join("\n");
 
     expect(sanitizePublicConfidenceText(input, buildPublicConfidencePolicy(calibratedPolicyInput()))).toBe(input);

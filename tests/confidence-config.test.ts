@@ -76,15 +76,18 @@ describe("confidence calibration config", () => {
     })).toThrow(/minWilsonLowerBound must be >= 0.95/);
   });
 
-  it("requires calibrated evidence URLs to be usable http or https URLs", () => {
+  it("requires calibrated evidence URLs to be usable https URLs", () => {
     const base = calibratedPublicDisplay();
 
     expect(() => loadConfigFromObject({
       confidenceCalibration: { publicDisplay: { ...base, evidenceUrl: "todo" } }
-    })).toThrow(/evidenceUrl must be an http\(s\) URL/);
+    })).toThrow(/evidenceUrl must be an https URL/);
     expect(() => loadConfigFromObject({
       confidenceCalibration: { publicDisplay: { ...base, evidenceUrl: "javascript:alert(1)" } }
-    })).toThrow(/evidenceUrl must be an http\(s\) URL/);
+    })).toThrow(/evidenceUrl must be an https URL/);
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: { publicDisplay: { ...base, evidenceUrl: "http://github.com/electricsheephq/evaos-code-review-bot/actions/runs/123" } }
+    })).toThrow(/evidenceUrl must be an https URL/);
   });
 });
 
