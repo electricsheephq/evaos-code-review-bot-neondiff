@@ -11,7 +11,7 @@ const providerIds = ["openai-compatible", "glm", "ollama-local", "zcode", "custo
 type JsonRecord = Record<string, unknown>;
 
 const invalidFixtureExpectedPaths: Record<string, string[]> = {
-  "invalid-provider-cross-use": ["/providers/local/provider"],
+  "invalid-local-provider-enum": ["/providers/local/provider"],
   "invalid-unsafe-enabled": [
     "/safetyGates/mutation/enabled",
     "/finishingTouches/enabled",
@@ -29,7 +29,8 @@ const credentialSmokePatterns: RegExp[] = [
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
   /\bAIza[0-9A-Za-z_-]{20,}\b/,
   /\bglpat-[0-9A-Za-z_-]{20,}\b/,
-  /\bglm-[0-9A-Za-z_-]{20,}\b/
+  /\bglm-[0-9A-Za-z_-]{20,}\b/,
+  /\bzai[._-][0-9A-Za-z_-]{20,}\b/
 ];
 
 function readJson(path: string): JsonRecord {
@@ -103,6 +104,8 @@ describe("NeonDiff config schema draft", () => {
     expect(schema.description).toMatch(/draft/i);
     expect(schema.description).toMatch(/not yet wired into runtime/i);
     expect(schema.description).toMatch(/#109/i);
+    expect(get("properties.$schema.description", schema)).toMatch(/NeonDiff-specific editor hint/);
+    expect(get("properties.$schema.description", schema)).toMatch(/not a JSON Schema meta-schema/);
 
     for (const topLevelKey of [
       "version",
@@ -152,7 +155,7 @@ describe("NeonDiff config schema draft", () => {
     const validate = compileSchema();
     const invalidFixtures = fixtureNames("invalid", ".json");
 
-    expect(invalidFixtures).toEqual(["invalid-provider-cross-use.json", "invalid-unsafe-enabled.json"]);
+    expect(invalidFixtures).toEqual(["invalid-local-provider-enum.json", "invalid-unsafe-enabled.json"]);
 
     for (const fixture of invalidFixtures) {
       expectInvalidFixture(validate, fixture, readJson(join(fixtureRoot, fixture)));
@@ -165,7 +168,7 @@ describe("NeonDiff config schema draft", () => {
     const invalidFixtures = fixtureNames("invalid", ".neondiff.yml");
 
     expect(validFixtures).toEqual(["valid-full.neondiff.yml", "valid-minimal.neondiff.yml"]);
-    expect(invalidFixtures).toEqual(["invalid-provider-cross-use.neondiff.yml", "invalid-unsafe-enabled.neondiff.yml"]);
+    expect(invalidFixtures).toEqual(["invalid-local-provider-enum.neondiff.yml", "invalid-unsafe-enabled.neondiff.yml"]);
 
     for (const fixture of validFixtures) {
       expectValidFixture(validate, fixture, readYaml(join(fixtureRoot, fixture)));
@@ -256,14 +259,14 @@ describe("NeonDiff config schema draft", () => {
     expect(errorPaths(defaultProviderErrors)).toContain("/providers/default");
   });
 
-  it("keeps the invalid cross-use fixture scoped to remote ids in the local slot", () => {
+  it("keeps the invalid local-provider fixture scoped to closed enum enforcement", () => {
     const validate = compileSchema();
-    const fixture = readJson(join(fixtureRoot, "invalid-provider-cross-use.json"));
+    const fixture = readJson(join(fixtureRoot, "invalid-local-provider-enum.json"));
     const errors = validateConfig(validate, fixture);
 
     expect(get("providers.default", fixture)).toBe("openai-compatible");
     expect(get("providers.local.provider", fixture)).toBe("openai-compatible");
-    expect(errorPaths(errors)).toEqual(expect.arrayContaining(["/providers/local/provider"]));
+    expect(errorPaths(errors)).toEqual(["/providers/local/provider"]);
     expect(errorPaths(errors)).not.toContain("/providers/default");
   });
 

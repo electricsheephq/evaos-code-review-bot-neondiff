@@ -18,7 +18,7 @@
   ],
   "properties": {
     "$schema": {
-      "description": "Optional editor hint pointing at this draft schema.",
+      "description": "Optional NeonDiff-specific editor hint pointing at this draft schema. In user config this is not a JSON Schema meta-schema declaration; the meta-schema for this schema document is the top-level https://json-schema.org/draft/2020-12/schema value.",
       "type": "string",
       "const": "docs/schema/neondiff-config.schema.json",
       "default": "docs/schema/neondiff-config.schema.json"
