@@ -30,12 +30,20 @@ Each command must appear as its own trimmed line in a PR comment:
 - `@evaos-code-review-bot explain`
 - `@evaos-code-review-bot stop`
 - `@evaos-code-review-bot generate tests`
+- `@evaos-code-review-bot draft tests`
 - `@evaos-code-review-bot generate docs`
+- `@evaos-code-review-bot draft docs`
 - `@evaos-code-review-bot generate docstrings`
 - `@evaos-code-review-bot simplify suggestion`
 - `@evaos-code-review-bot changelog draft`
+- `@evaos-code-review-bot draft changelog`
 - `@evaos-code-review-bot explain risk`
 - `@evaos-code-review-bot make review-ready`
+
+The public `@neondiff` mention uses the same parser when it is present in
+`commands.botMentions`, including `@neondiff review`, `@neondiff draft tests`,
+`@neondiff draft docs`, `@neondiff draft changelog`, and
+`@neondiff explain risk`.
 
 `review` and `re-review` route into the same ZCode review pipeline used by
 polling. They still use the current PR head SHA, current RIGHT-side diff-line
@@ -66,12 +74,12 @@ npx tsx src/cli.ts finishing-touch-dry-run \
   --config /path/to/live.json \
   --repo owner/repo \
   --pr 123 \
-  --head-sha HEAD \
-  --current-head HEAD \
+  --head-sha 0123456789abcdef0123456789abcdef01234567 \
+  --current-head 0123456789abcdef0123456789abcdef01234567 \
   --comment-id 456 \
   --author maintainer \
   --trusted-authors maintainer \
-  --body '@evaos-code-review-bot explain risk'
+  --body '@neondiff explain risk'
 ```
 
 The dry-run JSON includes a `contract` object with the target repo/PR/head,
@@ -81,7 +89,9 @@ trusted-author status, stale-head check, clean-worktree state
 booleans remain `false`; the command is `defaultOff: true` and
 `mode: "draft_only"` even when validation passes. When `--worktree-clean` is
 omitted, the dry-run contract reports `assumed_clean` rather than claiming an
-explicit Git clean check was performed.
+explicit Git clean check was performed. Validation fails closed unless both
+`--head-sha` and `--current-head` are explicit 40-character Git SHAs; placeholder
+values such as `HEAD` are not accepted as generation proof.
 
 ## Trust Boundary
 
