@@ -17,7 +17,7 @@ const DEFAULT_MIN_P0_P1_LABELS = 30;
 const DEFAULT_MIN_NEGATIVE_CONTROL_SCENARIOS = 10;
 const DEFAULT_MIN_WILSON_LOWER_BOUND = 0.95;
 const PUBLIC_CONFIDENCE_REPLACEMENT = "confidence not calibrated";
-const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1(?:\.0+)?)\b)`;
+const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)\b)`;
 const CONFIDENCE_NOUN_PATTERN = String.raw`(?:confidence|certainty|reliability|accuracy|likelihood|sure(?:ness)?)`;
 const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}`, "gi");
 const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
@@ -84,7 +84,7 @@ export function sanitizePublicConfidenceText(value: string, policy?: PublicConfi
   if (isPublicConfidenceDisplayAllowed(policy)) return value;
   return value
     .replace(QUALIFIED_CONFIDENCE_DECIMAL_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
-    .replace(CONFIDENCE_LABEL_PATTERN, `$1${PUBLIC_CONFIDENCE_REPLACEMENT}`)
+    .replace(CONFIDENCE_LABEL_PATTERN, (_match, prefix: string) => `${prefix}${PUBLIC_CONFIDENCE_REPLACEMENT}`)
     .replace(CONFIDENCE_NOUN_VALUE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT)
     .replace(VALUE_CONFIDENCE_PATTERN, PUBLIC_CONFIDENCE_REPLACEMENT);
 }

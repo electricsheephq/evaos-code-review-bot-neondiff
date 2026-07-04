@@ -57,6 +57,18 @@ describe("public confidence display policy", () => {
     expect(output).not.toContain("confidence not calibrated");
   });
 
+  it("does not over-sanitize ordinary numbered review prose", () => {
+    const input = [
+      "1 likely cause is a missing guard, and 2 likely follow-ups are documented.",
+      "1 accurate test can be better than 3 broad assertions.",
+      "1 reliable repro exists, but 0 flaky checks remain.",
+      "The review is sure to need 1 migration note.",
+      "This is 100 percent deterministic because it has no model judgment."
+    ].join("\n");
+
+    expect(sanitizePublicConfidenceText(input)).toBe(input);
+  });
+
   it("allows public confidence percentages only with explicit calibration evidence", () => {
     const policy = buildPublicConfidencePolicy(calibratedPolicyInput());
 
