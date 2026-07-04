@@ -351,6 +351,39 @@ describe("provider registry", () => {
       error: "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts."
     });
     expect(fetchCalls).toBe(0);
+
+    for (const unsafeBaseUrl of [
+      "https://[::ffff:169.254.169.254]/latest",
+      "https://[::ffff:10.0.0.1]/v1",
+      "https://0.0.0.0/v1"
+    ]) {
+      const unsafeResult = await doctorProviderRegistry({
+        registry: {
+          ...config.providers!,
+          providers: {
+            ...config.providers!.providers,
+            "openai-compatible": {
+              ...config.providers!.providers["openai-compatible"],
+              baseUrl: unsafeBaseUrl
+            }
+          }
+        },
+        providerId: "openai-compatible",
+        smoke: true,
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          return new Response(JSON.stringify({ data: [] }));
+        },
+        env: {
+          NEONDIFF_PROVIDER_API_KEY: "short-provider-key"
+        }
+      });
+      expect(unsafeResult.checks[0]).toMatchObject({
+        ok: false,
+        error: "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts."
+      });
+    }
+    expect(fetchCalls).toBe(0);
   });
 
   it("fails smoke when the configured model is not advertised", async () => {
@@ -753,6 +786,69 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/must not point to private, link-local, or cloud metadata hosts/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "ipv4-mapped-metadata",
+        providers: {
+          "ipv4-mapped-metadata": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://[::ffff:169.254.169.254]/latest",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/must not point to private, link-local, or cloud metadata hosts/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "wildcard-host",
+        providers: {
+          "wildcard-host": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://0.0.0.0/v1",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/must not point to private, link-local, or cloud metadata hosts/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "loopback-not-local",
+        providers: {
+          "loopback-not-local": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "http://localhost:11434/v1",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/capabilities\.local must be true for loopback provider baseUrl/);
 
     expect(() => loadConfigFromObject({
       providers: {

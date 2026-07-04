@@ -178,9 +178,9 @@ export async function doctorProviderRegistry(input: {
         ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
         ...(error ? { error } : {})
       });
-      if (!provider.enabled) troubleshooting.push(`Enable provider ${providerId} before selecting it for review.`);
-      if (capabilityError) troubleshooting.push(`Provider ${providerId} must support review and JSON output before it can be selected for review.`);
-      if (authError) troubleshooting.push(`Provider ${providerId} must declare an API key environment variable before it can be selected for review.`);
+      if (!provider.enabled) troubleshooting.push(`Enable provider ${safeProviderId} before selecting it for review.`);
+      if (capabilityError) troubleshooting.push(`Provider ${safeProviderId} must support review and JSON output before it can be selected for review.`);
+      if (authError) troubleshooting.push(`Provider ${safeProviderId} must declare an API key environment variable before it can be selected for review.`);
       continue;
     }
 
@@ -287,7 +287,11 @@ async function smokeOpenAICompatibleProvider(input: {
 }
 
 function signalWithTimeout(timeoutMs: number | undefined): AbortSignal | undefined {
-  return AbortSignal.timeout(timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS);
+  const timeout = timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS;
+  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(timeout);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeout);
+  return controller.signal;
 }
 
 function providerReadinessCapabilityError(provider: ProviderRegistryEntry): string | undefined {
@@ -345,6 +349,7 @@ function isUnsafeSmokeHost(hostname: string): boolean {
     normalized === "metadata" ||
     normalized === "metadata.google.internal" ||
     normalized === "metadata.azure.internal" ||
+    normalized === "0.0.0.0" ||
     normalized === "169.254.169.254" ||
     normalized === "100.100.100.200"
   ) {
@@ -368,10 +373,25 @@ function isPrivateOrLinkLocalIpv4(value: string): boolean {
 }
 
 function isPrivateOrLinkLocalIpv6(value: string): boolean {
+  const mappedIpv4 = ipv4MappedIpv6Address(value);
+  if (mappedIpv4) return isPrivateOrLinkLocalIpv4(mappedIpv4);
   return value === "::" ||
     value.startsWith("fc") ||
     value.startsWith("fd") ||
     value.startsWith("fe80:");
+}
+
+function ipv4MappedIpv6Address(value: string): string | undefined {
+  const normalized = value.toLowerCase();
+  if (!normalized.startsWith("::ffff:")) return undefined;
+  const suffix = normalized.slice("::ffff:".length);
+  if (isIP(suffix) === 4) return suffix;
+  const parts = suffix.split(":");
+  if (parts.length !== 2) return undefined;
+  const high = Number.parseInt(parts[0], 16);
+  const low = Number.parseInt(parts[1], 16);
+  if ([high, low].some((part) => !Number.isInteger(part) || part < 0 || part > 0xffff)) return undefined;
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
 }
 
 function extractModelIds(data: unknown[]): string[] {

@@ -792,6 +792,7 @@ function isUnsafeProviderHost(hostname: string): boolean {
     normalized === "metadata" ||
     normalized === "metadata.google.internal" ||
     normalized === "metadata.azure.internal" ||
+    normalized === "0.0.0.0" ||
     normalized === "169.254.169.254" ||
     normalized === "100.100.100.200"
   ) {
@@ -815,10 +816,25 @@ function isPrivateOrLinkLocalIpv4(value: string): boolean {
 }
 
 function isPrivateOrLinkLocalIpv6(value: string): boolean {
+  const mappedIpv4 = ipv4MappedIpv6Address(value);
+  if (mappedIpv4) return isPrivateOrLinkLocalIpv4(mappedIpv4);
   return value === "::" ||
     value.startsWith("fc") ||
     value.startsWith("fd") ||
     value.startsWith("fe80:");
+}
+
+function ipv4MappedIpv6Address(value: string): string | undefined {
+  const normalized = value.toLowerCase();
+  if (!normalized.startsWith("::ffff:")) return undefined;
+  const suffix = normalized.slice("::ffff:".length);
+  if (isIP(suffix) === 4) return suffix;
+  const parts = suffix.split(":");
+  if (parts.length !== 2) return undefined;
+  const high = Number.parseInt(parts[0], 16);
+  const low = Number.parseInt(parts[1], 16);
+  if ([high, low].some((part) => !Number.isInteger(part) || part < 0 || part > 0xffff)) return undefined;
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
 }
 
 function validateDesktopConfig(value: unknown, label: string): void {
@@ -879,6 +895,9 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
   for (const capability of ["review", "jsonOutput", "local", "streaming"] as const) {
     validateBoolean(value.capabilities[capability], `${label}.capabilities.${capability}`);
   }
+  if (typeof value.baseUrl === "string" && isLoopbackProviderBaseUrl(value.baseUrl) && value.capabilities.local !== true) {
+    throw new Error(`${label}.capabilities.local must be true for loopback provider baseUrl`);
+  }
   if (adapter === "openai-compatible" && value.enabled === true && typeof value.baseUrl !== "string") {
     throw new Error(`${label}.baseUrl is required when enabled openai-compatible provider`);
   }
@@ -928,6 +947,14 @@ function validateProviderBaseUrl(value: string, label: string): void {
   }
   if (isUnsafeProviderHost(parsed.hostname)) {
     throw new Error(`${label} must not point to private, link-local, or cloud metadata hosts`);
+  }
+}
+
+function isLoopbackProviderBaseUrl(value: string): boolean {
+  try {
+    return isLoopbackHost(new URL(value).hostname);
+  } catch {
+    return false;
   }
 }
 
