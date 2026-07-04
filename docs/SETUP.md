@@ -79,6 +79,11 @@ For the current internal provider path, the worker derives transient ZCode/GLM
 environment from the local app config referenced by `config.local.json`. Do not
 copy provider API keys into this repository.
 
+Use [docs/providers.md](providers.md) for GLM/Z.ai, Ollama, and
+OpenAI-compatible endpoint examples. The provider registry stores metadata such
+as provider id, base URL, model id, timeout, retry policy, and an API-key
+environment variable name; it must not store the API key itself.
+
 If you are reviewing private or commercial repos, set your license key through
 the configured local secret path or environment used by your operator wrapper.
 Do not paste license keys into tracked config.
@@ -155,6 +160,8 @@ Check:
 Then run full doctor with the config you intend to use:
 
 ```bash
+neondiff providers list --config config.local.json --json
+neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
@@ -164,6 +171,7 @@ The full doctor output is JSON. Check:
 - `github.readMode`
 - each `github.readChecks[]`
 - provider readiness
+- provider registry readiness from `providers doctor`
 - repo policy allow/skip state
 
 ## 5. Run A Dry-Run Review

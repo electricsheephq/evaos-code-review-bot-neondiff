@@ -49,6 +49,7 @@ import {
   type OperatorQueueSnapshot
 } from "./operator-cli.js";
 import { buildPricingOutput } from "./pricing.js";
+import { buildProviderRegistrySummary, doctorProviderRegistry } from "./providers.js";
 import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
@@ -119,6 +120,40 @@ async function main(): Promise<void> {
   if (command === "pricing") {
     console.log(stringifyRedactedJson(buildPricingOutput()));
     return;
+  }
+
+  if (command === "providers") {
+    const action = args._[1];
+    const config = loadConfig(args.config);
+    if (action === "list") {
+      console.log(stringifyProviderOutput({
+        ok: true,
+        command: "providers list",
+        proofBoundary: "Provider registry visibility only; live review execution remains ZCode-backed until adapter rollout evidence passes.",
+        ...buildProviderRegistrySummary({
+          registry: config.providers!,
+          currentZCode: {
+            providerId: config.zcode.providerId,
+            model: config.zcode.model
+          }
+        })
+      }));
+      return;
+    }
+    if (action === "doctor") {
+      const result = await doctorProviderRegistry({
+        registry: config.providers!,
+        ...(args.provider ? { providerId: parseSingleArg(args.provider, "--provider") } : {}),
+        smoke: args.smoke === undefined ? false : parseBooleanArg(args.smoke, "--smoke")
+      });
+      console.log(stringifyProviderOutput({
+        ...result,
+        proofBoundary: "Provider readiness check only; alternate providers are not selected for live review execution by this command."
+      }));
+      if (!result.ok) process.exitCode = 1;
+      return;
+    }
+    throw new Error("providers subcommand must be one of: list, doctor");
   }
 
   if (command === "license") {
@@ -2205,6 +2240,8 @@ function buildHelp(command?: string) {
         "config inspect",
         "config patch",
         "pricing",
+        "providers list",
+        "providers doctor",
         "doctor",
         "doctor github",
         "daemon start",
@@ -2260,6 +2297,9 @@ function buildHelp(command?: string) {
       "neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true",
       "desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}",
       "neondiff pricing",
+      "neondiff providers list --config config.local.json --json",
+      "neondiff providers doctor --config config.local.json --json",
+      "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
       "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",
@@ -2298,6 +2338,22 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ]
   };
+}
+
+function stringifyProviderOutput(input: unknown): string {
+  return JSON.stringify(redactProviderOutput(input), null, 2);
+}
+
+function redactProviderOutput(input: unknown, key?: string): unknown {
+  if (typeof input === "string") return key === "apiKeyEnv" ? input : redactSecrets(input);
+  if (input instanceof Date) return input.toISOString();
+  if (Array.isArray(input)) return input.map((item) => redactProviderOutput(item));
+  if (input && typeof input === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [entryKey, value] of Object.entries(input)) output[entryKey] = redactProviderOutput(value, entryKey);
+    return output;
+  }
+  return input;
 }
 
 function isHelpRequested(args: ParsedArgs): boolean {

@@ -22,6 +22,7 @@ describe("NeonDiff public community funnel", () => {
       /LICENSE\.md/i,
       /docs\/license-boundary\.md/i,
       /docs\/pricing\.md/i,
+      /docs\/providers\.md/i,
       /public open-source repos.*free/i,
       /\$1\/month/i,
       /\$10\/year/i,
@@ -106,6 +107,7 @@ describe("NeonDiff public community funnel", () => {
   it("setup guide gives a first-run path without hiding safety prerequisites in operator runbooks", () => {
     const setup = read("docs/SETUP.md");
     const githubApp = read("docs/github-app-setup.md");
+    const providers = read("docs/providers.md");
 
     for (const required of [
       /^# NeonDiff Setup/m,
@@ -115,6 +117,8 @@ describe("NeonDiff public community funnel", () => {
       /Contents: read/i,
       /Pull requests: read\/write/i,
       /doctor github/i,
+      /providers list/i,
+      /providers doctor/i,
       /app_installation/i,
       /provider/i,
       /license/i,
@@ -130,6 +134,14 @@ describe("NeonDiff public community funnel", () => {
 
     expect(setup).not.toMatch(/BEGIN (RSA|OPENSSH|PRIVATE) KEY|ghp_|github_pat_|sk-[A-Za-z0-9]/);
     expect(githubApp).toMatch(/^# GitHub App Install And Onboarding/m);
+    expect(providers).toMatch(/^# NeonDiff Provider Registry/m);
+    expect(providers).toMatch(/GLM\/Z\.ai/i);
+    expect(providers).toMatch(/Ollama/i);
+    expect(providers).toMatch(/OpenAI-compatible/i);
+    expect(providers).toMatch(/apiKeyEnv/i);
+    expect(providers).toMatch(/must not store the API key/i);
+    expect(providers).toMatch(/proof boundary/i);
+    expect(providers).not.toMatch(/BEGIN (RSA|OPENSSH|PRIVATE) KEY|ghp_|github_pat_|sk-[A-Za-z0-9]/);
     for (const required of [
       /Install URL/i,
       /Selected-Repo Install Path/i,

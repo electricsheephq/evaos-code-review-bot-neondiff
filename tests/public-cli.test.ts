@@ -46,6 +46,8 @@ describe("public NeonDiff CLI surface", () => {
       "config inspect",
       "config patch",
       "pricing",
+      "providers list",
+      "providers doctor",
       "doctor",
       "doctor github",
       "daemon start",
@@ -59,6 +61,9 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("neondiff pricing");
+    expect(output.examples).toContain("neondiff providers list --config config.local.json --json");
+    expect(output.examples).toContain("neondiff providers doctor --config config.local.json --json");
+    expect(output.examples).toContain("neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json");
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
@@ -137,6 +142,42 @@ describe("public NeonDiff CLI surface", () => {
     ]);
     expect(stdout).toContain("does not include hosted model credits");
     expect(stdout).not.toMatch(/"includedHostedModelCredits":\s*true|bundled provider tokens included/i);
+  });
+
+  it("lists and doctors providers without hiding env-var names or printing keys", async () => {
+    const list = JSON.parse((await runCli(["providers", "list"])).stdout);
+    const doctor = JSON.parse((await runCli(["providers", "doctor"])).stdout);
+
+    expect(list).toMatchObject({
+      ok: true,
+      command: "providers list",
+      defaultProviderId: "zcode-glm"
+    });
+    expect(list.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "openai-compatible",
+        authMode: "api-key-env",
+        apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
+      }),
+      expect.objectContaining({
+        id: "ollama-local",
+        adapter: "openai-compatible"
+      })
+    ]));
+    expect(JSON.stringify(list)).not.toMatch(/sk-[A-Za-z0-9]|provider-secret/i);
+
+    expect(doctor).toMatchObject({
+      ok: true,
+      command: "providers doctor",
+      defaultProviderId: "zcode-glm",
+      checks: [
+        expect.objectContaining({
+          providerId: "zcode-glm",
+          ok: true,
+          readMode: "metadata_only"
+        })
+      ]
+    });
   });
 
   it("doctor github proves App installation reads without printing secrets", async () => {

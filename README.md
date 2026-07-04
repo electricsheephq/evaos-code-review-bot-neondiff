@@ -16,6 +16,7 @@ source-available beta, not an open-source or GA release.
 [Agent Instructions](AGENTS.md) · [Security](SECURITY.md) ·
 [Code of Conduct](CODE_OF_CONDUCT.md) · [License](LICENSE.md) ·
 [License Boundary](docs/license-boundary.md) · [Pricing](docs/pricing.md) ·
+[Providers](docs/providers.md) ·
 [Roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
 
 ## Why It Matters
@@ -86,6 +87,8 @@ neondiff init --config config.local.json
 export EVAOS_REVIEW_BOT_APP_ID="<github-app-id>"
 export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 neondiff doctor github --config config.local.json --json
+neondiff providers list --config config.local.json --json
+neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
