@@ -3,6 +3,8 @@
 **NeonDiff is a local-first AI PR reviewer for teams and agents that want the
 review loop without handing every diff to a hosted review SaaS.**
 
+![NeonDiff cyberpunk wordmark in toxic green inside a black HUD frame](assets/readme/neondiff-cyberpunk-hero.png)
+
 Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
