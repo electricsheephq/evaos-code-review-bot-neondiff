@@ -54,6 +54,7 @@ export function buildWalkthroughComment(input: {
   const severityCounts = countSeverities(input.comments);
   const highSeverity = severityCounts.P0 + severityCounts.P1;
   const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
+  const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview);
 
   const visibleBody = [
     "## Walkthrough",
@@ -90,9 +91,7 @@ export function buildWalkthroughComment(input: {
     `Related issues/PRs: ${relatedRefs.length > 0 ? relatedRefs.join(", ") : "none detected from PR metadata"}.`,
     `Suggested labels: ${suggestedLabels.length > 0 ? suggestedLabels.join(", ") : "none"}.`,
     `Suggested reviewers: ${suggestedReviewers.length > 0 ? suggestedReviewers.join(", ") : "none from current metadata"}.`,
-    "",
-    ...formatSettingsPreviewSection(input.settingsPreview),
-    "",
+    ...(settingsPreviewSection.length > 0 ? ["", ...settingsPreviewSection, ""] : [""]),
     "### Pre-merge checklist",
     "",
     checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),

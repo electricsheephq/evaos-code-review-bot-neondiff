@@ -466,6 +466,36 @@ describe("repo profile registry", () => {
     });
   });
 
+  it("preserves chill profile and disabled status comment defaults in settings preview", () => {
+    const config = loadConfig(
+      writeConfig({
+        walkthrough: {
+          enabled: true,
+          postIssueComment: true
+        },
+        repoProfiles: {
+          repos: {
+            "electricsheephq/evaos-code-review-bot": {
+              displayName: "Review bot",
+              reviewProfile: "chill"
+            }
+          }
+        }
+      })
+    );
+    const profile = expectAllowed(resolveRepoProfile(config, "electricsheephq/evaos-code-review-bot"));
+
+    const preview = buildReviewSettingsPreview(config, profile);
+
+    expect(preview.profile).toBe("chill");
+    expect(preview.sections).toContainEqual({
+      key: "statusComment",
+      label: "Review status comment",
+      enabled: false,
+      mode: "sticky_status"
+    });
+  });
+
   it("keeps the active monitor profile template explicit and non-executing", () => {
     const template = JSON.parse(readFileSync(new URL("../config.active-profiles.example.json", import.meta.url), "utf8"));
     const config = loadConfig(writeConfig(template));

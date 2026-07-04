@@ -201,6 +201,31 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).not.toContain("labels were auto-applied");
   });
 
+  it("omits settings preview cleanly when no settings metadata is provided", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT"
+    });
+
+    expect(walkthrough.body).not.toContain("### Review Settings Preview");
+    expect(walkthrough.body).toContain("Suggested reviewers: reviewer-one.\n\n### Pre-merge checklist");
+    expect(walkthrough.body).not.toMatch(/Suggested reviewers:[^\n]*\n\n\n### Pre-merge checklist/);
+  });
+
   it("uses one sticky walkthrough marker per PR while updating head-specific state metadata", () => {
     const first = buildWalkthroughComment({
       repo: "electricsheephq/WorldOS",
