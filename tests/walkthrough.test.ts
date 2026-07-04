@@ -461,6 +461,8 @@ describe("walkthrough comment rendering", () => {
     });
 
     expect(walkthrough.body).toContain(`PR: electricsheephq/WorldOS#${pull.number} - ${"b".repeat(176)} Confidence: confidence not calibrated`);
+    expect(walkthrough.body).toContain("Validated inline findings: 1 (P0: 0, P1: 1, P2: 0, P3: 0).");
+    expect(walkthrough.body).toContain("Elevated: validated P1 finding");
     expect(walkthrough.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(walkthrough.body).not.toMatch(/confidence not cali(?:$|\n)/);
   });

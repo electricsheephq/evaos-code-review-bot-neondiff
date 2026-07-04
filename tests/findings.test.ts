@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideReviewEvent, normalizeFindingsForReview, parseFindings } from "../src/findings.js";
+import { decideReviewEvent, formatReviewComment, normalizeFindingsForReview, parseFindings } from "../src/findings.js";
 import type { Finding } from "../src/types.js";
 
 describe("finding normalization and review policy", () => {
@@ -43,6 +43,27 @@ describe("finding normalization and review policy", () => {
     expect(result.comments[0]?.title).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(result.comments[0]?.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(result.comments[0]?.body).not.toContain("0.99 confident");
+  });
+
+  it("does not re-sanitize already-public review comment text", () => {
+    const comment = formatReviewComment(
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression with confidence not calibrated",
+        body: "Confidence: confidence not calibrated.",
+        why_this_matters: "Confidence: confidence not calibrated.",
+        confidence: 0.99
+      },
+      undefined,
+      { textAlreadySanitized: true }
+    );
+
+    expect(comment.match(/confidence not calibrated/g)).toHaveLength(3);
+    expect(comment).not.toMatch(/confidence not calibrated confidence not calibrated/);
+    expect(comment).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
   });
 
   it("drops any finding whose title or body contains secret-looking material", () => {

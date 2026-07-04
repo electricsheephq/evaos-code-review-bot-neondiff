@@ -16,6 +16,24 @@ describe("confidence calibration config", () => {
     });
   });
 
+  it("fills default public display floors for partial confidence calibration config", () => {
+    const config = loadConfigFromObject({
+      confidenceCalibration: {
+        publicDisplay: {
+          mode: "uncalibrated"
+        }
+      }
+    });
+
+    expect(config.confidenceCalibration?.publicDisplay).toMatchObject({
+      mode: "uncalibrated",
+      minLabeledFindings: 100,
+      minP0P1Labels: 30,
+      minNegativeControlScenarios: 10,
+      minWilsonLowerBound: 0.95
+    });
+  });
+
   it("requires calibration evidence before public confidence display can be enabled", () => {
     expect(() => loadConfigFromObject({
       confidenceCalibration: {

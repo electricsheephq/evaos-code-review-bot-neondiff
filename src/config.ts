@@ -503,8 +503,9 @@ function validateConfig(config: BotConfig): void {
   config.reviewStatusComment = reviewStatusComment;
   validateBoolean(reviewStatusComment.enabled, "config.reviewStatusComment.enabled");
   const confidenceCalibration = config.confidenceCalibration ?? DEFAULT_CONFIG.confidenceCalibration!;
-  validatePublicConfidenceDisplayConfig(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
+  validatePublicConfidenceDisplayFloorOverrides(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
   confidenceCalibration.publicDisplay = buildPublicConfidencePolicy(confidenceCalibration.publicDisplay);
+  validatePublicConfidenceDisplayConfig(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
   config.confidenceCalibration = confidenceCalibration;
   const repoMemory = config.repoMemory ?? DEFAULT_CONFIG.repoMemory!;
   config.repoMemory = repoMemory;
@@ -611,6 +612,25 @@ function validatePublicConfidenceDisplayConfig(value: unknown, label: string): v
     if (typeof value.wilsonLowerBound !== "number" || value.wilsonLowerBound < (value.minWilsonLowerBound as number)) {
       throw new Error(`${label}.wilsonLowerBound must be >= minWilsonLowerBound before public confidence display is calibrated`);
     }
+  }
+}
+
+function validatePublicConfidenceDisplayFloorOverrides(value: unknown, label: string): void {
+  if (!isRecord(value)) return;
+  if (value.minLabeledFindings !== undefined && (value.minLabeledFindings as number) < PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS) {
+    throw new Error(`${label}.minLabeledFindings must be >= ${PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS}`);
+  }
+  if (value.minP0P1Labels !== undefined && (value.minP0P1Labels as number) < PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS) {
+    throw new Error(`${label}.minP0P1Labels must be >= ${PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS}`);
+  }
+  if (
+    value.minNegativeControlScenarios !== undefined &&
+    (value.minNegativeControlScenarios as number) < PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS
+  ) {
+    throw new Error(`${label}.minNegativeControlScenarios must be >= ${PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS}`);
+  }
+  if (value.minWilsonLowerBound !== undefined && (value.minWilsonLowerBound as number) < PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND) {
+    throw new Error(`${label}.minWilsonLowerBound must be >= ${PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND}`);
   }
 }
 

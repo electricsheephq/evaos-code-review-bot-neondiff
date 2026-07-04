@@ -46,6 +46,7 @@ export function buildWalkthroughComment(input: {
 }): WalkthroughComment {
   validateWalkthroughIdentity({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha });
   const marker = buildWalkthroughMarker({ repo: input.repo, pullNumber: input.pull.number });
+  // Keep gate/count signal on original comments; use publicComments only for public-text safety checks.
   const publicComments = input.comments.map((comment) => sanitizeReviewCommentPublicText(comment, input.publicConfidencePolicy));
   const files = input.files.map((file) => summarizeFile(file, input.comments));
   const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);

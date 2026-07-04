@@ -23,6 +23,7 @@ const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?\s*(?:%|percent\b)|(
 const CONFIDENCE_NOUN_PATTERN = String.raw`(?:confidence|certainty|reliability|sure(?:ness)?)`;
 const CONFIDENCE_SEPARATOR_PATTERN = String.raw`(?:\s+|[-_]+)`;
 const MARKDOWN_WRAPPER_PATTERN = "(?:[*_~`]+)?";
+const MARKDOWN_VALUE_START_PATTERN = "(?:\\b|(?<=[*_~`]))";
 const CONFIDENCE_LABEL_PATTERN = new RegExp(String.raw`\b((${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*)${CONFIDENCE_VALUE_PATTERN}(?=\s*(?:[.,;:!?)]|$))`, "gi");
 const CONFIDENCE_LABEL_CONTINUATION_PATTERN = new RegExp(
   String.raw`\b(${CONFIDENCE_NOUN_PATTERN})\s*[:=]\s*${CONFIDENCE_VALUE_PATTERN}\s+(is|was|are|were|that)\b`,
@@ -45,7 +46,7 @@ const VALUE_CONFIDENCE_PATTERN = new RegExp(
   "gi"
 );
 const MARKDOWN_VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`\b${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:\s*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
+  String.raw`${MARKDOWN_VALUE_START_PATTERN}${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:\s*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:\s+in\b)?|reliable|reliability|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
   "gi"
 );
 const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = /\b(?:high|medium|low)\s+confidence\s*\(\s*(?:0?\.\d+|1(?:\.0+)?)\s*\)/gi;

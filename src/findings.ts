@@ -103,6 +103,10 @@ export function normalizeFindingsForReview(
     comments: kept.map((finding) => {
       const category = normalizeFindingCategory(finding);
       const publicTitle = sanitizePublicConfidenceText(finding.title, options.publicConfidencePolicy);
+      const publicBody = sanitizePublicConfidenceText(finding.body, options.publicConfidencePolicy);
+      const publicWhy = finding.why_this_matters
+        ? sanitizePublicConfidenceText(finding.why_this_matters, options.publicConfidencePolicy)
+        : undefined;
       return {
         path: finding.path,
         line: finding.line,
@@ -110,7 +114,11 @@ export function normalizeFindingsForReview(
         severity: finding.severity,
         category,
         title: publicTitle,
-        body: formatReviewComment({ ...finding, category, title: publicTitle }, options.publicConfidencePolicy, { titleAlreadySanitized: true })
+        body: formatReviewComment(
+          { ...finding, category, title: publicTitle, body: publicBody, ...(publicWhy ? { why_this_matters: publicWhy } : {}) },
+          options.publicConfidencePolicy,
+          { textAlreadySanitized: true }
+        )
       };
     }),
     dropped
@@ -133,12 +141,14 @@ export function decideReviewEvent(findings: Pick<ReviewComment, "severity" | "ca
 export function formatReviewComment(
   finding: Finding,
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy,
-  options: { titleAlreadySanitized?: boolean } = {}
+  options: { textAlreadySanitized?: boolean } = {}
 ): string {
-  const title = options.titleAlreadySanitized ? finding.title : sanitizePublicConfidenceText(finding.title, publicConfidencePolicy);
-  const body = sanitizePublicConfidenceText(finding.body, publicConfidencePolicy);
+  const title = options.textAlreadySanitized ? finding.title : sanitizePublicConfidenceText(finding.title, publicConfidencePolicy);
+  const body = options.textAlreadySanitized ? finding.body : sanitizePublicConfidenceText(finding.body, publicConfidencePolicy);
   const category = finding.category ? `\n\nCategory: ${categoryLabel(finding.category)}` : "";
-  const why = finding.why_this_matters ? `\n\nWhy this matters: ${sanitizePublicConfidenceText(finding.why_this_matters, publicConfidencePolicy)}` : "";
+  const why = finding.why_this_matters
+    ? `\n\nWhy this matters: ${options.textAlreadySanitized ? finding.why_this_matters : sanitizePublicConfidenceText(finding.why_this_matters, publicConfidencePolicy)}`
+    : "";
   return `**${finding.severity}: ${title}**\n\n${body}${category}${why}`;
 }
 

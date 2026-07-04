@@ -72,6 +72,7 @@ describe("public confidence display policy", () => {
     const input = [
       "**Confidence**: `95%` that this is exploitable.",
       "- `0.92` confident this regression is real.",
+      "- `95%` reliable after model judgment.",
       "Body says **99 percent confidence** after the model pass.",
       "Why this matters: `95% confident` claims are not public calibration evidence."
     ].join("\n");
@@ -81,6 +82,7 @@ describe("public confidence display policy", () => {
     expect(output).toContain("confidence is not calibrated; this is exploitable.");
     expect(output).not.toMatch(/\b\d+(?:\.\d+)?\s*(?:%|percent)\b/i);
     expect(output).not.toContain("0.92");
+    expect(output).not.toContain("`95%` reliable");
     expect(output).not.toContain("95% confident");
   });
 
