@@ -503,6 +503,12 @@ function validateConfig(config: BotConfig): void {
   config.reviewStatusComment = reviewStatusComment;
   validateBoolean(reviewStatusComment.enabled, "config.reviewStatusComment.enabled");
   const confidenceCalibration = config.confidenceCalibration ?? DEFAULT_CONFIG.confidenceCalibration!;
+  if (!isRecord(confidenceCalibration)) {
+    throw new Error("config.confidenceCalibration must be an object");
+  }
+  if (confidenceCalibration.publicDisplay !== undefined && !isRecord(confidenceCalibration.publicDisplay)) {
+    throw new Error("config.confidenceCalibration.publicDisplay must be an object");
+  }
   validatePublicConfidenceDisplayFloorOverrides(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
   confidenceCalibration.publicDisplay = buildPublicConfidencePolicy(confidenceCalibration.publicDisplay);
   validatePublicConfidenceDisplayConfig(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");

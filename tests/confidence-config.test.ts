@@ -34,6 +34,18 @@ describe("confidence calibration config", () => {
     });
   });
 
+  it("rejects non-object public display config before defaulting", () => {
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: "calibrated" as unknown as Record<string, unknown>
+    })).toThrow(/confidenceCalibration must be an object/);
+
+    expect(() => loadConfigFromObject({
+      confidenceCalibration: {
+        publicDisplay: "calibrated" as unknown as Record<string, unknown>
+      }
+    })).toThrow(/publicDisplay must be an object/);
+  });
+
   it("requires calibration evidence before public confidence display can be enabled", () => {
     expect(() => loadConfigFromObject({
       confidenceCalibration: {

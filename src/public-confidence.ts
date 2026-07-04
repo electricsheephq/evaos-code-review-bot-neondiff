@@ -83,20 +83,40 @@ export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisp
 export function isPublicConfidenceDisplayAllowed(policy?: PublicConfidenceDisplayPolicy): boolean {
   if (!policy || policy.mode !== "calibrated") return false;
   if (!isUsablePublicConfidenceEvidenceUrl(policy.evidenceUrl) || !policy.datasetId?.trim()) return false;
-  if (policy.labeledFindings === undefined || policy.labeledFindings < Math.max(policy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS)) {
+  if (
+    !isPositiveInteger(policy.minLabeledFindings) ||
+    !isPositiveInteger(policy.minP0P1Labels) ||
+    !isPositiveInteger(policy.minNegativeControlScenarios) ||
+    !isProbability(policy.minWilsonLowerBound)
+  ) {
     return false;
   }
-  if (policy.p0p1Labels === undefined || policy.p0p1Labels < Math.max(policy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS)) return false;
+  if (!isNonNegativeInteger(policy.labeledFindings) || policy.labeledFindings < Math.max(policy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS)) {
+    return false;
+  }
+  if (!isNonNegativeInteger(policy.p0p1Labels) || policy.p0p1Labels < Math.max(policy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS)) return false;
   if (
-    policy.negativeControlScenarios === undefined ||
+    !isNonNegativeInteger(policy.negativeControlScenarios) ||
     policy.negativeControlScenarios < Math.max(policy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS)
   ) {
     return false;
   }
-  if (policy.wilsonLowerBound === undefined || policy.wilsonLowerBound < Math.max(policy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND)) {
+  if (!isProbability(policy.wilsonLowerBound) || policy.wilsonLowerBound < Math.max(policy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND)) {
     return false;
   }
   return true;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function isProbability(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
 export function isUsablePublicConfidenceEvidenceUrl(value: string | undefined): boolean {

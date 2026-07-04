@@ -224,6 +224,31 @@ describe("public confidence display policy", () => {
     expect(isPublicConfidenceDisplayAllowed(buildPublicConfidencePolicy(basePolicy))).toBe(true);
   });
 
+  it("rejects non-finite calibrated policy values from direct callers", () => {
+    const basePolicy = buildPublicConfidencePolicy(calibratedPolicyInput());
+
+    for (const override of [
+      { minLabeledFindings: Number.NaN },
+      { minLabeledFindings: 100.5 },
+      { minP0P1Labels: Number.NaN },
+      { minP0P1Labels: Number.POSITIVE_INFINITY },
+      { minNegativeControlScenarios: Number.NaN },
+      { minWilsonLowerBound: Number.NaN },
+      { minWilsonLowerBound: Number.POSITIVE_INFINITY },
+      { labeledFindings: Number.NaN },
+      { labeledFindings: 124.5 },
+      { p0p1Labels: Number.NaN },
+      { negativeControlScenarios: Number.NaN },
+      { wilsonLowerBound: Number.NaN },
+      { wilsonLowerBound: 1.5 }
+    ]) {
+      const policy = { ...basePolicy, ...override };
+
+      expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
+      expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: confidence not calibrated.");
+    }
+  });
+
   it("keeps hard promotion floors even when lower minima are supplied directly", () => {
     const policy = buildPublicConfidencePolicy({
       ...calibratedPolicyInput(),

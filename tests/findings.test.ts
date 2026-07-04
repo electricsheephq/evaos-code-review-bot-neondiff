@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decideReviewEvent, formatReviewComment, normalizeFindingsForReview, parseFindings } from "../src/findings.js";
+import type { PublicConfidenceDisplayPolicy } from "../src/public-confidence.js";
 import type { Finding } from "../src/types.js";
 
 describe("finding normalization and review policy", () => {
@@ -43,6 +44,37 @@ describe("finding normalization and review policy", () => {
     expect(result.comments[0]?.title).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(result.comments[0]?.body).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
     expect(result.comments[0]?.body).not.toContain("0.99 confident");
+  });
+
+  it("preserves confidence text when public confidence display is calibrated and eligible", () => {
+    const publicConfidencePolicy: PublicConfidenceDisplayPolicy = {
+      mode: "calibrated",
+      evidenceUrl: "https://github.com/electricsheephq/evaos-code-review-bot/actions/runs/123",
+      datasetId: "confidence-calibration-v1",
+      minLabeledFindings: 100,
+      labeledFindings: 124,
+      minP0P1Labels: 30,
+      p0p1Labels: 31,
+      minNegativeControlScenarios: 10,
+      negativeControlScenarios: 10,
+      minWilsonLowerBound: 0.95,
+      wilsonLowerBound: 0.95
+    };
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression with 99% confidence",
+        body: "Confidence: 99%. I am 0.99 confident this branch regresses review output.",
+        confidence: 0.99
+      }
+    ], { publicConfidencePolicy });
+
+    expect(result.comments[0]?.title).toBe("Regression with 99% confidence");
+    expect(result.comments[0]?.body).toContain("Confidence: 99%.");
+    expect(result.comments[0]?.body).toContain("I am 0.99 confident this branch regresses review output.");
   });
 
   it("keeps sanitized review comment titles aligned with rendered body titles for batches", () => {

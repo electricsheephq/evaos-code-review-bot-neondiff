@@ -247,7 +247,7 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("[redacted-secret]");
   });
 
-  it("sanitizes confidence-like settings preview metadata unless calibrated display is enabled", () => {
+  it("sanitizes confidence settings preview metadata while preserving ordinary likely wording", () => {
     const settingsPreview: ReviewSettingsPreview = {
       profile: "assertive",
       sections: [
@@ -290,6 +290,8 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("confidence not calibrated");
     expect(walkthrough.body).not.toContain("95% confidence");
     expect(walkthrough.body).not.toContain("confidence-95%");
+    expect(walkthrough.body).toContain("0.91 likely");
+    expect(walkthrough.body).toContain("0.91-likely");
   });
 
   it("omits settings preview cleanly when no settings metadata is provided", () => {
@@ -436,7 +438,7 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).not.toContain("0.91 confident");
   });
 
-  it("sanitizes raw walkthrough comments defensively and keeps inline replacement text whole", () => {
+  it("keeps PR title replacement text whole while preserving raw comment-derived signal", () => {
     const walkthrough = buildWalkthroughComment({
       repo: "electricsheephq/WorldOS",
       pull: {
