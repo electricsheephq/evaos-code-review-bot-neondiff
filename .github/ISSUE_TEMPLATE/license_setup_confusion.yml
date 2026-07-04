@@ -14,7 +14,7 @@ body:
     id: doc
     attributes:
       label: Current doc or page
-      placeholder: README.md, docs/SETUP.md, https://www.neondiff.com/...
+      placeholder: README.md, docs/SETUP.md, docs/license-boundary.md, https://www.neondiff.com/...
     validations:
       required: true
   - type: textarea

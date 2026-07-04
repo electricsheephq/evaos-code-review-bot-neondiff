@@ -1,9 +1,9 @@
 # NeonDiff Setup
 
 This guide is the first-run path for the current source-available beta. After
-`npm run build`, the source checkout exposes the beta `neondiff` binary. Public
-npm/package publishing stays blocked until the license gate in issue #104 and
-the distribution work in issue #107 are both resolved.
+`npm run build`, the source checkout exposes the beta `neondiff` binary. See
+[LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
+for the public/private repo license boundary.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ the distribution work in issue #107 are both resolved.
 - optional NeonDiff license key for private or commercial repo use
 
 Public open-source repos are free. Private and commercial repos require a paid
-license. Final license wording is tracked in issue #104.
+license.
 
 ## 1. Install From Source
 

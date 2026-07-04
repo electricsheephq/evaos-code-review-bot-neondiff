@@ -14,8 +14,8 @@ GA release.
 [Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
 [Contributing](CONTRIBUTING.md) · [Agent Instructions](AGENTS.md) ·
 [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
-[Roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103) ·
-[License Boundary](https://github.com/electricsheephq/evaos-code-review-bot/issues/104)
+[License](LICENSE.md) · [License Boundary](docs/license-boundary.md) ·
+[Roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
 
 ## Why It Matters
 
@@ -160,6 +160,10 @@ Provider registry, `.neondiff.yml`, public CLI packaging, license activation,
 desktop client, wiki exports, marketplace packaging, and confidence calibration
 each have separate issues and must not be treated as shipped until their PRs and
 proof gates close.
+
+Use [LICENSE.md](LICENSE.md) and [docs/license-boundary.md](docs/license-boundary.md)
+as the canonical public-beta license language. Do not copy older issue comments
+or release notes into public product surfaces when these files are more recent.
 
 For live beta operation, use [docs/beta-release-runbook.md](docs/beta-release-runbook.md)
 and [docs/release-governance.md](docs/release-governance.md). Documentation-only
