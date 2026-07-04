@@ -180,20 +180,28 @@ export async function runScheduledCycleWithDeps(input: {
   });
   result.queue.delayedByReason = result.queue.budget.delayedByReason;
 
-  const leased = input.state.leaseNextReviewQueueJobs({
-    maxProviderActive: scheduler.maxProviderActive,
-    maxOrgActive: scheduler.maxOrgActive,
-    maxRepoActive: scheduler.maxRepoActive,
-    manualCommandReserve: scheduler.manualCommandReserve,
-    // Provider capacity is the global API throttle; org/repo caps only decide which jobs can spend that budget.
-    limit: scheduler.maxProviderActive,
-    leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
-    now
-  });
-  result.queue.leased = leased.length;
-
   const budget = new ReviewRunBudget(Math.max(1, scheduler.maxProviderActive));
-  for (const [index, job] of leased.entries()) {
+  const attemptedJobIds = new Set<string>();
+  const attemptedJobs: ReviewQueueJobRecord[] = [];
+  // Lease just before execution to avoid idle active rows. This intentionally
+  // performs a bounded scan per provider slot, not one bulk pre-lease.
+  for (let leaseAttempt = 0; leaseAttempt < scheduler.maxProviderActive; leaseAttempt += 1) {
+    const leased = input.state.leaseNextReviewQueueJobs({
+      maxProviderActive: scheduler.maxProviderActive,
+      maxOrgActive: scheduler.maxOrgActive,
+      maxRepoActive: scheduler.maxRepoActive,
+      manualCommandReserve: scheduler.manualCommandReserve,
+      excludeJobIds: attemptedJobIds,
+      reservedActiveJobs: attemptedJobs,
+      limit: 1,
+      leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
+      now: eventClock()
+    });
+    const job = leased[0];
+    if (!job) break;
+    attemptedJobIds.add(job.jobId);
+    attemptedJobs.push(job);
+    result.queue.leased += 1;
     const status = await runLeasedQueueJob({
       config,
       github: input.github,
@@ -211,11 +219,10 @@ export async function runScheduledCycleWithDeps(input: {
     });
     applyReviewStatus(result, status);
     if (status === "skipped_provider_cooldown") {
-      result.queue.providerDeferred += deferUnstartedLeasedJobsForProviderThrottle({
+      result.queue.providerDeferred += deferQueuedProviderJobsForProviderThrottle({
         config,
         state: input.state,
         triggerJob: job,
-        jobs: leased.slice(index + 1),
         now: eventClock()
       });
       break;
@@ -1178,15 +1185,19 @@ function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobReco
   return existing?.commandAction ? isReviewCommandAction(existing.commandAction) : true;
 }
 
-function deferUnstartedLeasedJobsForProviderThrottle(input: {
+function deferQueuedProviderJobsForProviderThrottle(input: {
   config: BotConfig;
   state: ReviewStateStore;
   triggerJob: ReviewQueueJobRecord;
-  jobs: ReviewQueueJobRecord[];
   now: Date;
 }): number {
   const cooldown = providerThrottleCooldownFromTriggerJob(input);
-  for (const job of input.jobs) {
+  const providerId = input.triggerJob.providerId ?? "default";
+  const backgroundPriority = input.config.reviewScheduler?.backgroundPriority ?? 50;
+  let deferred = 0;
+  for (const job of input.state.listReviewQueueJobs({ state: "queued" })) {
+    if ((job.providerId ?? "default") !== providerId) continue;
+    if (job.source === "manual_command" || job.lane === "manual" || job.priority < backgroundPriority) continue;
     input.state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: "provider_deferred",
@@ -1194,8 +1205,9 @@ function deferUnstartedLeasedJobsForProviderThrottle(input: {
       lastError: `provider_throttle_cycle_deferred_until=${cooldown.cooldownUntil}; reason=${cooldown.reason}; trigger_repo=${input.triggerJob.repo}`,
       now: input.now
     });
+    deferred += 1;
   }
-  return input.jobs.length;
+  return deferred;
 }
 
 function providerThrottleCooldownFromTriggerJob(input: {

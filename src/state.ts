@@ -1535,6 +1535,8 @@ export class ReviewStateStore {
     maxOrgActive: number;
     maxRepoActive: number;
     manualCommandReserve?: number;
+    excludeJobIds?: Iterable<string>;
+    reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "jobId" | "providerId" | "org" | "repo">>;
     limit?: number;
     leaseTtlMs?: number;
     now?: Date;
@@ -1556,6 +1558,8 @@ export class ReviewStateStore {
     const nowIso = (input.now ?? new Date()).toISOString();
     const legacyLeaseCutoffIso = new Date(Date.parse(nowIso) - leaseTtlMs).toISOString();
     const leaseExpiresAt = new Date(Date.parse(nowIso) + leaseTtlMs).toISOString();
+    const excludeJobIds = new Set(input.excludeJobIds ?? []);
+    const reservedActiveJobs = Array.from(input.reservedActiveJobs ?? []);
     const leased: ReviewQueueJobRecord[] = [];
 
     this.db.exec("begin immediate");
@@ -1577,9 +1581,13 @@ export class ReviewStateStore {
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
       const jobs = this.listReviewQueueJobs();
       const eligible = jobs
-        .filter((job) => isQueueJobEligible(job, nowIso))
+        .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
         .sort(compareQueueJobsForLease);
-      const active = jobs.filter((job) => job.state === "leased" || job.state === "running");
+      const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
+      const active = [
+        ...jobs.filter((job) => (job.state === "leased" || job.state === "running") && !reservedJobIds.has(job.jobId)),
+        ...reservedActiveJobs
+      ];
       const providerActive = countBy(active, (job) => job.providerId ?? "default");
       const orgActive = countBy(active, (job) => job.org);
       const repoActive = countBy(active, (job) => job.repo);
