@@ -1,9 +1,11 @@
 # NeonDiff Provider Registry
 
-NeonDiff is local-first: repository data stays on the worker machine and model
-credentials stay in local app config, environment variables, Keychain-backed
-wrappers, or a local model runtime. Do not paste provider API keys into tracked
-config, GitHub comments, release notes, or evidence packets.
+NeonDiff is local-first for checkout state, evidence, credentials, and operator
+control. Repository prompts and diffs can still leave the worker when you choose
+a hosted model provider such as ZCode-backed GLM/Z.ai or a hosted
+OpenAI-compatible gateway. For no-egress review, use a local model runtime. Do
+not paste provider API keys into tracked config, GitHub comments, release notes,
+or evidence packets.
 
 The current live review engine remains ZCode-backed. The provider registry is
 the public setup and operator surface for declaring available providers before
@@ -36,8 +38,8 @@ neondiff providers doctor \
 The example `ollama-local` provider is disabled by default. Enable it in
 `config.local.json` or with a dry-run-verified config patch before running the
 smoke command; otherwise the doctor exits before calling `/models`. Smoke checks
-must include `--provider` so a single command cannot fan out authenticated
-requests to every enabled provider.
+are local-loopback only in this beta and must include `--provider` so a single
+command cannot fan out authenticated requests to every enabled provider.
 
 ## GLM/Z.ai Through ZCode
 

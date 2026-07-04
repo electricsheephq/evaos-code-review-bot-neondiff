@@ -370,6 +370,7 @@ describe("provider registry", () => {
       "https://[::ffff:10.0.0.1]/v1",
       "https://127.0.0.2/v1",
       "https://[::ffff:127.0.0.2]/v1",
+      "https://[fe90::1]/v1",
       "https://0.0.0.0/v1"
     ]) {
       const unsafeResult = await doctorProviderRegistry({
@@ -427,7 +428,7 @@ describe("provider registry", () => {
     });
     expect(fetchCalls).toBe(0);
 
-    const resolvedPrivateResult = await doctorProviderRegistry({
+    const remoteResult = await doctorProviderRegistry({
       registry: {
         ...config.providers!,
         providers: {
@@ -444,12 +445,11 @@ describe("provider registry", () => {
         fetchCalls += 1;
         return new Response(JSON.stringify({ data: [] }));
       },
-      lookupImpl: async () => [{ address: "169.254.169.254" }],
       env: {
         NEONDIFF_PROVIDER_API_KEY: "short-provider-key"
       }
     });
-    expect(resolvedPrivateResult.checks[0]).toMatchObject({
+    expect(remoteResult.checks[0]).toMatchObject({
       ok: false,
       error: "Remote OpenAI-compatible smoke checks are disabled until the transport can pin the validated DNS result."
     });
@@ -966,6 +966,27 @@ describe("provider registry", () => {
             enabled: true,
             adapter: "openai-compatible",
             baseUrl: "https://0.0.0.0/v1",
+            model: "review-model",
+            authMode: "none",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/must not point to private, link-local, or cloud metadata hosts/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "ipv6-link-local",
+        providers: {
+          "ipv6-link-local": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://[fe90::1]/v1",
             model: "review-model",
             authMode: "none",
             capabilities: {

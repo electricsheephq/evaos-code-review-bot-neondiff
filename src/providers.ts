@@ -1,5 +1,4 @@
 import { isIP } from "node:net";
-import { lookup } from "node:dns/promises";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS = 30_000;
@@ -32,8 +31,6 @@ export interface ProviderRegistryConfig {
   defaultProviderId: string;
   providers: Record<string, ProviderRegistryEntry>;
 }
-
-type ProviderDnsLookup = (hostname: string) => Promise<{ address: string }[]>;
 
 export type ProviderErrorCategory =
   | "auth"
@@ -122,7 +119,6 @@ export async function doctorProviderRegistry(input: {
   providerId?: string;
   smoke?: boolean;
   fetchImpl?: typeof fetch;
-  lookupImpl?: ProviderDnsLookup;
   env?: Record<string, string | undefined>;
 }): Promise<ProviderDoctorResult> {
   if (input.smoke && !input.providerId) {
@@ -191,7 +187,7 @@ export async function doctorProviderRegistry(input: {
       continue;
     }
 
-    checks.push(await smokeOpenAICompatibleProvider({ providerId, provider, fetchImpl, lookupImpl: input.lookupImpl ?? lookupProviderHost, env }));
+    checks.push(await smokeOpenAICompatibleProvider({ providerId, provider, fetchImpl, env }));
   }
 
   return {
@@ -208,7 +204,6 @@ async function smokeOpenAICompatibleProvider(input: {
   providerId: string;
   provider: ProviderRegistryEntry;
   fetchImpl: typeof fetch;
-  lookupImpl: ProviderDnsLookup;
   env: Record<string, string | undefined>;
 }): Promise<ProviderDoctorCheck> {
   const safeProviderId = safeProviderIdForOutput(input.providerId);
@@ -229,7 +224,7 @@ async function smokeOpenAICompatibleProvider(input: {
   const authError = providerAuthMetadataError(input.provider);
   if (authError) return { ...baseCheck, ok: false, error: authError };
   if (!input.provider.baseUrl) return { ...baseCheck, ok: false, error: "OpenAI-compatible provider requires baseUrl for smoke checks." };
-  const targetError = await providerSmokeTargetError(input.provider.baseUrl, input.provider, input.lookupImpl);
+  const targetError = providerSmokeTargetError(input.provider.baseUrl, input.provider);
   if (targetError) return { ...baseCheck, ok: false, error: targetError };
   if (input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv && !input.env[input.provider.apiKeyEnv]) {
     return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
@@ -332,11 +327,7 @@ function safeProviderIdForOutput(value: string): string {
   return isProviderId(value) ? value : "[invalid-provider-id]";
 }
 
-async function providerSmokeTargetError(
-  baseUrl: string,
-  provider: ProviderRegistryEntry,
-  lookupImpl: ProviderDnsLookup
-): Promise<string | undefined> {
+function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEntry): string | undefined {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -362,25 +353,7 @@ async function providerSmokeTargetError(
   if (!loopback) {
     return "Remote OpenAI-compatible smoke checks are disabled until the transport can pin the validated DNS result.";
   }
-  if (!isIP(parsed.hostname)) {
-    const resolvedAddresses = await safeLookupProviderHost(parsed.hostname, lookupImpl);
-    if (resolvedAddresses.some((address) => isUnsafeSmokeHost(address))) {
-      return "OpenAI-compatible smoke target resolved to a private, link-local, loopback, or cloud metadata address.";
-    }
-  }
   return undefined;
-}
-
-async function lookupProviderHost(hostname: string): Promise<{ address: string }[]> {
-  return lookup(hostname, { all: true, verbatim: true });
-}
-
-async function safeLookupProviderHost(hostname: string, lookupImpl: ProviderDnsLookup): Promise<string[]> {
-  try {
-    return (await lookupImpl(hostname)).map((entry) => entry.address);
-  } catch {
-    return [];
-  }
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -424,10 +397,11 @@ function isPrivateOrLinkLocalIpv4(value: string): boolean {
 function isPrivateOrLinkLocalIpv6(value: string): boolean {
   const mappedIpv4 = ipv4MappedIpv6Address(value);
   if (mappedIpv4) return isPrivateOrLinkLocalIpv4(mappedIpv4);
+  const firstHextet = Number.parseInt(value.split(":")[0] ?? "", 16);
   return value === "::" ||
     value.startsWith("fc") ||
     value.startsWith("fd") ||
-    value.startsWith("fe80:");
+    (Number.isInteger(firstHextet) && firstHextet >= 0xfe80 && firstHextet <= 0xfebf);
 }
 
 function ipv4MappedIpv6Address(value: string): string | undefined {

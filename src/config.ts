@@ -821,10 +821,11 @@ function isPrivateOrLinkLocalIpv4(value: string): boolean {
 function isPrivateOrLinkLocalIpv6(value: string): boolean {
   const mappedIpv4 = ipv4MappedIpv6Address(value);
   if (mappedIpv4) return isPrivateOrLinkLocalIpv4(mappedIpv4);
+  const firstHextet = Number.parseInt(value.split(":")[0] ?? "", 16);
   return value === "::" ||
     value.startsWith("fc") ||
     value.startsWith("fd") ||
-    value.startsWith("fe80:");
+    (Number.isInteger(firstHextet) && firstHextet >= 0xfe80 && firstHextet <= 0xfebf);
 }
 
 function ipv4MappedIpv6Address(value: string): string | undefined {
