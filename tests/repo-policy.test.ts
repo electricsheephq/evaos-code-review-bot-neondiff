@@ -411,7 +411,7 @@ describe("repo profile registry", () => {
     expect(buildReviewSettingsPreview(config, profile)).toEqual({
       profile: "assertive",
       sections: [
-        { key: "highLevelSummary", label: "High-level summary", enabled: true, mode: "inline_review" },
+        { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" },
         { key: "walkthrough", label: "Walkthrough", enabled: true, mode: "issue_comment" },
         { key: "changedFiles", label: "Changed-files table", enabled: true, mode: "walkthrough" },
         { key: "effortEstimate", label: "Effort estimate", enabled: true, mode: "walkthrough" },
@@ -432,7 +432,7 @@ describe("repo profile registry", () => {
     });
   });
 
-  it("marks high-level summary disabled when inline walkthrough replaces the review body", () => {
+  it("keeps review summary enabled when inline walkthrough carries the review body", () => {
     const config = loadConfig(
       writeConfig({
         walkthrough: {
@@ -453,9 +453,9 @@ describe("repo profile registry", () => {
     const preview = buildReviewSettingsPreview(config, profile);
 
     expect(preview.sections).toContainEqual({
-      key: "highLevelSummary",
-      label: "High-level summary",
-      enabled: false,
+      key: "reviewSummary",
+      label: "Review summary",
+      enabled: true,
       mode: "inline_review"
     });
     expect(preview.sections).toContainEqual({

@@ -151,7 +151,7 @@ describe("walkthrough comment rendering", () => {
     const settingsPreview: ReviewSettingsPreview = {
       profile: "assertive",
       sections: [
-        { key: "highLevelSummary", label: "High-level summary", enabled: true, mode: "inline_review" },
+        { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" },
         { key: "walkthrough", label: "Walkthrough", enabled: true, mode: "issue_comment" },
         { key: "changedFiles", label: "Changed-files table", enabled: true, mode: "walkthrough" },
         { key: "effortEstimate", label: "Effort estimate", enabled: true, mode: "walkthrough" },
@@ -190,7 +190,7 @@ describe("walkthrough comment rendering", () => {
 
     expect(walkthrough.body).toContain("### Review Settings Preview");
     expect(walkthrough.body).toContain("- Profile: assertive");
-    expect(walkthrough.body).toContain("- Enabled sections: High-level summary (inline_review); Walkthrough (issue_comment); Changed-files table (walkthrough); Effort estimate (walkthrough); Review status comment (sticky_status)");
+    expect(walkthrough.body).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (issue_comment); Changed-files table (walkthrough); Effort estimate (walkthrough); Review status comment (sticky_status)");
     expect(walkthrough.body).toContain("- Path instructions: `src/**` - Prioritize runtime correctness and duplicate-posting regressions.");
     expect(walkthrough.body).toContain("- Label suggestions: review-settings");
     expect(walkthrough.body).toContain("- Reviewer suggestions: maintainer-one");
@@ -199,6 +199,52 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).not.toContain("auto-apply enabled");
     expect(walkthrough.body).not.toContain("auto-request reviewers enabled");
     expect(walkthrough.body).not.toContain("labels were auto-applied");
+  });
+
+  it("redacts secrets and escapes markdown backticks in settings preview metadata", () => {
+    const secretLikeToken = "ghp_123456789012345678901234567890123456";
+    const settingsPreview: ReviewSettingsPreview = {
+      profile: "assertive",
+      sections: [
+        { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" }
+      ],
+      pathInstructions: [
+        {
+          pattern: "src/`templates`/**",
+          instructions: [`Never quote ${secretLikeToken} in review output.`]
+        }
+      ],
+      suggestions: {
+        labels: [`token-${secretLikeToken}`],
+        reviewers: ["maintainer-one"],
+        autoApply: false
+      },
+      roadmapOnly: []
+    };
+
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT",
+      settingsPreview
+    });
+
+    expect(walkthrough.body).toContain("- Path instructions: `src/\\`templates\\`/**`");
+    expect(walkthrough.body).not.toContain(secretLikeToken);
+    expect(walkthrough.body).toContain("[redacted-secret]");
   });
 
   it("omits settings preview cleanly when no settings metadata is provided", () => {

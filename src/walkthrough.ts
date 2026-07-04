@@ -141,7 +141,7 @@ function formatSettingsPreviewSection(settings: ReviewSettingsPreview | undefine
 function formatSettingsPathInstructions(settings: ReviewSettingsPreview): string[] {
   if (settings.pathInstructions.length === 0) return ["- Path instructions: none"];
   return settings.pathInstructions.map((entry) =>
-    `- Path instructions: \`${formatInlinePublicText(entry.pattern)}\` - ${entry.instructions.map(formatInlinePublicText).join("; ")}`
+    `- Path instructions: \`${formatInlineCodePublicText(entry.pattern)}\` - ${entry.instructions.map(formatInlinePublicText).join("; ")}`
   );
 }
 
@@ -181,6 +181,10 @@ function formatInlinePublicText(value: string | undefined): string {
     .trim()
     .replace(/^#{1,6}\s+/, "")
     .slice(0, 200);
+}
+
+function formatInlineCodePublicText(value: string | undefined): string {
+  return formatInlinePublicText(value).replace(/`/g, "\\`");
 }
 
 function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {
