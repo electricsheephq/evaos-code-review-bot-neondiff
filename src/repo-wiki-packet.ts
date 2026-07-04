@@ -317,6 +317,7 @@ function finalizePacket(
     includedFiles
   };
   let packetSha = sha256(canonicalStringify(withoutSha));
+  assertPacketSha(packetSha);
 
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const packet: RepoWikiPacket = { ...withoutSha, packetSha };
@@ -328,6 +329,7 @@ function finalizePacket(
       tokenBudget: { ...withoutSha.tokenBudget, usedTokens }
     };
     const nextSha = sha256(canonicalStringify(nextWithoutSha));
+    assertPacketSha(nextSha);
     if (usedBytes === withoutSha.byteBudget.usedBytes && usedTokens === withoutSha.tokenBudget.usedTokens) {
       return assertFinalPacketSize({ ...nextWithoutSha, packetSha: nextSha });
     }
@@ -466,6 +468,12 @@ function countNeedles(input: string, needle: string): number {
 
 function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
+}
+
+function assertPacketSha(packetSha: string): void {
+  if (!/^[a-f0-9]{64}$/.test(packetSha)) {
+    throw new Error("repo wiki packet SHA must be a fixed 64-character hex digest");
+  }
 }
 
 function canonicalStringify(input: unknown): string {

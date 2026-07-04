@@ -161,6 +161,32 @@ describe("repo wiki packets", () => {
     ).toThrow(/fixed packet header exceeds budget/);
   });
 
+  it("rejects invalid repo names, budgets, timestamps, and byte caps", () => {
+    const validInput = {
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "main", status: "fresh" as const },
+      generatedAt,
+      budget: { maxBytes: 12_000, maxTokens: 3_000, maxSectionBytes: 2_000 },
+      sections: [section({ id: "valid", title: "Valid", body: "Valid packet content." })]
+    };
+
+    expect(() => buildRepoWikiPacket({ ...validInput, repo: { fullName: "owner/repo/extra" } })).toThrow(/repo.fullName/);
+    expect(() => buildRepoWikiPacket({ ...validInput, repo: { fullName: "/repo" } })).toThrow(/repo.fullName/);
+    expect(() => buildRepoWikiPacket({ ...validInput, repo: { fullName: "owner/re_po!" } })).toThrow(/repo.fullName/);
+    expect(() => buildRepoWikiPacket({ ...validInput, budget: { maxBytes: 0 } })).toThrow(/budget.maxBytes/);
+    expect(() => buildRepoWikiPacket({ ...validInput, budget: { maxBytes: 12_000, maxTokens: -1 } })).toThrow(/budget.maxTokens/);
+    expect(() => buildRepoWikiPacket({ ...validInput, budget: { maxBytes: 12_000, maxSectionBytes: 1.5 } })).toThrow(/budget.maxSectionBytes/);
+    expect(() => buildRepoWikiPacket({ ...validInput, generatedAt: "2026-07-04T08:00:00Z" })).toThrow(/generatedAt/);
+    expect(() =>
+      buildRepoWikiPacket({
+        ...validInput,
+        source: { ref: "main", status: "fresh", checkedAt: "2026-07-04T08:00:00Z" }
+      })
+    ).toThrow(/source.checkedAt/);
+    expect(() => truncateUtf8Bytes("abc", -1)).toThrow(/maxBytes/);
+    expect(() => truncateUtf8Bytes("abc", 1.5)).toThrow(/maxBytes/);
+  });
+
   it("measures final packet size after budget fields stabilize", () => {
     const packet = buildRepoWikiPacket({
       repo: { fullName: "electricsheephq/evaos-code-review-bot" },
@@ -277,6 +303,7 @@ describe("repo wiki packets", () => {
 
     expect(first.packetSha).toBe(second.packetSha);
     expect(packetSha).toBe(first.packetSha);
+    expect(packetSha).toMatch(/^[a-f0-9]{64}$/);
     expect(sha256(canonicalStringifyForTest(parsed))).toBe(first.packetSha);
     expect(Object.keys(JSON.parse(formatRepoWikiPacketJson(first)))).toEqual([...Object.keys(JSON.parse(formatRepoWikiPacketJson(first)))].sort(codeUnitCompare));
     expect(Object.keys((JSON.parse(formatRepoWikiPacketJson(first)) as { byteBudget: Record<string, unknown> }).byteBudget)).toEqual(["maxBytes", "usedBytes"]);
