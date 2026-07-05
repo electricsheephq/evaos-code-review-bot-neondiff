@@ -280,6 +280,9 @@ describe("issue enrichment scorecard", () => {
     for (const fixtureCase of fixture.cases) {
       fixtureCase.dimensions.throttling = {
         unmeasurable: true,
+        evidenceLinks: [
+          `https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-${fixtureCase.id}-throttling`
+        ],
         unmeasurableReason: "Throttle budget data intentionally unavailable for denominator regression."
       };
     }
@@ -299,7 +302,8 @@ describe("issue enrichment scorecard", () => {
     const throttlingScore = result.dimensionScores.find((dimension) => dimension.id === "throttling");
     expect(throttlingScore).toMatchObject({
       measuredCases: 0,
-      unmeasurableCases: fixture.cases.map((fixtureCase) => fixtureCase.id)
+      unmeasurableCases: fixture.cases.map((fixtureCase) => fixtureCase.id),
+      evidenceLinks: []
     });
     expect(result.rawScore).toBe(expectedRawScore);
     expect(result.weightedScore).toBe(expectedWeightedScore);
@@ -371,6 +375,15 @@ describe("issue enrichment scorecard", () => {
         fixture.cases[0].dimensions = undefined as unknown as IssueEnrichmentFixturePacket["cases"][number]["dimensions"];
       },
       error: "case duplicate-same-head-comments missing dimensions"
+    },
+    {
+      name: "missing measured score",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].dimensions.proof_boundary = {
+          notes: "Measured score omitted by fixture author."
+        };
+      },
+      error: "case duplicate-same-head-comments dimension proof_boundary score is required"
     },
     {
       name: "missing metric threshold",

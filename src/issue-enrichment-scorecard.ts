@@ -264,6 +264,10 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
         }
         continue;
       }
+      if (score.score === undefined) {
+        errors.push(`case ${fixtureCase.id} dimension ${dimension.id} score is required`);
+        continue;
+      }
       const scoreIsInRange = Number.isFinite(score.score) && score.score! >= 0 && score.score! <= 5;
       if (!scoreIsInRange) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} score must be between 0 and 5`);
@@ -317,11 +321,11 @@ function scoreDimension(
   for (const fixtureCase of packet.cases) {
     const score = fixtureCase.dimensions?.[dimension.id];
     if (!score) continue;
-    for (const link of score.evidenceLinks ?? []) evidenceLinks.add(link);
     if (score.unmeasurable) {
       unmeasurableCases.push(fixtureCase.id);
       continue;
     }
+    for (const link of score.evidenceLinks ?? []) evidenceLinks.add(link);
     const numericScore = normalizeScore(score.score);
     measuredScores.push(numericScore);
     if (numericScore < threshold) pilotThresholdMisses.push(fixtureCase.id);
