@@ -522,7 +522,7 @@ function validateConfig(config: BotConfig): void {
   validateReviewSchedulerConfig(reviewScheduler, "config.reviewScheduler");
   const riskWeightedQueue = config.riskWeightedQueue ?? DEFAULT_CONFIG.riskWeightedQueue!;
   config.riskWeightedQueue = riskWeightedQueue;
-  validateRiskWeightedQueueConfig(riskWeightedQueue, "config.riskWeightedQueue");
+  validateRiskWeightedQueueConfig(riskWeightedQueue, "config.riskWeightedQueue", reviewScheduler.backgroundPriority);
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
@@ -686,11 +686,18 @@ function validateReviewGateConfig(value: unknown, label: string): void {
   }
 }
 
-function validateRiskWeightedQueueConfig(value: unknown, label: string): void {
+function validateRiskWeightedQueueConfig(value: unknown, label: string, backgroundPriority: number): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validateBoolean(value.enabled, `${label}.enabled`);
   if (value.elevatedPriority !== undefined) validateNonNegativeInteger(value.elevatedPriority, `${label}.elevatedPriority`);
   if (value.docsOnlyPriority !== undefined) validateNonNegativeInteger(value.docsOnlyPriority, `${label}.docsOnlyPriority`);
+  if (value.enabled) {
+    const elevatedPriority = value.elevatedPriority ?? Math.min(backgroundPriority, 10);
+    const docsOnlyPriority = value.docsOnlyPriority ?? backgroundPriority;
+    if (elevatedPriority > docsOnlyPriority) {
+      throw new Error(`${label}.elevatedPriority must be <= ${label}.docsOnlyPriority because lower priority values lease sooner`);
+    }
+  }
 }
 
 function validateRepoMemoryConfig(value: unknown, label: string): void {

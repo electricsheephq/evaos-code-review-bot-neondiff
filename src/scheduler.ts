@@ -438,10 +438,6 @@ async function enqueuePullIfEligible(input: {
     return "skipped_capacity";
   }
 
-  // Risk-weighted enqueue priority (#301): only when explicitly enabled do we fetch the changed
-  // surface to derive a risk tier. Disabled (default) ⇒ no extra GitHub call, flat priority.
-  input.automaticPriorityOverride = await resolveRiskWeightedPriorityOverride(input);
-
   const activeRepoCooldown = input.state.getActiveRepoProviderCooldown(input.repo, input.now);
   if (activeRepoCooldown) {
     const queued = enqueueReviewJob(input);
@@ -475,6 +471,10 @@ async function enqueuePullIfEligible(input: {
     }
     return "provider_deferred";
   }
+
+  // Risk-weighted enqueue priority (#301): only when explicitly enabled do we fetch the changed
+  // surface to derive a risk tier. Disabled (default) ⇒ no extra GitHub call, flat priority.
+  input.automaticPriorityOverride = await resolveRiskWeightedPriorityOverride(input);
 
   const enqueued = enqueueReviewJob(input);
   recordReadinessForEnqueue({

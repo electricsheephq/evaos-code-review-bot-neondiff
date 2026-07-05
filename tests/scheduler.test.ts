@@ -3041,6 +3041,57 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("does not fetch changed files for risk weighting while a repo provider cooldown is active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-risk-cooldown-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.riskWeightedQueue = {
+      enabled: true,
+      elevatedPriority: 5,
+      docsOnlyPriority: 80
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.recordRepoProviderCooldown({
+      repo: "org/repo-a",
+      cooldownUntil: new Date("2026-07-01T00:05:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+    let fileFetches = 0;
+    const github: SchedulerGitHubApi = {
+      ...githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      listPullFiles: async () => {
+        fileFetches += 1;
+        return [{ filename: "src/auth/session.ts" }];
+      }
+    };
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("provider-deferred head must not run review work");
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(fileFetches).toBe(0);
+    expect(result.skippedProviderCooldown).toBe(1);
+    expect(result.queue.providerDeferred).toBe(1);
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({
+        pullNumber: 1,
+        state: "provider_deferred",
+        priority: 50,
+        nextEligibleAt: "2026-07-01T00:05:00.000Z"
+      })
+    ]);
+    state.close();
+  });
+
   it("uses repo-profile queue overflow policy to mark burst heads explicitly provider-deferred", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-profile-capacity-"));
     roots.push(root);

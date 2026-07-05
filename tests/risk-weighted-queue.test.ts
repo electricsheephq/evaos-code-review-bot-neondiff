@@ -105,4 +105,28 @@ describe("risk-weighted queue config (#301)", () => {
       /riskWeightedQueue\.docsOnlyPriority must be a non-negative integer/
     );
   });
+
+  it("fails closed when explicit priorities would lease docs-only before elevated work", () => {
+    expect(() =>
+      loadConfigFromObject({
+        riskWeightedQueue: { enabled: true, elevatedPriority: 80, docsOnlyPriority: 20 }
+      })
+    ).toThrow(/riskWeightedQueue\.elevatedPriority must be <= .*docsOnlyPriority/);
+  });
+
+  it("validates explicit priorities against default priority fallbacks", () => {
+    expect(() =>
+      loadConfigFromObject({
+        reviewScheduler: { backgroundPriority: 50 },
+        riskWeightedQueue: { enabled: true, elevatedPriority: 80 }
+      })
+    ).toThrow(/riskWeightedQueue\.elevatedPriority must be <= .*docsOnlyPriority/);
+
+    expect(() =>
+      loadConfigFromObject({
+        reviewScheduler: { backgroundPriority: 50 },
+        riskWeightedQueue: { enabled: true, docsOnlyPriority: 5 }
+      })
+    ).toThrow(/riskWeightedQueue\.elevatedPriority must be <= .*docsOnlyPriority/);
+  });
 });
