@@ -135,6 +135,45 @@ describe("outcome ledger", () => {
     ]));
   });
 
+  it("overrides a caller-supplied passing secret redaction gate when secrets are present", () => {
+    const token = ["ghp", "abcdef1234567890abcdef1234567890abcd"].join("_");
+    const ledger = buildOutcomeLedger({
+      runId: "secret-gate-override",
+      subject: {
+        type: "issue",
+        repo: "owner/repo",
+        number: 123
+      },
+      evidence: [
+        {
+          kind: "log",
+          title: "Provider output",
+          summary: `raw output included ${token}`
+        }
+      ],
+      safetyGates: [
+        { name: "secret_redaction", status: "pass", detail: "caller claimed clean" }
+      ],
+      reviewerDecision: {
+        status: "warn"
+      },
+      postMergeOutcome: {
+        status: "unknown"
+      }
+    });
+
+    expect(ledger.ok).toBe(false);
+    expect(JSON.stringify(ledger)).not.toContain(token);
+    expect(ledger.safetyGates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "secret_redaction",
+        status: "fail",
+        detail: "Secret-like text detected; see redaction report."
+      })
+    ]));
+  });
+
+
   it("writes a JSON, Markdown, redaction, and manifest evidence packet", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-outcome-ledger-"));
     roots.push(root);
@@ -218,7 +257,11 @@ describe("outcome ledger", () => {
         headSha: "2222222222222222222222222222222222222222"
       },
       intent: {
-        sourceIssue: "owner/repo#41"
+        sourceIssue: "owner/repo#41",
+        acceptanceCriteria: [
+          "[ ] Verify runtime smoke",
+          "Must include focused test evidence"
+        ]
       },
       changedArtifacts: [
         {
@@ -238,14 +281,14 @@ describe("outcome ledger", () => {
         status: "block"
       },
       safetyGates: expect.arrayContaining([
-        expect.objectContaining({ name: "duplicate_same_head", status: "pass" }),
+        expect.objectContaining({ name: "duplicate_same_head", status: "unknown" }),
         expect.objectContaining({ name: "current_head", status: "unknown" }),
         expect.objectContaining({ name: "inline_coordinate_validation", status: "unknown" })
       ]),
       hardGateStatus: {
         ok: false,
         failed: [],
-        unknown: ["current_head", "inline_coordinate_validation"]
+        unknown: ["current_head", "duplicate_same_head", "inline_coordinate_validation"]
       }
     });
   });
@@ -474,7 +517,7 @@ function samplePull(): PullRequestSummary {
     number: 42,
     title: "Fixes owner/repo#41 runtime handoff",
     draft: false,
-    body: "- [ ] Verify runtime smoke",
+    body: "- [ ] Verify runtime smoke\n- Must include focused test evidence",
     head: {
       sha: "2222222222222222222222222222222222222222",
       ref: "feature/runtime"

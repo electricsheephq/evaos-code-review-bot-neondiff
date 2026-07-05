@@ -181,7 +181,7 @@ export interface OutcomeLedgerPacketResult {
 const REPO_SLUG_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const DEFAULT_PROOF_BOUNDARY =
-  "Outcome Ledger dry-run proves evidence-packet construction only. It does not post comments, change live runtime behavior, prove review accuracy, or claim production readiness.";
+  "Outcome Ledger dry-run proves evidence-packet construction only. It does not post comments, change live runtime behavior, prove review accuracy, or claim production readiness. The sha256 digest covers the redacted ledger content, not raw pre-redaction input.";
 
 export function readOutcomeLedgerInput(path: string): OutcomeLedgerInput {
   return parseOutcomeLedgerInput(JSON.parse(readFileSync(path, "utf8")));
@@ -277,6 +277,7 @@ export function buildOutcomeLedgerInputFromReviewPlan(input: {
   runtime?: OutcomeLedgerRuntimeInput;
   safetyGateEvidence?: {
     currentHead?: OutcomeLedgerSafetyGateInput;
+    duplicateSameHead?: OutcomeLedgerSafetyGateInput;
     inlineCoordinateValidation?: OutcomeLedgerSafetyGateInput;
   };
 }): OutcomeLedgerInput {
@@ -290,6 +291,13 @@ export function buildOutcomeLedgerInputFromReviewPlan(input: {
     name: "inline_coordinate_validation",
     status: "unknown" as const,
     detail: `${input.plan.comments.length} accepted inline comment(s) are present, but this generic builder did not re-run deterministic location validation.`
+  };
+  const duplicateSameHeadGate = input.safetyGateEvidence?.duplicateSameHead ?? {
+    name: "duplicate_same_head",
+    status: "unknown" as const,
+    detail: input.dryRun
+      ? "Dry-run ledger does not post public comments, but this generic builder did not check existing processed-head state."
+      : "Live duplicate state is outside this dry-run ledger."
   };
   return {
     ledgerName: "review-plan-outcome-ledger",
@@ -331,11 +339,7 @@ export function buildOutcomeLedgerInputFromReviewPlan(input: {
     proofGaps: buildProofGaps(input.plan),
     safetyGates: [
       currentHeadGate,
-      {
-        name: "duplicate_same_head",
-        status: input.dryRun ? "pass" : "unknown",
-        detail: input.dryRun ? "Dry-run ledger does not post public comments." : "Live duplicate state is outside this dry-run ledger."
-      },
+      duplicateSameHeadGate,
       inlineCoordinateGate
     ],
     reviewerDecision: {
@@ -884,7 +888,11 @@ function extractFirstRelatedIssue(text: string): string | undefined {
 function inferAcceptanceCriteria(body: string): string[] {
   const lines = body.split(/\r?\n/).map((line) => line.trim());
   const criteria = lines
-    .filter((line) => /^[-*]\s+\[[ xX]\]/.test(line) || /^[-*]\s+(acceptance|prove|verify|test)/i.test(line))
+    .filter((line) => (
+      /^[-*]\s+\[[ xX]\]/.test(line) ||
+      /^[-*]\s+(acceptance|prove|verify|test)/i.test(line) ||
+      /^[-*]\s+(must|should|needs?|requires?)\b.*\b(test|smoke|proof|evidence|verify|validation)\b/i.test(line)
+    ))
     .map((line) => line.replace(/^[-*]\s+/, "").trim());
   return criteria.slice(0, 8);
 }

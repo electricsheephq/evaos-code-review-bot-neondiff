@@ -2664,6 +2664,7 @@ function buildHelp(command?: string) {
     outcomeLedger: {
       notes: [
         "The outcome-ledger command is dry-run only.",
+        "--dry-run defaults to true for outcome-ledger; --dry-run false is rejected until live posting is explicitly implemented.",
         "Failed safety gates or secret redaction failures exit non-zero; unknown gates remain visible in the packet but do not fail the dry run."
       ]
     }

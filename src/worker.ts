@@ -43,7 +43,8 @@ import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
   renderOutcomeLedgerMarkdown,
-  type OutcomeLedgerRuntimeInput
+  type OutcomeLedgerRuntimeInput,
+  type OutcomeLedgerSafetyGateInput
 } from "./outcome-ledger.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
@@ -1547,7 +1548,18 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         pull,
         files: reviewFiles,
         plan,
-        runtime: zcodeResult.runtime
+        runtime: zcodeResult.runtime,
+        duplicateSameHead: processed
+          ? {
+              name: "duplicate_same_head",
+              status: "unknown",
+              detail: `A processed row already existed with status ${processed.status}; dry-run review proceeded under the current processed-head policy and posts no public comments.`
+            }
+          : {
+              name: "duplicate_same_head",
+              status: "pass",
+              detail: "ReviewPull processed-head preflight found no existing processed row for this head; dry-run posts no public comments."
+            }
       });
     }
     writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
@@ -2172,6 +2184,7 @@ export function writeDryRunOutcomeLedgerEvidence(input: {
   provider?: string;
   model?: string;
   runtime?: OutcomeLedgerRuntimeInput;
+  duplicateSameHead?: OutcomeLedgerSafetyGateInput;
 }): { ok: true } | { ok: false; error: string } {
   try {
     const outcomeLedger = buildOutcomeLedger(buildOutcomeLedgerInputFromReviewPlan({
@@ -2185,6 +2198,11 @@ export function writeDryRunOutcomeLedgerEvidence(input: {
           name: "current_head",
           status: "pass",
           detail: "Worker reached dry-run review-plan construction after stale-head preflight."
+        },
+        duplicateSameHead: input.duplicateSameHead ?? {
+          name: "duplicate_same_head",
+          status: "pass",
+          detail: "Caller did not provide processed-head state; dry-run helper writes no public comments."
         },
         inlineCoordinateValidation: {
           name: "inline_coordinate_validation",
