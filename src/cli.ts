@@ -2699,6 +2699,7 @@ function isHelpRequested(args: ParsedArgs): boolean {
 
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = { _: [] };
+  const repeatableArgs = repeatableArgsForCommand(argv);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (!arg.startsWith("--")) {
@@ -2708,16 +2709,19 @@ function parseArgs(argv: string[]): ParsedArgs {
     const key = arg.slice(2);
     const next = argv[index + 1];
     if (next && !next.startsWith("--")) {
-      setParsedArg(parsed, key, next);
+      setParsedArg(parsed, key, next, repeatableArgs);
       index += 1;
     } else {
-      setParsedArg(parsed, key, "true");
+      setParsedArg(parsed, key, "true", repeatableArgs);
     }
   }
   return parsed;
 }
 
-const REPEATABLE_ARGS = new Set(["issue"]);
+function repeatableArgsForCommand(argv: string[]): Set<string> {
+  const command = argv.find((arg) => !arg.startsWith("--"));
+  return command === "issue-enrichment-run" ? new Set(["issue"]) : new Set();
+}
 
 function licenseConfigFromArgs(base: LicenseConfig, args: ParsedArgs): LicenseConfig {
   const config = {
@@ -2749,10 +2753,10 @@ function parseLicenseStorageBackend(value: string): "keychain" | "file" {
   throw new Error("--license-storage must be keychain or file");
 }
 
-function setParsedArg(parsed: ParsedArgs, key: string, value: string): void {
+function setParsedArg(parsed: ParsedArgs, key: string, value: string, repeatableArgs: Set<string>): void {
   const existing = parsed[key];
   if (existing !== undefined) {
-    if (!REPEATABLE_ARGS.has(key)) throw new Error(`--${key} must be provided once`);
+    if (!repeatableArgs.has(key)) throw new Error(`--${key} must be provided once`);
     parsed[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
     return;
   }
