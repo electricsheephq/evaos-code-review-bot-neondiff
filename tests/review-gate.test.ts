@@ -298,4 +298,34 @@ describe("deterministic review gate", () => {
     );
     expect(gate.summary.dropReasonCounts).toMatchObject({ repo_memory_false_positive_match: 1 });
   });
+
+  it("redacts a secret-like repo-memory-suppressed finding at the gate boundary itself (#283)", () => {
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const suppressed: Finding = {
+      severity: "P3",
+      category: "proof_gap",
+      path: "src/save.ts",
+      line: 2,
+      title: "Marker with 99% confidence",
+      body: `Confidence: 99%. The raw token ${token} was previously a false positive.`,
+      confidence: 0.9
+    };
+    const matchingFingerprint = buildFindingFingerprint(suppressed);
+
+    // No caller-side sanitization: the gate is called directly and must return public-safe drops.
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [suppressed],
+      repoMemoryFalsePositiveFingerprints: [matchingFingerprint]
+    });
+
+    const droppedEntry = gate.dropped.find((entry) => entry.reason === "repo_memory_false_positive_match");
+    expect(droppedEntry).toBeDefined();
+    expect(droppedEntry).toMatchObject({ fingerprint: matchingFingerprint });
+    // Secret text is redacted and confidence numbers are stripped by default (uncalibrated policy).
+    expect(JSON.stringify(gate.dropped)).not.toContain(token);
+    expect(droppedEntry?.title).toBe("Marker with [confidence not calibrated]");
+    expect(droppedEntry?.body).toContain("Confidence: [confidence not calibrated].");
+    expect(JSON.stringify(gate.dropped)).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
+  });
 });
