@@ -351,6 +351,26 @@ describe("public confidence display policy", () => {
     }
   });
 
+  it("rejects zero and negative promotion minima from direct callers even when actual metrics pass", () => {
+    const basePolicy = buildPublicConfidencePolicy(calibratedPolicyInput());
+
+    for (const override of [
+      { minLabeledFindings: -5 },
+      { minLabeledFindings: 0 },
+      { minP0P1Labels: -5 },
+      { minP0P1Labels: 0 },
+      { minNegativeControlScenarios: -5 },
+      { minNegativeControlScenarios: 0 },
+      { minWilsonLowerBound: -0.5 }
+    ]) {
+      const policy = { ...basePolicy, ...override };
+
+      expect(evaluatePublicConfidencePolicy(policy).allowed).toBe(false);
+      expect(isPublicConfidenceDisplayAllowed(policy)).toBe(false);
+      expect(sanitizePublicConfidenceText("Confidence: 95%.", policy)).toBe("Confidence: [confidence not calibrated].");
+    }
+  });
+
   it("keeps hard promotion floors even when lower minima are supplied directly", () => {
     const policy = buildPublicConfidencePolicy({
       ...calibratedPolicyInput(),
