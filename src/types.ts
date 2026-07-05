@@ -107,6 +107,13 @@ export interface ReviewPlan {
   enrichmentComment?: EnrichmentCommentPostResult;
 }
 
+export interface ReviewProviderMetadata {
+  providerId: string;
+  adapter: string;
+  model: string;
+  displayName?: string;
+}
+
 export interface DeterministicReviewGateSummary {
   inputFindings: number;
   acceptedComments: number;
