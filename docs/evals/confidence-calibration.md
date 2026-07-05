@@ -16,6 +16,9 @@ Public confidence display is allowed only when all of these are true:
 - The evaluated dataset has at least 10 negative-control scenarios.
 - The measured Wilson lower bound is at least 0.95.
 
+These numbers are hard floors. Operators may configure stricter minimums, and
+the report reflects those stricter values in `metrics.*.required`.
+
 If any field is missing, malformed, or below threshold, the public mode is
 `uncalibrated`. Public comment text must continue replacing confidence values
 with `[confidence not calibrated]`.

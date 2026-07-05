@@ -380,7 +380,7 @@ describe("public confidence display policy", () => {
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.missingThresholds).toEqual(["min_labeled_findings_malformed"]);
     expect(evaluation.metrics).toMatchObject({
-      labeledFindings: { actual: 124, required: 100, passed: false },
+      labeledFindings: { actual: 124, required: 100, passed: false, blockedReason: "malformed_minimum" },
       p0p1Labels: { actual: 31, required: 30, passed: true },
       negativeControlScenarios: { actual: 10, required: 10, passed: true },
       wilsonLowerBound: { actual: 0.95, required: 0.95, passed: true }
@@ -487,16 +487,32 @@ describe("public confidence display policy", () => {
     expect(evaluation.publicMode).toBe("uncalibrated");
     expect(evaluation.proofBoundary).toBe("Public comments must not display confidence percentages until all calibration thresholds pass.");
     expect(evaluation.missingThresholds).toEqual([
-      "labeled_findings_below_100",
-      "p0_p1_labels_below_30",
-      "negative_controls_below_10",
-      "wilson_lower_bound_below_0.95"
+      "labeled_findings_below_required",
+      "p0_p1_labels_below_required",
+      "negative_controls_below_required",
+      "wilson_lower_bound_below_required"
     ]);
     expect(evaluation.metrics).toMatchObject({
       labeledFindings: { actual: 99, required: 100, passed: false },
       p0p1Labels: { actual: 29, required: 30, passed: false },
       negativeControlScenarios: { actual: 9, required: 10, passed: false },
       wilsonLowerBound: { actual: 0.949, required: 0.95, passed: false }
+    });
+  });
+
+  it("reports raised caller minima as below the configured required threshold", () => {
+    const report = buildPublicConfidenceCalibrationReport(buildPublicConfidencePolicy({
+      ...calibratedPolicyInput(),
+      minLabeledFindings: 150
+    }));
+
+    expect(report.allowed).toBe(false);
+    expect(report.missingThresholds).toEqual(["labeled_findings_below_required"]);
+    expect(report.metrics).toMatchObject({
+      labeledFindings: { actual: 124, required: 150, passed: false },
+      p0p1Labels: { actual: 31, required: 30, passed: true },
+      negativeControlScenarios: { actual: 10, required: 10, passed: true },
+      wilsonLowerBound: { actual: 0.95, required: 0.95, passed: true }
     });
   });
 
@@ -570,10 +586,10 @@ describe("public confidence display policy", () => {
     });
     expect(report.missingThresholds).toEqual([
       "mode_not_calibrated",
-      "labeled_findings_below_100",
-      "p0_p1_labels_below_30",
-      "negative_controls_below_10",
-      "wilson_lower_bound_below_0.95"
+      "labeled_findings_below_required",
+      "p0_p1_labels_below_required",
+      "negative_controls_below_required",
+      "wilson_lower_bound_below_required"
     ]);
     expect(report.metrics.wilsonLowerBound).toEqual({ actual: 0.949, required: 0.95, passed: false });
     expect(report.requestChangesPolicy).toBe("REQUEST_CHANGES confidence claims require calibrated P0/P1 bins that pass the public display policy.");
@@ -590,7 +606,7 @@ describe("public confidence display policy", () => {
     expect(report.publicMode).toBe("uncalibrated");
     expect(report.missingThresholds).toEqual(["min_labeled_findings_malformed"]);
     expect(report.metrics).toMatchObject({
-      labeledFindings: { actual: 124, required: 100, passed: false },
+      labeledFindings: { actual: 124, required: 100, passed: false, blockedReason: "malformed_minimum" },
       p0p1Labels: { actual: 31, required: 30, passed: true },
       negativeControlScenarios: { actual: 10, required: 10, passed: true },
       wilsonLowerBound: { actual: 0.95, required: 0.95, passed: true }

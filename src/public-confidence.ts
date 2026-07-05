@@ -22,15 +22,16 @@ export type PublicConfidenceMissingThreshold =
   | "min_p0_p1_labels_malformed"
   | "min_negative_control_scenarios_malformed"
   | "min_wilson_lower_bound_malformed"
-  | "labeled_findings_below_100"
-  | "p0_p1_labels_below_30"
-  | "negative_controls_below_10"
-  | "wilson_lower_bound_below_0.95";
+  | "labeled_findings_below_required"
+  | "p0_p1_labels_below_required"
+  | "negative_controls_below_required"
+  | "wilson_lower_bound_below_required";
 
 export interface PublicConfidenceMetric {
   actual?: number;
   required: number;
   passed: boolean;
+  blockedReason?: "malformed_minimum";
 }
 
 export interface PublicConfidencePolicyEvaluation {
@@ -177,22 +178,22 @@ export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayP
   if (malformedMinimums.labeledFindings) {
     missingThresholds.push("min_labeled_findings_malformed");
   } else if (!metrics.labeledFindings.passed) {
-    missingThresholds.push("labeled_findings_below_100");
+    missingThresholds.push("labeled_findings_below_required");
   }
   if (malformedMinimums.p0p1Labels) {
     missingThresholds.push("min_p0_p1_labels_malformed");
   } else if (!metrics.p0p1Labels.passed) {
-    missingThresholds.push("p0_p1_labels_below_30");
+    missingThresholds.push("p0_p1_labels_below_required");
   }
   if (malformedMinimums.negativeControlScenarios) {
     missingThresholds.push("min_negative_control_scenarios_malformed");
   } else if (!metrics.negativeControlScenarios.passed) {
-    missingThresholds.push("negative_controls_below_10");
+    missingThresholds.push("negative_controls_below_required");
   }
   if (malformedMinimums.wilsonLowerBound) {
     missingThresholds.push("min_wilson_lower_bound_malformed");
   } else if (!metrics.wilsonLowerBound.passed) {
-    missingThresholds.push("wilson_lower_bound_below_0.95");
+    missingThresholds.push("wilson_lower_bound_below_required");
   }
 
   const allowed = missingThresholds.length === 0;
@@ -236,7 +237,10 @@ function thresholdMetric(
   if (!isValidActual(actual)) {
     return { required, passed: false };
   }
-  return { actual, required, passed: !forceFail && actual >= required };
+  if (forceFail) {
+    return { actual, required, passed: false, blockedReason: "malformed_minimum" };
+  }
+  return { actual, required, passed: actual >= required };
 }
 
 function hardFloorPositiveInteger(value: unknown, floor: number): number {
