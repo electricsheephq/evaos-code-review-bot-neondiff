@@ -50,14 +50,14 @@ describe("issue enrichment scorecard", () => {
     const result = scoreIssueEnrichment(fixture);
 
     expect(result.rawScore).toBe(81);
-    expect(result.weightedScore).toBe(81);
+    expect(result.weightedScore).toBe(80);
     expect(result.publicClaim).toBe("no_public_claim");
     expect(result.calibration).toBe("uncalibrated");
     expect(result).not.toHaveProperty("publicParity");
     expect(result).not.toHaveProperty("calibratedConfidence");
     expect(result.dimensionScores.find((dimension) => dimension.id === "proof_boundary")).toMatchObject({
       score: 5,
-      weightedScore: 50,
+      weightedScore: 65,
       evidenceLinks: ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"]
     });
   });
@@ -90,10 +90,84 @@ describe("issue enrichment scorecard", () => {
   it("summarizes scorecard results with unmeasurable states and pilot threshold misses", () => {
     const summary = summarizeIssueEnrichmentScorecard(scoreIssueEnrichment(loadFixture()));
 
-    expect(summary).toContain("Issue enrichment scorecard: raw 81/100, weighted 81/100");
+    expect(summary).toContain("Issue enrichment scorecard: raw 81/100, weighted 80/100");
     expect(summary).toContain("Public claim: no_public_claim");
     expect(summary).toContain("Unmeasurable dimensions: external_precedent_required_issue:related_context_precision");
-    expect(summary).toContain("Pilot threshold misses: stale_irrelevant_web_result:related_context_precision");
+    expect(summary).toContain("stale_irrelevant_web_result:related_context_precision");
+    expect(summary).toContain("provider_failure_burst_30_prs:throttling");
     expect(summary).not.toMatch(/parity|calibrated confidence|95/i);
+  });
+
+  it.each([
+    {
+      name: "empty proof boundary",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.proofBoundary = "";
+      },
+      error: "fixture proofBoundary is required"
+    },
+    {
+      name: "empty known limitations",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.knownLimitations = [];
+      },
+      error: "fixture knownLimitations are required"
+    },
+    {
+      name: "missing coverage",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases = fixture.cases.filter((item) => item.coverage !== "stale_head_posts");
+      },
+      error: "missing required fixture coverage stale_head_posts"
+    },
+    {
+      name: "out-of-range score",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].dimensions.proof_boundary = { score: 6, evidenceLinks: ["https://example.com/evidence"] };
+      },
+      error: "case duplicate-same-head-comments dimension proof_boundary score must be between 0 and 5"
+    },
+    {
+      name: "unmeasurable without reason",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].dimensions.proof_boundary = { unmeasurable: true };
+      },
+      error: "case duplicate-same-head-comments dimension proof_boundary missing unmeasurableReason"
+    },
+    {
+      name: "missing dimension",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        const { proof_boundary: _proofBoundary, ...dimensions } = fixture.cases[0].dimensions;
+        fixture.cases[0].dimensions = dimensions as IssueEnrichmentFixturePacket["cases"][number]["dimensions"];
+      },
+      error: "case duplicate-same-head-comments missing dimension proof_boundary"
+    },
+    {
+      name: "missing metric threshold",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.metricContracts = {
+          proof_boundary: {
+            denominator: "proof claims",
+            dataSource: "fixture",
+            scoringRule: "score proof boundary clarity",
+            unmeasurableState: "no proof claim",
+            pilotThreshold: {
+              advisoryMin: Number.NaN,
+              promotionMin: Number.NaN
+            }
+          }
+        };
+      },
+      error: "dimension proof_boundary metric contract missing pilotThreshold.advisoryMin"
+    }
+  ])("fails closed for invalid fixture packets: $name", ({ mutate, error }) => {
+    const fixture = loadFixture();
+
+    mutate(fixture);
+
+    expect(validateIssueEnrichmentFixture(fixture)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([error])
+    });
   });
 });

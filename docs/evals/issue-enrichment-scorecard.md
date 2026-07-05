@@ -9,7 +9,9 @@ Each dimension is scored from `0` to `5`. The evaluator returns both:
 - `rawScore`: unweighted average across the ten dimensions.
 - `weightedScore`: dimension-weighted average using the executable weights in `src/issue-enrichment-scorecard.ts`.
 
-Scores above `3` require at least one direct evidence link on that case/dimension cell. The validator rejects high scores without direct `http` or `https` evidence links.
+Scores above `3` require at least one direct evidence link on that case/dimension cell. The validator rejects high scores without direct `http` or `https` evidence links. In this v0.1 contract, validation proves evidence-link presence only; fixture authors must still review whether each link is relevant to the specific coverage scenario.
+
+The current weights are intentionally differentiated so `weightedScore` is not a duplicate of `rawScore`. Proof boundary, throttling, acceptance criteria, related-context precision, and safety carry higher weight because a failure in those dimensions can create misleading readiness or noisy live-posting signals.
 
 The current dimensions are:
 

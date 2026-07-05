@@ -185,7 +185,7 @@
         "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
         "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
         "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
-        "throttling": { "score": 2.6222, "notes": "Simulated provider burst exercises deferral but not promotion-ready live throttle evidence." }
+        "throttling": { "score": 1, "notes": "Simulated provider burst stays below advisory threshold until live cap evidence exists." }
       }
     }
   ]

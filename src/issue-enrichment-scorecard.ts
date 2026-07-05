@@ -109,42 +109,42 @@ export const ISSUE_ENRICHMENT_REQUIRED_FIXTURE_COVERAGE: IssueEnrichmentFixtureC
 ];
 
 export const ISSUE_ENRICHMENT_SCORE_DIMENSIONS: IssueEnrichmentScoreDimension[] = [
-  dimension("related_context_precision", "Related-context precision", 10, {
+  dimension("related_context_precision", "Related-context precision", 12, {
     denominator: "Issue-enrichment comments that cite related repos, PRs, issues, docs, or web precedents.",
     dataSource: "Sampled enrichment fixture cases plus linked GitHub evidence.",
-    scoringRule: "0 means unrelated or stale context; 3 means useful but incomplete; 5 means all cited context is directly relevant and current.",
+    scoringRule: "0 means unrelated or stale context; 3 means useful but incomplete; 5 means all cited context is directly relevant and current. The validator enforces evidence-link presence for high scores; fixture authors remain responsible for relevance review.",
     unmeasurableState: "No external or internal precedent is available to judge related-context quality.",
     pilotThreshold: { advisoryMin: 3.5, promotionMin: 4.2 }
   }),
-  dimension("planning_value", "Planning value", 10, {
+  dimension("planning_value", "Planning value", 11, {
     denominator: "Issue-enrichment comments that propose next work.",
     dataSource: "Generated issue-enrichment body and fixture expectation notes.",
     scoringRule: "Score practical decomposition, sequencing, and handoff value without claiming implementation readiness.",
     unmeasurableState: "Issue lacks enough product or engineering detail to evaluate plan usefulness.",
     pilotThreshold: { advisoryMin: 3.5, promotionMin: 4.2 }
   }),
-  dimension("acceptance_criteria", "Acceptance criteria", 10, {
+  dimension("acceptance_criteria", "Acceptance criteria", 12, {
     denominator: "Issue-enrichment comments for issues with testable or reviewable outcomes.",
     dataSource: "Issue body, generated enrichment, and regression fixture labels.",
     scoringRule: "Score explicit pass/fail criteria, negative controls, and validation commands or CI gates.",
     unmeasurableState: "Issue is intentionally exploratory and has no accepted outcome contract yet.",
     pilotThreshold: { advisoryMin: 3.5, promotionMin: 4.2 }
   }),
-  dimension("ownership_routing", "Ownership/routing", 10, {
+  dimension("ownership_routing", "Ownership/routing", 9, {
     denominator: "Issue-enrichment comments that name owners, repos, lanes, or reviewer routes.",
     dataSource: "Issue labels, repo ownership metadata, and generated routing suggestions.",
     scoringRule: "Score whether ownership suggestions are specific, bounded, and do not mutate labels or assignees.",
     unmeasurableState: "No owner, repo, or lane data is available in the fixture source.",
     pilotThreshold: { advisoryMin: 3.5, promotionMin: 4.2 }
   }),
-  dimension("proof_boundary", "Proof boundary", 10, {
+  dimension("proof_boundary", "Proof boundary", 13, {
     denominator: "Issue-enrichment comments that make any evidence, readiness, or verification statement.",
     dataSource: "Generated body, fixture proof-boundary notes, and linked evidence URLs.",
     scoringRule: "Score explicit separation between advisory scoring, local evidence, CI proof, runtime proof, and release proof.",
     unmeasurableState: "No proof claim is present.",
     pilotThreshold: { advisoryMin: 4, promotionMin: 4.5 }
   }),
-  dimension("lifecycle_state", "Lifecycle state", 10, {
+  dimension("lifecycle_state", "Lifecycle state", 8, {
     denominator: "Issue-enrichment comments for open, closed, stale, backlog, or head-specific cases.",
     dataSource: "GitHub issue/PR state, head SHA metadata, and fixture lifecycle labels.",
     scoringRule: "Score correct handling of open/closed/stale/head-mismatch state and refusal to post on stale heads.",
@@ -158,21 +158,21 @@ export const ISSUE_ENRICHMENT_SCORE_DIMENSIONS: IssueEnrichmentScoreDimension[] 
     unmeasurableState: "No comparable noisy or negative-control path is present.",
     pilotThreshold: { advisoryMin: 3.5, promotionMin: 4.2 }
   }),
-  dimension("idempotency", "Idempotency", 10, {
+  dimension("idempotency", "Idempotency", 9, {
     denominator: "Repeated issue-enrichment attempts against the same issue/head/comment marker.",
     dataSource: "Same-head duplicate fixtures, sticky marker expectations, and state records.",
     scoringRule: "Score stable upsert behavior and no duplicate same-head comments.",
     unmeasurableState: "Only a single attempted enrichment exists.",
     pilotThreshold: { advisoryMin: 3.5, promotionMin: 4.2 }
   }),
-  dimension("safety", "Safety", 10, {
+  dimension("safety", "Safety", 11, {
     denominator: "Issue-enrichment comments that handle permissions, config, launchd, safety, or external references.",
     dataSource: "Permission-failure, launchd/config ambiguity, and external-precedent fixtures.",
     scoringRule: "Score fail-closed behavior, explicit non-mutation, and safe refusal when evidence is ambiguous.",
     unmeasurableState: "No safety-sensitive operation is represented.",
     pilotThreshold: { advisoryMin: 3.8, promotionMin: 4.5 }
   }),
-  dimension("throttling", "Throttling", 10, {
+  dimension("throttling", "Throttling", 15, {
     denominator: "Issue-enrichment attempts that consume GitHub API, provider, or comment budget.",
     dataSource: "Throttle config, burst simulation fixtures, provider failure records, and issue-run status.",
     scoringRule: "Score budget-aware deferral, provider-failure containment, and cap enforcement across bursts.",
