@@ -23,6 +23,17 @@ describe("NeonDiff public release readiness", () => {
       version?: string;
       packages?: Record<string, { name?: string; version?: string; license?: string; bin?: Record<string, string> }>;
     };
+    const manifest = JSON.parse(read("docs/public-release-manifest.json")) as {
+      packageArtifact?: {
+        name?: string;
+        version?: string;
+        requiredForThisRelease?: boolean;
+        state?: string;
+        heldReason?: string;
+        currentSourceVersion?: string;
+        previousReleasedPackageVersion?: string;
+      };
+    };
 
     expect(pkg.name).toBe("neondiff");
     expect(pkg.version).toBe("0.4.24-beta.1");
@@ -58,6 +69,15 @@ describe("NeonDiff public release readiness", () => {
       license: "SEE LICENSE IN LICENSE.md",
       bin: { neondiff: "dist/src/cli.js" }
     });
+    expect(manifest.packageArtifact).toMatchObject({
+      name: "neondiff",
+      version: "0.4.24-beta.1",
+      requiredForThisRelease: false,
+      state: "held_at_previous_npm_release",
+      currentSourceVersion: "v0.4.25-beta.1",
+      previousReleasedPackageVersion: "0.4.24-beta.1"
+    });
+    expect(manifest.packageArtifact?.heldReason).toMatch(/source\/daemon-only live beta/i);
   });
 
   it("ships the canonical install script contract", () => {

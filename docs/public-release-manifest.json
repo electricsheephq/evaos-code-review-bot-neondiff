@@ -1,10 +1,23 @@
 {
-  "version": "v0.4.24-beta.1",
+  "version": "v0.4.25-beta.1",
   "releaseLevel": "source-beta",
+  "packageArtifact": {
+    "name": "neondiff",
+    "version": "0.4.24-beta.1",
+    "requiredForThisRelease": false,
+    "state": "held_at_previous_npm_release",
+    "heldReason": "v0.4.25-beta.1 is a source/daemon-only live beta; no npm artifact is published for this hotfix.",
+    "currentSourceVersion": "v0.4.25-beta.1",
+    "previousReleasedPackageVersion": "0.4.24-beta.1"
+  },
+  "source": {
+    "shaState": "set_after_manifest_reconciliation_merge",
+    "proof": "release:status --expected-head $(git rev-parse HEAD)"
+  },
   "docs": {
-    "version": "v0.4.24-beta.1",
+    "version": "v0.4.25-beta.1",
     "setupPath": "docs/SETUP.md",
-    "releaseNotesPath": "docs/releases/v0.4.24-beta.1.md",
+    "releaseNotesPath": "docs/releases/v0.4.25-beta.1.md",
     "websiteRepo": "electricsheephq/neon-diff-agent"
   },
   "licenseApi": {
@@ -16,13 +29,13 @@
     "cli": {
       "requiredForThisRelease": true,
       "state": "source_checkout",
-      "version": "v0.4.24-beta.1",
+      "version": "v0.4.25-beta.1",
       "rollback": "git reset --hard refs/tags/v0.4.9-beta.1"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "launchd_prerelease",
-      "version": "v0.4.24-beta.1",
+      "version": "v0.4.25-beta.1",
       "rollback": "git reset --hard refs/tags/v0.4.9-beta.1"
     },
     "website": {
