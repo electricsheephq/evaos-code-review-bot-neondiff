@@ -45,6 +45,7 @@ export interface BotConfig {
     headCountLimit: number;
   };
   reviewScheduler?: ReviewSchedulerConfig;
+  riskWeightedQueue?: RiskWeightedQueueConfig;
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -196,6 +197,15 @@ export interface ReviewGateConfig {
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
 }
 
+export interface RiskWeightedQueueConfig {
+  /** When false (default), enqueue priority stays the flat backgroundPriority — byte-identical. */
+  enabled: boolean;
+  /** Priority for PRs whose changed surface matches a required-validation category (lower = sooner). */
+  elevatedPriority?: number;
+  /** Priority for docs-only PRs (typically >= backgroundPriority to defer them). */
+  docsOnlyPriority?: number;
+}
+
 export interface RepoMemoryConfig {
   enabled: boolean;
   memoryRoot: string;
@@ -233,6 +243,9 @@ const DEFAULT_CONFIG: BotConfig = {
     maxQueuedPerRepo: 10,
     manualCommandReserve: 1,
     backgroundPriority: 50
+  },
+  riskWeightedQueue: {
+    enabled: false
   },
   providerCooldown: {
     enabled: true,
@@ -507,6 +520,9 @@ function validateConfig(config: BotConfig): void {
   const reviewScheduler = config.reviewScheduler ?? DEFAULT_CONFIG.reviewScheduler!;
   config.reviewScheduler = reviewScheduler;
   validateReviewSchedulerConfig(reviewScheduler, "config.reviewScheduler");
+  const riskWeightedQueue = config.riskWeightedQueue ?? DEFAULT_CONFIG.riskWeightedQueue!;
+  config.riskWeightedQueue = riskWeightedQueue;
+  validateRiskWeightedQueueConfig(riskWeightedQueue, "config.riskWeightedQueue");
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
@@ -668,6 +684,13 @@ function validateReviewGateConfig(value: unknown, label: string): void {
       if (floor !== undefined) validateProbability(floor, `${label}.requestChangesConfidenceFloors.${severity}`);
     }
   }
+}
+
+function validateRiskWeightedQueueConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (value.elevatedPriority !== undefined) validateNonNegativeInteger(value.elevatedPriority, `${label}.elevatedPriority`);
+  if (value.docsOnlyPriority !== undefined) validateNonNegativeInteger(value.docsOnlyPriority, `${label}.docsOnlyPriority`);
 }
 
 function validateRepoMemoryConfig(value: unknown, label: string): void {
