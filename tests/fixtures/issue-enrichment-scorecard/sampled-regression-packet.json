@@ -5,6 +5,7 @@
     "Scores are seeded regression expectations, not statistically calibrated production outcomes.",
     "Provider-failure burst coverage is simulated and does not exercise live GitHub or provider APIs.",
     "External precedent quality is represented by sampled links and stale-link negatives, not a full web corpus.",
+    "Direct-evidence anchors are nominal fixture contract identifiers on issue #264; this packet validates anchor shape, not GitHub anchor resolvability.",
     "Fixture scoring does not post comments, mutate labels, update assignees, or change live config."
   ],
   "cases": [

@@ -494,6 +494,20 @@ describe("issue enrichment scorecard", () => {
       error: "dimension proof_boundary metric contract missing pilotThreshold.advisoryMin"
     },
     {
+      name: "partial metric-contract override",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.metricContracts = {
+          proof_boundary: {
+            pilotThreshold: {
+              advisoryMin: 4,
+              promotionMin: 4.5
+            }
+          } as NonNullable<IssueEnrichmentFixturePacket["metricContracts"]>["proof_boundary"]
+        };
+      },
+      error: "dimension proof_boundary metric contract missing denominator"
+    },
+    {
       name: "missing promotion threshold",
       mutate: (fixture: IssueEnrichmentFixturePacket) => {
         fixture.metricContracts = {
