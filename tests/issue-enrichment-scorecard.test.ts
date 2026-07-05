@@ -124,6 +124,21 @@ describe("issue enrichment scorecard", () => {
     });
   });
 
+  it("does not emit a redundant missing-evidence error for an out-of-range high score", () => {
+    const fixture = loadFixture();
+    fixture.cases[0].dimensions.proof_boundary = {
+      score: 6,
+      evidenceLinks: ["https://example.com/evidence#direct-evidence-duplicate-same-head-comments-proof-boundary"]
+    };
+
+    const validation = validateIssueEnrichmentFixture(fixture);
+
+    expect(validation.ok).toBe(false);
+    expect(validation.errors).toEqual([
+      "case duplicate-same-head-comments dimension proof_boundary score must be between 0 and 5"
+    ]);
+  });
+
   it("rejects duplicate fixture case ids and duplicate coverage ids", () => {
     const fixture = loadFixture();
     fixture.cases.push({
@@ -148,6 +163,29 @@ describe("issue enrichment scorecard", () => {
     expect(validation.coveredScenarioIds).toEqual(ISSUE_ENRICHMENT_REQUIRED_FIXTURE_COVERAGE);
     expect(fixture.proofBoundary).toContain("advisory fixture scoring only");
     expect(fixture.knownLimitations.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("uses packet metric-contract threshold overrides when scoring pilot misses", () => {
+    const fixture = loadFixture();
+    const throttlingContract = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.find((dimension) => dimension.id === "throttling")
+      ?.metricContract;
+    expect(throttlingContract).toBeDefined();
+
+    expect(scoreIssueEnrichment(fixture).pilotThresholdMisses).not.toContain(
+      "duplicate-same-head-comments:throttling"
+    );
+
+    fixture.metricContracts = {
+      throttling: {
+        ...throttlingContract!,
+        pilotThreshold: {
+          advisoryMin: 3,
+          promotionMin: throttlingContract!.pilotThreshold.promotionMin
+        }
+      }
+    };
+
+    expect(scoreIssueEnrichment(fixture).pilotThresholdMisses).toContain("duplicate-same-head-comments:throttling");
   });
 
   it("summarizes scorecard results with unmeasurable states and pilot threshold misses", () => {

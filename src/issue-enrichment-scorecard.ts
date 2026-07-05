@@ -181,8 +181,6 @@ export const ISSUE_ENRICHMENT_SCORE_DIMENSIONS: IssueEnrichmentScoreDimension[] 
   })
 ];
 
-const DIMENSIONS_BY_ID = new Map(ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map((item) => [item.id, item]));
-
 export function scoreIssueEnrichment(packet: IssueEnrichmentFixturePacket): IssueEnrichmentScorecardResult {
   const dimensionScores = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map((dimension) => scoreDimension(packet, dimension));
   const rawTotal = dimensionScores.reduce((sum, dimension) => sum + dimension.rawScore, 0);
@@ -259,10 +257,10 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
         }
         continue;
       }
-      if (!Number.isFinite(score.score) || score.score! < 0 || score.score! > 5) {
+      const scoreIsInRange = Number.isFinite(score.score) && score.score! >= 0 && score.score! <= 5;
+      if (!scoreIsInRange) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} score must be between 0 and 5`);
-      }
-      if ((score.score ?? 0) > 3 && !hasDirectEvidenceLink(score.evidenceLinks, fixtureCase, dimension.id)) {
+      } else if (score.score! > 3 && !hasDirectEvidenceLink(score.evidenceLinks, fixtureCase, dimension.id)) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} scored ${score.score} without direct evidence links`);
       }
     }
@@ -307,7 +305,7 @@ function scoreDimension(
   const unmeasurableCases: string[] = [];
   const pilotThresholdMisses: string[] = [];
   const evidenceLinks = new Set<string>();
-  const threshold = DIMENSIONS_BY_ID.get(dimension.id)?.metricContract.pilotThreshold.advisoryMin ?? 0;
+  const threshold = getMetricContract(packet, dimension).pilotThreshold.advisoryMin;
 
   for (const fixtureCase of packet.cases) {
     const score = fixtureCase.dimensions[dimension.id];
@@ -338,6 +336,13 @@ function scoreDimension(
     pilotThresholdMisses,
     evidenceLinks: [...evidenceLinks].sort()
   };
+}
+
+function getMetricContract(
+  packet: IssueEnrichmentFixturePacket,
+  dimension: IssueEnrichmentScoreDimension
+): IssueEnrichmentMetricContract {
+  return packet.metricContracts?.[dimension.id] ?? dimension.metricContract;
 }
 
 function normalizeScore(score: number | undefined): number {
