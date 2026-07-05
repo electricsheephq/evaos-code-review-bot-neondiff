@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
@@ -39,6 +39,13 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate } from "./review-gate.js";
+import {
+  buildOutcomeLedger,
+  buildOutcomeLedgerInputFromReviewPlan,
+  renderOutcomeLedgerMarkdown,
+  type OutcomeLedgerRuntimeInput,
+  type OutcomeLedgerSafetyGateInput
+} from "./outcome-ledger.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
@@ -65,7 +72,7 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
+import { buildReviewPrompt, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
 import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 
@@ -1447,7 +1454,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           prompt,
           evidenceDir
         })
-      : { findings: [], droppedFromSchema: [], rawResponse: "{\"findings\":[]}" };
+      : {
+          findings: [],
+          droppedFromSchema: [],
+          rawResponse: "{\"findings\":[]}",
+          runtime: {
+            provider: config.zcode.providerId,
+            model: config.zcode.model,
+            providerAttempts: 0,
+            notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+          }
+        };
 
     assertGitClean(worktree.path);
 
@@ -1524,6 +1541,27 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
     if (walkthrough) writeFileSync(join(evidenceDir, "walkthrough.md"), walkthrough.body);
     if (enrichment) writeFileSync(join(evidenceDir, "enrichment.md"), enrichment.body);
+    if (input.dryRun) {
+      writeDryRunOutcomeLedgerEvidence({
+        evidenceDir,
+        repo,
+        pull,
+        files: reviewFiles,
+        plan,
+        runtime: zcodeResult.runtime,
+        duplicateSameHead: processed
+          ? {
+              name: "duplicate_same_head",
+              status: "unknown",
+              detail: `A processed row already existed with status ${processed.status}; dry-run review proceeded under the current processed-head policy and posts no public comments.`
+            }
+          : {
+              name: "duplicate_same_head",
+              status: "pass",
+              detail: "ReviewPull processed-head preflight found no existing processed row for this head; dry-run posts no public comments."
+            }
+      });
+    }
     writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
 
     if (input.dryRun) {
@@ -2137,6 +2175,70 @@ export function createGitHubRelatedContextReader(config: BotConfig, fallback: Gi
   });
 }
 
+export function writeDryRunOutcomeLedgerEvidence(input: {
+  evidenceDir: string;
+  repo: string;
+  pull: PullRequestSummary;
+  files: PullFilePatch[];
+  plan: ReviewPlan;
+  provider?: string;
+  model?: string;
+  runtime?: OutcomeLedgerRuntimeInput;
+  duplicateSameHead?: OutcomeLedgerSafetyGateInput;
+}): { ok: true } | { ok: false; error: string } {
+  try {
+    const outcomeLedger = buildOutcomeLedger(buildOutcomeLedgerInputFromReviewPlan({
+      repo: input.repo,
+      pull: input.pull,
+      files: input.files,
+      plan: input.plan,
+      dryRun: true,
+      safetyGateEvidence: {
+        currentHead: {
+          name: "current_head",
+          status: "pass",
+          detail: "Worker reached dry-run review-plan construction after stale-head preflight."
+        },
+        duplicateSameHead: input.duplicateSameHead ?? {
+          name: "duplicate_same_head",
+          status: "pass",
+          detail: "Caller did not provide processed-head state; dry-run helper writes no public comments."
+        },
+        inlineCoordinateValidation: {
+          name: "inline_coordinate_validation",
+          status: "pass",
+          detail: `${input.plan.comments.length} accepted inline comment(s) survived deterministic location validation before review-plan evidence was written.`
+        }
+      },
+      runtime: {
+        ...input.runtime,
+        provider: input.provider ?? input.runtime?.provider,
+        model: input.model ?? input.runtime?.model
+      }
+    }));
+    const jsonPath = join(input.evidenceDir, "outcome-ledger.json");
+    const markdownPath = join(input.evidenceDir, "outcome-ledger.md");
+    const markdown = renderOutcomeLedgerMarkdown(outcomeLedger);
+    try {
+      writeRedactedJson(jsonPath, outcomeLedger);
+      writeFileSync(markdownPath, markdown);
+    } catch (error) {
+      rmSync(jsonPath, { force: true, recursive: true });
+      rmSync(markdownPath, { force: true, recursive: true });
+      throw error;
+    }
+    return { ok: true };
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : String(error));
+    writeRedactedJson(join(input.evidenceDir, "outcome-ledger-error.json"), {
+      ok: false,
+      error: message,
+      proofBoundary: "Outcome Ledger dry-run evidence failed to build; stable review-plan evidence must continue."
+    });
+    return { ok: false, error: message };
+  }
+}
+
 function recordStaleHeadSkip(input: {
   state: ReviewStateStore;
   repo: string;
@@ -2319,22 +2421,42 @@ async function runZCodeReviewWithProviderRetry(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
-}): Promise<ReturnType<typeof runZCodeReview>> {
-  return runWithProviderRetry({
+}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+  const startedAt = new Date();
+  let providerAttempts = 0;
+  const result = await runWithProviderRetry({
     config: input.config,
     evidenceDir: input.evidenceDir,
-    operation: () => runZCodeReview({
-      cwd: input.worktreePath,
-      prompt: input.prompt,
-      cliPath: input.config.zcode.cliPath,
-      appConfigPath: input.config.zcode.appConfigPath,
-      model: input.config.zcode.model,
-      providerId: input.config.zcode.providerId,
-      evidenceDir: input.evidenceDir,
-      timeoutMs: input.config.zcode.timeoutMs,
-      retryMaxRetries: input.config.zcode.retryMaxRetries
-    })
+    operation: () => {
+      providerAttempts += 1;
+      return runZCodeReview({
+        cwd: input.worktreePath,
+        prompt: input.prompt,
+        cliPath: input.config.zcode.cliPath,
+        appConfigPath: input.config.zcode.appConfigPath,
+        model: input.config.zcode.model,
+        providerId: input.config.zcode.providerId,
+        evidenceDir: input.evidenceDir,
+        timeoutMs: input.config.zcode.timeoutMs,
+        retryMaxRetries: input.config.zcode.retryMaxRetries
+      });
+    }
   });
+  const completedAt = new Date();
+  return {
+    ...result,
+    runtime: {
+      provider: input.config.zcode.providerId,
+      model: input.config.zcode.model,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      latencyMs: completedAt.getTime() - startedAt.getTime(),
+      notes: [
+        `Observed outer provider retry attempts: ${providerAttempts}.`,
+        "Internal ZCode retry attempts and token usage are not exposed by the configured provider path; providerAttempts and token metrics remain null."
+      ]
+    }
+  };
 }
 
 export async function runWithProviderRetry<T>(input: {
