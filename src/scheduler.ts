@@ -1730,7 +1730,6 @@ function updateQueueJobAfterReviewStatus(input: {
         lastError: "legacy_review_capacity_busy"
       });
       return;
-    case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
     case "skipped_license_gate":
@@ -1741,6 +1740,13 @@ function updateQueueJobAfterReviewStatus(input: {
         lastError: input.status === "skipped_license_gate"
           ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)?.reason ?? "license_entitlement_required"
           : `unexpected_scheduler_review_status=${input.status}`
+      });
+      return;
+    case "skipped_draft":
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "stale_retired",
+        lastError: "draft_pr"
       });
       return;
     case "skipped_command_stop":
