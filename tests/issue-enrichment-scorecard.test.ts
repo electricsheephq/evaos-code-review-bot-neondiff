@@ -62,6 +62,19 @@ describe("issue enrichment scorecard", () => {
       "safety",
       "throttling"
     ]);
+    expect(ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map(({ id, weight }) => ({ id, weight }))).toEqual([
+      { id: "related_context_precision", weight: 12 },
+      { id: "planning_value", weight: 11 },
+      { id: "acceptance_criteria", weight: 12 },
+      { id: "ownership_routing", weight: 9 },
+      { id: "proof_boundary", weight: 13 },
+      { id: "lifecycle_state", weight: 8 },
+      { id: "noise_control", weight: 10 },
+      { id: "idempotency", weight: 9 },
+      { id: "safety", weight: 11 },
+      { id: "throttling", weight: 15 }
+    ]);
+    expect(new Set(ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map((dimension) => dimension.weight)).size).toBeGreaterThan(1);
 
     for (const dimension of ISSUE_ENRICHMENT_SCORE_DIMENSIONS) {
       expect(dimension.metricContract).toMatchObject({
@@ -330,6 +343,13 @@ describe("issue enrichment scorecard", () => {
 
   it.each([
     {
+      name: "unknown fixture version",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.fixtureVersion = "9.9" as IssueEnrichmentFixturePacket["fixtureVersion"];
+      },
+      error: "fixture fixtureVersion must be 0.1"
+    },
+    {
       name: "empty proof boundary",
       mutate: (fixture: IssueEnrichmentFixturePacket) => {
         fixture.proofBoundary = "";
@@ -349,6 +369,34 @@ describe("issue enrichment scorecard", () => {
         fixture.cases = fixture.cases.filter((item) => item.coverage !== "stale_head_posts");
       },
       error: "missing required fixture coverage stale_head_posts"
+    },
+    {
+      name: "missing case title",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].title = "";
+      },
+      error: "case duplicate-same-head-comments title is required"
+    },
+    {
+      name: "missing fixture source",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].fixtureSource = undefined;
+      },
+      error: "case duplicate-same-head-comments fixtureSource must be an https URL"
+    },
+    {
+      name: "non-https fixture source",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].fixtureSource = "http://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264";
+      },
+      error: "case duplicate-same-head-comments fixtureSource must be an https URL"
+    },
+    {
+      name: "unknown coverage",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].coverage = "typo_coverage" as IssueEnrichmentFixturePacket["cases"][number]["coverage"];
+      },
+      error: "case duplicate-same-head-comments has unknown coverage typo_coverage"
     },
     {
       name: "out-of-range score",

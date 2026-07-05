@@ -219,7 +219,9 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
   const duplicateCaseIds = new Set<string>();
   const seenCoverageIds = new Set<IssueEnrichmentFixtureCoverageId>();
   const duplicateCoverageIds = new Set<IssueEnrichmentFixtureCoverageId>();
+  const allowedCoverageIds = new Set<string>(ISSUE_ENRICHMENT_REQUIRED_FIXTURE_COVERAGE);
 
+  if (packet.fixtureVersion !== "0.1") errors.push("fixture fixtureVersion must be 0.1");
   if (!packet.proofBoundary?.trim()) errors.push("fixture proofBoundary is required");
   if (!Array.isArray(packet.knownLimitations) || packet.knownLimitations.length === 0) {
     errors.push("fixture knownLimitations are required");
@@ -243,6 +245,13 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
   }
 
   for (const fixtureCase of packet.cases) {
+    if (!fixtureCase.title?.trim()) errors.push(`case ${fixtureCase.id} title is required`);
+    if (!parseHttpsUrl(fixtureCase.fixtureSource)) {
+      errors.push(`case ${fixtureCase.id} fixtureSource must be an https URL`);
+    }
+    if (!allowedCoverageIds.has(fixtureCase.coverage)) {
+      errors.push(`case ${fixtureCase.id} has unknown coverage ${fixtureCase.coverage}`);
+    }
     if (seenCaseIds.has(fixtureCase.id)) duplicateCaseIds.add(fixtureCase.id);
     seenCaseIds.add(fixtureCase.id);
     if (seenCoverageIds.has(fixtureCase.coverage)) duplicateCoverageIds.add(fixtureCase.coverage);
