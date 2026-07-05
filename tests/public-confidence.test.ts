@@ -115,6 +115,8 @@ describe("public confidence display policy", () => {
     const input = [
       "High reliability mode is enabled.",
       "On 7/10, reliability improved after the retry patch.",
+      "High confidence concern",
+      "Low confidence high severity",
       "A medium severity issue with confidence handling should keep its severity adjective."
     ].join("\n");
 
