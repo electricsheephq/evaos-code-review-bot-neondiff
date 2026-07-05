@@ -65,13 +65,24 @@ import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
-import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan } from "./types.js";
+import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
 const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private" | "unknown"; expiresAtMs: number }>();
+
+function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
+  const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
+  const provider = config.providers?.providers[providerId];
+  return {
+    providerId,
+    adapter: provider?.adapter ?? "zcode",
+    model: provider?.model ?? config.zcode.model,
+    ...(provider?.displayName ? { displayName: provider.displayName } : {})
+  };
+}
 
 export interface RunOnceOptions {
   configPath?: string;
@@ -1449,6 +1460,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           validation,
           proof,
           settingsPreview,
+          provider: buildReviewProviderMetadata(config),
           postIssueComment: config.walkthrough.postIssueComment,
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })

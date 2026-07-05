@@ -48,7 +48,7 @@ describe("deterministic review gate", () => {
     });
   });
 
-  it("keeps high-severity proof gaps blocking because severity is authoritative", () => {
+  it("keeps high-severity proof gaps advisory when no correctness risk category is validated", () => {
     const gate = applyDeterministicReviewGate({
       files,
       findings: [
@@ -64,11 +64,12 @@ describe("deterministic review gate", () => {
       ]
     });
 
-    expect(gate.event).toBe("REQUEST_CHANGES");
-    expect(gate.summary.requestChangesEligible).toBe(1);
+    expect(gate.event).toBe("COMMENT");
+    expect(gate.comments).toHaveLength(1);
+    expect(gate.summary.requestChangesEligible).toBe(0);
   });
 
-  it("does not let docs-only category demote high-severity findings", () => {
+  it("keeps docs-only findings advisory unless taxonomy validates a release regression", () => {
     const gate = applyDeterministicReviewGate({
       files: [
         {
@@ -91,6 +92,40 @@ describe("deterministic review gate", () => {
 
     expect(gate.event).toBe("REQUEST_CHANGES");
     expect(gate.summary.categoryCounts).toEqual({ release_regression: 1 });
+  });
+
+  it("does not request changes for high-severity docs-only or unknown findings", () => {
+    const gate = applyDeterministicReviewGate({
+      files: [
+        {
+          filename: "docs/readme.md",
+          patch: "@@ -1,1 +1,3 @@\n Intro.\n+Ambiguous warning.\n+Another warning."
+        }
+      ],
+      findings: [
+        {
+          severity: "P0",
+          category: "docs_only",
+          path: "docs/readme.md",
+          line: 2,
+          title: "Docs-only concern",
+          body: "This severe wording is limited to editorial phrasing.",
+          confidence: 0.95
+        },
+        {
+          severity: "P1",
+          category: "unknown",
+          path: "docs/readme.md",
+          line: 3,
+          title: "Unknown category concern",
+          body: "This severe wording is ambiguous and unactionable.",
+          confidence: 0.9
+        }
+      ]
+    });
+
+    expect(gate.event).toBe("COMMENT");
+    expect(gate.summary.requestChangesEligible).toBe(0);
   });
 
   it("suppresses only low-severity findings with exact repo-memory false-positive fingerprints", () => {

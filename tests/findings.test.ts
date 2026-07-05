@@ -242,9 +242,9 @@ describe("finding normalization and review policy", () => {
 
   it("requests changes only for P0 or P1 findings in eligible regression categories", () => {
     expect(decideReviewEvent([{ severity: "P2", category: "data_loss" }, { severity: "P3", category: "auth" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P1", category: "docs_only" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P1", category: "unknown" }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap" }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "docs_only" }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "unknown" }])).toBe("COMMENT");
     expect(decideReviewEvent([{ severity: "P1", category: "data_loss" }])).toBe("REQUEST_CHANGES");
     expect(decideReviewEvent([{ severity: "P0", category: "security_boundary" }])).toBe("REQUEST_CHANGES");
   });

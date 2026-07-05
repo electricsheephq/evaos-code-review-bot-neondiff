@@ -6,8 +6,9 @@ import {
   WALKTHROUGH_SCHEMA_VERSION,
   WALKTHROUGH_STATE_MARKER_PREFIX
 } from "../src/walkthrough.js";
+import { applyDeterministicReviewGate } from "../src/review-gate.js";
 import type { ReviewSettingsPreview } from "../src/repo-policy.js";
-import type { PullFilePatch, PullRequestSummary, ReviewComment } from "../src/types.js";
+import type { Finding, PullFilePatch, PullRequestSummary, ReviewComment } from "../src/types.js";
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
@@ -93,6 +94,12 @@ describe("walkthrough comment rendering", () => {
         requiredRecommendationIds: ["unity_editor_smoke"],
         missingRecommendationIds: ["unity_editor_smoke"],
         detectedEvidence: []
+      },
+      provider: {
+        providerId: "zcode-glm",
+        adapter: "zcode",
+        displayName: "GLM / Z.ai",
+        model: "GLM-5.2"
       }
     });
     const walkthroughAgain = buildWalkthroughComment({
@@ -126,6 +133,12 @@ describe("walkthrough comment rendering", () => {
         requiredRecommendationIds: ["unity_editor_smoke"],
         missingRecommendationIds: ["unity_editor_smoke"],
         detectedEvidence: []
+      },
+      provider: {
+        providerId: "zcode-glm",
+        adapter: "zcode",
+        displayName: "GLM / Z.ai",
+        model: "GLM-5.2"
       }
     });
 
@@ -136,6 +149,7 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("## Walkthrough");
     expect(walkthrough.body).toContain("| `Assets/Scripts/SaveGameController.cs` | modified | +44/-8 | Unity/gameplay state | Elevated: validated P1 finding |");
     expect(walkthrough.body).toContain("Estimated review effort: 2/5");
+    expect(walkthrough.body).toContain("Provider: GLM / Z.ai (`zcode-glm`, zcode, model `GLM-5.2`).");
     expect(walkthrough.body).toContain("Related issues/PRs: #17, #12");
     expect(walkthrough.body).toContain("Suggested reviewers: reviewer-one");
     expect(walkthrough.body).toContain("Suggested labels: bug, unity");
@@ -145,6 +159,84 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("Proof status: missing");
     expect(walkthrough.body).toContain("Pre-merge checklist");
     expect(walkthrough.body).toContain("REQUEST_CHANGES");
+  });
+
+  it("renders the review UX fixture walkthrough from validated inline findings and dropped evidence", () => {
+    const files: PullFilePatch[] = [
+      {
+        filename: "src/save.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 0,
+        changes: 2,
+        patch: "@@ -1,2 +1,4 @@\n export function save() {\n+  overwriteAllData();\n+  auditSave();\n }"
+      }
+    ];
+    const findings: Finding[] = [
+      {
+        severity: "P1",
+        category: "data_loss",
+        path: "src/save.ts",
+        line: 2,
+        title: "Save can overwrite state",
+        body: "The new write can overwrite newer customer state.",
+        confidence: 0.93
+      },
+      {
+        severity: "P1",
+        category: "data_loss",
+        path: "src/save.ts",
+        line: 99,
+        title: "Invalid line",
+        body: "This finding points outside the current diff.",
+        confidence: 0.93
+      }
+    ];
+    const gate = applyDeterministicReviewGate({ files, findings, droppedFromSchema: [{ reason: "invalid_schema" }] });
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        number: 110,
+        title: "Review UX fixture",
+        body: "Refs #110.",
+        head: {
+          sha: HEAD_A,
+          ref: "fixture-review-ux",
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files,
+      comments: gate.comments,
+      dropped: gate.dropped,
+      event: gate.event,
+      provider: {
+        providerId: "zcode-glm",
+        adapter: "zcode",
+        model: "GLM-5.2"
+      },
+      postIssueComment: true
+    });
+
+    expect(gate.event).toBe("REQUEST_CHANGES");
+    expect(gate.comments).toHaveLength(1);
+    expect(gate.dropped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: "invalid_schema" }),
+        expect.objectContaining({ reason: "line_not_in_current_diff" })
+      ])
+    );
+    expect(walkthrough.postIssueComment).toBe(true);
+    expect(walkthrough.body).toContain("PR: electricsheephq/evaos-code-review-bot#110 - Review UX fixture");
+    expect(walkthrough.body).toContain("Provider: (`zcode-glm`, zcode, model `GLM-5.2`).");
+    expect(walkthrough.body).toContain("| `src/save.ts` | modified | +2/-0 | Runtime code | Elevated: validated P1 finding |");
+    expect(walkthrough.body).toContain("Validated inline findings: 1 (P0: 0, P1: 1, P2: 0, P3: 0).");
+    expect(walkthrough.body).toContain("Dropped findings before posting: 2.");
+    expect(walkthrough.body).toContain("REQUEST_CHANGES is only used when eligible P0/P1 findings survive validation.");
   });
 
   it("renders CodeRabbit-style settings parity as preview-only walkthrough metadata", () => {
@@ -239,12 +331,19 @@ describe("walkthrough comment rendering", () => {
       comments: [],
       dropped: [],
       event: "COMMENT",
+      provider: {
+        providerId: "openai-compatible",
+        adapter: "openai-compatible",
+        displayName: `Gateway ${secretLikeToken}`,
+        model: `review-${secretLikeToken}`
+      },
       settingsPreview
     });
 
     expect(walkthrough.body).toContain("- Path instructions: `src/\\`templates\\`/**`");
     expect(walkthrough.body).not.toContain(secretLikeToken);
     expect(walkthrough.body).toContain("[redacted-secret]");
+    expect(walkthrough.body).toContain("Provider: Gateway [redacted-secret] (`openai-compatible`, openai-compatible, model `review-[redacted-secret]`).");
   });
 
   it("sanitizes confidence settings preview metadata while preserving ordinary likely wording", () => {

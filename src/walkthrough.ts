@@ -12,6 +12,7 @@ import type {
   RegressionCategory,
   ReviewComment,
   ReviewEvent,
+  ReviewProviderMetadata,
   Severity,
   WalkthroughComment
 } from "./types.js";
@@ -41,6 +42,7 @@ export function buildWalkthroughComment(input: {
   validation?: ChangedSurfaceValidationReport;
   proof?: ProofRequirementReport;
   settingsPreview?: ReviewSettingsPreview;
+  provider?: ReviewProviderMetadata;
   postIssueComment?: boolean;
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): WalkthroughComment {
@@ -65,6 +67,7 @@ export function buildWalkthroughComment(input: {
     "",
     `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title, input.publicConfidencePolicy)}`,
     `Head: \`${input.pull.head.sha}\` into \`${input.pull.base.ref}\`. Review event: \`${input.event}\`.`,
+    `Provider: ${formatProviderMetadata(input.provider, input.publicConfidencePolicy)}.`,
     "",
     `Estimated review effort: ${effort.score}/5 (~${effort.minutes} min)`,
     "",
@@ -122,6 +125,17 @@ export function buildWalkthroughComment(input: {
     body: [marker, stateMarker, redactedBody].join("\n"),
     postIssueComment: input.postIssueComment ?? false
   };
+}
+
+function formatProviderMetadata(
+  provider: ReviewProviderMetadata | undefined,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
+): string {
+  if (!provider) return "not recorded";
+  const displayName = provider.displayName
+    ? `${formatInlinePublicText(provider.displayName, publicConfidencePolicy)} `
+    : "";
+  return `${displayName}(\`${formatInlineCodePublicText(provider.providerId, publicConfidencePolicy)}\`, ${formatInlinePublicText(provider.adapter, publicConfidencePolicy)}, model \`${formatInlineCodePublicText(provider.model, publicConfidencePolicy)}\`)`;
 }
 
 function formatSettingsPreviewSection(
