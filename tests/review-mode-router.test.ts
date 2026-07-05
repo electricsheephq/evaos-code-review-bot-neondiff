@@ -39,7 +39,7 @@ describe("review mode router", () => {
     expect(selection.proofBoundary).toContain("does not change scheduler");
   });
 
-  it("keeps security or product docs in fast mode because docs-only wins", () => {
+  it("keeps security or product docs fast while recording hidden risk signals", () => {
     const selection = selectReviewMode({
       subject: "pull_request",
       title: "Update pricing and security docs",
@@ -55,6 +55,11 @@ describe("review mode router", () => {
       targetUse: "pull_request_review"
     });
     expect(selection.riskAreas).toContain("docs_only");
+    expect(selection.riskAreas).toContain("security_boundary");
+    expect(selection.riskAreas).toContain("api_compatibility");
+    expect(selection.matchedSignals).toContain("docs_security boundary path");
+    expect(selection.matchedSignals).toContain("docs_billing/pricing path");
+    expect(selection.matchedSignals).toContain("docs_product_pm_text");
   });
 
   it("does not classify security source directories as docs-only", () => {
@@ -118,6 +123,34 @@ describe("review mode router", () => {
     });
   });
 
+  it("does not report hardTimeoutMinutes beyond a non-minute wholeRunDeadlineMs", () => {
+    const hardTimeoutMs = 1_500_001;
+    const selection = selectReviewMode({
+      subject: "pull_request",
+      title: "refactor parser utility",
+      files: [{ filename: "src/parser.ts", status: "modified", changes: 20 }],
+      providerTimeoutMs: 2_000_000,
+      reviewModes: {
+        enabled: true,
+        defaultMode: "standard",
+        modes: {
+          fast: modeConfig(5, 10),
+          standard: {
+            ...modeConfig(15, 20),
+            wholeRunDeadlineMs: hardTimeoutMs
+          },
+          deep: modeConfig(25, 35),
+          product_pm: modeConfig(15, 25),
+          research: modeConfig(20, 30)
+        }
+      }
+    });
+
+    expect(selection.mode).toBe("standard");
+    expect(selection.budget.hardTimeoutMs).toBe(hardTimeoutMs);
+    expect(selection.budget.hardTimeoutMinutes * 60_000).toBeLessThanOrEqual(hardTimeoutMs);
+  });
+
   it("selects deep mode for runtime and provider risk paths", () => {
     const selection = selectReviewMode({
       subject: "pull_request",
@@ -147,6 +180,50 @@ describe("review mode router", () => {
 
     expect(selection.mode).toBe("deep");
     expect(selection.matchedSignals).toContain("runtime/provider path");
+  });
+
+  it("keeps generic runtime or release wording standard without corroborating risk", () => {
+    const selection = selectReviewMode({
+      subject: "pull_request",
+      title: "fix runtime typo in release notes script",
+      body: "Adds queue length wording to the status panel.",
+      files: [
+        { filename: "src/components/ReleaseNotesCopy.tsx", status: "modified", changes: 16 }
+      ]
+    });
+
+    expect(selection.mode).toBe("standard");
+    expect(selection.matchedSignals).toContain("default_standard");
+    expect(selection.matchedSignals).not.toContain("deep_text");
+    expect(selection.matchedSignals).not.toContain("corroborated_runtime_text");
+  });
+
+  it("uses deep mode for corroborated runtime incident wording", () => {
+    const selection = selectReviewMode({
+      subject: "pull_request",
+      title: "fix provider throttle queue backlog",
+      files: [
+        { filename: "src/components/ProviderStatus.tsx", status: "modified", changes: 16 }
+      ]
+    });
+
+    expect(selection.mode).toBe("deep");
+    expect(selection.matchedSignals).toContain("corroborated_runtime_text");
+    expect(selection.riskAreas).toContain("runtime_correctness");
+  });
+
+  it("selects deep mode for high churn files through additions/deletions fallback", () => {
+    const selection = selectReviewMode({
+      subject: "pull_request",
+      title: "refactor utility module",
+      files: [
+        { filename: "src/utils/formatters.ts", status: "modified", additions: 260, deletions: 240 }
+      ]
+    });
+
+    expect(selection.mode).toBe("deep");
+    expect(selection.matchedSignals).toContain("high_churn_file");
+    expect(selection.riskAreas).toContain("release_regression");
   });
 
   it("selects product_pm mode for UX and product intent when no deep risk matched", () => {

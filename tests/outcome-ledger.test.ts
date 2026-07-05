@@ -167,6 +167,34 @@ describe("outcome ledger", () => {
     });
   });
 
+  it("parses partial reviewMode inputs with the same timeout-risk placeholder", () => {
+    const parsed = parseOutcomeLedgerInput(sampleInput({
+      reviewMode: {
+        mode: "standard",
+        targetUse: "pull_request_review"
+      } as NonNullable<OutcomeLedgerInput["reviewMode"]>
+    }));
+
+    expect(parsed.reviewMode).toMatchObject({
+      mode: "standard",
+      targetUse: "pull_request_review",
+      budget: {
+        disposition: "timeout_risk",
+        detail: "Review mode budget was missing; treating as timeout risk."
+      }
+    });
+  });
+
+  it("still rejects malformed reviewMode budget values", () => {
+    expect(() => parseOutcomeLedgerInput(sampleInput({
+      reviewMode: {
+        mode: "standard",
+        targetUse: "pull_request_review",
+        budget: "bad"
+      } as unknown as NonNullable<OutcomeLedgerInput["reviewMode"]>
+    }))).toThrow("reviewMode.budget must be an object");
+  });
+
 
   it("redacts secret-like evidence and marks the packet non-ok", () => {
     const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");

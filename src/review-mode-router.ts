@@ -69,6 +69,7 @@ export function selectReviewMode(input: ReviewModeSelectionInput): ReviewModeSel
     reasons.push("Changed surface is docs/metadata only, so deep review would likely waste GLM time.");
     matchedSignals.add("docs_only_surface");
     riskAreas.add("docs_only");
+    recordDocsOnlySignals(files, text, matchedSignals, riskAreas);
     return buildSelection("fast", "pull_request_review", 0.9, reasons, matchedSignals, riskAreas, input.expectedRuntimeMs, input.providerTimeoutMs, input.reviewModes);
   }
 
@@ -170,7 +171,7 @@ function buildBudget(mode: ReviewMode, expectedRuntimeMs?: number, providerTimeo
   const targetMinutes = configured?.targetMinutes ?? fallback.targetMinutes;
   const targetMs = targetMinutes * 60_000;
   const hardTimeoutMs = configured?.wholeRunDeadlineMs ?? fallback.hardTimeoutMinutes * 60_000;
-  const hardTimeoutMinutes = Math.ceil(hardTimeoutMs / 60_000);
+  const hardTimeoutMinutes = Math.max(1, Math.floor(hardTimeoutMs / 60_000));
   if (providerTimeoutMs !== undefined && providerTimeoutMs < targetMs) {
     const disposition: ReviewModeBudgetDisposition = mode === "fast" ? "timeout_risk" : "partial";
     return {
@@ -254,7 +255,9 @@ function hasDeepSignal(files: PullFilePatch[], matchedSignals: Set<string>, risk
 
 function hasDeepTextSignal(text: string, matchedSignals: Set<string>, riskAreas: Set<RegressionCategory>): boolean {
   const patterns: Array<{ pattern: RegExp; area: RegressionCategory; signal: string }> = [
-    { pattern: /\b(auth|security|permission|data loss|migration|release|provider|runtime|queue|scheduler|zcode|glm)\b/i, area: "runtime_correctness", signal: "deep_text" },
+    { pattern: /\b(auth|permission|data loss|migration|zcode|glm)\b/i, area: "runtime_correctness", signal: "deep_text" },
+    { pattern: /\b(security boundary|security disclosure|vulnerability|credential leak|secret leak)\b/i, area: "security_boundary", signal: "security_text" },
+    { pattern: /\b(release blocker|release regression|release gate|runtime crash|runtime failure|provider outage|provider throttle|provider overload|queue stuck|queue backlog|scheduler deadlock|scheduler lease)\b/i, area: "runtime_correctness", signal: "corroborated_runtime_text" },
     { pattern: /\b(unity|scene|prefab|save state|save-state)\b/i, area: "unity_scene_prefab", signal: "unity_text" }
   ];
   let matched = false;
@@ -266,6 +269,18 @@ function hasDeepTextSignal(text: string, matchedSignals: Set<string>, riskAreas:
     }
   }
   return matched;
+}
+
+function recordDocsOnlySignals(files: PullFilePatch[], text: string, matchedSignals: Set<string>, riskAreas: Set<RegressionCategory>): void {
+  const docsRiskAreas = new Set<RegressionCategory>();
+  const docsSignals = new Set<string>();
+  hasDeepSignal(files, docsSignals, docsRiskAreas);
+  for (const signal of docsSignals) matchedSignals.add(`docs_${signal}`);
+  for (const area of docsRiskAreas) riskAreas.add(area);
+  if (hasProductSignal(text)) {
+    matchedSignals.add("docs_product_pm_text");
+    riskAreas.add("api_compatibility");
+  }
 }
 
 function hasProductSignal(text: string): boolean {

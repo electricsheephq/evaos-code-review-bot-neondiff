@@ -769,8 +769,17 @@ function parseRuntime(value: unknown): OutcomeLedgerRuntimeInput | undefined {
 function parseReviewModeSelection(value: unknown): ReviewModeSelection | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error("reviewMode must be an object");
-  const budget = value.budget;
-  if (!isRecord(budget)) throw new Error("reviewMode.budget must be an object");
+  const rawBudget = value.budget;
+  if (rawBudget !== undefined && !isRecord(rawBudget)) throw new Error("reviewMode.budget must be an object");
+  const budgetWasMissing = rawBudget === undefined;
+  const budget = rawBudget ?? {
+    targetMinutes: 0,
+    targetMs: 0,
+    hardTimeoutMinutes: 0,
+    hardTimeoutMs: 0,
+    disposition: "timeout_risk",
+    detail: "Review mode budget was missing; treating as timeout risk."
+  };
   return {
     mode: parseReviewMode(value.mode, "reviewMode.mode"),
     targetUse: parseEnum(value.targetUse, ["pull_request_review", "issue_enrichment"] as const, "reviewMode.targetUse"),
@@ -780,14 +789,14 @@ function parseReviewModeSelection(value: unknown): ReviewModeSelection | undefin
     matchedSignals: optionalStringArray(value.matchedSignals, "reviewMode.matchedSignals") ?? [],
     riskAreas: optionalArray(value.riskAreas, "reviewMode.riskAreas").map((area) => parseRegressionCategory(area, "reviewMode.riskAreas")),
     budget: {
-      targetMinutes: requiredPositiveInteger(budget.targetMinutes, "reviewMode.budget.targetMinutes"),
-      targetMs: requiredPositiveInteger(budget.targetMs, "reviewMode.budget.targetMs"),
-      hardTimeoutMinutes: requiredPositiveInteger(budget.hardTimeoutMinutes, "reviewMode.budget.hardTimeoutMinutes"),
-      hardTimeoutMs: requiredPositiveInteger(budget.hardTimeoutMs, "reviewMode.budget.hardTimeoutMs"),
+      targetMinutes: budgetWasMissing ? 0 : requiredPositiveInteger(budget.targetMinutes, "reviewMode.budget.targetMinutes"),
+      targetMs: budgetWasMissing ? 0 : requiredPositiveInteger(budget.targetMs, "reviewMode.budget.targetMs"),
+      hardTimeoutMinutes: budgetWasMissing ? 0 : requiredPositiveInteger(budget.hardTimeoutMinutes, "reviewMode.budget.hardTimeoutMinutes"),
+      hardTimeoutMs: budgetWasMissing ? 0 : requiredPositiveInteger(budget.hardTimeoutMs, "reviewMode.budget.hardTimeoutMs"),
       disposition: parseReviewModeBudgetDisposition(budget.disposition, "reviewMode.budget.disposition"),
       detail: requiredString(budget.detail, "reviewMode.budget.detail")
     },
-    proofBoundary: requiredString(value.proofBoundary, "reviewMode.proofBoundary")
+    proofBoundary: optionalString(value.proofBoundary, "reviewMode.proofBoundary") ?? "Review mode routing is evidence-only in this release."
   };
 }
 
