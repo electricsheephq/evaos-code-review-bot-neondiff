@@ -338,7 +338,7 @@ export async function collectIssueEnrichmentScan(input: {
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
   const status = buildIssueEnrichmentStatus({
     config: input.config,
-    canPostAsApp: input.dryRun ? true : input.canPostAsApp ?? false,
+    canPostAsApp: input.canPostAsApp ?? false,
     checkedAt
   });
   const repos = input.repo ? [input.repo] : input.repos ?? config.allowlist;
@@ -482,10 +482,9 @@ export async function runIssueEnrichmentCycle(input: {
 }): Promise<IssueEnrichmentCycleResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
-  const canPostIssueComments = input.dryRun ? true : input.github.canPostAsApp();
   const status = buildIssueEnrichmentStatus({
     config: input.config,
-    canPostAsApp: canPostIssueComments,
+    canPostAsApp: input.github.canPostAsApp(),
     checkedAt
   });
   if (!config.enabled) {
@@ -500,7 +499,12 @@ export async function runIssueEnrichmentCycle(input: {
       recommendedActions: buildScanRecommendedActions(status, emptyCycleSummary())
     };
   }
-  if (status.state === "blocked") {
+  const ignoredDryRunBlockers = new Set<IssueEnrichmentBlocker>([
+    "github_app_credentials_required_for_live_issue_comments"
+  ]);
+  const blockedForRun = status.state === "blocked" &&
+    !(input.dryRun && status.blockers.every((blocker) => ignoredDryRunBlockers.has(blocker)));
+  if (blockedForRun) {
     const summary = emptyCycleSummary();
     return {
       ok: false,
@@ -610,7 +614,7 @@ export async function runIssueEnrichmentCycle(input: {
           includeExisting: input.includeExisting,
           since: input.since,
           sinceByRepo,
-          canPostAsApp: canPostIssueComments,
+          canPostAsApp: input.github.canPostAsApp(),
           checkedAt,
           applyGlobalCaps: false,
           shouldCountItem

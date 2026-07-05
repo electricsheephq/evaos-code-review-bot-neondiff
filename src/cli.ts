@@ -1051,7 +1051,10 @@ async function main(): Promise<void> {
     const github = new GitHubApi(config.github);
     const liveStatus = buildIssueEnrichmentStatus({ config, canPostAsApp: github.canPostAsApp() });
     const statusBlockers = dryRun
-      ? liveStatus.blockers.filter((blocker) => blocker !== "github_app_credentials_required_for_live_issue_comments")
+      ? liveStatus.blockers.filter((blocker) =>
+          blocker !== "github_app_credentials_required_for_live_issue_comments" &&
+          blocker !== "issue_enrichment_live_posting_disabled"
+        )
       : liveStatus.blockers;
     if (statusBlockers.length > 0) {
       const missingThresholds = liveStatus.liveThresholdsMissingRepos.length
@@ -2794,7 +2797,7 @@ function effectiveIssueEnrichmentRunLimit(
   const binding = limits.reduce((best, candidate) => candidate.value < best.value ? candidate : best);
   return {
     binding: `${binding.field}=${binding.value}`,
-    value: Math.max(1, binding.value)
+    value: binding.value
   };
 }
 

@@ -438,12 +438,40 @@ describe("build-enrichment-comment issue CLI", () => {
       const parsed = JSON.parse(stdout);
 
       expect(parsed.summary).toMatchObject({ wouldComment: 1, posted: 0, failed: 0 });
+      expect(parsed.status.blockers).toContain("github_app_credentials_required_for_live_issue_comments");
       expect(requests).toContainEqual(expect.objectContaining({
         method: "GET",
         path: "/repos/owner/issue-repo/issues/17",
         authorization: "Bearer test-token"
       }));
       expect(requests.some((request) => request.path === "/app/installations/123/access_tokens")).toBe(false);
+      expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
+  it("allows selected issue enrichment dry-runs when live comment posting is disabled", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.issueEnrichment.postIssueComment = false;
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ]);
+      const parsed = JSON.parse(stdout);
+
+      expect(parsed.status.state).toBe("dry_run_only");
+      expect(parsed.summary).toMatchObject({ wouldEnrich: 1, posted: 0, failed: 0 });
       expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
     });
   });
@@ -637,6 +665,31 @@ describe("build-enrichment-comment issue CLI", () => {
         "true"
       ], issueRunEnv(root))).rejects.toMatchObject({
         stderr: expect.stringContaining("repo.maxIssuesPerBurst=1")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
+  it("rejects zero selected-run throttle during config validation", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.issueEnrichment.repos["owner/issue-repo"].maxIssuesPerCycle = 0;
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("config.issueEnrichment.repos.owner/issue-repo.maxIssuesPerCycle must be a positive integer")
       });
       expect(requests).toHaveLength(0);
     });
@@ -861,8 +914,10 @@ describe("build-enrichment-comment issue CLI", () => {
 
       const commentPosts = requests.filter((request) => request.method === "POST" && request.path === "/repos/owner/issue-repo/issues/17/comments");
       const commentPatches = requests.filter((request) => request.method === "PATCH" && request.path === "/repos/owner/issue-repo/issues/comments/9001");
+      const commentGets = requests.filter((request) => request.method === "GET" && request.path === "/repos/owner/issue-repo/issues/17/comments?per_page=100&page=1");
       expect(commentPosts).toHaveLength(1);
       expect(commentPatches).toHaveLength(1);
+      expect(commentGets).toHaveLength(2);
       const state = new ReviewStateStore(join(root, "state.sqlite"));
       try {
         expect(state.getIssueEnrichmentRecord("owner/issue-repo", 17)).toMatchObject({
