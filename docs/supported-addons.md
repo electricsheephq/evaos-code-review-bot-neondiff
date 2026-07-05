@@ -273,6 +273,24 @@ The summary should include:
 Do not store raw private diffs, secrets, raw provider prompts, raw customer
 logs, local credentials, cookies, or private keys in the evidence bundle.
 
+`src/repo-wiki-packet.ts` exposes a library-only
+`buildSupportedAddonDryRunPacket` helper for this bundle. It produces a
+deterministic Markdown summary over the OpenWiki-compatible repo wiki packet and
+GitNexus context packet, including:
+
+- packet versions and SHA-256 hashes
+- byte and token-ish estimates
+- redaction status or redaction report hashes
+- stale, missing, or unknown degraded-mode reasons
+- related and omitted GitNexus context counts
+- `runtimePromotion: false`
+- `nativeToolExpansion: false`
+
+That dry-run contract is intentionally not wired into `src/cli.ts`,
+`src/config.ts`, `src/worker.ts`, active config, release docs, daemon state, or
+GitHub App permissions. It is evidence for humans and agents to inspect before
+any later feature-flagged runtime integration.
+
 ## Non-Goals
 
 - Do not make OpenWiki or GitNexus required for v1.0 public launch.

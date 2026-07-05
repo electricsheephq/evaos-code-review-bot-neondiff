@@ -76,6 +76,24 @@ yet. Both statuses set `degraded: true` and should be treated as context hints
 only. Missing source with no sections records an excluded `packet:sections`
 entry with reason `missing_source`.
 
+## Supported Addon Dry-Run Packet
+
+Issue #123 adds a dry-run contract that summarizes the repo wiki packet beside a
+GitNexus context packet without making either addon required.
+
+`buildSupportedAddonDryRunPacket` emits a deterministic packet with:
+
+- one `openwiki-compatible-repo-wiki` addon entry
+- one `gitnexus-context` addon entry
+- packet hashes, versions, budget estimates, and redaction metadata
+- degraded-mode reasons for stale, missing, or unknown addon data
+- hard `runtimePromotion: false`
+- hard `nativeToolExpansion: false`
+
+The fixed summary itself has byte and token-ish caps. If even the fixed dry-run
+summary cannot fit those caps, the builder fails closed instead of returning an
+over-budget packet.
+
 ## Runtime Boundary
 
 This MVP intentionally does not wire packets into `src/worker.ts`,
