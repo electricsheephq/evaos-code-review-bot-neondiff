@@ -1,0 +1,192 @@
+{
+  "fixtureVersion": "0.1",
+  "proofBoundary": "advisory fixture scoring only; this packet does not prove public parity, calibrated confidence, runtime safety, or release readiness",
+  "knownLimitations": [
+    "Scores are seeded regression expectations, not statistically calibrated production outcomes.",
+    "Provider-failure burst coverage is simulated and does not exercise live GitHub or provider APIs.",
+    "External precedent quality is represented by sampled links and stale-link negatives, not a full web corpus.",
+    "Fixture scoring does not post comments, mutate labels, update assignees, or change live config."
+  ],
+  "cases": [
+    {
+      "id": "duplicate-same-head-comments",
+      "title": "Duplicate same-head comments",
+      "coverage": "duplicate_same_head_comments",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "No burst pressure in this fixture." }
+      }
+    },
+    {
+      "id": "stale_head_posts",
+      "title": "Stale-head posts",
+      "coverage": "stale_head_posts",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "Single stale-head rejection, no burst." }
+      }
+    },
+    {
+      "id": "invalid_inline_coordinates",
+      "title": "Invalid inline coordinates",
+      "coverage": "invalid_inline_coordinates",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "Coordinate validation does not exercise throttle pressure." }
+      }
+    },
+    {
+      "id": "issue_enrichment_permission_failure",
+      "title": "Issue-enrichment permission failure",
+      "coverage": "issue_enrichment_permission_failure",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "Permission failure exits before provider throttling." }
+      }
+    },
+    {
+      "id": "launchd_config_head_ambiguity",
+      "title": "Launchd/config/head ambiguity",
+      "coverage": "launchd_config_head_ambiguity",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "Ambiguity fails closed before live posting." }
+      }
+    },
+    {
+      "id": "docs_only_fast_negative_control",
+      "title": "Docs-only fast negative control",
+      "coverage": "docs_only_fast_negative_control",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "Fast negative avoids provider and comment spend." }
+      }
+    },
+    {
+      "id": "old_backlog_negative_control",
+      "title": "Old-backlog negative control",
+      "coverage": "old_backlog_negative_control",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "Backlog scan should defer rather than consume comment budget." }
+      }
+    },
+    {
+      "id": "external_precedent_required_issue",
+      "title": "External-precedent-required issue",
+      "coverage": "external_precedent_required_issue",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "unmeasurable": true, "unmeasurableReason": "No current external precedent is available in the sampled fixture." },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "External research needed before provider budget is meaningful." }
+      }
+    },
+    {
+      "id": "stale_irrelevant_web_result",
+      "title": "Stale or irrelevant web result",
+      "coverage": "stale_irrelevant_web_result",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 2, "notes": "Stale web result is intentionally below advisory threshold." },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "Rejecting stale context avoids extra provider retries." }
+      }
+    },
+    {
+      "id": "provider_failure_burst_30_prs",
+      "title": "30-PR provider-failure burst simulation",
+      "coverage": "provider_failure_burst_30_prs",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264",
+      "dimensions": {
+        "related_context_precision": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "planning_value": { "score": 4.2, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "acceptance_criteria": { "score": 4.5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "ownership_routing": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "proof_boundary": { "score": 5, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "lifecycle_state": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "noise_control": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "idempotency": { "score": 4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "safety": { "score": 4.4, "evidenceLinks": ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"] },
+        "throttling": { "score": 2.6222, "notes": "Simulated provider burst exercises deferral but not promotion-ready live throttle evidence." }
+      }
+    }
+  ]
+}
