@@ -33,27 +33,27 @@ npm install -g neondiff@1.0.0-beta.1
 Installer script:
 
 ```bash
-curl -fsSL https://neondiff.sh/install | sh
+curl -fsSL https://www.neondiff.com/install | sh
 ```
 
 Preview the installer without changing your machine:
 
 ```bash
-curl -fsSL https://neondiff.sh/install | sh -s -- --dry-run
+curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
 ```
 
 Use a temp npm prefix for isolated install proof:
 
 ```bash
 tmp_prefix="$(mktemp -d)"
-curl -fsSL https://neondiff.sh/install | sh -s -- --prefix "$tmp_prefix"
+curl -fsSL https://www.neondiff.com/install | sh -s -- --prefix "$tmp_prefix"
 "$tmp_prefix/bin/neondiff" help
 ```
 
 Source checkout fallback:
 
 ```bash
-git clone https://github.com/electricsheephq/neondiff.git neondiff
+git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git neondiff
 cd neondiff
 npm install
 npm run build
