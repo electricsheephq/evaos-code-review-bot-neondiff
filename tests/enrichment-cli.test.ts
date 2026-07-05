@@ -734,7 +734,7 @@ describe("build-enrichment-comment issue CLI", () => {
         "--confirm",
         "true"
       ], issueRunEnv(root))).rejects.toMatchObject({
-        stderr: expect.stringContaining("selected issue count 2 exceeds configured per-run cap 1")
+        stderr: expect.stringContaining("selected issue count 2 exceeds configured selected-run prefetch cap 1")
       });
       expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
     });
@@ -919,6 +919,7 @@ describe("build-enrichment-comment issue CLI", () => {
       ], issueRunEnv(root));
       expect(JSON.parse(first.stdout).summary).toMatchObject({ posted: 1, failed: 0 });
 
+      const secondOutputDir = join(root, "evidence", "issue-run-live-rerun");
       const second = await runCli([
         "issue-enrichment-run",
         "--config",
@@ -930,9 +931,13 @@ describe("build-enrichment-comment issue CLI", () => {
         "--dry-run",
         "false",
         "--confirm",
-        "true"
+        "true",
+        "--output-dir",
+        secondOutputDir
       ], issueRunEnv(root));
       expect(JSON.parse(second.stdout).summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+      expect(readFileSync(join(secondOutputDir, "issue-enrichment-run.json"), "utf8")).toContain("\"alreadyProcessed\": 1");
+      expect(existsSync(join(secondOutputDir, "issue-17.md"))).toBe(false);
 
       const forced = await runCli([
         "issue-enrichment-run",
@@ -1017,7 +1022,7 @@ describe("build-enrichment-comment issue CLI", () => {
         "--confirm",
         "true"
       ], issueRunEnv(root))).rejects.toMatchObject({
-        stdout: expect.stringContaining("\"workerSkipped\": 1")
+        stdout: expect.stringContaining("\"exitReason\": \"lease_busy\"")
       });
       expect(requests.some((request) => request.method === "GET" && request.path === "/repos/owner/issue-repo/issues/17")).toBe(false);
       expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);

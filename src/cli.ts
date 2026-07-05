@@ -35,6 +35,7 @@ import {
   resolveIssueEnrichmentRepoPolicy,
   runIssueEnrichmentCycle,
   type IssueEnrichmentCycleGithub,
+  type IssueEnrichmentCycleResult,
   type IssueEnrichmentConfig,
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
@@ -1066,11 +1067,12 @@ async function main(): Promise<void> {
     });
     if (issueNumbers.length > runLimit.value) {
       throw new Error(
-        `issue-enrichment-run selected issue count ${issueNumbers.length} exceeds configured per-run cap ${runLimit.value} (${runLimit.binding})`
+        `issue-enrichment-run selected issue count ${issueNumbers.length} exceeds configured selected-run prefetch cap ${runLimit.value} (${runLimit.binding}; cap is conservative and uses selected issue count before fetch)`
       );
     }
     const issues: GitHubRelatedIssueOrPull[] = [];
-    const previewOutputs: Array<Extract<ReturnType<typeof buildIssueEnrichmentDryRunOutput>, { skipped: false }>> = [];
+    type IssueEnrichmentPreview = Extract<ReturnType<typeof buildIssueEnrichmentDryRunOutput>, { skipped: false }>;
+    const previewOutputs: IssueEnrichmentPreview[] = [];
     let selectedIssuesLoaded = false;
     const loadSelectedIssues = async () => {
       if (selectedIssuesLoaded) return issues;
@@ -1118,7 +1120,7 @@ async function main(): Promise<void> {
         canPostAsApp: () => github.canPostAsApp(),
         upsertIssueComment: (input) => github.upsertIssueComment(input)
       };
-      const result = await runIssueEnrichmentCycle({
+      const cycleInput = {
         config,
         state,
         github: cycleGithub,
@@ -1128,32 +1130,37 @@ async function main(): Promise<void> {
         advanceWatermarks: false,
         force,
         ...(preacquiredLease ? { preacquiredLease } : {})
-      });
+      };
       if (preacquiredLease) leaseTransferredToCycle = true;
+      const result = await runIssueEnrichmentCycle(cycleInput);
+      const liveExitReason = dryRun ? undefined : issueEnrichmentRunLiveExitReason(result);
       const output = {
         command: "issue-enrichment-run",
         repo,
         issueNumbers,
         force,
+        ...(liveExitReason ? { exitReason: liveExitReason } : {}),
         ...result
       };
       if (args["output-dir"]) {
         const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
         mkdirSync(safeOutputDir, { recursive: true });
         writeFileSync(join(safeOutputDir, "issue-enrichment-run.json"), `${redactSecrets(JSON.stringify(output, null, 2))}\n`);
+        const resultIssueNumbers = new Set(
+          result.items
+            .filter((item) =>
+              dryRun ||
+              (!item.skippedExisting && item.recordStatus !== "deferred" && item.recordStatus !== "skipped")
+            )
+            .map((item) => item.issueNumber)
+        );
         for (const preview of previewOutputs) {
+          if (!resultIssueNumbers.has(preview.issueNumber)) continue;
           writeFileSync(join(safeOutputDir, `issue-${preview.issueNumber}.md`), redactSecrets(preview.body));
         }
       }
       console.log(redactSecrets(JSON.stringify(output, null, 2)));
-      const liveNoWork = !dryRun &&
-        result.summary.posted === 0 &&
-        result.summary.failed === 0 &&
-        result.summary.alreadyProcessed === 0 &&
-        result.summary.dryRunRecorded === 0 &&
-        result.summary.skippedRecorded === 0 &&
-        result.summary.deferredRecorded === 0;
-      if (!result.ok || (!dryRun && (result.summary.workerSkipped > 0 || liveNoWork))) process.exitCode = 1;
+      if (!result.ok || liveExitReason === "lease_busy" || liveExitReason === "no_work") process.exitCode = 1;
     } finally {
       if (preacquiredLease && !leaseTransferredToCycle) state.releaseIssueEnrichmentRunLease(preacquiredLease.leaseId);
       state.close();
@@ -2806,6 +2813,21 @@ function effectiveIssueEnrichmentRunLimit(
     binding: `${binding.field}=${binding.value}`,
     value: binding.value
   };
+}
+
+function issueEnrichmentRunLiveExitReason(
+  result: IssueEnrichmentCycleResult
+): "failed" | "lease_busy" | "no_work" | undefined {
+  if (!result.ok) return "failed";
+  if (result.summary.workerSkipped > 0) return "lease_busy";
+  const liveNoWork =
+    result.summary.posted === 0 &&
+    result.summary.failed === 0 &&
+    result.summary.alreadyProcessed === 0 &&
+    result.summary.dryRunRecorded === 0 &&
+    result.summary.skippedRecorded === 0 &&
+    result.summary.deferredRecorded === 0;
+  return liveNoWork ? "no_work" : undefined;
 }
 
 function parseSingleArg(value: string | string[], label: string): string {
