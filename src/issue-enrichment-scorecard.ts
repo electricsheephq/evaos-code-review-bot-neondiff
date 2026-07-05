@@ -270,29 +270,35 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
     }
 
     for (const dimension of ISSUE_ENRICHMENT_SCORE_DIMENSIONS) {
-      const score = fixtureCase.dimensions?.[dimension.id];
-      if (!score) {
+      const dimensionCell = fixtureCase.dimensions?.[dimension.id];
+      if (!dimensionCell) {
         errors.push(`case ${fixtureCase.id} missing dimension ${dimension.id}`);
         continue;
       }
-      if (score.unmeasurable) {
-        if (score.score !== undefined) {
+      if (dimensionCell.unmeasurable) {
+        if (dimensionCell.score !== undefined) {
           errors.push(`case ${fixtureCase.id} dimension ${dimension.id} cannot set score when unmeasurable`);
         }
-        if (!score.unmeasurableReason?.trim()) {
+        if (!dimensionCell.unmeasurableReason?.trim()) {
           errors.push(`case ${fixtureCase.id} dimension ${dimension.id} missing unmeasurableReason`);
         }
         continue;
       }
-      if (score.score === undefined) {
+      if (dimensionCell.score === undefined) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} score is required`);
         continue;
       }
-      const scoreIsInRange = Number.isFinite(score.score) && score.score! >= 0 && score.score! <= 5;
+      const scoreIsInRange =
+        Number.isFinite(dimensionCell.score) && dimensionCell.score! >= 0 && dimensionCell.score! <= 5;
       if (!scoreIsInRange) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} score must be between 0 and 5`);
-      } else if (score.score! > 3 && !hasDirectEvidenceLink(score.evidenceLinks, fixtureCase, dimension.id)) {
-        errors.push(`case ${fixtureCase.id} dimension ${dimension.id} scored ${score.score} without direct evidence links`);
+      } else if (
+        dimensionCell.score! > 3 &&
+        !hasDirectEvidenceLink(dimensionCell.evidenceLinks, fixtureCase, dimension.id)
+      ) {
+        errors.push(
+          `case ${fixtureCase.id} dimension ${dimension.id} scored ${dimensionCell.score} without direct evidence links`
+        );
       }
     }
   }
@@ -339,14 +345,14 @@ function scoreDimension(
   const threshold = getMetricContract(packet, dimension).pilotThreshold.advisoryMin;
 
   for (const fixtureCase of packet.cases) {
-    const score = fixtureCase.dimensions?.[dimension.id];
-    if (!score) continue;
-    if (score.unmeasurable) {
+    const dimensionCell = fixtureCase.dimensions?.[dimension.id];
+    if (!dimensionCell) continue;
+    if (dimensionCell.unmeasurable) {
       unmeasurableCases.push(fixtureCase.id);
       continue;
     }
-    for (const link of score.evidenceLinks ?? []) evidenceLinks.add(link);
-    const numericScore = normalizeScore(score.score);
+    for (const link of dimensionCell.evidenceLinks ?? []) evidenceLinks.add(link);
+    const numericScore = normalizeScore(dimensionCell.score);
     measuredScores.push(numericScore);
     if (numericScore < threshold) pilotThresholdMisses.push(fixtureCase.id);
   }

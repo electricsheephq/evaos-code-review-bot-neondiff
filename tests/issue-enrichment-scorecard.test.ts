@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ISSUE_ENRICHMENT_REQUIRED_FIXTURE_COVERAGE,
@@ -11,7 +11,9 @@ import {
   type IssueEnrichmentFixturePacket
 } from "../src/issue-enrichment-scorecard.js";
 
-const fixturePath = join("tests", "fixtures", "issue-enrichment-scorecard", "sampled-regression-packet.json");
+const fixturePath = fileURLToPath(
+  new URL("./fixtures/issue-enrichment-scorecard/sampled-regression-packet.json", import.meta.url)
+);
 
 function loadFixture(): IssueEnrichmentFixturePacket {
   return JSON.parse(readFileSync(fixturePath, "utf8")) as IssueEnrichmentFixturePacket;
