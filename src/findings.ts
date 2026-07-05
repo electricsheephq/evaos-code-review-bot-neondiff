@@ -97,8 +97,17 @@ export function normalizeFindingsForReview(
     return a.line - b.line || a.title.localeCompare(b.title);
   });
 
-  const kept = accepted.slice(0, maxInlineComments);
-  for (const finding of accepted.slice(maxInlineComments)) {
+  // Same-run near-duplicate suppression (#281): collapse clusters where one model response flags
+  // the same root cause twice (adjacent lines / reworded title). Runs on the confidence-ranked
+  // order so the KEPT cluster member is the highest-ranked (post-#287, highest-confidence) one, and
+  // runs BEFORE the cap so a suppressed duplicate frees a slot for a distinct finding.
+  const deduped = suppressSameRunNearDuplicates(accepted);
+  for (const finding of deduped.dropped) {
+    dropped.push({ ...sanitizeDroppedFindingPublicText(finding, options.publicConfidencePolicy), reason: "same_run_near_duplicate" });
+  }
+
+  const kept = deduped.kept.slice(0, maxInlineComments);
+  for (const finding of deduped.kept.slice(maxInlineComments)) {
     dropped.push({ ...sanitizeDroppedFindingPublicText(finding, options.publicConfidencePolicy), reason: "comment_cap_exceeded" });
   }
 
@@ -128,6 +137,58 @@ export function normalizeFindingsForReview(
     }),
     dropped
   };
+}
+
+const SAME_RUN_DEDUP_MAX_LINE_DELTA = 3;
+const SAME_RUN_DEDUP_MIN_PREFIX_LENGTH = 12;
+
+/**
+ * Suppress same-run near-duplicate findings (#281): within one review response, collapse a cluster
+ * of findings that flag the same root cause. Two findings are near-duplicates when they share the
+ * same path AND the same normalized category (normalizeFindingCategory) AND their line numbers are
+ * within {@link SAME_RUN_DEDUP_MAX_LINE_DELTA} AND their normalized titles are exact-or-prefix
+ * similar. Conservative by design (no fuzzy edit-distance): a missed duplicate is cheaper than a
+ * suppressed distinct finding. The input order is authoritative — the FIRST member of a cluster is
+ * kept and later members are dropped, so callers should pass findings pre-sorted by rank.
+ */
+export function suppressSameRunNearDuplicates(findings: Finding[]): { kept: Finding[]; dropped: Finding[] } {
+  const kept: Array<{ finding: Finding; category: string; normalizedTitle: string }> = [];
+  const dropped: Finding[] = [];
+
+  for (const finding of findings) {
+    const category = normalizeFindingCategory(finding);
+    const normalizedTitle = normalizeTitleForDedup(finding.title);
+    const isDuplicate = kept.some(
+      (entry) =>
+        entry.finding.path === finding.path &&
+        entry.category === category &&
+        Math.abs(entry.finding.line - finding.line) <= SAME_RUN_DEDUP_MAX_LINE_DELTA &&
+        titlesAreNearDuplicate(entry.normalizedTitle, normalizedTitle)
+    );
+    if (isDuplicate) {
+      dropped.push(finding);
+      continue;
+    }
+    kept.push({ finding, category, normalizedTitle });
+  }
+
+  return { kept: kept.map((entry) => entry.finding), dropped };
+}
+
+function normalizeTitleForDedup(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function titlesAreNearDuplicate(a: string, b: string): boolean {
+  if (a === b) return a.length > 0;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  // Prefix match must span a meaningful anchor so short generic titles don't collapse distinct
+  // findings; require the shared prefix (the shorter title) to be at least the min length.
+  return shorter.length >= SAME_RUN_DEDUP_MIN_PREFIX_LENGTH && longer.startsWith(shorter);
 }
 
 function redactFinding<T extends Finding>(finding: T): T {
