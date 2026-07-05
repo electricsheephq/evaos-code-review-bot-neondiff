@@ -1663,7 +1663,8 @@ describe("offline negative-control flag (#284)", () => {
     runOfflineEval(scenario, { outputDir: root });
     return {
       manifest: JSON.parse(readFileSync(join(root, "manifest.json"), "utf8")),
-      calibration: JSON.parse(readFileSync(join(root, "calibration-report.json"), "utf8"))
+      calibration: JSON.parse(readFileSync(join(root, "calibration-report.json"), "utf8")),
+      scorecard: JSON.parse(readFileSync(join(root, "scorecard.json"), "utf8"))
     };
   }
 
@@ -1701,6 +1702,30 @@ describe("offline negative-control flag (#284)", () => {
 
     expect(() => runOfflineEval(scenario, { outputDir: mkdtempSync(join(tmpdir(), "evaos-neg-control-reject-")) }))
       .toThrow("negativeControl scenarios must not include expected labels");
+  });
+
+  it("sums negative-control credit across multiple scorecards in the promotion decision", () => {
+    // #284 second derivation site: suite-level promotion aggregates the explicit per-scorecard
+    // count. One flagged control + one merely-unlabeled scenario must aggregate to exactly 1.
+    const flagged = runInto(
+      baseScenario({ runId: "neg-control-284-flagged", negativeControl: true }),
+      "evaos-neg-control-agg-flagged-"
+    );
+    const unlabeled = runInto(
+      baseScenario({ runId: "neg-control-284-unlabeled" }),
+      "evaos-neg-control-agg-unlabeled-"
+    );
+
+    const markdown = buildEvalPromotionDecisionMarkdown({
+      ok: true,
+      scenarioCount: 2,
+      missingSuites: [],
+      scorecards: [flagged.scorecard, unlabeled.scorecard]
+    });
+
+    expect(markdown).toContain("- Negative-control scenarios: 1 /");
+    expect(markdown).not.toContain("- Negative-control scenarios: 2 /");
+    expect(markdown).toContain("Decision: not enough evidence");
   });
 
   it("rejects a non-boolean negativeControl flag", () => {
