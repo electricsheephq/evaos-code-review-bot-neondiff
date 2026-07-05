@@ -569,7 +569,9 @@ async function resolveRiskWeightedPriorityOverride(input: {
   const { priority, tier, reason } = riskWeightedQueuePriority({ config: input.config, repo: input.repo, report });
   if (tier !== "default") {
     console.warn(
-      `[risk-queue] repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha} tier=${tier} priority=${priority ?? "default"} reason=${reason}`
+      redactSecrets(
+        `[risk-queue] repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha} tier=${tier} priority=${priority ?? "default"} reason=${reason}`
+      )
     );
   }
   return priority;

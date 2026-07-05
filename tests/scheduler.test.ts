@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
 import { runScheduledCycleWithDeps, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
@@ -3090,6 +3090,110 @@ describe("provider-aware review scheduler", () => {
       })
     ]);
     state.close();
+  });
+
+  it("does not fetch changed files when risk weighting is disabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-risk-disabled-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.riskWeightedQueue = { enabled: false };
+    const state = new ReviewStateStore(config.statePath);
+    let fileFetches = 0;
+    const github: SchedulerGitHubApi = {
+      ...githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      listPullFiles: async () => {
+        fileFetches += 1;
+        throw new Error("listPullFiles must not be called when risk weighting is disabled");
+      }
+    };
+    let reviewed = 0;
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewed += 1;
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(fileFetches).toBe(0);
+    expect(reviewed).toBe(1);
+    expect(result.reviewed).toBe(1);
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({ pullNumber: 1, priority: 50 })
+    ]);
+    state.close();
+  });
+
+  it("falls back to flat priority and redacted logs when risk file fetch fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-risk-fetch-fail-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.riskWeightedQueue = {
+      enabled: true,
+      elevatedPriority: 5,
+      docsOnlyPriority: 80
+    };
+    const state = new ReviewStateStore(config.statePath);
+    let fileFetches = 0;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const github: SchedulerGitHubApi = {
+      ...githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      listPullFiles: async () => {
+        fileFetches += 1;
+        throw new Error("GitHub failed with ghp_fake_token");
+      }
+    };
+    let reviewed = 0;
+
+    try {
+      const result = await runScheduledCycleWithDeps({
+        config,
+        github,
+        state,
+        options: { dryRun: true, useZCode: false },
+        reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+          reviewed += 1;
+          reviewState.recordProcessed({
+            repo,
+            pullNumber: reviewPull.number,
+            headSha: reviewPull.head.sha,
+            status: "dry_run",
+            event: "COMMENT"
+          });
+          return "reviewed";
+        },
+        now: new Date("2026-07-01T00:00:00.000Z")
+      });
+
+      const warning = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(fileFetches).toBe(1);
+      expect(reviewed).toBe(1);
+      expect(result.reviewed).toBe(1);
+      expect(warning).toContain("[risk-queue] changed-surface fetch failed");
+      expect(warning).not.toContain("ghp_fake_token");
+      expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+        expect.objectContaining({ pullNumber: 1, priority: 50 })
+      ]);
+    } finally {
+      warn.mockRestore();
+      state.close();
+    }
   });
 
   it("uses repo-profile queue overflow policy to mark burst heads explicitly provider-deferred", async () => {
