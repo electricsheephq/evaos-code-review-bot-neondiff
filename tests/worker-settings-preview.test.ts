@@ -20,7 +20,7 @@ vi.mock("../src/git.js", async (importOriginal) => {
   };
 });
 
-const { localDateFolder, reviewPull } = await import("../src/worker.js");
+const { buildReviewProviderMetadata, localDateFolder, reviewPull } = await import("../src/worker.js");
 
 describe("worker review settings preview evidence", () => {
   const roots: string[] = [];
@@ -79,10 +79,43 @@ describe("worker review settings preview evidence", () => {
       mode: "inline_review"
     });
     expect(walkthrough).toContain("### Review Settings Preview");
+    expect(walkthrough).toContain("Provider: GLM/Z.ai through ZCode (`zcode-glm`, zcode, model `GLM-5.2`).");
     expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");
     expect(walkthrough).toContain("- Path instructions: `src/\\`templates\\`/**`");
     expect(walkthrough).not.toContain(secretLikeToken);
     state.close();
+  });
+
+  it("marks stale zcode provider ids as registry misses instead of silently claiming a configured provider", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-metadata-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.zcode.providerId = "ghost-provider";
+    config.providers = {
+      defaultProviderId: "zcode-glm",
+      providers: {
+        "zcode-glm": {
+          enabled: true,
+          adapter: "zcode",
+          displayName: "GLM/Z.ai through ZCode",
+          model: "GLM-5.2",
+          authMode: "zcode-app-config",
+          capabilities: {
+            review: true,
+            jsonOutput: true,
+            local: false,
+            streaming: false
+          }
+        }
+      }
+    };
+
+    expect(buildReviewProviderMetadata(config)).toEqual({
+      providerId: "ghost-provider",
+      adapter: "zcode (registry miss)",
+      model: "GLM-5.2",
+      displayName: "Unregistered provider id"
+    });
   });
 });
 
@@ -136,12 +169,31 @@ function minimalConfig(root: string): BotConfig {
       }
     },
     zcode: {
+      providerId: "zcode-glm",
       cliPath: "/unused/zcode.cjs",
       appConfigPath: "/unused/config.json",
       model: "GLM-5.2",
       timeoutMs: 1,
       maxPatchBytes: 1,
       retryMaxRetries: 0
+    },
+    providers: {
+      defaultProviderId: "zcode-glm",
+      providers: {
+        "zcode-glm": {
+          enabled: true,
+          adapter: "zcode",
+          displayName: "GLM/Z.ai through ZCode",
+          model: "GLM-5.2",
+          authMode: "zcode-app-config",
+          capabilities: {
+            review: true,
+            jsonOutput: true,
+            local: false,
+            streaming: false
+          }
+        }
+      }
     },
     github: {}
   };

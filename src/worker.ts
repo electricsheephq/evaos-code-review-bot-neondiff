@@ -73,14 +73,22 @@ const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
 const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private" | "unknown"; expiresAtMs: number }>();
 
-function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
+export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
   const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
   const provider = config.providers?.providers[providerId];
+  if (!provider) {
+    return {
+      providerId,
+      adapter: "zcode (registry miss)",
+      model: config.zcode.model,
+      displayName: "Unregistered provider id"
+    };
+  }
   return {
     providerId,
-    adapter: provider?.adapter ?? "zcode",
-    model: provider?.model ?? config.zcode.model,
-    ...(provider?.displayName ? { displayName: provider.displayName } : {})
+    adapter: provider.adapter,
+    model: provider.model,
+    ...(provider.displayName ? { displayName: provider.displayName } : {})
   };
 }
 
