@@ -12,6 +12,49 @@ export interface PublicConfidenceDisplayPolicy {
   wilsonLowerBound?: number;
 }
 
+export type PublicConfidenceMode = "uncalibrated" | "calibrated";
+
+export type PublicConfidenceMissingThreshold =
+  | "mode_not_calibrated"
+  | "calibration_evidence_url_missing_or_unusable"
+  | "dataset_id_missing"
+  | "labeled_findings_below_100"
+  | "p0_p1_labels_below_30"
+  | "negative_controls_below_10"
+  | "wilson_lower_bound_below_0.95";
+
+export interface PublicConfidenceMetric {
+  actual?: number;
+  required: number;
+  passed: boolean;
+}
+
+export interface PublicConfidencePolicyEvaluation {
+  allowed: boolean;
+  publicMode: PublicConfidenceMode;
+  missingThresholds: PublicConfidenceMissingThreshold[];
+  metrics: {
+    labeledFindings: PublicConfidenceMetric;
+    p0p1Labels: PublicConfidenceMetric;
+    negativeControlScenarios: PublicConfidenceMetric;
+    wilsonLowerBound: PublicConfidenceMetric;
+  };
+  proofBoundary: string;
+}
+
+export interface PublicConfidenceCalibrationReport extends PublicConfidencePolicyEvaluation {
+  dataset: {
+    id?: string;
+    evidenceUrl?: string;
+  };
+  labels: {
+    labeledFindings?: number;
+    p0p1Labels?: number;
+    negativeControlScenarios?: number;
+  };
+  requestChangesPolicy: string;
+}
+
 export const PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS = 100;
 export const PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS = 30;
 export const PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS = 10;
@@ -99,30 +142,88 @@ export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisp
 }
 
 export function isPublicConfidenceDisplayAllowed(policy?: PublicConfidenceDisplayPolicy): boolean {
-  if (!policy || policy.mode !== "calibrated") return false;
-  if (!isUsablePublicConfidenceEvidenceUrl(policy.evidenceUrl) || !policy.datasetId?.trim()) return false;
+  return evaluatePublicConfidencePolicy(policy).allowed;
+}
+
+export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayPolicy): PublicConfidencePolicyEvaluation {
+  const effectivePolicy = buildPublicConfidencePolicy(policy);
+  const requiredLabeledFindings = Math.max(effectivePolicy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS);
+  const requiredP0P1Labels = Math.max(effectivePolicy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS);
+  const requiredNegativeControls = Math.max(effectivePolicy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS);
+  const requiredWilsonLowerBound = Math.max(effectivePolicy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND);
+  const metrics = {
+    labeledFindings: thresholdMetric(effectivePolicy.labeledFindings, requiredLabeledFindings, isNonNegativeInteger),
+    p0p1Labels: thresholdMetric(effectivePolicy.p0p1Labels, requiredP0P1Labels, isNonNegativeInteger),
+    negativeControlScenarios: thresholdMetric(effectivePolicy.negativeControlScenarios, requiredNegativeControls, isNonNegativeInteger),
+    wilsonLowerBound: thresholdMetric(effectivePolicy.wilsonLowerBound, requiredWilsonLowerBound, isProbability)
+  };
+  const missingThresholds: PublicConfidenceMissingThreshold[] = [];
+
+  if (effectivePolicy.mode !== "calibrated") missingThresholds.push("mode_not_calibrated");
+  if (!isUsablePublicConfidenceEvidenceUrl(effectivePolicy.evidenceUrl)) {
+    missingThresholds.push("calibration_evidence_url_missing_or_unusable");
+  }
+  if (!effectivePolicy.datasetId?.trim()) missingThresholds.push("dataset_id_missing");
   if (
-    !isPositiveInteger(policy.minLabeledFindings) ||
-    !isPositiveInteger(policy.minP0P1Labels) ||
-    !isPositiveInteger(policy.minNegativeControlScenarios) ||
-    !isProbability(policy.minWilsonLowerBound)
+    !isPositiveInteger(effectivePolicy.minLabeledFindings) ||
+    !isPositiveInteger(effectivePolicy.minP0P1Labels) ||
+    !isPositiveInteger(effectivePolicy.minNegativeControlScenarios) ||
+    !isProbability(effectivePolicy.minWilsonLowerBound)
   ) {
-    return false;
+    missingThresholds.push(
+      "labeled_findings_below_100",
+      "p0_p1_labels_below_30",
+      "negative_controls_below_10",
+      "wilson_lower_bound_below_0.95"
+    );
+  } else {
+    if (!metrics.labeledFindings.passed) missingThresholds.push("labeled_findings_below_100");
+    if (!metrics.p0p1Labels.passed) missingThresholds.push("p0_p1_labels_below_30");
+    if (!metrics.negativeControlScenarios.passed) missingThresholds.push("negative_controls_below_10");
+    if (!metrics.wilsonLowerBound.passed) missingThresholds.push("wilson_lower_bound_below_0.95");
   }
-  if (!isNonNegativeInteger(policy.labeledFindings) || policy.labeledFindings < Math.max(policy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS)) {
-    return false;
+
+  const allowed = missingThresholds.length === 0;
+  return {
+    allowed,
+    publicMode: allowed ? "calibrated" : "uncalibrated",
+    missingThresholds,
+    metrics,
+    proofBoundary: allowed
+      ? "Public comments may display confidence percentages only while this report stays linked to the evaluated dataset and passing metrics."
+      : "Public comments must not display confidence percentages until all calibration thresholds pass."
+  };
+}
+
+export function buildPublicConfidenceCalibrationReport(policy?: PublicConfidenceDisplayPolicy): PublicConfidenceCalibrationReport {
+  const effectivePolicy = buildPublicConfidencePolicy(policy);
+  const evaluation = evaluatePublicConfidencePolicy(effectivePolicy);
+  return {
+    ...evaluation,
+    dataset: {
+      ...(effectivePolicy.datasetId ? { id: effectivePolicy.datasetId } : {}),
+      ...(effectivePolicy.evidenceUrl ? { evidenceUrl: effectivePolicy.evidenceUrl } : {})
+    },
+    labels: {
+      ...(effectivePolicy.labeledFindings !== undefined ? { labeledFindings: effectivePolicy.labeledFindings } : {}),
+      ...(effectivePolicy.p0p1Labels !== undefined ? { p0p1Labels: effectivePolicy.p0p1Labels } : {}),
+      ...(effectivePolicy.negativeControlScenarios !== undefined
+        ? { negativeControlScenarios: effectivePolicy.negativeControlScenarios }
+        : {})
+    },
+    requestChangesPolicy: "REQUEST_CHANGES confidence claims require calibrated P0/P1 bins that pass the public display policy."
+  };
+}
+
+function thresholdMetric(
+  actual: number | undefined,
+  required: number,
+  isValidActual: (value: unknown) => value is number
+): PublicConfidenceMetric {
+  if (!isValidActual(actual)) {
+    return { required, passed: false };
   }
-  if (!isNonNegativeInteger(policy.p0p1Labels) || policy.p0p1Labels < Math.max(policy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS)) return false;
-  if (
-    !isNonNegativeInteger(policy.negativeControlScenarios) ||
-    policy.negativeControlScenarios < Math.max(policy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS)
-  ) {
-    return false;
-  }
-  if (!isProbability(policy.wilsonLowerBound) || policy.wilsonLowerBound < Math.max(policy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND)) {
-    return false;
-  }
-  return true;
+  return { actual, required, passed: actual >= required };
 }
 
 function isPositiveInteger(value: unknown): value is number {
