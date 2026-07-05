@@ -144,6 +144,20 @@ describe("issue relationship taxonomy", () => {
       proofRequirements: ["current_head_failure"],
       suggestedLabels: ["blocker"]
     });
+
+    const explicitHumanRouting = classifyIssueRelationshipItem({
+      id: "issue-44c",
+      kind: "issue",
+      title: "Manual triage needed for owner mapping",
+      categoryHint: "dependency"
+    });
+
+    expect(explicitHumanRouting).toMatchObject({
+      category: "needs_human_routing",
+      categoryHint: "dependency",
+      categoryHintHonored: false,
+      proofRequirements: ["human_triage"]
+    });
   });
 
   it("routes notarization and release-gate risks without over-triggering on release notes", () => {
@@ -215,6 +229,21 @@ describe("issue relationship taxonomy", () => {
       title: "Label cleanup",
       labels: ["pre-release-risk-review"]
     }).category).toBe("needs_human_routing");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49h",
+      kind: "issue",
+      title: "Docs-only parser broke",
+      labels: ["docs-only"],
+      paths: ["src/router.ts"]
+    }).category).toBe("regression");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49i",
+      kind: "issue",
+      title: "Bump lockfile version",
+      paths: ["package-lock.json"]
+    }).category).toBe("dependency");
   });
 
   it("keeps dependsOn refs as relationship metadata, not proof evidence", () => {
@@ -293,6 +322,29 @@ describe("issue relationship taxonomy", () => {
     expect(JSON.stringify(result.publicIssueCommentState)).not.toContain("/Volumes/LEXAR");
   });
 
+  it("rejects private relationship refs before public cluster ids", () => {
+    const result = buildIssueRelationshipClusters({
+      items: [
+        {
+          id: "issue-57",
+          kind: "issue",
+          title: "Private relationship ref should not leak",
+          relationshipKeys: ["/Volumes/LEXAR/private/raw.log", "public-routing-key"],
+          duplicateOf: "/Users/lume/secrets/raw.log",
+          relatedRefs: ["http://localhost:3000/private"]
+        }
+      ]
+    });
+
+    expect(result.publicIssueCommentState.clusters[0]?.id).toBe("public-routing-key");
+    expect(result.privateEvidenceBoundary).toEqual({
+      rawEvidenceOmitted: true,
+      privateEvidenceItems: 1
+    });
+    expect(JSON.stringify(result.publicIssueCommentState)).not.toContain("Volumes-LEXAR");
+    expect(JSON.stringify(result.publicIssueCommentState)).not.toContain("localhost");
+  });
+
   it("keeps standalone clusters distinct when ids sanitize to the same slug", () => {
     const result = buildIssueRelationshipClusters({
       items: [
@@ -326,6 +378,17 @@ describe("issue relationship taxonomy", () => {
     expect(clusterIds).toContain("standalone-issue-50");
     expect(clusterIds).toContain("standalone-issue.50");
     expect(clusterIds.filter((id) => /^standalone-issue-50-[a-z0-9]{7}$/.test(id))).toHaveLength(2);
+  });
+
+  it("keeps standalone cluster ids stable for repeated inputs", () => {
+    const first = buildIssueRelationshipClusters({
+      items: [{ id: "issue/50", kind: "issue", title: "Slash id issue" }]
+    });
+    const second = buildIssueRelationshipClusters({
+      items: [{ id: "issue/50", kind: "issue", title: "Slash id issue" }]
+    });
+
+    expect(first.publicIssueCommentState.clusters[0]?.id).toBe(second.publicIssueCommentState.clusters[0]?.id);
   });
 
   it("counts private fields that are sanitized out of public output", () => {
@@ -366,6 +429,43 @@ describe("issue relationship taxonomy", () => {
     expect(JSON.stringify(result)).not.toContain("\\\\fileserver");
     expect(JSON.stringify(result)).not.toContain("C:secrets");
     expect(JSON.stringify(result)).not.toContain("/etc/passwd");
+  });
+
+  it("redacts public summary fallback text when publicSummary is omitted", () => {
+    const result = classifyIssueRelationshipItem({
+      id: "issue-54b",
+      kind: "issue",
+      title: "Failure at /Volumes/LEXAR/private/raw.log",
+      body: "Raw detail includes /Users/lume/.ssh/id_rsa and token sk-test-example."
+    });
+
+    expect(result.title).toBe("Failure at [local-path-redacted]");
+    expect(result.summary).toBe("Failure at [local-path-redacted]");
+    expect(JSON.stringify(result)).not.toContain("/Volumes/LEXAR");
+    expect(JSON.stringify(result)).not.toContain("/Users/lume");
+    expect(JSON.stringify(result)).not.toContain("sk-test-example");
+  });
+
+  it("drops local and private-network evidence urls from public output", () => {
+    const result = classifyIssueRelationshipItem({
+      id: "issue-54c",
+      kind: "issue",
+      title: "Evidence URL filtering",
+      url: "http://localhost:3000/private",
+      evidenceUrls: [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1",
+        "http://127.0.0.1/private",
+        "http://10.0.0.5/private",
+        "http://192.168.1.20/private",
+        "http://[::1]/private",
+        "https://service.internal/private"
+      ]
+    });
+
+    expect(result.url).toBeUndefined();
+    expect(result.publicEvidenceUrls).toEqual([
+      "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1"
+    ]);
   });
 
   it("keeps only safe reviewer logins in public output", () => {

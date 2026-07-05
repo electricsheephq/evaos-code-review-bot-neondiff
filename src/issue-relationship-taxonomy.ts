@@ -169,7 +169,7 @@ export function buildIssueRelationshipClusters(input: IssueRelationshipClusterIn
 
 function resolveRelationshipCategory(input: IssueRelationshipItemInput): IssueRelationshipCategoryId {
   const inferred = inferRelationshipCategory(input);
-  return inferred === "needs_human_routing" && input.categoryHint ? input.categoryHint : inferred;
+  return inferred === "needs_human_routing" && input.categoryHint && !hasHumanRoutingSignal(searchableText(input)) ? input.categoryHint : inferred;
 }
 
 function inferRelationshipCategory(input: IssueRelationshipItemInput): IssueRelationshipCategoryId {
@@ -183,12 +183,15 @@ function inferRelationshipCategory(input: IssueRelationshipItemInput): IssueRela
   }
   if (hasReleaseRiskSignal(haystack)) return "release_risk";
   if (input.duplicateOf || matchesAny(haystack, ["stale duplicate", "duplicate of", "superseded by", "already covered"])) return "stale_duplicate";
-  if (isDocsOnly(input.paths ?? []) || matchesAny(haystack, ["docs-only", "documentation-only"])) return "docs_only";
-  if (matchesAny(haystack, ["dependency", "depends on", "blocked by", "upstream", "package update"]) || hasDependencyPath(input.paths ?? [])) {
+  const paths = input.paths ?? [];
+  const docsOnlyByPath = isDocsOnly(paths);
+  const docsOnlyByText = matchesAny(haystack, ["docs-only", "documentation-only"]);
+  if (docsOnlyByPath || (docsOnlyByText && paths.length === 0)) return "docs_only";
+  if (matchesAny(haystack, ["dependency", "depends on", "blocked by", "upstream", "package update"]) || hasDependencyPath(paths)) {
     return "dependency";
   }
   if (hasRegressionSignal(haystack)) return "regression";
-  if (matchesAny(haystack, ["manual triage", "needs human", "human routing", "ambiguous owner", "unknown owner"])) return "needs_human_routing";
+  if (hasHumanRoutingSignal(haystack)) return "needs_human_routing";
   return "needs_human_routing";
 }
 
@@ -249,6 +252,10 @@ function hasRegressionSignal(text: string): boolean {
   ]);
 }
 
+function hasHumanRoutingSignal(text: string): boolean {
+  return matchesAny(text, ["manual triage", "needs human", "human routing", "ambiguous owner", "unknown owner"]);
+}
+
 function suggestedLabelsFor(input: IssueRelationshipItemInput, category: IssueRelationshipCategoryId): string[] {
   const explicit = publicLabels(input.suggestedLabels ?? []);
   if (category === "release_risk") return unique([...explicit, "release-risk"]);
@@ -299,18 +306,23 @@ function searchableText(input: IssueRelationshipItemInput): string {
 }
 
 function hasPrivateEvidence(input: IssueRelationshipItemInput): boolean {
+  const relationshipValues = relationshipRefValues(input);
   return Boolean(
     input.privateEvidence?.length ||
     input.rawLogs?.length ||
     input.localPaths?.length ||
     input.tokens?.length ||
     input.paths?.some(isLocalPath) ||
+    relationshipValues.some((value) => isPrivateRelationshipValue(value)) ||
     containsSecretLikeText([
       input.title,
       input.body ?? "",
       input.publicSummary ?? "",
       input.url ?? "",
       ...(input.paths ?? []),
+      ...(input.labels ?? []),
+      ...(input.evidenceUrls ?? []),
+      ...(input.suggestedLabels ?? []),
       ...(input.suggestedReviewers ?? [])
     ].join("\n"))
   );
@@ -338,10 +350,30 @@ function publicReviewerLogins(values: string[]): string[] {
 
 function firstPublicId(values: string[]): string | undefined {
   for (const value of values) {
-    const id = sanitizeId(value);
+    if (isPrivateRelationshipValue(value)) continue;
+    const redacted = redactLocalPathLikeText(redactSecrets(value.trim()));
+    if (redacted.includes("[local-path-redacted]")) continue;
+    const id = sanitizeId(redacted);
     if (id) return id;
   }
   return undefined;
+}
+
+function relationshipRefValues(input: IssueRelationshipItemInput): string[] {
+  return [
+    ...(input.relationshipKeys ?? []),
+    ...(input.duplicateOf ? [input.duplicateOf] : []),
+    ...(input.dependsOn ?? []),
+    ...(input.blockedBy ?? []),
+    ...(input.relatedRefs ?? [])
+  ];
+}
+
+function isPrivateRelationshipValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || isLocalPath(trimmed) || containsSecretLikeText(trimmed)) return true;
+  if (/^https?:/i.test(trimmed) && !isSafePublicUrl(trimmed)) return true;
+  return false;
 }
 
 function sanitizeId(value: string): string {
@@ -368,10 +400,28 @@ function isSafePublicUrl(value: string): boolean {
   if (containsSecretLikeText(value)) return false;
   try {
     const url = new URL(value);
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (isPrivateOrLocalHostname(hostname)) return false;
     return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password;
   } catch {
     return false;
   }
+}
+
+function isPrivateOrLocalHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "0.0.0.0" ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    (hostname.includes(":") && (hostname.startsWith("fc") || hostname.startsWith("fd"))) ||
+    /^127\./.test(hostname) ||
+    /^10\./.test(hostname) ||
+    /^169\.254\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname) ||
+    /^192\.168\./.test(hostname)
+  );
 }
 
 function isLocalPath(value: string): boolean {
