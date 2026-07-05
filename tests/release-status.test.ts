@@ -193,16 +193,16 @@ describe("beta release status", () => {
     const manifest = readPublicReleaseManifestStatus({
       cwd: repoRoot,
       manifestPath: "docs/public-release-manifest.json",
-      expectedVersion: "v0.4.26-beta.1"
+      expectedVersion: "v0.4.27-beta.1"
     });
 
     expect(manifest).toMatchObject({
       ok: true,
-      version: "v0.4.26-beta.1",
+      version: "v0.4.27-beta.1",
       docs: {
         ok: true,
         setupPath: "docs/SETUP.md",
-        releaseNotesPath: "docs/releases/v0.4.26-beta.1.md"
+        releaseNotesPath: "docs/releases/v0.4.27-beta.1.md"
       },
       updateChannels: {
         ok: true
@@ -262,13 +262,13 @@ describe("beta release status", () => {
       statePath: join(root, "missing-live-state.sqlite"),
       configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
       publicReleaseManifestPath: "docs/public-release-manifest.json",
-      expectedPublicVersion: "v0.4.26-beta.1",
+      expectedPublicVersion: "v0.4.27-beta.1",
       launchdLabel: "com.electricsheephq.evaos-code-review-bot"
     });
 
     expect(status.publicRelease).toMatchObject({
       ok: true,
-      version: "v0.4.26-beta.1"
+      version: "v0.4.27-beta.1"
     });
     expect(status.gates).toContainEqual({
       name: "public_update_channels",

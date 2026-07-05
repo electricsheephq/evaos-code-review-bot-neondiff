@@ -74,7 +74,7 @@ describe("NeonDiff public release readiness", () => {
       version: "0.4.24-beta.1",
       requiredForThisRelease: false,
       state: "held_at_previous_npm_release",
-      currentSourceVersion: "v0.4.26-beta.1",
+      currentSourceVersion: "v0.4.27-beta.1",
       previousReleasedPackageVersion: "0.4.24-beta.1"
     });
     expect(manifest.packageArtifact?.heldReason).toMatch(/source\/daemon-only live beta/i);
