@@ -80,7 +80,7 @@ export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMe
     return {
       providerId,
       adapter: "zcode (registry miss)",
-      model: config.zcode.model,
+      model: "unknown",
       displayName: "Unregistered provider id"
     };
   }

@@ -113,7 +113,7 @@ describe("worker review settings preview evidence", () => {
     expect(buildReviewProviderMetadata(config)).toEqual({
       providerId: "ghost-provider",
       adapter: "zcode (registry miss)",
-      model: "GLM-5.2",
+      model: "unknown",
       displayName: "Unregistered provider id"
     });
   });

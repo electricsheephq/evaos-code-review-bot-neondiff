@@ -94,12 +94,16 @@ describe("deterministic review gate", () => {
     expect(gate.summary.categoryCounts).toEqual({ release_regression: 1 });
   });
 
-  it("does not request changes for high-severity docs-only or unknown findings", () => {
+  it("keeps docs-only advisory while treating unknown as a blocking fallback for high-severity findings", () => {
     const gate = applyDeterministicReviewGate({
       files: [
         {
           filename: "docs/readme.md",
           patch: "@@ -1,1 +1,3 @@\n Intro.\n+Ambiguous warning.\n+Another warning."
+        },
+        {
+          filename: "misc/ambiguous.data",
+          patch: "@@ -1,1 +1,2 @@\n value=1\n+ambiguous=2"
         }
       ],
       findings: [
@@ -115,8 +119,8 @@ describe("deterministic review gate", () => {
         {
           severity: "P1",
           category: "unknown",
-          path: "docs/readme.md",
-          line: 3,
+          path: "misc/ambiguous.data",
+          line: 2,
           title: "Unknown category concern",
           body: "This severe wording is ambiguous and unactionable.",
           confidence: 0.9
@@ -124,8 +128,9 @@ describe("deterministic review gate", () => {
       ]
     });
 
-    expect(gate.event).toBe("COMMENT");
-    expect(gate.summary.requestChangesEligible).toBe(0);
+    expect(gate.event).toBe("REQUEST_CHANGES");
+    expect(gate.summary.requestChangesEligible).toBe(1);
+    expect(gate.summary.categoryCounts).toEqual({ docs_only: 1, unknown: 1 });
   });
 
   it("suppresses only low-severity findings with exact repo-memory false-positive fingerprints", () => {

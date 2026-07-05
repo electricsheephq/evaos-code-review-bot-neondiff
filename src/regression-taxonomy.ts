@@ -36,7 +36,7 @@ export const REGRESSION_CATEGORY_POLICY: Record<RegressionCategory, RegressionCa
   runtime_correctness: { label: "Runtime correctness", requestChangesEligible: true },
   dependency: { label: "Dependency", requestChangesEligible: false },
   docs_only: { label: "Docs only", requestChangesEligible: false },
-  unknown: { label: "Uncategorized", requestChangesEligible: false }
+  unknown: { label: "Uncategorized", requestChangesEligible: true }
 };
 
 export function isRegressionCategory(value: unknown): value is RegressionCategory {
