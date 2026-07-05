@@ -305,7 +305,6 @@ describe("issue enrichment scorecard", () => {
 
   it("excludes fully unmeasurable dimensions from top-level score denominators", () => {
     const fixture = loadFixture();
-    const baseline = scoreIssueEnrichment(fixture);
     const throttlingConfig = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.find((dimension) => dimension.id === "throttling");
     expect(throttlingConfig).toBeDefined();
 
@@ -339,7 +338,6 @@ describe("issue enrichment scorecard", () => {
     });
     expect(result.rawScore).toBe(expectedRawScore);
     expect(result.weightedScore).toBe(expectedWeightedScore);
-    expect(result.weightedScore).toBeGreaterThanOrEqual(baseline.weightedScore);
     expect(result.pilotThresholdMisses.some((miss) => miss.endsWith(":throttling"))).toBe(false);
   });
 

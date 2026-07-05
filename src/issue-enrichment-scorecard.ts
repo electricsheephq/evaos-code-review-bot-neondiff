@@ -374,11 +374,11 @@ function assertValidIssueEnrichmentFixture(packet: IssueEnrichmentFixturePacket)
   }
 }
 
-// scoreIssueEnrichment validates packets before scoring; keep scoreDimension private
-// so this normalization remains defense-in-depth rather than a public validation path.
 function normalizeScore(score: number | undefined): number {
-  if (score === undefined || !Number.isFinite(score)) return 0;
-  return Math.min(5, Math.max(0, score));
+  if (score === undefined || !Number.isFinite(score) || score < 0 || score > 5) {
+    throw new Error("Invalid score reached scoring path after fixture validation");
+  }
+  return score;
 }
 
 function hasDirectEvidenceLink(

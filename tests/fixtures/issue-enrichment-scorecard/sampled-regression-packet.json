@@ -632,6 +632,7 @@
         },
         "proof_boundary": {
           "score": 5,
+          "notes": "High proof-boundary score is limited to the fixture's explicit advisory caveat: the burst is simulated and does not prove live provider reliability or release readiness.",
           "evidenceLinks": [
             "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-proof-boundary"
           ]
@@ -650,12 +651,14 @@
         },
         "idempotency": {
           "score": 4,
+          "notes": "Scores deterministic retry/defer state modeling for the simulated burst; it does not claim production idempotency under live provider pressure.",
           "evidenceLinks": [
             "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-idempotency"
           ]
         },
         "safety": {
           "score": 4.4,
+          "notes": "High safety score is for fail-closed advisory handling in the simulated burst only; live runtime safety remains outside this fixture proof boundary.",
           "evidenceLinks": [
             "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-safety"
           ]
