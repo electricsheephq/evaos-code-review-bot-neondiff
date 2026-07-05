@@ -260,7 +260,7 @@ describe("beta release status", () => {
         publicReleaseManifestPath: "docs/public-release-manifest.json",
         expectedPublicVersion: oversizedVersion
       })
-    ).toThrow("--expected-public-version is too long (max 128 chars)");
+    ).toThrow("--expected-public-version is too long (max 128 characters)");
   });
 
   it("collects public release manifest gates through release-status wiring", () => {

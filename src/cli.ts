@@ -822,14 +822,15 @@ async function main(): Promise<void> {
       mkdirSync(safeOutputDir, { recursive: true });
       const jsonName = result.ok ? "gitnexus-context-packet.json" : "gitnexus-context-packet-error.json";
       writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
-      if (result.ok) writeFileSync(join(safeOutputDir, "gitnexus-context-packet.md"), result.packet.markdown);
+      if (result.ok) writeFileSync(join(safeOutputDir, "gitnexus-context-packet.md"), redactSecrets(result.packet.markdown));
     }
     const format = args.format ?? "json";
     const redactedJson = stringifyRedactedJson(result);
+    const redactedMarkdown = result.ok ? redactSecrets(result.packet.markdown) : undefined;
     if (format === "markdown") {
-      console.log(result.ok ? result.packet.markdown : redactedJson);
+      console.log(redactedMarkdown ?? redactedJson);
     } else if (format === "both" && result.ok) {
-      console.log(`${redactedJson}\n\n${result.packet.markdown}`);
+      console.log(`${redactedJson}\n\n${redactedMarkdown}`);
     } else {
       console.log(redactedJson);
     }

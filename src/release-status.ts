@@ -457,7 +457,7 @@ export function validatePublicReleaseManifestInputs(input: {
     throw new Error("--public-release-manifest is required when --expected-public-version is provided");
   }
   if (input.expectedPublicVersion && input.expectedPublicVersion.length > MAX_PUBLIC_VERSION_TAG_LENGTH) {
-    throw new Error(`--expected-public-version is too long (max ${MAX_PUBLIC_VERSION_TAG_LENGTH} chars)`);
+    throw new Error(`--expected-public-version is too long (max ${MAX_PUBLIC_VERSION_TAG_LENGTH} characters)`);
   }
   if (input.expectedPublicVersion && !isPublicVersionTag(input.expectedPublicVersion)) {
     throw new Error("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");

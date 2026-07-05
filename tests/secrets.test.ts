@@ -121,6 +121,13 @@ describe("secret redaction", () => {
     expect(redactSecrets(text)).toBe("[redacted-secret]");
   });
 
+  it("fails closed on short sensitive cookie values", () => {
+    const text = "Cookie: theme=light; session=short";
+
+    expect(containsSecretLikeText(text)).toBe(true);
+    expect(redactSecrets(text)).toBe("[redacted-secret]");
+  });
+
   it("fails closed when a cookie header exceeds the bounded scan cap", () => {
     const longCookiePrefix = Array.from({ length: 1_000 }, (_, index) => `pref${index}=value`).join("; ");
     const hiddenSessionToken = "123456789012345678901234";

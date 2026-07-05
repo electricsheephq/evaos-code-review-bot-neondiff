@@ -221,7 +221,7 @@ function formatMarkdownCodeSpan(value: string): string {
     longestBacktickRun = Math.max(longestBacktickRun, match[0].length);
   }
   const delimiter = "`".repeat(longestBacktickRun + 1);
-  const padding = value.startsWith("`") || value.endsWith("`") || value.startsWith(" ") || value.endsWith(" ")
+  const padding = value.startsWith("`") || value.endsWith("`")
     ? " "
     : "";
   return `${delimiter}${padding}${value}${padding}${delimiter}`;

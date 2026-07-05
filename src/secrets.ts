@@ -78,7 +78,7 @@ function readSensitiveCookieHeader(line: string): string | undefined {
     if (equalsIndex <= 0) continue;
     const name = attribute.slice(0, equalsIndex).trim();
     const value = attribute.slice(equalsIndex + 1).trim();
-    if (value.length >= 16 && SENSITIVE_COOKIE_NAME_PATTERN.test(name)) return line;
+    if (value.length > 0 && SENSITIVE_COOKIE_NAME_PATTERN.test(name)) return line;
   }
   return undefined;
 }

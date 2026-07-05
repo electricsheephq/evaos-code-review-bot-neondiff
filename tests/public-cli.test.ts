@@ -252,6 +252,22 @@ exit 1
       expect(JSON.parse(jsonPart!).ok).toBe(true);
       expect(markdownPart).toContain("Repository: acme/demo");
       expect(stdout).not.toContain(fakeToken);
+
+      const markdownSuccess = await runCli([
+        "build-gitnexus-context-packet",
+        "--config",
+        configPath,
+        "--repo",
+        "acme/demo",
+        "--pr",
+        "7",
+        "--format",
+        "markdown",
+        "--generated-at",
+        "2026-07-05T00:00:00.000Z"
+      ], { env });
+      expect(markdownSuccess.stdout).toContain("# GitNexus context packet");
+      expect(markdownSuccess.stdout).not.toContain(fakeToken);
     } finally {
       await closeServer(server);
     }
