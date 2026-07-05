@@ -126,6 +126,7 @@ export interface GitNexusContextPacketSummary {
   degradedReason?: string;
   relatedContextCount: number;
   omittedContextCount: number;
+  redactionStatus?: "passed" | "redacted" | "unknown";
   redactionReportSha256: string;
 }
 
@@ -705,7 +706,7 @@ function summarizeGitNexusAddon(packet: GitNexusContextPacketSummary | undefined
     advisory: true,
     degradedMode: packet.degradedMode,
     ...(packet.degradedReason ? { degradedReason: packet.degradedReason } : {}),
-    redactionStatus: "passed",
+    redactionStatus: packet.redactionStatus ?? "unknown",
     redactionReportSha256: packet.redactionReportSha256,
     relatedContextCount: packet.relatedContextCount,
     omittedContextCount: packet.omittedContextCount

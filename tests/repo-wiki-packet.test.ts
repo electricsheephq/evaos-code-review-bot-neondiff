@@ -495,6 +495,61 @@ describe("repo wiki packets", () => {
     ]);
   });
 
+  it("does not treat a GitNexus redaction report hash as a passed redaction status", () => {
+    const contract = buildSupportedAddonDryRunPacket({
+      repo: "electricsheephq/evaos-code-review-bot",
+      generatedAt,
+      maxBytes: 40_000,
+      maxTokens: 10_000,
+      gitnexusPacket: {
+        packetVersion: "gitnexus-context-packet-v0.1",
+        sha256: "e".repeat(64),
+        byteEstimate: 1024,
+        tokenEstimate: 256,
+        freshness: "fresh",
+        degradedMode: false,
+        relatedContextCount: 1,
+        omittedContextCount: 0,
+        redactionReportSha256: "f".repeat(64)
+      }
+    });
+
+    expect(contract.addons.find((addon) => addon.kind === "gitnexus-context")).toEqual(
+      expect.objectContaining({
+        redactionStatus: "unknown",
+        redactionReportSha256: "f".repeat(64)
+      })
+    );
+  });
+
+  it("preserves an explicit GitNexus redaction status when the packet summary includes one", () => {
+    const contract = buildSupportedAddonDryRunPacket({
+      repo: "electricsheephq/evaos-code-review-bot",
+      generatedAt,
+      maxBytes: 40_000,
+      maxTokens: 10_000,
+      gitnexusPacket: {
+        packetVersion: "gitnexus-context-packet-v0.1",
+        sha256: "1".repeat(64),
+        byteEstimate: 1024,
+        tokenEstimate: 256,
+        freshness: "fresh",
+        degradedMode: false,
+        relatedContextCount: 1,
+        omittedContextCount: 0,
+        redactionStatus: "passed",
+        redactionReportSha256: "2".repeat(64)
+      }
+    });
+
+    expect(contract.addons.find((addon) => addon.kind === "gitnexus-context")).toEqual(
+      expect.objectContaining({
+        redactionStatus: "passed",
+        redactionReportSha256: "2".repeat(64)
+      })
+    );
+  });
+
   it("rejects supported-addon dry-run contracts whose fixed summary exceeds byte or token caps", () => {
     const input = {
       repo: "electricsheephq/evaos-code-review-bot",

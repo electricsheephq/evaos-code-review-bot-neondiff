@@ -94,8 +94,8 @@ Required fields:
 - `sources`: source IDs, hashes, freshness flags, and source type.
 - `degradedMode` and `degradedReason`: machine-readable missing, stale, or
   skipped state.
-- `redactionReportSha256`: proof that source and rendered packet text passed
-  redaction checks.
+- `redactionReportSha256`: evidence hash for the redaction report; packet
+  summaries must carry a separate status when pass/fail/redacted state is known.
 
 Packet builders must fail closed when source text, metadata, or rendered packet
 content contains secret-like data. Redacted previews may be used for operator
