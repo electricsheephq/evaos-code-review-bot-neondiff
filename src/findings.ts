@@ -211,6 +211,29 @@ function sanitizeDroppedFindingPublicText<T extends Partial<Finding>>(finding: T
   };
 }
 
+/**
+ * Full public-safe sanitization for a dropped finding (#283): redact secret-like text AND strip
+ * uncalibrated confidence numbers from title/body/why_this_matters. This is the same treatment the
+ * secret-drop path applies inline and that worker.ts re-applies as a second pass; both redactSecrets
+ * and sanitizePublicConfidenceText are idempotent, so callers may re-run it without changing output.
+ * Exported so the review-gate module boundary can enforce redaction on drops it produces BEFORE any
+ * caller sees them, rather than relying on the caller to sanitize.
+ */
+export function sanitizeDroppedFinding<T extends Partial<Finding>>(finding: T, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): T {
+  return {
+    ...finding,
+    ...(typeof finding.title === "string"
+      ? { title: sanitizePublicConfidenceText(redactSecrets(finding.title), publicConfidencePolicy) }
+      : {}),
+    ...(typeof finding.body === "string"
+      ? { body: sanitizePublicConfidenceText(redactSecrets(finding.body), publicConfidencePolicy) }
+      : {}),
+    ...(typeof finding.why_this_matters === "string"
+      ? { why_this_matters: sanitizePublicConfidenceText(redactSecrets(finding.why_this_matters), publicConfidencePolicy) }
+      : {})
+  };
+}
+
 export function decideReviewEvent(
   findings: Pick<ReviewComment, "severity" | "category" | "confidence">[],
   confidenceFloors?: RequestChangesConfidenceFloors
