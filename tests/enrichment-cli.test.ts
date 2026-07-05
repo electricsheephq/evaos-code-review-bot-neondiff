@@ -419,6 +419,51 @@ describe("build-enrichment-comment issue CLI", () => {
     });
   });
 
+  it("rejects selected issue enrichment when the feature config is absent or disabled", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const missingRoot = createRoot(roots);
+      const missingConfigPath = writeIssueRunConfig(missingRoot, apiBaseUrl);
+      const missingConfig = JSON.parse(readFileSync(missingConfigPath, "utf8"));
+      delete missingConfig.issueEnrichment;
+      writeFileSync(missingConfigPath, `${JSON.stringify(missingConfig, null, 2)}\n`);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        missingConfigPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(missingRoot))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue-enrichment-run requires issueEnrichment.enabled true")
+      });
+
+      const disabledRoot = createRoot(roots);
+      const disabledConfigPath = writeIssueRunConfig(disabledRoot, apiBaseUrl);
+      const disabledConfig = JSON.parse(readFileSync(disabledConfigPath, "utf8"));
+      disabledConfig.issueEnrichment.enabled = false;
+      writeFileSync(disabledConfigPath, `${JSON.stringify(disabledConfig, null, 2)}\n`);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        disabledConfigPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(disabledRoot))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue-enrichment-run requires issueEnrichment.enabled true")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
   it("surfaces missing live repo thresholds before fetching", async () => {
     await withMockGitHub(async ({ apiBaseUrl, requests }) => {
       const root = createRoot(roots);
@@ -455,6 +500,31 @@ describe("build-enrichment-comment issue CLI", () => {
         "true"
       ], issueRunEnv(root))).rejects.toMatchObject({
         stderr: expect.stringContaining("issue-enrichment-run live posting blocked: issue_enrichment_live_repo_thresholds_required")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
+  it("rejects selected issue enrichment when the repo override is disabled", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.issueEnrichment.repos["owner/issue-repo"].enabled = false;
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue_enrichment_repo_disabled")
       });
       expect(requests).toHaveLength(0);
     });
@@ -750,6 +820,29 @@ describe("build-enrichment-comment issue CLI", () => {
     });
   });
 
+  it("exits nonzero when confirmed live issue enrichment cannot post a comment", async () => {
+    await withMockGitHub(async ({ apiBaseUrl }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stdout: expect.stringContaining("\"failed\": 1")
+      });
+    }, { failIssue17CommentPost: true });
+  });
+
   it("exits nonzero when a confirmed live selected run cannot acquire the worker lease", async () => {
     await withMockGitHub(async ({ apiBaseUrl, requests }) => {
       const root = createRoot(roots);
@@ -938,7 +1031,7 @@ function issueRunEnv(root: string): NodeJS.ProcessEnv {
 
 async function withMockGitHub(
   callback: (input: { apiBaseUrl: string; requests: Array<{ method: string; path: string; authorization?: string }> }) => Promise<void>,
-  options: { issuePages?: unknown[][] } = {}
+  options: { failIssue17CommentPost?: boolean; issuePages?: unknown[][] } = {}
 ): Promise<void> {
   const requests: Array<{ method: string; path: string; authorization?: string }> = [];
   const state: MockGitHubState = {};
@@ -965,7 +1058,7 @@ interface MockGitHubState {
 function routeMockGitHub(
   request: IncomingMessage,
   response: ServerResponse,
-  options: { issuePages?: unknown[][]; state?: MockGitHubState } = {}
+  options: { failIssue17CommentPost?: boolean; issuePages?: unknown[][]; state?: MockGitHubState } = {}
 ): void {
   if (
     request.method === "GET" &&
@@ -1072,6 +1165,10 @@ function routeMockGitHub(
     return;
   }
   if (request.method === "POST" && request.url === "/repos/owner/issue-repo/issues/17/comments") {
+    if (options.failIssue17CommentPost) {
+      respondJson(response, 502, { message: "upstream unavailable" });
+      return;
+    }
     if (options.state) {
       options.state.issue17CommentBody = "<!-- evaos-code-review-bot:enrichment repo=owner/issue-repo issue=17 -->";
     }
