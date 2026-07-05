@@ -371,6 +371,22 @@ describe("public confidence display policy", () => {
     }
   });
 
+  it("keeps malformed-minimum metrics aligned with missing thresholds", () => {
+    const evaluation = evaluatePublicConfidencePolicy({
+      ...buildPublicConfidencePolicy(calibratedPolicyInput()),
+      minLabeledFindings: -5
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.missingThresholds).toEqual(["labeled_findings_below_100"]);
+    expect(evaluation.metrics).toMatchObject({
+      labeledFindings: { actual: 124, required: 100, passed: false },
+      p0p1Labels: { actual: 31, required: 30, passed: true },
+      negativeControlScenarios: { actual: 10, required: 10, passed: true },
+      wilsonLowerBound: { actual: 0.95, required: 0.95, passed: true }
+    });
+  });
+
   it("keeps hard promotion floors even when lower minima are supplied directly", () => {
     const policy = buildPublicConfidencePolicy({
       ...calibratedPolicyInput(),
@@ -484,6 +500,35 @@ describe("public confidence display policy", () => {
     });
   });
 
+  it("reports exact evidence and dataset threshold codes", () => {
+    const evaluation = evaluatePublicConfidencePolicy(buildPublicConfidencePolicy({
+      ...calibratedPolicyInput(),
+      evidenceUrl: " ",
+      datasetId: " "
+    }));
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.missingThresholds).toEqual([
+      "calibration_evidence_url_missing_or_unusable",
+      "dataset_id_missing"
+    ]);
+
+    const report = buildPublicConfidenceCalibrationReport(buildPublicConfidencePolicy({
+      ...calibratedPolicyInput(),
+      evidenceUrl: "javascript:alert(1)",
+      datasetId: ""
+    }));
+
+    expect(report.allowed).toBe(false);
+    expect(report.missingThresholds).toEqual([
+      "calibration_evidence_url_missing_or_unusable",
+      "dataset_id_missing"
+    ]);
+    expect(report.dataset).toEqual({
+      evidenceUrl: "javascript:alert(1)"
+    });
+  });
+
   it("builds an auditable calibration report only when dataset, labels, metrics, and proof boundary are explicit", () => {
     const report = buildPublicConfidenceCalibrationReport(buildPublicConfidencePolicy(calibratedPolicyInput()));
 
@@ -534,6 +579,24 @@ describe("public confidence display policy", () => {
     ]);
     expect(report.metrics.wilsonLowerBound).toEqual({ actual: 0.949, required: 0.95, passed: false });
     expect(report.requestChangesPolicy).toBe("REQUEST_CHANGES confidence claims require calibrated P0/P1 bins that pass the public display policy.");
+    expect(report.proofBoundary).toBe("Public comments must not display confidence percentages until all calibration thresholds pass.");
+  });
+
+  it("builds a failed calibration report for malformed direct-caller minima", () => {
+    const report = buildPublicConfidenceCalibrationReport({
+      ...buildPublicConfidencePolicy(calibratedPolicyInput()),
+      minLabeledFindings: -5
+    });
+
+    expect(report.allowed).toBe(false);
+    expect(report.publicMode).toBe("uncalibrated");
+    expect(report.missingThresholds).toEqual(["labeled_findings_below_100"]);
+    expect(report.metrics).toMatchObject({
+      labeledFindings: { actual: 124, required: 100, passed: false },
+      p0p1Labels: { actual: 31, required: 30, passed: true },
+      negativeControlScenarios: { actual: 10, required: 10, passed: true },
+      wilsonLowerBound: { actual: 0.95, required: 0.95, passed: true }
+    });
     expect(report.proofBoundary).toBe("Public comments must not display confidence percentages until all calibration thresholds pass.");
   });
 });

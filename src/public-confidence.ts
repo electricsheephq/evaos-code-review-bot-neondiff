@@ -146,17 +146,22 @@ export function isPublicConfidenceDisplayAllowed(policy?: PublicConfidenceDispla
 }
 
 export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayPolicy): PublicConfidencePolicyEvaluation {
-  const malformedMinimums = hasMalformedPolicyMinimums(policy);
+  const malformedMinimums = findMalformedPolicyMinimums(policy);
   const effectivePolicy = buildPublicConfidencePolicy(policy);
   const requiredLabeledFindings = hardFloorPositiveInteger(effectivePolicy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS);
   const requiredP0P1Labels = hardFloorPositiveInteger(effectivePolicy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS);
   const requiredNegativeControls = hardFloorPositiveInteger(effectivePolicy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS);
   const requiredWilsonLowerBound = hardFloorProbability(effectivePolicy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND);
   const metrics = {
-    labeledFindings: thresholdMetric(effectivePolicy.labeledFindings, requiredLabeledFindings, isNonNegativeInteger),
-    p0p1Labels: thresholdMetric(effectivePolicy.p0p1Labels, requiredP0P1Labels, isNonNegativeInteger),
-    negativeControlScenarios: thresholdMetric(effectivePolicy.negativeControlScenarios, requiredNegativeControls, isNonNegativeInteger),
-    wilsonLowerBound: thresholdMetric(effectivePolicy.wilsonLowerBound, requiredWilsonLowerBound, isProbability)
+    labeledFindings: thresholdMetric(effectivePolicy.labeledFindings, requiredLabeledFindings, isNonNegativeInteger, malformedMinimums.labeledFindings),
+    p0p1Labels: thresholdMetric(effectivePolicy.p0p1Labels, requiredP0P1Labels, isNonNegativeInteger, malformedMinimums.p0p1Labels),
+    negativeControlScenarios: thresholdMetric(
+      effectivePolicy.negativeControlScenarios,
+      requiredNegativeControls,
+      isNonNegativeInteger,
+      malformedMinimums.negativeControlScenarios
+    ),
+    wilsonLowerBound: thresholdMetric(effectivePolicy.wilsonLowerBound, requiredWilsonLowerBound, isProbability, malformedMinimums.wilsonLowerBound)
   };
   const missingThresholds: PublicConfidenceMissingThreshold[] = [];
 
@@ -165,19 +170,10 @@ export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayP
     missingThresholds.push("calibration_evidence_url_missing_or_unusable");
   }
   if (!effectivePolicy.datasetId?.trim()) missingThresholds.push("dataset_id_missing");
-  if (malformedMinimums) {
-    missingThresholds.push(
-      "labeled_findings_below_100",
-      "p0_p1_labels_below_30",
-      "negative_controls_below_10",
-      "wilson_lower_bound_below_0.95"
-    );
-  } else {
-    if (!metrics.labeledFindings.passed) missingThresholds.push("labeled_findings_below_100");
-    if (!metrics.p0p1Labels.passed) missingThresholds.push("p0_p1_labels_below_30");
-    if (!metrics.negativeControlScenarios.passed) missingThresholds.push("negative_controls_below_10");
-    if (!metrics.wilsonLowerBound.passed) missingThresholds.push("wilson_lower_bound_below_0.95");
-  }
+  if (!metrics.labeledFindings.passed) missingThresholds.push("labeled_findings_below_100");
+  if (!metrics.p0p1Labels.passed) missingThresholds.push("p0_p1_labels_below_30");
+  if (!metrics.negativeControlScenarios.passed) missingThresholds.push("negative_controls_below_10");
+  if (!metrics.wilsonLowerBound.passed) missingThresholds.push("wilson_lower_bound_below_0.95");
 
   const allowed = missingThresholds.length === 0;
   return {
@@ -193,7 +189,7 @@ export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayP
 
 export function buildPublicConfidenceCalibrationReport(policy?: PublicConfidenceDisplayPolicy): PublicConfidenceCalibrationReport {
   const effectivePolicy = buildPublicConfidencePolicy(policy);
-  const evaluation = evaluatePublicConfidencePolicy(effectivePolicy);
+  const evaluation = evaluatePublicConfidencePolicy(policy);
   return {
     ...evaluation,
     dataset: {
@@ -214,12 +210,13 @@ export function buildPublicConfidenceCalibrationReport(policy?: PublicConfidence
 function thresholdMetric(
   actual: number | undefined,
   required: number,
-  isValidActual: (value: unknown) => value is number
+  isValidActual: (value: unknown) => value is number,
+  forceFail = false
 ): PublicConfidenceMetric {
   if (!isValidActual(actual)) {
     return { required, passed: false };
   }
-  return { actual, required, passed: actual >= required };
+  return { actual, required, passed: !forceFail && actual >= required };
 }
 
 function hardFloorPositiveInteger(value: unknown, floor: number): number {
@@ -230,14 +227,19 @@ function hardFloorProbability(value: unknown, floor: number): number {
   return isProbability(value) ? Math.max(value, floor) : floor;
 }
 
-function hasMalformedPolicyMinimums(policy: PublicConfidenceDisplayPolicy | undefined): boolean {
-  if (!policy) return false;
-  return (
-    (policy.minLabeledFindings !== undefined && !isPositiveInteger(policy.minLabeledFindings)) ||
-    (policy.minP0P1Labels !== undefined && !isPositiveInteger(policy.minP0P1Labels)) ||
-    (policy.minNegativeControlScenarios !== undefined && !isPositiveInteger(policy.minNegativeControlScenarios)) ||
-    (policy.minWilsonLowerBound !== undefined && !isProbability(policy.minWilsonLowerBound))
-  );
+function findMalformedPolicyMinimums(policy: PublicConfidenceDisplayPolicy | undefined): {
+  labeledFindings: boolean;
+  p0p1Labels: boolean;
+  negativeControlScenarios: boolean;
+  wilsonLowerBound: boolean;
+} {
+  return {
+    labeledFindings: policy?.minLabeledFindings !== undefined && !isPositiveInteger(policy.minLabeledFindings),
+    p0p1Labels: policy?.minP0P1Labels !== undefined && !isPositiveInteger(policy.minP0P1Labels),
+    negativeControlScenarios:
+      policy?.minNegativeControlScenarios !== undefined && !isPositiveInteger(policy.minNegativeControlScenarios),
+    wilsonLowerBound: policy?.minWilsonLowerBound !== undefined && !isProbability(policy.minWilsonLowerBound)
+  };
 }
 
 function isPositiveInteger(value: unknown): value is number {
