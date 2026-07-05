@@ -313,12 +313,18 @@ describe("issue enrichment scorecard", () => {
 
   it("summarizes scorecard results with unmeasurable states and pilot threshold misses", () => {
     const summary = summarizeIssueEnrichmentScorecard(scoreIssueEnrichment(loadFixture()));
+    const unmeasurableLine = summary
+      .split("\n")
+      .find((line) => line.startsWith("Unmeasurable dimensions:"));
+    const pilotThresholdMissesLine = summary
+      .split("\n")
+      .find((line) => line.startsWith("Pilot threshold misses:"));
 
     expect(summary).toMatch(/Issue enrichment scorecard: raw \d+\/100, weighted \d+\/100/);
     expect(summary).toContain("Public claim: no_public_claim");
-    expect(summary).toContain("Unmeasurable dimensions: external_precedent_required_issue:related_context_precision");
-    expect(summary).toContain("stale_irrelevant_web_result:related_context_precision");
-    expect(summary).toContain("provider_failure_burst_30_prs:throttling");
+    expect(unmeasurableLine).toBe("Unmeasurable dimensions: external_precedent_required_issue:related_context_precision");
+    expect(pilotThresholdMissesLine).toContain("stale_irrelevant_web_result:related_context_precision");
+    expect(pilotThresholdMissesLine).toContain("provider_failure_burst_30_prs:throttling");
     expect(summary).not.toMatch(/parity|calibrated confidence|95/i);
   });
 
