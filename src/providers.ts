@@ -327,33 +327,46 @@ function safeProviderIdForOutput(value: string): string {
   return isProviderId(value) ? value : "[invalid-provider-id]";
 }
 
-function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEntry): string | undefined {
+type OpenAICompatibleTargetPurpose = "smoke" | "review";
+
+export function openAICompatibleProviderTargetError(
+  baseUrl: string,
+  provider: ProviderRegistryEntry,
+  purpose: OpenAICompatibleTargetPurpose
+): string | undefined {
+  const targetLabel = purpose === "review" ? "review target" : "smoke target";
+  const operationLabel = purpose === "review" ? "review execution" : "smoke checks";
+  const disabledVerb = purpose === "review" ? "is" : "are";
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
   } catch {
-    return "OpenAI-compatible provider baseUrl must be a valid URL for smoke checks.";
+    return `OpenAI-compatible provider baseUrl must be a valid URL for ${operationLabel}.`;
   }
   if (parsed.username || parsed.password) {
-    return "OpenAI-compatible smoke target must not include username or password credentials.";
+    return `OpenAI-compatible ${targetLabel} must not include username or password credentials.`;
   }
   if (containsSecretLikeText(decodeURIComponent(`${parsed.pathname}${parsed.hash}`))) {
-    return "OpenAI-compatible smoke target must not include secret-like path or fragment values.";
+    return `OpenAI-compatible ${targetLabel} must not include secret-like path or fragment values.`;
   }
   for (const key of parsed.searchParams.keys()) {
     if (/(key|token|secret|password|session|cookie)/i.test(key)) {
-      return "OpenAI-compatible smoke target must not include credential query parameters.";
+      return `OpenAI-compatible ${targetLabel} must not include credential query parameters.`;
     }
   }
   const loopback = isLoopbackHost(parsed.hostname);
   if (loopback && provider.capabilities.local) return undefined;
   if (isUnsafeSmokeHost(parsed.hostname)) {
-    return "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts.";
+    return `OpenAI-compatible ${targetLabel} must not point to private, link-local, loopback, or cloud metadata hosts.`;
   }
   if (!loopback) {
-    return "Remote OpenAI-compatible smoke checks are disabled until the transport can pin the validated DNS result.";
+    return `Remote OpenAI-compatible ${operationLabel} ${disabledVerb} disabled until the transport can pin the validated DNS result.`;
   }
   return undefined;
+}
+
+function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEntry): string | undefined {
+  return openAICompatibleProviderTargetError(baseUrl, provider, "smoke");
 }
 
 function isLoopbackHost(hostname: string): boolean {
