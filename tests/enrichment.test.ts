@@ -422,8 +422,89 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).toContain("Existing labels: support");
     expect(comment.body).toContain("Suggested labels: triage");
     expect(comment.body).toContain("Suggested owners: runtime-owner");
+    expect(comment.body).toContain("### Agent-start packet");
+    expect(comment.body).toContain("Problem shape: Triage support escalation #22");
+    expect(comment.body).toContain("Build / borrow / buy scan:");
+    expect(comment.body).toContain("Context-source taxonomy:");
+    expect(comment.body).toContain("[enabled] vision_repo_policy_memory_gitnexus");
+    expect(comment.body).toContain("[enabled] same_repo_issues_prs");
     expect(comment.body).toContain("No labels, owners, reviewers, or roadmap fields were changed by this bot.");
     expect(comment.body).not.toContain("ghp_fake_token");
+  });
+
+  it("adds a build-borrow-buy planner packet for research-triggered issue classes", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 89,
+      title: "Evaluate OSS module for onboarding UX integration",
+      state: "open",
+      html_url: "https://github.test/electricsheephq/evaos-code-review-bot/issues/89",
+      body: "We need a better onboarding flow. Check open source examples, library options, and current market patterns before building from scratch. Related to #12.",
+      labels: [{ name: "enhancement" }],
+      milestone: { title: "v1.2" }
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      maxRelatedRefs: 4,
+      maxSuggestions: 8
+    });
+
+    expect(comment.body).toContain("### Related context");
+    expect(comment.body).toContain("- #12 - mentioned in issue metadata; inspect for dependency, duplicate, or prior-decision risk.");
+    expect(comment.body).toContain("Product/UX-sensitive issue");
+    expect(comment.body).toContain("run capped external OSS/library/API/current-market research with citations");
+    expect(comment.body).toContain("[enabled] external_oss_examples");
+    expect(comment.body).toContain("[enabled] library_api_docs");
+    expect(comment.body).toContain("[enabled] current_market_examples");
+    expect(comment.body).toContain("External research must stay capped, cited, fresh-dated, and redacted.");
+    expect(comment.body).toContain("Do not claim external market or OSS research was performed unless cited sources are present.");
+  });
+
+  it("defers external research source classes for implementation-only issues", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 93,
+      title: "Fix typo in docs heading",
+      state: "open",
+      body: "Small copy edit. Done when the heading reads correctly."
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue
+    });
+
+    expect(comment.body).toContain("Buy/use: deferred");
+    expect(comment.body).toContain("[deferred] external_oss_examples");
+    expect(comment.body).toContain("[deferred] current_market_examples");
+    expect(comment.body).toContain("No same-repo issue/PR references detected in issue metadata.");
+    expect(comment.body).not.toContain("run capped external OSS/library/API/current-market research with citations");
+  });
+
+  it("keeps planner sections useful when suggestion caps are low", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 94,
+      title: "Choose library for onboarding UX",
+      state: "open",
+      body: "Need build vs buy research and acceptance criteria before implementation. Related to #12 #13 #14."
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      maxRelatedRefs: 2,
+      maxSuggestions: 2
+    });
+
+    expect(comment.body).toContain("Related issues/PRs: #12, #13.");
+    const relatedContextSection = comment.body.split("### Agent-start packet")[0]!;
+    expect(relatedContextSection).not.toContain("#14");
+    expect(comment.body).toContain("Build / borrow / buy scan:\n- Build:");
+    expect(comment.body).toContain("- Buy/use: run capped external OSS/library/API/current-market research with citations");
+    expect(comment.body).toContain("Acceptance criteria:\n- Preserve and execute the issue's stated acceptance criteria.");
+    expect(comment.body).toContain("Proof plan:\n- Focused unit/fixture test for the changed planner behavior.");
+    expect(comment.body).toContain("Known traps:\n- Do not treat related links as proof by themselves");
+    expect(comment.body).toContain("Non-goals:\n- Do not auto-apply labels, owners, reviewers, roadmap fields, or milestones.");
   });
 
   it("rejects stale or pull-request-shaped issues at the comment builder boundary", () => {
