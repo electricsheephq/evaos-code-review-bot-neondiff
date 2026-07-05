@@ -50,4 +50,6 @@ jobs:
           node scripts/check-packlist.mjs pack.json
 
       - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
