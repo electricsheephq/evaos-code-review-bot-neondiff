@@ -568,7 +568,7 @@ export async function runIssueEnrichmentCycle(input: {
         reposToScan.push(repo);
         continue;
       }
-      if (!input.dryRun) {
+      if (!input.dryRun && input.advanceWatermarks !== false) {
         input.state.recordIssueEnrichmentRepoWatermark({
           repo,
           activatedAt: checkedAt,
