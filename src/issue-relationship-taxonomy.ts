@@ -177,6 +177,7 @@ function inferRelationshipCategory(input: IssueRelationshipItemInput): IssueRela
   if (input.severity === "P0" || input.severity === "P1" || matchesAny(haystack, ["blocks merge", "blocking", "must fix"])) {
     return "blocker";
   }
+  // Missing proof wins over dependency ownership so implementation is not assigned before a reproducible case exists.
   if (matchesAny(haystack, ["reproduction gap", "missing reproduction", "no reproduction", "lacks proof", "missing proof", "missing evidence", "no command", "no head sha", "no fixture", "needs proof"])) {
     return "reproduction_gap";
   }
@@ -265,7 +266,7 @@ function clusterKey(input: IssueRelationshipItemInput): string {
     ...(input.relatedRefs ?? [])
   ]);
   if (related) return related;
-  return `standalone-${sanitizeId(input.id)}`;
+  return standaloneClusterId(input.id);
 }
 
 function whyClusterMatters(
@@ -345,6 +346,22 @@ function firstPublicId(values: string[]): string | undefined {
 
 function sanitizeId(value: string): string {
   return redactSecrets(value).trim().replace(/[^A-Za-z0-9_.:-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+}
+
+function standaloneClusterId(value: string): string {
+  const redacted = redactSecrets(value).trim();
+  const sanitized = sanitizeId(value) || "item";
+  const suffix = redacted === sanitized ? "" : `-${shortStableHash(redacted)}`;
+  return `standalone-${sanitized}${suffix}`;
+}
+
+function shortStableHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(7, "0").slice(0, 7);
 }
 
 function isSafePublicUrl(value: string): boolean {

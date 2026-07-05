@@ -293,6 +293,30 @@ describe("issue relationship taxonomy", () => {
     expect(JSON.stringify(result.publicIssueCommentState)).not.toContain("/Volumes/LEXAR");
   });
 
+  it("keeps standalone clusters distinct when ids sanitize to the same slug", () => {
+    const result = buildIssueRelationshipClusters({
+      items: [
+        {
+          id: "issue/50",
+          kind: "issue",
+          title: "Slash id issue"
+        },
+        {
+          id: "issue-50",
+          kind: "issue",
+          title: "Hyphen id issue"
+        }
+      ]
+    });
+
+    const clusterIds = result.publicIssueCommentState.clusters.map((cluster) => cluster.id);
+
+    expect(result.publicIssueCommentState.clusters).toHaveLength(2);
+    expect(new Set(clusterIds).size).toBe(2);
+    expect(clusterIds).toContain("standalone-issue-50");
+    expect(clusterIds.some((id) => /^standalone-issue-50-[a-z0-9]{7}$/.test(id))).toBe(true);
+  });
+
   it("counts private fields that are sanitized out of public output", () => {
     const result = buildIssueRelationshipClusters({
       items: [
@@ -331,6 +355,25 @@ describe("issue relationship taxonomy", () => {
     expect(JSON.stringify(result)).not.toContain("\\\\fileserver");
     expect(JSON.stringify(result)).not.toContain("C:secrets");
     expect(JSON.stringify(result)).not.toContain("/etc/passwd");
+  });
+
+  it("keeps only safe reviewer logins in public output", () => {
+    const result = classifyIssueRelationshipItem({
+      id: "issue-55",
+      kind: "issue",
+      title: "Needs reviewer routing",
+      suggestedReviewers: [
+        "@valid-bot",
+        "team-reviewer",
+        "a*b!",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "/etc/passwd",
+        "owner/name",
+        "contains space"
+      ]
+    });
+
+    expect(result.suggestedReviewers).toEqual(["valid-bot", "team-reviewer"]);
   });
 
   it("documents single-item routing narratives", () => {
