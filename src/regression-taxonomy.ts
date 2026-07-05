@@ -31,10 +31,10 @@ export const REGRESSION_CATEGORY_POLICY: Record<RegressionCategory, RegressionCa
   migration: { label: "Migration", requestChangesEligible: true },
   api_compatibility: { label: "API compatibility", requestChangesEligible: true },
   release_regression: { label: "Release regression", requestChangesEligible: true },
-  flaky_test_risk: { label: "Flaky test risk", requestChangesEligible: false },
+  flaky_test_risk: { label: "Flaky test risk", requestChangesEligible: true },
   proof_gap: { label: "Proof gap", requestChangesEligible: false },
   runtime_correctness: { label: "Runtime correctness", requestChangesEligible: true },
-  dependency: { label: "Dependency", requestChangesEligible: false },
+  dependency: { label: "Dependency", requestChangesEligible: true },
   docs_only: { label: "Docs only", requestChangesEligible: false },
   unknown: { label: "Uncategorized", requestChangesEligible: true }
 };
