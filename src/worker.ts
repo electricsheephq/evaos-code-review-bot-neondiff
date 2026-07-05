@@ -2189,8 +2189,8 @@ export function writeDryRunOutcomeLedgerEvidence(input: {
       writeRedactedJson(jsonPath, outcomeLedger);
       writeFileSync(markdownPath, markdown);
     } catch (error) {
-      rmSync(jsonPath, { force: true });
-      rmSync(markdownPath, { force: true });
+      rmSync(jsonPath, { force: true, recursive: true });
+      rmSync(markdownPath, { force: true, recursive: true });
       throw error;
     }
     return { ok: true };

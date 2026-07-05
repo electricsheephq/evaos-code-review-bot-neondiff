@@ -142,6 +142,33 @@ describe("outcome ledger", () => {
       ok: true,
       runId: "lco-461-agent-provenance"
     });
+    expect(Object.keys(manifest.artifactInventory).sort()).toEqual([
+      "outcome-ledger.json",
+      "outcome-ledger.md",
+      "redaction-report.json"
+    ].sort());
+    expect(Object.keys(result.artifacts).sort()).toEqual([
+      "manifest.json",
+      "outcome-ledger.json",
+      "outcome-ledger.md",
+      "redaction-report.json"
+    ].sort());
+  });
+
+  it("removes packet artifacts written before a mid-sequence failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-outcome-ledger-partial-packet-"));
+    roots.push(root);
+    mkdirSync(join(root, "outcome-ledger.md"));
+
+    expect(() => writeOutcomeLedgerPacket({
+      ledgerInput: sampleInput(),
+      outputDir: root,
+      now: new Date("2026-07-05T12:00:00Z")
+    })).toThrow();
+
+    expect(existsSync(join(root, "outcome-ledger.json"))).toBe(false);
+    expect(existsSync(join(root, "redaction-report.json"))).toBe(false);
+    expect(existsSync(join(root, "manifest.json"))).toBe(false);
   });
 
   it("rejects invalid pull request subjects without base and head shas", () => {

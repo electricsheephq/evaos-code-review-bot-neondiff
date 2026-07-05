@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -83,6 +83,55 @@ describe("worker review settings preview evidence", () => {
     expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");
     expect(walkthrough).toContain("- Path instructions: `src/\\`templates\\`/**`");
     expect(walkthrough).not.toContain(secretLikeToken);
+    state.close();
+  });
+
+  it("keeps dry-run review-plan evidence when outcome ledger build fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-outcome-ledger-failure-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.walkthrough.enabled = false;
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1411, "short-head-sha");
+    const github = {
+      getPull: async () => pull,
+      listPullFiles: async () => [
+        {
+          filename: "src/runtime.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          changes: 2
+        }
+      ],
+      canPostAsApp: () => false
+    } as unknown as GitHubApi;
+
+    const result = await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: false
+    });
+
+    expect(result).toBe("reviewed");
+    const evidenceDir = join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      "pr-1411",
+      pull.head.sha
+    );
+    expect(existsSync(join(evidenceDir, "review-plan.json"))).toBe(true);
+    expect(existsSync(join(evidenceDir, "outcome-ledger-error.json"))).toBe(true);
+    expect(existsSync(join(evidenceDir, "outcome-ledger.json"))).toBe(false);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "dry_run"
+    });
     state.close();
   });
 

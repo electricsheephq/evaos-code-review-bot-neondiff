@@ -1877,7 +1877,7 @@ function runInitCommand(args: ParsedArgs): {
       `neondiff doctor --config ${configPath} --json`,
       `neondiff review-pr --config ${configPath} --repo owner/name --pr 123 --dry-run true --zcode false`,
       `neondiff status --config ${configPath} --json`
-    ]
+    ],
   };
 }
 
@@ -2657,10 +2657,16 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts clear-issue-enrichment-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts clear-review-queue-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
-      "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /Volumes/LEXAR/Codex/evals/evaos-reviewer-benchmark/$(date +%F)/advanced-outcome-modes-v0.1/run-id",
+      "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
-    ]
+    ],
+    outcomeLedger: {
+      notes: [
+        "The outcome-ledger command is dry-run only.",
+        "Failed safety gates or secret redaction failures exit non-zero; unknown gates remain visible in the packet but do not fail the dry run."
+      ]
+    }
   };
 }
 

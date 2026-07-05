@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, ReviewPlan } from "./types.js";
@@ -359,26 +359,36 @@ export function writeOutcomeLedgerPacket(input: {
   mkdirSync(input.outputDir, { recursive: true });
   const markdown = renderOutcomeLedgerMarkdown(ledger);
   const artifacts: Record<string, string> = {};
+  const writtenArtifactNames: string[] = [];
   const writeArtifact = (name: string, value: string): void => {
     const path = join(input.outputDir, name);
     writeFileSync(path, value);
     artifacts[name] = sha256File(path);
+    writtenArtifactNames.push(name);
   };
-  writeArtifact("outcome-ledger.json", `${JSON.stringify(ledger, null, 2)}\n`);
-  writeArtifact("outcome-ledger.md", `${markdown}\n`);
-  writeArtifact("redaction-report.json", `${JSON.stringify(ledger.redaction, null, 2)}\n`);
-  const manifestArtifactInventory = { ...artifacts };
-  writeArtifact("manifest.json", `${JSON.stringify({
-    artifactVersion: "0.1",
-    ok: ledger.ok,
-    generatedAt: ledger.generatedAt,
-    runId: ledger.runId,
-    mode: ledger.mode,
-    subject: ledger.subject,
-    proofBoundary: ledger.proofBoundary,
-    artifactInventory: manifestArtifactInventory
-  }, null, 2)}\n`);
-  artifacts["manifest.json"] = sha256File(join(input.outputDir, "manifest.json"));
+  try {
+    writeArtifact("outcome-ledger.json", `${JSON.stringify(ledger, null, 2)}\n`);
+    writeArtifact("outcome-ledger.md", `${markdown}\n`);
+    writeArtifact("redaction-report.json", `${JSON.stringify(ledger.redaction, null, 2)}\n`);
+    const manifestArtifactInventory = { ...artifacts };
+    writeArtifact("manifest.json", `${JSON.stringify({
+      artifactVersion: "0.1",
+      ok: ledger.ok,
+      generatedAt: ledger.generatedAt,
+      runId: ledger.runId,
+      mode: ledger.mode,
+      subject: ledger.subject,
+      proofBoundary: ledger.proofBoundary,
+      artifactInventory: manifestArtifactInventory
+    }, null, 2)}\n`);
+    artifacts["manifest.json"] = sha256File(join(input.outputDir, "manifest.json"));
+  } catch (error) {
+    for (const artifactName of writtenArtifactNames) {
+      rmSync(join(input.outputDir, artifactName), { force: true, recursive: true });
+      delete artifacts[artifactName];
+    }
+    throw error;
+  }
   return {
     ok: ledger.ok,
     outputDir: input.outputDir,
