@@ -113,6 +113,62 @@ export interface BuildRepoWikiPacketInput {
   packetVersion?: string;
 }
 
+export type SupportedAddonKind = "openwiki-compatible-repo-wiki" | "gitnexus-context";
+export type SupportedAddonStatus = "fresh" | "stale" | "missing" | "unknown";
+
+export interface GitNexusContextPacketSummary {
+  packetVersion: string;
+  sha256: string;
+  byteEstimate: number;
+  tokenEstimate: number;
+  freshness: SupportedAddonStatus;
+  degradedMode: boolean;
+  degradedReason?: string;
+  relatedContextCount: number;
+  omittedContextCount: number;
+  redactionStatus?: "passed" | "redacted" | "unknown";
+  redactionReportSha256: string;
+}
+
+export interface SupportedAddonDryRunInput {
+  repo: string;
+  generatedAt?: string;
+  maxBytes: number;
+  maxTokens?: number;
+  repoWikiPacket?: RepoWikiPacket;
+  gitnexusPacket?: GitNexusContextPacketSummary;
+}
+
+export interface SupportedAddonDryRunAddon {
+  kind: SupportedAddonKind;
+  status: SupportedAddonStatus;
+  packetVersion?: string;
+  packetSha?: string;
+  byteEstimate: number;
+  tokenEstimate: number;
+  advisory: boolean;
+  degradedMode: boolean;
+  degradedReason?: string;
+  redactionStatus: "passed" | "redacted" | "unknown";
+  redactionReportSha256?: string;
+  relatedContextCount?: number;
+  omittedContextCount?: number;
+}
+
+export interface SupportedAddonDryRunPacket {
+  packetVersion: "supported-addons-dry-run-v0.1";
+  repo: string;
+  generatedAt: string;
+  advisory: string;
+  runtimePromotion: false;
+  nativeToolExpansion: false;
+  degradedMode: boolean;
+  byteBudget: RepoWikiPacketBudget;
+  tokenBudget: RepoWikiTokenBudget;
+  addons: SupportedAddonDryRunAddon[];
+  packetSha: string;
+}
+
 export function normalizeRepoWikiSections(input: RepoWikiSectionInput[]): {
   sections: RepoWikiNormalizedSection[];
   excluded: RepoWikiExcludedSection[];
@@ -276,6 +332,94 @@ export function formatRepoWikiPacketMarkdown(packet: RepoWikiPacket): string {
 
 export function formatRepoWikiPacketJson(packet: RepoWikiPacket): string {
   return `${canonicalStringify(packet)}\n`;
+}
+
+export function buildSupportedAddonDryRunPacket(input: SupportedAddonDryRunInput): SupportedAddonDryRunPacket {
+  assertRepoName(input.repo);
+  assertBudget({ maxBytes: input.maxBytes, maxTokens: input.maxTokens });
+  const generatedAt = input.generatedAt ?? new Date().toISOString();
+  assertIsoTimestamp(generatedAt, "generatedAt");
+  const maxTokens = input.maxTokens ?? tokenEstimateForBytes(input.maxBytes);
+  const addons = [
+    summarizeRepoWikiAddon(input.repoWikiPacket),
+    summarizeGitNexusAddon(input.gitnexusPacket)
+  ];
+  const degradedMode = addons.some((addon) => addon.degradedMode);
+  const base = {
+    packetVersion: "supported-addons-dry-run-v0.1",
+    repo: input.repo,
+    generatedAt,
+    advisory: "Supported addon packets are advisory. GitHub PR diff, checkout files, and GitHub metadata remain authoritative.",
+    runtimePromotion: false,
+    nativeToolExpansion: false,
+    degradedMode,
+    byteBudget: { maxBytes: input.maxBytes, usedBytes: 0 },
+    tokenBudget: { maxTokens, usedTokens: 0 },
+    addons
+  } satisfies Omit<SupportedAddonDryRunPacket, "packetSha">;
+
+  let withoutSha = base;
+  let packetSha = sha256(canonicalStringify(withoutSha));
+  assertPacketSha(packetSha);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const packet = { ...withoutSha, packetSha } satisfies SupportedAddonDryRunPacket;
+    const usedBytes = Buffer.byteLength(formatSupportedAddonDryRunPacketMarkdown(packet), "utf8");
+    const usedTokens = tokenEstimateForBytes(usedBytes);
+    const nextWithoutSha = {
+      ...withoutSha,
+      byteBudget: { ...withoutSha.byteBudget, usedBytes },
+      tokenBudget: { ...withoutSha.tokenBudget, usedTokens }
+    };
+    const nextSha = sha256(canonicalStringify(nextWithoutSha));
+    assertPacketSha(nextSha);
+    if (usedBytes === withoutSha.byteBudget.usedBytes && usedTokens === withoutSha.tokenBudget.usedTokens) {
+      return assertSupportedAddonDryRunBudget({ ...nextWithoutSha, packetSha: nextSha });
+    }
+    withoutSha = nextWithoutSha;
+    packetSha = nextSha;
+  }
+
+  return assertSupportedAddonDryRunBudget({ ...withoutSha, packetSha });
+}
+
+export function formatSupportedAddonDryRunPacketMarkdown(packet: SupportedAddonDryRunPacket): string {
+  const lines = [
+    "# Supported Addons Dry-Run Packet",
+    "",
+    `Repository: ${packet.repo}`,
+    `Generated at: ${packet.generatedAt}`,
+    `Packet version: ${packet.packetVersion}`,
+    `Packet SHA: ${packet.packetSha}`,
+    `Budget: ${packet.byteBudget.usedBytes}/${packet.byteBudget.maxBytes} bytes; ${packet.tokenBudget.usedTokens}/${packet.tokenBudget.maxTokens} token-ish`,
+    `Runtime promotion: ${packet.runtimePromotion}`,
+    `Native tool expansion: ${packet.nativeToolExpansion}`,
+    `Degraded mode: ${packet.degradedMode}`,
+    "",
+    packet.advisory,
+    "",
+    "## Addons"
+  ];
+
+  for (const addon of packet.addons) {
+    lines.push(
+      "",
+      `### ${addon.kind}`,
+      "",
+      `Status: ${addon.status}`,
+      `Advisory: ${addon.advisory}`,
+      `Degraded mode: ${addon.degradedMode}`,
+      ...(addon.degradedReason ? [`Degraded reason: ${addon.degradedReason}`] : []),
+      ...(addon.packetVersion ? [`Packet version: ${addon.packetVersion}`] : []),
+      ...(addon.packetSha ? [`Packet SHA: ${addon.packetSha}`] : []),
+      `Budget: ${addon.byteEstimate} bytes; ${addon.tokenEstimate} token-ish`,
+      `Redaction: ${addon.redactionStatus}`,
+      ...(addon.redactionReportSha256 ? [`Redaction report SHA: ${addon.redactionReportSha256}`] : []),
+      ...(addon.relatedContextCount !== undefined ? [`Related context count: ${addon.relatedContextCount}`] : []),
+      ...(addon.omittedContextCount !== undefined ? [`Omitted context count: ${addon.omittedContextCount}`] : [])
+    );
+  }
+
+  return `${lines.join("\n").trim()}\n`;
 }
 
 export function redactRepoWikiText(input: string): { text: string; replacementCount: number } {
@@ -502,6 +646,84 @@ function assertFinalPacketSize(packet: RepoWikiPacket): RepoWikiPacket {
   if (usedBytes !== packet.byteBudget.usedBytes || usedTokens !== packet.tokenBudget.usedTokens) {
     throw new Error(
       `repo wiki packet size invariant failed (${usedBytes}/${packet.byteBudget.usedBytes} bytes, ${usedTokens}/${packet.tokenBudget.usedTokens} token-ish)`
+    );
+  }
+  return packet;
+}
+
+function summarizeRepoWikiAddon(packet: RepoWikiPacket | undefined): SupportedAddonDryRunAddon {
+  if (!packet) {
+    return {
+      kind: "openwiki-compatible-repo-wiki",
+      status: "missing",
+      byteEstimate: 0,
+      tokenEstimate: 0,
+      advisory: true,
+      degradedMode: true,
+      degradedReason: "OpenWiki-compatible repo wiki packet was not supplied for this dry run.",
+      redactionStatus: "unknown"
+    };
+  }
+  return {
+    kind: "openwiki-compatible-repo-wiki",
+    status: packet.source.status,
+    packetVersion: packet.packetVersion,
+    packetSha: packet.packetSha,
+    byteEstimate: packet.byteBudget.usedBytes,
+    tokenEstimate: packet.tokenBudget.usedTokens,
+    advisory: true,
+    degradedMode: packet.degraded,
+    ...(packet.source.staleReason ? { degradedReason: packet.source.staleReason } : {}),
+    redactionStatus: packet.redaction.status,
+    redactionReportSha256: sha256(canonicalStringify(packet.redaction))
+  };
+}
+
+function summarizeGitNexusAddon(packet: GitNexusContextPacketSummary | undefined): SupportedAddonDryRunAddon {
+  if (!packet) {
+    return {
+      kind: "gitnexus-context",
+      status: "missing",
+      byteEstimate: 0,
+      tokenEstimate: 0,
+      advisory: true,
+      degradedMode: true,
+      degradedReason: "GitNexus context packet was not supplied for this dry run.",
+      redactionStatus: "unknown",
+      relatedContextCount: 0,
+      omittedContextCount: 0
+    };
+  }
+  assertPacketSha(packet.sha256);
+  assertPacketSha(packet.redactionReportSha256);
+  return {
+    kind: "gitnexus-context",
+    status: packet.freshness,
+    packetVersion: packet.packetVersion,
+    packetSha: packet.sha256,
+    byteEstimate: packet.byteEstimate,
+    tokenEstimate: packet.tokenEstimate,
+    advisory: true,
+    degradedMode: packet.degradedMode,
+    ...(packet.degradedReason ? { degradedReason: packet.degradedReason } : {}),
+    redactionStatus: packet.redactionStatus ?? "unknown",
+    redactionReportSha256: packet.redactionReportSha256,
+    relatedContextCount: packet.relatedContextCount,
+    omittedContextCount: packet.omittedContextCount
+  };
+}
+
+function assertSupportedAddonDryRunBudget(packet: SupportedAddonDryRunPacket): SupportedAddonDryRunPacket {
+  const usedBytes = Buffer.byteLength(formatSupportedAddonDryRunPacketMarkdown(packet), "utf8");
+  const usedTokens = tokenEstimateForBytes(usedBytes);
+  if (
+    usedBytes !== packet.byteBudget.usedBytes ||
+    usedTokens !== packet.tokenBudget.usedTokens ||
+    usedBytes > packet.byteBudget.maxBytes ||
+    usedTokens > packet.tokenBudget.maxTokens
+  ) {
+    throw new Error(
+      `supported addon dry-run packet exceeds budget (${usedBytes}/${packet.byteBudget.maxBytes} bytes, ${usedTokens}/${packet.tokenBudget.maxTokens} token-ish)`
     );
   }
   return packet;

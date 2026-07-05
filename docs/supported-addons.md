@@ -94,8 +94,8 @@ Required fields:
 - `sources`: source IDs, hashes, freshness flags, and source type.
 - `degradedMode` and `degradedReason`: machine-readable missing, stale, or
   skipped state.
-- `redactionReportSha256`: proof that source and rendered packet text passed
-  redaction checks.
+- `redactionReportSha256`: evidence hash for the redaction report; packet
+  summaries must carry a separate status when pass/fail/redacted state is known.
 
 Packet builders must fail closed when source text, metadata, or rendered packet
 content contains secret-like data. Redacted previews may be used for operator
@@ -272,6 +272,24 @@ The summary should include:
 
 Do not store raw private diffs, secrets, raw provider prompts, raw customer
 logs, local credentials, cookies, or private keys in the evidence bundle.
+
+`src/repo-wiki-packet.ts` exposes a library-only
+`buildSupportedAddonDryRunPacket` helper for this bundle. It produces a
+deterministic Markdown summary over the OpenWiki-compatible repo wiki packet and
+GitNexus context packet, including:
+
+- packet versions and SHA-256 hashes
+- byte and token-ish estimates
+- redaction status or redaction report hashes
+- stale, missing, or unknown degraded-mode reasons
+- related and omitted GitNexus context counts
+- `runtimePromotion: false`
+- `nativeToolExpansion: false`
+
+That dry-run contract is intentionally not wired into `src/cli.ts`,
+`src/config.ts`, `src/worker.ts`, active config, release docs, daemon state, or
+GitHub App permissions. It is evidence for humans and agents to inspect before
+any later feature-flagged runtime integration.
 
 ## Non-Goals
 

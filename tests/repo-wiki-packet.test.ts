@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildRepoWikiPacket,
+  buildSupportedAddonDryRunPacket,
   formatRepoWikiPacketJson,
   formatRepoWikiPacketMarkdown,
+  formatSupportedAddonDryRunPacketMarkdown,
   normalizeRepoWikiSections,
   redactRepoWikiText,
   truncateUtf8Bytes
@@ -406,6 +408,158 @@ describe("repo wiki packets", () => {
       text: "[redacted-secret]",
       replacementCount: 1
     });
+  });
+
+  it("builds a dry-run supported-addon contract without runtime or native tool expansion", () => {
+    const wikiPacket = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: {
+        ref: "main",
+        headSha: "02c388056e6b04405bce2e6fe2de74db34db6ba7",
+        checkedAt: generatedAt,
+        status: "fresh"
+      },
+      generatedAt,
+      budget: { maxBytes: 12_000, maxTokens: 3_000 },
+      sections: [section({ id: "arch", title: "Architecture", body: "Local-first review worker." })]
+    });
+    const contract = buildSupportedAddonDryRunPacket({
+      repo: "electricsheephq/evaos-code-review-bot",
+      generatedAt,
+      maxBytes: 40_000,
+      maxTokens: 10_000,
+      repoWikiPacket: wikiPacket,
+      gitnexusPacket: {
+        packetVersion: "gitnexus-context-packet-v0.1",
+        sha256: "a".repeat(64),
+        byteEstimate: 2048,
+        tokenEstimate: 512,
+        freshness: "fresh",
+        degradedMode: false,
+        relatedContextCount: 2,
+        omittedContextCount: 0,
+        redactionReportSha256: "b".repeat(64)
+      }
+    });
+    const markdown = formatSupportedAddonDryRunPacketMarkdown(contract);
+
+    expect(contract.packetSha).toMatch(/^[a-f0-9]{64}$/);
+    expect(contract.runtimePromotion).toBe(false);
+    expect(contract.nativeToolExpansion).toBe(false);
+    expect(contract.addons.map((addon) => addon.kind)).toEqual([
+      "openwiki-compatible-repo-wiki",
+      "gitnexus-context"
+    ]);
+    expect(contract.addons.every((addon) => addon.advisory)).toBe(true);
+    expect(contract.addons.every((addon) => !addon.degradedMode)).toBe(true);
+    expect(contract.byteBudget.usedBytes).toBe(Buffer.byteLength(markdown, "utf8"));
+    expect(contract.tokenBudget.usedTokens).toBe(Math.ceil(contract.byteBudget.usedBytes / 4));
+    expect(markdown).toContain("Runtime promotion: false");
+    expect(markdown).toContain("Native tool expansion: false");
+  });
+
+  it("records missing and stale addons as degraded dry-run evidence without blocking the contract", () => {
+    const contract = buildSupportedAddonDryRunPacket({
+      repo: "electricsheephq/evaos-code-review-bot",
+      generatedAt,
+      maxBytes: 40_000,
+      maxTokens: 10_000,
+      gitnexusPacket: {
+        packetVersion: "gitnexus-context-packet-v0.1",
+        sha256: "c".repeat(64),
+        byteEstimate: 1024,
+        tokenEstimate: 256,
+        freshness: "stale",
+        degradedMode: true,
+        degradedReason: "GitNexus index commit does not match PR base/head.",
+        relatedContextCount: 0,
+        omittedContextCount: 1,
+        redactionReportSha256: "d".repeat(64)
+      }
+    });
+
+    expect(contract.degradedMode).toBe(true);
+    expect(contract.addons).toEqual([
+      expect.objectContaining({
+        kind: "openwiki-compatible-repo-wiki",
+        status: "missing",
+        degradedMode: true,
+        degradedReason: "OpenWiki-compatible repo wiki packet was not supplied for this dry run."
+      }),
+      expect.objectContaining({
+        kind: "gitnexus-context",
+        status: "stale",
+        degradedMode: true,
+        degradedReason: "GitNexus index commit does not match PR base/head."
+      })
+    ]);
+  });
+
+  it("does not treat a GitNexus redaction report hash as a passed redaction status", () => {
+    const contract = buildSupportedAddonDryRunPacket({
+      repo: "electricsheephq/evaos-code-review-bot",
+      generatedAt,
+      maxBytes: 40_000,
+      maxTokens: 10_000,
+      gitnexusPacket: {
+        packetVersion: "gitnexus-context-packet-v0.1",
+        sha256: "e".repeat(64),
+        byteEstimate: 1024,
+        tokenEstimate: 256,
+        freshness: "fresh",
+        degradedMode: false,
+        relatedContextCount: 1,
+        omittedContextCount: 0,
+        redactionReportSha256: "f".repeat(64)
+      }
+    });
+
+    expect(contract.addons.find((addon) => addon.kind === "gitnexus-context")).toEqual(
+      expect.objectContaining({
+        redactionStatus: "unknown",
+        redactionReportSha256: "f".repeat(64)
+      })
+    );
+  });
+
+  it("preserves an explicit GitNexus redaction status when the packet summary includes one", () => {
+    const contract = buildSupportedAddonDryRunPacket({
+      repo: "electricsheephq/evaos-code-review-bot",
+      generatedAt,
+      maxBytes: 40_000,
+      maxTokens: 10_000,
+      gitnexusPacket: {
+        packetVersion: "gitnexus-context-packet-v0.1",
+        sha256: "1".repeat(64),
+        byteEstimate: 1024,
+        tokenEstimate: 256,
+        freshness: "fresh",
+        degradedMode: false,
+        relatedContextCount: 1,
+        omittedContextCount: 0,
+        redactionStatus: "passed",
+        redactionReportSha256: "2".repeat(64)
+      }
+    });
+
+    expect(contract.addons.find((addon) => addon.kind === "gitnexus-context")).toEqual(
+      expect.objectContaining({
+        redactionStatus: "passed",
+        redactionReportSha256: "2".repeat(64)
+      })
+    );
+  });
+
+  it("rejects supported-addon dry-run contracts whose fixed summary exceeds byte or token caps", () => {
+    const input = {
+      repo: "electricsheephq/evaos-code-review-bot",
+      generatedAt,
+      repoWikiPacket: undefined,
+      gitnexusPacket: undefined
+    };
+
+    expect(() => buildSupportedAddonDryRunPacket({ ...input, maxBytes: 10, maxTokens: 10 })).toThrow(/supported addon dry-run packet exceeds budget/);
+    expect(() => buildSupportedAddonDryRunPacket({ ...input, maxBytes: 40_000, maxTokens: 1 })).toThrow(/supported addon dry-run packet exceeds budget/);
   });
 });
 
