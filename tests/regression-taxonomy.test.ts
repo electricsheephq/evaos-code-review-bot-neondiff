@@ -39,18 +39,19 @@ describe("normalizeFindingCategory precedence (#280)", () => {
   });
 
   it("does not de-escalate: keeps an RC-eligible model category over a docs-only inference", () => {
-    // model data_loss (eligible) with docs-y path/text; inferred docs_only is INELIGIBLE, so the
-    // escalate-only override does not fire and the model category is preserved.
-    const result = normalizeFindingCategory(
-      full({
-        category: "data_loss",
-        path: "docs/runbook.md",
-        title: "Restore step overwrites live rows",
-        body: "The documented restore step can overwrite live customer rows."
-      })
-    );
+    // model data_loss (eligible) with docs-only path/text; inferred docs_only is INELIGIBLE, so the
+    // escalate-only override does not fire and the model category is preserved. The fixture text
+    // deliberately avoids every prose-category needle so inference genuinely resolves docs_only —
+    // asserted below so the fixture cannot rot back into a trivially-passing case.
+    const docsOnlyFinding = full({
+      category: "data_loss",
+      path: "docs/runbook.md",
+      title: "Runbook restore section is unclear",
+      body: "The runbook paragraph describing the restore workflow is confusing and needs a rewrite."
+    });
 
-    expect(result).toBe("data_loss");
+    expect(inferRegressionCategory(docsOnlyFinding)).toBe("docs_only");
+    expect(normalizeFindingCategory(docsOnlyFinding)).toBe("data_loss");
   });
 
   it("escalates across the eligibility boundary: RC-ineligible model, RC-eligible inference wins", () => {
