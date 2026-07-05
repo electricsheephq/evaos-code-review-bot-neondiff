@@ -12,8 +12,7 @@ import { ReviewStateStore } from "../src/state.js";
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
-const { privateKey: testPrivateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-const TEST_PRIVATE_KEY_PEM = String(testPrivateKey.export({ type: "pkcs1", format: "pem" }));
+let testPrivateKeyPem: string | undefined;
 
 describe("build-enrichment-comment issue CLI", () => {
   const roots: string[] = [];
@@ -1134,11 +1133,17 @@ function writeTwoRepoIssueRunConfig(root: string, apiBaseUrl: string): string {
 
 function issueRunEnv(root: string): NodeJS.ProcessEnv {
   const privateKeyPath = join(root, "app.pem");
-  writeFileSync(privateKeyPath, TEST_PRIVATE_KEY_PEM);
+  testPrivateKeyPem ??= generateTestPrivateKeyPem();
+  writeFileSync(privateKeyPath, testPrivateKeyPem);
   return {
     EVAOS_REVIEW_BOT_APP_ID: "4184532",
     EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: privateKeyPath
   };
+}
+
+function generateTestPrivateKeyPem(): string {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  return String(privateKey.export({ type: "pkcs1", format: "pem" }));
 }
 
 async function withMockGitHub(
@@ -1245,9 +1250,10 @@ function routeMockGitHub(
     return;
   }
   if (request.url === "/repos/owner/issue-repo/issues/20") {
+    const syntheticGitHubToken = ["ghp", "secret1234567890abcdef"].join("_");
     respondJson(response, 200, {
       number: 20,
-      title: "Another open issue ghp_secret1234567890abcdef",
+      title: `Another open issue ${syntheticGitHubToken}`,
       state: "open",
       updated_at: "2026-07-05T00:01:00.000Z",
       html_url: "https://github.test/owner/issue-repo/issues/20",

@@ -31,6 +31,7 @@ import { buildGitHubRelatedContextPacket, type GitHubRelatedIssueOrPull } from "
 import {
   buildIssueEnrichmentStatus,
   collectIssueEnrichmentScan,
+  DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS,
   resolveIssueEnrichmentRepoPolicy,
   runIssueEnrichmentCycle,
   type IssueEnrichmentCycleGithub,
@@ -1051,10 +1052,7 @@ async function main(): Promise<void> {
     const github = new GitHubApi(config.github);
     const liveStatus = buildIssueEnrichmentStatus({ config, canPostAsApp: github.canPostAsApp() });
     const statusBlockers = dryRun
-      ? liveStatus.blockers.filter((blocker) =>
-          blocker !== "github_app_credentials_required_for_live_issue_comments" &&
-          blocker !== "issue_enrichment_live_posting_disabled"
-        )
+      ? liveStatus.blockers.filter((blocker) => !DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(blocker))
       : liveStatus.blockers;
     if (statusBlockers.length > 0) {
       const missingThresholds = liveStatus.liveThresholdsMissingRepos.length

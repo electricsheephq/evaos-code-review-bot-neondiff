@@ -77,6 +77,11 @@ export interface IssueEnrichmentStatus {
   blockers: IssueEnrichmentBlocker[];
 }
 
+export const DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS = new Set<IssueEnrichmentBlocker>([
+  "github_app_credentials_required_for_live_issue_comments",
+  "issue_enrichment_live_posting_disabled"
+]);
+
 export interface IssueEnrichmentRepoReadCheck {
   repo: string;
   ok: boolean;
@@ -499,11 +504,8 @@ export async function runIssueEnrichmentCycle(input: {
       recommendedActions: buildScanRecommendedActions(status, emptyCycleSummary())
     };
   }
-  const ignoredDryRunBlockers = new Set<IssueEnrichmentBlocker>([
-    "github_app_credentials_required_for_live_issue_comments"
-  ]);
   const blockedForRun = status.state === "blocked" &&
-    !(input.dryRun && status.blockers.every((blocker) => ignoredDryRunBlockers.has(blocker)));
+    !(input.dryRun && status.blockers.every((blocker) => DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(blocker)));
   if (blockedForRun) {
     const summary = emptyCycleSummary();
     return {
