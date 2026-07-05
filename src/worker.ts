@@ -2451,8 +2451,10 @@ async function runZCodeReviewWithProviderRetry(input: {
       startedAt: startedAt.toISOString(),
       completedAt: completedAt.toISOString(),
       latencyMs: completedAt.getTime() - startedAt.getTime(),
-      providerAttempts,
-      notes: ["Token usage is not exposed by the configured ZCode provider path; token metrics remain null."]
+      notes: [
+        `Observed outer provider retry attempts: ${providerAttempts}.`,
+        "Internal ZCode retry attempts and token usage are not exposed by the configured provider path; providerAttempts and token metrics remain null."
+      ]
     }
   };
 }

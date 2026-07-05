@@ -1437,8 +1437,12 @@ async function main(): Promise<void> {
   }
 
   if (command === "outcome-ledger") {
-    if (!args.input) throw new Error("--input is required for outcome-ledger");
-    if (!args["output-dir"]) throw new Error("--output-dir is required for outcome-ledger");
+    if (args.input === undefined || (Array.isArray(args.input) && args.input.length === 0)) {
+      throw new Error("--input is required for outcome-ledger");
+    }
+    if (args["output-dir"] === undefined || (Array.isArray(args["output-dir"]) && args["output-dir"].length === 0)) {
+      throw new Error("--output-dir is required for outcome-ledger");
+    }
     const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
     if (!dryRun) throw new Error("outcome-ledger is dry-run only in this release");
     const ledgerInput = readOutcomeLedgerInput(parseSingleArg(args.input, "--input"));

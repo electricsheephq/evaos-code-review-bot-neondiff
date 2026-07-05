@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, ReviewPlan } from "./types.js";
 
@@ -360,12 +360,17 @@ export function writeOutcomeLedgerPacket(input: {
   now?: Date;
 }): OutcomeLedgerPacketResult {
   const ledger = buildOutcomeLedger(input.ledgerInput, { now: input.now });
-  mkdirSync(input.outputDir, { recursive: true });
+  const parentDir = dirname(input.outputDir);
+  const outputBase = basename(input.outputDir);
+  const tempDir = join(parentDir, `.${outputBase}.tmp-${process.pid}-${Date.now()}`);
+  mkdirSync(parentDir, { recursive: true });
+  rmSync(tempDir, { recursive: true, force: true });
+  mkdirSync(tempDir, { recursive: true });
   const markdown = renderOutcomeLedgerMarkdown(ledger);
   const artifacts: Record<string, string> = {};
   const writtenArtifactNames: string[] = [];
   const writeArtifact = (name: string, value: string): void => {
-    const path = join(input.outputDir, name);
+    const path = join(tempDir, name);
     writeFileSync(path, value);
     artifacts[name] = sha256File(path);
     writtenArtifactNames.push(name);
@@ -385,12 +390,20 @@ export function writeOutcomeLedgerPacket(input: {
       proofBoundary: ledger.proofBoundary,
       artifactInventory: manifestArtifactInventory
     }, null, 2)}\n`);
-    artifacts["manifest.json"] = sha256File(join(input.outputDir, "manifest.json"));
+    artifacts["manifest.json"] = sha256File(join(tempDir, "manifest.json"));
+    if (existsSync(input.outputDir)) {
+      const stat = statSync(input.outputDir);
+      if (!stat.isDirectory()) throw new Error("outputDir must be a directory when it already exists");
+      if (readdirSync(input.outputDir).length > 0) throw new Error("outputDir must be empty before publishing outcome ledger packet");
+      rmSync(input.outputDir, { recursive: true, force: true });
+    }
+    renameSync(tempDir, input.outputDir);
   } catch (error) {
     for (const artifactName of writtenArtifactNames) {
-      rmSync(join(input.outputDir, artifactName), { force: true, recursive: true });
+      rmSync(join(tempDir, artifactName), { force: true, recursive: true });
       delete artifacts[artifactName];
     }
+    rmSync(tempDir, { recursive: true, force: true });
     throw error;
   }
   return {
@@ -450,12 +463,12 @@ export function renderOutcomeLedgerMarkdown(ledger: OutcomeLedger): string {
 function normalizeSubject(subject: OutcomeLedgerSubjectInput): OutcomeLedger["subject"] {
   return {
     type: subject.type,
-    repo: redact(subject.repo),
+    repo: subject.repo,
     number: subject.number,
     ...(subject.title ? { title: redact(subject.title) } : {}),
     ...(subject.url ? { url: redact(subject.url) } : {}),
-    ...(subject.baseSha ? { baseSha: redact(subject.baseSha) } : {}),
-    ...(subject.headSha ? { headSha: redact(subject.headSha) } : {}),
+    ...(subject.baseSha ? { baseSha: subject.baseSha } : {}),
+    ...(subject.headSha ? { headSha: subject.headSha } : {}),
     ...(subject.author ? { author: redact(subject.author) } : {}),
     labels: (subject.labels ?? []).map(redact).sort()
   };
