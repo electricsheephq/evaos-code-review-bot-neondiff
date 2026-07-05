@@ -12,6 +12,55 @@ export interface PublicConfidenceDisplayPolicy {
   wilsonLowerBound?: number;
 }
 
+export type PublicConfidenceMode = "uncalibrated" | "calibrated";
+
+export type PublicConfidenceMissingThreshold =
+  | "mode_not_calibrated"
+  | "calibration_evidence_url_missing_or_unusable"
+  | "dataset_id_missing"
+  | "min_labeled_findings_malformed"
+  | "min_p0_p1_labels_malformed"
+  | "min_negative_control_scenarios_malformed"
+  | "min_wilson_lower_bound_malformed"
+  | "labeled_findings_below_required"
+  | "p0_p1_labels_below_required"
+  | "negative_controls_below_required"
+  | "wilson_lower_bound_below_required";
+
+export interface PublicConfidenceMetric {
+  actual?: number;
+  required: number;
+  passed: boolean;
+  blockedReason?: "malformed_minimum";
+  rejectedMinimum?: number;
+}
+
+export interface PublicConfidencePolicyEvaluation {
+  allowed: boolean;
+  publicMode: PublicConfidenceMode;
+  missingThresholds: PublicConfidenceMissingThreshold[];
+  metrics: {
+    labeledFindings: PublicConfidenceMetric;
+    p0p1Labels: PublicConfidenceMetric;
+    negativeControlScenarios: PublicConfidenceMetric;
+    wilsonLowerBound: PublicConfidenceMetric;
+  };
+  proofBoundary: string;
+}
+
+export interface PublicConfidenceCalibrationReport extends PublicConfidencePolicyEvaluation {
+  dataset: {
+    id?: string;
+    evidenceUrl?: string;
+  };
+  labels: {
+    labeledFindings?: number;
+    p0p1Labels?: number;
+    negativeControlScenarios?: number;
+  };
+  requestChangesPolicy: string;
+}
+
 export const PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS = 100;
 export const PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS = 30;
 export const PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS = 10;
@@ -82,13 +131,13 @@ export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisp
   const datasetId = input?.datasetId?.trim();
   return {
     mode: input?.mode ?? "uncalibrated",
-    minLabeledFindings: Math.max(input?.minLabeledFindings ?? PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS),
-    minP0P1Labels: Math.max(input?.minP0P1Labels ?? PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS),
-    minNegativeControlScenarios: Math.max(
-      input?.minNegativeControlScenarios ?? PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS,
+    minLabeledFindings: hardFloorPositiveInteger(input?.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS),
+    minP0P1Labels: hardFloorPositiveInteger(input?.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS),
+    minNegativeControlScenarios: hardFloorPositiveInteger(
+      input?.minNegativeControlScenarios,
       PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS
     ),
-    minWilsonLowerBound: Math.max(input?.minWilsonLowerBound ?? PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND),
+    minWilsonLowerBound: hardFloorProbability(input?.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND),
     ...(evidenceUrl ? { evidenceUrl } : {}),
     ...(datasetId ? { datasetId } : {}),
     ...(input?.labeledFindings !== undefined ? { labeledFindings: input.labeledFindings } : {}),
@@ -99,30 +148,153 @@ export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisp
 }
 
 export function isPublicConfidenceDisplayAllowed(policy?: PublicConfidenceDisplayPolicy): boolean {
-  if (!policy || policy.mode !== "calibrated") return false;
-  if (!isUsablePublicConfidenceEvidenceUrl(policy.evidenceUrl) || !policy.datasetId?.trim()) return false;
-  if (
-    !isPositiveInteger(policy.minLabeledFindings) ||
-    !isPositiveInteger(policy.minP0P1Labels) ||
-    !isPositiveInteger(policy.minNegativeControlScenarios) ||
-    !isProbability(policy.minWilsonLowerBound)
-  ) {
-    return false;
+  return evaluatePublicConfidencePolicy(policy).allowed;
+}
+
+export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayPolicy): PublicConfidencePolicyEvaluation {
+  const malformedMinimums = findMalformedPolicyMinimums(policy);
+  const effectivePolicy = buildPublicConfidencePolicy(policy);
+  const requiredLabeledFindings = hardFloorPositiveInteger(effectivePolicy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS);
+  const requiredP0P1Labels = hardFloorPositiveInteger(effectivePolicy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS);
+  const requiredNegativeControls = hardFloorPositiveInteger(effectivePolicy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS);
+  const requiredWilsonLowerBound = hardFloorProbability(effectivePolicy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND);
+  const metrics = {
+    labeledFindings: thresholdMetric(
+      effectivePolicy.labeledFindings,
+      requiredLabeledFindings,
+      isNonNegativeInteger,
+      malformedMinimums.labeledFindings,
+      finiteNumberOrUndefined(policy?.minLabeledFindings)
+    ),
+    p0p1Labels: thresholdMetric(
+      effectivePolicy.p0p1Labels,
+      requiredP0P1Labels,
+      isNonNegativeInteger,
+      malformedMinimums.p0p1Labels,
+      finiteNumberOrUndefined(policy?.minP0P1Labels)
+    ),
+    negativeControlScenarios: thresholdMetric(
+      effectivePolicy.negativeControlScenarios,
+      requiredNegativeControls,
+      isNonNegativeInteger,
+      malformedMinimums.negativeControlScenarios,
+      finiteNumberOrUndefined(policy?.minNegativeControlScenarios)
+    ),
+    wilsonLowerBound: thresholdMetric(
+      effectivePolicy.wilsonLowerBound,
+      requiredWilsonLowerBound,
+      isProbability,
+      malformedMinimums.wilsonLowerBound,
+      finiteNumberOrUndefined(policy?.minWilsonLowerBound)
+    )
+  };
+  const missingThresholds: PublicConfidenceMissingThreshold[] = [];
+
+  if (effectivePolicy.mode !== "calibrated") missingThresholds.push("mode_not_calibrated");
+  if (!isUsablePublicConfidenceEvidenceUrl(effectivePolicy.evidenceUrl)) {
+    missingThresholds.push("calibration_evidence_url_missing_or_unusable");
   }
-  if (!isNonNegativeInteger(policy.labeledFindings) || policy.labeledFindings < Math.max(policy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS)) {
-    return false;
+  if (!effectivePolicy.datasetId?.trim()) missingThresholds.push("dataset_id_missing");
+  if (malformedMinimums.labeledFindings) {
+    missingThresholds.push("min_labeled_findings_malformed");
+  } else if (!metrics.labeledFindings.passed) {
+    missingThresholds.push("labeled_findings_below_required");
   }
-  if (!isNonNegativeInteger(policy.p0p1Labels) || policy.p0p1Labels < Math.max(policy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS)) return false;
-  if (
-    !isNonNegativeInteger(policy.negativeControlScenarios) ||
-    policy.negativeControlScenarios < Math.max(policy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS)
-  ) {
-    return false;
+  if (malformedMinimums.p0p1Labels) {
+    missingThresholds.push("min_p0_p1_labels_malformed");
+  } else if (!metrics.p0p1Labels.passed) {
+    missingThresholds.push("p0_p1_labels_below_required");
   }
-  if (!isProbability(policy.wilsonLowerBound) || policy.wilsonLowerBound < Math.max(policy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND)) {
-    return false;
+  if (malformedMinimums.negativeControlScenarios) {
+    missingThresholds.push("min_negative_control_scenarios_malformed");
+  } else if (!metrics.negativeControlScenarios.passed) {
+    missingThresholds.push("negative_controls_below_required");
   }
-  return true;
+  if (malformedMinimums.wilsonLowerBound) {
+    missingThresholds.push("min_wilson_lower_bound_malformed");
+  } else if (!metrics.wilsonLowerBound.passed) {
+    missingThresholds.push("wilson_lower_bound_below_required");
+  }
+
+  const allowed = missingThresholds.length === 0;
+  return {
+    allowed,
+    publicMode: allowed ? "calibrated" : "uncalibrated",
+    missingThresholds,
+    metrics,
+    proofBoundary: allowed
+      ? "Public comments may display confidence percentages only while this report stays linked to the evaluated dataset and passing metrics."
+      : "Public comments must not display confidence percentages until all calibration thresholds pass."
+  };
+}
+
+export function buildPublicConfidenceCalibrationReport(policy?: PublicConfidenceDisplayPolicy): PublicConfidenceCalibrationReport {
+  const effectivePolicy = buildPublicConfidencePolicy(policy);
+  const evaluation = evaluatePublicConfidencePolicy(policy);
+  return {
+    ...evaluation,
+    dataset: {
+      ...(effectivePolicy.datasetId ? { id: effectivePolicy.datasetId } : {}),
+      ...(isUsablePublicConfidenceEvidenceUrl(effectivePolicy.evidenceUrl) ? { evidenceUrl: effectivePolicy.evidenceUrl } : {})
+    },
+    labels: {
+      ...(effectivePolicy.labeledFindings !== undefined ? { labeledFindings: effectivePolicy.labeledFindings } : {}),
+      ...(effectivePolicy.p0p1Labels !== undefined ? { p0p1Labels: effectivePolicy.p0p1Labels } : {}),
+      ...(effectivePolicy.negativeControlScenarios !== undefined
+        ? { negativeControlScenarios: effectivePolicy.negativeControlScenarios }
+        : {})
+    },
+    requestChangesPolicy: "REQUEST_CHANGES confidence claims require calibrated P0/P1 bins that pass the public display policy."
+  };
+}
+
+function thresholdMetric(
+  actual: number | undefined,
+  required: number,
+  isValidActual: (value: unknown) => value is number,
+  forceFail = false,
+  rejectedMinimum?: number
+): PublicConfidenceMetric {
+  if (!isValidActual(actual)) {
+    return { required, passed: false };
+  }
+  if (forceFail) {
+    return {
+      actual,
+      required,
+      passed: false,
+      blockedReason: "malformed_minimum",
+      ...(rejectedMinimum !== undefined ? { rejectedMinimum } : {})
+    };
+  }
+  return { actual, required, passed: actual >= required };
+}
+
+function hardFloorPositiveInteger(value: unknown, floor: number): number {
+  return isPositiveInteger(value) ? Math.max(value, floor) : floor;
+}
+
+function hardFloorProbability(value: unknown, floor: number): number {
+  return isProbability(value) ? Math.max(value, floor) : floor;
+}
+
+function finiteNumberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function findMalformedPolicyMinimums(policy: PublicConfidenceDisplayPolicy | undefined): {
+  labeledFindings: boolean;
+  p0p1Labels: boolean;
+  negativeControlScenarios: boolean;
+  wilsonLowerBound: boolean;
+} {
+  return {
+    labeledFindings: policy?.minLabeledFindings !== undefined && !isPositiveInteger(policy.minLabeledFindings),
+    p0p1Labels: policy?.minP0P1Labels !== undefined && !isPositiveInteger(policy.minP0P1Labels),
+    negativeControlScenarios:
+      policy?.minNegativeControlScenarios !== undefined && !isPositiveInteger(policy.minNegativeControlScenarios),
+    wilsonLowerBound: policy?.minWilsonLowerBound !== undefined && !isProbability(policy.minWilsonLowerBound)
+  };
 }
 
 function isPositiveInteger(value: unknown): value is number {
