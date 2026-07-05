@@ -152,6 +152,15 @@ describe("review gate config", () => {
     );
   });
 
+  it("rejects unknown keys in the confidence floors map", () => {
+    expect(() =>
+      loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { p0: 0.8 } } })
+    ).toThrow(/reviewGate\.requestChangesConfidenceFloors has unknown key "p0"; expected only P0 or P1/);
+    expect(() =>
+      loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { P2: 0.5 } } })
+    ).toThrow(/reviewGate\.requestChangesConfidenceFloors has unknown key "P2"; expected only P0 or P1/);
+  });
+
   it("rejects out-of-range or non-number confidence floors", () => {
     expect(() =>
       loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { P0: -0.1 } } })

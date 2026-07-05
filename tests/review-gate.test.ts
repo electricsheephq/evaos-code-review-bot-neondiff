@@ -200,6 +200,60 @@ describe("deterministic review gate", () => {
     expect(gate.summary.requestChangesEligible).toBe(1);
   });
 
+  it("requests changes for a P0 finding exactly at the floor (floor is inclusive)", () => {
+    const findings: Finding[] = [
+      {
+        severity: "P0",
+        category: "data_loss",
+        path: "src/save.ts",
+        line: 2,
+        title: "Rollback can clobber fresh state",
+        body: "The added call can overwrite newer data after a failed save.",
+        confidence: 0.8
+      }
+    ];
+
+    const gate = applyDeterministicReviewGate({
+      findings,
+      files,
+      requestChangesConfidenceFloors: { P0: 0.8 }
+    });
+
+    expect(gate.event).toBe("REQUEST_CHANGES");
+    expect(gate.summary.requestChangesEligible).toBe(1);
+  });
+
+  it("keeps a below-P1-floor finding as a comment and requests changes at or above it", () => {
+    const finding: Finding = {
+      severity: "P1",
+      category: "data_loss",
+      path: "src/save.ts",
+      line: 2,
+      title: "Rollback can clobber fresh state",
+      body: "The added call can overwrite newer data after a failed save.",
+      confidence: 0.5
+    };
+
+    const below = applyDeterministicReviewGate({
+      findings: [finding],
+      files,
+      requestChangesConfidenceFloors: { P1: 0.6 }
+    });
+
+    expect(below.event).toBe("COMMENT");
+    expect(below.comments).toHaveLength(1);
+    expect(below.summary.requestChangesEligible).toBe(0);
+
+    const atFloor = applyDeterministicReviewGate({
+      findings: [{ ...finding, confidence: 0.6 }],
+      files,
+      requestChangesConfidenceFloors: { P1: 0.6 }
+    });
+
+    expect(atFloor.event).toBe("REQUEST_CHANGES");
+    expect(atFloor.summary.requestChangesEligible).toBe(1);
+  });
+
   it("suppresses only low-severity findings with exact repo-memory false-positive fingerprints", () => {
     const lowSeverityFinding: Finding = {
       severity: "P3",

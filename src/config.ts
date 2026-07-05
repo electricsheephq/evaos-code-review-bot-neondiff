@@ -658,6 +658,11 @@ function validateReviewGateConfig(value: unknown, label: string): void {
     if (!isRecord(value.requestChangesConfidenceFloors)) {
       throw new Error(`${label}.requestChangesConfidenceFloors must be an object`);
     }
+    for (const key of Object.keys(value.requestChangesConfidenceFloors)) {
+      if (key !== "P0" && key !== "P1") {
+        throw new Error(`${label}.requestChangesConfidenceFloors has unknown key "${key}"; expected only P0 or P1`);
+      }
+    }
     for (const severity of ["P0", "P1"] as const) {
       const floor = value.requestChangesConfidenceFloors[severity];
       if (floor !== undefined) validateProbability(floor, `${label}.requestChangesConfidenceFloors.${severity}`);
