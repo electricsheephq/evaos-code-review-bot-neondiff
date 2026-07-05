@@ -39,6 +39,7 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate } from "./review-gate.js";
+import { buildOutcomeLedger, buildOutcomeLedgerInputFromReviewPlan, renderOutcomeLedgerMarkdown } from "./outcome-ledger.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
@@ -1524,6 +1525,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
     if (walkthrough) writeFileSync(join(evidenceDir, "walkthrough.md"), walkthrough.body);
     if (enrichment) writeFileSync(join(evidenceDir, "enrichment.md"), enrichment.body);
+    if (input.dryRun) {
+      writeDryRunOutcomeLedgerEvidence({
+        evidenceDir,
+        repo,
+        pull,
+        files: reviewFiles,
+        plan,
+        provider: config.zcode.providerId,
+        model: config.zcode.model
+      });
+    }
     writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
 
     if (input.dryRun) {
@@ -2135,6 +2147,41 @@ export function createGitHubRelatedContextReader(config: BotConfig, fallback: Gi
     ...config.github,
     requestTimeoutMs: relatedConfig.requestTimeoutMs
   });
+}
+
+export function writeDryRunOutcomeLedgerEvidence(input: {
+  evidenceDir: string;
+  repo: string;
+  pull: PullRequestSummary;
+  files: PullFilePatch[];
+  plan: ReviewPlan;
+  provider?: string;
+  model?: string;
+}): { ok: true } | { ok: false; error: string } {
+  try {
+    const outcomeLedger = buildOutcomeLedger(buildOutcomeLedgerInputFromReviewPlan({
+      repo: input.repo,
+      pull: input.pull,
+      files: input.files,
+      plan: input.plan,
+      dryRun: true,
+      runtime: {
+        provider: input.provider,
+        model: input.model
+      }
+    }));
+    writeRedactedJson(join(input.evidenceDir, "outcome-ledger.json"), outcomeLedger);
+    writeFileSync(join(input.evidenceDir, "outcome-ledger.md"), renderOutcomeLedgerMarkdown(outcomeLedger));
+    return { ok: true };
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : String(error));
+    writeRedactedJson(join(input.evidenceDir, "outcome-ledger-error.json"), {
+      ok: false,
+      error: message,
+      proofBoundary: "Outcome Ledger dry-run evidence failed to build; stable review-plan evidence must continue."
+    });
+    return { ok: false, error: message };
+  }
 }
 
 function recordStaleHeadSkip(input: {
