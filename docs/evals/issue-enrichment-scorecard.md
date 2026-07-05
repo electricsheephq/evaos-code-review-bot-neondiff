@@ -17,7 +17,7 @@ Scores above `3` require at least one direct evidence link on that case/dimensio
 
 For example, `duplicate-same-head-comments` scored on `proof_boundary` must link to `#direct-evidence-duplicate-same-head-comments-proof-boundary`. A generic parent issue URL is not enough for high scores.
 
-Direct evidence links must be `https` URLs on the same host and path as the fixture case's `fixtureSource`. Query strings are not part of the evidence identity, so fixture authors can add tracking or version query parameters without forcing every evidence link to duplicate them. The anchor alone is not enough; synthetic links such as `https://example.com/#direct-evidence-...` fail validation.
+Fixture sources and direct evidence links must be `https` URLs on the canonical issue-enrichment evidence issue: `https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264`. Query strings are not part of the evidence identity, so fixture authors can add tracking or version query parameters without forcing every evidence link to duplicate them. The anchor alone is not enough; synthetic links such as `https://example.com/#direct-evidence-...` fail validation.
 
 The current weights are intentionally differentiated so `weightedScore` is not a duplicate of `rawScore`. Proof boundary, throttling, acceptance criteria, related-context precision, and safety carry higher weight because a failure in those dimensions can create misleading readiness or noisy live-posting signals.
 

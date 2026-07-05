@@ -108,6 +108,10 @@ export const ISSUE_ENRICHMENT_REQUIRED_FIXTURE_COVERAGE: IssueEnrichmentFixtureC
   "provider_failure_burst_30_prs"
 ];
 
+const ISSUE_ENRICHMENT_DIRECT_EVIDENCE_SOURCE = new URL(
+  "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"
+);
+
 export const ISSUE_ENRICHMENT_SCORE_DIMENSIONS: IssueEnrichmentScoreDimension[] = [
   dimension("related_context_precision", "Related-context precision", 12, {
     denominator: "Issue-enrichment comments that cite related repos, PRs, issues, docs, or web precedents.",
@@ -187,7 +191,10 @@ export function scoreIssueEnrichment(packet: IssueEnrichmentFixturePacket): Issu
   const dimensionScores = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map((dimension) => scoreDimension(packet, dimension));
   const measuredDimensionScores = dimensionScores.filter((dimension) => dimension.measuredCases > 0);
   const rawTotal = measuredDimensionScores.reduce((sum, dimension) => sum + dimension.rawScore, 0);
-  const weightedTotal = measuredDimensionScores.reduce((sum, dimension) => sum + dimension.weightedContribution, 0);
+  const weightedTotal = measuredDimensionScores.reduce(
+    (sum, dimension) => sum + dimension.rawScore * dimension.weight,
+    0
+  );
   const maxRaw = measuredDimensionScores.length * 5;
   const maxWeighted = measuredDimensionScores.reduce((sum, dimension) => sum + dimension.weight * 5, 0);
   const unmeasurableStates = dimensionScores.flatMap((dimension) =>
@@ -252,8 +259,11 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
 
   for (const fixtureCase of packet.cases) {
     if (!fixtureCase.title?.trim()) errors.push(`case ${fixtureCase.id} title is required`);
-    if (!parseHttpsUrl(fixtureCase.fixtureSource)) {
+    const fixtureSource = parseHttpsUrl(fixtureCase.fixtureSource);
+    if (!fixtureSource) {
       errors.push(`case ${fixtureCase.id} fixtureSource must be an https URL`);
+    } else if (!isCanonicalDirectEvidencePath(fixtureSource)) {
+      errors.push(`case ${fixtureCase.id} fixtureSource must point to the canonical issue-enrichment evidence issue`);
     }
     if (!allowedCoverageIds.has(fixtureCase.coverage)) {
       errors.push(`case ${fixtureCase.id} has unknown coverage ${fixtureCase.coverage}`);
@@ -406,18 +416,22 @@ function hasDirectEvidenceLink(
   dimensionId: IssueEnrichmentScoreDimensionId
 ): boolean {
   const expectedAnchor = `direct-evidence-${fixtureCase.id.replaceAll("_", "-")}-${dimensionId.replaceAll("_", "-")}`;
-  const source = parseHttpsUrl(fixtureCase.fixtureSource);
-  if (!source) return false;
 
   return (links ?? []).some((link) => {
     const url = parseHttpsUrl(link);
     if (!url) return false;
     return (
-      url.origin === source.origin &&
-      url.pathname === source.pathname &&
+      isCanonicalDirectEvidencePath(url) &&
       url.hash.slice(1) === expectedAnchor
     );
   });
+}
+
+function isCanonicalDirectEvidencePath(url: URL): boolean {
+  return (
+    url.origin === ISSUE_ENRICHMENT_DIRECT_EVIDENCE_SOURCE.origin &&
+    url.pathname === ISSUE_ENRICHMENT_DIRECT_EVIDENCE_SOURCE.pathname
+  );
 }
 
 function parseHttpsUrl(value: string | undefined): URL | null {

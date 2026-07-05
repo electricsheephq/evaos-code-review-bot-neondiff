@@ -28,11 +28,10 @@ function expectedTopLevelScores(fixture: IssueEnrichmentFixturePacket): { rawSco
 
     if (!scores.length) return [];
     const averageScore = scores.reduce((sum, score) => sum + score, 0) / scores.length;
-    const roundedWeightedContribution = Math.round(averageScore * dimension.weight * 100) / 100;
     return [
       {
         rawScore: averageScore,
-        weightedContribution: roundedWeightedContribution,
+        weightedContribution: averageScore * dimension.weight,
         maxWeightedScore: dimension.weight * 5
       }
     ];
@@ -176,7 +175,7 @@ describe("issue enrichment scorecard", () => {
     });
   });
 
-  it("rejects direct-evidence anchors that do not point at the fixture source issue", () => {
+  it("rejects direct-evidence anchors that do not point at the canonical evidence issue", () => {
     const fixture = loadFixture();
     fixture.cases[0].dimensions.proof_boundary = {
       score: 4,
@@ -186,6 +185,23 @@ describe("issue enrichment scorecard", () => {
     expect(validateIssueEnrichmentFixture(fixture)).toMatchObject({
       ok: false,
       errors: expect.arrayContaining([
+        "case duplicate-same-head-comments dimension proof_boundary scored 4 without direct evidence links"
+      ])
+    });
+  });
+
+  it("rejects self-consistent high-score evidence links on non-canonical fixture sources", () => {
+    const fixture = loadFixture();
+    fixture.cases[0].fixtureSource = "https://example.com/evidence#scenario-duplicate-same-head-comments";
+    fixture.cases[0].dimensions.proof_boundary = {
+      score: 4,
+      evidenceLinks: ["https://example.com/evidence#direct-evidence-duplicate-same-head-comments-proof-boundary"]
+    };
+
+    expect(validateIssueEnrichmentFixture(fixture)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "case duplicate-same-head-comments fixtureSource must point to the canonical issue-enrichment evidence issue",
         "case duplicate-same-head-comments dimension proof_boundary scored 4 without direct evidence links"
       ])
     });
@@ -412,6 +428,13 @@ describe("issue enrichment scorecard", () => {
         fixture.cases[0].fixtureSource = "http://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264";
       },
       error: "case duplicate-same-head-comments fixtureSource must be an https URL"
+    },
+    {
+      name: "non-canonical fixture source",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].fixtureSource = "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/999";
+      },
+      error: "case duplicate-same-head-comments fixtureSource must point to the canonical issue-enrichment evidence issue"
     },
     {
       name: "unknown coverage",
