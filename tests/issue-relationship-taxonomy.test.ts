@@ -85,6 +85,20 @@ describe("issue relationship taxonomy", () => {
   });
 
   it("keeps category hints advisory when higher-risk signals are present", () => {
+    const ownerHint = classifyIssueRelationshipItem({
+      id: "issue-42b",
+      kind: "issue",
+      title: "Needs owner routing",
+      categoryHint: "dependency"
+    });
+
+    expect(ownerHint).toMatchObject({
+      category: "dependency",
+      categoryHint: "dependency",
+      categoryHintHonored: true,
+      proofRequirements: ["dependency_owner"]
+    });
+
     const p0DocsHint = classifyIssueRelationshipItem({
       id: "issue-43",
       kind: "issue",
@@ -194,6 +208,22 @@ describe("issue relationship taxonomy", () => {
       title: "Update beta release gating notes",
       paths: ["docs/beta.md"]
     }).category).toBe("docs_only");
+  });
+
+  it("keeps dependsOn refs as relationship metadata, not proof evidence", () => {
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49e",
+      kind: "issue",
+      title: "Release gate needs beta proof",
+      dependsOn: ["ci failure fixture issue"]
+    }).proofRequirements).toEqual(["release_gate"]);
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49f",
+      kind: "issue",
+      title: "Release gate needs beta proof",
+      relatedRefs: ["ci failure fixture issue"]
+    }).proofRequirements).toEqual(["release_gate", "regression_fixture"]);
   });
 
   it("clusters related issues and PRs with public-safe relationship reasons", () => {
