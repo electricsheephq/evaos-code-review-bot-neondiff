@@ -338,7 +338,7 @@ export async function collectIssueEnrichmentScan(input: {
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
   const status = buildIssueEnrichmentStatus({
     config: input.config,
-    canPostAsApp: input.canPostAsApp ?? false,
+    canPostAsApp: input.dryRun ? true : input.canPostAsApp ?? false,
     checkedAt
   });
   const repos = input.repo ? [input.repo] : input.repos ?? config.allowlist;
@@ -482,9 +482,10 @@ export async function runIssueEnrichmentCycle(input: {
 }): Promise<IssueEnrichmentCycleResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const canPostIssueComments = input.dryRun ? true : input.github.canPostAsApp();
   const status = buildIssueEnrichmentStatus({
     config: input.config,
-    canPostAsApp: input.github.canPostAsApp(),
+    canPostAsApp: canPostIssueComments,
     checkedAt
   });
   if (!config.enabled) {
@@ -609,7 +610,7 @@ export async function runIssueEnrichmentCycle(input: {
           includeExisting: input.includeExisting,
           since: input.since,
           sinceByRepo,
-          canPostAsApp: input.github.canPostAsApp(),
+          canPostAsApp: canPostIssueComments,
           checkedAt,
           applyGlobalCaps: false,
           shouldCountItem

@@ -419,6 +419,35 @@ describe("build-enrichment-comment issue CLI", () => {
     });
   });
 
+  it("allows selected issue enrichment dry-runs without GitHub App posting credentials", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ]);
+      const parsed = JSON.parse(stdout);
+
+      expect(parsed.summary).toMatchObject({ wouldComment: 1, posted: 0, failed: 0 });
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "GET",
+        path: "/repos/owner/issue-repo/issues/17",
+        authorization: "Bearer test-token"
+      }));
+      expect(requests.some((request) => request.path === "/app/installations/123/access_tokens")).toBe(false);
+      expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
   it("rejects selected issue enrichment when the feature config is absent or disabled", async () => {
     await withMockGitHub(async ({ apiBaseUrl, requests }) => {
       const missingRoot = createRoot(roots);
@@ -583,6 +612,33 @@ describe("build-enrichment-comment issue CLI", () => {
       expect(issue20Markdown).toContain("Issue: owner/issue-repo#20");
       expect(issue20Markdown).not.toContain("ghp_secret");
       expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
+  it("names the binding throttle when selected issue count exceeds the per-run cap", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.issueEnrichment.repos["owner/issue-repo"].maxIssuesPerBurst = 1;
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--issue",
+        "20",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("repo.maxIssuesPerBurst=1")
+      });
+      expect(requests).toHaveLength(0);
     });
   });
 

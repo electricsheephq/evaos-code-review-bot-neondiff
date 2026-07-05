@@ -1049,18 +1049,23 @@ async function main(): Promise<void> {
     if (!policy.allowed) throw new Error(`Repo ${repo} is skipped by issue-enrichment policy: ${policy.reason}`);
     const github = new GitHubApi(config.github);
     const liveStatus = buildIssueEnrichmentStatus({ config, canPostAsApp: github.canPostAsApp() });
-    if (liveStatus.state === "blocked") {
+    const statusBlockers = dryRun
+      ? liveStatus.blockers.filter((blocker) => blocker !== "github_app_credentials_required_for_live_issue_comments")
+      : liveStatus.blockers;
+    if (statusBlockers.length > 0) {
       const missingThresholds = liveStatus.liveThresholdsMissingRepos.length
         ? `; liveThresholdsMissingRepos=${liveStatus.liveThresholdsMissingRepos.join(",")}`
         : "";
       const mode = dryRun ? "dry-run" : "live posting";
-      throw new Error(`issue-enrichment-run ${mode} blocked: ${liveStatus.blockers.join(", ")}${missingThresholds}`);
+      throw new Error(`issue-enrichment-run ${mode} blocked: ${statusBlockers.join(", ")}${missingThresholds}`);
     }
     const runLimit = effectiveIssueEnrichmentRunLimit(issueConfig, policy, {
       postIssueComment: !dryRun && issueConfig.postIssueComment
     });
-    if (issueNumbers.length > runLimit) {
-      throw new Error(`issue-enrichment-run selected issue count ${issueNumbers.length} exceeds configured per-run cap ${runLimit}`);
+    if (issueNumbers.length > runLimit.value) {
+      throw new Error(
+        `issue-enrichment-run selected issue count ${issueNumbers.length} exceeds configured per-run cap ${runLimit.value} (${runLimit.binding})`
+      );
     }
     const issues: GitHubRelatedIssueOrPull[] = [];
     const previewOutputs = [];
@@ -2759,16 +2764,23 @@ function effectiveIssueEnrichmentRunLimit(
   config: IssueEnrichmentConfig,
   policy: ReturnType<typeof resolveIssueEnrichmentRepoPolicy>,
   input: { postIssueComment: boolean }
-): number {
+): { binding: string; value: number } {
   const limits = [
-    policy.throttle.maxIssuesPerCycle,
-    policy.throttle.maxIssuesPerBurst,
-    config.globalMaxIssuesPerCycle
+    { field: "repo.maxIssuesPerCycle", value: policy.throttle.maxIssuesPerCycle },
+    { field: "repo.maxIssuesPerBurst", value: policy.throttle.maxIssuesPerBurst },
+    { field: "globalMaxIssuesPerCycle", value: config.globalMaxIssuesPerCycle }
   ];
   if (input.postIssueComment) {
-    limits.push(policy.throttle.maxCommentsPerCycle, config.globalMaxCommentsPerCycle);
+    limits.push(
+      { field: "repo.maxCommentsPerCycle", value: policy.throttle.maxCommentsPerCycle },
+      { field: "globalMaxCommentsPerCycle", value: config.globalMaxCommentsPerCycle }
+    );
   }
-  return Math.max(1, Math.min(...limits));
+  const binding = limits.reduce((best, candidate) => candidate.value < best.value ? candidate : best);
+  return {
+    binding: `${binding.field}=${binding.value}`,
+    value: Math.max(1, binding.value)
+  };
 }
 
 function parseSingleArg(value: string | string[], label: string): string {
