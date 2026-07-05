@@ -484,6 +484,7 @@ export async function runIssueEnrichmentCycle(input: {
   force?: boolean;
   advanceWatermarks?: boolean;
   checkedAt?: string;
+  preacquiredLease?: { leaseId: string };
 }): Promise<IssueEnrichmentCycleResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
@@ -522,7 +523,7 @@ export async function runIssueEnrichmentCycle(input: {
 
   let lease: { leaseId: string } | undefined;
   if (!input.dryRun) {
-    lease = input.state.tryAcquireIssueEnrichmentRunLease(config.maxActiveRuns, config.leaseTtlMs, new Date(checkedAt));
+    lease = input.preacquiredLease ?? input.state.tryAcquireIssueEnrichmentRunLease(config.maxActiveRuns, config.leaseTtlMs, new Date(checkedAt));
     if (!lease) {
       const summary = { ...emptyCycleSummary(), workerSkipped: 1 };
       return {

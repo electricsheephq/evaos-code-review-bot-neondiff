@@ -859,6 +859,46 @@ describe("build-enrichment-comment issue CLI", () => {
     });
   });
 
+  it("rejects closed and PR-shaped selected issues in live mode before posting", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "18",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("stale_issue_closed")
+      });
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "19",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue_is_pull_request")
+      });
+      expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
   it("posts selected issue enrichment live, skips unchanged reruns, and force-updates the sticky comment", async () => {
     await withMockGitHub(async ({ apiBaseUrl, requests }) => {
       const root = createRoot(roots);

@@ -1101,7 +1101,13 @@ async function main(): Promise<void> {
     if (dryRun) await loadSelectedIssues();
 
     const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
+    let preacquiredLease: { leaseId: string } | undefined;
+    let leaseTransferredToCycle = false;
     try {
+      if (!dryRun) {
+        preacquiredLease = state.tryAcquireIssueEnrichmentRunLease(issueConfig.maxActiveRuns, issueConfig.leaseTtlMs, new Date());
+        if (preacquiredLease) await loadSelectedIssues();
+      }
       const cycleGithub: IssueEnrichmentCycleGithub = {
         listIssuesForEnrichment: async (requestedRepo) => {
           if (requestedRepo !== repo) {
@@ -1120,8 +1126,10 @@ async function main(): Promise<void> {
         repo,
         includeExisting: true,
         advanceWatermarks: false,
-        force
+        force,
+        ...(preacquiredLease ? { preacquiredLease } : {})
       });
+      if (preacquiredLease) leaseTransferredToCycle = true;
       const output = {
         command: "issue-enrichment-run",
         repo,
@@ -1147,6 +1155,7 @@ async function main(): Promise<void> {
         result.summary.deferredRecorded === 0;
       if (!result.ok || (!dryRun && (result.summary.workerSkipped > 0 || liveNoWork))) process.exitCode = 1;
     } finally {
+      if (preacquiredLease && !leaseTransferredToCycle) state.releaseIssueEnrichmentRunLease(preacquiredLease.leaseId);
       state.close();
     }
     return;
