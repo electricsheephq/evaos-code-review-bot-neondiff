@@ -4,10 +4,65 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runOfflineEval, runStickyVsColdEval, type EvalScenarioInput, type StickyVsColdScenarioInput } from "../src/eval-harness.js";
+import {
+  __evalHarnessTestHooks,
+  buildEvalPromotionDecisionMarkdown,
+  runOfflineEval,
+  runStickyVsColdEval,
+  type EvalScenarioInput,
+  type EvalScorecard,
+  type StickyVsColdScenarioInput
+} from "../src/eval-harness.js";
 
 const nodeRequire = createRequire(import.meta.url);
 const tsxCli = nodeRequire.resolve("tsx/cli");
+
+function promotionScorecard(input: {
+  labels: number;
+  p0p1Labels: number;
+  maxWilsonLowerBound: number;
+}): EvalScorecard {
+  return {
+    evalName: "evaos-zcode-review-bot-comparison-v0.1",
+    runId: "promotion-scorecard",
+    suite: "canary_shadow",
+    repo: "electricsheephq/evaos-code-review-bot",
+    pullNumber: 282,
+    headSha: "abc123",
+    counts: {
+      botFindings: input.labels,
+      labels: input.labels,
+      truePositive: input.labels,
+      falsePositive: 0,
+      falseNegative: 0,
+      exactLineMatches: input.labels,
+      nearbyLineMatches: 0,
+      semanticMatches: 0,
+      droppedFromSchema: 0,
+      secretFindings: 0,
+      duplicateFindings: 0,
+      inlinePreviews: 0,
+      ciMetadata: 0,
+      mergedFixes: 0,
+      p0p1Labels: input.p0p1Labels
+    },
+    metrics: {
+      precision: 1,
+      recall: 1,
+      seededRecall: 1,
+      maxWilsonLowerBound: input.maxWilsonLowerBound
+    },
+    matchedLabelKeys: [],
+    thresholds: {
+      minPrecision: 0.8,
+      minRecall: 0.6,
+      minSeededRecall: 1,
+      maxSecretFindings: 0,
+      maxDuplicateFindings: 0
+    },
+    gates: []
+  };
+}
 
 describe("offline eval harness", () => {
   const roots: string[] = [];
@@ -731,6 +786,84 @@ describe("offline eval harness", () => {
     expect(result.scorecard.metrics.maxWilsonLowerBound).toBeGreaterThan(0.949);
     const calibration = JSON.parse(readFileSync(join(root, "calibration-report.json"), "utf8"));
     expect(calibration.bins[2].wilsonLowerBound).toBe(0.95);
+  });
+
+  it("fails closed instead of returning NaN for malformed Wilson success counts", () => {
+    expect(__evalHarnessTestHooks.wilsonLowerBound95(2, 1)).toBe(0);
+    expect(__evalHarnessTestHooks.wilsonLowerBound95(Number.POSITIVE_INFINITY, 10)).toBe(0);
+    expect(__evalHarnessTestHooks.wilsonLowerBound95(Number.NaN, 10)).toBe(0);
+  });
+
+  it("keeps raw promotion Wilson math aligned with confidence-bin stats", () => {
+    const botFindings = [
+      {
+        id: "bot-low",
+        source: "bot" as const,
+        severity: "P2" as const,
+        path: "src/a.ts",
+        line: 10,
+        title: "Low-confidence match",
+        body: "Low confidence bin should be counted.",
+        confidence: 0.25
+      },
+      {
+        id: "bot-mid",
+        source: "bot" as const,
+        severity: "P2" as const,
+        path: "src/b.ts",
+        line: 20,
+        title: "Mid-confidence miss",
+        body: "Mid confidence bin should be counted.",
+        confidence: 0.65
+      },
+      {
+        id: "bot-high",
+        source: "bot" as const,
+        severity: "P1" as const,
+        path: "src/c.ts",
+        line: 30,
+        title: "High-confidence match",
+        body: "High confidence bin should be counted.",
+        confidence: 0.95
+      }
+    ];
+    const matches = [
+      { botFindingId: "bot-low", labelId: "label-low", kind: "exact_line" as const },
+      { botFindingId: "bot-high", labelId: "label-high", kind: "semantic" as const }
+    ];
+    const stats = __evalHarnessTestHooks.computeConfidenceBinStats(botFindings, matches);
+    const maxFromBins = Math.max(0, ...stats.map((bin) => bin.rawWilsonLowerBound));
+
+    expect(__evalHarnessTestHooks.maxRawWilsonLowerBound(botFindings, matches)).toBe(maxFromBins);
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY]
+  ])("fails closed when promotion Wilson evidence is %s", (_name, maxWilsonLowerBound) => {
+    const scorecards = [
+      promotionScorecard({
+        labels: 100,
+        p0p1Labels: 30,
+        maxWilsonLowerBound
+      }),
+      ...Array.from({ length: 10 }, () => promotionScorecard({
+        labels: 0,
+        p0p1Labels: 0,
+        maxWilsonLowerBound: 0.99
+      }))
+    ];
+
+    const markdown = buildEvalPromotionDecisionMarkdown({
+      ok: true,
+      scenarioCount: scorecards.length,
+      missingSuites: [],
+      scorecards
+    });
+
+    expect(markdown).toContain("Decision: not enough evidence");
+    expect(markdown).toContain("Calibrated public confidence: disabled");
+    expect(markdown).toContain("- wilson_lower_bound_below_threshold");
   });
 
   it("writes suite-level summary and promotion decision artifacts for eval-suite", () => {
