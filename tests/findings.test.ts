@@ -490,9 +490,12 @@ describe("same-run near-duplicate suppression (#281)", () => {
     const result = normalizeFindingsForReview(findings);
 
     // A duplicate whose body contains a secret is dropped by the secret filter first (never reaches
-    // dedup), so the surviving finding posts and the dropped entry stays redacted and public-safe.
+    // dedup). Asserting the explicit secret_detected reason makes that ordering invariant loud: if
+    // the pipeline were ever reordered so dedup ran first, the reason would flip to
+    // same_run_near_duplicate and this test would fail instead of silently passing.
     expect(result.comments).toHaveLength(1);
     expect(result.comments[0]?.title).toBe("Rollback clobbers fresh state");
+    expect(result.dropped).toEqual([expect.objectContaining({ line: 43, reason: "secret_detected" })]);
     expect(JSON.stringify(result.dropped)).not.toContain(token);
   });
 });
