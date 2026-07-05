@@ -1732,7 +1732,7 @@ function isNeonDiffPackageRoot(candidate: string): boolean {
   }
   try {
     const packageJson = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8"));
-    return packageJson.name === "evaos-code-review-bot"
+    return ["neondiff", "evaos-code-review-bot"].includes(packageJson.name)
       && packageJson.bin?.neondiff === "dist/src/cli.js";
   } catch {
     return false;

@@ -597,7 +597,7 @@ describe("operator CLI summaries", () => {
       durableQueue: durableQueueSnapshot({
         jobs: [
           durableJob({ repo: "owner/repo", pullNumber: 2, headSha: "head-pending", state: "queued", priority: 5, source: "manual_command", lane: "manual" }),
-          durableJob({ repo: "owner/other", pullNumber: 4, headSha: "head-failed", state: "failed", priority: 10, lastError: "ZCode failed ghp_123456789012345678901234" })
+          durableJob({ repo: "owner/other", pullNumber: 4, headSha: "head-failed", state: "failed", priority: 10, lastError: "ZCode failed ghp_fake_token" })
         ],
         summary: { total: 2, queued: 1, failed: 1, running: 0, providerDeferred: 0, retryableProviderDeferred: 0 }
       }),
@@ -658,7 +658,7 @@ describe("operator CLI summaries", () => {
     );
     expect(dashboard.items[1].lastError).toBe("ZCode failed [redacted-secret]");
     expect(formatOperatorDashboardHuman(dashboard)).toContain("dashboard: blocked total=5");
-    expect(JSON.stringify(dashboard)).not.toMatch(/ghp_123456789012345678901234/);
+    expect(JSON.stringify(dashboard)).not.toMatch(/ghp_fake_token/);
   });
 
   it("hides historical stale-only dashboard rows by default while preserving explicit history filters", () => {
@@ -1118,7 +1118,7 @@ describe("operator CLI summaries", () => {
         ok: true,
         processed: [{
           ...processedEntry(10, "head-failed", "failed"),
-          error: "ZCode failed ghp_123456789012345678901234"
+          error: "ZCode failed ghp_fake_token"
         }]
       }),
       checkedAt: "2026-07-02T00:00:00.000Z"
@@ -1141,7 +1141,7 @@ describe("operator CLI summaries", () => {
         nextAction: "inspect failure evidence and retry or retire the head"
       })
     ]);
-    expect(JSON.stringify(dashboard)).not.toMatch(/ghp_123456789012345678901234/);
+    expect(JSON.stringify(dashboard)).not.toMatch(/ghp_fake_token/);
   });
 
   it("renders every dashboard row in the human formatter", () => {
@@ -1185,7 +1185,7 @@ describe("operator CLI summaries", () => {
 
   it("filters runtime processes to bot-owned rows and redacts command text", () => {
     const rows = [
-      { pid: 10, ppid: 1, command: "node /Volumes/LEXAR/repos/evaos-code-review-bot/dist/cli.js daemon --config live.json --token=ghp_123456789012345678901234" },
+      { pid: 10, ppid: 1, command: "node /Volumes/LEXAR/repos/evaos-code-review-bot/dist/cli.js daemon --config live.json --token=ghp_fake_token" },
       { pid: 11, ppid: 10, command: "node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs --cwd /Volumes/LEXAR/repos/some-worktree" },
       { pid: 12, ppid: 1, command: "node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs --cwd /Users/lume/other" },
       { pid: 13, ppid: 1, command: "node /tmp/not-the-bot.js" },
@@ -1208,7 +1208,7 @@ describe("operator CLI summaries", () => {
       classification: "child_process",
       matchedBy: ["child_of_bot_process"]
     });
-    expect(JSON.stringify(processes)).not.toMatch(/ghp_123456789012345678901234/);
+    expect(JSON.stringify(processes)).not.toMatch(/ghp_fake_token/);
     expect(JSON.stringify(processes)).toContain("[redacted-secret]");
   });
 

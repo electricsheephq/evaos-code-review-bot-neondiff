@@ -29,7 +29,7 @@ describe("desktop config CLI", () => {
       github: {
         appId: "123",
         privateKeyPath: join(root, "private-key.pem"),
-        token: "ghp_123456789012345678901234567890123456"
+        token: "ghp_fake_token"
       },
       notes: {
         customProviderHeader: "Bearer custom-provider-token-1234567890"
@@ -177,7 +177,7 @@ describe("desktop config CLI", () => {
       providers: {
         providers: {
           "openai-compatible": {
-            baseUrl: "https://gateway.example.test/v1?api_key=sk-live-secret-secret-secret-secret"
+            baseUrl: "https://gateway.example.test/v1?api_key=sk-fixture-secret"
           }
         }
       }
@@ -186,7 +186,7 @@ describe("desktop config CLI", () => {
       providers: {
         providers: {
           "openai-compatible": {
-            apiKeyEnv: "sk-live-secret-secret-secret-secret"
+            apiKeyEnv: "sk-fixture-secret"
           }
         }
       }
@@ -377,7 +377,7 @@ describe("desktop config CLI", () => {
       evidenceDir: join(root, "evidence")
     });
     writeConfig(secretPatchPath, {
-      github: { token: "ghp_123456789012345678901234567890123456" }
+      github: { token: "ghp_fake_token" }
     });
     writeConfig(licensePatchPath, {
       desktop: { updateChannel: "NEONDIFF-PRIVATE-1234567890123456" }

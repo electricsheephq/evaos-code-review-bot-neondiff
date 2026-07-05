@@ -35,10 +35,10 @@ describe("daemon heartbeat logs", () => {
     const log = formatDaemonLog({
       event: "daemon_cycle_failed",
       level: "error",
-      error: "request failed with ghp_1234567890abcdefghijklmnopqrstuvwx"
+      error: "request failed with ghp_fake_token"
     }, new Date("2026-07-01T00:00:00.000Z"));
 
     expect(log).toContain("[redacted-secret]");
-    expect(log).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(log).not.toContain("ghp_fake_token");
   });
 });

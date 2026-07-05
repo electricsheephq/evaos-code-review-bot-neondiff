@@ -282,7 +282,7 @@ describe("beta release status", () => {
     });
     expect(redactedOutput).toContain("git reset --hard refs/tags/v0.4.9-beta.1");
     expect(redactedOutput).toContain("cli=source_checkout; daemon=launchd_prerelease");
-    expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot/issues/111");
+    expect(redactedOutput).toContain("https://github.com/electricsheephq/neondiff/issues/111");
   });
 
   it("fails closed without throwing when collectReleaseStatus receives a missing public manifest path", () => {

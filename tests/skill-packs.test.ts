@@ -31,7 +31,7 @@ describe("read-only skill-pack context", () => {
       "# Review Doctrine",
       "",
       "Prefer current diff evidence.",
-      "Never expose ghp_123456789012345678901234."
+      "Never expose ghp_fake_token."
     ].join("\n"));
 
     const result = buildSkillPackContextPacket({
@@ -49,7 +49,7 @@ describe("read-only skill-pack context", () => {
     expect(result.packet.markdown).toContain("Read-only skill-pack context");
     expect(result.packet.markdown).toContain("review-doctrine");
     expect(result.packet.markdown).toContain("[redacted-secret]");
-    expect(JSON.stringify(result)).not.toContain("ghp_123456789012345678901234");
+    expect(JSON.stringify(result)).not.toContain("ghp_fake_token");
     expect(result.redactionReport.ok).toBe(true);
   });
 

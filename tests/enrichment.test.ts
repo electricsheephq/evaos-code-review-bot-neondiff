@@ -25,7 +25,7 @@ const pull: PullRequestSummary = {
   number: 77,
   title: "Harden review queue #22",
   draft: false,
-  body: "Closes #22. ghp_123456789012345678901234",
+  body: "Closes #22. ghp_fake_token",
   head: { sha: HEAD_A, ref: "feature/enrich", repo: { full_name: "electricsheephq/evaos-code-review-bot" } },
   base: { sha: "b".repeat(40), ref: "main", repo: { full_name: "electricsheephq/evaos-code-review-bot" } },
   html_url: "https://github.test/electricsheephq/evaos-code-review-bot/pull/77",
@@ -252,7 +252,7 @@ describe("sticky enrichment comments", () => {
     expect(first.body).toContain("Suggested reviewers: runtime-owner, reviewer-one");
     expect(first.body).toContain("Related issues/PRs: #22");
     expect(first.body).toContain("No labels or reviewers were applied by this bot.");
-    expect(first.body).not.toContain("ghp_123456789012345678901234");
+    expect(first.body).not.toContain("ghp_fake_token");
     expect(extractStateHash(first.body)).not.toBe(extractStateHash(changedSuggestion.body));
   });
 
@@ -363,7 +363,7 @@ describe("sticky enrichment comments", () => {
         github: {
           canPostAsApp: () => true,
           upsertIssueComment: async () => {
-            throw new Error("GitHub API 502 ghp_123456789012345678901234");
+            throw new Error("GitHub API 502 ghp_fake_token");
           }
         },
         repo: "owner/repo",
@@ -380,10 +380,10 @@ describe("sticky enrichment comments", () => {
       expect(result).toMatchObject({ posted: false, reason: "upsert_failed" });
       if (result.posted) throw new Error("expected failed enrichment post");
       expect(result.error).toContain("GitHub API 502");
-      expect(result.error).not.toContain("ghp_123456789012345678901234");
+      expect(result.error).not.toContain("ghp_fake_token");
       const errorPath = join(evidenceDir, "enrichment-comment-error.txt");
       expect(existsSync(errorPath)).toBe(true);
-      expect(readFileSync(errorPath, "utf8")).not.toContain("ghp_123456789012345678901234");
+      expect(readFileSync(errorPath, "utf8")).not.toContain("ghp_fake_token");
     } finally {
       rmSync(evidenceDir, { recursive: true, force: true });
     }
@@ -395,7 +395,7 @@ describe("sticky enrichment comments", () => {
       title: "Triage support escalation #22",
       state: "open",
       html_url: "https://github.test/electricsheephq/evaos-code-review-bot/issues/88",
-      body: "Customer path missing validation evidence. ghp_123456789012345678901234",
+      body: "Customer path missing validation evidence. ghp_fake_token",
       user: { login: "issue-author" },
       labels: [{ name: "support" }],
       milestone: { title: "v0.2" }
@@ -420,7 +420,7 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).toContain("Suggested labels: triage");
     expect(comment.body).toContain("Suggested owners: runtime-owner");
     expect(comment.body).toContain("No labels, owners, reviewers, or roadmap fields were changed by this bot.");
-    expect(comment.body).not.toContain("ghp_123456789012345678901234");
+    expect(comment.body).not.toContain("ghp_fake_token");
   });
 
   it("rejects stale or pull-request-shaped issues at the comment builder boundary", () => {
@@ -2104,7 +2104,7 @@ describe("sticky enrichment comments", () => {
             listIssuesForEnrichment: async () => [issue],
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
-              throw new Error("GitHub rejected comment with ghp_1234567890abcdefghijklmnopqrstuvwx");
+              throw new Error("GitHub rejected comment with ghp_fake_token");
             }
           },
           dryRun: false,
@@ -2114,13 +2114,13 @@ describe("sticky enrichment comments", () => {
         expect(result.ok).toBe(false);
         expect(result.summary).toMatchObject({ posted: 0, failed: 1 });
         expect(result.items[0]).toMatchObject({ recordStatus: "failed" });
-        expect(result.items[0]!.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+        expect(result.items[0]!.error).not.toContain("ghp_fake_token");
         const record = state.getIssueEnrichmentRecord("owner/issue-repo", 61);
         expect(record).toMatchObject({
           status: "failed",
           reason: "post_failed"
         });
-        expect(record?.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+        expect(record?.error).not.toContain("ghp_fake_token");
       } finally {
         state.close();
       }

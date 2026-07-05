@@ -245,14 +245,14 @@ describe("GitNexus context packets", () => {
       generatedAt,
       gitnexusListText: gitnexusList([{ alias: "evaos-code-review-bot", commit: pull.head.sha.slice(0, 7) }]),
       commandRunner: queryRunner({
-        "src/worker.ts worker": "Leaked token ghp_123456789012345678901234 in an indexed comment."
+        "src/worker.ts worker": "Leaked token ghp_fake_token in an indexed comment."
       })
     });
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected packet build to fail closed");
     expect(result.error).toContain("secret-like");
-    expect(JSON.stringify(result)).not.toContain("ghp_123456789012345678901234");
+    expect(JSON.stringify(result)).not.toContain("ghp_fake_token");
     expect(JSON.stringify(result)).toContain("[redacted-secret]");
   });
 

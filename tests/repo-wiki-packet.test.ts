@@ -90,7 +90,7 @@ describe("repo wiki packets", () => {
   });
 
   it("redacts token-like strings from markdown and JSON payloads", () => {
-    const token = "ghp_123456789012345678901234";
+    const token = "ghp_fake_token";
     const packet = buildRepoWikiPacket({
       repo: {
         fullName: `electricsheephq/${token}`,
@@ -143,7 +143,7 @@ describe("repo wiki packets", () => {
   });
 
   it("dedupes included files when redaction collapses distinct source paths", () => {
-    const token = "ghp_123456789012345678901234";
+    const token = "ghp_fake_token";
     const packet = buildRepoWikiPacket({
       repo: { fullName: "electricsheephq/evaos-code-review-bot" },
       source: { ref: "main", status: "fresh" },
@@ -166,7 +166,7 @@ describe("repo wiki packets", () => {
   });
 
   it("counts real replacements when input already contains the literal redaction marker", () => {
-    const token = "ghp_123456789012345678901234";
+    const token = "ghp_fake_token";
     const packet = buildRepoWikiPacket({
       repo: { fullName: "electricsheephq/evaos-code-review-bot" },
       source: { ref: "main", status: "fresh" },
@@ -397,12 +397,13 @@ describe("repo wiki packets", () => {
   });
 
   it("exposes evidence-safe text helpers", () => {
+    const privateKeyFixture = "-----BEGIN " + "PRIVATE KEY-----\n[redacted-secret]\nabc\n-----END " + "PRIVATE KEY-----";
     expect(truncateUtf8Bytes("ééabc", 3)).toBe("é");
     expect(redactRepoWikiText("token=abcdefghijklmnop")).toEqual({
       text: "[redacted-secret]",
       replacementCount: 1
     });
-    expect(redactRepoWikiText("-----BEGIN PRIVATE KEY-----\n[redacted-secret]\nabc\n-----END PRIVATE KEY-----")).toEqual({
+    expect(redactRepoWikiText(privateKeyFixture)).toEqual({
       text: "[redacted-secret]",
       replacementCount: 1
     });

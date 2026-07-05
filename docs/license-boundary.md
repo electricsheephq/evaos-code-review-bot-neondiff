@@ -96,7 +96,8 @@ Private-repo failure copy should say:
 
 ## Tracking
 
-- Public product roadmap: https://github.com/electricsheephq/evaos-code-review-bot/issues/103
-- License/commercial boundary gate: https://github.com/electricsheephq/evaos-code-review-bot/issues/104
-- Pricing implementation: https://github.com/electricsheephq/evaos-code-review-bot/issues/105
-- License activation implementation: https://github.com/electricsheephq/evaos-code-review-bot/issues/111
+- Public product roadmap: https://github.com/electricsheephq/neondiff/issues/103
+- License/commercial boundary gate: https://github.com/electricsheephq/neondiff/issues/104
+- Pricing implementation: https://github.com/electricsheephq/neondiff/issues/105
+- License activation implementation: https://github.com/electricsheephq/neondiff/issues/111
+- Public beta release readiness: https://github.com/electricsheephq/neondiff/issues/232

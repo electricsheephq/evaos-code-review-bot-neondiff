@@ -90,7 +90,7 @@ describe("finishing-touch draft commands", () => {
     });
     expect(validateFinishingTouchRequest({
       ...base,
-      proposedOutput: "token ghp_123456789012345678901234567890123456"
+      proposedOutput: "token ghp_fake_token"
     })).toMatchObject({
       ok: false,
       reason: "secret_detected",
@@ -288,7 +288,7 @@ describe("finishing-touch draft commands", () => {
       action: "generate_tests",
       author: "100yenadmin",
       commentId: 789,
-      trigger: "@evaos-code-review-bot generate tests ghp_123456789012345678901234567890123456",
+      trigger: "@evaos-code-review-bot generate tests ghp_fake_token",
       generatedAt: "2026-07-03T00:00:00.000Z"
     });
     const failureCases = [
@@ -390,7 +390,7 @@ describe("finishing-touch draft commands", () => {
       });
       expect(contract, failureCase.name).not.toHaveProperty("draft");
       expect(contract, failureCase.name).not.toHaveProperty("command.trigger");
-      expect(JSON.stringify(contract), failureCase.name).not.toContain("ghp_123456789012345678901234567890123456");
+      expect(JSON.stringify(contract), failureCase.name).not.toContain("ghp_fake_token");
     }
   });
 });

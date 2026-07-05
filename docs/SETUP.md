@@ -1,7 +1,8 @@
 # NeonDiff Setup
 
-This guide is the first-run path for the current source-available beta. After
-`npm run build`, the source checkout exposes the beta `neondiff` binary. See
+This guide is the first-run path for the current source-available beta. The
+recommended path installs the `neondiff` npm package; source checkout remains a
+fallback for contributors and reviewers who want to inspect or build locally. See
 [LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
 for the public/private repo license boundary, and [docs/pricing.md](pricing.md)
 for the support-tier pricing contract.
@@ -21,19 +22,45 @@ remain external through your own provider key or local model; NeonDiff does not
 include hosted model credits, unlimited SaaS inference, or bundled provider
 tokens.
 
-## 1. Install From Source
+## 1. Install NeonDiff
+
+Recommended package install:
 
 ```bash
-git clone https://github.com/electricsheephq/evaos-code-review-bot.git neondiff
+npm install -g neondiff@1.0.0-beta.1
+```
+
+Installer script:
+
+```bash
+curl -fsSL https://neondiff.sh/install | sh
+```
+
+Preview the installer without changing your machine:
+
+```bash
+curl -fsSL https://neondiff.sh/install | sh -s -- --dry-run
+```
+
+Use a temp npm prefix for isolated install proof:
+
+```bash
+tmp_prefix="$(mktemp -d)"
+curl -fsSL https://neondiff.sh/install | sh -s -- --prefix "$tmp_prefix"
+"$tmp_prefix/bin/neondiff" help
+```
+
+Source checkout fallback:
+
+```bash
+git clone https://github.com/electricsheephq/neondiff.git neondiff
 cd neondiff
 npm install
 npm run build
-npm link
 ```
 
-`npm link` installs the local source-checkout shim so the examples below can use
-`neondiff`. If you intentionally skip linking, substitute `./dist/src/cli.js`
-for `neondiff`.
+If you intentionally use the source checkout without the global package,
+substitute `./dist/src/cli.js` for `neondiff`.
 
 ## 2. Create Or Install A GitHub App
 
@@ -266,5 +293,5 @@ that channel as `requiredForThisRelease: false`.
 ## What Setup Does Not Prove
 
 Setup does not prove public launch, final legal adequacy, calibrated review
-accuracy, enterprise readiness, desktop client readiness, package publishing, or
-live beta promotion. Those are separate issues and release gates.
+accuracy, enterprise readiness, desktop client readiness, or live beta
+promotion. Those are separate issues and release gates.
