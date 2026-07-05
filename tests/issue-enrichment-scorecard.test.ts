@@ -26,10 +26,11 @@ function expectedTopLevelScores(fixture: IssueEnrichmentFixturePacket): { rawSco
 
     if (!scores.length) return [];
     const averageScore = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+    const roundedWeightedContribution = Math.round(averageScore * dimension.weight * 100) / 100;
     return [
       {
         rawScore: averageScore,
-        weightedContribution: averageScore * dimension.weight,
+        weightedContribution: roundedWeightedContribution,
         maxWeightedScore: dimension.weight * 5
       }
     ];
