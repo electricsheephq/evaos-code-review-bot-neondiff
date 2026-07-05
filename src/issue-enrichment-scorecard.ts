@@ -185,10 +185,11 @@ export function scoreIssueEnrichment(packet: IssueEnrichmentFixturePacket): Issu
   assertValidIssueEnrichmentFixture(packet);
 
   const dimensionScores = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map((dimension) => scoreDimension(packet, dimension));
-  const rawTotal = dimensionScores.reduce((sum, dimension) => sum + dimension.rawScore, 0);
-  const weightedTotal = dimensionScores.reduce((sum, dimension) => sum + dimension.weightedContribution, 0);
-  const maxRaw = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.length * 5;
-  const maxWeighted = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.reduce((sum, dimension) => sum + dimension.weight * 5, 0);
+  const measuredDimensionScores = dimensionScores.filter((dimension) => dimension.measuredCases > 0);
+  const rawTotal = measuredDimensionScores.reduce((sum, dimension) => sum + dimension.rawScore, 0);
+  const weightedTotal = measuredDimensionScores.reduce((sum, dimension) => sum + dimension.weightedContribution, 0);
+  const maxRaw = measuredDimensionScores.length * 5;
+  const maxWeighted = measuredDimensionScores.reduce((sum, dimension) => sum + dimension.weight * 5, 0);
   const unmeasurableStates = dimensionScores.flatMap((dimension) =>
     dimension.unmeasurableCases.map((caseId) => `${caseId}:${dimension.id}`)
   );
@@ -391,6 +392,7 @@ function parseHttpsUrl(value: string | undefined): URL | null {
 }
 
 function percent(value: number, max: number): number {
+  if (max <= 0) return 0;
   return Math.round((value / max) * 100);
 }
 

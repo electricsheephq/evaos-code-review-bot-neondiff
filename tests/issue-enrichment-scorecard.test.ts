@@ -58,25 +58,22 @@ describe("issue enrichment scorecard", () => {
     expect(result.calibration).toBe("uncalibrated");
     expect(result).not.toHaveProperty("publicParity");
     expect(result).not.toHaveProperty("calibratedConfidence");
-    expect(result.dimensionScores.find((dimension) => dimension.id === "proof_boundary")).toMatchObject({
-      score: 5,
-      weightedContribution: expect.any(Number),
-      evidenceLinks: [
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-proof-boundary",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-proof-boundary"
-      ]
-    });
-
     const proofBoundary = result.dimensionScores.find((dimension) => dimension.id === "proof_boundary");
-    expect(proofBoundary?.weightedContribution).toBeGreaterThan(proofBoundary?.score ?? 0);
+    expect(proofBoundary).toMatchObject({
+      score: 5,
+      weightedContribution: expect.any(Number)
+    });
+    expect(proofBoundary?.evidenceLinks).toHaveLength(fixture.cases.length);
+    for (const link of proofBoundary?.evidenceLinks ?? []) {
+      expect(link).toMatch(
+        /^https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot-neondiff\/issues\/264#direct-evidence-[a-z0-9-]+-proof-boundary$/
+      );
+    }
+    const proofBoundaryConfig = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.find((dimension) => dimension.id === "proof_boundary");
+    expect(proofBoundary?.weightedContribution).toBeCloseTo(
+      (proofBoundary?.score ?? 0) * (proofBoundaryConfig?.weight ?? 0),
+      2
+    );
   });
 
   it("requires direct evidence links for every dimension score above 3", () => {
@@ -220,6 +217,42 @@ describe("issue enrichment scorecard", () => {
     expect(scoreIssueEnrichment(fixture).pilotThresholdMisses).toContain("duplicate-same-head-comments:throttling");
   });
 
+  it("excludes fully unmeasurable dimensions from top-level score denominators", () => {
+    const fixture = loadFixture();
+    const baseline = scoreIssueEnrichment(fixture);
+    const throttlingConfig = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.find((dimension) => dimension.id === "throttling");
+    expect(throttlingConfig).toBeDefined();
+
+    for (const fixtureCase of fixture.cases) {
+      fixtureCase.dimensions.throttling = {
+        unmeasurable: true,
+        unmeasurableReason: "Throttle budget data intentionally unavailable for denominator regression."
+      };
+    }
+
+    const result = scoreIssueEnrichment(fixture);
+    const measuredDimensions = result.dimensionScores.filter((dimension) => dimension.measuredCases > 0);
+    const expectedRawScore = Math.round(
+      (measuredDimensions.reduce((sum, dimension) => sum + dimension.rawScore, 0) / (measuredDimensions.length * 5)) *
+        100
+    );
+    const expectedWeightedScore = Math.round(
+      (measuredDimensions.reduce((sum, dimension) => sum + dimension.weightedContribution, 0) /
+        measuredDimensions.reduce((sum, dimension) => sum + dimension.weight * 5, 0)) *
+        100
+    );
+
+    const throttlingScore = result.dimensionScores.find((dimension) => dimension.id === "throttling");
+    expect(throttlingScore).toMatchObject({
+      measuredCases: 0,
+      unmeasurableCases: fixture.cases.map((fixtureCase) => fixtureCase.id)
+    });
+    expect(result.rawScore).toBe(expectedRawScore);
+    expect(result.weightedScore).toBe(expectedWeightedScore);
+    expect(result.weightedScore).toBeGreaterThanOrEqual(baseline.weightedScore);
+    expect(result.pilotThresholdMisses.some((miss) => miss.endsWith(":throttling"))).toBe(false);
+  });
+
   it("summarizes scorecard results with unmeasurable states and pilot threshold misses", () => {
     const summary = summarizeIssueEnrichmentScorecard(scoreIssueEnrichment(loadFixture()));
 
@@ -295,6 +328,24 @@ describe("issue enrichment scorecard", () => {
         };
       },
       error: "dimension proof_boundary metric contract missing pilotThreshold.advisoryMin"
+    },
+    {
+      name: "missing promotion threshold",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.metricContracts = {
+          proof_boundary: {
+            denominator: "proof claims",
+            dataSource: "fixture",
+            scoringRule: "score proof boundary clarity",
+            unmeasurableState: "no proof claim",
+            pilotThreshold: {
+              advisoryMin: 4,
+              promotionMin: Number.NaN
+            }
+          }
+        };
+      },
+      error: "dimension proof_boundary metric contract missing pilotThreshold.promotionMin"
     }
   ])("fails closed for invalid fixture packets: $name", ({ mutate, error }) => {
     const fixture = loadFixture();
