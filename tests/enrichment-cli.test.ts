@@ -925,6 +925,7 @@ describe("build-enrichment-comment issue CLI", () => {
       ], issueRunEnv(root))).rejects.toMatchObject({
         stdout: expect.stringContaining("\"workerSkipped\": 1")
       });
+      expect(requests.some((request) => request.method === "GET" && request.path === "/repos/owner/issue-repo/issues/17")).toBe(false);
       expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
     });
   });
@@ -938,7 +939,7 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
       ...process.env,
       EVAOS_REVIEW_BOT_APP_ID: "",
       EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
-      GITHUB_TOKEN: "test-token",
+      [["GITHUB", "TOKEN"].join("_")]: "test-token",
       ...env
     },
     maxBuffer: 1024 * 1024

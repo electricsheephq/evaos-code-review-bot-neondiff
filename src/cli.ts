@@ -927,6 +927,7 @@ async function main(): Promise<void> {
   if (command === "build-enrichment-comment") {
     if (!args.repo) throw new Error("--repo is required for build-enrichment-comment");
     if (Boolean(args.pr) === Boolean(args.issue)) throw new Error("exactly one of --pr or --issue is required for build-enrichment-comment");
+    if (Array.isArray(args.issue)) throw new Error("--issue must be provided once for build-enrichment-comment");
     const repo = parseSingleArg(args.repo, "--repo");
     const config = loadConfig(args.config);
     const github = new GitHubApi(config.github);
@@ -1068,28 +1069,35 @@ async function main(): Promise<void> {
       );
     }
     const issues: GitHubRelatedIssueOrPull[] = [];
-    const previewOutputs = [];
-    for (const issueNumber of issueNumbers) {
-      const issue = await github.getIssueOrPull(repo, issueNumber, { tolerateUnreadable: true });
-      if (!issue) {
-        throw new Error(`Issue ${repo}#${issueNumber} was not found or is not readable; run doctor github and confirm GitHub App Issues permission before live issue enrichment.`);
+    const previewOutputs: Array<Extract<ReturnType<typeof buildIssueEnrichmentDryRunOutput>, { skipped: false }>> = [];
+    let selectedIssuesLoaded = false;
+    const loadSelectedIssues = async () => {
+      if (selectedIssuesLoaded) return issues;
+      for (const issueNumber of issueNumbers) {
+        const issue = await github.getIssueOrPull(repo, issueNumber, { tolerateUnreadable: true });
+        if (!issue) {
+          throw new Error(`Issue ${repo}#${issueNumber} was not found or is not readable; run doctor github and confirm GitHub App Issues permission before live issue enrichment.`);
+        }
+        const preview = buildIssueEnrichmentDryRunOutput({
+          repo,
+          issue,
+          allowedLabels: policy.suggestions.allowedLabels,
+          allowedOwners: policy.suggestions.allowedReviewers,
+          validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
+          maxRelatedRefs: config.enrichment?.maxRelatedRefs,
+          maxSuggestions: config.enrichment?.maxSuggestions,
+          publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+        });
+        if (preview.skipped) {
+          throw new Error(`Issue ${repo}#${issueNumber} is not eligible for issue enrichment: ${preview.reason}`);
+        }
+        issues.push(issue);
+        previewOutputs.push(preview);
       }
-      const preview = buildIssueEnrichmentDryRunOutput({
-        repo,
-        issue,
-        allowedLabels: policy.suggestions.allowedLabels,
-        allowedOwners: policy.suggestions.allowedReviewers,
-        validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
-        maxRelatedRefs: config.enrichment?.maxRelatedRefs,
-        maxSuggestions: config.enrichment?.maxSuggestions,
-        publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
-      });
-      if (preview.skipped) {
-        throw new Error(`Issue ${repo}#${issueNumber} is not eligible for issue enrichment: ${preview.reason}`);
-      }
-      issues.push(issue);
-      previewOutputs.push(preview);
-    }
+      selectedIssuesLoaded = true;
+      return issues;
+    };
+    if (dryRun) await loadSelectedIssues();
 
     const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
     try {
@@ -1098,7 +1106,7 @@ async function main(): Promise<void> {
           if (requestedRepo !== repo) {
             throw new Error(`issue-enrichment-run internal repo mismatch: requested ${requestedRepo}, expected ${repo}`);
           }
-          return issues;
+          return loadSelectedIssues();
         },
         canPostAsApp: () => github.canPostAsApp(),
         upsertIssueComment: (input) => github.upsertIssueComment(input)
@@ -1129,7 +1137,14 @@ async function main(): Promise<void> {
         }
       }
       console.log(redactSecrets(JSON.stringify(output, null, 2)));
-      if (!result.ok || (!dryRun && result.summary.workerSkipped > 0)) process.exitCode = 1;
+      const liveNoWork = !dryRun &&
+        result.summary.posted === 0 &&
+        result.summary.failed === 0 &&
+        result.summary.alreadyProcessed === 0 &&
+        result.summary.dryRunRecorded === 0 &&
+        result.summary.skippedRecorded === 0 &&
+        result.summary.deferredRecorded === 0;
+      if (!result.ok || (!dryRun && (result.summary.workerSkipped > 0 || liveNoWork))) process.exitCode = 1;
     } finally {
       state.close();
     }
