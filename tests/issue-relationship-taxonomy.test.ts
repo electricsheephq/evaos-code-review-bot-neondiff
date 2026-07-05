@@ -4,6 +4,7 @@ import {
   classifyIssueRelationshipItem,
   ISSUE_RELATIONSHIP_CATEGORIES,
   PROOF_REQUIREMENTS,
+  type IssueRelationshipClusterResult,
   type IssueRelationshipItemInput
 } from "../src/issue-relationship-taxonomy.js";
 
@@ -231,7 +232,7 @@ describe("issue relationship taxonomy", () => {
       }
     ];
 
-    const result = buildIssueRelationshipClusters({ items });
+    const result: IssueRelationshipClusterResult = buildIssueRelationshipClusters({ items });
 
     expect(result.publicIssueCommentState.clusters).toHaveLength(2);
     expect(result.publicIssueCommentState.clusters[0]).toMatchObject({
