@@ -1,0 +1,674 @@
+{
+  "fixtureVersion": "0.1",
+  "proofBoundary": "advisory fixture scoring only; this packet does not prove public parity, calibrated confidence, runtime safety, or release readiness",
+  "knownLimitations": [
+    "Scores are seeded regression expectations, not statistically calibrated production outcomes.",
+    "Provider-failure burst coverage is simulated and does not exercise live GitHub or provider APIs.",
+    "External precedent quality is represented by sampled links and stale-link negatives, not a full web corpus.",
+    "Direct-evidence anchors are nominal fixture contract identifiers on issue #264; this packet validates anchor shape, not GitHub anchor resolvability.",
+    "Fixture scoring does not post comments, mutate labels, update assignees, or change live config."
+  ],
+  "cases": [
+    {
+      "id": "duplicate-same-head-comments",
+      "title": "Duplicate same-head comments",
+      "coverage": "duplicate_same_head_comments",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-duplicate-same-head-comments",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-related-context-precision"
+          ]
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "notes": "Scores duplicate suppression as noise control: useful no-spam behavior, not perfect because live sticky-update reporting still needs broader rollout proof.",
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "notes": "Scores repeated same-head behavior as idempotency: stable marker/upsert expectations are covered, but full cross-cycle state repair remains a separate runtime eval.",
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "No burst pressure in this fixture. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "stale_head_posts",
+      "title": "Stale-head posts",
+      "coverage": "stale_head_posts",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-stale-head-posts",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-related-context-precision"
+          ]
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "Single stale-head rejection, no burst. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "invalid_inline_coordinates",
+      "title": "Invalid inline coordinates",
+      "coverage": "invalid_inline_coordinates",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-invalid-inline-coordinates",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-related-context-precision"
+          ]
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "Coordinate validation does not exercise throttle pressure. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "issue_enrichment_permission_failure",
+      "title": "Issue-enrichment permission failure",
+      "coverage": "issue_enrichment_permission_failure",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-issue-enrichment-permission-failure",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-related-context-precision"
+          ]
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "Permission failure exits before provider throttling. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "launchd_config_head_ambiguity",
+      "title": "Launchd/config/head ambiguity",
+      "coverage": "launchd_config_head_ambiguity",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-launchd-config-head-ambiguity",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-related-context-precision"
+          ]
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "Ambiguity fails closed before live posting. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "docs_only_fast_negative_control",
+      "title": "Docs-only fast negative control",
+      "coverage": "docs_only_fast_negative_control",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-docs-only-fast-negative-control",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-related-context-precision"
+          ]
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "Fast negative avoids provider and comment spend. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "old_backlog_negative_control",
+      "title": "Old-backlog negative control",
+      "coverage": "old_backlog_negative_control",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-old-backlog-negative-control",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-related-context-precision"
+          ]
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "Backlog scan should defer rather than consume comment budget. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "external_precedent_required_issue",
+      "title": "External-precedent-required issue",
+      "coverage": "external_precedent_required_issue",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-external-precedent-required-issue",
+      "dimensions": {
+        "related_context_precision": {
+          "unmeasurable": true,
+          "unmeasurableReason": "No current external precedent is available in the sampled fixture."
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "External research needed before provider budget is meaningful. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "stale_irrelevant_web_result",
+      "title": "Stale or irrelevant web result",
+      "coverage": "stale_irrelevant_web_result",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-stale-irrelevant-web-result",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 2,
+          "notes": "Stale web result is intentionally below advisory threshold."
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-safety"
+          ]
+        },
+        "throttling": {
+          "score": 2.6222,
+          "notes": "Rejecting stale context avoids extra provider retries. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
+        }
+      }
+    },
+    {
+      "id": "provider_failure_burst_30_prs",
+      "title": "30-PR provider-failure burst simulation",
+      "coverage": "provider_failure_burst_30_prs",
+      "fixtureSource": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#scenario-provider-failure-burst-30-prs",
+      "dimensions": {
+        "related_context_precision": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-related-context-precision"
+          ]
+        },
+        "planning_value": {
+          "score": 4.2,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-planning-value"
+          ]
+        },
+        "acceptance_criteria": {
+          "score": 4.5,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-acceptance-criteria"
+          ]
+        },
+        "ownership_routing": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-ownership-routing"
+          ]
+        },
+        "proof_boundary": {
+          "score": 5,
+          "notes": "High proof-boundary score is limited to the fixture's explicit advisory caveat: the burst is simulated and does not prove live provider reliability or release readiness.",
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-proof-boundary"
+          ]
+        },
+        "lifecycle_state": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-lifecycle-state"
+          ]
+        },
+        "noise_control": {
+          "score": 4,
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-noise-control"
+          ]
+        },
+        "idempotency": {
+          "score": 4,
+          "notes": "Scores deterministic retry/defer state modeling for the simulated burst; it does not claim production idempotency under live provider pressure.",
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-idempotency"
+          ]
+        },
+        "safety": {
+          "score": 4.4,
+          "notes": "High safety score is for fail-closed advisory handling in the simulated burst only; live runtime safety remains outside this fixture proof boundary.",
+          "evidenceLinks": [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-safety"
+          ]
+        },
+        "throttling": {
+          "score": 1,
+          "notes": "Simulated provider burst score 1 means burst pressure is known unsafe until live cap evidence exists; it is deliberately below advisory and promotion thresholds and is not calibrated production reliability."
+        }
+      }
+    }
+  ]
+}
