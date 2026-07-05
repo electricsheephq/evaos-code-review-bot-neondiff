@@ -1,5 +1,5 @@
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { assertPathOutsideProtectedRoot } from "./path-safety.js";
 
@@ -57,8 +57,12 @@ export function preparePullWorktree(input: PullWorktreeInput): PreparedWorktree 
     "+refs/heads/*:refs/heads/*"
   ]);
 
-  rmSync(worktreePath, { recursive: true, force: true });
-  run("git", ["--git-dir", mirrorPath, "worktree", "prune"]);
+  repairExistingReviewWorktreePathForCheckout({
+    worktreePath,
+    mirrorPath,
+    protectedCheckoutRoot: input.protectedCheckoutRoot,
+    protectedCheckoutRoots: input.protectedCheckoutRoots
+  });
   run("git", [
     "--git-dir",
     mirrorPath,
@@ -75,6 +79,49 @@ export function preparePullWorktree(input: PullWorktreeInput): PreparedWorktree 
   }
 
   return { path: worktreePath, headSha: actualHeadSha };
+}
+
+export function repairExistingReviewWorktreePathForCheckout(input: {
+  worktreePath: string;
+  mirrorPath: string;
+  protectedCheckoutRoot?: string;
+  protectedCheckoutRoots?: string[];
+}): void {
+  assertPathOutsideProtectedRoot({
+    path: input.worktreePath,
+    protectedRoot: input.protectedCheckoutRoot,
+    protectedRoots: input.protectedCheckoutRoots,
+    pathLabel: "worktreePath",
+    protectedRootLabel: "the protected live checkout"
+  });
+
+  if (existsSync(input.worktreePath)) {
+    const stat = lstatSync(input.worktreePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`checkout preparation failed for ${input.worktreePath}: existing_symlink`);
+    }
+    const existingGitWorktree = existsAsGitWorktree(input.worktreePath);
+
+    if (existingGitWorktree) {
+      if (!isGitWorktreeOwnedByMirror(input)) {
+        throw new Error(`checkout preparation failed for ${input.worktreePath}: existing_git_worktree_not_owned`);
+      }
+      run("git", ["--git-dir", input.mirrorPath, "worktree", "remove", "--force", input.worktreePath]);
+    } else if (stat.isDirectory()) {
+      const entries = readdirSync(input.worktreePath);
+      const nonIgnorableEntries = entries.filter((entry) => !isIgnorableEmptyWorktreeEntry(entry));
+      if (nonIgnorableEntries.length > 0) {
+        throw new Error(
+          `checkout preparation failed for ${input.worktreePath}: existing_non_git_non_empty; refusing to remove ${nonIgnorableEntries.length} file(s)`
+        );
+      }
+      removeExistingReviewPath(input.worktreePath);
+    } else {
+      throw new Error(`checkout preparation failed for ${input.worktreePath}: existing_non_directory`);
+    }
+  }
+
+  run("git", ["--git-dir", input.mirrorPath, "worktree", "prune"]);
 }
 
 function assertReviewPathOutsideProtectedCheckout(pathLabel: string, path: string, input: PullWorktreeInput): void {
@@ -99,6 +146,60 @@ export function assertGitClean(worktreePath: string): void {
 function existsAsGitMirror(path: string): boolean {
   const result = spawnSync("git", ["--git-dir", path, "rev-parse", "--is-bare-repository"], { encoding: "utf8" });
   return result.status === 0 && result.stdout.trim() === "true";
+}
+
+function existsAsGitWorktree(path: string): boolean {
+  const result = spawnSync("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  if (result.status === null) {
+    const message = result.error instanceof Error ? result.error.message : "git failed before returning a status";
+    throw new Error(`checkout preparation failed for ${path}: git_worktree_probe_failed: ${message}`);
+  }
+  return result.status === 0 && result.stdout.trim() === "true";
+}
+
+function isGitWorktreeOwnedByMirror(input: { mirrorPath: string; worktreePath: string }): boolean {
+  const result = spawnSync("git", ["--git-dir", input.mirrorPath, "worktree", "list", "--porcelain"], { encoding: "utf8" });
+  if (result.status === null) {
+    const message = result.error instanceof Error ? result.error.message : "git failed before returning a status";
+    throw new Error(`checkout preparation failed for ${input.worktreePath}: git_worktree_list_failed: ${message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`checkout preparation failed for ${input.worktreePath}: git_worktree_list_failed`);
+  }
+
+  const existingRawPath = resolve(input.worktreePath);
+  const existingRealPath = maybeRealpath(input.worktreePath);
+  if (!existingRealPath) {
+    throw new Error(`checkout preparation failed for ${input.worktreePath}: existing_git_worktree_missing`);
+  }
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (!line.startsWith("worktree ")) continue;
+    const listedPath = line.slice("worktree ".length).trim();
+    if (!listedPath) continue;
+    if (resolve(listedPath) === existingRawPath) return true;
+    const listedRealPath = maybeRealpath(listedPath);
+    if (listedRealPath === existingRealPath) return true;
+  }
+  return false;
+}
+
+function maybeRealpath(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function removeExistingReviewPath(path: string): void {
+  if (lstatSync(path).isSymbolicLink()) {
+    throw new Error(`checkout preparation failed for ${path}: existing_symlink`);
+  }
+  rmSync(path, { recursive: true, force: true });
+}
+
+function isIgnorableEmptyWorktreeEntry(entry: string): boolean {
+  return entry === ".DS_Store";
 }
 
 function run(command: string, args: string[]): { stdout: string; stderr: string } {
