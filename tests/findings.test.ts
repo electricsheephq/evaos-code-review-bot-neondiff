@@ -4,6 +4,85 @@ import type { PublicConfidenceDisplayPolicy } from "../src/public-confidence.js"
 import type { Finding } from "../src/types.js";
 
 describe("finding normalization and review policy", () => {
+  it("orders same-severity findings by confidence and caps the lowest-confidence first", () => {
+    const findings: Finding[] = [
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "a.ts",
+        line: 1,
+        title: "Low confidence concern",
+        body: "A concrete review comment.",
+        confidence: 0.1
+      },
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "a.ts",
+        line: 1,
+        title: "High confidence concern",
+        body: "A concrete review comment.",
+        confidence: 0.99
+      }
+    ];
+
+    const result = normalizeFindingsForReview(findings, { maxInlineComments: 1 });
+
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.title).toBe("High confidence concern");
+    expect(result.comments[0]?.confidence).toBe(0.99);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ title: "Low confidence concern", reason: "comment_cap_exceeded" })
+    ]);
+  });
+
+  it("keeps cross-severity ordering independent of confidence", () => {
+    const findings: Finding[] = [
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "a.ts",
+        line: 1,
+        title: "High confidence low severity",
+        body: "A concrete review comment.",
+        confidence: 0.99
+      },
+      {
+        severity: "P1",
+        category: "runtime_correctness",
+        path: "a.ts",
+        line: 1,
+        title: "Low confidence high severity",
+        body: "A concrete review comment.",
+        confidence: 0.1
+      }
+    ];
+
+    const result = normalizeFindingsForReview(findings);
+
+    expect(result.comments[0]?.severity).toBe("P1");
+    expect(result.comments[0]?.title).toBe("Low confidence high severity");
+    expect(result.comments[1]?.severity).toBe("P2");
+  });
+
+  it("carries confidence metadata on review comments without rendering it in the body or title", () => {
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression concern",
+        body: "A concrete review comment.",
+        confidence: 0.73
+      }
+    ]);
+
+    expect(result.comments[0]?.confidence).toBe(0.73);
+    expect(result.comments[0]?.title).not.toContain("0.73");
+    expect(result.comments[0]?.body).not.toContain("0.73");
+  });
+
   it("keeps validated findings, caps aggressive inline comments, and sorts by severity", () => {
     const findings: Finding[] = Array.from({ length: 30 }, (_, index) => ({
       severity: index === 29 ? "P0" : index % 2 === 0 ? "P2" : "P3",
@@ -241,14 +320,14 @@ describe("finding normalization and review policy", () => {
   });
 
   it("requests changes only for P0 or P1 findings in eligible regression categories", () => {
-    expect(decideReviewEvent([{ severity: "P2", category: "data_loss" }, { severity: "P3", category: "auth" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "docs_only" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "flaky_test_risk" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P1", category: "dependency" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P1", category: "unknown" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P1", category: "data_loss" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P0", category: "security_boundary" }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P2", category: "data_loss", confidence: 0.9 }, { severity: "P3", category: "auth", confidence: 0.9 }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap", confidence: 0.9 }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "docs_only", confidence: 0.9 }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "flaky_test_risk", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P1", category: "dependency", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P1", category: "unknown", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P1", category: "data_loss", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P0", category: "security_boundary", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
   });
 
   it("ignores unsupported optional model categories without dropping the finding", () => {

@@ -1,5 +1,5 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
-import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory } from "./regression-taxonomy.js";
+import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
@@ -89,6 +89,9 @@ export function normalizeFindingsForReview(
   accepted.sort((a, b) => {
     const severity = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
     if (severity !== 0) return severity;
+    // Within a severity tier, higher-confidence findings rank first so the cap keeps them.
+    const confidence = b.confidence - a.confidence;
+    if (confidence !== 0) return confidence;
     const path = a.path.localeCompare(b.path);
     if (path !== 0) return path;
     return a.line - b.line || a.title.localeCompare(b.title);
@@ -113,6 +116,8 @@ export function normalizeFindingsForReview(
         side: "RIGHT",
         severity: finding.severity,
         category,
+        // Internal gating/evidence metadata; never rendered into the public body/title.
+        confidence: finding.confidence,
         title: publicTitle,
         body: formatReviewComment(
           { ...finding, category, title: publicTitle, body: publicBody, ...(publicWhy ? { why_this_matters: publicWhy } : {}) },
@@ -145,8 +150,11 @@ function sanitizeDroppedFindingPublicText<T extends Partial<Finding>>(finding: T
   };
 }
 
-export function decideReviewEvent(findings: Pick<ReviewComment, "severity" | "category">[]): ReviewEvent {
-  return findings.some((finding) => isRequestChangesEligible(finding)) ? "REQUEST_CHANGES" : "COMMENT";
+export function decideReviewEvent(
+  findings: Pick<ReviewComment, "severity" | "category" | "confidence">[],
+  confidenceFloors?: RequestChangesConfidenceFloors
+): ReviewEvent {
+  return findings.some((finding) => isRequestChangesEligible(finding, confidenceFloors)) ? "REQUEST_CHANGES" : "COMMENT";
 }
 
 export function formatReviewComment(

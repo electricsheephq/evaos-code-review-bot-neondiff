@@ -557,6 +557,7 @@ function sampleReviewPlan(): ReviewPlan {
         body: "Runtime handoff can still lose provider state.",
         severity: "P1",
         category: "runtime_correctness",
+        confidence: 0.9,
         title: "Preserve provider state"
       }
     ],

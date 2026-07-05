@@ -1479,9 +1479,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       findings: zcodeResult.findings,
       files: reviewFiles,
       droppedFromSchema: zcodeResult.droppedFromSchema,
-      maxInlineComments: 25,
+      maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
-      publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+      publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
+      ...(config.reviewGate?.requestChangesConfidenceFloors
+        ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
+        : {})
     });
     const comments = gate.comments;
     // Gate output is already public-safe; this second pass keeps evidence redacted

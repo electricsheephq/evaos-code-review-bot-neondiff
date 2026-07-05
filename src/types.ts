@@ -90,6 +90,8 @@ export interface ReviewComment {
   body: string;
   severity: Severity;
   category: RegressionCategory;
+  /** Model confidence (0..1); internal gating/evidence metadata, never rendered publicly. */
+  confidence: number;
   title: string;
 }
 

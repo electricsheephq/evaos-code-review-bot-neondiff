@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { validateFindingLocations } from "./diff.js";
 import { decideReviewEvent, normalizeFindingsForReview } from "./findings.js";
 import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
-import { countCategories, isRequestChangesEligible } from "./regression-taxonomy.js";
+import { countCategories, isRequestChangesEligible, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type {
   DeterministicReviewGateSummary,
   DroppedFinding,
@@ -26,6 +26,7 @@ export function applyDeterministicReviewGate(input: {
   maxInlineComments?: number;
   repoMemoryFalsePositiveFingerprints?: string[];
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
 }): DeterministicReviewGateResult {
   const located = validateFindingLocations(input.findings, input.files);
   // Memory suppression intentionally precedes normalization; dropReasonCounts reflects that ordering.
@@ -44,7 +45,7 @@ export function applyDeterministicReviewGate(input: {
     ...normalized.dropped
   ];
   const comments = normalized.comments;
-  const event = decideReviewEvent(comments);
+  const event = decideReviewEvent(comments, input.requestChangesConfidenceFloors);
 
   return {
     event,
@@ -55,7 +56,7 @@ export function applyDeterministicReviewGate(input: {
       acceptedComments: comments.length,
       droppedFindings: dropped.length,
       event,
-      requestChangesEligible: comments.filter((comment) => isRequestChangesEligible(comment)).length,
+      requestChangesEligible: comments.filter((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors)).length,
       categoryCounts: countCategories(comments),
       dropReasonCounts: countDropReasons(dropped)
     }
