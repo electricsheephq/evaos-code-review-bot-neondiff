@@ -18,6 +18,9 @@ Public confidence display is allowed only when all of these are true:
 
 These numbers are hard floors. Operators may configure stricter minimums, and
 the report reflects those stricter values in `metrics.*.required`.
+Malformed minimums fail closed with `blockedReason: malformed_minimum`; finite
+malformed inputs are shown as `metrics.*.rejectedMinimum` while `required`
+remains the hard floor.
 
 If any field is missing, malformed, or below threshold, the public mode is
 `uncalibrated`. Public comment text must continue replacing confidence values
