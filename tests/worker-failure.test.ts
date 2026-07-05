@@ -2554,6 +2554,74 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("preserves command metadata when reconciling automatic queue jobs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-direct-review-automatic-command-metadata-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewStatusComment: { enabled: false }
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const headSha = "5656565656565656565656565656565656565656";
+    const pull = pullSummary(1241, headSha);
+    const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1241#pullrequestreview-9";
+    const github = {
+      canPostAsApp: () => true,
+      upsertIssueComment: async () => {
+        throw new Error("status comment disabled");
+      }
+    } as unknown as GitHubApi;
+    const automaticJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha,
+      baseSha: pull.base.sha
+    }).job;
+    state.recordReviewReadiness({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha,
+      state: "awaiting_re_review",
+      reason: "trusted_re_review_command",
+      commandAction: "re-review",
+      commandCommentId: 87654,
+      now: new Date("2026-07-05T00:01:00.000Z")
+    });
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl
+    });
+
+    const result = await reconcileProcessedHeadAfterDirectReview({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      now: new Date("2026-07-05T00:02:00.000Z")
+    });
+
+    expect(result).toEqual({ activeQueueJobs: 1, settledQueueJobs: 1, statusCommentPosted: false });
+    expect(state.getReviewQueueJob(automaticJob.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl
+    });
+    expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, headSha)).toMatchObject({
+      state: "ready_for_human",
+      reason: "direct_review_reconciled_processed_head",
+      event: "COMMENT",
+      reviewUrl,
+      commandAction: "re-review",
+      commandCommentId: 87654
+    });
+    state.close();
+  });
+
   it("posts retry status comments against the requested stale failed head", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-stale-status-"));
     roots.push(root);

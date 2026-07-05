@@ -1669,9 +1669,7 @@ export async function reconcileProcessedHeadAfterDirectReview(input: {
     reason: "direct_review_reconciled_processed_head",
     ...(processed.event ? { event: processed.event } : {}),
     ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-    ...(manualCommandJob
-      ? (manualCommandJob.commentId ? { commandCommentId: manualCommandJob.commentId } : {})
-      : { clearCommandMetadata: true }),
+    ...(manualCommandJob?.commentId ? { commandCommentId: manualCommandJob.commentId } : {}),
     now
   });
 
