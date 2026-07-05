@@ -95,6 +95,8 @@ describe("issue relationship taxonomy", () => {
 
     expect(p0DocsHint).toMatchObject({
       category: "blocker",
+      categoryHint: "docs_only",
+      categoryHintHonored: false,
       proofRequirements: ["current_head_failure"],
       suggestedLabels: ["blocker"]
     });
@@ -110,6 +112,22 @@ describe("issue relationship taxonomy", () => {
     expect(duplicateReleaseBlocker).toMatchObject({
       category: "release_risk",
       proofRequirements: ["release_gate"]
+    });
+
+    const p0Release = classifyIssueRelationshipItem({
+      id: "issue-44b",
+      kind: "issue",
+      title: "Launchd beta release gate is down",
+      severity: "P0",
+      categoryHint: "release_risk"
+    });
+
+    expect(p0Release).toMatchObject({
+      category: "blocker",
+      categoryHint: "release_risk",
+      categoryHintHonored: false,
+      proofRequirements: ["current_head_failure"],
+      suggestedLabels: ["blocker"]
     });
   });
 
@@ -137,6 +155,22 @@ describe("issue relationship taxonomy", () => {
       body: "Document the production setup page before publishing the docs.",
       paths: ["docs/SETUP.md"]
     }).category).toBe("docs_only");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-48",
+      kind: "issue",
+      title: "Bug in label parser",
+      body: "Minor parser failure while reading a label.",
+      paths: ["src/labels.ts"]
+    }).category).toBe("needs_human_routing");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49",
+      kind: "issue",
+      title: "Worker queue regression fixture update",
+      body: "The current fixture proves this regressed.",
+      paths: ["src/worker.ts"]
+    }).category).toBe("regression");
   });
 
   it("clusters related issues and PRs with public-safe relationship reasons", () => {
@@ -222,14 +256,19 @@ describe("issue relationship taxonomy", () => {
     const result = classifyIssueRelationshipItem({
       id: "issue-54",
       kind: "issue",
-      title: "Failure captured at /Volumes/LEXAR/private/raw.log",
-      publicSummary: "Repro notes live in ~/secrets/repro.md and file:///tmp/raw.log."
+      title: "Failure captured at /Volumes/LEXAR/private/raw.log and \\\\fileserver\\secrets\\config.env",
+      publicSummary: "Repro notes live in ~/secrets/repro.md, ~, C:secrets.txt, C:\\secrets\\raw.log, /etc/passwd, /var/log/raw.log, /root/.env, /home/lume/.env, /mnt/share/raw.log, /opt/app/raw.log, /srv/app/raw.log, /Library/Logs/raw.log, and file:///tmp/raw.log.",
+      paths: ["\\\\fileserver\\secrets\\config.env", "C:secrets.txt", "/etc/passwd"]
     });
 
-    expect(result.title).toBe("Failure captured at [local-path-redacted]");
-    expect(result.summary).toBe("Repro notes live in [local-path-redacted] and [local-path-redacted]");
+    expect(result.title).toBe("Failure captured at [local-path-redacted] and [local-path-redacted]");
+    expect(result.summary.match(/\[local-path-redacted\]/g)).toHaveLength(13);
+    expect(result.publicPaths).toEqual([]);
     expect(JSON.stringify(result)).not.toContain("/Volumes/LEXAR");
     expect(JSON.stringify(result)).not.toContain("~/secrets");
     expect(JSON.stringify(result)).not.toContain("file:///tmp");
+    expect(JSON.stringify(result)).not.toContain("\\\\fileserver");
+    expect(JSON.stringify(result)).not.toContain("C:secrets");
+    expect(JSON.stringify(result)).not.toContain("/etc/passwd");
   });
 });

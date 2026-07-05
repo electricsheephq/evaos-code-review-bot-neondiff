@@ -68,6 +68,8 @@ export interface ClassifiedIssueRelationshipItem {
   title: string;
   summary: string;
   category: IssueRelationshipCategoryId;
+  categoryHint?: IssueRelationshipCategoryId;
+  categoryHintHonored?: boolean;
   proofRequirements: ProofRequirementId[];
   publicEvidenceUrls: string[];
   suggestedLabels: string[];
@@ -108,12 +110,14 @@ export interface IssueRelationshipClusterInput {
 export function classifyIssueRelationshipItem(input: IssueRelationshipItemInput): ClassifiedIssueRelationshipItem {
   const category = resolveRelationshipCategory(input);
   const proofRequirements = proofRequirementsFor(input, category);
+  const categoryHintHonored = input.categoryHint ? category === input.categoryHint : undefined;
   return {
     id: sanitizeId(input.id),
     kind: input.kind,
     title: publicText(input.title),
     summary: publicText(input.publicSummary ?? input.title),
     category,
+    ...(input.categoryHint ? { categoryHint: input.categoryHint, categoryHintHonored } : {}),
     proofRequirements,
     publicEvidenceUrls: publicEvidenceUrls(input.evidenceUrls ?? []),
     suggestedLabels: suggestedLabelsFor(input, category),
@@ -171,10 +175,10 @@ function resolveRelationshipCategory(input: IssueRelationshipItemInput): IssueRe
 
 function inferRelationshipCategory(input: IssueRelationshipItemInput): IssueRelationshipCategoryId {
   const haystack = searchableText(input);
-  if (hasReleaseRiskSignal(haystack)) return "release_risk";
-  if (input.severity === "P0" || input.severity === "P1" || matchesAny(haystack, ["blocker", "blocks merge", "blocking", "must fix"])) {
+  if (input.severity === "P0" || input.severity === "P1" || matchesAny(haystack, ["blocks merge", "blocking", "must fix"])) {
     return "blocker";
   }
+  if (hasReleaseRiskSignal(haystack)) return "release_risk";
   if (matchesAny(haystack, ["reproduction gap", "missing reproduction", "no reproduction", "lacks proof", "missing proof", "missing evidence", "no command", "no head sha", "no fixture", "needs proof"])) {
     return "reproduction_gap";
   }
@@ -183,7 +187,7 @@ function inferRelationshipCategory(input: IssueRelationshipItemInput): IssueRela
     return "dependency";
   }
   if (isDocsOnly(input.paths ?? []) || matchesAny(haystack, ["docs-only", "documentation-only"])) return "docs_only";
-  if (matchesAny(haystack, ["regression", "broke", "broken", "failing", "failure", "fails", "bug", "fixture update"])) return "regression";
+  if (hasRegressionSignal(haystack)) return "regression";
   if (matchesAny(haystack, ["manual triage", "needs human", "human routing", "ambiguous owner", "unknown owner"])) return "needs_human_routing";
   return "needs_human_routing";
 }
@@ -224,10 +228,23 @@ function proofRequirementsFor(input: IssueRelationshipItemInput, category: Issue
   if (category === "release_risk") requirements.push("release_gate");
   if (category === "docs_only") requirements.push("docs_scope");
   if (category === "needs_human_routing") requirements.push("human_triage");
-  if (category === "release_risk" && matchesAny(searchableText(input), ["regression", "broke", "broken", "failure", "fails"])) {
+  if (category === "release_risk" && hasRegressionSignal(searchableText(input))) {
     requirements.push("regression_fixture");
   }
   return unique(requirements);
+}
+
+function hasRegressionSignal(text: string): boolean {
+  return matchesAny(text, [
+    "regression",
+    "regressed",
+    "broke",
+    "broken",
+    "failing test",
+    "test failure",
+    "ci failure",
+    "fixture update"
+  ]);
 }
 
 function suggestedLabelsFor(input: IssueRelationshipItemInput, category: IssueRelationshipCategoryId): string[] {
@@ -339,14 +356,24 @@ function isSafePublicUrl(value: string): boolean {
 }
 
 function isLocalPath(value: string): boolean {
-  return value.startsWith("/") || value.startsWith("~/") || value.startsWith("file:") || /^[A-Za-z]:[\\/]/.test(value);
+  const trimmed = value.trim();
+  return (
+    trimmed === "~" ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("~/") ||
+    trimmed.startsWith("~\\") ||
+    trimmed.startsWith("file:") ||
+    trimmed.startsWith("\\\\") ||
+    /^[A-Za-z]:(?:[\\/]|[^\s])/.test(trimmed)
+  );
 }
 
 function redactLocalPathLikeText(value: string): string {
-  return value
-    .replace(/file:\/\/\S+/g, "[local-path-redacted]")
-    .replace(/(?:\/Volumes|\/Users|\/private|\/tmp|~\/|[A-Za-z]:[\\/])\S*/g, "[local-path-redacted]");
+  return value.replace(LOCAL_PATH_TEXT_PATTERN, (_match, prefix: string) => `${prefix}[local-path-redacted]`);
 }
+
+const LOCAL_PATH_TEXT_PATTERN =
+  /(^|[\s([{"'`])(?:file:\/\/\S+|\\\\\S+|~(?:[\\/]\S*)?|\/(?!\/)\S+|[A-Za-z]:(?:[\\/]\S*|\S+))/g;
 
 function isDocsOnly(paths: string[]): boolean {
   return paths.length > 0 && paths.every((path) => {
