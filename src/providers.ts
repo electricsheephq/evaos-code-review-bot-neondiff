@@ -1,7 +1,18 @@
+import { lookup as defaultDnsLookup } from "node:dns/promises";
+import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS = 30_000;
+const MAX_PROVIDER_SMOKE_RESPONSE_BYTES = 256 * 1024;
+const REMOTE_SMOKE_OPT_IN_ERROR = "Remote OpenAI-compatible smoke checks require --allow-remote-smoke true and --provider <id>.";
+
+type DnsLookupAddress = { address: string; family: number };
+type DnsLookupImpl = (
+  hostname: string,
+  options: { all: true; verbatim?: boolean }
+) => Promise<DnsLookupAddress[]>;
 
 export type ProviderAdapter = "zcode" | "openai-compatible" | "anthropic" | "openai" | "gemini";
 export type ProviderAuthMode = "zcode-app-config" | "api-key-env" | "none";
@@ -118,7 +129,9 @@ export async function doctorProviderRegistry(input: {
   registry: ProviderRegistryConfig;
   providerId?: string;
   smoke?: boolean;
+  allowRemoteSmoke?: boolean;
   fetchImpl?: typeof fetch;
+  dnsLookupImpl?: DnsLookupImpl;
   env?: Record<string, string | undefined>;
 }): Promise<ProviderDoctorResult> {
   if (input.smoke && !input.providerId) {
@@ -187,7 +200,14 @@ export async function doctorProviderRegistry(input: {
       continue;
     }
 
-    checks.push(await smokeOpenAICompatibleProvider({ providerId, provider, fetchImpl, env }));
+    checks.push(await smokeOpenAICompatibleProvider({
+      providerId,
+      provider,
+      fetchImpl,
+      dnsLookupImpl: input.dnsLookupImpl ?? defaultDnsLookup,
+      env,
+      allowRemoteSmoke: input.allowRemoteSmoke === true
+    }));
   }
 
   return {
@@ -204,7 +224,9 @@ async function smokeOpenAICompatibleProvider(input: {
   providerId: string;
   provider: ProviderRegistryEntry;
   fetchImpl: typeof fetch;
+  dnsLookupImpl: DnsLookupImpl;
   env: Record<string, string | undefined>;
+  allowRemoteSmoke: boolean;
 }): Promise<ProviderDoctorCheck> {
   const safeProviderId = safeProviderIdForOutput(input.providerId);
   const baseCheck = {
@@ -224,23 +246,48 @@ async function smokeOpenAICompatibleProvider(input: {
   const authError = providerAuthMetadataError(input.provider);
   if (authError) return { ...baseCheck, ok: false, error: authError };
   if (!input.provider.baseUrl) return { ...baseCheck, ok: false, error: "OpenAI-compatible provider requires baseUrl for smoke checks." };
-  const targetError = providerSmokeTargetError(input.provider.baseUrl, input.provider);
-  if (targetError) return { ...baseCheck, ok: false, error: targetError };
+  const target = await resolveProviderSmokeTarget({
+    baseUrl: input.provider.baseUrl,
+    provider: input.provider,
+    env: input.env,
+    allowRemoteSmoke: input.allowRemoteSmoke,
+    dnsLookupImpl: input.dnsLookupImpl
+  });
+  if (target.error) return { ...baseCheck, ok: false, error: target.error };
   if (input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv && !input.env[input.provider.apiKeyEnv]) {
     return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
   }
 
   try {
-    const response = await input.fetchImpl(buildOpenAIModelsUrl(input.provider.baseUrl), {
+    const requestUrl = buildOpenAIModelsUrl(input.provider.baseUrl);
+    const requestInit: RequestInit = {
+      method: "GET",
       signal: signalWithTimeout(input.provider.timeoutMs),
+      redirect: "manual",
       headers: {
         Accept: "application/json",
         ...(input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv
           ? { Authorization: `Bearer ${input.env[input.provider.apiKeyEnv]}` }
           : {})
       }
-    });
-    const text = await response.text();
+    };
+    const response = input.fetchImpl === fetch
+      ? await fetchProviderModels(requestUrl, requestInit, target.target, input.provider.timeoutMs)
+      : await input.fetchImpl(requestUrl, requestInit);
+    let text: string;
+    try {
+      text = await readResponseTextBounded(response);
+    } catch (error) {
+      if (error instanceof ProviderSmokeResponseTooLargeError) {
+        return {
+          ...baseCheck,
+          ok: false,
+          errorCategory: "model_output_schema",
+          error: error.message
+        };
+      }
+      throw error;
+    }
     if (!response.ok) {
       const redactedText = redactProviderSmokeText(text, input.provider, input.env);
       const error = `OpenAI-compatible models endpoint returned ${response.status}: ${redactedText.slice(0, 300)}`;
@@ -278,6 +325,14 @@ async function smokeOpenAICompatibleProvider(input: {
         : {})
     };
   } catch (error) {
+    if (error instanceof ProviderSmokeResponseTooLargeError) {
+      return {
+        ...baseCheck,
+        ok: false,
+        errorCategory: "model_output_schema",
+        error: error.message
+      };
+    }
     const message = error instanceof Error ? error.message : String(error);
     const errorCategory = classifyProviderError(message);
     const redactedMessage = redactProviderSmokeText(message, input.provider, input.env);
@@ -365,8 +420,77 @@ export function openAICompatibleProviderTargetError(
   return undefined;
 }
 
-function providerSmokeTargetError(baseUrl: string, provider: ProviderRegistryEntry): string | undefined {
-  return openAICompatibleProviderTargetError(baseUrl, provider, "smoke");
+interface ProviderSmokeTarget {
+  remote: boolean;
+  pinnedAddress?: DnsLookupAddress;
+}
+
+async function resolveProviderSmokeTarget(input: {
+  baseUrl: string;
+  provider: ProviderRegistryEntry;
+  env: Record<string, string | undefined>;
+  allowRemoteSmoke: boolean;
+  dnsLookupImpl: DnsLookupImpl;
+}): Promise<{ target?: ProviderSmokeTarget; error?: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(input.baseUrl);
+  } catch {
+    return { error: "OpenAI-compatible provider baseUrl must be a valid URL for smoke checks." };
+  }
+  if (parsed.username || parsed.password) {
+    return { error: "OpenAI-compatible smoke target must not include username or password credentials." };
+  }
+  if (containsSecretLikeText(decodeURIComponent(`${parsed.pathname}${parsed.hash}`))) {
+    return { error: "OpenAI-compatible smoke target must not include secret-like path or fragment values." };
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (/(key|token|secret|password|session|cookie)/i.test(key)) {
+      return { error: "OpenAI-compatible smoke target must not include credential query parameters." };
+    }
+  }
+  const loopback = isLoopbackHost(parsed.hostname);
+  if (loopback && input.provider.capabilities.local) return { target: { remote: false } };
+  if (isUnsafeSmokeHost(parsed.hostname)) {
+    return { error: "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts." };
+  }
+  if (parsed.protocol !== "https:") {
+    return { error: "Remote OpenAI-compatible smoke target must use HTTPS." };
+  }
+  if (!input.allowRemoteSmoke) return { error: REMOTE_SMOKE_OPT_IN_ERROR };
+  if (input.provider.authMode !== "api-key-env" || !input.provider.apiKeyEnv) {
+    return { error: "Hosted remote smoke requires authMode api-key-env and apiKeyEnv." };
+  }
+  if (!input.env[input.provider.apiKeyEnv]) {
+    return { error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
+  }
+  const pinnedAddress = await resolvePinnedRemoteSmokeAddress(parsed.hostname, input.dnsLookupImpl);
+  if (pinnedAddress.error) return { error: pinnedAddress.error };
+  return { target: { remote: true, pinnedAddress: pinnedAddress.address } };
+}
+
+async function resolvePinnedRemoteSmokeAddress(
+  hostname: string,
+  dnsLookupImpl: DnsLookupImpl
+): Promise<{ address?: DnsLookupAddress; error?: string }> {
+  let addresses: DnsLookupAddress[];
+  try {
+    addresses = await dnsLookupImpl(hostname, { all: true, verbatim: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Remote OpenAI-compatible smoke DNS lookup failed: ${redactSecrets(message)}` };
+  }
+  if (addresses.length === 0) {
+    return { error: "Remote OpenAI-compatible smoke DNS lookup returned no addresses." };
+  }
+  if (addresses.some((entry) => isUnsafeSmokeHost(entry.address))) {
+    return { error: "Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address." };
+  }
+  const address = addresses.find((entry) => entry.family === 4 || entry.family === 6);
+  if (!address) {
+    return { error: "Remote OpenAI-compatible smoke DNS lookup returned no IPv4 or IPv6 addresses." };
+  }
+  return { address };
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -428,6 +552,121 @@ function ipv4MappedIpv6Address(value: string): string | undefined {
   const low = Number.parseInt(parts[1], 16);
   if ([high, low].some((part) => !Number.isInteger(part) || part < 0 || part > 0xffff)) return undefined;
   return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
+class ProviderSmokeResponseTooLargeError extends Error {
+  constructor() {
+    super(`Models response exceeded ${MAX_PROVIDER_SMOKE_RESPONSE_BYTES} byte limit.`);
+  }
+}
+
+async function fetchProviderModels(
+  url: string,
+  init: RequestInit,
+  target: ProviderSmokeTarget | undefined,
+  timeoutMs: number | undefined
+): Promise<Response> {
+  const parsed = new URL(url);
+  const requestFn = parsed.protocol === "https:" ? httpsRequest : httpRequest;
+  const headers = new Headers(init.headers);
+  const headerObject = Object.fromEntries(headers.entries());
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const request = requestFn({
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: `${parsed.pathname}${parsed.search}`,
+      method: "GET",
+      headers: headerObject,
+      timeout: timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS,
+      ...(target?.remote && target.pinnedAddress
+        ? {
+            servername: parsed.hostname,
+            lookup: (_hostname, _options, callback) => {
+              callback(null, target.pinnedAddress!.address, target.pinnedAddress!.family);
+            }
+          }
+        : {})
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      response.on("data", (chunk: Buffer | string) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buffer.byteLength;
+        if (totalBytes > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
+          request.destroy(new ProviderSmokeResponseTooLargeError());
+          return;
+        }
+        chunks.push(buffer);
+      });
+      response.on("end", () => {
+        if (settled) return;
+        settled = true;
+        init.signal?.removeEventListener("abort", abort);
+        resolve(new Response(Buffer.concat(chunks), {
+          status: response.statusCode ?? 0,
+          statusText: response.statusMessage,
+          headers: responseHeadersToHeaders(response.headers)
+        }));
+      });
+    });
+    const abort = () => request.destroy(new Error("Provider smoke request aborted."));
+    init.signal?.addEventListener("abort", abort, { once: true });
+    request.on("timeout", () => request.destroy(new Error("Provider smoke request timed out.")));
+    request.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      init.signal?.removeEventListener("abort", abort);
+      reject(error);
+    });
+    request.end();
+  });
+}
+
+function responseHeadersToHeaders(headers: IncomingHttpHeaders): Headers {
+  const output = new Headers();
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const entry of value) output.append(key, entry);
+    } else {
+      output.set(key, String(value));
+    }
+  }
+  return output;
+}
+
+async function readResponseTextBounded(response: Response): Promise<string> {
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
+    throw new ProviderSmokeResponseTooLargeError();
+  }
+  if (!response.body) return response.text();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
+        throw new ProviderSmokeResponseTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const output = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(output);
 }
 
 function extractModelIds(data: unknown[]): string[] {

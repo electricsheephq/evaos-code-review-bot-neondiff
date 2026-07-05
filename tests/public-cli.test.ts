@@ -58,6 +58,7 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("neondiff providers list --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json");
+    expect(output.examples).toContain("neondiff providers doctor --config config.local.json --provider openai-compatible --smoke true --allow-remote-smoke true --json");
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
@@ -360,6 +361,54 @@ describe("public NeonDiff CLI surface", () => {
     } finally {
       await closeServer(server);
     }
+  });
+
+  it("fails hosted remote smoke through the public CLI without explicit remote opt-in", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-remote-provider-cli-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/demo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })}\n`);
+
+    await expect(runCli([
+      "providers",
+      "doctor",
+      "--config",
+      configPath,
+      "--provider",
+      "openai-compatible",
+      "--smoke",
+      "true"
+    ], {
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    })).rejects.toMatchObject({
+      stdout: expect.stringContaining("Remote OpenAI-compatible smoke checks require --allow-remote-smoke true and --provider <id>.")
+    });
   });
 
   it("rejects malformed provider ids before reflecting them", async () => {

@@ -166,7 +166,10 @@ async function main(): Promise<void> {
       const result = await doctorProviderRegistry({
         registry: config.providers!,
         ...(providerId ? { providerId } : {}),
-        smoke: args.smoke === undefined ? false : parseBooleanArg(args.smoke, "--smoke")
+        smoke: args.smoke === undefined ? false : parseBooleanArg(args.smoke, "--smoke"),
+        allowRemoteSmoke: args["allow-remote-smoke"] === undefined
+          ? false
+          : parseBooleanArg(args["allow-remote-smoke"], "--allow-remote-smoke")
       });
       console.log(stringifyProviderOutput({
         ...result,
@@ -2595,6 +2598,7 @@ function buildHelp(command?: string) {
       "neondiff providers list --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
+      "neondiff providers doctor --config config.local.json --provider openai-compatible --smoke true --allow-remote-smoke true --json",
       "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",

@@ -131,6 +131,304 @@ describe("provider registry", () => {
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
+  it("denies hosted remote OpenAI-compatible smoke by default even with a selected provider", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+    let dnsCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      dnsLookupImpl: async () => {
+        dnsCalls += 1;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      smokeAttempted: true,
+      readMode: "openai_compatible_models",
+      error: "Remote OpenAI-compatible smoke checks require --allow-remote-smoke true and --provider <id>."
+    });
+    expect(fetchCalls).toBe(0);
+    expect(dnsCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("allows explicitly opted-in hosted BYOK smoke after safe DNS validation", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    const dnsCalls: string[] = [];
+    const fetchCalls: string[] = [];
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async (hostname) => {
+        dnsCalls.push(hostname);
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      fetchImpl: async (url, init) => {
+        fetchCalls.push(String(url));
+        expect(init?.method).toBe("GET");
+        expect(init?.redirect).toBe("manual");
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        expect(new Headers(init?.headers).get("accept")).toBe("application/json");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer provider-secret");
+        return new Response(JSON.stringify({ data: [{ id: "review-model" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks[0]).toMatchObject({
+      providerId: "hosted-byok",
+      ok: true,
+      smokeAttempted: true,
+      readMode: "openai_compatible_models",
+      baseUrl: "https://gateway.example.test/v1",
+      apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+      modelCount: 1
+    });
+    expect(dnsCalls).toEqual(["gateway.example.test"]);
+    expect(fetchCalls).toEqual(["https://gateway.example.test/v1/models"]);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("requires hosted remote smoke to be env-key-backed before DNS or fetch", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+    let dnsCalls = 0;
+
+    const missingEnv = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      dnsLookupImpl: async () => {
+        dnsCalls += 1;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {}
+    });
+
+    expect(missingEnv.checks[0]).toMatchObject({
+      ok: false,
+      error: "Missing API key environment variable NEONDIFF_PROVIDER_API_KEY."
+    });
+
+    const noneAuthProvider = {
+      ...config.providers!.providers["hosted-byok"],
+      authMode: "none" as const
+    };
+    delete noneAuthProvider.apiKeyEnv;
+    const noneAuth = await doctorProviderRegistry({
+      registry: {
+        ...config.providers!,
+        providers: {
+          "hosted-byok": noneAuthProvider
+        }
+      },
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      dnsLookupImpl: async () => {
+        dnsCalls += 1;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {}
+    });
+
+    expect(noneAuth.checks[0]).toMatchObject({
+      ok: false,
+      error: "Hosted remote smoke requires authMode api-key-env and apiKeyEnv."
+    });
+    expect(fetchCalls).toBe(0);
+    expect(dnsCalls).toBe(0);
+  });
+
+  it("rejects hosted remote DNS resolutions to unsafe networks before fetch", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      dnsLookupImpl: async () => [{ address: "10.0.0.25", family: 4 }],
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address."
+    });
+    expect(fetchCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("does not follow hosted remote redirects or leak provider response secrets", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetchImpl: async (_url, init) => {
+        expect(init?.redirect).toBe("manual");
+        return new Response("redirect includes provider-secret and https://user:password@example.test", {
+          status: 302,
+          headers: {
+            Location: "https://redirect.example.test/v1/models"
+          }
+        });
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("OpenAI-compatible models endpoint returned 302")
+    });
+    expect(JSON.stringify(result)).toContain("[redacted-provider-key]");
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+    expect(JSON.stringify(result)).not.toContain("password");
+  });
+
   it("classifies provider failures and redacts provider URLs", () => {
     expect(classifyProviderError("401 invalid api key")).toBe("auth");
     expect(classifyProviderError("429 too many requests")).toBe("quota_or_rate_limit");
@@ -451,7 +749,7 @@ describe("provider registry", () => {
     });
     expect(remoteResult.checks[0]).toMatchObject({
       ok: false,
-      error: "Remote OpenAI-compatible smoke checks are disabled until the transport can pin the validated DNS result."
+      error: "Remote OpenAI-compatible smoke checks require --allow-remote-smoke true and --provider <id>."
     });
     expect(fetchCalls).toBe(0);
   });
