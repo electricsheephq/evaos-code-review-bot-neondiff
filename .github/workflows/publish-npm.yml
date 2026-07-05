@@ -9,7 +9,7 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v1.0.0-beta.1
+        default: v0.4.24-beta.1
 
 permissions:
   contents: read
@@ -26,9 +26,9 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.event.release.tag_name }}
 
-      - name: Require v1.0.0-beta.1
+      - name: Require v0.4.24-beta.1
         run: |
-          test "${{ github.event.inputs.tag || github.event.release.tag_name }}" = "v1.0.0-beta.1"
+          test "${{ github.event.inputs.tag || github.event.release.tag_name }}" = "v0.4.24-beta.1"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
