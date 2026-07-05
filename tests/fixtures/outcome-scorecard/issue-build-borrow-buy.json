@@ -1,0 +1,97 @@
+{
+  "evalName": "evaos-outcome-scorecard-fixture-v0.1",
+  "runId": "issue-build-borrow-buy",
+  "surface": "issue_enrichment",
+  "scenario": {
+    "id": "issue-build-borrow-buy",
+    "title": "Issue enrichment should identify useful build, borrow, buy options",
+    "repo": "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+    "url": "https://github.com/100yenadmin/Lossless-Codex-Orchestrator-LCO/issues/522"
+  },
+  "metrics": [
+    {
+      "id": "build_vs_buy_leverage",
+      "label": "Build-vs-buy leverage",
+      "weight": 25,
+      "rawScore": 4,
+      "denominator": "Issue handoff should reduce wasted implementation effort by finding credible external precedent.",
+      "dataSource": "issue enrichment packet and research links",
+      "scoringRule": "4 means at least one directly relevant repo/library precedent is cited with a usable implementation wedge.",
+      "evidenceUrls": [
+        "https://github.com/100yenadmin/Lossless-Codex-Orchestrator-LCO/issues/522"
+      ]
+    },
+    {
+      "id": "vision_product_alignment",
+      "label": "Vision and product alignment",
+      "weight": 20,
+      "rawScore": 3,
+      "denominator": "Enrichment should connect work to repo vision, non-goals, and user value.",
+      "dataSource": "VISION.md, repo policy, issue body",
+      "scoringRule": "3 means product fit and non-goals are stated but not yet validated by user feedback.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/261"
+      ]
+    },
+    {
+      "id": "implementation_readiness",
+      "label": "Implementation readiness",
+      "weight": 20,
+      "rawScore": 4,
+      "denominator": "Output should become an agent-start packet with acceptance criteria and proof plan.",
+      "dataSource": "issue enrichment markdown packet",
+      "scoringRule": "4 means acceptance criteria, proof plan, and first wedge are clear.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/261"
+      ]
+    },
+    {
+      "id": "downstream_agent_enablement",
+      "label": "Downstream agent enablement",
+      "weight": 15,
+      "rawScore": 4,
+      "denominator": "A follow-up agent should know what to do without rereading the whole thread.",
+      "dataSource": "agent handoff packet",
+      "scoringRule": "4 means clear next action, constraints, and evidence links.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/260"
+      ]
+    },
+    {
+      "id": "cost_throttle_control",
+      "label": "Cost and throttle control",
+      "weight": 10,
+      "rawScore": 4,
+      "denominator": "Research mode should be triggered and capped, not backlog-wide.",
+      "dataSource": "issue-enrichment allowlist and throttle config",
+      "scoringRule": "4 means separate allowlist, repo throttles, and no old-backlog processing by default.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/119"
+      ]
+    },
+    {
+      "id": "lifecycle_routing_clarity",
+      "label": "Lifecycle and routing clarity",
+      "weight": 10,
+      "rawScore": 3,
+      "denominator": "Issue enrichment should make owner, route, and follow-up status visible.",
+      "dataSource": "sticky comment and issue state",
+      "scoringRule": "3 means routing is visible but not yet integrated with a broader product roadmap lane.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"
+      ]
+    }
+  ],
+  "hardGates": [
+    {
+      "name": "unredacted_secret",
+      "ok": true,
+      "detail": "Fixture contains no secrets."
+    },
+    {
+      "name": "old_backlog_scan",
+      "ok": true,
+      "detail": "Fixture assumes triggered enrichment only, not backlog-wide scanning."
+    }
+  ]
+}
