@@ -236,6 +236,76 @@ describe("pre-merge checks", () => {
     expect(result.checks.find((check) => check.id === "custom:tracked-issue")).toMatchObject({ status: "pass" });
   });
 
+  it("evaluates deterministic PR metadata sections without turning warnings into blockers", () => {
+    const result = evaluatePreMergeChecks({
+      pull: {
+        title: "Add deterministic metadata gates",
+        body: [
+          "Closes #118",
+          "",
+          "Validation: focused tests passed.",
+          "Docstrings: N/A - no public API changes."
+        ].join("\n")
+      },
+      policy: {
+        testEvidence: { mode: "warning" },
+        docs: { mode: "warning" },
+        docstrings: { mode: "error" },
+        outOfScope: { mode: "error" }
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reviewEvent).toBe("REQUEST_CHANGES");
+    expect(result.warnings.map((warning) => warning.id)).toEqual(["docs"]);
+    expect(result.blockingErrors.map((error) => error.id)).toEqual(["out_of_scope"]);
+    expect(result.checks.find((check) => check.id === "test_evidence")).toMatchObject({
+      status: "pass",
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ key: "test_evidence.section_present", value: "Validation", passed: true })
+      ])
+    });
+    expect(result.checks.find((check) => check.id === "docstrings")).toMatchObject({
+      status: "pass",
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ key: "docstrings.not_placeholder", value: "true", passed: true })
+      ])
+    });
+  });
+
+  it("accepts not-applicable metadata only when the check policy allows it", () => {
+    const body = "Out of scope: N/A - metadata only change.";
+    const allowed = evaluatePreMergeChecks({
+      pull: { body },
+      policy: {
+        outOfScope: { mode: "error", allowNotApplicable: true }
+      }
+    });
+    const rejected = evaluatePreMergeChecks({
+      pull: { body },
+      policy: {
+        outOfScope: { mode: "error", allowNotApplicable: false }
+      }
+    });
+
+    expect(allowed.ok).toBe(true);
+    expect(allowed.checks.find((check) => check.id === "out_of_scope")).toMatchObject({
+      status: "pass",
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ key: "out_of_scope.not_applicable_allowed", value: "true", passed: true })
+      ])
+    });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.blockingErrors).toEqual([
+      expect.objectContaining({
+        id: "out_of_scope",
+        evidence: expect.arrayContaining([
+          expect.objectContaining({ key: "out_of_scope.not_placeholder", value: "false", passed: false })
+        ])
+      })
+    ]);
+  });
+
   it("honors draft-prefix opt-out and title minLength boundaries", () => {
     const atMinimum = evaluatePreMergeChecks({
       pull: { title: "Draft: okay", body: "Closes #42", linkedIssues: [42] },

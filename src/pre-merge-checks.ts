@@ -36,6 +36,12 @@ export interface PreMergeLinkedIssueCheckConfig extends PreMergeBuiltInCheckConf
   requireOpen?: boolean;
 }
 
+export interface PreMergeMetadataCheckConfig extends PreMergeBuiltInCheckConfig {
+  allowNotApplicable?: boolean;
+  minDetailLength?: number;
+  sectionHeadings?: string[];
+}
+
 export type PreMergeCustomMatchSource = "title" | "description" | "title_or_description" | "changed_files" | "linked_issue_refs";
 
 export interface PreMergeCustomMatcher {
@@ -55,6 +61,10 @@ export interface PreMergeCheckPolicy {
   title?: PreMergeTitleCheckConfig;
   description?: PreMergeDescriptionCheckConfig;
   linkedIssue?: PreMergeLinkedIssueCheckConfig;
+  testEvidence?: PreMergeMetadataCheckConfig;
+  docs?: PreMergeMetadataCheckConfig;
+  docstrings?: PreMergeMetadataCheckConfig;
+  outOfScope?: PreMergeMetadataCheckConfig;
   customChecks?: PreMergeCustomCheckConfig[];
 }
 
@@ -107,6 +117,42 @@ const CUSTOM_NAME_PATTERN = /^[a-z][a-z0-9-]{1,63}$/;
 const NON_DETERMINISTIC_INSTRUCTION_PATTERN =
   /\b(ask\s+(?:the\s+)?(?:model|llm)|model\s+(?:should|must|can)|llm|ai\s+judg|judge\s+whether|best\s+judg(?:e)?ment|probably|seems\s+safe|looks\s+safe)\b/i;
 const MAX_CUSTOM_REGEX_INPUT_CHARS = 2048;
+const DEFAULT_METADATA_MIN_DETAIL_LENGTH = 6;
+
+const METADATA_CHECKS = {
+  testEvidence: {
+    id: "test_evidence",
+    name: "Test evidence",
+    keyPrefix: "test_evidence",
+    headings: ["Validation", "Tests", "Test evidence"],
+    passSummary: "PR metadata includes deterministic validation or test evidence.",
+    failSummary: "PR metadata does not include deterministic validation or test evidence."
+  },
+  docs: {
+    id: "docs",
+    name: "Docs",
+    keyPrefix: "docs",
+    headings: ["Docs", "Documentation"],
+    passSummary: "PR metadata includes deterministic documentation impact evidence.",
+    failSummary: "PR metadata does not include deterministic documentation impact evidence."
+  },
+  docstrings: {
+    id: "docstrings",
+    name: "Docstrings",
+    keyPrefix: "docstrings",
+    headings: ["Docstrings", "Docstring"],
+    passSummary: "PR metadata includes deterministic docstring impact evidence.",
+    failSummary: "PR metadata does not include deterministic docstring impact evidence."
+  },
+  outOfScope: {
+    id: "out_of_scope",
+    name: "Out of scope",
+    keyPrefix: "out_of_scope",
+    headings: ["Out of scope", "Non-goals", "Non-goal"],
+    passSummary: "PR metadata includes deterministic out-of-scope boundaries.",
+    failSummary: "PR metadata does not include deterministic out-of-scope boundaries."
+  }
+} as const;
 
 export function evaluatePreMergeChecks(input: {
   pull: PreMergePullInput;
@@ -122,6 +168,10 @@ export function evaluatePreMergeChecks(input: {
   if (input.policy.title) checks.push(evaluateTitleCheck(input.pull, input.policy.title));
   if (input.policy.description) checks.push(evaluateDescriptionCheck(input.pull, input.policy.description));
   if (input.policy.linkedIssue) checks.push(evaluateLinkedIssueCheck(input.pull, input.policy.linkedIssue));
+  if (input.policy.testEvidence) checks.push(evaluateMetadataCheck(input.pull, input.policy.testEvidence, METADATA_CHECKS.testEvidence));
+  if (input.policy.docs) checks.push(evaluateMetadataCheck(input.pull, input.policy.docs, METADATA_CHECKS.docs));
+  if (input.policy.docstrings) checks.push(evaluateMetadataCheck(input.pull, input.policy.docstrings, METADATA_CHECKS.docstrings));
+  if (input.policy.outOfScope) checks.push(evaluateMetadataCheck(input.pull, input.policy.outOfScope, METADATA_CHECKS.outOfScope));
   for (const custom of input.policy.customChecks ?? []) checks.push(evaluateCustomCheck(input.pull, custom));
   return summarizeChecks(checks, validation);
 }
@@ -131,8 +181,16 @@ export function validatePreMergeCheckPolicy(policy: PreMergeCheckPolicy): PreMer
   validateMode("title", policy.title?.mode, errors, policy.title !== undefined);
   validateMode("description", policy.description?.mode, errors, policy.description !== undefined);
   validateMode("linked_issue", policy.linkedIssue?.mode, errors, policy.linkedIssue !== undefined);
+  validateMode("test_evidence", policy.testEvidence?.mode, errors, policy.testEvidence !== undefined);
+  validateMode("docs", policy.docs?.mode, errors, policy.docs !== undefined);
+  validateMode("docstrings", policy.docstrings?.mode, errors, policy.docstrings !== undefined);
+  validateMode("out_of_scope", policy.outOfScope?.mode, errors, policy.outOfScope !== undefined);
   validatePositiveInteger("title", "minLength", policy.title?.minLength, errors);
   validatePositiveInteger("description", "minLength", policy.description?.minLength, errors);
+  validateMetadataCheckConfig("test_evidence", policy.testEvidence, errors);
+  validateMetadataCheckConfig("docs", policy.docs, errors);
+  validateMetadataCheckConfig("docstrings", policy.docstrings, errors);
+  validateMetadataCheckConfig("out_of_scope", policy.outOfScope, errors);
 
   const seenCustomNames = new Set<string>();
   for (const custom of policy.customChecks ?? []) {
@@ -253,6 +311,55 @@ function evaluateCustomCheck(pull: PreMergePullInput, custom: PreMergeCustomChec
       }
     ],
     instructions: custom.instructions
+  });
+}
+
+function evaluateMetadataCheck(
+  pull: PreMergePullInput,
+  config: PreMergeMetadataCheckConfig,
+  spec: (typeof METADATA_CHECKS)[keyof typeof METADATA_CHECKS]
+): PreMergeCheckResult {
+  if (config.mode === "off") return skippedCheck(spec.id, spec.name, config.mode, `${spec.name} check is disabled.`);
+  const headings = config.sectionHeadings?.length ? config.sectionHeadings : spec.headings;
+  const section = findMetadataSection(pull.body, headings);
+  const minDetailLength = config.minDetailLength ?? DEFAULT_METADATA_MIN_DETAIL_LENGTH;
+  const sectionPresent = section !== undefined;
+  const notApplicable = isNotApplicableSection(section?.detail ?? "");
+  const notApplicableAllowed = config.allowNotApplicable ?? true;
+  const detailLengthPassed = sectionPresent && normalizeText(section.detail).length >= minDetailLength;
+  const notPlaceholderPassed = sectionPresent && ((!notApplicable && detailLengthPassed) || (notApplicable && notApplicableAllowed));
+  const passed = sectionPresent && notPlaceholderPassed;
+  const evidence: PreMergeCheckEvidence[] = [
+    {
+      key: `${spec.keyPrefix}.section_present`,
+      value: section?.heading ?? "none",
+      passed: sectionPresent,
+      detail: `headings=${headings.join("|")}`
+    },
+    {
+      key: `${spec.keyPrefix}.not_placeholder`,
+      value: String(notPlaceholderPassed),
+      passed: notPlaceholderPassed,
+      detail: `minimum_detail_length=${minDetailLength}`
+    }
+  ];
+
+  if (notApplicable) {
+    evidence.push({
+      key: `${spec.keyPrefix}.not_applicable_allowed`,
+      value: String(notApplicableAllowed),
+      passed: notApplicableAllowed
+    });
+  }
+
+  return checkFromOutcome({
+    id: spec.id,
+    name: spec.name,
+    mode: config.mode,
+    passed,
+    passSummary: spec.passSummary,
+    failSummary: spec.failSummary,
+    evidence
   });
 }
 
@@ -414,6 +521,10 @@ function skippedChecksForOffModes(policy: PreMergeCheckPolicy): PreMergeCheckRes
   if (policy.title?.mode === "off") checks.push(skippedCheck("title", "Title", "off", "Title check is disabled."));
   if (policy.description?.mode === "off") checks.push(skippedCheck("description", "Description", "off", "Description check is disabled."));
   if (policy.linkedIssue?.mode === "off") checks.push(skippedCheck("linked_issue", "Linked issue", "off", "Linked issue check is disabled."));
+  if (policy.testEvidence?.mode === "off") checks.push(skippedCheck("test_evidence", "Test evidence", "off", "Test evidence check is disabled."));
+  if (policy.docs?.mode === "off") checks.push(skippedCheck("docs", "Docs", "off", "Docs check is disabled."));
+  if (policy.docstrings?.mode === "off") checks.push(skippedCheck("docstrings", "Docstrings", "off", "Docstrings check is disabled."));
+  if (policy.outOfScope?.mode === "off") checks.push(skippedCheck("out_of_scope", "Out of scope", "off", "Out of scope check is disabled."));
   for (const custom of policy.customChecks ?? []) {
     if (custom.mode === "off") checks.push(skippedCheck(`custom:${custom.name}`, custom.name, "off", "Custom check is disabled.", custom.instructions));
   }
@@ -430,6 +541,18 @@ function skippedChecksForInvalidPolicy(policy: PreMergeCheckPolicy): PreMergeChe
   }
   if (policy.linkedIssue) {
     checks.push(skippedCheck("linked_issue", "Linked issue", policy.linkedIssue.mode, skippedForInvalidPolicySummary("Linked issue", policy.linkedIssue.mode)));
+  }
+  if (policy.testEvidence) {
+    checks.push(skippedCheck("test_evidence", "Test evidence", policy.testEvidence.mode, skippedForInvalidPolicySummary("Test evidence", policy.testEvidence.mode)));
+  }
+  if (policy.docs) {
+    checks.push(skippedCheck("docs", "Docs", policy.docs.mode, skippedForInvalidPolicySummary("Docs", policy.docs.mode)));
+  }
+  if (policy.docstrings) {
+    checks.push(skippedCheck("docstrings", "Docstrings", policy.docstrings.mode, skippedForInvalidPolicySummary("Docstrings", policy.docstrings.mode)));
+  }
+  if (policy.outOfScope) {
+    checks.push(skippedCheck("out_of_scope", "Out of scope", policy.outOfScope.mode, skippedForInvalidPolicySummary("Out of scope", policy.outOfScope.mode)));
   }
   for (const custom of policy.customChecks ?? []) {
     checks.push(
@@ -488,6 +611,29 @@ function validateInstructions(
       field: "instructions",
       message: "Instructions must be deterministic and must not delegate pass/fail judgment to a model."
     });
+  }
+}
+
+function validateMetadataCheckConfig(
+  check: string,
+  config: PreMergeMetadataCheckConfig | undefined,
+  errors: PreMergePolicyValidationError[]
+): void {
+  if (!config) return;
+  validatePositiveInteger(check, "minDetailLength", config.minDetailLength, errors);
+  if (config.allowNotApplicable !== undefined && typeof config.allowNotApplicable !== "boolean") {
+    errors.push({ check, field: "allowNotApplicable", message: "allowNotApplicable must be a boolean when provided." });
+  }
+  if (config.sectionHeadings !== undefined) {
+    if (!Array.isArray(config.sectionHeadings) || config.sectionHeadings.length === 0) {
+      errors.push({ check, field: "sectionHeadings", message: "sectionHeadings must be a non-empty string array when provided." });
+      return;
+    }
+    for (const [index, heading] of config.sectionHeadings.entries()) {
+      if (typeof heading !== "string" || heading.trim().length === 0 || heading.length > 80) {
+        errors.push({ check, field: `sectionHeadings.${index}`, message: "section headings must be non-empty strings up to 80 characters." });
+      }
+    }
   }
 }
 
@@ -572,6 +718,50 @@ function normalizeIssueRef(ref: string): string | undefined {
 
 function normalizeText(text: string | null | undefined): string {
   return (text ?? "").replace(/\s+/g, " ").trim();
+}
+
+function findMetadataSection(
+  body: string | null | undefined,
+  headings: readonly string[]
+): { heading: string; detail: string } | undefined {
+  const lines = (body ?? "").split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = matchMetadataHeading(lines[index], headings);
+    if (!match) continue;
+    const followingLines: string[] = [];
+    for (let next = index + 1; next < lines.length; next += 1) {
+      if (matchMetadataHeading(lines[next], headings) || isAnyMetadataHeading(lines[next])) break;
+      followingLines.push(lines[next]);
+    }
+    return {
+      heading: match.heading,
+      detail: normalizeText([match.inlineDetail, ...followingLines].join(" "))
+    };
+  }
+  return undefined;
+}
+
+function matchMetadataHeading(line: string, headings: readonly string[]): { heading: string; inlineDetail: string } | undefined {
+  for (const heading of headings) {
+    const escaped = escapeRegExp(heading.trim());
+    const pattern = new RegExp(`^\\s*(?:#{1,6}\\s*)?(?:[-*]\\s*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?(?:\\s*:\\s*(.*)|\\s*)$`, "i");
+    const match = line.match(pattern);
+    if (match) return { heading, inlineDetail: match[1] ?? "" };
+  }
+  return undefined;
+}
+
+function isAnyMetadataHeading(line: string): boolean {
+  const headings = Object.values(METADATA_CHECKS).flatMap((check) => [...check.headings]);
+  return matchMetadataHeading(line, headings) !== undefined;
+}
+
+function isNotApplicableSection(detail: string): boolean {
+  return /^(?:n\/a|not applicable|none needed|none required|no\b)/i.test(normalizeText(detail));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function capCustomRegexInput(value: string): string {

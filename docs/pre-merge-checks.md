@@ -34,7 +34,11 @@ Built-in checks are enabled only when present in policy:
 const policy = {
   title: { mode: "warning", minLength: 8 },
   description: { mode: "warning", minLength: 20 },
-  linkedIssue: { mode: "error" }
+  linkedIssue: { mode: "error" },
+  testEvidence: { mode: "warning" },
+  docs: { mode: "warning" },
+  docstrings: { mode: "warning" },
+  outOfScope: { mode: "error" }
 };
 ```
 
@@ -45,6 +49,36 @@ prefix by default.
 
 `linkedIssue` checks structured linked issues, explicit linked issue refs, and
 PR title/body text such as `Closes #118` or `Related: owner/repo#118`.
+
+`testEvidence`, `docs`, `docstrings`, and `outOfScope` are deterministic
+metadata-section checks. They inspect the PR body for explicit headings such as:
+
+- `Validation:`
+- `Docs:` or `Documentation:`
+- `Docstrings:`
+- `Out of scope:` or `Non-goals:`
+
+They do not execute tests, inspect PR code, infer coverage, or call a model.
+They only verify that the PR author supplied explicit metadata for the policy
+area. Section details are not echoed back into evidence, which keeps status
+output compact and avoids leaking private rollout text.
+
+Metadata checks accept:
+
+```ts
+const policy = {
+  outOfScope: {
+    mode: "error",
+    allowNotApplicable: false,
+    minDetailLength: 12,
+    sectionHeadings: ["Out of scope", "Non-goals"]
+  }
+};
+```
+
+`allowNotApplicable` defaults to `true`, so `N/A - no public API changes` can
+be a valid deterministic answer when the repository policy allows it. Set it to
+`false` when the check must contain a concrete non-placeholder detail.
 
 Each check returns evidence entries with a `key`, `value`, `passed`, and
 optional `detail` field so status rendering can show why a result passed or
@@ -104,6 +138,9 @@ Validation rejects:
 - custom names outside `^[a-z][a-z0-9-]{1,63}$`
 - duplicate custom names
 - modes outside `off`, `warning`, and `error`
+- invalid metadata section heading arrays
+- non-boolean `allowNotApplicable` values
+- invalid metadata `minDetailLength` values
 - empty or invalid matchers
 - invalid regular expressions
 - custom instructions shorter than 12 or longer than 500 characters
