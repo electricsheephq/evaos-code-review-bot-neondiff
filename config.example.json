@@ -10,6 +10,104 @@
     "maxActiveRuns": 5,
     "leaseTtlMs": 900000
   },
+  "reviewModes": {
+    "_comment": "Evidence-only beta controls for selecting the cheapest useful PR/issue depth. These settings are recorded in review-mode evidence; they do not change scheduler/provider/posting behavior until a later rollout explicitly enables enforcement.",
+    "enabled": false,
+    "defaultMode": "fast",
+    "_safetyComment": "Depth escalation stays disabled while provider-deferred/retryable backlog exists during beta.",
+    "modes": {
+      "fast": {
+        "targetMinutes": 5,
+        "wholeRunDeadlineMs": 600000,
+        "perAttemptTimeoutMs": 300000,
+        "maxPatchBytes": 20000,
+        "maxContextBytes": 8000,
+        "maxProviderAttempts": 1,
+        "allowedContextSources": ["patch"],
+        "queueWeight": 10,
+        "leaseTtlMs": 2700000,
+        "heartbeatMs": 60000,
+        "escalation": {
+          "allowDepthEscalation": false,
+          "allowDepthEscalationWhileProviderBacklog": false,
+          "allowManualCommand": true,
+          "allowRequestChanges": false
+        }
+      },
+      "standard": {
+        "targetMinutes": 15,
+        "wholeRunDeadlineMs": 1200000,
+        "perAttemptTimeoutMs": 900000,
+        "maxPatchBytes": 80000,
+        "maxContextBytes": 40000,
+        "maxProviderAttempts": 2,
+        "allowedContextSources": ["patch", "repo_memory", "gitnexus", "github_related", "skill_packs"],
+        "queueWeight": 50,
+        "leaseTtlMs": 2700000,
+        "heartbeatMs": 60000,
+        "escalation": {
+          "allowDepthEscalation": true,
+          "allowDepthEscalationWhileProviderBacklog": false,
+          "allowManualCommand": true,
+          "allowRequestChanges": true
+        }
+      },
+      "deep": {
+        "targetMinutes": 25,
+        "wholeRunDeadlineMs": 2100000,
+        "perAttemptTimeoutMs": 1500000,
+        "maxPatchBytes": 80000,
+        "maxContextBytes": 40000,
+        "maxProviderAttempts": 2,
+        "allowedContextSources": ["patch", "repo_memory", "gitnexus", "github_related", "skill_packs"],
+        "queueWeight": 90,
+        "leaseTtlMs": 2700000,
+        "heartbeatMs": 60000,
+        "escalation": {
+          "allowDepthEscalation": true,
+          "allowDepthEscalationWhileProviderBacklog": false,
+          "allowManualCommand": true,
+          "allowRequestChanges": true
+        }
+      },
+      "product_pm": {
+        "targetMinutes": 15,
+        "wholeRunDeadlineMs": 1500000,
+        "perAttemptTimeoutMs": 900000,
+        "maxPatchBytes": 80000,
+        "maxContextBytes": 24000,
+        "maxProviderAttempts": 1,
+        "allowedContextSources": ["patch", "repo_memory", "gitnexus", "github_related", "skill_packs"],
+        "queueWeight": 40,
+        "leaseTtlMs": 2700000,
+        "heartbeatMs": 60000,
+        "escalation": {
+          "allowDepthEscalation": false,
+          "allowDepthEscalationWhileProviderBacklog": false,
+          "allowManualCommand": true,
+          "allowRequestChanges": false
+        }
+      },
+      "research": {
+        "targetMinutes": 20,
+        "wholeRunDeadlineMs": 1800000,
+        "perAttemptTimeoutMs": 1200000,
+        "maxPatchBytes": 0,
+        "maxContextBytes": 32000,
+        "maxProviderAttempts": 1,
+        "allowedContextSources": ["repo_memory", "gitnexus", "github_related", "skill_packs"],
+        "queueWeight": 30,
+        "leaseTtlMs": 2700000,
+        "heartbeatMs": 60000,
+        "escalation": {
+          "allowDepthEscalation": false,
+          "allowDepthEscalationWhileProviderBacklog": false,
+          "allowManualCommand": true,
+          "allowRequestChanges": false
+        }
+      }
+    }
+  },
   "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot-runtime",
   "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",

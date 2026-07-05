@@ -8,6 +8,7 @@ import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
   parseOutcomeLedgerInput,
+  renderOutcomeLedgerMarkdown,
   writeOutcomeLedgerPacket,
   type OutcomeLedgerInput
 } from "../src/outcome-ledger.js";
@@ -98,6 +99,72 @@ describe("outcome ledger", () => {
       unknown: ["current_head"]
     });
     expect(ledger.metrics.unknownSafetyGates).toBe(1);
+  });
+
+  it("includes selected review mode and budget in the ledger packet", () => {
+    const ledger = buildOutcomeLedger(sampleInput({
+      reviewMode: {
+        mode: "deep",
+        targetUse: "pull_request_review",
+        confidence: 0.82,
+        outcomeWeights: {
+          regressionPrevention: 35,
+          signalToNoise: 15,
+          latencyFlow: 10,
+          contextProofAwareness: 20,
+          glmCostEfficiency: 10,
+          safetyLifecycle: 10
+        },
+        reasons: ["Runtime provider path changed."],
+        matchedSignals: ["runtime/provider path"],
+        riskAreas: ["runtime_correctness"],
+        budget: {
+          targetMinutes: 25,
+          targetMs: 1_500_000,
+          hardTimeoutMinutes: 35,
+          hardTimeoutMs: 2_100_000,
+          disposition: "within_budget",
+          detail: "No observed runtime supplied; route records target budget only."
+        },
+        proofBoundary: "Review mode routing is evidence-only in this release."
+      }
+    }));
+
+    expect(ledger.reviewMode).toMatchObject({
+      mode: "deep",
+      targetUse: "pull_request_review",
+      budget: {
+        targetMinutes: 25,
+        hardTimeoutMinutes: 35,
+        disposition: "within_budget"
+      }
+    });
+    const markdown = renderOutcomeLedgerMarkdown(ledger);
+    expect(markdown).toContain("## Review Mode");
+    expect(markdown).toContain("- Selected: `deep`");
+    expect(markdown).toContain("Outcome weights: regression=35");
+    expect(markdown).toContain("- Budget disposition: `within_budget`");
+  });
+
+  it("normalizes partial direct reviewMode inputs without crashing", () => {
+    const ledger = buildOutcomeLedger(sampleInput({
+      reviewMode: {
+        mode: "standard",
+        targetUse: "pull_request_review"
+      } as NonNullable<OutcomeLedgerInput["reviewMode"]>
+    }));
+
+    expect(ledger.reviewMode).toMatchObject({
+      mode: "standard",
+      targetUse: "pull_request_review",
+      outcomeWeights: {
+        regressionPrevention: -1
+      },
+      budget: {
+        disposition: "timeout_risk",
+        detail: "Review mode budget was missing; treating as timeout risk."
+      }
+    });
   });
 
 
@@ -280,6 +347,10 @@ describe("outcome ledger", () => {
       reviewerDecision: {
         status: "block"
       },
+      reviewMode: {
+        mode: "deep",
+        targetUse: "pull_request_review"
+      },
       safetyGates: expect.arrayContaining([
         expect.objectContaining({ name: "duplicate_same_head", status: "unknown" }),
         expect.objectContaining({ name: "current_head", status: "unknown" }),
@@ -323,6 +394,64 @@ describe("outcome ledger", () => {
     });
     expect(parsed.outputDir).toContain("/packet");
     expect(existsSync(join(outputDir, "outcome-ledger.json"))).toBe(true);
+  });
+
+  it("preserves reviewMode when reading outcome-ledger CLI input", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-outcome-ledger-cli-mode-"));
+    roots.push(root);
+    const inputPath = join(root, "input.json");
+    const outputDir = join(root, "packet");
+    writeFileSync(inputPath, `${JSON.stringify(sampleInput({
+      reviewMode: {
+        mode: "product_pm",
+        targetUse: "pull_request_review",
+        confidence: 0.78,
+        outcomeWeights: {
+          regressionPrevention: 15,
+          signalToNoise: 20,
+          latencyFlow: 20,
+          contextProofAwareness: 25,
+          glmCostEfficiency: 10,
+          safetyLifecycle: 10
+        },
+        reasons: ["UX copy changed."],
+        matchedSignals: ["product_pm_text"],
+        riskAreas: [],
+        budget: {
+          targetMinutes: 15,
+          targetMs: 900_000,
+          hardTimeoutMinutes: 25,
+          hardTimeoutMs: 1_500_000,
+          disposition: "within_budget",
+          detail: "No observed runtime supplied; route records target budget only."
+        },
+        proofBoundary: "Review mode routing is evidence-only in this release."
+      }
+    }), null, 2)}\n`);
+
+    execFileSync(process.execPath, [
+      tsxCli,
+      "src/cli.ts",
+      "outcome-ledger",
+      "--input",
+      inputPath,
+      "--dry-run",
+      "true",
+      "--output-dir",
+      outputDir
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+
+    const ledger = JSON.parse(readFileSync(join(outputDir, "outcome-ledger.json"), "utf8"));
+    expect(ledger.reviewMode).toMatchObject({
+      mode: "product_pm",
+      matchedSignals: ["product_pm_text"],
+      budget: {
+        disposition: "within_budget"
+      }
+    });
   });
 
   it("requires output-dir for CLI portability", () => {
@@ -597,6 +726,31 @@ function sampleReviewPlan(): ReviewPlan {
       requiredRecommendationIds: ["runtime-smoke"],
       missingRecommendationIds: [],
       detectedEvidence: ["smoke"]
+    },
+    reviewMode: {
+      mode: "deep",
+      targetUse: "pull_request_review",
+      confidence: 0.8,
+      outcomeWeights: {
+        regressionPrevention: 35,
+        signalToNoise: 15,
+        latencyFlow: 10,
+        contextProofAwareness: 20,
+        glmCostEfficiency: 10,
+        safetyLifecycle: 10
+      },
+      reasons: ["Runtime path changed."],
+      matchedSignals: ["runtime/provider path"],
+      riskAreas: ["runtime_correctness"],
+      budget: {
+        targetMinutes: 25,
+        targetMs: 1_500_000,
+        hardTimeoutMinutes: 35,
+        hardTimeoutMs: 2_100_000,
+        disposition: "within_budget",
+        detail: "No observed runtime supplied; route records target budget only."
+      },
+      proofBoundary: "Review mode routing is evidence-only in this release."
     }
   };
 }

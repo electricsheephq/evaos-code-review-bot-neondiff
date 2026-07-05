@@ -1,3 +1,5 @@
+import type { ReviewModeSelection } from "./review-mode-types.js";
+
 export type Severity = "P0" | "P1" | "P2" | "P3";
 
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
@@ -98,6 +100,7 @@ export interface ReviewPlan {
   comments: ReviewComment[];
   dropped: DroppedFinding[];
   summary: string;
+  reviewMode?: ReviewModeSelection;
   deterministicGate?: DeterministicReviewGateSummary;
   validation?: ChangedSurfaceValidationReport;
   proof?: ProofRequirementReport;

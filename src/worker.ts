@@ -48,6 +48,8 @@ import {
 } from "./outcome-ledger.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
+import { selectReviewMode } from "./review-mode-router.js";
+import type { ReviewModeSelection } from "./review-mode-types.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import {
   postReviewStatusComment,
@@ -1446,7 +1448,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
     writeRedactedJson(join(evidenceDir, "validation-selector.json"), validation);
     writeRedactedJson(join(evidenceDir, "proof-requirements.json"), proof);
-
     const zcodeResult = input.useZCode
       ? await runZCodeReviewWithProviderRetry({
           config,
@@ -1465,6 +1466,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
             notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
           }
         };
+
+    const reviewMode = buildReviewModeEvidence({
+      evidenceDir,
+      pull,
+      files: reviewFiles,
+      docsOnly: validation.docsOnly,
+      expectedRuntimeMs: zcodeResult.runtime.latencyMs,
+      providerTimeoutMs: config.zcode.timeoutMs,
+      reviewModes: config.reviewModes
+    });
 
     assertGitClean(worktree.path);
 
@@ -1533,6 +1544,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dropped,
       summary,
       deterministicGate: gate.summary,
+      ...(reviewMode ? { reviewMode } : {}),
       validation,
       proof,
       ...(walkthrough ? { walkthrough } : {}),
@@ -2236,6 +2248,42 @@ export function writeDryRunOutcomeLedgerEvidence(input: {
       proofBoundary: "Outcome Ledger dry-run evidence failed to build; stable review-plan evidence must continue."
     });
     return { ok: false, error: message };
+  }
+}
+
+export function buildReviewModeEvidence(input: {
+  evidenceDir: string;
+  pull: PullRequestSummary;
+  files: PullFilePatch[];
+  docsOnly: boolean;
+  expectedRuntimeMs?: number;
+  providerTimeoutMs?: number;
+  reviewModes?: BotConfig["reviewModes"];
+}): ReviewModeSelection | undefined {
+  try {
+    const reviewMode = selectReviewMode({
+      subject: "pull_request",
+      pull: input.pull,
+      files: input.files,
+      docsOnly: input.docsOnly,
+      expectedRuntimeMs: input.expectedRuntimeMs,
+      providerTimeoutMs: input.providerTimeoutMs,
+      reviewModes: input.reviewModes
+    });
+    writeRedactedJson(join(input.evidenceDir, "review-mode.json"), reviewMode);
+    return reviewMode;
+  } catch (error) {
+    try {
+      writeRedactedJson(join(input.evidenceDir, "review-mode-error.json"), {
+        ok: false,
+        error: redactSecrets(error instanceof Error ? error.message : String(error)),
+        proofBoundary: "Review mode routing is evidence-only in this release; failures must not block stable review execution."
+      });
+    } catch {
+      // Review-mode routing is advisory evidence only; stable review must continue
+      // even when the evidence directory itself is not writable.
+    }
+    return undefined;
   }
 }
 

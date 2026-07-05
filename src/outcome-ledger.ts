@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
-import type { PullFilePatch, PullRequestSummary, ReviewPlan } from "./types.js";
+import type { ReviewMode, ReviewModeBudgetDisposition, ReviewModeSelection } from "./review-mode-types.js";
+import type { PullFilePatch, PullRequestSummary, RegressionCategory, ReviewPlan } from "./types.js";
 
 export type OutcomeLedgerSubjectType = "pull_request" | "issue";
 export type OutcomeLedgerMode =
@@ -39,6 +40,7 @@ export interface OutcomeLedgerInput {
   proofGaps?: OutcomeLedgerProofGapInput[];
   safetyGates?: OutcomeLedgerSafetyGateInput[];
   reviewerDecision?: OutcomeLedgerReviewerDecisionInput;
+  reviewMode?: ReviewModeSelection;
   runtime?: OutcomeLedgerRuntimeInput;
   postMergeOutcome?: OutcomeLedgerPostMergeOutcomeInput;
 }
@@ -142,6 +144,7 @@ export interface OutcomeLedger {
   proofGaps: Array<Required<Pick<OutcomeLedgerProofGapInput, "id" | "severity" | "summary">> & OutcomeLedgerProofGapInput>;
   safetyGates: Required<Pick<OutcomeLedgerSafetyGateInput, "name" | "status" | "detail">>[];
   reviewerDecision: Required<OutcomeLedgerReviewerDecisionInput>;
+  reviewMode?: ReviewModeSelection;
   runtime: Required<OutcomeLedgerRuntimeInput>;
   postMergeOutcome: Required<OutcomeLedgerPostMergeOutcomeInput>;
   hardGateStatus: {
@@ -213,6 +216,7 @@ export function parseOutcomeLedgerInput(value: unknown): OutcomeLedgerInput {
     proofGaps: optionalArray(value.proofGaps, "proofGaps").map(parseProofGap),
     safetyGates: optionalArray(value.safetyGates, "safetyGates").map(parseSafetyGate),
     reviewerDecision: parseReviewerDecision(value.reviewerDecision),
+    reviewMode: parseReviewModeSelection(value.reviewMode),
     runtime: parseRuntime(value.runtime),
     postMergeOutcome: parsePostMergeOutcome(value.postMergeOutcome)
   };
@@ -243,6 +247,7 @@ export function buildOutcomeLedger(input: OutcomeLedgerInput, options: { now?: D
     proofGaps: (input.proofGaps ?? []).map(normalizeProofGap),
     safetyGates,
     reviewerDecision: normalizeReviewerDecision(input.reviewerDecision),
+    ...(input.reviewMode ? { reviewMode: normalizeReviewModeSelection(input.reviewMode) } : {}),
     runtime,
     postMergeOutcome,
     hardGateStatus,
@@ -346,6 +351,7 @@ export function buildOutcomeLedgerInputFromReviewPlan(input: {
       status: mapReviewPlanDecision(input.plan),
       reason: input.plan.summary
     },
+    ...(input.plan.reviewMode ? { reviewMode: input.plan.reviewMode } : {}),
     runtime: input.runtime,
     postMergeOutcome: {
       status: "unknown",
@@ -419,6 +425,7 @@ export function renderOutcomeLedgerMarkdown(ledger: OutcomeLedger): string {
     `# Outcome Ledger: ${ledger.subject.repo}#${ledger.subject.number}`,
     "",
     `- Mode: \`${ledger.mode}\``,
+    ...(ledger.reviewMode ? [`- Review depth: \`${ledger.reviewMode.mode}\` (${ledger.reviewMode.budget.targetMinutes} min target)`] : []),
     `- Decision: \`${ledger.reviewerDecision.status}\``,
     `- OK: \`${ledger.ok ? "true" : "false"}\``,
     `- Head: \`${ledger.subject.headSha ?? "n/a"}\``,
@@ -446,6 +453,19 @@ export function renderOutcomeLedgerMarkdown(ledger: OutcomeLedger): string {
     "## Safety Gates",
     "",
     ...listOrNone(ledger.safetyGates.map((gate) => `- [${gate.status}] ${gate.name}${gate.detail ? `: ${gate.detail}` : ""}`)),
+    ...(ledger.reviewMode ? [
+      "",
+      "## Review Mode",
+      "",
+      `- Selected: \`${ledger.reviewMode.mode}\``,
+      `- Target use: ${ledger.reviewMode.targetUse}`,
+      `- Outcome weights: regression=${ledger.reviewMode.outcomeWeights.regressionPrevention}, signal=${ledger.reviewMode.outcomeWeights.signalToNoise}, latency=${ledger.reviewMode.outcomeWeights.latencyFlow}, context=${ledger.reviewMode.outcomeWeights.contextProofAwareness}, cost=${ledger.reviewMode.outcomeWeights.glmCostEfficiency}, safety=${ledger.reviewMode.outcomeWeights.safetyLifecycle}`,
+      `- Budget: ${ledger.reviewMode.budget.targetMinutes} min target / ${ledger.reviewMode.budget.hardTimeoutMinutes} min hard timeout`,
+      `- Budget disposition: \`${ledger.reviewMode.budget.disposition}\``,
+      `- Signals: ${ledger.reviewMode.matchedSignals.length > 0 ? ledger.reviewMode.matchedSignals.join(", ") : "none"}`,
+      "",
+      ...listOrNone(ledger.reviewMode.reasons.map((reason) => `- ${reason}`))
+    ] : []),
     "",
     "## Runtime",
     "",
@@ -458,6 +478,46 @@ export function renderOutcomeLedgerMarkdown(ledger: OutcomeLedger): string {
     "",
     ledger.proofBoundary
   ].join("\n");
+}
+
+function normalizeReviewModeSelection(selection: ReviewModeSelection): ReviewModeSelection {
+  const budget = selection.budget ?? {
+    targetMinutes: 0,
+    targetMs: 0,
+    hardTimeoutMinutes: 0,
+    hardTimeoutMs: 0,
+    disposition: "timeout_risk" as const,
+    detail: "Review mode budget was missing; treating as timeout risk."
+  };
+  return {
+    mode: selection.mode ?? "standard",
+    targetUse: selection.targetUse ?? "pull_request_review",
+    confidence: clampConfidence(selection.confidence),
+    outcomeWeights: normalizeOutcomeWeights(selection.outcomeWeights),
+    reasons: (selection.reasons ?? []).map(redact),
+    matchedSignals: (selection.matchedSignals ?? []).map(redact).sort(),
+    riskAreas: [...(selection.riskAreas ?? [])].sort(),
+    budget: {
+      targetMinutes: normalizeNonNegative(budget.targetMinutes),
+      targetMs: normalizeNonNegative(budget.targetMs),
+      hardTimeoutMinutes: normalizeNonNegative(budget.hardTimeoutMinutes),
+      hardTimeoutMs: normalizeNonNegative(budget.hardTimeoutMs),
+      disposition: budget.disposition,
+      detail: redact(budget.detail)
+    },
+    proofBoundary: redact(selection.proofBoundary ?? "Review mode routing is evidence-only in this release.")
+  };
+}
+
+function normalizeOutcomeWeights(weights: ReviewModeSelection["outcomeWeights"] | undefined): ReviewModeSelection["outcomeWeights"] {
+  return {
+    regressionPrevention: normalizeNonNegative(weights?.regressionPrevention),
+    signalToNoise: normalizeNonNegative(weights?.signalToNoise),
+    latencyFlow: normalizeNonNegative(weights?.latencyFlow),
+    contextProofAwareness: normalizeNonNegative(weights?.contextProofAwareness),
+    glmCostEfficiency: normalizeNonNegative(weights?.glmCostEfficiency),
+    safetyLifecycle: normalizeNonNegative(weights?.safetyLifecycle)
+  };
 }
 
 function normalizeSubject(subject: OutcomeLedgerSubjectInput): OutcomeLedger["subject"] {
@@ -706,6 +766,53 @@ function parseRuntime(value: unknown): OutcomeLedgerRuntimeInput | undefined {
   };
 }
 
+function parseReviewModeSelection(value: unknown): ReviewModeSelection | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("reviewMode must be an object");
+  const budget = value.budget;
+  if (!isRecord(budget)) throw new Error("reviewMode.budget must be an object");
+  return {
+    mode: parseReviewMode(value.mode, "reviewMode.mode"),
+    targetUse: parseEnum(value.targetUse, ["pull_request_review", "issue_enrichment"] as const, "reviewMode.targetUse"),
+    confidence: optionalNonNegative(value.confidence, "reviewMode.confidence") ?? 0,
+    outcomeWeights: parseReviewModeOutcomeWeights(value.outcomeWeights),
+    reasons: optionalStringArray(value.reasons, "reviewMode.reasons") ?? [],
+    matchedSignals: optionalStringArray(value.matchedSignals, "reviewMode.matchedSignals") ?? [],
+    riskAreas: optionalArray(value.riskAreas, "reviewMode.riskAreas").map((area) => parseRegressionCategory(area, "reviewMode.riskAreas")),
+    budget: {
+      targetMinutes: requiredPositiveInteger(budget.targetMinutes, "reviewMode.budget.targetMinutes"),
+      targetMs: requiredPositiveInteger(budget.targetMs, "reviewMode.budget.targetMs"),
+      hardTimeoutMinutes: requiredPositiveInteger(budget.hardTimeoutMinutes, "reviewMode.budget.hardTimeoutMinutes"),
+      hardTimeoutMs: requiredPositiveInteger(budget.hardTimeoutMs, "reviewMode.budget.hardTimeoutMs"),
+      disposition: parseReviewModeBudgetDisposition(budget.disposition, "reviewMode.budget.disposition"),
+      detail: requiredString(budget.detail, "reviewMode.budget.detail")
+    },
+    proofBoundary: requiredString(value.proofBoundary, "reviewMode.proofBoundary")
+  };
+}
+
+function parseReviewModeOutcomeWeights(value: unknown): ReviewModeSelection["outcomeWeights"] {
+  if (value === undefined) {
+    return {
+      regressionPrevention: 0,
+      signalToNoise: 0,
+      latencyFlow: 0,
+      contextProofAwareness: 0,
+      glmCostEfficiency: 0,
+      safetyLifecycle: 0
+    };
+  }
+  if (!isRecord(value)) throw new Error("reviewMode.outcomeWeights must be an object");
+  return {
+    regressionPrevention: optionalNonNegative(value.regressionPrevention, "reviewMode.outcomeWeights.regressionPrevention") ?? 0,
+    signalToNoise: optionalNonNegative(value.signalToNoise, "reviewMode.outcomeWeights.signalToNoise") ?? 0,
+    latencyFlow: optionalNonNegative(value.latencyFlow, "reviewMode.outcomeWeights.latencyFlow") ?? 0,
+    contextProofAwareness: optionalNonNegative(value.contextProofAwareness, "reviewMode.outcomeWeights.contextProofAwareness") ?? 0,
+    glmCostEfficiency: optionalNonNegative(value.glmCostEfficiency, "reviewMode.outcomeWeights.glmCostEfficiency") ?? 0,
+    safetyLifecycle: optionalNonNegative(value.safetyLifecycle, "reviewMode.outcomeWeights.safetyLifecycle") ?? 0
+  };
+}
+
 function parsePostMergeOutcome(value: unknown): OutcomeLedgerPostMergeOutcomeInput | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error("postMergeOutcome must be an object");
@@ -767,9 +874,41 @@ function normalizeNonNegative(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : -1;
 }
 
+function clampConfidence(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
 function parseMode(value: unknown): OutcomeLedgerMode | undefined {
   if (value === undefined) return undefined;
   return parseEnum(value, ["stable", "advanced_dry_run", "advanced_pr_review", "advanced_issue_research", "advanced_full"] as const, "mode");
+}
+
+function parseReviewMode(value: unknown, label: string): ReviewMode {
+  return parseEnum(value, ["fast", "standard", "deep", "product_pm", "research"] as const, label);
+}
+
+function parseReviewModeBudgetDisposition(value: unknown, label: string): ReviewModeBudgetDisposition {
+  return parseEnum(value, ["within_budget", "partial", "timeout_risk", "deferred"] as const, label);
+}
+
+function parseRegressionCategory(value: unknown, label: string): RegressionCategory {
+  return parseEnum(value, [
+    "data_loss",
+    "auth",
+    "ci_build",
+    "unity_scene_prefab",
+    "security_boundary",
+    "migration",
+    "api_compatibility",
+    "release_regression",
+    "flaky_test_risk",
+    "proof_gap",
+    "runtime_correctness",
+    "dependency",
+    "docs_only",
+    "unknown"
+  ] as const, label);
 }
 
 function parseSubjectType(value: unknown): OutcomeLedgerSubjectType {

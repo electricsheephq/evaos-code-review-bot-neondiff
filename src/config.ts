@@ -19,6 +19,7 @@ import {
 } from "./public-confidence.js";
 import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
 import { containsSecretLikeText } from "./secrets.js";
+import type { ReviewMode, ReviewModeContextSource, ReviewModesConfig, ReviewModeRuntimeConfig } from "./review-mode-types.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
 const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
@@ -44,6 +45,7 @@ export interface BotConfig {
     headCountLimit: number;
   };
   reviewScheduler?: ReviewSchedulerConfig;
+  reviewModes?: ReviewModesConfig;
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -187,6 +189,97 @@ export interface ReviewSchedulerConfig {
   backgroundPriority: number;
 }
 
+function buildDefaultReviewModesConfig(): ReviewModesConfig {
+  const base = {
+    maxPatchBytes: 80_000,
+    maxContextBytes: 40_000,
+    allowedContextSources: ["patch", "repo_memory", "gitnexus", "github_related", "skill_packs"] as ReviewModeContextSource[],
+    leaseTtlMs: 45 * 60_000,
+    heartbeatMs: 60_000
+  };
+  const mode = (input: {
+    targetMinutes: number;
+    hardTimeoutMinutes: number;
+    maxProviderAttempts: number;
+    queueWeight: number;
+    allowDepthEscalation: boolean;
+    allowRequestChanges: boolean;
+    maxPatchBytes?: number;
+    maxContextBytes?: number;
+    allowedContextSources?: ReviewModeContextSource[];
+  }): ReviewModeRuntimeConfig => ({
+    targetMinutes: input.targetMinutes,
+    wholeRunDeadlineMs: input.hardTimeoutMinutes * 60_000,
+    perAttemptTimeoutMs: input.targetMinutes * 60_000,
+    maxPatchBytes: input.maxPatchBytes ?? base.maxPatchBytes,
+    maxContextBytes: input.maxContextBytes ?? base.maxContextBytes,
+    maxProviderAttempts: input.maxProviderAttempts,
+    allowedContextSources: input.allowedContextSources ?? base.allowedContextSources,
+    queueWeight: input.queueWeight,
+    leaseTtlMs: base.leaseTtlMs,
+    heartbeatMs: base.heartbeatMs,
+    escalation: {
+      allowDepthEscalation: input.allowDepthEscalation,
+      allowDepthEscalationWhileProviderBacklog: false,
+      allowManualCommand: true,
+      allowRequestChanges: input.allowRequestChanges
+    }
+  });
+  return {
+    enabled: false,
+    defaultMode: "fast",
+    modes: {
+      fast: mode({
+        targetMinutes: 5,
+        hardTimeoutMinutes: 10,
+        maxProviderAttempts: 1,
+        queueWeight: 10,
+        allowDepthEscalation: false,
+        allowRequestChanges: false,
+        maxPatchBytes: 20_000,
+        maxContextBytes: 8_000,
+        allowedContextSources: ["patch"]
+      }),
+      standard: mode({
+        targetMinutes: 15,
+        hardTimeoutMinutes: 20,
+        maxProviderAttempts: 2,
+        queueWeight: 50,
+        allowDepthEscalation: true,
+        allowRequestChanges: true
+      }),
+      deep: mode({
+        targetMinutes: 25,
+        hardTimeoutMinutes: 35,
+        maxProviderAttempts: 2,
+        queueWeight: 90,
+        allowDepthEscalation: true,
+        allowRequestChanges: true
+      }),
+      product_pm: mode({
+        targetMinutes: 15,
+        hardTimeoutMinutes: 25,
+        maxProviderAttempts: 1,
+        queueWeight: 40,
+        allowDepthEscalation: false,
+        allowRequestChanges: false,
+        maxContextBytes: 24_000
+      }),
+      research: mode({
+        targetMinutes: 20,
+        hardTimeoutMinutes: 30,
+        maxProviderAttempts: 1,
+        queueWeight: 30,
+        allowDepthEscalation: false,
+        allowRequestChanges: false,
+        maxPatchBytes: 0,
+        maxContextBytes: 32_000,
+        allowedContextSources: ["repo_memory", "gitnexus", "github_related", "skill_packs"]
+      })
+    }
+  };
+}
+
 export interface RepoMemoryConfig {
   enabled: boolean;
   memoryRoot: string;
@@ -225,6 +318,7 @@ const DEFAULT_CONFIG: BotConfig = {
     manualCommandReserve: 1,
     backgroundPriority: 50
   },
+  reviewModes: buildDefaultReviewModesConfig(),
   providerCooldown: {
     enabled: true,
     durationMs: 15 * 60_000,
@@ -495,6 +589,9 @@ function validateConfig(config: BotConfig): void {
   const reviewScheduler = config.reviewScheduler ?? DEFAULT_CONFIG.reviewScheduler!;
   config.reviewScheduler = reviewScheduler;
   validateReviewSchedulerConfig(reviewScheduler, "config.reviewScheduler");
+  const reviewModes = config.reviewModes ?? DEFAULT_CONFIG.reviewModes!;
+  config.reviewModes = reviewModes;
+  validateReviewModesConfig(reviewModes, "config.reviewModes");
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
@@ -1165,6 +1262,51 @@ function validateReviewSchedulerConfig(value: unknown, label: string): void {
   const manualCommandReserve = Number(value.manualCommandReserve);
   if (manualCommandReserve > maxProviderActive) {
     throw new Error(`${label}.manualCommandReserve must be <= ${label}.maxProviderActive`);
+  }
+}
+
+function validateReviewModesConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (!["fast", "standard", "deep", "product_pm"].includes(String(value.defaultMode))) {
+    throw new Error(`${label}.defaultMode must be fast, standard, deep, or product_pm`);
+  }
+  if (!isRecord(value.modes)) throw new Error(`${label}.modes must be an object`);
+  for (const mode of ["fast", "standard", "deep", "product_pm", "research"] as ReviewMode[]) {
+    validateReviewModeRuntimeConfig(value.modes[mode], `${label}.modes.${mode}`);
+  }
+}
+
+function validateReviewModeRuntimeConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validatePositiveInteger(value.targetMinutes, `${label}.targetMinutes`);
+  validatePositiveInteger(value.wholeRunDeadlineMs, `${label}.wholeRunDeadlineMs`);
+  validatePositiveInteger(value.perAttemptTimeoutMs, `${label}.perAttemptTimeoutMs`);
+  validateNonNegativeInteger(value.maxPatchBytes, `${label}.maxPatchBytes`);
+  validateNonNegativeInteger(value.maxContextBytes, `${label}.maxContextBytes`);
+  validatePositiveInteger(value.maxProviderAttempts, `${label}.maxProviderAttempts`);
+  validatePositiveInteger(value.queueWeight, `${label}.queueWeight`);
+  validatePositiveInteger(value.leaseTtlMs, `${label}.leaseTtlMs`);
+  validatePositiveInteger(value.heartbeatMs, `${label}.heartbeatMs`);
+  validateStringArray(value.allowedContextSources, `${label}.allowedContextSources`);
+  for (const source of value.allowedContextSources as string[]) {
+    if (!["patch", "repo_memory", "gitnexus", "github_related", "skill_packs"].includes(source)) {
+      throw new Error(`${label}.allowedContextSources entries must be patch, repo_memory, gitnexus, github_related, or skill_packs`);
+    }
+  }
+  if (!isRecord(value.escalation)) throw new Error(`${label}.escalation must be an object`);
+  validateBoolean(value.escalation.allowDepthEscalation, `${label}.escalation.allowDepthEscalation`);
+  validateBoolean(value.escalation.allowDepthEscalationWhileProviderBacklog, `${label}.escalation.allowDepthEscalationWhileProviderBacklog`);
+  validateBoolean(value.escalation.allowManualCommand, `${label}.escalation.allowManualCommand`);
+  validateBoolean(value.escalation.allowRequestChanges, `${label}.escalation.allowRequestChanges`);
+  if ((value.escalation.allowDepthEscalationWhileProviderBacklog as boolean) === true) {
+    throw new Error(`${label}.escalation.allowDepthEscalationWhileProviderBacklog must remain false during beta`);
+  }
+  if (Number(value.perAttemptTimeoutMs) > Number(value.wholeRunDeadlineMs)) {
+    throw new Error(`${label}.perAttemptTimeoutMs must be <= ${label}.wholeRunDeadlineMs`);
+  }
+  if (Number(value.heartbeatMs) >= Number(value.leaseTtlMs)) {
+    throw new Error(`${label}.heartbeatMs must be < ${label}.leaseTtlMs`);
   }
 }
 

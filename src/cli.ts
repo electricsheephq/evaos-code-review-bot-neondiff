@@ -46,6 +46,7 @@ import {
   writeOutcomeLedgerPacket
 } from "./outcome-ledger.js";
 import { buildReviewBudgetStatus } from "./review-budget.js";
+import { selectReviewMode, type ReviewModeSelectionInput } from "./review-mode-router.js";
 import {
   buildOperatorDashboard,
   buildRuntimeInventory,
@@ -1459,6 +1460,29 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "review-mode") {
+    if (args.input === undefined || (Array.isArray(args.input) && args.input.length === 0)) {
+      throw new Error("--input is required for review-mode");
+    }
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    if (!dryRun) throw new Error("review-mode is dry-run only in this release");
+    const input = readJsonInput(parseSingleArg(args.input, "--input"), "--input") as ReviewModeSelectionInput;
+    const result = selectReviewMode(input);
+    if (args["output-dir"] !== undefined) {
+      const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
+      assertEvalOutputDirSafe(outputDir);
+      mkdirSync(outputDir, { recursive: true });
+      writeFileSync(join(outputDir, "review-mode.json"), `${stringifyRedactedJson(result)}\n`);
+    }
+    console.log(stringifyRedactedJson({
+      ok: true,
+      command: "review-mode",
+      dryRun,
+      result
+    }));
+    return;
+  }
+
   if (command === "run-once" || command === "review-pr") {
     if (command === "review-pr" && (!args.repo || !args.pr)) {
       console.log(JSON.stringify({
@@ -2612,7 +2636,8 @@ function buildHelp(command?: string) {
         "eval-offline",
         "eval-suite",
         "eval-sticky-vs-cold",
-        "outcome-ledger"
+        "outcome-ledger",
+        "review-mode"
       ]
     },
     examples: [
@@ -2662,6 +2687,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts clear-review-queue-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
       "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
+      "npx tsx src/cli.ts review-mode --input /path/to/review-mode-input.json --dry-run true --output-dir /path/to/evidence/review-mode-run",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ],
@@ -2670,6 +2696,12 @@ function buildHelp(command?: string) {
         "The outcome-ledger command is dry-run only.",
         "--dry-run defaults to true for outcome-ledger; --dry-run false is rejected until live posting is explicitly implemented.",
         "Failed safety gates or secret redaction failures exit non-zero; unknown gates remain visible in the packet but do not fail the dry run."
+      ]
+    },
+    reviewMode: {
+      notes: [
+        "The review-mode command is dry-run only.",
+        "It previews fast, standard, deep, product_pm, or research routing and budget disposition without changing scheduler, provider timeout, posting policy, or live runtime behavior."
       ]
     }
   };

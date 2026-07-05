@@ -70,6 +70,8 @@ describe("worker review settings preview evidence", () => {
       pull.head.sha
     );
     const preview = JSON.parse(readFileSync(join(evidenceDir, "review-settings-preview.json"), "utf8"));
+    const reviewMode = JSON.parse(readFileSync(join(evidenceDir, "review-mode.json"), "utf8"));
+    const reviewPlan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
     const walkthrough = readFileSync(join(evidenceDir, "walkthrough.md"), "utf8");
     const ledger = JSON.parse(readFileSync(join(evidenceDir, "outcome-ledger.json"), "utf8"));
 
@@ -84,6 +86,25 @@ describe("worker review settings preview evidence", () => {
     expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");
     expect(walkthrough).toContain("- Path instructions: `src/\\`templates\\`/**`");
     expect(walkthrough).not.toContain(secretLikeToken);
+    expect(reviewMode).toMatchObject({
+      mode: "standard",
+      budget: {
+        disposition: "partial",
+        detail: expect.stringContaining("Configured provider timeout 1ms")
+      }
+    });
+    expect(reviewPlan.reviewMode).toMatchObject({
+      mode: reviewMode.mode,
+      budget: {
+        disposition: reviewMode.budget.disposition
+      }
+    });
+    expect(ledger.reviewMode).toMatchObject({
+      mode: reviewMode.mode,
+      budget: {
+        disposition: reviewMode.budget.disposition
+      }
+    });
     expect(ledger.runtime).toMatchObject({
       provider: "zcode-glm",
       model: "GLM-5.2",

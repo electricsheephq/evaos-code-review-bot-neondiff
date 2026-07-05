@@ -27,6 +27,86 @@ describe("review scheduler config", () => {
       overloadBackoffMaxDurationMs: 10 * 60_000,
       overloadBackoffJitterMs: 30_000
     });
+    expect(config.reviewModes).toMatchObject({
+      enabled: false,
+      defaultMode: "fast",
+      modes: {
+        fast: {
+          targetMinutes: 5,
+          wholeRunDeadlineMs: 10 * 60_000,
+          maxProviderAttempts: 1,
+          allowedContextSources: ["patch"],
+          escalation: {
+            allowDepthEscalation: false,
+            allowDepthEscalationWhileProviderBacklog: false
+          }
+        },
+        deep: {
+          targetMinutes: 25,
+          wholeRunDeadlineMs: 35 * 60_000,
+          queueWeight: 90
+        },
+        research: {
+          maxPatchBytes: 0,
+          allowedContextSources: ["repo_memory", "gitnexus", "github_related", "skill_packs"]
+        }
+      }
+    });
+  });
+
+  it("loads explicit review mode budget and escalation policy overrides", () => {
+    const config = loadConfig(writeConfig({
+      reviewModes: {
+        enabled: true,
+        modes: {
+          deep: {
+            targetMinutes: 22,
+            wholeRunDeadlineMs: 33 * 60_000,
+            perAttemptTimeoutMs: 11 * 60_000,
+            maxPatchBytes: 90_000,
+            maxContextBytes: 50_000,
+            maxProviderAttempts: 3,
+            allowedContextSources: ["patch", "repo_memory"],
+            queueWeight: 80,
+            leaseTtlMs: 50 * 60_000,
+            heartbeatMs: 60_000,
+            escalation: {
+              allowDepthEscalation: true,
+              allowDepthEscalationWhileProviderBacklog: false,
+              allowManualCommand: true,
+              allowRequestChanges: true
+            }
+          }
+        }
+      }
+    }));
+
+    expect(config.reviewModes).toMatchObject({
+      enabled: true,
+      modes: {
+        deep: {
+          targetMinutes: 22,
+          wholeRunDeadlineMs: 33 * 60_000,
+          perAttemptTimeoutMs: 11 * 60_000,
+          maxProviderAttempts: 3,
+          allowedContextSources: ["patch", "repo_memory"]
+        }
+      }
+    });
+  });
+
+  it("rejects review mode configs that allow depth escalation while provider backlog exists", () => {
+    expect(() => loadConfig(writeConfig({
+      reviewModes: {
+        modes: {
+          standard: {
+            escalation: {
+              allowDepthEscalationWhileProviderBacklog: true
+            }
+          }
+        }
+      }
+    }))).toThrow("config.reviewModes.modes.standard.escalation.allowDepthEscalationWhileProviderBacklog must remain false during beta");
   });
 
   it("rejects scheduler settings that cannot preserve manual reserve capacity", () => {
