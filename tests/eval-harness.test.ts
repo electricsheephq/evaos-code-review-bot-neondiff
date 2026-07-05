@@ -1636,3 +1636,77 @@ describe("offline eval harness", () => {
     expect(existsSync(join(outputRoot, "sticky-vs-cold-summary.json"))).toBe(false);
   });
 });
+
+describe("offline negative-control flag (#284)", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function baseScenario(overrides: Partial<EvalScenarioInput> = {}): EvalScenarioInput {
+    return {
+      runId: "neg-control-284",
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 4242,
+      headSha: "sha284",
+      suite: "seeded_defect_recall",
+      botFindings: { findings: [] },
+      labels: [],
+      ...overrides
+    };
+  }
+
+  function runInto(scenario: EvalScenarioInput, prefix: string) {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    roots.push(root);
+    runOfflineEval(scenario, { outputDir: root });
+    return {
+      manifest: JSON.parse(readFileSync(join(root, "manifest.json"), "utf8")),
+      calibration: JSON.parse(readFileSync(join(root, "calibration-report.json"), "utf8"))
+    };
+  }
+
+  it("gives an unlabeled scenario WITHOUT the flag zero negative-control credit", () => {
+    const { manifest, calibration } = runInto(baseScenario(), "evaos-neg-control-implicit-");
+
+    expect(manifest.negativeControl).toBe(false);
+    // Empty labels no longer implies a negative control; promotion still fails on labeled-finding
+    // count, but the reason must not be an unearned negative-control credit.
+    expect(calibration.promotion.eligible).toBe(false);
+  });
+
+  it("credits an unlabeled scenario WITH the explicit flag as a negative control", () => {
+    const { manifest } = runInto(baseScenario({ negativeControl: true }), "evaos-neg-control-explicit-");
+
+    expect(manifest.negativeControl).toBe(true);
+  });
+
+  it("rejects a declared negative control that carries expected labels", () => {
+    const scenario = baseScenario({
+      negativeControl: true,
+      botFindings: { findings: [] },
+      labels: [
+        {
+          source: "human",
+          severity: "P1",
+          path: "src/x.ts",
+          line: 3,
+          title: "Real defect",
+          body: "A genuinely expected label.",
+          expected: true
+        }
+      ]
+    });
+
+    expect(() => runOfflineEval(scenario, { outputDir: mkdtempSync(join(tmpdir(), "evaos-neg-control-reject-")) }))
+      .toThrow("negativeControl scenarios must not include expected labels");
+  });
+
+  it("rejects a non-boolean negativeControl flag", () => {
+    const scenario = baseScenario({ negativeControl: "yes" as unknown as boolean });
+
+    expect(() => runOfflineEval(scenario, { outputDir: mkdtempSync(join(tmpdir(), "evaos-neg-control-type-")) }))
+      .toThrow("negativeControl must be a boolean");
+  });
+});
