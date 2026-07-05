@@ -21,6 +21,7 @@ function promotionScorecard(input: {
   labels: number;
   p0p1Labels: number;
   maxWilsonLowerBound: number;
+  negativeControlScenarios?: number;
 }): EvalScorecard {
   return {
     evalName: "evaos-zcode-review-bot-comparison-v0.1",
@@ -44,7 +45,8 @@ function promotionScorecard(input: {
       inlinePreviews: 0,
       ciMetadata: 0,
       mergedFixes: 0,
-      p0p1Labels: input.p0p1Labels
+      p0p1Labels: input.p0p1Labels,
+      negativeControlScenarios: input.negativeControlScenarios ?? 0
     },
     metrics: {
       precision: 1,
@@ -847,10 +849,13 @@ describe("offline eval harness", () => {
         p0p1Labels: 30,
         maxWilsonLowerBound
       }),
+      // #284: an unlabeled scorecard no longer implies a negative control; these stubs must carry
+      // explicit control credit so the Wilson gate stays the isolated variable under test.
       ...Array.from({ length: 10 }, () => promotionScorecard({
         labels: 0,
         p0p1Labels: 0,
-        maxWilsonLowerBound: 0.99
+        maxWilsonLowerBound: 0.99,
+        negativeControlScenarios: 1
       }))
     ];
 
