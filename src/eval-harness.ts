@@ -29,6 +29,13 @@ export interface EvalScenarioInput {
   ciMetadata?: EvalCiMetadataInput[];
   mergedFixes?: EvalMergedFixInput[];
   labels: EvalLabelInput[];
+  /**
+   * Explicit negative-control declaration (#284): a scenario earns negative-control calibration
+   * credit ONLY when this is true — an empty label set no longer implies a negative control (that
+   * conflated "nobody labeled this" with "deliberately verified clean"). Must not carry expected
+   * labels, mirroring the sticky-vs-cold rule.
+   */
+  negativeControl?: boolean;
   thresholds?: Partial<EvalThresholds>;
 }
 
@@ -228,6 +235,7 @@ export interface EvalScorecard {
     ciMetadata: number;
     mergedFixes: number;
     p0p1Labels: number;
+    negativeControlScenarios: number;
   };
   metrics: {
     precision: number;
@@ -405,7 +413,7 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   writeJson(artifacts["duplicate-report.json"]!, duplicateReport);
   writeFileSync(artifacts["comparison.csv"]!, buildComparisonCsv(botFindings, labels, matches));
   writeJson(artifacts["labels.json"]!, labels);
-  writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, labels, matches));
+  writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, labels, matches, input.negativeControl === true));
   writeJson(artifacts["scorecard.json"]!, scorecard);
   writeJson(artifacts["manifest.json"]!, {
     evalName,
@@ -418,7 +426,7 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
     pullNumber: input.pullNumber,
     headSha: input.headSha,
     scenarioSource: input.scenarioSource ? redactUnknown(input.scenarioSource) : undefined,
-    negativeControl: labels.length === 0,
+    negativeControl: input.negativeControl === true,
     thresholds,
     artifactInventory: Object.entries(artifacts)
       .filter(([name]) => name !== "manifest.json")
@@ -942,7 +950,11 @@ function buildScorecard(input: {
       inlinePreviews: input.inlinePreviewCount,
       ciMetadata: input.ciMetadataCount,
       mergedFixes: input.mergedFixCount,
-      p0p1Labels
+      p0p1Labels,
+      // #284: negative-control credit requires the explicit scenario flag AND a clean result —
+      // a declared control the bot still fired findings on is a FAILED control, not evidence
+      // (mirrors hasCleanNegativeControlEvidence in the sticky-vs-cold path).
+      negativeControlScenarios: input.input.negativeControl === true && input.botFindings.length === 0 ? 1 : 0
     },
     metrics: {
       precision: roundMetric(precision),
@@ -1218,13 +1230,16 @@ function buildComparisonCsv(
 function buildCalibrationReport(
   botFindings: NormalizedEvalFinding[],
   labels: NormalizedEvalFinding[],
-  matches: EvalMatch[]
+  matches: EvalMatch[],
+  negativeControl: boolean
 ): EvalCalibrationReport {
   const bins = confidenceBins(botFindings, matches);
   const promotionReason = choosePromotionReason({
     labeledFindings: labels.length,
     p0p1Labels: labels.filter((label) => label.severity === "P0" || label.severity === "P1").length,
-    negativeControlScenarios: labels.length === 0 ? 1 : 0,
+    // #284: negative-control credit comes only from the explicit scenario flag, never from an
+    // empty label set (which merely means "unlabeled", not "verified clean").
+    negativeControlScenarios: negativeControl ? 1 : 0,
     bestWilsonLowerBound: maxRawWilsonLowerBound(botFindings, matches)
   });
   return {
@@ -1281,7 +1296,7 @@ function computeConfidenceBinStats(botFindings: NormalizedEvalFinding[], matches
 export function buildEvalPromotionDecisionMarkdown(input: EvalSuitePromotionInput): string {
   const labeledFindings = input.scorecards.reduce((sum, scorecard) => sum + scorecard.counts.labels, 0);
   const p0p1Labels = input.scorecards.reduce((sum, scorecard) => sum + scorecard.counts.p0p1Labels, 0);
-  const negativeControlScenarios = input.scorecards.filter((scorecard) => scorecard.counts.labels === 0).length;
+  const negativeControlScenarios = input.scorecards.reduce((sum, scorecard) => sum + scorecard.counts.negativeControlScenarios, 0);
   const maxWilsonLowerBound = input.scorecards.reduce((max, scorecard) => Math.max(max, scorecard.metrics.maxWilsonLowerBound), 0);
   const reason = !input.ok
     ? input.missingSuites.length > 0
@@ -1711,6 +1726,12 @@ function validateEvalInput(input: EvalScenarioInput): void {
   if (input.mode !== undefined && !["gating", "exploratory"].includes(input.mode)) throw new Error("mode must be gating or exploratory");
   if (input.scenarioSource !== undefined) validateScenarioSource(input.scenarioSource);
   if (!Array.isArray(input.labels)) throw new Error("labels must be an array");
+  if (input.negativeControl !== undefined && typeof input.negativeControl !== "boolean") {
+    throw new Error("negativeControl must be a boolean");
+  }
+  if (input.negativeControl === true && expectedLabelKeys(input.labels).length > 0) {
+    throw new Error("negativeControl scenarios must not include expected labels");
+  }
   if (input.inlinePreviews !== undefined && !Array.isArray(input.inlinePreviews)) throw new Error("inlinePreviews must be an array");
   if (input.ciMetadata !== undefined && !Array.isArray(input.ciMetadata)) throw new Error("ciMetadata must be an array");
   if (input.mergedFixes !== undefined && !Array.isArray(input.mergedFixes)) throw new Error("mergedFixes must be an array");

@@ -21,6 +21,7 @@ function promotionScorecard(input: {
   labels: number;
   p0p1Labels: number;
   maxWilsonLowerBound: number;
+  negativeControlScenarios?: number;
 }): EvalScorecard {
   return {
     evalName: "evaos-zcode-review-bot-comparison-v0.1",
@@ -44,7 +45,8 @@ function promotionScorecard(input: {
       inlinePreviews: 0,
       ciMetadata: 0,
       mergedFixes: 0,
-      p0p1Labels: input.p0p1Labels
+      p0p1Labels: input.p0p1Labels,
+      negativeControlScenarios: input.negativeControlScenarios ?? 0
     },
     metrics: {
       precision: 1,
@@ -847,10 +849,13 @@ describe("offline eval harness", () => {
         p0p1Labels: 30,
         maxWilsonLowerBound
       }),
+      // #284: an unlabeled scorecard no longer implies a negative control; these stubs must carry
+      // explicit control credit so the Wilson gate stays the isolated variable under test.
       ...Array.from({ length: 10 }, () => promotionScorecard({
         labels: 0,
         p0p1Labels: 0,
-        maxWilsonLowerBound: 0.99
+        maxWilsonLowerBound: 0.99,
+        negativeControlScenarios: 1
       }))
     ];
 
@@ -1634,5 +1639,130 @@ describe("offline eval harness", () => {
     expect(() => runStickyVsColdEval(scenario, { outputRoot }))
       .toThrow("outputDir must not be inside the current git checkout");
     expect(existsSync(join(outputRoot, "sticky-vs-cold-summary.json"))).toBe(false);
+  });
+});
+
+describe("offline negative-control flag (#284)", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function baseScenario(overrides: Partial<EvalScenarioInput> = {}): EvalScenarioInput {
+    return {
+      runId: "neg-control-284",
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 4242,
+      headSha: "sha284",
+      suite: "seeded_defect_recall",
+      botFindings: { findings: [] },
+      labels: [],
+      ...overrides
+    };
+  }
+
+  function runInto(scenario: EvalScenarioInput, prefix: string) {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    roots.push(root);
+    runOfflineEval(scenario, { outputDir: root });
+    return {
+      manifest: JSON.parse(readFileSync(join(root, "manifest.json"), "utf8")),
+      calibration: JSON.parse(readFileSync(join(root, "calibration-report.json"), "utf8")),
+      scorecard: JSON.parse(readFileSync(join(root, "scorecard.json"), "utf8"))
+    };
+  }
+
+  it("gives an unlabeled scenario WITHOUT the flag zero negative-control credit", () => {
+    const { manifest, calibration } = runInto(baseScenario(), "evaos-neg-control-implicit-");
+
+    expect(manifest.negativeControl).toBe(false);
+    // Empty labels no longer implies a negative control; promotion still fails on labeled-finding
+    // count, but the reason must not be an unearned negative-control credit.
+    expect(calibration.promotion.eligible).toBe(false);
+  });
+
+  it("credits an unlabeled scenario WITH the explicit flag as a negative control", () => {
+    const { manifest } = runInto(baseScenario({ negativeControl: true }), "evaos-neg-control-explicit-");
+
+    expect(manifest.negativeControl).toBe(true);
+  });
+
+  it("rejects a declared negative control that carries expected labels", () => {
+    const scenario = baseScenario({
+      negativeControl: true,
+      botFindings: { findings: [] },
+      labels: [
+        {
+          source: "human",
+          severity: "P1",
+          path: "src/x.ts",
+          line: 3,
+          title: "Real defect",
+          body: "A genuinely expected label.",
+          expected: true
+        }
+      ]
+    });
+
+    expect(() => runOfflineEval(scenario, { outputDir: mkdtempSync(join(tmpdir(), "evaos-neg-control-reject-")) }))
+      .toThrow("negativeControl scenarios must not include expected labels");
+  });
+
+  it("denies negative-control credit when a declared control still fires findings", () => {
+    // A flagged control the bot fired on is a FAILED control — it must not add calibration
+    // evidence (mirrors the sticky-vs-cold clean-evidence rule).
+    const dirty = runInto(
+      baseScenario({
+        runId: "neg-control-284-dirty",
+        negativeControl: true,
+        botFindings: {
+          findings: [
+            {
+              severity: "P2",
+              path: "src/x.ts",
+              line: 3,
+              title: "Spurious finding on a negative control",
+              body: "The bot should not have fired here.",
+              confidence: 0.7
+            }
+          ]
+        }
+      }),
+      "evaos-neg-control-dirty-"
+    );
+
+    expect(dirty.scorecard.counts.negativeControlScenarios).toBe(0);
+  });
+
+  it("sums negative-control credit across multiple scorecards in the promotion decision", () => {
+    // #284 second derivation site: suite-level promotion aggregates the explicit per-scorecard
+    // count. One flagged control + one merely-unlabeled scenario must aggregate to exactly 1.
+    const flagged = runInto(
+      baseScenario({ runId: "neg-control-284-flagged", negativeControl: true }),
+      "evaos-neg-control-agg-flagged-"
+    );
+    const unlabeled = runInto(
+      baseScenario({ runId: "neg-control-284-unlabeled" }),
+      "evaos-neg-control-agg-unlabeled-"
+    );
+
+    const markdown = buildEvalPromotionDecisionMarkdown({
+      ok: true,
+      scenarioCount: 2,
+      missingSuites: [],
+      scorecards: [flagged.scorecard, unlabeled.scorecard]
+    });
+
+    expect(markdown).toContain("- Negative-control scenarios: 1 /");
+    expect(markdown).not.toContain("- Negative-control scenarios: 2 /");
+    expect(markdown).toContain("Decision: not enough evidence");
+  });
+
+  it("rejects a non-boolean negativeControl flag", () => {
+    const scenario = baseScenario({ negativeControl: "yes" as unknown as boolean });
+
+    expect(() => runOfflineEval(scenario, { outputDir: mkdtempSync(join(tmpdir(), "evaos-neg-control-type-")) }))
+      .toThrow("negativeControl must be a boolean");
   });
 });
