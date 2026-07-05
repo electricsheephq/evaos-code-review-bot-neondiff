@@ -319,6 +319,12 @@ export const REQUIRED_SUITES: EvalSuiteName[] = [
   "duplicate_suppression"
 ];
 
+const CONFIDENCE_BINS = [
+  { minConfidence: 0, maxConfidence: 0.5 },
+  { minConfidence: 0.5, maxConfidence: 0.8 },
+  { minConfidence: 0.8, maxConfidence: 1.01 }
+] as const;
+
 const DEFAULT_STICKY_VS_COLD_THRESHOLDS: StickyVsColdThresholds = {
   maxFalsePositiveDelta: 0,
   maxFalseNegativeDelta: 0,
@@ -1234,38 +1240,42 @@ function buildCalibrationReport(
 }
 
 function confidenceBins(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): EvalCalibrationReport["bins"] {
+  return computeConfidenceBinStats(botFindings, matches).map((bin) => ({
+    minConfidence: bin.minConfidence,
+    maxConfidence: bin.maxConfidence,
+    findings: bin.findings,
+    matched: bin.matched,
+    empiricalPrecision: roundMetric(bin.empiricalPrecision),
+    wilsonLowerBound: roundMetric(bin.rawWilsonLowerBound),
+    publicLabel: "uncalibrated" as const
+  }));
+}
+
+function maxRawWilsonLowerBound(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): number {
+  return Math.max(0, ...computeConfidenceBinStats(botFindings, matches).map((bin) => bin.rawWilsonLowerBound));
+}
+
+function computeConfidenceBinStats(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): Array<{
+  minConfidence: number;
+  maxConfidence: number;
+  findings: number;
+  matched: number;
+  empiricalPrecision: number;
+  rawWilsonLowerBound: number;
+}> {
   const matchedBotIds = new Set(matches.map((match) => match.botFindingId));
-  return [
-    { minConfidence: 0, maxConfidence: 0.5 },
-    { minConfidence: 0.5, maxConfidence: 0.8 },
-    { minConfidence: 0.8, maxConfidence: 1.01 }
-  ].map((bin) => {
+  return CONFIDENCE_BINS.map((bin) => {
     const findings = botFindings.filter((finding) => finding.confidence >= bin.minConfidence && finding.confidence < bin.maxConfidence);
     const matched = findings.filter((finding) => matchedBotIds.has(finding.id)).length;
-    const wilsonLowerBound = wilsonLowerBound95(matched, findings.length);
     return {
       minConfidence: bin.minConfidence,
       maxConfidence: bin.maxConfidence === 1.01 ? 1 : bin.maxConfidence,
       findings: findings.length,
       matched,
-      empiricalPrecision: roundMetric(findings.length === 0 ? 0 : matched / findings.length),
-      wilsonLowerBound: roundMetric(wilsonLowerBound),
-      publicLabel: "uncalibrated" as const
+      empiricalPrecision: findings.length === 0 ? 0 : matched / findings.length,
+      rawWilsonLowerBound: wilsonLowerBound95(matched, findings.length)
     };
   });
-}
-
-function maxRawWilsonLowerBound(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): number {
-  const matchedBotIds = new Set(matches.map((match) => match.botFindingId));
-  return Math.max(0, ...[
-    { minConfidence: 0, maxConfidence: 0.5 },
-    { minConfidence: 0.5, maxConfidence: 0.8 },
-    { minConfidence: 0.8, maxConfidence: 1.01 }
-  ].map((bin) => {
-    const findings = botFindings.filter((finding) => finding.confidence >= bin.minConfidence && finding.confidence < bin.maxConfidence);
-    const matched = findings.filter((finding) => matchedBotIds.has(finding.id)).length;
-    return wilsonLowerBound95(matched, findings.length);
-  }));
 }
 
 export function buildEvalPromotionDecisionMarkdown(input: EvalSuitePromotionInput): string {
@@ -1321,12 +1331,16 @@ function choosePromotionReason(input: {
   if (input.labeledFindings < PUBLIC_CONFIDENCE_POLICY.minLabeledFindings) return "insufficient_labeled_findings";
   if (input.p0p1Labels < PUBLIC_CONFIDENCE_POLICY.minP0P1Labels) return "insufficient_p0_p1_labels";
   if (input.negativeControlScenarios < PUBLIC_CONFIDENCE_POLICY.minNegativeControlScenarios) return "insufficient_negative_controls";
-  if (input.bestWilsonLowerBound < PUBLIC_CONFIDENCE_POLICY.minWilsonLowerBound) return "wilson_lower_bound_below_threshold";
+  if (
+    !Number.isFinite(input.bestWilsonLowerBound) ||
+    input.bestWilsonLowerBound < PUBLIC_CONFIDENCE_POLICY.minWilsonLowerBound ||
+    input.bestWilsonLowerBound > 1
+  ) return "wilson_lower_bound_below_threshold";
   return "eligible";
 }
 
 function wilsonLowerBound95(successes: number, total: number): number {
-  if (total <= 0) return 0;
+  if (!Number.isFinite(successes) || !Number.isFinite(total) || total <= 0 || successes < 0 || successes > total) return 0;
   const z = 1.96;
   const p = successes / total;
   const denominator = 1 + z ** 2 / total;
@@ -1334,6 +1348,12 @@ function wilsonLowerBound95(successes: number, total: number): number {
   const margin = z * Math.sqrt((p * (1 - p) + z ** 2 / (4 * total)) / total);
   return Math.max(0, (centre - margin) / denominator);
 }
+
+export const __evalHarnessTestHooks = {
+  computeConfidenceBinStats,
+  maxRawWilsonLowerBound,
+  wilsonLowerBound95
+};
 
 function buildInlinePreviews(
   inputPreviews: EvalInlinePreviewInput[] | undefined,
