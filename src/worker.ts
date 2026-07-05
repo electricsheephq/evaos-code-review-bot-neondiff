@@ -56,6 +56,8 @@ import {
   ReviewStateStore,
   type ProcessedStatus,
   type ReviewQueueJobState,
+  type ReviewReadinessRecord,
+  type ReviewReadinessState,
   type ReviewerSessionJobState,
   type ReviewRunLease,
   type StoredProcessedReviewRecord
@@ -65,7 +67,7 @@ import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
-import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
@@ -1286,6 +1288,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     !commandReviewRequested &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
+    // This is a provider-free visibility repair for a GitHub review that is
+    // already durable. Keep it before provider cooldown handling so agents do
+    // not stay blocked on a stale queued status marker for a completed head.
+    await reconcileProcessedHeadAfterDirectReviewSafely({
+      config,
+      github,
+      state,
+      repo,
+      pull,
+      dryRun: input.dryRun
+    });
     return "skipped_processed";
   }
   const activeCooldown = config.providerCooldown.enabled && typeof state.getActiveRepoProviderCooldown === "function"
@@ -1317,6 +1330,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   let lease: ReviewRunLease | undefined;
   let budgetStarted = false;
+  const releaseReviewCapacity = (): void => {
+    if (lease) {
+      state.releaseReviewRunLease(lease.leaseId);
+      lease = undefined;
+    }
+    if (budgetStarted) {
+      budget.finish();
+      budgetStarted = false;
+    }
+  };
   const acquireReviewCapacity = (): boolean => {
     if (budgetStarted && lease) return true;
     if (!budget.tryStart()) return false;
@@ -1548,11 +1571,163 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       event,
       reviewUrl: review.html_url
     });
+    releaseReviewCapacity();
+    if (input.processedHeadPolicy !== "retry_failed_head") {
+      await reconcileProcessedHeadAfterDirectReviewSafely({
+        config,
+        github,
+        state,
+        repo,
+        pull,
+        dryRun: input.dryRun
+      });
+    }
     return commandReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
-    if (lease) state.releaseReviewRunLease(lease.leaseId);
-    if (budgetStarted) budget.finish();
+    releaseReviewCapacity();
   }
+}
+
+async function reconcileProcessedHeadAfterDirectReviewSafely(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+  now?: Date;
+}): Promise<void> {
+  try {
+    await reconcileProcessedHeadAfterDirectReview(input);
+  } catch (error) {
+    // The GitHub review and processed row are already durable here. Reconciliation
+    // is an operator-visibility repair, so it must not turn a posted review into
+    // a failed review if local state or status-comment upsert hiccups.
+    console.warn(
+      `[reconcile] processed-head reconcile failed repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha}: ${
+        redactSecrets(error instanceof Error ? error.message : String(error))
+      }`
+    );
+  }
+}
+
+const DIRECT_REVIEW_RECONCILE_QUEUE_STATES: ReviewQueueJobState[] = [
+  "queued",
+  "leased",
+  "running",
+  "provider_deferred",
+  "blocked_on_proof"
+];
+
+export async function reconcileProcessedHeadAfterDirectReview(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+  now?: Date;
+}): Promise<{ activeQueueJobs: number; settledQueueJobs: number; statusCommentPosted: boolean }> {
+  if (input.dryRun) return { activeQueueJobs: 0, settledQueueJobs: 0, statusCommentPosted: false };
+  const activeJobs = input.state
+    .listReviewQueueJobsForPull({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      states: DIRECT_REVIEW_RECONCILE_QUEUE_STATES
+    })
+    .filter((job) => job.headSha === input.pull.head.sha);
+  if (activeJobs.length === 0) {
+    return { activeQueueJobs: 0, settledQueueJobs: 0, statusCommentPosted: false };
+  }
+
+  const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  if (processed?.status !== "posted") {
+    return { activeQueueJobs: activeJobs.length, settledQueueJobs: 0, statusCommentPosted: false };
+  }
+
+  const now = input.now ?? new Date();
+  const manualCommandJob =
+    activeJobs.find((job) => job.source === "manual_command" && job.commentId) ??
+    activeJobs.find((job) => job.source === "manual_command");
+  const existingReadiness = input.state.getReviewReadiness(input.repo, input.pull.number, input.pull.head.sha);
+
+  for (const job of activeJobs) {
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "posted",
+      ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+      lastError: directReviewReconcileLastError(job.lastError),
+      now
+    });
+    if (job.sessionId && input.state.getReviewerSessionJob(job.repo, job.pullNumber, job.headSha)) {
+      input.state.updateReviewerSessionJobState({
+        repo: job.repo,
+        pullNumber: job.pullNumber,
+        headSha: job.headSha,
+        jobState: "completed",
+        processedReviewStatus: "posted",
+        now
+      });
+    }
+  }
+
+  input.state.recordReviewReadiness({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: readinessStateForDirectProcessedReview(processed.event),
+    reason: directReviewReconcileReadinessReason(existingReadiness),
+    ...(processed.event ? { event: processed.event } : {}),
+    ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+    ...(manualCommandJob?.commentId ? { commandCommentId: manualCommandJob.commentId } : {}),
+    now
+  });
+
+  let statusCommentPosted = false;
+  if (isReviewStatusCommentGithub(input.github)) {
+    const result = await postReviewStatusComment({
+      enabled: input.config.reviewStatusComment?.enabled ?? false,
+      dryRun: input.dryRun,
+      github: input.github,
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      state: "completed",
+      pullTitle: input.pull.title,
+      pullUrl: input.pull.html_url,
+      ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+      now,
+      publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
+    });
+    statusCommentPosted = result.posted;
+  }
+
+  return {
+    activeQueueJobs: activeJobs.length,
+    settledQueueJobs: activeJobs.length,
+    statusCommentPosted
+  };
+}
+
+const DIRECT_REVIEW_RECONCILED_ERROR = "direct_review_reconciled_processed_head=posted";
+const DIRECT_REVIEW_RECONCILED_REASON = "direct_review_reconciled_processed_head";
+
+function directReviewReconcileLastError(previous?: string): string {
+  if (!previous) return DIRECT_REVIEW_RECONCILED_ERROR;
+  if (previous.includes(DIRECT_REVIEW_RECONCILED_ERROR)) return previous;
+  return `${DIRECT_REVIEW_RECONCILED_ERROR}; previous_last_error=${previous}`;
+}
+
+function directReviewReconcileReadinessReason(previous?: ReviewReadinessRecord): string {
+  const previousReason = previous?.reason?.trim();
+  if (!previousReason || previousReason.includes(DIRECT_REVIEW_RECONCILED_REASON)) {
+    return DIRECT_REVIEW_RECONCILED_REASON;
+  }
+  return `${DIRECT_REVIEW_RECONCILED_REASON}; previous_reason=${redactSecrets(previousReason).slice(0, 200)}`;
+}
+
+function readinessStateForDirectProcessedReview(event?: ReviewEvent): ReviewReadinessState {
+  return event === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
 }
 
 export async function buildLicenseGateForPull(input: {
