@@ -513,7 +513,7 @@ function buildIssuePlannerPacket(input: {
       "- Do not auto-apply labels, owners, reviewers, roadmap fields, or milestones.",
       "- Do not bulk-enrich old backlog issues from this planner output.",
       "- Do not claim external market or OSS research was performed unless cited sources are present."
-    ].slice(0, input.maxItems)
+    ]
   };
 }
 
@@ -524,7 +524,7 @@ function classifyIssueForPlanner(text: string): string[] {
   if (/\b(product|pricing|market|positioning|customer|roadmap|vision)\b/.test(normalized)) classes.add("product");
   if (/\b(architecture|runtime|provider|queue|scheduler|database|migration|api|integration)\b/.test(normalized)) classes.add("architecture");
   if (/\b(library|sdk|module|package|framework|dependency|build vs buy|borrow|buy)\b/.test(normalized)) classes.add("library_choice");
-  if (/\b(open source|oss|competitor|alternative|github|current market|last 30 days)\b/.test(normalized)) classes.add("market_positioning");
+  if (/\b(open source|oss|competitor|alternative to|current market|last 30 days)\b/.test(normalized)) classes.add("market_positioning");
   if (/\b(integration|webhook|oauth|api|connector)\b/.test(normalized)) classes.add("integration");
   if (/\b(milestone|roadmap|sprint|release|launch)\b/.test(normalized)) classes.add("roadmap");
   if (classes.size === 0) classes.add("implementation");

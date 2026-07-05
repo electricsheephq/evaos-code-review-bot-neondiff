@@ -505,6 +505,26 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).toContain("Proof plan:\n- Focused unit/fixture test for the changed planner behavior.");
     expect(comment.body).toContain("Known traps:\n- Do not treat related links as proof by themselves");
     expect(comment.body).toContain("Non-goals:\n- Do not auto-apply labels, owners, reviewers, roadmap fields, or milestones.");
+    expect(comment.body).toContain("- Do not bulk-enrich old backlog issues from this planner output.");
+    expect(comment.body).toContain("- Do not claim external market or OSS research was performed unless cited sources are present.");
+  });
+
+  it("does not trigger external research just because a routine issue mentions GitHub", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 95,
+      title: "Fix GitHub App permission typo",
+      state: "open",
+      body: "The GitHub App setup docs mention the wrong permission name. Update the text only."
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue
+    });
+
+    expect(comment.body).toContain("[deferred] external_oss_examples");
+    expect(comment.body).toContain("[deferred] current_market_examples");
+    expect(comment.body).not.toContain("run capped external OSS/library/API/current-market research with citations");
   });
 
   it("rejects stale or pull-request-shaped issues at the comment builder boundary", () => {
