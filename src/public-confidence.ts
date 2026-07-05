@@ -125,13 +125,13 @@ export function buildPublicConfidencePolicy(input?: Partial<PublicConfidenceDisp
   const datasetId = input?.datasetId?.trim();
   return {
     mode: input?.mode ?? "uncalibrated",
-    minLabeledFindings: Math.max(input?.minLabeledFindings ?? PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS),
-    minP0P1Labels: Math.max(input?.minP0P1Labels ?? PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS),
-    minNegativeControlScenarios: Math.max(
-      input?.minNegativeControlScenarios ?? PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS,
+    minLabeledFindings: hardFloorPositiveInteger(input?.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS),
+    minP0P1Labels: hardFloorPositiveInteger(input?.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS),
+    minNegativeControlScenarios: hardFloorPositiveInteger(
+      input?.minNegativeControlScenarios,
       PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS
     ),
-    minWilsonLowerBound: Math.max(input?.minWilsonLowerBound ?? PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND),
+    minWilsonLowerBound: hardFloorProbability(input?.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND),
     ...(evidenceUrl ? { evidenceUrl } : {}),
     ...(datasetId ? { datasetId } : {}),
     ...(input?.labeledFindings !== undefined ? { labeledFindings: input.labeledFindings } : {}),
@@ -146,11 +146,12 @@ export function isPublicConfidenceDisplayAllowed(policy?: PublicConfidenceDispla
 }
 
 export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayPolicy): PublicConfidencePolicyEvaluation {
+  const malformedMinimums = hasMalformedPolicyMinimums(policy);
   const effectivePolicy = buildPublicConfidencePolicy(policy);
-  const requiredLabeledFindings = Math.max(effectivePolicy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS);
-  const requiredP0P1Labels = Math.max(effectivePolicy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS);
-  const requiredNegativeControls = Math.max(effectivePolicy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS);
-  const requiredWilsonLowerBound = Math.max(effectivePolicy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND);
+  const requiredLabeledFindings = hardFloorPositiveInteger(effectivePolicy.minLabeledFindings, PUBLIC_CONFIDENCE_MIN_LABELED_FINDINGS);
+  const requiredP0P1Labels = hardFloorPositiveInteger(effectivePolicy.minP0P1Labels, PUBLIC_CONFIDENCE_MIN_P0_P1_LABELS);
+  const requiredNegativeControls = hardFloorPositiveInteger(effectivePolicy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS);
+  const requiredWilsonLowerBound = hardFloorProbability(effectivePolicy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND);
   const metrics = {
     labeledFindings: thresholdMetric(effectivePolicy.labeledFindings, requiredLabeledFindings, isNonNegativeInteger),
     p0p1Labels: thresholdMetric(effectivePolicy.p0p1Labels, requiredP0P1Labels, isNonNegativeInteger),
@@ -164,12 +165,7 @@ export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayP
     missingThresholds.push("calibration_evidence_url_missing_or_unusable");
   }
   if (!effectivePolicy.datasetId?.trim()) missingThresholds.push("dataset_id_missing");
-  if (
-    !isPositiveInteger(effectivePolicy.minLabeledFindings) ||
-    !isPositiveInteger(effectivePolicy.minP0P1Labels) ||
-    !isPositiveInteger(effectivePolicy.minNegativeControlScenarios) ||
-    !isProbability(effectivePolicy.minWilsonLowerBound)
-  ) {
+  if (malformedMinimums) {
     missingThresholds.push(
       "labeled_findings_below_100",
       "p0_p1_labels_below_30",
@@ -224,6 +220,24 @@ function thresholdMetric(
     return { required, passed: false };
   }
   return { actual, required, passed: actual >= required };
+}
+
+function hardFloorPositiveInteger(value: unknown, floor: number): number {
+  return isPositiveInteger(value) ? Math.max(value, floor) : floor;
+}
+
+function hardFloorProbability(value: unknown, floor: number): number {
+  return isProbability(value) ? Math.max(value, floor) : floor;
+}
+
+function hasMalformedPolicyMinimums(policy: PublicConfidenceDisplayPolicy | undefined): boolean {
+  if (!policy) return false;
+  return (
+    (policy.minLabeledFindings !== undefined && !isPositiveInteger(policy.minLabeledFindings)) ||
+    (policy.minP0P1Labels !== undefined && !isPositiveInteger(policy.minP0P1Labels)) ||
+    (policy.minNegativeControlScenarios !== undefined && !isPositiveInteger(policy.minNegativeControlScenarios)) ||
+    (policy.minWilsonLowerBound !== undefined && !isProbability(policy.minWilsonLowerBound))
+  );
 }
 
 function isPositiveInteger(value: unknown): value is number {

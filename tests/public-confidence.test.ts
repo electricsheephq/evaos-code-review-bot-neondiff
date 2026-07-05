@@ -482,6 +482,40 @@ describe("public confidence display policy", () => {
     expect(report.requestChangesPolicy).toBe("REQUEST_CHANGES confidence claims require calibrated P0/P1 bins that pass the public display policy.");
     expect(report.proofBoundary).toBe("Public comments may display confidence percentages only while this report stays linked to the evaluated dataset and passing metrics.");
   });
+
+  it("builds an uncalibrated calibration report when promotion evidence is incomplete", () => {
+    const report = buildPublicConfidenceCalibrationReport(buildPublicConfidencePolicy({
+      mode: "uncalibrated",
+      evidenceUrl: "https://github.com/electricsheephq/evaos-code-review-bot/actions/runs/456",
+      datasetId: "confidence-calibration-v1",
+      labeledFindings: 99,
+      p0p1Labels: 29,
+      negativeControlScenarios: 9,
+      wilsonLowerBound: 0.949
+    }));
+
+    expect(report.allowed).toBe(false);
+    expect(report.publicMode).toBe("uncalibrated");
+    expect(report.dataset).toEqual({
+      id: "confidence-calibration-v1",
+      evidenceUrl: "https://github.com/electricsheephq/evaos-code-review-bot/actions/runs/456"
+    });
+    expect(report.labels).toEqual({
+      labeledFindings: 99,
+      p0p1Labels: 29,
+      negativeControlScenarios: 9
+    });
+    expect(report.missingThresholds).toEqual([
+      "mode_not_calibrated",
+      "labeled_findings_below_100",
+      "p0_p1_labels_below_30",
+      "negative_controls_below_10",
+      "wilson_lower_bound_below_0.95"
+    ]);
+    expect(report.metrics.wilsonLowerBound).toEqual({ actual: 0.949, required: 0.95, passed: false });
+    expect(report.requestChangesPolicy).toBe("REQUEST_CHANGES confidence claims require calibrated P0/P1 bins that pass the public display policy.");
+    expect(report.proofBoundary).toBe("Public comments must not display confidence percentages until all calibration thresholds pass.");
+  });
 });
 
 function calibratedPolicyInput() {
