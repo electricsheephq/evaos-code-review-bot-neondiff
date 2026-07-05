@@ -63,6 +63,29 @@ describe("public confidence display policy", () => {
     }
   });
 
+  it("sanitizes fraction and qualitative confidence bypass phrasings", () => {
+    const input = [
+      "Confidence: 9/10.",
+      "confidence score: 8 out of 10.",
+      "model confidence 9 / 10",
+      "9/10 confident this is exploitable.",
+      "8 out of 10 confidence after review.",
+      "Confidence: high.",
+      "certainty = medium.",
+      "reliability: low is still a confidence claim.",
+      "**Confidence**: `high` that this is exploitable."
+    ].join("\n");
+
+    const output = sanitizePublicConfidenceText(input);
+
+    expect(output).toContain("confidence not calibrated");
+    expect(output).not.toMatch(/\b\d+\s*(?:\/|out\s+of)\s*\d+\b/i);
+    expect(output).not.toMatch(/\b(?:confidence|certainty|reliability)\s*[:=]\s*(?:high|medium|low)\b/i);
+    expect(output).not.toContain("9/10 confident");
+    expect(output).not.toContain("8 out of 10 confidence");
+    expect(output).not.toContain("`high`");
+  });
+
   it("redacts residual confidence values near confidence nouns as a final safety pass", () => {
     const input = [
       "Reliability after the model pass lands near 0.95 even though phrased oddly.",
@@ -83,6 +106,18 @@ describe("public confidence display policy", () => {
       "Make sure the lock timeout of 0.5 s is reliable.",
       "A reliable retry backoff of 0.75 seconds avoids churn.",
       "This path is 100 percent deterministic and reliable in the fixture."
+    ].join("\n");
+
+    expect(sanitizePublicConfidenceText(input)).toBe(input);
+  });
+
+  it("preserves ordinary qualitative and fraction prose outside explicit confidence claims", () => {
+    const input = [
+      "High reliability mode is enabled.",
+      "On 7/10, reliability improved after the retry patch.",
+      "High confidence concern",
+      "Low confidence high severity",
+      "A medium severity issue with confidence handling should keep its severity adjective."
     ].join("\n");
 
     expect(sanitizePublicConfidenceText(input)).toBe(input);
@@ -462,6 +497,11 @@ describe("public confidence display policy", () => {
       "95 percent confidence",
       "I have 0.95 confidence in this",
       "high confidence (0.95)",
+      "Confidence: 9/10.",
+      "confidence score: 8 out of 10.",
+      "Confidence: high.",
+      "certainty = medium.",
+      "reliability: low.",
       "certainty: 95%",
       "reliability: 95%",
       "accuracy 0.9",
