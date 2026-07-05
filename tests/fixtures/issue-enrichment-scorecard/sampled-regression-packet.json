@@ -52,12 +52,14 @@
         },
         "noise_control": {
           "score": 4,
+          "notes": "Scores duplicate suppression as noise control: useful no-spam behavior, not perfect because live sticky-update reporting still needs broader rollout proof.",
           "evidenceLinks": [
             "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-noise-control"
           ]
         },
         "idempotency": {
           "score": 4,
+          "notes": "Scores repeated same-head behavior as idempotency: stable marker/upsert expectations are covered, but full cross-cycle state repair remains a separate runtime eval.",
           "evidenceLinks": [
             "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-idempotency"
           ]

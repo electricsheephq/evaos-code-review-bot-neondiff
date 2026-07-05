@@ -252,6 +252,8 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
     if (!allowedCoverageIds.has(fixtureCase.coverage)) {
       errors.push(`case ${fixtureCase.id} has unknown coverage ${fixtureCase.coverage}`);
     }
+    // Record duplicate identity before per-dimension validation so malformed cases
+    // still report duplicate coverage/id errors alongside structural errors.
     if (seenCaseIds.has(fixtureCase.id)) duplicateCaseIds.add(fixtureCase.id);
     seenCaseIds.add(fixtureCase.id);
     if (seenCoverageIds.has(fixtureCase.coverage)) duplicateCoverageIds.add(fixtureCase.coverage);
@@ -372,6 +374,8 @@ function assertValidIssueEnrichmentFixture(packet: IssueEnrichmentFixturePacket)
   }
 }
 
+// scoreIssueEnrichment validates packets before scoring; keep scoreDimension private
+// so this normalization remains defense-in-depth rather than a public validation path.
 function normalizeScore(score: number | undefined): number {
   if (score === undefined || !Number.isFinite(score)) return 0;
   return Math.min(5, Math.max(0, score));

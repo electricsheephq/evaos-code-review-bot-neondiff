@@ -251,6 +251,25 @@ describe("issue enrichment scorecard", () => {
     });
   });
 
+  it("reports duplicate identity errors even when the duplicate case is structurally malformed", () => {
+    const fixture = loadFixture();
+    fixture.cases.push({
+      ...fixture.cases[0],
+      title: "",
+      dimensions: undefined as unknown as IssueEnrichmentFixturePacket["cases"][number]["dimensions"]
+    });
+
+    expect(validateIssueEnrichmentFixture(fixture)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "case duplicate-same-head-comments title is required",
+        "case duplicate-same-head-comments missing dimensions",
+        "duplicate fixture case id duplicate-same-head-comments",
+        "duplicate fixture coverage duplicate_same_head_comments"
+      ])
+    });
+  });
+
   it("validates proof boundary, known limitations, and the required sampled regression coverage", () => {
     const fixture = loadFixture();
     const validation = validateIssueEnrichmentFixture(fixture);
@@ -350,6 +369,13 @@ describe("issue enrichment scorecard", () => {
       error: "fixture fixtureVersion must be 0.1"
     },
     {
+      name: "missing fixture version",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.fixtureVersion = undefined as unknown as IssueEnrichmentFixturePacket["fixtureVersion"];
+      },
+      error: "fixture fixtureVersion must be 0.1"
+    },
+    {
       name: "empty proof boundary",
       mutate: (fixture: IssueEnrichmentFixturePacket) => {
         fixture.proofBoundary = "";
@@ -404,6 +430,18 @@ describe("issue enrichment scorecard", () => {
         fixture.cases[0].dimensions.proof_boundary = {
           score: 6,
           evidenceLinks: ["https://example.com/evidence#direct-evidence-duplicate-same-head-comments-proof-boundary"]
+        };
+      },
+      error: "case duplicate-same-head-comments dimension proof_boundary score must be between 0 and 5"
+    },
+    {
+      name: "slightly above max score",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].dimensions.proof_boundary = {
+          score: 5.5,
+          evidenceLinks: [
+            "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-proof-boundary"
+          ]
         };
       },
       error: "case duplicate-same-head-comments dimension proof_boundary score must be between 0 and 5"
