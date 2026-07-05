@@ -164,6 +164,7 @@ export type WalkthroughCommentPostResult =
 export interface EnrichmentComment {
   marker: string;
   body: string;
+  bodyHash: string;
   postIssueComment: boolean;
 }
 

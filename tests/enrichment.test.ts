@@ -411,6 +411,9 @@ describe("sticky enrichment comments", () => {
     });
 
     expect(comment.marker).toBe(buildIssueEnrichmentMarker({ repo: "electricsheephq/evaos-code-review-bot", issueNumber: 88 }));
+    const stateHash = comment.body.match(/<!-- evaos-code-review-bot:enrichment-state\b[^>]*\bhash=([0-9a-f]{64}) -->/)?.[1];
+    expect(comment.bodyHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(stateHash).toBe(comment.bodyHash);
     expect(comment.body).toContain(`${ENRICHMENT_MARKER_PREFIX} repo=electricsheephq/evaos-code-review-bot issue=88 -->`);
     expect(comment.body).toContain(`${ENRICHMENT_STATE_MARKER_PREFIX} version=1 repo=electricsheephq/evaos-code-review-bot issue=88 state=open`);
     expect(comment.body).toMatch(/^<!-- evaos-code-review-bot:enrichment repo=electricsheephq\/evaos-code-review-bot issue=88 -->\n<!-- evaos-code-review-bot:enrichment-state version=1 repo=electricsheephq\/evaos-code-review-bot issue=88 state=open hash=[0-9a-f]{64} -->\n## evaOS issue enrichment/);
@@ -1413,6 +1416,97 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("does not let a dry-run-only body hash suppress the first live issue comment", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-dry-run-to-live-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      const writeConfig = (postIssueComment: boolean) => writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 1,
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 60_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            }
+          }
+        }
+      })}\n`);
+      writeConfig(false);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const issue: GitHubRelatedIssueOrPull = {
+          number: 32,
+          title: "Promote issue enrichment comments",
+          state: "open",
+          updated_at: "2026-07-03T01:00:00.000Z",
+          body: "Acceptance criteria and owner present."
+        };
+        const reader = { listIssuesForEnrichment: async () => [issue] };
+        const posted: number[] = [];
+
+        const dryRunOnly = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            ...reader,
+            canPostAsApp: () => false,
+            upsertIssueComment: async () => {
+              throw new Error("should not post while issue comments are disabled");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T01:05:00.000Z"
+        });
+        const dryRunRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 32);
+        writeConfig(true);
+        const live = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            ...reader,
+            canPostAsApp: () => true,
+            upsertIssueComment: async (input: { issueNumber: number }) => {
+              posted.push(input.issueNumber);
+              return {
+                action: "created" as const,
+                id: input.issueNumber,
+                html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
+              };
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-07-03T01:06:00.000Z"
+        });
+
+        expect(dryRunOnly.summary).toMatchObject({ dryRunRecorded: 1, alreadyProcessed: 0, posted: 0, failed: 0 });
+        expect(dryRunRecord).toMatchObject({ status: "dry_run", bodyHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+        expect(live.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
+        expect(posted).toEqual([32]);
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 32)).toMatchObject({
+          status: "posted",
+          bodyHash: dryRunRecord?.bodyHash,
+          commentUrl: "https://github.test/owner/issue-repo/issues/32#issuecomment-32"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not let already processed issues consume live global caps forever", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-global-cap-progress-"));
     try {
@@ -2023,6 +2117,15 @@ describe("sticky enrichment comments", () => {
           dryRun: false,
           checkedAt: "2026-07-03T02:05:00.000Z"
         });
+        const firstRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 41);
+        state.recordIssueEnrichment({
+          repo: "owner/issue-repo",
+          issueNumber: 41,
+          issueUpdatedAt: "2026-07-03T02:00:00.000Z",
+          status: "posted",
+          commentUrl: "https://github.test/comment/1",
+          now: new Date("2026-07-03T02:05:30.000Z")
+        });
         const second = await runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
@@ -2030,11 +2133,32 @@ describe("sticky enrichment comments", () => {
           dryRun: false,
           checkedAt: "2026-07-03T02:06:00.000Z"
         });
+        const backfilledRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 41);
+        issue.updated_at = "2026-07-03T02:07:00.000Z";
+        const third = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T02:08:00.000Z"
+        });
+        const refreshedRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 41);
+        issue.updated_at = "2026-07-03T02:09:00.000Z";
+        issue.body = "Acceptance criteria and owner present. Update the docs runbook. Link follow-up #99.";
+        const fourth = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T02:10:00.000Z"
+        });
 
-      expect(first.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
-      expect(second.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
-      expect(second.repos[0]).toMatchObject({ eligible: 0, wouldEnrich: 0, wouldComment: 0, deferred: 0 });
-      expect(posts).toHaveLength(1);
+        expect(first.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
+        expect(second.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+        expect(second.repos[0]).toMatchObject({ eligible: 0, wouldEnrich: 0, wouldComment: 0, deferred: 0 });
+        expect(third.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+        expect(fourth.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
+        expect(posts).toHaveLength(2);
         expect(posts[0]!.marker).toContain("issue=41");
         expect(posts[0]!.body).toContain("## evaOS issue enrichment");
         expect(posts[0]!.body).toContain("Suggested labels: docs.");
@@ -2042,11 +2166,34 @@ describe("sticky enrichment comments", () => {
         expect(posts[0]!.body).toContain("Suggested owners: none.");
         expect(posts[0]!.body).not.toContain("issue-owner");
         expect(posts[0]!.body).not.toContain("incident-reviewer");
-        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 41)).toMatchObject({
+        expect(firstRecord).toMatchObject({
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:00:00.000Z",
           commentUrl: "https://github.test/comment/1"
         });
+        expect(firstRecord?.bodyHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(backfilledRecord).toMatchObject({
+          status: "posted",
+          issueUpdatedAt: "2026-07-03T02:00:00.000Z",
+          commentUrl: "https://github.test/comment/1",
+          bodyHash: firstRecord?.bodyHash
+        });
+        expect(posts[0]!.body).toContain(`hash=${firstRecord?.bodyHash} -->`);
+        expect(refreshedRecord).toMatchObject({
+          status: "posted",
+          issueUpdatedAt: "2026-07-03T02:07:00.000Z",
+          commentUrl: "https://github.test/comment/1",
+          bodyHash: firstRecord?.bodyHash
+        });
+        const changedRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 41);
+        expect(changedRecord).toMatchObject({
+          status: "posted",
+          issueUpdatedAt: "2026-07-03T02:09:00.000Z",
+          commentUrl: "https://github.test/comment/2"
+        });
+        expect(changedRecord?.bodyHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(changedRecord?.bodyHash).not.toBe(firstRecord?.bodyHash);
+        expect(posts[1]!.body).toContain(`hash=${changedRecord?.bodyHash} -->`);
       } finally {
         state.close();
       }
