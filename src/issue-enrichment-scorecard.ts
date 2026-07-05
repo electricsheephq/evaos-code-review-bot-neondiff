@@ -70,7 +70,7 @@ export interface IssueEnrichmentDimensionScore {
   score: number;
   weight: number;
   rawScore: number;
-  weightedScore: number;
+  weightedContribution: number;
   measuredCases: number;
   unmeasurableCases: string[];
   pilotThresholdMisses: string[];
@@ -186,7 +186,7 @@ const DIMENSIONS_BY_ID = new Map(ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map((item) =>
 export function scoreIssueEnrichment(packet: IssueEnrichmentFixturePacket): IssueEnrichmentScorecardResult {
   const dimensionScores = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map((dimension) => scoreDimension(packet, dimension));
   const rawTotal = dimensionScores.reduce((sum, dimension) => sum + dimension.rawScore, 0);
-  const weightedTotal = dimensionScores.reduce((sum, dimension) => sum + dimension.weightedScore, 0);
+  const weightedTotal = dimensionScores.reduce((sum, dimension) => sum + dimension.weightedContribution, 0);
   const maxRaw = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.length * 5;
   const maxWeighted = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.reduce((sum, dimension) => sum + dimension.weight * 5, 0);
   const unmeasurableStates = dimensionScores.flatMap((dimension) =>
@@ -214,6 +214,10 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
   const coveredScenarioIds = ISSUE_ENRICHMENT_REQUIRED_FIXTURE_COVERAGE.filter((coverage) =>
     packet.cases.some((item) => item.coverage === coverage)
   );
+  const seenCaseIds = new Set<string>();
+  const duplicateCaseIds = new Set<string>();
+  const seenCoverageIds = new Set<IssueEnrichmentFixtureCoverageId>();
+  const duplicateCoverageIds = new Set<IssueEnrichmentFixtureCoverageId>();
 
   if (!packet.proofBoundary?.trim()) errors.push("fixture proofBoundary is required");
   if (!Array.isArray(packet.knownLimitations) || packet.knownLimitations.length === 0) {
@@ -238,6 +242,11 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
   }
 
   for (const fixtureCase of packet.cases) {
+    if (seenCaseIds.has(fixtureCase.id)) duplicateCaseIds.add(fixtureCase.id);
+    seenCaseIds.add(fixtureCase.id);
+    if (seenCoverageIds.has(fixtureCase.coverage)) duplicateCoverageIds.add(fixtureCase.coverage);
+    seenCoverageIds.add(fixtureCase.coverage);
+
     for (const dimension of ISSUE_ENRICHMENT_SCORE_DIMENSIONS) {
       const score = fixtureCase.dimensions[dimension.id];
       if (!score) {
@@ -253,10 +262,18 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
       if (!Number.isFinite(score.score) || score.score! < 0 || score.score! > 5) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} score must be between 0 and 5`);
       }
-      if ((score.score ?? 0) > 3 && !hasDirectEvidenceLink(score.evidenceLinks, fixtureCase.id, dimension.id)) {
+      if ((score.score ?? 0) > 3 && !hasDirectEvidenceLink(score.evidenceLinks, fixtureCase, dimension.id)) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} scored ${score.score} without direct evidence links`);
       }
     }
+  }
+
+  for (const caseId of [...duplicateCaseIds].sort()) {
+    errors.push(`duplicate fixture case id ${caseId}`);
+  }
+
+  for (const coverageId of [...duplicateCoverageIds].sort()) {
+    errors.push(`duplicate fixture coverage ${coverageId}`);
   }
 
   return { ok: errors.length === 0, errors, coveredScenarioIds };
@@ -315,7 +332,7 @@ function scoreDimension(
     score: round(averageScore, 2),
     weight: dimension.weight,
     rawScore: averageScore,
-    weightedScore: round(averageScore * dimension.weight, 2),
+    weightedContribution: round(averageScore * dimension.weight, 2),
     measuredCases: measuredScores.length,
     unmeasurableCases,
     pilotThresholdMisses,
@@ -330,18 +347,28 @@ function normalizeScore(score: number | undefined): number {
 
 function hasDirectEvidenceLink(
   links: string[] | undefined,
-  caseId: string,
+  fixtureCase: IssueEnrichmentFixtureCase,
   dimensionId: IssueEnrichmentScoreDimensionId
 ): boolean {
-  const expectedAnchor = `direct-evidence-${caseId.replaceAll("_", "-")}-${dimensionId.replaceAll("_", "-")}`;
+  const expectedAnchor = `direct-evidence-${fixtureCase.id.replaceAll("_", "-")}-${dimensionId.replaceAll("_", "-")}`;
+  const source = parseHttpsUrl(fixtureCase.fixtureSource);
+  if (!source) return false;
+
   return (links ?? []).some((link) => {
-    try {
-      const url = new URL(link);
-      return (url.protocol === "https:" || url.protocol === "http:") && url.hash.slice(1) === expectedAnchor;
-    } catch {
-      return false;
-    }
+    const url = parseHttpsUrl(link);
+    if (!url) return false;
+    return url.host === source.host && url.pathname === source.pathname && url.hash.slice(1) === expectedAnchor;
   });
+}
+
+function parseHttpsUrl(value: string | undefined): URL | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 function percent(value: number, max: number): number {
