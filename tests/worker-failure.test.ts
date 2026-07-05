@@ -2372,6 +2372,17 @@ describe("worker review failures", () => {
       nextEligibleAt: "2026-07-05T00:10:00.000Z",
       lastError: "provider_cooldown"
     });
+    const blockedOnProofJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha,
+      baseSha: "base-blocked"
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: blockedOnProofJob.jobId,
+      state: "blocked_on_proof",
+      lastError: "license_entitlement_required"
+    });
     state.recordReviewReadiness({
       repo: "electricsheephq/WorldOS",
       pullNumber: pull.number,
@@ -2401,7 +2412,7 @@ describe("worker review failures", () => {
       now: new Date("2026-07-05T00:02:00.000Z")
     });
 
-    expect(result).toEqual({ activeQueueJobs: 2, settledQueueJobs: 2, statusCommentPosted: true });
+    expect(result).toEqual({ activeQueueJobs: 3, settledQueueJobs: 3, statusCommentPosted: true });
     expect(state.getReviewQueueJob(runningJob.jobId)).toMatchObject({
       state: "posted",
       reviewUrl,
@@ -2417,6 +2428,11 @@ describe("worker review failures", () => {
       lastError: "direct_review_reconciled_processed_head=posted; previous_last_error=provider_cooldown"
     });
     expect(state.getReviewQueueJob(providerDeferredJob.jobId)?.nextEligibleAt).toBeUndefined();
+    expect(state.getReviewQueueJob(blockedOnProofJob.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl,
+      lastError: "direct_review_reconciled_processed_head=posted; previous_last_error=license_entitlement_required"
+    });
     expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, headSha)).toMatchObject({
       state: "needs_fix",
       reason: "direct_review_reconciled_processed_head; previous_reason=trusted_re_review_command",

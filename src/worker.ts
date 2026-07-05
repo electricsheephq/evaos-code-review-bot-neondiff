@@ -1288,19 +1288,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     !commandReviewRequested &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
-    if (!input.processedHeadPolicy) {
-      // This is a provider-free visibility repair for a GitHub review that is
-      // already durable. Keep it before provider cooldown handling so agents do
-      // not stay blocked on a stale queued status marker for a completed head.
-      await reconcileProcessedHeadAfterDirectReviewSafely({
-        config,
-        github,
-        state,
-        repo,
-        pull,
-        dryRun: input.dryRun
-      });
-    }
+    // This is a provider-free visibility repair for a GitHub review that is
+    // already durable. Keep it before provider cooldown handling so agents do
+    // not stay blocked on a stale queued status marker for a completed head.
+    await reconcileProcessedHeadAfterDirectReviewSafely({
+      config,
+      github,
+      state,
+      repo,
+      pull,
+      dryRun: input.dryRun
+    });
     return "skipped_processed";
   }
   const activeCooldown = config.providerCooldown.enabled && typeof state.getActiveRepoProviderCooldown === "function"
@@ -1574,7 +1572,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       reviewUrl: review.html_url
     });
     releaseReviewCapacity();
-    if (!input.processedHeadPolicy) {
+    if (input.processedHeadPolicy !== "retry_failed_head") {
       await reconcileProcessedHeadAfterDirectReviewSafely({
         config,
         github,
