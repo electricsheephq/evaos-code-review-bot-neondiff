@@ -182,6 +182,8 @@ export const ISSUE_ENRICHMENT_SCORE_DIMENSIONS: IssueEnrichmentScoreDimension[] 
 ];
 
 export function scoreIssueEnrichment(packet: IssueEnrichmentFixturePacket): IssueEnrichmentScorecardResult {
+  assertValidIssueEnrichmentFixture(packet);
+
   const dimensionScores = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.map((dimension) => scoreDimension(packet, dimension));
   const rawTotal = dimensionScores.reduce((sum, dimension) => sum + dimension.rawScore, 0);
   const weightedTotal = dimensionScores.reduce((sum, dimension) => sum + dimension.weightedContribution, 0);
@@ -345,6 +347,13 @@ function getMetricContract(
   return packet.metricContracts?.[dimension.id] ?? dimension.metricContract;
 }
 
+function assertValidIssueEnrichmentFixture(packet: IssueEnrichmentFixturePacket): void {
+  const validation = validateIssueEnrichmentFixture(packet);
+  if (!validation.ok) {
+    throw new Error(`Cannot score invalid issue-enrichment fixture: ${validation.errors.join("; ")}`);
+  }
+}
+
 function normalizeScore(score: number | undefined): number {
   if (score === undefined || !Number.isFinite(score)) return 0;
   return Math.min(5, Math.max(0, score));
@@ -362,7 +371,12 @@ function hasDirectEvidenceLink(
   return (links ?? []).some((link) => {
     const url = parseHttpsUrl(link);
     if (!url) return false;
-    return url.host === source.host && url.pathname === source.pathname && url.hash.slice(1) === expectedAnchor;
+    return (
+      url.origin === source.origin &&
+      url.pathname === source.pathname &&
+      url.search === source.search &&
+      url.hash.slice(1) === expectedAnchor
+    );
   });
 }
 

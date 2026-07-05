@@ -70,7 +70,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "No burst pressure in this fixture."
+          "notes": "No burst pressure in this fixture. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -136,7 +136,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "Single stale-head rejection, no burst."
+          "notes": "Single stale-head rejection, no burst. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -202,7 +202,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "Coordinate validation does not exercise throttle pressure."
+          "notes": "Coordinate validation does not exercise throttle pressure. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -268,7 +268,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "Permission failure exits before provider throttling."
+          "notes": "Permission failure exits before provider throttling. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -334,7 +334,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "Ambiguity fails closed before live posting."
+          "notes": "Ambiguity fails closed before live posting. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -400,7 +400,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "Fast negative avoids provider and comment spend."
+          "notes": "Fast negative avoids provider and comment spend. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -466,7 +466,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "Backlog scan should defer rather than consume comment budget."
+          "notes": "Backlog scan should defer rather than consume comment budget. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -530,7 +530,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "External research needed before provider budget is meaningful."
+          "notes": "External research needed before provider budget is meaningful. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -594,7 +594,7 @@
         },
         "throttling": {
           "score": 2.6222,
-          "notes": "Rejecting stale context avoids extra provider retries."
+          "notes": "Rejecting stale context avoids extra provider retries. Seeded throttle baseline 2.6222 means partial budget evidence, no burst, and below promotion threshold; it is not calibrated production reliability."
         }
       }
     },
@@ -660,7 +660,7 @@
         },
         "throttling": {
           "score": 1,
-          "notes": "Simulated provider burst stays below advisory threshold until live cap evidence exists."
+          "notes": "Simulated provider burst score 1 means burst pressure is known unsafe until live cap evidence exists; it is deliberately below advisory and promotion thresholds and is not calibrated production reliability."
         }
       }
     }

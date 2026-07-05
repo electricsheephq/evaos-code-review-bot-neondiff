@@ -124,6 +124,23 @@ describe("issue enrichment scorecard", () => {
     });
   });
 
+  it("rejects direct-evidence anchors with a query string that differs from the fixture source issue", () => {
+    const fixture = loadFixture();
+    fixture.cases[0].dimensions.proof_boundary = {
+      score: 4,
+      evidenceLinks: [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264?query=x#direct-evidence-duplicate-same-head-comments-proof-boundary"
+      ]
+    };
+
+    expect(validateIssueEnrichmentFixture(fixture)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "case duplicate-same-head-comments dimension proof_boundary scored 4 without direct evidence links"
+      ])
+    });
+  });
+
   it("does not emit a redundant missing-evidence error for an out-of-range high score", () => {
     const fixture = loadFixture();
     fixture.cases[0].dimensions.proof_boundary = {
@@ -134,9 +151,24 @@ describe("issue enrichment scorecard", () => {
     const validation = validateIssueEnrichmentFixture(fixture);
 
     expect(validation.ok).toBe(false);
-    expect(validation.errors).toEqual([
-      "case duplicate-same-head-comments dimension proof_boundary score must be between 0 and 5"
-    ]);
+    expect(validation.errors).toContain("case duplicate-same-head-comments dimension proof_boundary score must be between 0 and 5");
+    expect(validation.errors).not.toContain(
+      "case duplicate-same-head-comments dimension proof_boundary scored 6 without direct evidence links"
+    );
+  });
+
+  it("refuses to score invalid fixture packets instead of silently clamping invalid scores", () => {
+    const fixture = loadFixture();
+    fixture.cases[0].dimensions.proof_boundary = {
+      score: 99,
+      evidenceLinks: [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-proof-boundary"
+      ]
+    };
+
+    expect(() => scoreIssueEnrichment(fixture)).toThrow(
+      "Cannot score invalid issue-enrichment fixture: case duplicate-same-head-comments dimension proof_boundary score must be between 0 and 5"
+    );
   });
 
   it("rejects duplicate fixture case ids and duplicate coverage ids", () => {
