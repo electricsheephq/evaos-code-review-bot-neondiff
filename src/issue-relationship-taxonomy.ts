@@ -345,6 +345,7 @@ function publicLabels(values: string[]): string[] {
 }
 
 function publicReviewerLogins(values: string[]): string[] {
+  // Suggested reviewers are individual GitHub logins only; team slugs need a separate public field before support.
   return unique(values.map((value) => value.trim().replace(/^@/, "")).filter((value) => /^[A-Za-z0-9-]{1,39}$/.test(value)));
 }
 
@@ -411,16 +412,11 @@ function isSafePublicUrl(value: string): boolean {
 function isPrivateOrLocalHostname(hostname: string): boolean {
   return (
     hostname === "localhost" ||
-    hostname === "::1" ||
     hostname === "0.0.0.0" ||
     hostname.endsWith(".local") ||
     hostname.endsWith(".internal") ||
-    (hostname.includes(":") && (hostname.startsWith("fc") || hostname.startsWith("fd"))) ||
-    /^127\./.test(hostname) ||
-    /^10\./.test(hostname) ||
-    /^169\.254\./.test(hostname) ||
-    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname) ||
-    /^192\.168\./.test(hostname)
+    hostname.includes(":") ||
+    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)
   );
 }
 
@@ -442,7 +438,7 @@ function redactLocalPathLikeText(value: string): string {
 }
 
 const LOCAL_PATH_TEXT_PATTERN =
-  /(^|[\s([{"'`])(?:file:\/\/\S+|\\\\\S+|~(?:[\\/]\S*)?|\/(?!\/)\S+|[A-Za-z]:(?:[\\/]\S*|\S+))/g;
+  /(^|[\s([{"'`=,;?])(?:file:\/\/[^\s,;]+|\\\\[^\s,;]+|~(?:[\\/][^\s,;]*)?|\/(?!\/)[^\s,;]+|[A-Za-z]:(?:[\\/][^\s,;]*|[^\s,;]+))/g;
 
 function isDocsOnly(paths: string[]): boolean {
   return paths.length > 0 && paths.every((path) => {

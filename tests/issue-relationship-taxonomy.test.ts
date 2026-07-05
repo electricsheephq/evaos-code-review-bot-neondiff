@@ -431,6 +431,22 @@ describe("issue relationship taxonomy", () => {
     expect(JSON.stringify(result)).not.toContain("/etc/passwd");
   });
 
+  it("redacts local paths after query and list delimiters", () => {
+    const result = classifyIssueRelationshipItem({
+      id: "issue-54a",
+      kind: "issue",
+      title: "Leak contexts query=file:///tmp/raw.log,path=/etc/passwd,list=/root/.env;next=/var/log/raw.log",
+      publicSummary: "Values are a=1,b=/home/lume/.env;file=file:///tmp/raw.log?x=1"
+    });
+
+    expect(result.title.match(/\[local-path-redacted\]/g)).toHaveLength(4);
+    expect(result.summary.match(/\[local-path-redacted\]/g)).toHaveLength(2);
+    expect(JSON.stringify(result)).not.toContain("file:///tmp");
+    expect(JSON.stringify(result)).not.toContain("/etc/passwd");
+    expect(JSON.stringify(result)).not.toContain("/root/.env");
+    expect(JSON.stringify(result)).not.toContain("/home/lume");
+  });
+
   it("redacts public summary fallback text when publicSummary is omitted", () => {
     const result = classifyIssueRelationshipItem({
       id: "issue-54b",
@@ -456,8 +472,11 @@ describe("issue relationship taxonomy", () => {
         "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1",
         "http://127.0.0.1/private",
         "http://10.0.0.5/private",
+        "http://100.64.0.1/private",
         "http://192.168.1.20/private",
         "http://[::1]/private",
+        "http://[fe80::1]/private",
+        "https://8.8.8.8/private",
         "https://service.internal/private"
       ]
     });
