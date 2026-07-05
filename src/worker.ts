@@ -39,7 +39,12 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate } from "./review-gate.js";
-import { buildOutcomeLedger, buildOutcomeLedgerInputFromReviewPlan, renderOutcomeLedgerMarkdown } from "./outcome-ledger.js";
+import {
+  buildOutcomeLedger,
+  buildOutcomeLedgerInputFromReviewPlan,
+  renderOutcomeLedgerMarkdown,
+  type OutcomeLedgerRuntimeInput
+} from "./outcome-ledger.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
@@ -66,7 +71,7 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { buildReviewPrompt, runZCodeReview } from "./zcode.js";
+import { buildReviewPrompt, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
 import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 
@@ -1448,7 +1453,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           prompt,
           evidenceDir
         })
-      : { findings: [], droppedFromSchema: [], rawResponse: "{\"findings\":[]}" };
+      : {
+          findings: [],
+          droppedFromSchema: [],
+          rawResponse: "{\"findings\":[]}",
+          runtime: {
+            provider: config.zcode.providerId,
+            model: config.zcode.model,
+            providerAttempts: 0,
+            notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+          }
+        };
 
     assertGitClean(worktree.path);
 
@@ -1532,8 +1547,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         pull,
         files: reviewFiles,
         plan,
-        provider: config.zcode.providerId,
-        model: config.zcode.model
+        runtime: zcodeResult.runtime
       });
     }
     writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
@@ -2157,6 +2171,7 @@ export function writeDryRunOutcomeLedgerEvidence(input: {
   plan: ReviewPlan;
   provider?: string;
   model?: string;
+  runtime?: OutcomeLedgerRuntimeInput;
 }): { ok: true } | { ok: false; error: string } {
   try {
     const outcomeLedger = buildOutcomeLedger(buildOutcomeLedgerInputFromReviewPlan({
@@ -2178,8 +2193,9 @@ export function writeDryRunOutcomeLedgerEvidence(input: {
         }
       },
       runtime: {
-        provider: input.provider,
-        model: input.model
+        ...input.runtime,
+        provider: input.provider ?? input.runtime?.provider,
+        model: input.model ?? input.runtime?.model
       }
     }));
     const jsonPath = join(input.evidenceDir, "outcome-ledger.json");
@@ -2387,22 +2403,40 @@ async function runZCodeReviewWithProviderRetry(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
-}): Promise<ReturnType<typeof runZCodeReview>> {
-  return runWithProviderRetry({
+}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+  const startedAt = new Date();
+  let providerAttempts = 0;
+  const result = await runWithProviderRetry({
     config: input.config,
     evidenceDir: input.evidenceDir,
-    operation: () => runZCodeReview({
-      cwd: input.worktreePath,
-      prompt: input.prompt,
-      cliPath: input.config.zcode.cliPath,
-      appConfigPath: input.config.zcode.appConfigPath,
-      model: input.config.zcode.model,
-      providerId: input.config.zcode.providerId,
-      evidenceDir: input.evidenceDir,
-      timeoutMs: input.config.zcode.timeoutMs,
-      retryMaxRetries: input.config.zcode.retryMaxRetries
-    })
+    operation: () => {
+      providerAttempts += 1;
+      return runZCodeReview({
+        cwd: input.worktreePath,
+        prompt: input.prompt,
+        cliPath: input.config.zcode.cliPath,
+        appConfigPath: input.config.zcode.appConfigPath,
+        model: input.config.zcode.model,
+        providerId: input.config.zcode.providerId,
+        evidenceDir: input.evidenceDir,
+        timeoutMs: input.config.zcode.timeoutMs,
+        retryMaxRetries: input.config.zcode.retryMaxRetries
+      });
+    }
   });
+  const completedAt = new Date();
+  return {
+    ...result,
+    runtime: {
+      provider: input.config.zcode.providerId,
+      model: input.config.zcode.model,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      latencyMs: completedAt.getTime() - startedAt.getTime(),
+      providerAttempts,
+      notes: ["Token usage is not exposed by the configured ZCode provider path; token metrics remain null."]
+    }
+  };
 }
 
 export async function runWithProviderRetry<T>(input: {

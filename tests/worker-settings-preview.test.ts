@@ -71,6 +71,7 @@ describe("worker review settings preview evidence", () => {
     );
     const preview = JSON.parse(readFileSync(join(evidenceDir, "review-settings-preview.json"), "utf8"));
     const walkthrough = readFileSync(join(evidenceDir, "walkthrough.md"), "utf8");
+    const ledger = JSON.parse(readFileSync(join(evidenceDir, "outcome-ledger.json"), "utf8"));
 
     expect(preview.sections).toContainEqual({
       key: "reviewSummary",
@@ -83,6 +84,12 @@ describe("worker review settings preview evidence", () => {
     expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");
     expect(walkthrough).toContain("- Path instructions: `src/\\`templates\\`/**`");
     expect(walkthrough).not.toContain(secretLikeToken);
+    expect(ledger.runtime).toMatchObject({
+      provider: "zcode-glm",
+      model: "GLM-5.2",
+      providerAttempts: 0,
+      notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+    });
     state.close();
   });
 

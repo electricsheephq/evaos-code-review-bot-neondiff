@@ -326,7 +326,7 @@ export function buildOutcomeLedgerInputFromReviewPlan(input: {
       category: comment.category,
       claim: `${comment.title}: ${comment.body}`,
       evidenceIds: [],
-      status: "validated"
+      status: "unvalidated"
     })),
     proofGaps: buildProofGaps(input.plan),
     safetyGates: [
@@ -564,7 +564,7 @@ function buildHardGateStatus(safetyGates: Required<Pick<OutcomeLedgerSafetyGateI
   const failed = safetyGates.filter((gate) => gate.status === "fail").map((gate) => gate.name);
   const unknown = safetyGates.filter((gate) => gate.status === "unknown").map((gate) => gate.name);
   return {
-    ok: failed.length === 0,
+    ok: failed.length === 0 && unknown.length === 0,
     failed,
     unknown
   };

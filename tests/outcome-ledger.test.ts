@@ -84,6 +84,23 @@ describe("outcome ledger", () => {
     expect(ledger.metrics.failedSafetyGates).toBe(1);
   });
 
+  it("marks unknown safety gates non-ok without treating them as failed", () => {
+    const ledger = buildOutcomeLedger(sampleInput({
+      safetyGates: [
+        { name: "current_head", status: "unknown", detail: "not checked in this dry run" }
+      ]
+    }));
+
+    expect(ledger.ok).toBe(false);
+    expect(ledger.hardGateStatus).toMatchObject({
+      ok: false,
+      failed: [],
+      unknown: ["current_head"]
+    });
+    expect(ledger.metrics.unknownSafetyGates).toBe(1);
+  });
+
+
   it("redacts secret-like evidence and marks the packet non-ok", () => {
     const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
     const ledger = buildOutcomeLedger(sampleInput({
@@ -194,7 +211,7 @@ describe("outcome ledger", () => {
     const ledger = buildOutcomeLedger(ledgerInput);
 
     expect(ledger).toMatchObject({
-      ok: true,
+      ok: false,
       subject: {
         repo: "owner/repo",
         number: 42,
@@ -214,7 +231,7 @@ describe("outcome ledger", () => {
         {
           severity: "P1",
           category: "runtime_correctness",
-          status: "validated"
+          status: "unvalidated"
         }
       ],
       reviewerDecision: {
@@ -224,7 +241,12 @@ describe("outcome ledger", () => {
         expect.objectContaining({ name: "duplicate_same_head", status: "pass" }),
         expect.objectContaining({ name: "current_head", status: "unknown" }),
         expect.objectContaining({ name: "inline_coordinate_validation", status: "unknown" })
-      ])
+      ]),
+      hardGateStatus: {
+        ok: false,
+        failed: [],
+        unknown: ["current_head", "inline_coordinate_validation"]
+      }
     });
   });
 
