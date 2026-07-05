@@ -58,6 +58,7 @@ describe("walkthrough comment rendering", () => {
         side: "RIGHT",
         severity: "P1",
         category: "data_loss",
+        confidence: 0.9,
         title: "Rollback can overwrite fresh saves",
         body: "The rollback path can clobber newer save data."
       }
@@ -416,6 +417,7 @@ describe("walkthrough comment rendering", () => {
           side: "RIGHT",
           severity: "P3",
           category: "security_boundary",
+          confidence: 0.91,
           title: "Confidence: 95% should never be quoted",
           body: "The model says 0.91 reliability in raw finding prose."
         }
@@ -542,6 +544,7 @@ describe("walkthrough comment rendering", () => {
           side: "RIGHT",
           severity: "P2",
           category: "runtime_correctness",
+          confidence: 0.88,
           title: "Model says 88% confidence",
           body: "Confidence: 88%. The model is 0.88 confident."
         }
@@ -590,6 +593,7 @@ describe("walkthrough comment rendering", () => {
           side: "RIGHT",
           severity: "P1",
           category: "runtime_correctness",
+          confidence: 0.91,
           title: "Regression with 99% confidence",
           body: "Model body says `0.91` likely."
         }

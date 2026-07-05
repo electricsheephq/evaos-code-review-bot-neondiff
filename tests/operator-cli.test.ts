@@ -346,6 +346,112 @@ describe("operator CLI summaries", () => {
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
 
+  it("keeps retryable issue enrichment deferrals advisory when PR runtime is clear", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec(`
+        create table issue_enrichment_records (
+          repo text not null,
+          issue_number integer not null,
+          issue_updated_at text,
+          status text not null,
+          reason text,
+          comment_url text,
+          error text,
+          next_eligible_at text,
+          created_at text not null,
+          updated_at text not null,
+          primary key (repo, issue_number)
+        )
+      `);
+      db
+        .prepare(
+          `insert into issue_enrichment_records
+            (repo, issue_number, issue_updated_at, status, reason, next_eligible_at, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "owner/issue-repo",
+          61,
+          "2026-07-03T03:30:00.000Z",
+          "deferred",
+          "repo_max_comments_per_cycle",
+          "2026-07-03T04:00:00.000Z",
+          "2026-07-03T03:35:00.000Z",
+          "2026-07-03T03:35:00.000Z"
+        );
+    } finally {
+      db.close();
+    }
+
+    const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(statePath, {
+      now: new Date("2026-07-03T04:30:00.000Z")
+    });
+    const issueEnrichment = issueEnrichmentStatus({ state: "ready", ok: true });
+    const release = releaseStatus({ ok: true });
+    const agents = agentInventory({ ok: true });
+    const coverage = coverageReport({ ok: true });
+    const durableQueue = durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() });
+    const checkedAt = "2026-07-03T04:30:00.000Z";
+
+    expect(issueEnrichmentRuntime).toMatchObject({
+      ok: true,
+      state: "deferred",
+      summary: {
+        total: 1,
+        failed: 0,
+        deferred: 1,
+        retryableDeferred: 1
+      }
+    });
+
+    const status = buildOperatorStatus({
+      release,
+      coverage,
+      agents,
+      providerCooldowns: [],
+      durableQueue,
+      issueEnrichment,
+      issueEnrichmentRuntime,
+      checkedAt
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.summary.issueEnrichmentRuntimeState).toBe("deferred");
+    expect(status.failedGates).not.toContainEqual(
+      expect.objectContaining({ name: "issue_enrichment_runtime_no_retryable_deferred_records" })
+    );
+    expect(status.gates).toContainEqual({
+      name: "issue_enrichment_runtime_no_retryable_deferred_records",
+      ok: true,
+      detail: "1 retryable deferred issue-enrichment record(s); advisory only"
+    });
+    expect(status.recommendedActions).toContain("retry or inspect deferred issue-enrichment records");
+
+    const inventory = buildRuntimeInventory({
+      release,
+      coverage,
+      agents,
+      durableQueue,
+      providerCooldowns: [],
+      repoProviderCooldowns: [],
+      issueEnrichment,
+      issueEnrichmentRuntime,
+      checkedAt
+    });
+
+    expect(inventory.ok).toBe(true);
+    expect(inventory.runtimeState).toBe("healthy_idle");
+    expect(inventory.summary.issueEnrichmentRuntimeState).toBe("deferred");
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_issue_enrichment_no_retryable_deferred_records",
+      ok: true,
+      detail: "1 retryable deferred issue-enrichment record(s); advisory only"
+    });
+    expect(inventory.recommendedActions).toContain("retry or inspect deferred issue-enrichment records");
+  });
+
   it("reports default-off issue enrichment runtime as disabled when there are no issue records", () => {
     const statePath = createTempDatabase(tempDirs);
     const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(statePath, {

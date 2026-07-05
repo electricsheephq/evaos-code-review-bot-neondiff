@@ -29,6 +29,13 @@ export interface EvalScenarioInput {
   ciMetadata?: EvalCiMetadataInput[];
   mergedFixes?: EvalMergedFixInput[];
   labels: EvalLabelInput[];
+  /**
+   * Explicit negative-control declaration (#284): a scenario earns negative-control calibration
+   * credit ONLY when this is true — an empty label set no longer implies a negative control (that
+   * conflated "nobody labeled this" with "deliberately verified clean"). Must not carry expected
+   * labels, mirroring the sticky-vs-cold rule.
+   */
+  negativeControl?: boolean;
   thresholds?: Partial<EvalThresholds>;
 }
 
@@ -228,6 +235,7 @@ export interface EvalScorecard {
     ciMetadata: number;
     mergedFixes: number;
     p0p1Labels: number;
+    negativeControlScenarios: number;
   };
   metrics: {
     precision: number;
@@ -319,6 +327,12 @@ export const REQUIRED_SUITES: EvalSuiteName[] = [
   "duplicate_suppression"
 ];
 
+const CONFIDENCE_BINS = [
+  { minConfidence: 0, maxConfidence: 0.5 },
+  { minConfidence: 0.5, maxConfidence: 0.8 },
+  { minConfidence: 0.8, maxConfidence: 1.01 }
+] as const;
+
 const DEFAULT_STICKY_VS_COLD_THRESHOLDS: StickyVsColdThresholds = {
   maxFalsePositiveDelta: 0,
   maxFalseNegativeDelta: 0,
@@ -399,7 +413,7 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   writeJson(artifacts["duplicate-report.json"]!, duplicateReport);
   writeFileSync(artifacts["comparison.csv"]!, buildComparisonCsv(botFindings, labels, matches));
   writeJson(artifacts["labels.json"]!, labels);
-  writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, labels, matches));
+  writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, labels, matches, input.negativeControl === true));
   writeJson(artifacts["scorecard.json"]!, scorecard);
   writeJson(artifacts["manifest.json"]!, {
     evalName,
@@ -412,7 +426,7 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
     pullNumber: input.pullNumber,
     headSha: input.headSha,
     scenarioSource: input.scenarioSource ? redactUnknown(input.scenarioSource) : undefined,
-    negativeControl: labels.length === 0,
+    negativeControl: input.negativeControl === true,
     thresholds,
     artifactInventory: Object.entries(artifacts)
       .filter(([name]) => name !== "manifest.json")
@@ -936,7 +950,11 @@ function buildScorecard(input: {
       inlinePreviews: input.inlinePreviewCount,
       ciMetadata: input.ciMetadataCount,
       mergedFixes: input.mergedFixCount,
-      p0p1Labels
+      p0p1Labels,
+      // #284: negative-control credit requires the explicit scenario flag AND a clean result —
+      // a declared control the bot still fired findings on is a FAILED control, not evidence
+      // (mirrors hasCleanNegativeControlEvidence in the sticky-vs-cold path).
+      negativeControlScenarios: input.input.negativeControl === true && input.botFindings.length === 0 ? 1 : 0
     },
     metrics: {
       precision: roundMetric(precision),
@@ -1212,13 +1230,16 @@ function buildComparisonCsv(
 function buildCalibrationReport(
   botFindings: NormalizedEvalFinding[],
   labels: NormalizedEvalFinding[],
-  matches: EvalMatch[]
+  matches: EvalMatch[],
+  negativeControl: boolean
 ): EvalCalibrationReport {
   const bins = confidenceBins(botFindings, matches);
   const promotionReason = choosePromotionReason({
     labeledFindings: labels.length,
     p0p1Labels: labels.filter((label) => label.severity === "P0" || label.severity === "P1").length,
-    negativeControlScenarios: labels.length === 0 ? 1 : 0,
+    // #284: negative-control credit comes only from the explicit scenario flag, never from an
+    // empty label set (which merely means "unlabeled", not "verified clean").
+    negativeControlScenarios: negativeControl ? 1 : 0,
     bestWilsonLowerBound: maxRawWilsonLowerBound(botFindings, matches)
   });
   return {
@@ -1234,44 +1255,48 @@ function buildCalibrationReport(
 }
 
 function confidenceBins(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): EvalCalibrationReport["bins"] {
+  return computeConfidenceBinStats(botFindings, matches).map((bin) => ({
+    minConfidence: bin.minConfidence,
+    maxConfidence: bin.maxConfidence,
+    findings: bin.findings,
+    matched: bin.matched,
+    empiricalPrecision: roundMetric(bin.empiricalPrecision),
+    wilsonLowerBound: roundMetric(bin.rawWilsonLowerBound),
+    publicLabel: "uncalibrated" as const
+  }));
+}
+
+function maxRawWilsonLowerBound(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): number {
+  return Math.max(0, ...computeConfidenceBinStats(botFindings, matches).map((bin) => bin.rawWilsonLowerBound));
+}
+
+function computeConfidenceBinStats(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): Array<{
+  minConfidence: number;
+  maxConfidence: number;
+  findings: number;
+  matched: number;
+  empiricalPrecision: number;
+  rawWilsonLowerBound: number;
+}> {
   const matchedBotIds = new Set(matches.map((match) => match.botFindingId));
-  return [
-    { minConfidence: 0, maxConfidence: 0.5 },
-    { minConfidence: 0.5, maxConfidence: 0.8 },
-    { minConfidence: 0.8, maxConfidence: 1.01 }
-  ].map((bin) => {
+  return CONFIDENCE_BINS.map((bin) => {
     const findings = botFindings.filter((finding) => finding.confidence >= bin.minConfidence && finding.confidence < bin.maxConfidence);
     const matched = findings.filter((finding) => matchedBotIds.has(finding.id)).length;
-    const wilsonLowerBound = wilsonLowerBound95(matched, findings.length);
     return {
       minConfidence: bin.minConfidence,
       maxConfidence: bin.maxConfidence === 1.01 ? 1 : bin.maxConfidence,
       findings: findings.length,
       matched,
-      empiricalPrecision: roundMetric(findings.length === 0 ? 0 : matched / findings.length),
-      wilsonLowerBound: roundMetric(wilsonLowerBound),
-      publicLabel: "uncalibrated" as const
+      empiricalPrecision: findings.length === 0 ? 0 : matched / findings.length,
+      rawWilsonLowerBound: wilsonLowerBound95(matched, findings.length)
     };
   });
-}
-
-function maxRawWilsonLowerBound(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): number {
-  const matchedBotIds = new Set(matches.map((match) => match.botFindingId));
-  return Math.max(0, ...[
-    { minConfidence: 0, maxConfidence: 0.5 },
-    { minConfidence: 0.5, maxConfidence: 0.8 },
-    { minConfidence: 0.8, maxConfidence: 1.01 }
-  ].map((bin) => {
-    const findings = botFindings.filter((finding) => finding.confidence >= bin.minConfidence && finding.confidence < bin.maxConfidence);
-    const matched = findings.filter((finding) => matchedBotIds.has(finding.id)).length;
-    return wilsonLowerBound95(matched, findings.length);
-  }));
 }
 
 export function buildEvalPromotionDecisionMarkdown(input: EvalSuitePromotionInput): string {
   const labeledFindings = input.scorecards.reduce((sum, scorecard) => sum + scorecard.counts.labels, 0);
   const p0p1Labels = input.scorecards.reduce((sum, scorecard) => sum + scorecard.counts.p0p1Labels, 0);
-  const negativeControlScenarios = input.scorecards.filter((scorecard) => scorecard.counts.labels === 0).length;
+  const negativeControlScenarios = input.scorecards.reduce((sum, scorecard) => sum + scorecard.counts.negativeControlScenarios, 0);
   const maxWilsonLowerBound = input.scorecards.reduce((max, scorecard) => Math.max(max, scorecard.metrics.maxWilsonLowerBound), 0);
   const reason = !input.ok
     ? input.missingSuites.length > 0
@@ -1321,12 +1346,16 @@ function choosePromotionReason(input: {
   if (input.labeledFindings < PUBLIC_CONFIDENCE_POLICY.minLabeledFindings) return "insufficient_labeled_findings";
   if (input.p0p1Labels < PUBLIC_CONFIDENCE_POLICY.minP0P1Labels) return "insufficient_p0_p1_labels";
   if (input.negativeControlScenarios < PUBLIC_CONFIDENCE_POLICY.minNegativeControlScenarios) return "insufficient_negative_controls";
-  if (input.bestWilsonLowerBound < PUBLIC_CONFIDENCE_POLICY.minWilsonLowerBound) return "wilson_lower_bound_below_threshold";
+  if (
+    !Number.isFinite(input.bestWilsonLowerBound) ||
+    input.bestWilsonLowerBound < PUBLIC_CONFIDENCE_POLICY.minWilsonLowerBound ||
+    input.bestWilsonLowerBound > 1
+  ) return "wilson_lower_bound_below_threshold";
   return "eligible";
 }
 
 function wilsonLowerBound95(successes: number, total: number): number {
-  if (total <= 0) return 0;
+  if (!Number.isFinite(successes) || !Number.isFinite(total) || total <= 0 || successes < 0 || successes > total) return 0;
   const z = 1.96;
   const p = successes / total;
   const denominator = 1 + z ** 2 / total;
@@ -1334,6 +1363,12 @@ function wilsonLowerBound95(successes: number, total: number): number {
   const margin = z * Math.sqrt((p * (1 - p) + z ** 2 / (4 * total)) / total);
   return Math.max(0, (centre - margin) / denominator);
 }
+
+export const __evalHarnessTestHooks = {
+  computeConfidenceBinStats,
+  maxRawWilsonLowerBound,
+  wilsonLowerBound95
+};
 
 function buildInlinePreviews(
   inputPreviews: EvalInlinePreviewInput[] | undefined,
@@ -1691,6 +1726,12 @@ function validateEvalInput(input: EvalScenarioInput): void {
   if (input.mode !== undefined && !["gating", "exploratory"].includes(input.mode)) throw new Error("mode must be gating or exploratory");
   if (input.scenarioSource !== undefined) validateScenarioSource(input.scenarioSource);
   if (!Array.isArray(input.labels)) throw new Error("labels must be an array");
+  if (input.negativeControl !== undefined && typeof input.negativeControl !== "boolean") {
+    throw new Error("negativeControl must be a boolean");
+  }
+  if (input.negativeControl === true && expectedLabelKeys(input.labels).length > 0) {
+    throw new Error("negativeControl scenarios must not include expected labels");
+  }
   if (input.inlinePreviews !== undefined && !Array.isArray(input.inlinePreviews)) throw new Error("inlinePreviews must be an array");
   if (input.ciMetadata !== undefined && !Array.isArray(input.ciMetadata)) throw new Error("ciMetadata must be an array");
   if (input.mergedFixes !== undefined && !Array.isArray(input.mergedFixes)) throw new Error("mergedFixes must be an array");

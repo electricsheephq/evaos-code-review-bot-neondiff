@@ -450,8 +450,8 @@ export function buildOperatorStatus(input: {
           },
           {
             name: "issue_enrichment_runtime_no_retryable_deferred_records",
-            ok: issueEnrichmentRuntimeRetryableDeferred === 0,
-            detail: `${issueEnrichmentRuntimeRetryableDeferred} retryable deferred issue-enrichment record(s)`
+            ok: true,
+            detail: `${issueEnrichmentRuntimeRetryableDeferred} retryable deferred issue-enrichment record(s); advisory only`
           }
         ]
       : [])
@@ -646,8 +646,8 @@ export function buildRuntimeInventory(input: {
           },
           {
             name: "runtime_issue_enrichment_no_retryable_deferred_records",
-            ok: issueEnrichmentRuntimeRetryableDeferred === 0,
-            detail: `${issueEnrichmentRuntimeRetryableDeferred} retryable deferred issue-enrichment record(s)`
+            ok: true,
+            detail: `${issueEnrichmentRuntimeRetryableDeferred} retryable deferred issue-enrichment record(s); advisory only`
           }
         ]
       : [])
@@ -1002,7 +1002,8 @@ export function collectOperatorIssueEnrichmentRuntime(
         ? "deferred"
         : "idle";
     return {
-      ok: summary.failed === 0 && summary.retryableDeferred === 0,
+      // Deferrals are backlog signals for the separate issue-enrichment lane; only failures make this runtime unhealthy.
+      ok: summary.failed === 0,
       checkedAt,
       state,
       summary,

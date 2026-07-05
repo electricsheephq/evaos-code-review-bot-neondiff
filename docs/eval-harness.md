@@ -136,9 +136,11 @@ rejects non-empty roots instead of deleting them, so stale artifacts cannot
 survive into a new evidence packet and the CLI cannot accidentally remove a
 broader eval directory.
 
-An empty sticky-vs-cold label set is not counted as negative-control evidence by
-itself. The wrapper must set `negativeControl: true`, and declared
-negative-control wrappers may not include expected labels.
+An empty label set is never counted as negative-control evidence by itself, on
+either the offline or the sticky-vs-cold path. A scenario earns negative-control
+credit only when it explicitly sets `negativeControl: true`; an unlabeled
+scenario without the flag earns zero calibration credit of any kind. Declared
+negative controls may not include expected labels.
 
 Supported label sources:
 
@@ -148,10 +150,11 @@ Supported label sources:
 - `merged_fix`
 - `seeded_defect`
 
-Negative controls use an empty `labels` array. In sticky-vs-cold packets, a
-declared negative control only counts and only passes when both cold and sticky
-packets emit zero findings, even when the inner packets use exploratory
-thresholds.
+Negative controls set `negativeControl: true` and use an empty `labels` array
+(the flag, not the empty array, is what grants credit). In sticky-vs-cold
+packets, a declared negative control only counts and only passes when both cold
+and sticky packets emit zero findings, even when the inner packets use
+exploratory thresholds.
 
 `mode` defaults to `gating`. Gating scenarios may tighten thresholds, but cannot
 silently loosen below the harness defaults. Use `mode: "exploratory"` for scout
