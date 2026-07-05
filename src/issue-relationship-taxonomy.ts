@@ -286,6 +286,7 @@ function whyClusterMatters(
 }
 
 function searchableText(input: IssueRelationshipItemInput): string {
+  // dependsOn and blockedBy are cluster relationships; relatedRefs is the public evidence channel for routing signals.
   return [
     input.title,
     input.body ?? "",

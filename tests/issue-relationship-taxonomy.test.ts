@@ -208,18 +208,25 @@ describe("issue relationship taxonomy", () => {
       title: "Update beta release gating notes",
       paths: ["docs/beta.md"]
     }).category).toBe("docs_only");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49e",
+      kind: "issue",
+      title: "Label cleanup",
+      labels: ["pre-release-risk-review"]
+    }).category).toBe("needs_human_routing");
   });
 
   it("keeps dependsOn refs as relationship metadata, not proof evidence", () => {
     expect(classifyIssueRelationshipItem({
-      id: "issue-49e",
+      id: "issue-49f",
       kind: "issue",
       title: "Release gate needs beta proof",
       dependsOn: ["ci failure fixture issue"]
     }).proofRequirements).toEqual(["release_gate"]);
 
     expect(classifyIssueRelationshipItem({
-      id: "issue-49f",
+      id: "issue-49g",
       kind: "issue",
       title: "Release gate needs beta proof",
       relatedRefs: ["ci failure fixture issue"]
@@ -263,17 +270,18 @@ describe("issue relationship taxonomy", () => {
     ];
 
     const result: IssueRelationshipClusterResult = buildIssueRelationshipClusters({ items });
+    const clustersById = new Map(result.publicIssueCommentState.clusters.map((cluster) => [cluster.id, cluster]));
 
     expect(result.publicIssueCommentState.clusters).toHaveLength(2);
-    expect(result.publicIssueCommentState.clusters[0]).toMatchObject({
+    expect(clustersById.get("worker-queue")).toMatchObject({
       id: "worker-queue",
       categories: ["reproduction_gap", "regression"],
       proofRequirements: ["reproduction_steps", "regression_fixture"],
       suggestedLabels: ["needs-proof"],
       suggestedReviewers: ["queue-owner"]
     });
-    expect(result.publicIssueCommentState.clusters[0]?.whyItMatters).toContain("Multiple related records");
-    expect(result.publicIssueCommentState.clusters[1]).toMatchObject({
+    expect(clustersById.get("worker-queue")?.whyItMatters).toContain("Multiple related records");
+    expect(clustersById.get("standalone-issue-52")).toMatchObject({
       id: "standalone-issue-52",
       categories: ["docs_only"],
       proofRequirements: ["docs_scope"]
