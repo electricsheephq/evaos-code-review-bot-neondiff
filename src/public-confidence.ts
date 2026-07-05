@@ -72,7 +72,11 @@ const DANGLING_CONFIDENCE_FRAGMENT_MAX_TRAILING_CHARS = 64;
 const DANGLING_CONFIDENCE_VALUE_CONTEXT_CHARS = 256;
 const PUBLIC_CONFIDENCE_TRUNCATION_NOTICE = "\n\n[truncated before public confidence sanitization]";
 const HORIZONTAL_WHITESPACE_PATTERN = String.raw`[^\S\r\n]`;
-const CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?${HORIZONTAL_WHITESPACE_PATTERN}*(?:%|percent\b)|(?:0?\.\d+|1\.0+)(?=\b|[-_]))`;
+const NUMERIC_CONFIDENCE_VALUE_PATTERN = String.raw`(?:\d+(?:\.\d+)?${HORIZONTAL_WHITESPACE_PATTERN}*(?:%|percent\b)|(?:0?\.\d+|1\.0+)(?=\b|[-_]))`;
+const FRACTION_CONFIDENCE_VALUE_PATTERN = String.raw`(?:\b\d{1,3}${HORIZONTAL_WHITESPACE_PATTERN}*(?:\/${HORIZONTAL_WHITESPACE_PATTERN}*|out${HORIZONTAL_WHITESPACE_PATTERN}+of${HORIZONTAL_WHITESPACE_PATTERN}+)\d{1,3}\b)`;
+const QUALITATIVE_CONFIDENCE_VALUE_PATTERN = String.raw`(?:\b(?:high|medium|low)\b)`;
+const RATING_CONFIDENCE_VALUE_PATTERN = String.raw`(?:${NUMERIC_CONFIDENCE_VALUE_PATTERN}|${FRACTION_CONFIDENCE_VALUE_PATTERN})`;
+const CONFIDENCE_VALUE_PATTERN = String.raw`(?:${NUMERIC_CONFIDENCE_VALUE_PATTERN}|${FRACTION_CONFIDENCE_VALUE_PATTERN}|${QUALITATIVE_CONFIDENCE_VALUE_PATTERN})`;
 const CONFIDENCE_NOUN_PATTERN = String.raw`(?:confidence|certainty|reliability|sure(?:ness)?)`;
 const CONFIDENCE_SEPARATOR_PATTERN = String.raw`(?:${HORIZONTAL_WHITESPACE_PATTERN}+|[-_]+)`;
 const MARKDOWN_WRAPPER_PATTERN = "(?:[*_~`]+)?";
@@ -98,7 +102,7 @@ const CONFIDENCE_NOUN_VALUE_PATTERN = new RegExp(
   "gi"
 );
 const VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`\b${CONFIDENCE_VALUE_PATTERN}(?:${HORIZONTAL_WHITESPACE_PATTERN}*|[-_]+)(?:confident|confidence(?:${HORIZONTAL_WHITESPACE_PATTERN}+in\b)?|reliable|reliability|sure)\b`,
+  String.raw`\b(?:${RATING_CONFIDENCE_VALUE_PATTERN}(?:${HORIZONTAL_WHITESPACE_PATTERN}*|[-_]+)(?:confident|confidence(?:${HORIZONTAL_WHITESPACE_PATTERN}+in\b)?|reliable|reliability|sure)|${QUALITATIVE_CONFIDENCE_VALUE_PATTERN}(?:${HORIZONTAL_WHITESPACE_PATTERN}*|[-_]+)(?:confident|confidence(?:${HORIZONTAL_WHITESPACE_PATTERN}+in\b)?))\b`,
   "gi"
 );
 const VALUE_IN_CONFIDENCE_PATTERN = new RegExp(
@@ -110,16 +114,16 @@ const CONCATENATED_VALUE_CONFIDENCE_PATTERN = new RegExp(
   "gi"
 );
 const MARKDOWN_VALUE_CONFIDENCE_PATTERN = new RegExp(
-  String.raw`${MARKDOWN_VALUE_START_PATTERN}${MARKDOWN_WRAPPER_PATTERN}${CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:${HORIZONTAL_WHITESPACE_PATTERN}*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:${HORIZONTAL_WHITESPACE_PATTERN}+in\b)?|reliable|reliability|sure)${MARKDOWN_WRAPPER_PATTERN}\b`,
+  String.raw`${MARKDOWN_VALUE_START_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:${RATING_CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:${HORIZONTAL_WHITESPACE_PATTERN}*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:${HORIZONTAL_WHITESPACE_PATTERN}+in\b)?|reliable|reliability|sure)|${QUALITATIVE_CONFIDENCE_VALUE_PATTERN}${MARKDOWN_WRAPPER_PATTERN}(?:${HORIZONTAL_WHITESPACE_PATTERN}*|[-_]+)${MARKDOWN_WRAPPER_PATTERN}(?:confident|confidence(?:${HORIZONTAL_WHITESPACE_PATTERN}+in\b)?))${MARKDOWN_WRAPPER_PATTERN}\b`,
   "gi"
 );
 const QUALIFIED_CONFIDENCE_DECIMAL_PATTERN = new RegExp(
   String.raw`\b(?:high|medium|low)${HORIZONTAL_WHITESPACE_PATTERN}+confidence${HORIZONTAL_WHITESPACE_PATTERN}*\(${HORIZONTAL_WHITESPACE_PATTERN}*(?:0?\.\d+|1(?:\.0+)?)${HORIZONTAL_WHITESPACE_PATTERN}*\)`,
   "gi"
 );
-const RESIDUAL_CONFIDENCE_VALUE_PATTERN = new RegExp(CONFIDENCE_VALUE_PATTERN, "gi");
+const RESIDUAL_CONFIDENCE_VALUE_PATTERN = new RegExp(NUMERIC_CONFIDENCE_VALUE_PATTERN, "gi");
 const CONFIDENCE_SANITIZER_CONTEXT_PREFILTER = /confidence|certainty|reliability|sure|confident|reliable/i;
-const CONFIDENCE_SANITIZER_VALUE_PREFILTER = /\d/;
+const CONFIDENCE_SANITIZER_VALUE_PREFILTER = /\d|\b(?:high|medium|low)\b/i;
 const RESIDUAL_CONFIDENCE_CONTEXT_PATTERN = /confidence|certainty|reliability/i;
 // Keep this carve-out deliberately narrow: until calibrated evidence is present,
 // review-confidence redaction wins over ambiguous statistical phrasing.
@@ -399,7 +403,8 @@ function boundPublicConfidenceText(value: string): string {
 }
 
 function findDanglingConfidenceTokenStart(value: string): number {
-  const confidenceFragment = /confidence|certainty|reliability|sure(?:ness)?|\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)/gi;
+  const confidenceFragment =
+    /confidence|certainty|reliability|sure(?:ness)?|\d+(?:\.\d+)?\s*(?:%|percent\b)|(?:0?\.\d+|1\.0+)|\b\d{1,3}\s*(?:\/\s*|out\s+of\s+)\d{1,3}\b|\b(?:high|medium|low)\b/gi;
   let lastConfidenceWordIndex = -1;
   let lastMatchIndex = -1;
   for (const match of value.matchAll(confidenceFragment)) {
