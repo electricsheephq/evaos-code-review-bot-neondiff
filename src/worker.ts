@@ -1332,6 +1332,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   let lease: ReviewRunLease | undefined;
   let budgetStarted = false;
+  const releaseReviewCapacity = (): void => {
+    if (lease) {
+      state.releaseReviewRunLease(lease.leaseId);
+      lease = undefined;
+    }
+    if (budgetStarted) {
+      budget.finish();
+      budgetStarted = false;
+    }
+  };
   const acquireReviewCapacity = (): boolean => {
     if (budgetStarted && lease) return true;
     if (!budget.tryStart()) return false;
@@ -1563,6 +1573,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       event,
       reviewUrl: review.html_url
     });
+    releaseReviewCapacity();
     if (!input.processedHeadPolicy) {
       await reconcileProcessedHeadAfterDirectReviewSafely({
         config,
@@ -1575,8 +1586,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     return commandReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
-    if (lease) state.releaseReviewRunLease(lease.leaseId);
-    if (budgetStarted) budget.finish();
+    releaseReviewCapacity();
   }
 }
 
