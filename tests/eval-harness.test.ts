@@ -1704,6 +1704,32 @@ describe("offline negative-control flag (#284)", () => {
       .toThrow("negativeControl scenarios must not include expected labels");
   });
 
+  it("denies negative-control credit when a declared control still fires findings", () => {
+    // A flagged control the bot fired on is a FAILED control — it must not add calibration
+    // evidence (mirrors the sticky-vs-cold clean-evidence rule).
+    const dirty = runInto(
+      baseScenario({
+        runId: "neg-control-284-dirty",
+        negativeControl: true,
+        botFindings: {
+          findings: [
+            {
+              severity: "P2",
+              path: "src/x.ts",
+              line: 3,
+              title: "Spurious finding on a negative control",
+              body: "The bot should not have fired here.",
+              confidence: 0.7
+            }
+          ]
+        }
+      }),
+      "evaos-neg-control-dirty-"
+    );
+
+    expect(dirty.scorecard.counts.negativeControlScenarios).toBe(0);
+  });
+
   it("sums negative-control credit across multiple scorecards in the promotion decision", () => {
     // #284 second derivation site: suite-level promotion aggregates the explicit per-scorecard
     // count. One flagged control + one merely-unlabeled scenario must aggregate to exactly 1.

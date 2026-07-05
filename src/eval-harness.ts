@@ -951,8 +951,10 @@ function buildScorecard(input: {
       ciMetadata: input.ciMetadataCount,
       mergedFixes: input.mergedFixCount,
       p0p1Labels,
-      // #284: negative-control credit is earned only by the explicit scenario flag.
-      negativeControlScenarios: input.input.negativeControl === true ? 1 : 0
+      // #284: negative-control credit requires the explicit scenario flag AND a clean result —
+      // a declared control the bot still fired findings on is a FAILED control, not evidence
+      // (mirrors hasCleanNegativeControlEvidence in the sticky-vs-cold path).
+      negativeControlScenarios: input.input.negativeControl === true && input.botFindings.length === 0 ? 1 : 0
     },
     metrics: {
       precision: roundMetric(precision),
