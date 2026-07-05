@@ -129,6 +129,14 @@ describe("issue relationship taxonomy", () => {
       body: "Fix wording in the release notes.",
       paths: ["docs/releases/v0.4.0.md"]
     }).category).toBe("docs_only");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-47",
+      kind: "issue",
+      title: "Publish docs typo",
+      body: "Document the production setup page before publishing the docs.",
+      paths: ["docs/SETUP.md"]
+    }).category).toBe("docs_only");
   });
 
   it("clusters related issues and PRs with public-safe relationship reasons", () => {
@@ -188,5 +196,40 @@ describe("issue relationship taxonomy", () => {
       privateEvidenceItems: 1
     });
     expect(JSON.stringify(result.publicIssueCommentState)).not.toContain("/Volumes/LEXAR");
+  });
+
+  it("counts private fields that are sanitized out of public output", () => {
+    const result = buildIssueRelationshipClusters({
+      items: [
+        {
+          id: "issue-53",
+          kind: "issue",
+          title: "Local screenshot proves the failure",
+          publicSummary: "Public summary is safe.",
+          paths: ["/Volumes/LEXAR/private/screenshot.png"]
+        }
+      ]
+    });
+
+    expect(result.privateEvidenceBoundary).toEqual({
+      rawEvidenceOmitted: true,
+      privateEvidenceItems: 1
+    });
+    expect(result.publicIssueCommentState.clusters[0]?.items[0]?.publicPaths).toEqual([]);
+  });
+
+  it("redacts local paths from public text fields", () => {
+    const result = classifyIssueRelationshipItem({
+      id: "issue-54",
+      kind: "issue",
+      title: "Failure captured at /Volumes/LEXAR/private/raw.log",
+      publicSummary: "Repro notes live in ~/secrets/repro.md and file:///tmp/raw.log."
+    });
+
+    expect(result.title).toBe("Failure captured at [local-path-redacted]");
+    expect(result.summary).toBe("Repro notes live in [local-path-redacted] and [local-path-redacted]");
+    expect(JSON.stringify(result)).not.toContain("/Volumes/LEXAR");
+    expect(JSON.stringify(result)).not.toContain("~/secrets");
+    expect(JSON.stringify(result)).not.toContain("file:///tmp");
   });
 });

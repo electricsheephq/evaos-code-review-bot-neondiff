@@ -196,17 +196,21 @@ function hasReleaseRiskSignal(text: string): boolean {
     "release regression",
     "beta tag",
     "beta release",
-    "deploy",
-    "deployment",
+    "deploy release",
+    "deploy blocker",
+    "deployment blocker",
     "appcast",
     "notary",
     "notarize",
     "notarized",
     "notarization",
     "launchd",
-    "production",
-    "rollout",
-    "publish"
+    "production release",
+    "production rollout",
+    "publish release",
+    "publish blocker",
+    "rollout blocker",
+    "rollout gate"
   ]);
 }
 
@@ -280,12 +284,20 @@ function hasPrivateEvidence(input: IssueRelationshipItemInput): boolean {
     input.rawLogs?.length ||
     input.localPaths?.length ||
     input.tokens?.length ||
-    containsSecretLikeText(`${input.body ?? ""}\n${input.publicSummary ?? ""}`)
+    input.paths?.some(isLocalPath) ||
+    containsSecretLikeText([
+      input.title,
+      input.body ?? "",
+      input.publicSummary ?? "",
+      input.url ?? "",
+      ...(input.paths ?? []),
+      ...(input.suggestedReviewers ?? [])
+    ].join("\n"))
   );
 }
 
 function publicText(value: string): string {
-  return redactSecrets(value).trim();
+  return redactLocalPathLikeText(redactSecrets(value)).trim();
 }
 
 function publicEvidenceUrls(values: string[]): string[] {
@@ -330,6 +342,12 @@ function isLocalPath(value: string): boolean {
   return value.startsWith("/") || value.startsWith("~/") || value.startsWith("file:") || /^[A-Za-z]:[\\/]/.test(value);
 }
 
+function redactLocalPathLikeText(value: string): string {
+  return value
+    .replace(/file:\/\/\S+/g, "[local-path-redacted]")
+    .replace(/(?:\/Volumes|\/Users|\/private|\/tmp|~\/|[A-Za-z]:[\\/])\S*/g, "[local-path-redacted]");
+}
+
 function isDocsOnly(paths: string[]): boolean {
   return paths.length > 0 && paths.every((path) => {
     const normalized = path.toLowerCase();
@@ -348,12 +366,22 @@ function hasDependencyPath(paths: string[]): boolean {
 function matchesAny(text: string, needles: string[]): boolean {
   return needles.some((needle) => {
     if (/[\s/_-]/.test(needle)) return text.includes(needle);
-    return new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}([^a-z0-9]|$)`).test(text);
+    return tokenNeedleRegExp(needle).test(text);
   });
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const TOKEN_NEEDLE_REGEXPS = new Map<string, RegExp>();
+
+function tokenNeedleRegExp(needle: string): RegExp {
+  const cached = TOKEN_NEEDLE_REGEXPS.get(needle);
+  if (cached) return cached;
+  const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(needle)}([^a-z0-9]|$)`);
+  TOKEN_NEEDLE_REGEXPS.set(needle, pattern);
+  return pattern;
 }
 
 function unique<T>(values: T[]): T[] {
