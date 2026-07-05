@@ -1912,6 +1912,62 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("does not baseline activation watermarks when manual selected runs disable watermark advancement", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-baseline-manual-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 1,
+          processExistingOpenIssuesOnActivation: false,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000,
+              processExistingOpenIssuesOnActivation: false
+            }
+          }
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => {
+              throw new Error("manual selected baseline should not scan old issues");
+            },
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              throw new Error("manual selected baseline should not post");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T04:35:00.000Z",
+          advanceWatermarks: false
+        });
+
+        expect(result.summary).toMatchObject({ reposScanned: 0, issuesSeen: 0, baselinedRepos: 1 });
+        expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toBeUndefined();
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("posts sticky issue enrichment when live comments are explicitly enabled and skips unchanged reruns", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-post-"));
     try {

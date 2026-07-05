@@ -77,6 +77,11 @@ export interface IssueEnrichmentStatus {
   blockers: IssueEnrichmentBlocker[];
 }
 
+export const DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS = new Set<IssueEnrichmentBlocker>([
+  "github_app_credentials_required_for_live_issue_comments",
+  "issue_enrichment_live_posting_disabled"
+]);
+
 export interface IssueEnrichmentRepoReadCheck {
   repo: string;
   ok: boolean;
@@ -476,16 +481,25 @@ export async function runIssueEnrichmentCycle(input: {
   repo?: string;
   includeExisting?: boolean;
   since?: string;
+  force?: boolean;
+  advanceWatermarks?: boolean;
   checkedAt?: string;
+  preacquiredLease?: { leaseId: string };
 }): Promise<IssueEnrichmentCycleResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const releasePreacquiredLeaseBeforeRun = () => {
+    if (!input.dryRun && input.preacquiredLease) {
+      input.state.releaseIssueEnrichmentRunLease(input.preacquiredLease.leaseId);
+    }
+  };
   const status = buildIssueEnrichmentStatus({
     config: input.config,
     canPostAsApp: input.github.canPostAsApp(),
     checkedAt
   });
   if (!config.enabled) {
+    releasePreacquiredLeaseBeforeRun();
     return {
       ok: true,
       checkedAt,
@@ -497,7 +511,10 @@ export async function runIssueEnrichmentCycle(input: {
       recommendedActions: buildScanRecommendedActions(status, emptyCycleSummary())
     };
   }
-  if (status.state === "blocked") {
+  const blockedForRun = status.state === "blocked" &&
+    !(input.dryRun && status.blockers.every((blocker) => DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(blocker)));
+  if (blockedForRun) {
+    releasePreacquiredLeaseBeforeRun();
     const summary = emptyCycleSummary();
     return {
       ok: false,
@@ -513,7 +530,7 @@ export async function runIssueEnrichmentCycle(input: {
 
   let lease: { leaseId: string } | undefined;
   if (!input.dryRun) {
-    lease = input.state.tryAcquireIssueEnrichmentRunLease(config.maxActiveRuns, config.leaseTtlMs, new Date(checkedAt));
+    lease = input.preacquiredLease ?? input.state.tryAcquireIssueEnrichmentRunLease(config.maxActiveRuns, config.leaseTtlMs, new Date(checkedAt));
     if (!lease) {
       const summary = { ...emptyCycleSummary(), workerSkipped: 1 };
       return {
@@ -558,7 +575,7 @@ export async function runIssueEnrichmentCycle(input: {
         reposToScan.push(repo);
         continue;
       }
-      if (!input.dryRun) {
+      if (!input.dryRun && input.advanceWatermarks !== false) {
         input.state.recordIssueEnrichmentRepoWatermark({
           repo,
           activatedAt: checkedAt,
@@ -590,7 +607,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
+      return input.force === true || !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
     };
     const scanned = reposToScan.length
       ? await collectIssueEnrichmentScan({
@@ -652,7 +669,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      if (existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt)) {
+      if (input.force !== true && existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt)) {
         summary.alreadyProcessed += 1;
         items.push({ ...item, skippedExisting: true, recordStatus: existing.status });
         continue;
@@ -752,7 +769,7 @@ export async function runIssueEnrichmentCycle(input: {
       }
     }
 
-    if (!input.dryRun) {
+    if (!input.dryRun && input.advanceWatermarks !== false) {
       for (const repo of scanned.repos) {
         if (!repo.allowed || !repo.ok || repo.baselined) continue;
         const repoItems = items.filter((item) => item.repo === repo.repo);
