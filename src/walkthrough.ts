@@ -135,7 +135,7 @@ function formatProviderMetadata(
   const displayName = provider.displayName
     ? `${formatInlinePublicText(provider.displayName, publicConfidencePolicy)} `
     : "";
-  return `${displayName}(\`${formatInlineCodePublicText(provider.providerId, publicConfidencePolicy)}\`, ${formatInlinePublicText(provider.adapter, publicConfidencePolicy)}, model \`${formatInlineCodePublicText(provider.model, publicConfidencePolicy)}\`)`;
+  return `${displayName}(${formatInlineCodePublicText(provider.providerId, publicConfidencePolicy)}, ${formatInlinePublicText(provider.adapter, publicConfidencePolicy)}, model ${formatInlineCodePublicText(provider.model, publicConfidencePolicy)})`;
 }
 
 function formatSettingsPreviewSection(
@@ -165,7 +165,7 @@ function formatSettingsPathInstructions(
 ): string[] {
   if (settings.pathInstructions.length === 0) return ["- Path instructions: none"];
   return settings.pathInstructions.map((entry) =>
-    `- Path instructions: \`${formatInlineCodePublicText(entry.pattern, publicConfidencePolicy)}\` - ${entry.instructions.map((instruction) => formatInlinePublicText(instruction, publicConfidencePolicy)).join("; ")}`
+    `- Path instructions: ${formatInlineCodePublicText(entry.pattern, publicConfidencePolicy)} - ${entry.instructions.map((instruction) => formatInlinePublicText(instruction, publicConfidencePolicy)).join("; ")}`
   );
 }
 
@@ -212,9 +212,19 @@ function formatInlinePublicText(value: string | undefined, publicConfidencePolic
 }
 
 function formatInlineCodePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
-  return formatInlinePublicText(value, publicConfidencePolicy)
-    .replace(/\\/g, "\\\\")
-    .replace(/`/g, "\\`");
+  return formatMarkdownCodeSpan(formatInlinePublicText(value, publicConfidencePolicy));
+}
+
+function formatMarkdownCodeSpan(value: string): string {
+  let longestBacktickRun = 0;
+  for (const match of value.matchAll(/`+/g)) {
+    longestBacktickRun = Math.max(longestBacktickRun, match[0].length);
+  }
+  const delimiter = "`".repeat(longestBacktickRun + 1);
+  const padding = value.startsWith("`") || value.endsWith("`") || value.startsWith(" ") || value.endsWith(" ")
+    ? " "
+    : "";
+  return `${delimiter}${padding}${value}${padding}${delimiter}`;
 }
 
 function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {

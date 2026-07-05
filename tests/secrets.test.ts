@@ -17,6 +17,20 @@ describe("secret redaction", () => {
     expect(redactSecrets(text)).toBe("Use [redacted-secret] only via env.");
   });
 
+  it("redacts NeonDiff license-shaped values case-insensitively", () => {
+    const license = "neondiff_abcd1234efgh5678";
+
+    expect(containsSecretLikeText(license)).toBe(true);
+    expect(redactSecrets(`license=${license}`)).toBe("license=[redacted-secret]");
+  });
+
+  it("does not redact ordinary lowercase hyphenated NeonDiff paths as license tokens", () => {
+    const path = "/tmp/neondiff-launchd-plist-Ov4D5v/com.example.neondiff.plist";
+
+    expect(containsSecretLikeText(path)).toBe(false);
+    expect(redactSecrets(path)).toBe(path);
+  });
+
   it("detects credential URLs, cookie headers, query tokens, and private key bodies", () => {
     const longSecret = ["123456789012", "345678901234"].join("");
     const password = ["password", "1234567890"].join("");
@@ -102,6 +116,15 @@ describe("secret redaction", () => {
     const longCookiePrefix = Array.from({ length: 600 }, (_, index) => `pref${index}=value`).join("; ");
     const sessionToken = "123456789012345678901234";
     const text = `Cookie: ${longCookiePrefix}; session=${sessionToken}`;
+
+    expect(containsSecretLikeText(text)).toBe(true);
+    expect(redactSecrets(text)).toBe("[redacted-secret]");
+  });
+
+  it("fails closed when a cookie header exceeds the bounded scan cap", () => {
+    const longCookiePrefix = Array.from({ length: 1_000 }, (_, index) => `pref${index}=value`).join("; ");
+    const hiddenSessionToken = "123456789012345678901234";
+    const text = `Cookie: ${longCookiePrefix}; session=${hiddenSessionToken}`;
 
     expect(containsSecretLikeText(text)).toBe(true);
     expect(redactSecrets(text)).toBe("[redacted-secret]");

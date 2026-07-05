@@ -32,6 +32,18 @@ const pull: PullRequestSummary = {
   requested_reviewers: [{ login: "reviewer-one" }]
 };
 
+function expectPathInstructionCodeSpan(body: string, expectedContent: string): void {
+  const line = body.split("\n").find((candidate) => candidate.startsWith("- Path instructions: "));
+  expect(line).toBeDefined();
+  const remainder = line!.slice("- Path instructions: ".length);
+  const delimiter = remainder.match(/^`+/)?.[0];
+  expect(delimiter).toBeDefined();
+  const closingIndex = remainder.indexOf(delimiter!, delimiter!.length);
+  expect(closingIndex).toBeGreaterThan(delimiter!.length - 1);
+  expect(remainder.slice(delimiter!.length, closingIndex)).toBe(expectedContent);
+  expect(remainder.slice(closingIndex + delimiter!.length)).toMatch(/^ - /);
+}
+
 describe("walkthrough comment rendering", () => {
   it("renders a stable marked walkthrough with files, effort, related refs, and text-only suggestions", () => {
     const files: PullFilePatch[] = [
@@ -341,13 +353,13 @@ describe("walkthrough comment rendering", () => {
       settingsPreview
     });
 
-    expect(walkthrough.body).toContain("- Path instructions: `src/\\`templates\\`/**`");
+    expectPathInstructionCodeSpan(walkthrough.body, "src/`templates`/**");
     expect(walkthrough.body).not.toContain(secretLikeToken);
     expect(walkthrough.body).toContain("[redacted-secret]");
     expect(walkthrough.body).toContain("Provider: Gateway [redacted-secret] (`openai-compatible`, openai-compatible, model `review-[redacted-secret]`).");
   });
 
-  it("escapes backslashes before backticks inside inline-code markdown", () => {
+  it("uses variable-length code spans for backticks inside inline-code markdown", () => {
     const settingsPreview: ReviewSettingsPreview = {
       profile: "assertive",
       sections: [
@@ -384,10 +396,16 @@ describe("walkthrough comment rendering", () => {
       comments: [],
       dropped: [],
       event: "COMMENT",
+      provider: {
+        providerId: "provider`id",
+        adapter: "openai-compatible",
+        model: "model`name"
+      },
       settingsPreview
     });
 
-    expect(walkthrough.body).toContain("- Path instructions: `src/path\\\\\\`template\\\\\\`/**`");
+    expectPathInstructionCodeSpan(walkthrough.body, "src/path\\`template\\`/**");
+    expect(walkthrough.body).toContain("Provider: (``provider`id``, openai-compatible, model ``model`name``).");
   });
 
   it("sanitizes confidence settings preview metadata while preserving ordinary likely wording", () => {

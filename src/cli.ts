@@ -825,12 +825,13 @@ async function main(): Promise<void> {
       if (result.ok) writeFileSync(join(safeOutputDir, "gitnexus-context-packet.md"), result.packet.markdown);
     }
     const format = args.format ?? "json";
+    const redactedJson = stringifyRedactedJson(result);
     if (format === "markdown") {
-      console.log(result.ok ? result.packet.markdown : JSON.stringify(result, null, 2));
+      console.log(result.ok ? result.packet.markdown : redactedJson);
     } else if (format === "both" && result.ok) {
-      console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
+      console.log(`${redactedJson}\n\n${result.packet.markdown}`);
     } else {
-      console.log(stringifyRedactedJson(result));
+      console.log(redactedJson);
     }
     if (!result.ok) process.exitCode = 1;
     return;
