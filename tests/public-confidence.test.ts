@@ -378,7 +378,7 @@ describe("public confidence display policy", () => {
     });
 
     expect(evaluation.allowed).toBe(false);
-    expect(evaluation.missingThresholds).toEqual(["labeled_findings_below_100"]);
+    expect(evaluation.missingThresholds).toEqual(["min_labeled_findings_malformed"]);
     expect(evaluation.metrics).toMatchObject({
       labeledFindings: { actual: 124, required: 100, passed: false },
       p0p1Labels: { actual: 31, required: 30, passed: true },
@@ -524,9 +524,7 @@ describe("public confidence display policy", () => {
       "calibration_evidence_url_missing_or_unusable",
       "dataset_id_missing"
     ]);
-    expect(report.dataset).toEqual({
-      evidenceUrl: "javascript:alert(1)"
-    });
+    expect(report.dataset).toEqual({});
   });
 
   it("builds an auditable calibration report only when dataset, labels, metrics, and proof boundary are explicit", () => {
@@ -590,7 +588,7 @@ describe("public confidence display policy", () => {
 
     expect(report.allowed).toBe(false);
     expect(report.publicMode).toBe("uncalibrated");
-    expect(report.missingThresholds).toEqual(["labeled_findings_below_100"]);
+    expect(report.missingThresholds).toEqual(["min_labeled_findings_malformed"]);
     expect(report.metrics).toMatchObject({
       labeledFindings: { actual: 124, required: 100, passed: false },
       p0p1Labels: { actual: 31, required: 30, passed: true },

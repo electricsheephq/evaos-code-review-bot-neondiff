@@ -18,6 +18,10 @@ export type PublicConfidenceMissingThreshold =
   | "mode_not_calibrated"
   | "calibration_evidence_url_missing_or_unusable"
   | "dataset_id_missing"
+  | "min_labeled_findings_malformed"
+  | "min_p0_p1_labels_malformed"
+  | "min_negative_control_scenarios_malformed"
+  | "min_wilson_lower_bound_malformed"
   | "labeled_findings_below_100"
   | "p0_p1_labels_below_30"
   | "negative_controls_below_10"
@@ -170,10 +174,26 @@ export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayP
     missingThresholds.push("calibration_evidence_url_missing_or_unusable");
   }
   if (!effectivePolicy.datasetId?.trim()) missingThresholds.push("dataset_id_missing");
-  if (!metrics.labeledFindings.passed) missingThresholds.push("labeled_findings_below_100");
-  if (!metrics.p0p1Labels.passed) missingThresholds.push("p0_p1_labels_below_30");
-  if (!metrics.negativeControlScenarios.passed) missingThresholds.push("negative_controls_below_10");
-  if (!metrics.wilsonLowerBound.passed) missingThresholds.push("wilson_lower_bound_below_0.95");
+  if (malformedMinimums.labeledFindings) {
+    missingThresholds.push("min_labeled_findings_malformed");
+  } else if (!metrics.labeledFindings.passed) {
+    missingThresholds.push("labeled_findings_below_100");
+  }
+  if (malformedMinimums.p0p1Labels) {
+    missingThresholds.push("min_p0_p1_labels_malformed");
+  } else if (!metrics.p0p1Labels.passed) {
+    missingThresholds.push("p0_p1_labels_below_30");
+  }
+  if (malformedMinimums.negativeControlScenarios) {
+    missingThresholds.push("min_negative_control_scenarios_malformed");
+  } else if (!metrics.negativeControlScenarios.passed) {
+    missingThresholds.push("negative_controls_below_10");
+  }
+  if (malformedMinimums.wilsonLowerBound) {
+    missingThresholds.push("min_wilson_lower_bound_malformed");
+  } else if (!metrics.wilsonLowerBound.passed) {
+    missingThresholds.push("wilson_lower_bound_below_0.95");
+  }
 
   const allowed = missingThresholds.length === 0;
   return {
@@ -194,7 +214,7 @@ export function buildPublicConfidenceCalibrationReport(policy?: PublicConfidence
     ...evaluation,
     dataset: {
       ...(effectivePolicy.datasetId ? { id: effectivePolicy.datasetId } : {}),
-      ...(effectivePolicy.evidenceUrl ? { evidenceUrl: effectivePolicy.evidenceUrl } : {})
+      ...(isUsablePublicConfidenceEvidenceUrl(effectivePolicy.evidenceUrl) ? { evidenceUrl: effectivePolicy.evidenceUrl } : {})
     },
     labels: {
       ...(effectivePolicy.labeledFindings !== undefined ? { labeledFindings: effectivePolicy.labeledFindings } : {}),
