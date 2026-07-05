@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
@@ -2165,13 +2165,34 @@ export function writeDryRunOutcomeLedgerEvidence(input: {
       files: input.files,
       plan: input.plan,
       dryRun: true,
+      safetyGateEvidence: {
+        currentHead: {
+          name: "current_head",
+          status: "pass",
+          detail: "Worker reached dry-run review-plan construction after stale-head preflight."
+        },
+        inlineCoordinateValidation: {
+          name: "inline_coordinate_validation",
+          status: "pass",
+          detail: `${input.plan.comments.length} accepted inline comment(s) survived deterministic location validation before review-plan evidence was written.`
+        }
+      },
       runtime: {
         provider: input.provider,
         model: input.model
       }
     }));
-    writeRedactedJson(join(input.evidenceDir, "outcome-ledger.json"), outcomeLedger);
-    writeFileSync(join(input.evidenceDir, "outcome-ledger.md"), renderOutcomeLedgerMarkdown(outcomeLedger));
+    const jsonPath = join(input.evidenceDir, "outcome-ledger.json");
+    const markdownPath = join(input.evidenceDir, "outcome-ledger.md");
+    const markdown = renderOutcomeLedgerMarkdown(outcomeLedger);
+    try {
+      writeRedactedJson(jsonPath, outcomeLedger);
+      writeFileSync(markdownPath, markdown);
+    } catch (error) {
+      rmSync(jsonPath, { force: true });
+      rmSync(markdownPath, { force: true });
+      throw error;
+    }
     return { ok: true };
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error));

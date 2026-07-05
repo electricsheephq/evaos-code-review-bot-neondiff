@@ -275,8 +275,22 @@ export function buildOutcomeLedgerInputFromReviewPlan(input: {
   runId?: string;
   mode?: OutcomeLedgerMode;
   runtime?: OutcomeLedgerRuntimeInput;
+  safetyGateEvidence?: {
+    currentHead?: OutcomeLedgerSafetyGateInput;
+    inlineCoordinateValidation?: OutcomeLedgerSafetyGateInput;
+  };
 }): OutcomeLedgerInput {
   const sourceIssue = extractFirstRelatedIssue(`${input.pull.title}\n${input.pull.body ?? ""}`);
+  const currentHeadGate = input.safetyGateEvidence?.currentHead ?? {
+    name: "current_head",
+    status: "unknown" as const,
+    detail: "Generic review-plan ledger builder did not re-run stale-head validation; caller must supply inherited worker evidence to mark this gate pass."
+  };
+  const inlineCoordinateGate = input.safetyGateEvidence?.inlineCoordinateValidation ?? {
+    name: "inline_coordinate_validation",
+    status: "unknown" as const,
+    detail: `${input.plan.comments.length} accepted inline comment(s) are present, but this generic builder did not re-run deterministic location validation.`
+  };
   return {
     ledgerName: "review-plan-outcome-ledger",
     runId: input.runId ?? `${input.repo.replaceAll("/", "__")}-pr-${input.pull.number}-${input.pull.head.sha.slice(0, 12)}`,
@@ -316,21 +330,13 @@ export function buildOutcomeLedgerInputFromReviewPlan(input: {
     })),
     proofGaps: buildProofGaps(input.plan),
     safetyGates: [
-      {
-        name: "current_head",
-        status: "pass",
-        detail: "Worker reached review-plan construction after stale-head preflight."
-      },
+      currentHeadGate,
       {
         name: "duplicate_same_head",
         status: input.dryRun ? "pass" : "unknown",
         detail: input.dryRun ? "Dry-run ledger does not post public comments." : "Live duplicate state is outside this dry-run ledger."
       },
-      {
-        name: "inline_coordinate_validation",
-        status: "pass",
-        detail: `${input.plan.comments.length} accepted inline comment(s) survived deterministic location validation.`
-      }
+      inlineCoordinateGate
     ],
     reviewerDecision: {
       status: mapReviewPlanDecision(input.plan),

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -195,7 +195,8 @@ describe("outcome ledger", () => {
       },
       safetyGates: expect.arrayContaining([
         expect.objectContaining({ name: "duplicate_same_head", status: "pass" }),
-        expect.objectContaining({ name: "inline_coordinate_validation", status: "pass" })
+        expect.objectContaining({ name: "current_head", status: "unknown" }),
+        expect.objectContaining({ name: "inline_coordinate_validation", status: "unknown" })
       ])
     });
   });
@@ -303,6 +304,26 @@ describe("outcome ledger", () => {
       ok: false,
       proofBoundary: "Outcome Ledger dry-run evidence failed to build; stable review-plan evidence must continue."
     });
+  });
+
+  it("removes partial worker success artifacts when markdown write fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-outcome-ledger-worker-partial-"));
+    roots.push(root);
+    mkdirSync(join(root, "outcome-ledger.md"));
+
+    const result = writeDryRunOutcomeLedgerEvidence({
+      evidenceDir: root,
+      repo: "owner/repo",
+      pull: samplePull(),
+      files: sampleFiles(),
+      plan: sampleReviewPlan(),
+      provider: "zcode",
+      model: "glm-5.2"
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(existsSync(join(root, "outcome-ledger-error.json"))).toBe(true);
+    expect(existsSync(join(root, "outcome-ledger.json"))).toBe(false);
   });
 });
 
