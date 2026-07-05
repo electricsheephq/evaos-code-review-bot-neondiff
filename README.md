@@ -112,6 +112,36 @@ Do not store the GitHub App private key, provider API key, license key, tokens,
 or customer data in this repository. Keep local config, secrets, state DBs, and
 evidence outside git.
 
+## Provider Resources And Compatibility
+
+NeonDiff is local-first for checkout state, credentials, config, evidence, and
+operator control. Model egress depends on the provider you choose: local or
+self-hosted endpoints can keep prompts and diffs on your machine or network,
+while hosted providers such as GLM/Z.AI through ZCode or hosted
+OpenAI-compatible gateways receive the review prompt and diff context required
+to answer.
+
+For setup details, see [docs/providers.md](docs/providers.md). Useful provider
+resources:
+
+- [Z.AI quick start](https://docs.z.ai/guides/overview/quick-start),
+  [Z.AI API reference](https://docs.z.ai/api-reference/introduction), and
+  [Z.AI OpenAI SDK compatibility](https://docs.z.ai/guides/develop/openai/python)
+- [Z.AI current GLM coding model guidance](https://docs.z.ai/devpack/latest-model)
+- [Ollama OpenAI compatibility docs](https://docs.ollama.com/api/openai-compatibility)
+- [cheahjs/free-llm-api-resources](https://github.com/cheahjs/free-llm-api-resources)
+  for volatile free/trial provider discovery, not NeonDiff compatibility proof
+
+Small NeonDiff compatibility matrix:
+
+| Provider or resource | NeonDiff status | Egress posture |
+| --- | --- | --- |
+| GLM/Z.AI through ZCode | Default beta path; tested by NeonDiff as the current live review route | Hosted provider receives prompts and diffs |
+| Ollama on `localhost` | Compatible by interface; provider doctor/smoke only until adapter proof promotes live review | No-egress only when endpoint and model are local |
+| LM Studio, vLLM, or local gateways | Compatible by interface; tracked for provider proof before live promotion | No-egress only for local/self-hosted endpoints |
+| Hosted OpenAI-compatible BYOK gateways | Compatible by interface; remote smoke and live review proof required | Hosted provider receives prompts and diffs |
+| Free-provider catalogs | Resource only; untested by NeonDiff unless a provider has its own proof issue | Usually hosted; check each provider |
+
 ## First Dry-Run Review
 
 Run a dry-run review before any live posting:
