@@ -32,6 +32,7 @@ export interface PublicConfidenceMetric {
   required: number;
   passed: boolean;
   blockedReason?: "malformed_minimum";
+  rejectedMinimum?: number;
 }
 
 export interface PublicConfidencePolicyEvaluation {
@@ -158,15 +159,34 @@ export function evaluatePublicConfidencePolicy(policy?: PublicConfidenceDisplayP
   const requiredNegativeControls = hardFloorPositiveInteger(effectivePolicy.minNegativeControlScenarios, PUBLIC_CONFIDENCE_MIN_NEGATIVE_CONTROL_SCENARIOS);
   const requiredWilsonLowerBound = hardFloorProbability(effectivePolicy.minWilsonLowerBound, PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND);
   const metrics = {
-    labeledFindings: thresholdMetric(effectivePolicy.labeledFindings, requiredLabeledFindings, isNonNegativeInteger, malformedMinimums.labeledFindings),
-    p0p1Labels: thresholdMetric(effectivePolicy.p0p1Labels, requiredP0P1Labels, isNonNegativeInteger, malformedMinimums.p0p1Labels),
+    labeledFindings: thresholdMetric(
+      effectivePolicy.labeledFindings,
+      requiredLabeledFindings,
+      isNonNegativeInteger,
+      malformedMinimums.labeledFindings,
+      finiteNumberOrUndefined(policy?.minLabeledFindings)
+    ),
+    p0p1Labels: thresholdMetric(
+      effectivePolicy.p0p1Labels,
+      requiredP0P1Labels,
+      isNonNegativeInteger,
+      malformedMinimums.p0p1Labels,
+      finiteNumberOrUndefined(policy?.minP0P1Labels)
+    ),
     negativeControlScenarios: thresholdMetric(
       effectivePolicy.negativeControlScenarios,
       requiredNegativeControls,
       isNonNegativeInteger,
-      malformedMinimums.negativeControlScenarios
+      malformedMinimums.negativeControlScenarios,
+      finiteNumberOrUndefined(policy?.minNegativeControlScenarios)
     ),
-    wilsonLowerBound: thresholdMetric(effectivePolicy.wilsonLowerBound, requiredWilsonLowerBound, isProbability, malformedMinimums.wilsonLowerBound)
+    wilsonLowerBound: thresholdMetric(
+      effectivePolicy.wilsonLowerBound,
+      requiredWilsonLowerBound,
+      isProbability,
+      malformedMinimums.wilsonLowerBound,
+      finiteNumberOrUndefined(policy?.minWilsonLowerBound)
+    )
   };
   const missingThresholds: PublicConfidenceMissingThreshold[] = [];
 
@@ -232,13 +252,20 @@ function thresholdMetric(
   actual: number | undefined,
   required: number,
   isValidActual: (value: unknown) => value is number,
-  forceFail = false
+  forceFail = false,
+  rejectedMinimum?: number
 ): PublicConfidenceMetric {
   if (!isValidActual(actual)) {
     return { required, passed: false };
   }
   if (forceFail) {
-    return { actual, required, passed: false, blockedReason: "malformed_minimum" };
+    return {
+      actual,
+      required,
+      passed: false,
+      blockedReason: "malformed_minimum",
+      ...(rejectedMinimum !== undefined ? { rejectedMinimum } : {})
+    };
   }
   return { actual, required, passed: actual >= required };
 }
@@ -249,6 +276,10 @@ function hardFloorPositiveInteger(value: unknown, floor: number): number {
 
 function hardFloorProbability(value: unknown, floor: number): number {
   return isProbability(value) ? Math.max(value, floor) : floor;
+}
+
+function finiteNumberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function findMalformedPolicyMinimums(policy: PublicConfidenceDisplayPolicy | undefined): {

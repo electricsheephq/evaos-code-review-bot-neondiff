@@ -372,19 +372,43 @@ describe("public confidence display policy", () => {
   });
 
   it("keeps malformed-minimum metrics aligned with missing thresholds", () => {
-    const evaluation = evaluatePublicConfidencePolicy({
-      ...buildPublicConfidencePolicy(calibratedPolicyInput()),
-      minLabeledFindings: -5
-    });
+    const cases = [
+      {
+        override: { minLabeledFindings: -5 },
+        threshold: "min_labeled_findings_malformed",
+        metric: "labeledFindings",
+        expectedMetric: { actual: 124, required: 100, passed: false, blockedReason: "malformed_minimum", rejectedMinimum: -5 }
+      },
+      {
+        override: { minP0P1Labels: -5 },
+        threshold: "min_p0_p1_labels_malformed",
+        metric: "p0p1Labels",
+        expectedMetric: { actual: 31, required: 30, passed: false, blockedReason: "malformed_minimum", rejectedMinimum: -5 }
+      },
+      {
+        override: { minNegativeControlScenarios: -5 },
+        threshold: "min_negative_control_scenarios_malformed",
+        metric: "negativeControlScenarios",
+        expectedMetric: { actual: 10, required: 10, passed: false, blockedReason: "malformed_minimum", rejectedMinimum: -5 }
+      },
+      {
+        override: { minWilsonLowerBound: -0.5 },
+        threshold: "min_wilson_lower_bound_malformed",
+        metric: "wilsonLowerBound",
+        expectedMetric: { actual: 0.95, required: 0.95, passed: false, blockedReason: "malformed_minimum", rejectedMinimum: -0.5 }
+      }
+    ] as const;
 
-    expect(evaluation.allowed).toBe(false);
-    expect(evaluation.missingThresholds).toEqual(["min_labeled_findings_malformed"]);
-    expect(evaluation.metrics).toMatchObject({
-      labeledFindings: { actual: 124, required: 100, passed: false, blockedReason: "malformed_minimum" },
-      p0p1Labels: { actual: 31, required: 30, passed: true },
-      negativeControlScenarios: { actual: 10, required: 10, passed: true },
-      wilsonLowerBound: { actual: 0.95, required: 0.95, passed: true }
-    });
+    for (const testCase of cases) {
+      const evaluation = evaluatePublicConfidencePolicy({
+        ...buildPublicConfidencePolicy(calibratedPolicyInput()),
+        ...testCase.override
+      });
+
+      expect(evaluation.allowed).toBe(false);
+      expect(evaluation.missingThresholds).toEqual([testCase.threshold]);
+      expect(evaluation.metrics[testCase.metric]).toMatchObject(testCase.expectedMetric);
+    }
   });
 
   it("keeps hard promotion floors even when lower minima are supplied directly", () => {
@@ -606,7 +630,7 @@ describe("public confidence display policy", () => {
     expect(report.publicMode).toBe("uncalibrated");
     expect(report.missingThresholds).toEqual(["min_labeled_findings_malformed"]);
     expect(report.metrics).toMatchObject({
-      labeledFindings: { actual: 124, required: 100, passed: false, blockedReason: "malformed_minimum" },
+      labeledFindings: { actual: 124, required: 100, passed: false, blockedReason: "malformed_minimum", rejectedMinimum: -5 },
       p0p1Labels: { actual: 31, required: 30, passed: true },
       negativeControlScenarios: { actual: 10, required: 10, passed: true },
       wilsonLowerBound: { actual: 0.95, required: 0.95, passed: true }
