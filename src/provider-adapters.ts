@@ -1,8 +1,11 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { parseFindings } from "./findings.js";
+import { openAICompatibleProviderTargetError, type ProviderRegistryEntry } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const EVIDENCE_PREVIEW_LIMIT = 500;
+const REVIEW_JSON_EXTRACTION_CHAR_LIMIT = 200_000;
 const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
 const REDACTION_TOKENS = [
   "[redacted-private-evidence]",
@@ -27,6 +30,7 @@ export interface ProviderAdapterFixture {
   model: string;
   prompt: string;
   expectJsonObject?: boolean;
+  expectReviewJson?: boolean;
 }
 
 export interface ProviderAdapterExecutionInput {
@@ -45,6 +49,13 @@ export interface ProviderAdapterExecutionResult {
 export interface ProviderRuntimeAdapter {
   id: string;
   execute(input: ProviderAdapterExecutionInput): Promise<ProviderAdapterExecutionResult>;
+}
+
+export interface OpenAICompatibleReviewAdapterOptions {
+  providerId: string;
+  provider: ProviderRegistryEntry;
+  fetchImpl?: typeof fetch;
+  env?: Record<string, string | undefined>;
 }
 
 export interface ProviderAdapterFixtureEvidence {
@@ -105,14 +116,15 @@ export async function runProviderAdapterFixture(input: {
       prompt: fixture.prompt
     });
     const evidence = buildFixtureEvidence(fixture.prompt, execution);
-    if (fixture.expectJsonObject && !isJsonObject(execution.text)) {
+    const reviewJsonError = fixture.expectReviewJson ? validateReviewJsonOutput(execution.text) : undefined;
+    if (reviewJsonError || (fixture.expectJsonObject && !isJsonObject(execution.text))) {
       return {
         ok: false,
         ...baseResult,
         evidence,
         error: {
           class: "model-output",
-          message: "Adapter output was not a JSON object."
+          message: reviewJsonError ?? "Adapter output was not a JSON object."
         }
       };
     }
@@ -136,15 +148,94 @@ export async function runProviderAdapterFixture(input: {
 
 export function classifyProviderAdapterError(message: string): ProviderAdapterErrorClass {
   const normalized = message.toLowerCase();
-  if (/\b(unauthorized|forbidden|invalid[ _-]api[ _-]key|401|403)\b/.test(normalized)) return "auth";
+  if (/\b(unauthorized|forbidden|invalid[ _-]api[ _-]key|missing[ _-]api[ _-]key|401|403)\b/.test(normalized)) return "auth";
   if (/\b(rate[ _-]limit|quota|too many requests|429|insufficient[ _-]quota|throttl(?:e|ed|ing))\b/.test(normalized)) return "throttle";
   // Provider timeout wording wins over network codes in combined messages to keep cooldown evidence deterministic.
   if (/\b(time[ _-]?out|timed[ _-]out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
-  if (/\b(econnreset|econnrefused|enotfound|eai_again|socket|dns|connection[ _-]refused|connection[ _-]reset|network[ _-](?:error|failure|failed|unreachable|unavailable|down))\b/.test(normalized)) return "network";
-  if (/\b(json|schema|parseable|malformed output|invalid response|invalid output|tool call|structured output)\b/.test(normalized)) {
+  if (/\b(econnreset|econnrefused|enotfound|eai_again|socket|dns|fetch failed|service unavailable|temporarily unavailable|overload|connection[ _-]refused|connection[ _-]reset|network[ _-](?:error|failure|failed|unreachable|unavailable|down))\b/.test(normalized)) return "network";
+  if (/\b(json|schema|parseable|malformed output|invalid response|invalid output|review object|review json|tool call|structured output)\b/.test(normalized)) {
     return "model-output";
   }
   return "unknown";
+}
+
+export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleReviewAdapterOptions): ProviderRuntimeAdapter {
+  return {
+    id: "openai-compatible",
+    async execute(input) {
+      const provider = options.provider;
+      const fetchImpl = options.fetchImpl ?? fetch;
+      const env = options.env ?? process.env;
+      const baseUrl = provider.baseUrl;
+      if (!baseUrl) throw new Error("OpenAI-compatible provider requires baseUrl for review execution.");
+      const targetError = openAICompatibleProviderTargetError(baseUrl, provider, "review");
+      if (targetError) throw new Error(targetError);
+
+      const apiKey = resolveOpenAICompatibleApiKey(provider, env);
+      const timeout = createAbortSignal(provider.timeoutMs);
+      const requestBody = {
+        model: input.model,
+        temperature: 0,
+        stream: false,
+        ...(provider.capabilities.jsonOutput ? { response_format: { type: "json_object" } } : {}),
+        messages: [
+          {
+            role: "system",
+            content: "Return only the NeonDiff review JSON object. Do not include markdown, prose, tool calls, or raw diff excerpts."
+          },
+          {
+            role: "user",
+            content: input.prompt
+          }
+        ]
+      };
+      try {
+        const response = await fetchImpl(buildOpenAIChatCompletionsUrl(baseUrl), {
+          method: "POST",
+          signal: timeout.signal,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+          },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+          throw new Error(openAICompatibleStatusErrorMessage(response.status));
+        }
+
+        const responseText = await readResponseTextWithAbort(response, timeout.signal);
+        const parsed = parseOpenAICompatibleResponse(responseText);
+        const content = extractOpenAICompatibleMessageContent(parsed);
+        const reviewOutput = normalizeReviewJsonOutput(content);
+        if (!reviewOutput.ok) throw new Error(reviewOutput.error);
+
+        return {
+          text: reviewOutput.text,
+          rawEvidence: {
+            providerId: options.providerId,
+            adapterId: input.adapterId,
+            model: input.model,
+            baseUrl,
+            status: response.status,
+            ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
+            ...extractOpenAICompatibleChoiceEvidence(parsed),
+            ...extractOpenAICompatibleUsageEvidence(parsed)
+          }
+        };
+      } finally {
+        timeout.dispose();
+      }
+    }
+  };
+}
+
+export function buildOpenAIChatCompletionsUrl(baseUrl: string): string {
+  const parsed = new URL(baseUrl);
+  const pathname = parsed.pathname.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  parsed.pathname = pathname.endsWith("/chat/completions") ? pathname : `${pathname}/chat/completions`;
+  return parsed.toString();
 }
 
 function buildFixtureEvidence(
@@ -169,6 +260,178 @@ function isJsonObject(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function validateReviewJsonOutput(value: string): string | undefined {
+  const result = normalizeReviewJsonOutput(value);
+  return result.ok ? undefined : result.error;
+}
+
+function normalizeReviewJsonOutput(value: string): { ok: true; text: string } | { ok: false; error: string } {
+  let parsed: unknown;
+  let reviewJson = value.trim();
+  try {
+    parsed = JSON.parse(reviewJson) as unknown;
+  } catch {
+    try {
+      reviewJson = extractReviewJsonObject(value);
+      parsed = JSON.parse(reviewJson) as unknown;
+    } catch {
+      return { ok: false, error: "Adapter output was not a parseable JSON review object." };
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !Array.isArray((parsed as { findings?: unknown }).findings)) {
+    return { ok: false, error: "Adapter output did not contain a review findings array." };
+  }
+  const { dropped } = parseFindings(parsed);
+  if (dropped.length > 0) return { ok: false, error: "Adapter output contained invalid review findings." };
+  return { ok: true, text: reviewJson };
+}
+
+function extractReviewJsonObject(text: string): string {
+  const boundedText = text.slice(0, REVIEW_JSON_EXTRACTION_CHAR_LIMIT);
+  const fencedMatches = [...boundedText.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  for (const fenced of fencedMatches) {
+    const candidate = fenced[1]!.trim();
+    if (isReviewJsonObject(candidate)) return candidate;
+  }
+
+  const starts: number[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < boundedText.length; index += 1) {
+    const char = boundedText[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      starts.push(index);
+      continue;
+    }
+    if (char === "}") {
+      const start = starts.pop();
+      if (start === undefined) continue;
+      const candidate = boundedText.slice(start, index + 1).trim();
+      if (candidate.includes("\"findings\"") && isReviewJsonObject(candidate)) return candidate;
+    }
+  }
+  throw new Error("Adapter output did not contain a parseable JSON review object.");
+}
+
+function isReviewJsonObject(candidate: string): boolean {
+  try {
+    const parsed = JSON.parse(candidate) as { findings?: unknown };
+    return typeof parsed === "object" && parsed !== null && Array.isArray(parsed.findings);
+  } catch {
+    return false;
+  }
+}
+
+function resolveOpenAICompatibleApiKey(
+  provider: ProviderRegistryEntry,
+  env: Record<string, string | undefined>
+): string | undefined {
+  if (provider.authMode !== "api-key-env") return undefined;
+  if (!provider.apiKeyEnv) throw new Error("Missing api key environment variable name for OpenAI-compatible provider.");
+  const value = env[provider.apiKeyEnv];
+  if (!value) throw new Error(`Missing api key environment variable ${provider.apiKeyEnv}.`);
+  return value;
+}
+
+function openAICompatibleStatusErrorMessage(status: number): string {
+  if (status === 401 || status === 403) return `OpenAI-compatible chat completions endpoint returned ${status} auth failure.`;
+  if (status === 429) return "OpenAI-compatible chat completions endpoint returned 429 throttle failure.";
+  if (status === 408 || status === 504) return `OpenAI-compatible chat completions endpoint returned ${status} timeout failure.`;
+  if (status >= 500) return `OpenAI-compatible chat completions endpoint returned ${status} network failure.`;
+  // Non-auth/non-throttle 4xx statuses stay unknown until runtime wiring needs a distinct operator action.
+  return `OpenAI-compatible chat completions endpoint returned ${status}.`;
+}
+
+async function readResponseTextWithAbort(response: Response, signal: AbortSignal): Promise<string> {
+  if (signal.aborted) throw new Error("deadline exceeded");
+  let abortHandler: ((event: Event) => void) | undefined;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    abortHandler = () => {
+      void response.body?.cancel().catch(() => undefined);
+      reject(new Error("deadline exceeded"));
+    };
+    signal.addEventListener("abort", abortHandler, { once: true });
+  });
+  try {
+    return await Promise.race([response.text(), abortPromise]);
+  } finally {
+    if (abortHandler) signal.removeEventListener("abort", abortHandler);
+  }
+}
+
+function parseOpenAICompatibleResponse(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // Fall through to the normalized schema error below.
+  }
+  throw new Error("OpenAI-compatible chat completions response was not valid JSON.");
+}
+
+function extractOpenAICompatibleMessageContent(parsed: Record<string, unknown>): string {
+  const choices = parsed.choices;
+  if (!Array.isArray(choices)) throw new Error("OpenAI-compatible chat completions response had invalid response schema.");
+  const firstChoice = choices[0];
+  if (!firstChoice || typeof firstChoice !== "object" || Array.isArray(firstChoice)) {
+    throw new Error("OpenAI-compatible chat completions response had invalid response schema.");
+  }
+  const message = (firstChoice as { message?: unknown }).message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    throw new Error("OpenAI-compatible chat completions response had invalid response schema.");
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content !== "string" || content.trim().length === 0) {
+    throw new Error("OpenAI-compatible chat completions response had invalid response schema.");
+  }
+  return content;
+}
+
+function extractOpenAICompatibleChoiceEvidence(parsed: Record<string, unknown>): Record<string, unknown> {
+  const firstChoice = Array.isArray(parsed.choices) ? parsed.choices[0] : undefined;
+  if (!firstChoice || typeof firstChoice !== "object" || Array.isArray(firstChoice)) return {};
+  const finishReason = (firstChoice as { finish_reason?: unknown }).finish_reason;
+  return typeof finishReason === "string" ? { finishReason } : {};
+}
+
+function extractOpenAICompatibleUsageEvidence(parsed: Record<string, unknown>): Record<string, unknown> {
+  const usage = parsed.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return {};
+  return {
+    usage: Object.fromEntries(
+      Object.entries(usage)
+        .filter(([, value]) => typeof value === "number" && Number.isFinite(value))
+        .map(([key, value]) => [key, value])
+    )
+  };
+}
+
+function createAbortSignal(timeoutMs: number | undefined): { signal: AbortSignal; dispose: () => void } {
+  const timeout = timeoutMs && timeoutMs > 0 ? timeoutMs : 30_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  const maybeUnref = timer as { unref?: () => void };
+  if (typeof maybeUnref.unref === "function") maybeUnref.unref();
+  return {
+    signal: controller.signal,
+    dispose: () => clearTimeout(timer)
+  };
 }
 
 function previewEvidenceText(value: string): string {
