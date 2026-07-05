@@ -306,6 +306,86 @@ describe("pre-merge checks", () => {
     ]);
   });
 
+  it("does not treat concrete No-prefixed metadata as not applicable", () => {
+    const result = evaluatePreMergeChecks({
+      pull: { body: "Out of scope: No database migrations required for this metadata-only gate." },
+      policy: {
+        outOfScope: { mode: "error", allowNotApplicable: false }
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.find((check) => check.id === "out_of_scope")).toMatchObject({
+      status: "pass",
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ key: "out_of_scope.not_placeholder", value: "true", passed: true })
+      ])
+    });
+  });
+
+  it("fails metadata sections whose detail is shorter than the default minimum", () => {
+    const result = evaluatePreMergeChecks({
+      pull: { body: "Docs: api" },
+      policy: {
+        docs: { mode: "error" }
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blockingErrors).toEqual([
+      expect.objectContaining({
+        id: "docs",
+        evidence: expect.arrayContaining([
+          expect.objectContaining({ key: "docs.section_present", value: "Docs", passed: true }),
+          expect.objectContaining({
+            key: "docs.not_placeholder",
+            value: "false",
+            passed: false,
+            detail: "minimum_detail_length=6"
+          })
+        ])
+      })
+    ]);
+  });
+
+  it("honors metadata section heading overrides", () => {
+    const result = evaluatePreMergeChecks({
+      pull: { body: "Release notes: Documentation pages were updated." },
+      policy: {
+        docs: { mode: "error", sectionHeadings: ["Release notes"] }
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.find((check) => check.id === "docs")).toMatchObject({
+      status: "pass",
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ key: "docs.section_present", value: "Release notes", passed: true })
+      ])
+    });
+  });
+
+  it("blocks error-mode metadata checks when the section is missing", () => {
+    const result = evaluatePreMergeChecks({
+      pull: { body: "Docs: README updated." },
+      policy: {
+        testEvidence: { mode: "error" }
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reviewEvent).toBe("REQUEST_CHANGES");
+    expect(result.blockingErrors).toEqual([
+      expect.objectContaining({
+        id: "test_evidence",
+        evidence: expect.arrayContaining([
+          expect.objectContaining({ key: "test_evidence.section_present", value: "none", passed: false }),
+          expect.objectContaining({ key: "test_evidence.not_placeholder", value: "false", passed: false })
+        ])
+      })
+    ]);
+  });
+
   it("honors draft-prefix opt-out and title minLength boundaries", () => {
     const atMinimum = evaluatePreMergeChecks({
       pull: { title: "Draft: okay", body: "Closes #42", linkedIssues: [42] },

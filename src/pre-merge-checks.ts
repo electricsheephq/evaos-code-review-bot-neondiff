@@ -757,7 +757,7 @@ function isAnyMetadataHeading(line: string): boolean {
 }
 
 function isNotApplicableSection(detail: string): boolean {
-  return /^(?:n\/a|not applicable|none needed|none required|no\b)/i.test(normalizeText(detail));
+  return /^(?:n\/a|not applicable|none needed|none required)\b/i.test(normalizeText(detail));
 }
 
 function escapeRegExp(value: string): string {

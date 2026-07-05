@@ -79,6 +79,8 @@ const policy = {
 `allowNotApplicable` defaults to `true`, so `N/A - no public API changes` can
 be a valid deterministic answer when the repository policy allows it. Set it to
 `false` when the check must contain a concrete non-placeholder detail.
+`minDetailLength` defaults to 6 normalized characters, which filters empty or
+token-sized placeholders such as `api` without requiring prose-heavy sections.
 
 Each check returns evidence entries with a `key`, `value`, `passed`, and
 optional `detail` field so status rendering can show why a result passed or
