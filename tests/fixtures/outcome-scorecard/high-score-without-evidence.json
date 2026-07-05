@@ -1,0 +1,26 @@
+{
+  "runId": "high-score-without-evidence",
+  "surface": "issue_enrichment",
+  "scenario": {
+    "id": "high-score-without-evidence",
+    "title": "High score without evidence must be capped"
+  },
+  "metrics": [
+    {
+      "id": "build_vs_buy_leverage",
+      "label": "Build-vs-buy leverage",
+      "weight": 100,
+      "rawScore": 5,
+      "denominator": "High scores require direct evidence.",
+      "dataSource": "missing evidence",
+      "scoringRule": "5 would require cited proof."
+    }
+  ],
+  "hardGates": [
+    {
+      "name": "unredacted_secret",
+      "ok": true,
+      "detail": "No secret."
+    }
+  ]
+}

@@ -45,6 +45,10 @@ import {
   readOutcomeLedgerInput,
   writeOutcomeLedgerPacket
 } from "./outcome-ledger.js";
+import {
+  readOutcomeScorecardInput,
+  writeOutcomeScorecardPacket
+} from "./outcome-scorecard.js";
 import { buildReviewBudgetStatus } from "./review-budget.js";
 import { selectReviewMode, type ReviewModeSelectionInput } from "./review-mode-router.js";
 import {
@@ -1483,6 +1487,29 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "outcome-scorecard") {
+    if (args.input === undefined || (Array.isArray(args.input) && args.input.length === 0)) {
+      throw new Error("--input is required for outcome-scorecard");
+    }
+    if (args["output-dir"] === undefined || (Array.isArray(args["output-dir"]) && args["output-dir"].length === 0)) {
+      throw new Error("--output-dir is required for outcome-scorecard");
+    }
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    if (!dryRun) throw new Error("outcome-scorecard is dry-run only in this release");
+    const scorecardInput = readOutcomeScorecardInput(parseSingleArg(args.input, "--input"));
+    const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
+    assertEvalOutputDirSafe(outputDir);
+    const result = writeOutcomeScorecardPacket({ scorecardInput, outputDir });
+    console.log(stringifyRedactedJson({
+      command: "outcome-scorecard",
+      dryRun,
+      outputDir,
+      ...result
+    }));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
   if (command === "run-once" || command === "review-pr") {
     if (command === "review-pr" && (!args.repo || !args.pr)) {
       console.log(JSON.stringify({
@@ -2637,7 +2664,8 @@ function buildHelp(command?: string) {
         "eval-suite",
         "eval-sticky-vs-cold",
         "outcome-ledger",
-        "review-mode"
+        "review-mode",
+        "outcome-scorecard"
       ]
     },
     examples: [
@@ -2688,6 +2716,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
       "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
       "npx tsx src/cli.ts review-mode --input /path/to/review-mode-input.json --dry-run true --output-dir /path/to/evidence/review-mode-run",
+      "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ],
@@ -2702,6 +2731,13 @@ function buildHelp(command?: string) {
       notes: [
         "The review-mode command is dry-run only.",
         "It previews fast, standard, deep, product_pm, or research routing and budget disposition without changing scheduler, provider timeout, posting policy, or live runtime behavior."
+      ]
+    },
+    outcomeScorecard: {
+      notes: [
+        "The outcome-scorecard command is dry-run only.",
+        "Scores above 3 require direct evidence links.",
+        "Safety failures cap the score at 1 and all public claims remain advisory-only."
       ]
     }
   };
