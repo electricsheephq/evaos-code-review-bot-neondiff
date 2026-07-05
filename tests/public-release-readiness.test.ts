@@ -32,7 +32,7 @@ describe("NeonDiff public release readiness", () => {
     expect(pkg.homepage).toBe("https://www.neondiff.com");
     expect(pkg.repository).toMatchObject({
       type: "git",
-      url: "git+https://github.com/electricsheephq/neondiff.git"
+      url: "git+https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git"
     });
     expect(pkg.bin).toEqual({ neondiff: "dist/src/cli.js" });
     expect(pkg.files).toEqual([
@@ -71,7 +71,7 @@ describe("NeonDiff public release readiness", () => {
     expect(script).not.toMatch(/ghp_|github_pat_|BEGIN (RSA|OPENSSH|PRIVATE) KEY|sk-[A-Za-z0-9]/);
   });
 
-  it("public setup docs point to npm, install script, source fallback, and the planned public repo", () => {
+  it("public setup docs point to npm, install script, source fallback, and the public implementation repo", () => {
     const docs = [
       read("README.md"),
       read("docs/SETUP.md"),
@@ -81,10 +81,10 @@ describe("NeonDiff public release readiness", () => {
       read("docs/releases/v1.0.0-beta.1.md")
     ].join("\n\n");
 
-    expect(docs).toMatch(/https:\/\/github\.com\/electricsheephq\/neondiff/i);
+    expect(docs).toMatch(/https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot-neondiff/i);
     expect(docs).toMatch(/npm install -g neondiff@1\.0\.0-beta\.1/i);
-    expect(docs).toMatch(/curl -fsSL https:\/\/neondiff\.sh\/install/i);
-    expect(docs).toMatch(/git clone https:\/\/github\.com\/electricsheephq\/neondiff\.git/i);
+    expect(docs).toMatch(/curl -fsSL https:\/\/www\.neondiff\.com\/install/i);
+    expect(docs).toMatch(/git clone https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot-neondiff\.git/i);
     expect(docs).not.toMatch(/https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot(?!-neondiff)/i);
     expect(docs).not.toMatch(/npm link installs the local source-checkout shim/i);
   });

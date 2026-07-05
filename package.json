@@ -10,7 +10,7 @@
   "homepage": "https://www.neondiff.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/electricsheephq/neondiff.git"
+    "url": "git+https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git"
   },
   "files": [
     "dist/src",

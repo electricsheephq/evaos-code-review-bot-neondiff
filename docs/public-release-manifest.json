@@ -10,7 +10,7 @@
   "licenseApi": {
     "requiredForThisRelease": false,
     "state": "pending",
-    "trackingIssue": "https://github.com/electricsheephq/neondiff/issues/111"
+    "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/111"
   },
   "updateChannels": {
     "cli": {
@@ -33,7 +33,7 @@
     "desktop": {
       "requiredForThisRelease": false,
       "state": "post_1_0",
-      "trackingIssue": "https://github.com/electricsheephq/neondiff/issues/116"
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/116"
     }
   }
 }

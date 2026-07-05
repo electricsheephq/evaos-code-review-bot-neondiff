@@ -29,8 +29,8 @@ If you are a coding agent working in this repository:
 - Private and commercial repos require a paid license.
 - License keys support paid/private usage and update entitlement.
 - Exact license text, public/private grants, and commercial terms are governed
-  by https://github.com/electricsheephq/neondiff/issues/104. Public beta
-  release readiness is tracked by https://github.com/electricsheephq/neondiff/issues/232.
+  by https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/104. Public beta
+  release readiness is tracked by https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/232.
 
 Do not claim open-source/MIT status, public launch completion, GA readiness,
 CodeRabbit parity, enterprise readiness, or legal adequacy from this file.
