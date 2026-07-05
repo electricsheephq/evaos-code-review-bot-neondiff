@@ -72,9 +72,22 @@ export function isHighSeverity(severity: Severity): boolean {
 }
 
 export function normalizeFindingCategory(finding: Finding): RegressionCategory {
+  // Asymmetric precedence (#280): the model's validated category wins whenever it is present and
+  // != "unknown", with ONE exception — inference may override only when it ESCALATES across the
+  // REQUEST_CHANGES eligibility boundary (model category RC-ineligible, inferred category RC-eligible
+  // and != "unknown"). This is an escalate-only safety net: it never de-escalates a model category
+  // and never relabels within the same eligibility tier (the incidental-"token" bug #280 verified).
+  // Absent or "unknown" model category falls through to inference as before. The first-match-wins
+  // chain in inferRegressionCategory is a deliberate risk-priority arbiter (scoring was evaluated
+  // and dropped after it misclassified security findings on the overlapping needle substrate).
   const inferred = inferRegressionCategory(finding);
-  if (inferred !== "unknown") return inferred;
-  return finding.category ?? inferred;
+  if (finding.category && finding.category !== "unknown") {
+    const modelEligible = REGRESSION_CATEGORY_POLICY[finding.category].requestChangesEligible;
+    const inferredEligible = inferred !== "unknown" && REGRESSION_CATEGORY_POLICY[inferred].requestChangesEligible;
+    if (!modelEligible && inferredEligible) return inferred;
+    return finding.category;
+  }
+  return inferred;
 }
 
 export function countCategories(comments: Pick<ReviewComment, "category">[]): Partial<Record<RegressionCategory, number>> {
