@@ -118,11 +118,16 @@ Regression caps:
 
 ## Evidence Packet
 
-Write eval evidence under:
+For EVAOS operator-local runs, write eval evidence under the default scratch
+root:
 
 ```text
 /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/<date>/gitnexus-readonly-adapter-<run-id>/
 ```
+
+Other operators and CI runners should configure an equivalent environment-local
+evidence root and preserve the same per-run packet shape. The Lexar path is the
+current EVAOS workstation default, not a portable hard requirement.
 
 Each scenario should include:
 

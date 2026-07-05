@@ -238,5 +238,8 @@ The issue should require:
 - No live config change.
 - No raw ZCode GitNexus access.
 - No index writes.
-- Evidence packets under `/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/`.
+- Evidence packets under the configured eval evidence root. For EVAOS
+  operator-local runs, the current default is
+  `/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/`; other environments should
+  configure an equivalent local/runner path.
 - A promotion decision that can still choose packet-only.
