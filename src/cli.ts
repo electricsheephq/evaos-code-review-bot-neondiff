@@ -265,7 +265,7 @@ async function main(): Promise<void> {
       issueReadChecks: await collectIssueEnrichmentReadChecks(config, github)
     });
     const ok = readChecks.every((check) => check.ok) && issueEnrichment.ok;
-    console.log(JSON.stringify({
+    console.log(stringifyRedactedJson({
       ok,
       pilotRepos: config.pilotRepos,
       monitoredRepos,
@@ -286,7 +286,7 @@ async function main(): Promise<void> {
         hasFallbackReadToken: Boolean(config.github.token),
         readChecks
       }
-    }, null, 2));
+    }));
     if (!ok) process.exitCode = 1;
     return;
   }
@@ -386,7 +386,7 @@ async function main(): Promise<void> {
         detail: `${failed} failed durable queue job(s)`
       }
     ];
-    console.log(JSON.stringify({
+    console.log(stringifyRedactedJson({
       ok,
       healthState: ok ? "runtime_ok" : "runtime_blocked",
       runtimeOk: ok,
@@ -404,7 +404,7 @@ async function main(): Promise<void> {
       ],
       gates,
       budget: status.budget
-    }, null, 2));
+    }));
     if (!ok) process.exitCode = 1;
     return;
   }
@@ -484,7 +484,7 @@ async function main(): Promise<void> {
       }),
       issueEnrichmentRuntime
     });
-    console.log(JSON.stringify(status, null, 2));
+    console.log(stringifyRedactedJson(status));
     if (!status.ok) process.exitCode = 1;
     return;
   }
@@ -633,7 +633,7 @@ async function main(): Promise<void> {
         ...(args.limit ? { limit: parsePositiveInteger(args.limit, "--limit") } : {})
       }
     });
-    console.log(args.human === "true" ? formatOperatorDashboardHuman(dashboard) : JSON.stringify(dashboard, null, 2));
+    console.log(args.human === "true" ? formatOperatorDashboardHuman(dashboard) : stringifyRedactedJson(dashboard));
     if (!dashboard.ok) process.exitCode = 1;
     return;
   }
@@ -830,7 +830,7 @@ async function main(): Promise<void> {
     } else if (format === "both" && result.ok) {
       console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
     } else {
-      console.log(JSON.stringify(result, null, 2));
+      console.log(stringifyRedactedJson(result));
     }
     if (!result.ok) process.exitCode = 1;
     return;
@@ -1797,7 +1797,7 @@ async function main(): Promise<void> {
     const daemonAction = args._[1];
     if (daemonAction === "start" || daemonAction === "stop" || daemonAction === "status") {
       const result = runDaemonControlCommandSafely(daemonAction, args);
-      console.log(JSON.stringify(result, null, 2));
+      console.log(stringifyRedactedJson(result));
       if (!result.ok) process.exitCode = 1;
       return;
     }

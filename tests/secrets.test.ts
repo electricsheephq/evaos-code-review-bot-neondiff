@@ -97,4 +97,13 @@ describe("secret redaction", () => {
     expect(parsed.message).toBe("status payload");
     expect(typeof parsed.token).toBe("string");
   });
+
+  it("redacts sensitive long cookie headers without scanning unbounded attribute chains", () => {
+    const longCookiePrefix = Array.from({ length: 600 }, (_, index) => `pref${index}=value`).join("; ");
+    const sessionToken = "123456789012345678901234";
+    const text = `Cookie: ${longCookiePrefix}; session=${sessionToken}`;
+
+    expect(containsSecretLikeText(text)).toBe(true);
+    expect(redactSecrets(text)).toBe("[redacted-secret]");
+  });
 });

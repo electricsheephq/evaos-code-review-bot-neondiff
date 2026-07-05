@@ -347,6 +347,49 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("Provider: Gateway [redacted-secret] (`openai-compatible`, openai-compatible, model `review-[redacted-secret]`).");
   });
 
+  it("escapes backslashes before backticks inside inline-code markdown", () => {
+    const settingsPreview: ReviewSettingsPreview = {
+      profile: "assertive",
+      sections: [
+        { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" }
+      ],
+      pathInstructions: [
+        {
+          pattern: "src/path\\`template\\`/**",
+          instructions: ["Keep inline code markdown intact."]
+        }
+      ],
+      suggestions: {
+        labels: [],
+        reviewers: [],
+        autoApply: false
+      },
+      roadmapOnly: []
+    };
+
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT",
+      settingsPreview
+    });
+
+    expect(walkthrough.body).toContain("- Path instructions: `src/path\\\\\\`template\\\\\\`/**`");
+  });
+
   it("sanitizes confidence settings preview metadata while preserving ordinary likely wording", () => {
     const settingsPreview: ReviewSettingsPreview = {
       profile: "assertive",

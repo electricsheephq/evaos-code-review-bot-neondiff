@@ -212,7 +212,9 @@ function formatInlinePublicText(value: string | undefined, publicConfidencePolic
 }
 
 function formatInlineCodePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
-  return formatInlinePublicText(value, publicConfidencePolicy).replace(/`/g, "\\`");
+  return formatInlinePublicText(value, publicConfidencePolicy)
+    .replace(/\\/g, "\\\\")
+    .replace(/`/g, "\\`");
 }
 
 function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {

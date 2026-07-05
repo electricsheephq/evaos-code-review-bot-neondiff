@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -72,6 +72,50 @@ describe("public NeonDiff CLI surface", () => {
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
     );
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
+  });
+
+  it("redacts secret-like values from structured status JSON stdout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cli-status-"));
+    roots.push(root);
+    const secretSegment = "config-secret-value";
+    const configPath = join(root, secretSegment, "config.json");
+    const statePath = join(root, "state.sqlite");
+    const workRoot = join(root, "work");
+    const evidenceDir = join(root, "evidence");
+    const fakeGithubToken = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      workRoot,
+      statePath,
+      evidenceDir,
+      github: {
+        token: fakeGithubToken
+      }
+    }));
+
+    let failure: unknown;
+    try {
+      await runCli([
+        "daemon",
+        "status",
+        "--config",
+        configPath,
+        "--state-path",
+        statePath,
+        "--launchd-label",
+        "com.example.neondiff"
+      ]);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ stdout: expect.any(String) });
+    const stdout = (failure as { stdout: string }).stdout;
+    const output = JSON.parse(stdout);
+
+    expect(output.status.releaseUnit.configPath).toContain("[redacted-secret]");
+    expect(stdout).not.toContain(secretSegment);
+    expect(stdout).not.toContain(fakeGithubToken);
   });
 
   it("prints finishing-touch dry-run output as a default-off draft-only contract", async () => {
