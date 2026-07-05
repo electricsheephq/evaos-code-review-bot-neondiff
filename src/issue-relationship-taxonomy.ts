@@ -131,16 +131,15 @@ export function classifyIssueRelationshipItem(input: IssueRelationshipItemInput)
 }
 
 export function buildIssueRelationshipClusters(input: IssueRelationshipClusterInput): IssueRelationshipClusterResult {
-  const groups = new Map<string, Array<{ raw: IssueRelationshipItemInput; classified: ClassifiedIssueRelationshipItem }>>();
+  const groups = new Map<string, ClassifiedIssueRelationshipItem[]>();
   for (const item of input.items) {
     const key = clusterKey(item);
     const group = groups.get(key) ?? [];
-    group.push({ raw: item, classified: classifyIssueRelationshipItem(item) });
+    group.push(classifyIssueRelationshipItem(item));
     groups.set(key, group);
   }
 
-  const clusters = Array.from(groups.entries()).map(([id, entries]) => {
-    const items = entries.map((entry) => entry.classified);
+  const clusters = Array.from(groups.entries()).map(([id, items]) => {
     const categories = unique(items.map((item) => item.category));
     const proofRequirements = unique(items.flatMap((item) => item.proofRequirements));
     return {
@@ -178,15 +177,15 @@ function inferRelationshipCategory(input: IssueRelationshipItemInput): IssueRela
   if (input.severity === "P0" || input.severity === "P1" || matchesAny(haystack, ["blocks merge", "blocking", "must fix"])) {
     return "blocker";
   }
-  if (hasReleaseRiskSignal(haystack)) return "release_risk";
   if (matchesAny(haystack, ["reproduction gap", "missing reproduction", "no reproduction", "lacks proof", "missing proof", "missing evidence", "no command", "no head sha", "no fixture", "needs proof"])) {
     return "reproduction_gap";
   }
+  if (hasReleaseRiskSignal(haystack)) return "release_risk";
   if (input.duplicateOf || matchesAny(haystack, ["stale duplicate", "duplicate of", "superseded by", "already covered"])) return "stale_duplicate";
+  if (isDocsOnly(input.paths ?? []) || matchesAny(haystack, ["docs-only", "documentation-only"])) return "docs_only";
   if (matchesAny(haystack, ["dependency", "depends on", "blocked by", "upstream", "package update"]) || hasDependencyPath(input.paths ?? [])) {
     return "dependency";
   }
-  if (isDocsOnly(input.paths ?? []) || matchesAny(haystack, ["docs-only", "documentation-only"])) return "docs_only";
   if (hasRegressionSignal(haystack)) return "regression";
   if (matchesAny(haystack, ["manual triage", "needs human", "human routing", "ambiguous owner", "unknown owner"])) return "needs_human_routing";
   return "needs_human_routing";
@@ -198,8 +197,10 @@ function hasReleaseRiskSignal(text: string): boolean {
     "release gate",
     "release risk",
     "release regression",
-    "beta tag",
-    "beta release",
+    "beta tag gate",
+    "beta tag blocker",
+    "beta release gate",
+    "beta release blocker",
     "deploy release",
     "deploy blocker",
     "deployment blocker",

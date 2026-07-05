@@ -171,6 +171,28 @@ describe("issue relationship taxonomy", () => {
       body: "The current fixture proves this regressed.",
       paths: ["src/worker.ts"]
     }).category).toBe("regression");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49b",
+      kind: "issue",
+      title: "package.json change is missing reproduction steps",
+      body: "No command or fixture is attached.",
+      paths: ["package.json"]
+    }).category).toBe("reproduction_gap");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49c",
+      kind: "issue",
+      title: "docs package metadata typo",
+      paths: ["docs/package.json"]
+    }).category).toBe("docs_only");
+
+    expect(classifyIssueRelationshipItem({
+      id: "issue-49d",
+      kind: "issue",
+      title: "Update beta release gating notes",
+      paths: ["docs/beta.md"]
+    }).category).toBe("docs_only");
   });
 
   it("clusters related issues and PRs with public-safe relationship reasons", () => {
@@ -270,5 +292,40 @@ describe("issue relationship taxonomy", () => {
     expect(JSON.stringify(result)).not.toContain("\\\\fileserver");
     expect(JSON.stringify(result)).not.toContain("C:secrets");
     expect(JSON.stringify(result)).not.toContain("/etc/passwd");
+  });
+
+  it("documents single-item routing narratives", () => {
+    const result = buildIssueRelationshipClusters({
+      items: [
+        {
+          id: "stale-one",
+          kind: "issue",
+          title: "Duplicate of fresher queue report",
+          duplicateOf: "queue-current"
+        },
+        {
+          id: "release-one",
+          kind: "issue",
+          title: "Appcast release gate stalled before rollout"
+        },
+        {
+          id: "proof-one",
+          kind: "issue",
+          title: "Worker issue lacks proof"
+        },
+        {
+          id: "default-one",
+          kind: "issue",
+          title: "Needs owner routing"
+        }
+      ]
+    });
+
+    const byId = new Map(result.publicIssueCommentState.clusters.map((cluster) => [cluster.id, cluster.whyItMatters]));
+
+    expect(byId.get("queue-current")).toContain("Stale duplicate routing");
+    expect(byId.get("standalone-release-one")).toContain("Release-risk routing");
+    expect(byId.get("standalone-proof-one")).toContain("Proof-gap routing");
+    expect(byId.get("standalone-default-one")).toContain("Single-item routing records");
   });
 });
