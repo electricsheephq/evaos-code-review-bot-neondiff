@@ -59,7 +59,7 @@ export function buildWalkthroughComment(input: {
   const suggestedReviewers = input.pull.requested_reviewers?.map((reviewer) => reviewer.login).filter(Boolean) ?? [];
   const severityCounts = countSeverities(input.comments);
   const highSeverity = severityCounts.P0 + severityCounts.P1;
-  const requestChangesEligible = input.comments.filter(isRequestChangesEligible).length;
+  const requestChangesEligible = input.comments.filter((comment) => isRequestChangesEligible(comment)).length;
   const settingsPreviewSection = formatSettingsPreviewSection(input.settingsPreview, input.publicConfidencePolicy);
 
   const visibleBody = [

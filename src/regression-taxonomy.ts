@@ -47,8 +47,24 @@ export function categoryLabel(category: RegressionCategory): string {
   return REGRESSION_CATEGORY_POLICY[category].label;
 }
 
-export function isRequestChangesEligible(input: Pick<ReviewComment, "severity" | "category">): boolean {
-  return isHighSeverity(input.severity) && REGRESSION_CATEGORY_POLICY[input.category].requestChangesEligible;
+/** Optional per-severity confidence floors for REQUEST_CHANGES eligibility (default off). */
+export interface RequestChangesConfidenceFloors {
+  P0?: number;
+  P1?: number;
+}
+
+export function isRequestChangesEligible(
+  input: Pick<ReviewComment, "severity" | "category" | "confidence">,
+  confidenceFloors?: RequestChangesConfidenceFloors
+): boolean {
+  if (!isHighSeverity(input.severity) || !REGRESSION_CATEGORY_POLICY[input.category].requestChangesEligible) {
+    return false;
+  }
+  const floor = confidenceFloors?.[input.severity as "P0" | "P1"];
+  // A configured floor may only make the gate quieter: below-floor findings stop counting toward
+  // REQUEST_CHANGES but still post as comments. When unset, behavior is byte-identical to before.
+  if (typeof floor === "number" && input.confidence < floor) return false;
+  return true;
 }
 
 export function isHighSeverity(severity: Severity): boolean {

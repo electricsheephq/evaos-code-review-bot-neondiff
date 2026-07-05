@@ -121,6 +121,61 @@ describe("confidence calibration config", () => {
   });
 });
 
+describe("review gate config", () => {
+  it("defaults review gate to the built-in inline comment cap without confidence floors", () => {
+    const config = loadConfigFromObject({});
+
+    expect(config.reviewGate).toMatchObject({ maxInlineComments: 25 });
+    expect(config.reviewGate?.requestChangesConfidenceFloors).toBeUndefined();
+  });
+
+  it("accepts an explicit inline comment cap and per-severity confidence floors", () => {
+    const config = loadConfigFromObject({
+      reviewGate: {
+        maxInlineComments: 10,
+        requestChangesConfidenceFloors: { P0: 0.8, P1: 0.6 }
+      }
+    });
+
+    expect(config.reviewGate).toMatchObject({
+      maxInlineComments: 10,
+      requestChangesConfidenceFloors: { P0: 0.8, P1: 0.6 }
+    });
+  });
+
+  it("rejects a non-positive-integer inline comment cap", () => {
+    expect(() => loadConfigFromObject({ reviewGate: { maxInlineComments: 0 } })).toThrow(
+      /reviewGate\.maxInlineComments must be a positive integer/
+    );
+    expect(() => loadConfigFromObject({ reviewGate: { maxInlineComments: 2.5 } })).toThrow(
+      /reviewGate\.maxInlineComments must be a positive integer/
+    );
+  });
+
+  it("rejects unknown keys in the confidence floors map", () => {
+    expect(() =>
+      loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { p0: 0.8 } } })
+    ).toThrow(/reviewGate\.requestChangesConfidenceFloors has unknown key "p0"; expected only P0 or P1/);
+    expect(() =>
+      loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { P2: 0.5 } } })
+    ).toThrow(/reviewGate\.requestChangesConfidenceFloors has unknown key "P2"; expected only P0 or P1/);
+  });
+
+  it("rejects out-of-range or non-number confidence floors", () => {
+    expect(() =>
+      loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { P0: -0.1 } } })
+    ).toThrow(/reviewGate\.requestChangesConfidenceFloors\.P0 must be a number from 0 to 1/);
+    expect(() =>
+      loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { P1: 1.5 } } })
+    ).toThrow(/reviewGate\.requestChangesConfidenceFloors\.P1 must be a number from 0 to 1/);
+    expect(() =>
+      loadConfigFromObject({
+        reviewGate: { requestChangesConfidenceFloors: { P0: "high" as unknown as number } }
+      })
+    ).toThrow(/reviewGate\.requestChangesConfidenceFloors\.P0 must be a number from 0 to 1/);
+  });
+});
+
 function calibratedPublicDisplay() {
   return {
     mode: "calibrated" as const,
