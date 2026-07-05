@@ -236,11 +236,17 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
     for (const key of ["denominator", "dataSource", "scoringRule", "unmeasurableState"] as const) {
       if (!contract[key]?.trim()) errors.push(`dimension ${dimension.id} metric contract missing ${key}`);
     }
-    if (!Number.isFinite(contract.pilotThreshold?.advisoryMin)) {
+    const advisoryMin = contract.pilotThreshold?.advisoryMin;
+    const promotionMin = contract.pilotThreshold?.promotionMin;
+    if (!Number.isFinite(advisoryMin)) {
       errors.push(`dimension ${dimension.id} metric contract missing pilotThreshold.advisoryMin`);
+    } else if (!isScoreThresholdInRange(advisoryMin)) {
+      errors.push(`dimension ${dimension.id} metric contract pilotThreshold.advisoryMin must be between 0 and 5`);
     }
-    if (!Number.isFinite(contract.pilotThreshold?.promotionMin)) {
+    if (!Number.isFinite(promotionMin)) {
       errors.push(`dimension ${dimension.id} metric contract missing pilotThreshold.promotionMin`);
+    } else if (!isScoreThresholdInRange(promotionMin)) {
+      errors.push(`dimension ${dimension.id} metric contract pilotThreshold.promotionMin must be between 0 and 5`);
     }
   }
 
@@ -270,6 +276,9 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
         continue;
       }
       if (score.unmeasurable) {
+        if (score.score !== undefined) {
+          errors.push(`case ${fixtureCase.id} dimension ${dimension.id} cannot set score when unmeasurable`);
+        }
         if (!score.unmeasurableReason?.trim()) {
           errors.push(`case ${fixtureCase.id} dimension ${dimension.id} missing unmeasurableReason`);
         }
@@ -381,6 +390,10 @@ function normalizeScore(score: number | undefined): number {
   return score;
 }
 
+function isScoreThresholdInRange(value: number | undefined): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 5;
+}
+
 function hasDirectEvidenceLink(
   links: string[] | undefined,
   fixtureCase: IssueEnrichmentFixtureCase,
@@ -396,7 +409,6 @@ function hasDirectEvidenceLink(
     return (
       url.origin === source.origin &&
       url.pathname === source.pathname &&
-      url.search === source.search &&
       url.hash.slice(1) === expectedAnchor
     );
   });

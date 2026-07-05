@@ -188,7 +188,7 @@ describe("issue enrichment scorecard", () => {
     });
   });
 
-  it("rejects direct-evidence anchors with a query string that differs from the fixture source issue", () => {
+  it("accepts direct-evidence anchors on the fixture source path without query-string coupling", () => {
     const fixture = loadFixture();
     fixture.cases[0].dimensions.proof_boundary = {
       score: 4,
@@ -197,12 +197,7 @@ describe("issue enrichment scorecard", () => {
       ]
     };
 
-    expect(validateIssueEnrichmentFixture(fixture)).toMatchObject({
-      ok: false,
-      errors: expect.arrayContaining([
-        "case duplicate-same-head-comments dimension proof_boundary scored 4 without direct evidence links"
-      ])
-    });
+    expect(validateIssueEnrichmentFixture(fixture).ok).toBe(true);
   });
 
   it("does not emit a redundant missing-evidence error for an out-of-range high score", () => {
@@ -452,6 +447,17 @@ describe("issue enrichment scorecard", () => {
       error: "case duplicate-same-head-comments dimension proof_boundary missing unmeasurableReason"
     },
     {
+      name: "unmeasurable with conflicting measured score",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].dimensions.proof_boundary = {
+          unmeasurable: true,
+          score: 4,
+          unmeasurableReason: "No proof claim is available to score."
+        };
+      },
+      error: "case duplicate-same-head-comments dimension proof_boundary cannot set score when unmeasurable"
+    },
+    {
       name: "missing dimension",
       mutate: (fixture: IssueEnrichmentFixturePacket) => {
         const { proof_boundary: _proofBoundary, ...dimensions } = fixture.cases[0].dimensions;
@@ -524,6 +530,42 @@ describe("issue enrichment scorecard", () => {
         };
       },
       error: "dimension proof_boundary metric contract missing pilotThreshold.promotionMin"
+    },
+    {
+      name: "out-of-range advisory threshold",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.metricContracts = {
+          proof_boundary: {
+            denominator: "proof claims",
+            dataSource: "fixture",
+            scoringRule: "score proof boundary clarity",
+            unmeasurableState: "no proof claim",
+            pilotThreshold: {
+              advisoryMin: 1000,
+              promotionMin: 4.5
+            }
+          }
+        };
+      },
+      error: "dimension proof_boundary metric contract pilotThreshold.advisoryMin must be between 0 and 5"
+    },
+    {
+      name: "negative promotion threshold",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.metricContracts = {
+          proof_boundary: {
+            denominator: "proof claims",
+            dataSource: "fixture",
+            scoringRule: "score proof boundary clarity",
+            unmeasurableState: "no proof claim",
+            pilotThreshold: {
+              advisoryMin: 3,
+              promotionMin: -1
+            }
+          }
+        };
+      },
+      error: "dimension proof_boundary metric contract pilotThreshold.promotionMin must be between 0 and 5"
     }
   ])("fails closed for invalid fixture packets: $name", ({ mutate, error }) => {
     const fixture = loadFixture();
