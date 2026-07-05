@@ -16,7 +16,7 @@ describe("daemon cycle resilience", () => {
       canaryPulls: [],
       commandsEnabled: false,
       runOnceImpl: async () => {
-        throw new Error("ZCode failed before completion: spawnSync node ETIMEDOUT with ghp_1234567890abcdefghijklmnopqrstuvwx");
+        throw new Error("ZCode failed before completion: spawnSync node ETIMEDOUT with ghp_fake_token");
       },
       recordHeartbeatImpl: () => undefined,
       stdout: (line) => stdout.push(line),
@@ -39,7 +39,7 @@ describe("daemon cycle resilience", () => {
       dryRun: false
     });
     expect(failure.error).toContain("ETIMEDOUT");
-    expect(failure.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(failure.error).not.toContain("ghp_fake_token");
   });
 
   it("records start and completion heartbeat events for successful cycles", async () => {
@@ -294,7 +294,7 @@ describe("daemon cycle resilience", () => {
       issueEnrichmentEnabled: true,
       runOnceImpl: async () => successfulRunOnceResult(),
       issueEnrichmentCycleImpl: async () => {
-        throw new Error("issue enrichment failed with ghp_1234567890abcdefghijklmnopqrstuvwx");
+        throw new Error("issue enrichment failed with ghp_fake_token");
       },
       recordHeartbeatImpl: () => undefined,
       stdout: () => undefined,
@@ -310,7 +310,7 @@ describe("daemon cycle resilience", () => {
       cycle: 10
     });
     expect(failure.error).toContain("issue enrichment failed");
-    expect(failure.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(failure.error).not.toContain("ghp_fake_token");
   });
 });
 

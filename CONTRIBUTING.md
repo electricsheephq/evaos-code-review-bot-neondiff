@@ -12,7 +12,8 @@ contributions are focused, test-backed, and careful about public claims.
 - [GitHub App setup](docs/github-app-setup.md)
 - [Security policy](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Product roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
+- [Product roadmap](https://github.com/electricsheephq/neondiff/issues/103)
+- [Public beta release readiness](https://github.com/electricsheephq/neondiff/issues/232)
 
 ## Issue Routing
 

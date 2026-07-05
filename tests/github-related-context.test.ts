@@ -121,7 +121,7 @@ describe("GitHub related context packets", () => {
       pull: pull({ body: "Refs #1 #2 #3" }),
       config: config({ maxRelatedItems: 2 }),
       reader: readerFor({
-        "owner/repo#1": { number: 1, title: "Keep first ghp_123456789012345678901234", state: "open", html_url: "https://github.test/owner/repo/issues/1" },
+        "owner/repo#1": { number: 1, title: "Keep first ghp_fake_token", state: "open", html_url: "https://github.test/owner/repo/issues/1" },
         "owner/repo#2": { number: 2, title: "Keep second", state: "closed", html_url: "https://github.test/owner/repo/issues/2" },
         "owner/repo#3": { number: 3, title: "Omitted", state: "open", html_url: "https://github.test/owner/repo/issues/3" }
       }),
@@ -135,7 +135,7 @@ describe("GitHub related context packets", () => {
       expect.objectContaining({ id: "owner/repo#3", reason: "reference_limit" })
     ]);
     expect(result.packet.markdown).toContain("[redacted-secret]");
-    expect(JSON.stringify(result)).not.toContain("ghp_123456789012345678901234");
+    expect(JSON.stringify(result)).not.toContain("ghp_fake_token");
   });
 
   it("omits cross-repo references unless configured", async () => {
@@ -159,7 +159,7 @@ describe("GitHub related context packets", () => {
   });
 
   it("does not treat token-shaped text as a cross-repo reference", async () => {
-    const secretValue = "ghp_123456789012345678901234";
+    const secretValue = "ghp_fake_token";
     const result = await buildGitHubRelatedContextPacket({
       repo: "owner/repo",
       pull: pull({

@@ -202,7 +202,7 @@ describe("walkthrough comment rendering", () => {
   });
 
   it("redacts secrets and escapes markdown backticks in settings preview metadata", () => {
-    const secretLikeToken = "ghp_123456789012345678901234567890123456";
+    const secretLikeToken = "ghp_fake_token";
     const settingsPreview: ReviewSettingsPreview = {
       profile: "assertive",
       sections: [

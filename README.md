@@ -19,7 +19,8 @@ source-available beta, not an open-source or GA release.
 [Code of Conduct](CODE_OF_CONDUCT.md) · [License](LICENSE.md) ·
 [License Boundary](docs/license-boundary.md) · [Pricing](docs/pricing.md) ·
 [Providers](docs/providers.md) ·
-[Roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
+[Roadmap](https://github.com/electricsheephq/neondiff/issues/103) ·
+[Repository](https://github.com/electricsheephq/neondiff)
 
 ## Why It Matters
 
@@ -61,23 +62,36 @@ Requirements:
 - a model/provider path configured locally, such as GLM/Z.ai, Ollama, or a
   future OpenAI-compatible provider slot
 
-Source checkout install for the current beta:
+Recommended package install for the current beta:
 
 ```bash
-git clone https://github.com/electricsheephq/evaos-code-review-bot.git neondiff
+npm install -g neondiff@1.0.0-beta.1
+```
+
+Installer script path:
+
+```bash
+curl -fsSL https://neondiff.sh/install | sh
+```
+
+The installer script checks for Node.js 26 or newer and installs the same npm
+package. To preview without changing your machine:
+
+```bash
+curl -fsSL https://neondiff.sh/install | sh -s -- --dry-run
+```
+
+Source checkout fallback:
+
+```bash
+git clone https://github.com/electricsheephq/neondiff.git neondiff
 cd neondiff
 npm install
 npm run build
-npm link
 ```
 
-The source checkout exposes the beta `neondiff` binary through `npm link`.
-If you intentionally skip linking, substitute `./dist/src/cli.js` anywhere this
-guide calls `neondiff`. Public npm/package distribution stays blocked until the license gate in
-[issue #104](https://github.com/electricsheephq/evaos-code-review-bot/issues/104)
-and the distribution work in
-[issue #107](https://github.com/electricsheephq/evaos-code-review-bot/issues/107)
-are both resolved.
+If you intentionally use the source checkout without the global package,
+substitute `./dist/src/cli.js` anywhere this guide calls `neondiff`.
 
 ## Set Up
 
@@ -128,11 +142,11 @@ If you are contributing as an AI coding agent:
 
 Useful public-product issues:
 
-- [#103 NeonDiff public product roadmap](https://github.com/electricsheephq/evaos-code-review-bot/issues/103)
-- [#104 license and commercial boundary](https://github.com/electricsheephq/evaos-code-review-bot/issues/104)
-- [#105 pricing implementation](https://github.com/electricsheephq/evaos-code-review-bot/issues/105)
-- [#107 CLI package and local daemon public install flow](https://github.com/electricsheephq/evaos-code-review-bot/issues/107)
-- [#113 agent-first CLI and API documentation contract](https://github.com/electricsheephq/evaos-code-review-bot/issues/113)
+- [#103 NeonDiff public product roadmap](https://github.com/electricsheephq/neondiff/issues/103)
+- [#104 license and commercial boundary](https://github.com/electricsheephq/neondiff/issues/104)
+- [#105 pricing implementation](https://github.com/electricsheephq/neondiff/issues/105)
+- [#107 CLI package and local daemon public install flow](https://github.com/electricsheephq/neondiff/issues/107)
+- [#113 agent-first CLI and API documentation contract](https://github.com/electricsheephq/neondiff/issues/113)
 
 ## Safety Boundaries
 
@@ -163,8 +177,8 @@ Not claimed:
 ## Roadmap Vs Shipped
 
 The current repo is a source-available beta implementation. The public MVP is
-tracked in [#103](https://github.com/electricsheephq/evaos-code-review-bot/issues/103).
-Provider registry, `.neondiff.yml`, public CLI packaging, license activation,
+tracked in [#103](https://github.com/electricsheephq/neondiff/issues/103).
+Provider registry, `.neondiff.yml`, public package publishing, license activation,
 desktop client, wiki exports, marketplace packaging, and confidence calibration
 each have separate issues and must not be treated as shipped until their PRs and
 proof gates close.

@@ -133,10 +133,10 @@ describe("review status comment", () => {
       pullNumber: 1,
       headSha: HEAD_A,
       state: "failed",
-      details: "provider failed with ghp_1234567890abcdefghijklmnopqrstuvwx"
+      details: "provider failed with ghp_fake_token"
     });
 
-    expect(comment.body).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(comment.body).not.toContain("ghp_fake_token");
   });
 
   it("strips public confidence percentages from status comments by default", () => {
@@ -178,12 +178,12 @@ describe("review status comment", () => {
       pullNumber: 1,
       headSha: HEAD_A,
       state: "queued",
-      details: "provider failed with ghp_1234567890abcdefghijklmnopqrstuvwx"
+      details: "provider failed with ghp_fake_token"
     });
 
     expect(comment.body).toContain(comment.marker);
     expect(comment.marker).toContain("owner/api-token-rotator");
-    expect(comment.body).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(comment.body).not.toContain("ghp_fake_token");
   });
 
   it("strips heading markers from PR titles before rendering bot-authored text", () => {

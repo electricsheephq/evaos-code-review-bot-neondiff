@@ -235,7 +235,7 @@ describe("GitHub App read authentication", () => {
     const privateKeyPath = join(root, "app.pem");
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
-    const leakedToken = "ghp_123456789012345678901234567890123456";
+    const leakedToken = "ghp_fake_token";
 
     globalThis.fetch = vi.fn(async (url) => {
       if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });

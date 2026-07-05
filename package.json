@@ -1,14 +1,31 @@
 {
-  "name": "evaos-code-review-bot",
-  "version": "0.1.0",
-  "private": true,
+  "name": "neondiff",
+  "version": "1.0.0-beta.1",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE.md",
   "bin": {
-    "neondiff": "dist/src/cli.js",
-    "evaos-review-bot": "dist/src/cli.js"
+    "neondiff": "dist/src/cli.js"
   },
-  "description": "Local ZCode-backed GitHub PR review bot pilot for evaOS repos.",
+  "description": "Local-first AI PR reviewer for teams that want current-head reviews without handing every diff to a hosted review SaaS.",
+  "homepage": "https://www.neondiff.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electricsheephq/neondiff.git"
+  },
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "config.example.json",
+    "docs/SETUP.md",
+    "docs/github-app-setup.md",
+    "docs/providers.md",
+    "docs/license-boundary.md",
+    "docs/pricing.md",
+    "docs/schema/neondiff-config.schema.json"
+  ],
   "engines": {
     "node": ">=26"
   },

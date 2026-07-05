@@ -1354,7 +1354,7 @@ describe("review state store", () => {
       jobId: job.jobId,
       state: "provider_deferred",
       nextEligibleAt: "2026-07-01T00:05:00.000Z",
-      lastError: "provider 1302 with ghp_1234567890abcdefghijklmnopqrstuvwx",
+      lastError: "provider 1302 with ghp_fake_token",
       now: new Date("2026-07-01T00:00:05.000Z")
     });
     expect(store.leaseNextReviewQueueJobs({
@@ -1460,7 +1460,7 @@ describe("review state store", () => {
       cycle: 2,
       event: "daemon_cycle_failed",
       dryRun: false,
-      error: "request failed with ghp_1234567890abcdefghijklmnopqrstuvwx",
+      error: "request failed with ghp_fake_token",
       recordedAt: new Date("2026-07-01T00:00:10.000Z")
     });
 
@@ -1604,7 +1604,7 @@ describe("review state store", () => {
       author: "100yenadmin",
       trigger: "@evaos-code-review-bot generate tests",
       status: "rejected",
-      proposedOutput: { markdown: "token ghp_123456789012345678901234567890123456" }
+      proposedOutput: { markdown: "token ghp_fake_token" }
     })).toThrow(/secret-like/);
     store.close();
   });

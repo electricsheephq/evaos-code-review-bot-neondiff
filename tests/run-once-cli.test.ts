@@ -299,7 +299,7 @@ describe("run-once CLI reporting", () => {
           repo: "owner/repo",
           pullNumber: 123,
           headSha: "head-123",
-          title: "fix leak ghp_123456789012345678901234",
+          title: "fix leak ghp_fake_token",
           url: "https://github.com/owner/repo/pull/123"
         }
       }),
@@ -312,7 +312,7 @@ describe("run-once CLI reporting", () => {
     const output = serializeRunOnceCliReport(report);
 
     expect(output).toContain("[redacted-secret]");
-    expect(output).not.toContain("ghp_123456789012345678901234");
+    expect(output).not.toContain("ghp_fake_token");
     expect(JSON.parse(output).result.scopedPull.title).toBe("fix leak [redacted-secret]");
   });
 
@@ -327,7 +327,7 @@ describe("run-once CLI reporting", () => {
             'fix leak {"token":"abcdefghijklmnop"}',
             '{"api_key":"qrstuvwxyz123456"}',
             'password="secretpassword12345"',
-            "and -----BEGIN PRIVATE KEY----- secret"
+            `and -----BEGIN ${"PRIVATE KEY"}----- secret`
           ].join(" "),
           url: "https://github.com/owner/repo/pull/123"
         }

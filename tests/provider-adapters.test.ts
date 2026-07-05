@@ -392,7 +392,7 @@ describe("provider adapter fixtures", () => {
   });
 
   it("redacts provider token, base64, and split PEM shapes from raw evidence values", async () => {
-    const anthropicToken = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890";
+    const anthropicToken = "sk-ant-fixture-token";
     const googleToken = "ya29.a0AfH6SMDabcdefghijklmnopqrstuvwxyz1234567890";
     const base64Blob = "VGhpcy1sb29rcy1saWtlLWVuY29kZWQtcHJvdmlkZXItZXZpZGVuY2UtdGhhdC1zaG91bGQtYmUtcmVkYWN0ZWQ=";
     const result = await runProviderAdapterFixture({

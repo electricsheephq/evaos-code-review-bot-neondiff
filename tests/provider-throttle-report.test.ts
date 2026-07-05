@@ -446,7 +446,7 @@ describe("provider throttle report", () => {
         repo: "owner/repo",
         pullNumber: 14,
         headSha: "secret-provider-id-head",
-        providerId: "ghp_123456789012345678901234567890123456",
+        providerId: "ghp_fake_token",
         state: "failed",
         lastError: "ProviderBusinessError: [1305][temporarily overloaded]",
         createdAt: "2026-07-01T11:00:00.000Z",
@@ -477,7 +477,7 @@ describe("provider throttle report", () => {
       expect.objectContaining({ providerId: "z.ai/GLM-5.2@beta", total: 1 }),
       expect.objectContaining({ providerId: "[redacted-provider-id]", total: 2 })
     ]));
-    expect(JSON.stringify(report)).not.toContain("ghp_123456789012345678901234567890123456");
+    expect(JSON.stringify(report)).not.toContain("ghp_fake_token");
     expect(JSON.stringify(report)).not.toContain("0123456789abcdefghijklmnopqrstuvwxyzAB");
   });
 

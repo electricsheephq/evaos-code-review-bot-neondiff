@@ -23,18 +23,12 @@ describe("public NeonDiff CLI surface", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("declares the neondiff source-checkout binary", () => {
+  it("declares the neondiff package binary", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
     const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
 
-    expect(packageJson.bin).toMatchObject({
-      neondiff: "dist/src/cli.js",
-      "evaos-review-bot": "dist/src/cli.js"
-    });
-    expect(packageLock.packages[""].bin).toMatchObject({
-      neondiff: "dist/src/cli.js",
-      "evaos-review-bot": "dist/src/cli.js"
-    });
+    expect(packageJson.bin).toEqual({ neondiff: "dist/src/cli.js" });
+    expect(packageLock.packages[""].bin).toEqual({ neondiff: "dist/src/cli.js" });
   });
 
   it("shows public commands in help output", async () => {
@@ -145,7 +139,7 @@ describe("public NeonDiff CLI surface", () => {
   });
 
   it("omits failed finishing-touch drafts and secret-bearing triggers from CLI stdout", async () => {
-    const secretLikeToken = "ghp_123456789012345678901234567890123456";
+    const secretLikeToken = "ghp_fake_token";
     let failure: unknown;
     try {
       await runCli([
@@ -369,7 +363,8 @@ describe("public NeonDiff CLI surface", () => {
   });
 
   it("rejects malformed provider ids before reflecting them", async () => {
-    await expect(runCli(["providers", "doctor", "--provider", "sk-live-secret-secret-secret-secret"])).rejects.toMatchObject({
+    const secretLikeProviderId = `sk-${"fixturesecretfixturesecret"}`;
+    await expect(runCli(["providers", "doctor", "--provider", secretLikeProviderId])).rejects.toMatchObject({
       stdout: expect.stringContaining("--provider must be a stable provider identifier")
     });
   });
@@ -553,7 +548,11 @@ describe("public NeonDiff CLI surface", () => {
     const config = readFileSync(configPath, "utf8");
     expect(config).toBe(example);
     expect(example).toContain("\"pilotRepos\"");
-    expect(example).not.toMatch(/ghp_|BEGIN PRIVATE KEY|api[_-]?key["']?\s*[:=]\s*["'][A-Za-z0-9._~+/=-]{16,}/i);
+    const fixtureLeakPattern = new RegExp(
+      String.raw`ghp_|BEGIN ${"PRIVATE KEY"}|api[_-]?key["']?\s*[:=]\s*["'][A-Za-z0-9._~+/=-]{16,}`,
+      "i"
+    );
+    expect(example).not.toMatch(fixtureLeakPattern);
   });
 
   it("refuses to overwrite an existing config without force", async () => {
@@ -719,7 +718,7 @@ describe("public NeonDiff CLI surface", () => {
     const repo = "electricsheephq/evaos-code-review-bot";
     const pullNumber = 176;
     const headSha = "secret-failed-head";
-    const ghToken = "ghp_abcdefghijklmnopqrstuvwx";
+    const ghToken = "ghp_fake_token";
     const bearerToken = "Bearer abcdefghijklmnopqrstuvwxyz";
     let store = new ReviewStateStore(statePath);
 

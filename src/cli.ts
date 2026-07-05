@@ -1732,7 +1732,7 @@ function isNeonDiffPackageRoot(candidate: string): boolean {
   }
   try {
     const packageJson = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8"));
-    return packageJson.name === "evaos-code-review-bot"
+    return ["neondiff", "evaos-code-review-bot"].includes(packageJson.name)
       && packageJson.bin?.neondiff === "dist/src/cli.js";
   } catch {
     return false;
@@ -2028,21 +2028,42 @@ function parseLaunchdLabelArg(value: string | string[] | undefined, label: strin
 
 function assertPlistLabelMatches(plistPath: string, launchdLabel: string): void {
   if (!existsSync(plistPath)) throw new Error(`--plist does not exist: ${plistPath}`);
+  const plistLabel = readPlistLabel(plistPath);
+  if (plistLabel !== launchdLabel) {
+    throw new Error(`--plist Label (${redactSecrets(plistLabel)}) must match --launchd-label (${redactSecrets(launchdLabel)})`);
+  }
+}
+
+function readPlistLabel(plistPath: string): string {
   const result = spawnSync("plutil", ["-extract", "Label", "raw", plistPath], {
     encoding: "utf8",
     timeout: PLUTIL_TIMEOUT_MS
   });
   if (result.error) {
+    if ((result.error as NodeJS.ErrnoException).code === "ENOENT") return readPlistLabelFromXml(plistPath);
     throw new Error(`failed to read --plist Label: ${redactSecrets(result.error.message)}`);
   }
   if (result.status !== 0) {
     const detail = redactSecrets((result.stderr || result.stdout || "").trim());
     throw new Error(`failed to read --plist Label${detail ? `: ${detail}` : ""}`);
   }
-  const plistLabel = result.stdout.trim();
-  if (plistLabel !== launchdLabel) {
-    throw new Error(`--plist Label (${redactSecrets(plistLabel)}) must match --launchd-label (${redactSecrets(launchdLabel)})`);
-  }
+  return result.stdout.trim();
+}
+
+function readPlistLabelFromXml(plistPath: string): string {
+  const xml = readFileSync(plistPath, "utf8");
+  const match = xml.match(/<key>\s*Label\s*<\/key>\s*<string>([\s\S]*?)<\/string>/);
+  if (!match) throw new Error("failed to read --plist Label: Label key missing");
+  return decodeXmlText(match[1]!.trim());
+}
+
+function decodeXmlText(value: string): string {
+  return value
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
 }
 
 function launchdDomainTarget(): string {

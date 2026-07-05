@@ -48,7 +48,7 @@ describe("worker review failures", () => {
       state,
       repo: "electricsheephq/WorldOS",
       pull,
-      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT with ghp_1234567890abcdefghijklmnopqrstuvwx")
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT with ghp_fake_token")
     });
 
     expect(state.hasProcessed("electricsheephq/WorldOS", 1222, "head-failed")).toBe(true);
@@ -57,7 +57,7 @@ describe("worker review failures", () => {
       "utf8"
     );
     expect(evidence).toContain("ETIMEDOUT");
-    expect(evidence).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(evidence).not.toContain("ghp_fake_token");
     state.close();
   });
 
@@ -73,7 +73,7 @@ describe("worker review failures", () => {
       state,
       repo: "electricsheephq/evaos-code-review-bot-neondiff",
       pull,
-      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT with ghp_1234567890abcdefghijklmnopqrstuvwx")
+      error: new Error("ZCode failed before completion: spawnSync node ETIMEDOUT with ghp_fake_token")
     });
 
     const first = state.getProcessedReview("electricsheephq/evaos-code-review-bot-neondiff", 215, "head-timeout");
@@ -84,7 +84,7 @@ describe("worker review failures", () => {
     expect(first?.error).toContain("reason=zcode_hard_timeout");
     expect(first?.error).toContain("retry_attempt=1");
     expect(first?.error).toContain("timeout_ms=1");
-    expect(first?.error).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(first?.error).not.toContain("ghp_fake_token");
     expect(parseZCodeTimeoutError(first?.error)).toMatchObject({
       retryAttempt: 1,
       timeoutMs: 1,
@@ -280,7 +280,7 @@ describe("worker review failures", () => {
     roots.push(root);
     const evidenceDir = join(root, "evidence");
     const skillRoot = join(root, "skills");
-    const secretValue = "ghp_123456789012345678901234";
+    const secretValue = "ghp_fake_token";
     mkdirSync(evidenceDir, { recursive: true });
     mkdirSync(skillRoot, { recursive: true });
     writeFileSync(join(skillRoot, "review.md"), "Prefer current diff evidence.");
@@ -454,7 +454,7 @@ describe("worker review failures", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-gitnexus-secret-"));
     roots.push(root);
     const evidenceDir = join(root, "evidence");
-    const secretValue = "ghp_123456789012345678901234";
+    const secretValue = "ghp_fake_token";
     mkdirSync(evidenceDir, { recursive: true });
     const config: BotConfig = {
       ...minimalConfig(root),
@@ -512,7 +512,7 @@ describe("worker review failures", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-github-related-"));
     roots.push(root);
     const evidenceDir = join(root, "evidence");
-    const secretValue = "ghp_123456789012345678901234";
+    const secretValue = "ghp_fake_token";
     mkdirSync(evidenceDir, { recursive: true });
     const config: BotConfig = {
       ...minimalConfig(root),

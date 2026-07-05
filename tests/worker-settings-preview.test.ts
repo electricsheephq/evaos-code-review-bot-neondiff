@@ -35,7 +35,7 @@ describe("worker review settings preview evidence", () => {
     const config = minimalConfig(root);
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(1410, "a".repeat(40));
-    const secretLikeToken = "ghp_123456789012345678901234567890123456";
+    const secretLikeToken = "ghp_fake_token";
     const github = {
       getPull: async () => pull,
       listPullFiles: async () => [
@@ -128,7 +128,7 @@ function minimalConfig(root: string): BotConfig {
         "electricsheephq/WorldOS": {
           reviewProfile: "assertive",
           pathInstructions: {
-            "src/`templates`/**": [`Do not quote ghp_123456789012345678901234567890123456 in public comments.`]
+            "src/`templates`/**": [`Do not quote ghp_fake_token in public comments.`]
           },
           suggestedLabels: ["review-settings"],
           suggestedReviewers: ["maintainer-one"]

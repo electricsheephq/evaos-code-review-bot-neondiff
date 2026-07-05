@@ -227,7 +227,7 @@ describe("repo memory packets", () => {
   it("fails closed and redacts the report when memory text contains secret-like content", () => {
     const result = buildRepoMemoryPacket({
       repo,
-      humanMarkdown: "## Security\nDo not leak token: ghp_123456789012345678901234",
+      humanMarkdown: "## Security\nDo not leak token: ghp_fake_token",
       stateNotes: [],
       generatedAt,
       maxPacketBytes: 12_000
@@ -236,12 +236,12 @@ describe("repo memory packets", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected packet build to fail closed");
     expect(result.error).toContain("secret-like");
-    expect(JSON.stringify(result)).not.toContain("ghp_123456789012345678901234");
+    expect(JSON.stringify(result)).not.toContain("ghp_fake_token");
     expect(JSON.stringify(result)).toContain("[redacted-secret]");
   });
 
   it("fails closed when note identifiers contain secret-like content", () => {
-    const fixtureToken = "ghp_123456789012345678901234";
+    const fixtureToken = "ghp_fake_token";
     const result = buildRepoMemoryPacket({
       repo,
       humanMarkdown: "## Preferred Proof\nKeep proof bounded.",
@@ -328,7 +328,7 @@ describe("repo memory packets", () => {
         now: new Date(generatedAt)
       })
     ).toThrow(/secret-like/);
-    const badId = "ghp_123456789012345678901234";
+    const badId = "ghp_fake_token";
     expect(() =>
       store.recordRepoMemoryNote({
         noteId: badId,

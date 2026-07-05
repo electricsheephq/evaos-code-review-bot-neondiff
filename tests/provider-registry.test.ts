@@ -881,7 +881,7 @@ describe("provider registry", () => {
           "leaky-path": {
             enabled: true,
             adapter: "openai-compatible",
-            baseUrl: "https://gateway.example.test/proxy/sk-live-secret-secret-secret/v1#github_pat_secretsecretsecretsecretsecretsecretsecretsecret",
+            baseUrl: "https://gateway.example.test/proxy/sk-fixture/v1#github_pat_fake_token",
             model: "review-model",
             authMode: "none",
             capabilities: {
@@ -1115,7 +1115,7 @@ describe("provider registry", () => {
             baseUrl: "https://gateway.example.test/v1",
             model: "review-model",
             authMode: "api-key-env",
-            apiKeyEnv: "ghp_123456789012345678901234567890123456",
+            apiKeyEnv: "ghp_fake_token",
             capabilities: {
               review: true,
               jsonOutput: true,

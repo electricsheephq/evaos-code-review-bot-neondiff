@@ -31,11 +31,11 @@ describe("NeonDiff public community funnel", () => {
       /source-available beta/i,
       /GitHub App/i,
       /dry-run review/i,
-      /electricsheephq\/evaos-code-review-bot\/issues\/103/i,
-      /electricsheephq\/evaos-code-review-bot\/issues\/104/i,
-      /electricsheephq\/evaos-code-review-bot\/issues\/105/i,
-      /electricsheephq\/evaos-code-review-bot\/issues\/107/i,
-      /electricsheephq\/evaos-code-review-bot\/issues\/113/i
+      /electricsheephq\/neondiff\/issues\/103/i,
+      /electricsheephq\/neondiff\/issues\/104/i,
+      /electricsheephq\/neondiff\/issues\/105/i,
+      /electricsheephq\/neondiff\/issues\/107/i,
+      /electricsheephq\/neondiff\/issues\/113/i
     ]) {
       expect(readme).toMatch(required);
     }

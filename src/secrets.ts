@@ -1,6 +1,7 @@
 const SECRET_PATTERNS: RegExp[] = [
-  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,
-  /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g,
+  /\bgh[pousr]_[A-Za-z0-9_]{8,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{8,}\b/g,
+  /\bsk-[A-Za-z0-9_-]{8,}\b/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/gi,
   /https?:\/\/[^/\s@]+@[^/\s]+/gi,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
