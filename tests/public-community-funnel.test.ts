@@ -12,7 +12,6 @@ describe("NeonDiff public community funnel", () => {
     for (const required of [
       /^# NeonDiff/m,
       /local-first AI PR reviewer/i,
-      /https:\/\/www\.neondiff\.com/i,
       /docs\/SETUP\.md/i,
       /docs\/github-app-setup\.md/i,
       /CONTRIBUTING\.md/i,
@@ -39,6 +38,7 @@ describe("NeonDiff public community funnel", () => {
     ]) {
       expect(readme).toMatch(required);
     }
+    expect(readme).toContain("https://www.neondiff.com");
 
     for (const forbidden of [
       /OpenSource replacement/i,

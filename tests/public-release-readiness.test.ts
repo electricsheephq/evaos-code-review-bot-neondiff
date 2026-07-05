@@ -100,12 +100,19 @@ describe("NeonDiff public release readiness", () => {
       read("docs/license-boundary.md"),
       read("docs/releases/v0.4.24-beta.1.md")
     ].join("\n\n");
+    const legacyRepoReferences = docs
+      .split(/\s+/)
+      .filter(
+        (token) =>
+          token.includes("github.com/electricsheephq/evaos-code-review-bot") &&
+          !token.includes("github.com/electricsheephq/evaos-code-review-bot-neondiff")
+      );
 
-    expect(docs).toMatch(/https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot-neondiff/i);
+    expect(docs).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff");
     expect(docs).toMatch(/npm install -g neondiff@0\.4\.24-beta\.1/i);
     expect(docs).toMatch(/curl -fsSL https:\/\/www\.neondiff\.com\/install/i);
-    expect(docs).toMatch(/git clone https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot-neondiff\.git/i);
-    expect(docs).not.toMatch(/https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot(?!-neondiff)/i);
+    expect(docs).toContain("git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git");
+    expect(legacyRepoReferences).toEqual([]);
     expect(docs).not.toMatch(/npm link installs the local source-checkout shim/i);
   });
 
