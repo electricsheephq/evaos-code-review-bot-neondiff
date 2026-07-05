@@ -320,6 +320,7 @@ export interface IssueEnrichmentRecord {
   repo: string;
   issueNumber: number;
   issueUpdatedAt?: string;
+  bodyHash?: string;
   status: IssueEnrichmentRecordStatus;
   reason?: string;
   commentUrl?: string;
@@ -341,6 +342,7 @@ export interface RecordIssueEnrichmentInput {
   repo: string;
   issueNumber: number;
   issueUpdatedAt?: string;
+  bodyHash?: string;
   status: IssueEnrichmentRecordStatus;
   reason?: string;
   commentUrl?: string;
@@ -589,6 +591,7 @@ export class ReviewStateStore {
         repo text not null,
         issue_number integer not null,
         issue_updated_at text,
+        body_hash text,
         status text not null,
         reason text,
         comment_url text,
@@ -619,6 +622,7 @@ export class ReviewStateStore {
         owner_pid integer
       );
     `);
+    this.ensureIssueEnrichmentBodyHashColumn();
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
     this.ensureReviewQueueJobColumns();
@@ -841,17 +845,19 @@ export class ReviewStateStore {
     const existing = this.getIssueEnrichmentRecord(input.repo, input.issueNumber);
     const nowIso = (input.now ?? new Date()).toISOString();
     const reason = input.reason ? redactSecrets(input.reason).trim().slice(0, 500) : undefined;
+    const bodyHash = input.bodyHash ? input.bodyHash.trim().toLowerCase() : undefined;
     const commentUrl = input.commentUrl ? redactSecrets(input.commentUrl).trim().slice(0, 500) : undefined;
     const error = input.error ? redactSecrets(input.error).trim().slice(0, 1_000) : undefined;
     const nextEligibleAt = input.nextEligibleAt ? new Date(Date.parse(input.nextEligibleAt)).toISOString() : undefined;
     this.db
       .prepare(
         `insert into issue_enrichment_records
-          (repo, issue_number, issue_updated_at, status, reason, comment_url, error,
+          (repo, issue_number, issue_updated_at, body_hash, status, reason, comment_url, error,
            next_eligible_at, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(repo, issue_number) do update set
            issue_updated_at = excluded.issue_updated_at,
+           body_hash = excluded.body_hash,
            status = excluded.status,
            reason = excluded.reason,
            comment_url = excluded.comment_url,
@@ -863,6 +869,7 @@ export class ReviewStateStore {
         input.repo,
         input.issueNumber,
         input.issueUpdatedAt ?? null,
+        bodyHash ?? null,
         input.status,
         reason ?? null,
         commentUrl ?? null,
@@ -878,7 +885,7 @@ export class ReviewStateStore {
     validateRepoIssue(repo, issueNumber);
     const row = this.db
       .prepare(
-        `select repo, issue_number, issue_updated_at, status, reason, comment_url, error,
+        `select repo, issue_number, issue_updated_at, body_hash, status, reason, comment_url, error,
                 next_eligible_at, created_at, updated_at
          from issue_enrichment_records
          where repo = ? and issue_number = ?
@@ -915,7 +922,7 @@ export class ReviewStateStore {
     if (input.limit) params.push(input.limit);
     const rows = this.db
       .prepare(
-        `select repo, issue_number, issue_updated_at, status, reason, comment_url, error,
+        `select repo, issue_number, issue_updated_at, body_hash, status, reason, comment_url, error,
                 next_eligible_at, created_at, updated_at
          from issue_enrichment_records
          ${where}
@@ -2438,6 +2445,13 @@ export class ReviewStateStore {
     this.db.close();
   }
 
+  private ensureIssueEnrichmentBodyHashColumn(): void {
+    const columns = this.db.prepare("pragma table_info(issue_enrichment_records)").all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "body_hash")) {
+      this.db.exec("alter table issue_enrichment_records add column body_hash text");
+    }
+  }
+
   private ensureDaemonHeartbeatColumns(): void {
     const columns = this.db
       .prepare("pragma table_info(daemon_heartbeat)")
@@ -2582,6 +2596,9 @@ function validateIssueEnrichmentInput(input: RecordIssueEnrichmentInput): void {
   if (input.issueUpdatedAt !== undefined && !isCanonicalIsoTimestamp(input.issueUpdatedAt)) {
     throw new Error("issueUpdatedAt must be a canonical ISO timestamp");
   }
+  if (input.bodyHash !== undefined && !/^[0-9a-f]{64}$/i.test(input.bodyHash)) {
+    throw new Error("bodyHash must be a 64-character hex digest");
+  }
   if (input.nextEligibleAt !== undefined && !Number.isFinite(Date.parse(input.nextEligibleAt))) {
     throw new Error("nextEligibleAt must be an ISO timestamp");
   }
@@ -2592,6 +2609,7 @@ function validateIssueEnrichmentInput(input: RecordIssueEnrichmentInput): void {
     input.repo,
     String(input.issueNumber),
     input.issueUpdatedAt ?? "",
+    input.bodyHash ?? "",
     input.reason ?? "",
     input.commentUrl ?? "",
     input.error ?? "",
@@ -2925,6 +2943,7 @@ interface IssueEnrichmentRecordRow {
   repo: string;
   issue_number: number;
   issue_updated_at: string | null;
+  body_hash: string | null;
   status: IssueEnrichmentRecordStatus;
   reason: string | null;
   comment_url: string | null;
@@ -2991,6 +3010,7 @@ function mapIssueEnrichmentRecordRow(row: IssueEnrichmentRecordRow): IssueEnrich
     repo: row.repo,
     issueNumber: row.issue_number,
     ...(row.issue_updated_at ? { issueUpdatedAt: row.issue_updated_at } : {}),
+    ...(row.body_hash ? { bodyHash: row.body_hash } : {}),
     status: row.status,
     ...(row.reason ? { reason: row.reason } : {}),
     ...(row.comment_url ? { commentUrl: row.comment_url } : {}),

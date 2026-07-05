@@ -899,7 +899,7 @@ describe("build-enrichment-comment issue CLI", () => {
     });
   });
 
-  it("posts selected issue enrichment live, skips unchanged reruns, and force-updates the sticky comment", async () => {
+  it("posts selected issue enrichment live, skips bot-comment updated_at reruns, and force-updates the sticky comment", async () => {
     await withMockGitHub(async ({ apiBaseUrl, requests }) => {
       const root = createRoot(roots);
       const configPath = writeIssueRunConfig(root, apiBaseUrl);
@@ -1215,6 +1215,7 @@ async function withMockGitHub(
 
 interface MockGitHubState {
   issue17CommentBody?: string;
+  issue17UpdatedAt?: string;
 }
 
 function routeMockGitHub(
@@ -1264,7 +1265,7 @@ function routeMockGitHub(
       number: 17,
       title: "Open issue #11 #12 #13",
       state: "open",
-      updated_at: "2026-07-05T00:00:00.000Z",
+      updated_at: options.state?.issue17UpdatedAt ?? "2026-07-05T00:00:00.000Z",
       html_url: "https://github.test/owner/issue-repo/issues/17",
       body: "Acceptance criteria and owner are present.",
       labels: [{ name: "support" }]
@@ -1334,6 +1335,7 @@ function routeMockGitHub(
     }
     if (options.state) {
       options.state.issue17CommentBody = "<!-- evaos-code-review-bot:enrichment repo=owner/issue-repo issue=17 -->";
+      options.state.issue17UpdatedAt = "2026-07-05T00:00:01.000Z";
     }
     respondJson(response, 200, {
       id: 9001,
@@ -1344,6 +1346,7 @@ function routeMockGitHub(
   if (request.method === "PATCH" && request.url === "/repos/owner/issue-repo/issues/comments/9001") {
     if (options.state) {
       options.state.issue17CommentBody = "<!-- evaos-code-review-bot:enrichment repo=owner/issue-repo issue=17 --> updated";
+      options.state.issue17UpdatedAt = "2026-07-05T00:00:02.000Z";
     }
     respondJson(response, 200, {
       id: 9001,
