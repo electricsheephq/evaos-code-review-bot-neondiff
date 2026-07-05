@@ -58,7 +58,18 @@ describe("issue enrichment scorecard", () => {
     expect(result.dimensionScores.find((dimension) => dimension.id === "proof_boundary")).toMatchObject({
       score: 5,
       weightedScore: 65,
-      evidenceLinks: ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"]
+      evidenceLinks: [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-docs-only-fast-negative-control-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-duplicate-same-head-comments-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-external-precedent-required-issue-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-invalid-inline-coordinates-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-issue-enrichment-permission-failure-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-launchd-config-head-ambiguity-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-old-backlog-negative-control-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-provider-failure-burst-30-prs-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-head-posts-proof-boundary",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264#direct-evidence-stale-irrelevant-web-result-proof-boundary"
+      ]
     });
   });
 
@@ -67,6 +78,21 @@ describe("issue enrichment scorecard", () => {
     fixture.cases[0].dimensions.proof_boundary = {
       score: 4,
       notes: "High score without a direct link must fail validation."
+    };
+
+    expect(validateIssueEnrichmentFixture(fixture)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "case duplicate-same-head-comments dimension proof_boundary scored 4 without direct evidence links"
+      ])
+    });
+  });
+
+  it("rejects generic parent issue URLs for high scores even when they are valid http links", () => {
+    const fixture = loadFixture();
+    fixture.cases[0].dimensions.proof_boundary = {
+      score: 4,
+      evidenceLinks: ["https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"]
     };
 
     expect(validateIssueEnrichmentFixture(fixture)).toMatchObject({
@@ -123,7 +149,10 @@ describe("issue enrichment scorecard", () => {
     {
       name: "out-of-range score",
       mutate: (fixture: IssueEnrichmentFixturePacket) => {
-        fixture.cases[0].dimensions.proof_boundary = { score: 6, evidenceLinks: ["https://example.com/evidence"] };
+        fixture.cases[0].dimensions.proof_boundary = {
+          score: 6,
+          evidenceLinks: ["https://example.com/evidence#direct-evidence-duplicate-same-head-comments-proof-boundary"]
+        };
       },
       error: "case duplicate-same-head-comments dimension proof_boundary score must be between 0 and 5"
     },

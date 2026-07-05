@@ -253,7 +253,7 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
       if (!Number.isFinite(score.score) || score.score! < 0 || score.score! > 5) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} score must be between 0 and 5`);
       }
-      if ((score.score ?? 0) > 3 && !hasDirectEvidenceLink(score.evidenceLinks)) {
+      if ((score.score ?? 0) > 3 && !hasDirectEvidenceLink(score.evidenceLinks, fixtureCase.id, dimension.id)) {
         errors.push(`case ${fixtureCase.id} dimension ${dimension.id} scored ${score.score} without direct evidence links`);
       }
     }
@@ -328,8 +328,20 @@ function normalizeScore(score: number | undefined): number {
   return Math.min(5, Math.max(0, score));
 }
 
-function hasDirectEvidenceLink(links: string[] | undefined): boolean {
-  return (links ?? []).some((link) => /^https?:\/\/\S+$/i.test(link));
+function hasDirectEvidenceLink(
+  links: string[] | undefined,
+  caseId: string,
+  dimensionId: IssueEnrichmentScoreDimensionId
+): boolean {
+  const expectedAnchor = `direct-evidence-${caseId.replaceAll("_", "-")}-${dimensionId.replaceAll("_", "-")}`;
+  return (links ?? []).some((link) => {
+    try {
+      const url = new URL(link);
+      return (url.protocol === "https:" || url.protocol === "http:") && url.hash.slice(1) === expectedAnchor;
+    } catch {
+      return false;
+    }
+  });
 }
 
 function percent(value: number, max: number): number {
