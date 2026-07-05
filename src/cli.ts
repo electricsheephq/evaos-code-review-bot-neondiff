@@ -26,6 +26,7 @@ import {
 } from "./finishing-touches.js";
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
+import { buildGitNexusRefreshPreflight } from "./gitnexus-refresh-preflight.js";
 import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
 import {
   buildIssueEnrichmentStatus,
@@ -817,6 +818,32 @@ async function main(): Promise<void> {
     } else {
       console.log(JSON.stringify(result, null, 2));
     }
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "gitnexus-refresh-preflight") {
+    const repoPath = args["repo-path"] ? parseSingleArg(args["repo-path"], "--repo-path") : ".";
+    const indexInfoText = args["index-info-file"]
+      ? readFileSync(parseSingleArg(args["index-info-file"], "--index-info-file"), "utf8")
+      : collectGitNexusPreflightText(repoPath);
+    const result = buildGitNexusRefreshPreflight({
+      repoPath,
+      ...(args["repo-alias"] ? { repoAlias: parseSingleArg(args["repo-alias"], "--repo-alias") } : {}),
+      indexInfoText,
+      env: process.env,
+      indexOnlyFallback: args["index-only-fallback"] === undefined
+        ? false
+        : parseBooleanArg(args["index-only-fallback"], "--index-only-fallback"),
+      allowDimensionChange: args["allow-dimension-change"] === undefined
+        ? false
+        : parseBooleanArg(args["allow-dimension-change"], "--allow-dimension-change")
+    });
+    console.log(stringifyRedactedJson({
+      command: "gitnexus-refresh-preflight",
+      proofBoundary: "Preflight only; this command does not run gitnexus analyze or mutate the index.",
+      ...result
+    }));
     if (!result.ok) process.exitCode = 1;
     return;
   }
@@ -2369,6 +2396,7 @@ function buildHelp(command?: string) {
         "release-status",
         "review-head-gate",
         "coverage-audit",
+        "gitnexus-refresh-preflight",
         "build-memory-packet",
         "build-gitnexus-context-packet",
         "build-github-related-context-packet",
@@ -2423,6 +2451,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts provider-throttle-report --config /path/to/live.json --since 7d --timezone Asia/Singapore",
       "provider-throttle-report peak-window flags use inclusive local-hour buckets, e.g. --peak-start-hour 14 --peak-end-hour 18 includes 14:00 through 18:00",
       "npx tsx src/cli.ts why --config /path/to/live.json --repo owner/repo --pr 123",
+      "npx tsx src/cli.ts gitnexus-refresh-preflight --repo-path . --repo-alias evaos-code-review-bot-neondiff",
       "npx tsx src/cli.ts build-memory-packet --config /path/to/live.json --repo owner/repo --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-gitnexus-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-github-related-context-packet --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
@@ -2441,6 +2470,44 @@ function buildHelp(command?: string) {
 
 function stringifyProviderOutput(input: unknown): string {
   return JSON.stringify(redactProviderOutput(input), null, 2);
+}
+
+function collectGitNexusPreflightText(repoPath: string): string {
+  const status = spawnSync("gitnexus", ["status"], {
+    cwd: repoPath,
+    encoding: "utf8",
+    timeout: 15_000,
+    maxBuffer: 1024 * 1024
+  });
+  const doctor = spawnSync("gitnexus", ["doctor"], {
+    cwd: repoPath,
+    encoding: "utf8",
+    timeout: 15_000,
+    maxBuffer: 1024 * 1024
+  });
+  return [
+    "$ gitnexus status",
+    formatSpawnSyncDiagnostics("gitnexus status", status),
+    status.stdout,
+    status.stderr,
+    "$ gitnexus doctor",
+    formatSpawnSyncDiagnostics("gitnexus doctor", doctor),
+    doctor.stdout,
+    doctor.stderr
+  ].filter(Boolean).join("\n");
+}
+
+function formatSpawnSyncDiagnostics(command: string, result: ReturnType<typeof spawnSync>): string | undefined {
+  const error = result.error as NodeJS.ErrnoException | undefined;
+  const diagnostics = [
+    `[${command} exit status=${result.status ?? "null"} signal=${result.signal ?? "null"}]`,
+    error ? `[${command} error code=${error.code ?? "unknown"} message=${formatSpawnSyncDiagnosticMessage(error.message)}]` : undefined
+  ].filter(Boolean);
+  return diagnostics.length > 0 ? diagnostics.join("\n") : undefined;
+}
+
+function formatSpawnSyncDiagnosticMessage(message: string): string {
+  return message.replaceAll("]", ")");
 }
 
 function redactProviderOutput(input: unknown, key?: string): unknown {

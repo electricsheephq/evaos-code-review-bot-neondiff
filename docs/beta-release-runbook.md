@@ -129,6 +129,58 @@ Prefer `npx tsx src/cli.ts release-status ...` when writing machine-readable JSO
 to an evidence file, because `npm run release:status` prepends npm's command
 banner to stdout.
 
+### Post-Merge GitNexus Refresh Preflight
+
+Post-merge GitNexus refreshes are release hygiene only. They must not change
+live `gitnexusContext` behavior, runtime config, launchd state, monitored repos,
+or review posting behavior. Preserve the existing index embedding dimensions
+unless a separate tracked issue and release gate intentionally changes them.
+
+Before running `gitnexus analyze --embeddings`, bootstrap the intended embedding
+provider explicitly in the shell that will run the refresh. For the current
+Voyage-backed Electric Sheep indexes, that means setting the HTTP endpoint,
+model, and the dimension count that matches the existing index. Do not guess the
+dimension count: use only a GitNexus field that explicitly names embedding
+dimensions, such as `embeddingDimensions` or `Embedding dimensions`, or the
+preflight output's `current.dimensions` field after it has parsed that explicit
+GitNexus evidence.
+
+```bash
+export GITNEXUS_EMBEDDING_URL=https://api.voyageai.com/v1
+export GITNEXUS_EMBEDDING_MODEL=voyage-code-3
+export GITNEXUS_EMBEDDING_DIMS=<current-index-dimensions>
+```
+
+Then run the preflight from the clean release checkout:
+
+```bash
+npx tsx src/cli.ts gitnexus-refresh-preflight \
+  --repo-path . \
+  --repo-alias evaos-code-review-bot-neondiff
+```
+
+The preflight prints the current index dimensions only when GitNexus exposes an
+explicit embedding-dimension field, the intended provider/model/dimensions from
+the environment, and the exact recommended command. If provider configuration is
+missing, the current index dimensions cannot be proven, or the intended
+dimensions differ from the current index, do not run
+`gitnexus analyze --embeddings`. Either fix the provider bootstrap/index
+dimension evidence and rerun the preflight, or use the explicit fallback when the
+release only needs commit freshness:
+
+```bash
+npx tsx src/cli.ts gitnexus-refresh-preflight \
+  --repo-path . \
+  --repo-alias evaos-code-review-bot-neondiff \
+  --index-only-fallback true
+
+gitnexus analyze . --name evaos-code-review-bot-neondiff --index-only
+```
+
+Do not use `--allow-dimension-change true` during routine post-merge refreshes;
+that flag is only for a separate embedding migration issue with its own evidence
+packet.
+
 ## Required Gates
 
 - GitHub PR merged to `main` with checks green and no current-head actionable
@@ -177,6 +229,10 @@ npx tsx src/cli.ts review-head-gate \
   explained in the release packet.
 - GitHub tracker issue records source SHA, config path, launchd proof, DB proof,
   rollback command, and next action.
+- Post-merge GitNexus refreshes record the `gitnexus-refresh-preflight` output
+  before any `gitnexus analyze --embeddings` command; missing provider config
+  or missing/mismatched dimension evidence must block vector rebuilds or use the
+  explicit `--index-only` fallback.
 
 ## Stale Main Guard
 
