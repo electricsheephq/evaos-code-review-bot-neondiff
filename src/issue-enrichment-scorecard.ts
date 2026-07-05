@@ -247,9 +247,13 @@ export function validateIssueEnrichmentFixture(packet: IssueEnrichmentFixturePac
     seenCaseIds.add(fixtureCase.id);
     if (seenCoverageIds.has(fixtureCase.coverage)) duplicateCoverageIds.add(fixtureCase.coverage);
     seenCoverageIds.add(fixtureCase.coverage);
+    if (!fixtureCase.dimensions || typeof fixtureCase.dimensions !== "object") {
+      errors.push(`case ${fixtureCase.id} missing dimensions`);
+      continue;
+    }
 
     for (const dimension of ISSUE_ENRICHMENT_SCORE_DIMENSIONS) {
-      const score = fixtureCase.dimensions[dimension.id];
+      const score = fixtureCase.dimensions?.[dimension.id];
       if (!score) {
         errors.push(`case ${fixtureCase.id} missing dimension ${dimension.id}`);
         continue;
@@ -311,7 +315,7 @@ function scoreDimension(
   const threshold = getMetricContract(packet, dimension).pilotThreshold.advisoryMin;
 
   for (const fixtureCase of packet.cases) {
-    const score = fixtureCase.dimensions[dimension.id];
+    const score = fixtureCase.dimensions?.[dimension.id];
     if (!score) continue;
     for (const link of score.evidenceLinks ?? []) evidenceLinks.add(link);
     if (score.unmeasurable) {

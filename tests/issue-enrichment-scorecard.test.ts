@@ -7,6 +7,7 @@ import {
   scoreIssueEnrichment,
   summarizeIssueEnrichmentScorecard,
   validateIssueEnrichmentFixture,
+  type IssueEnrichmentDimensionFixtureScore,
   type IssueEnrichmentFixturePacket
 } from "../src/issue-enrichment-scorecard.js";
 
@@ -14,6 +15,37 @@ const fixturePath = join("tests", "fixtures", "issue-enrichment-scorecard", "sam
 
 function loadFixture(): IssueEnrichmentFixturePacket {
   return JSON.parse(readFileSync(fixturePath, "utf8")) as IssueEnrichmentFixturePacket;
+}
+
+function expectedTopLevelScores(fixture: IssueEnrichmentFixturePacket): { rawScore: number; weightedScore: number } {
+  const measuredDimensions = ISSUE_ENRICHMENT_SCORE_DIMENSIONS.flatMap((dimension) => {
+    const scores = fixture.cases
+      .map((fixtureCase) => fixtureCase.dimensions?.[dimension.id])
+      .filter((score): score is IssueEnrichmentDimensionFixtureScore => Boolean(score) && !score.unmeasurable)
+      .map((score) => score.score ?? 0);
+
+    if (!scores.length) return [];
+    const averageScore = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+    return [
+      {
+        rawScore: averageScore,
+        weightedContribution: averageScore * dimension.weight,
+        maxWeightedScore: dimension.weight * 5
+      }
+    ];
+  });
+
+  return {
+    rawScore: Math.round(
+      (measuredDimensions.reduce((sum, dimension) => sum + dimension.rawScore, 0) / (measuredDimensions.length * 5)) *
+        100
+    ),
+    weightedScore: Math.round(
+      (measuredDimensions.reduce((sum, dimension) => sum + dimension.weightedContribution, 0) /
+        measuredDimensions.reduce((sum, dimension) => sum + dimension.maxWeightedScore, 0)) *
+        100
+    )
+  };
 }
 
 describe("issue enrichment scorecard", () => {
@@ -48,11 +80,10 @@ describe("issue enrichment scorecard", () => {
   it("scores fixture packets with separate raw and weighted scores without public parity or calibrated-confidence claims", () => {
     const fixture = loadFixture();
     const result = scoreIssueEnrichment(fixture);
+    const expectedScores = expectedTopLevelScores(fixture);
 
-    expect(result.rawScore).toBeGreaterThanOrEqual(75);
-    expect(result.rawScore).toBeLessThanOrEqual(85);
-    expect(result.weightedScore).toBeGreaterThanOrEqual(75);
-    expect(result.weightedScore).toBeLessThanOrEqual(85);
+    expect(result.rawScore).toBe(expectedScores.rawScore);
+    expect(result.weightedScore).toBe(expectedScores.weightedScore);
     expect(result.weightedScore).not.toBe(result.rawScore);
     expect(result.publicClaim).toBe("no_public_claim");
     expect(result.calibration).toBe("uncalibrated");
@@ -87,6 +118,29 @@ describe("issue enrichment scorecard", () => {
       ok: false,
       errors: expect.arrayContaining([
         "case duplicate-same-head-comments dimension proof_boundary scored 4 without direct evidence links"
+      ])
+    });
+  });
+
+  it("documents the strict high-score evidence boundary at scores above 3", () => {
+    const exactlyThree = loadFixture();
+    exactlyThree.cases[0].dimensions.proof_boundary = {
+      score: 3,
+      notes: "Exactly 3 is useful but incomplete and does not require direct evidence."
+    };
+
+    expect(validateIssueEnrichmentFixture(exactlyThree).ok).toBe(true);
+
+    const aboveThree = loadFixture();
+    aboveThree.cases[0].dimensions.proof_boundary = {
+      score: 3.01,
+      notes: "Scores above 3 require a direct evidence link."
+    };
+
+    expect(validateIssueEnrichmentFixture(aboveThree)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "case duplicate-same-head-comments dimension proof_boundary scored 3.01 without direct evidence links"
       ])
     });
   });
@@ -310,6 +364,13 @@ describe("issue enrichment scorecard", () => {
         fixture.cases[0].dimensions = dimensions as IssueEnrichmentFixturePacket["cases"][number]["dimensions"];
       },
       error: "case duplicate-same-head-comments missing dimension proof_boundary"
+    },
+    {
+      name: "missing dimensions object",
+      mutate: (fixture: IssueEnrichmentFixturePacket) => {
+        fixture.cases[0].dimensions = undefined as unknown as IssueEnrichmentFixturePacket["cases"][number]["dimensions"];
+      },
+      error: "case duplicate-same-head-comments missing dimensions"
     },
     {
       name: "missing metric threshold",
