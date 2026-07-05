@@ -2235,7 +2235,7 @@ describe("worker review failures", () => {
     });
     expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, headSha)).toMatchObject({
       state: "ready_for_human",
-      reason: "direct_review_reconciled_processed_head",
+      reason: "direct_review_reconciled_processed_head; previous_reason=active_queue_job_queued",
       event: "COMMENT",
       reviewUrl
     });
@@ -2419,7 +2419,7 @@ describe("worker review failures", () => {
     expect(state.getReviewQueueJob(providerDeferredJob.jobId)?.nextEligibleAt).toBeUndefined();
     expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, headSha)).toMatchObject({
       state: "needs_fix",
-      reason: "direct_review_reconciled_processed_head",
+      reason: "direct_review_reconciled_processed_head; previous_reason=trusted_re_review_command",
       event: "REQUEST_CHANGES",
       reviewUrl,
       commandAction: "re-review",
@@ -2545,7 +2545,7 @@ describe("worker review failures", () => {
     });
     expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, headSha)).toMatchObject({
       state: "ready_for_human",
-      reason: "direct_review_reconciled_processed_head",
+      reason: "direct_review_reconciled_processed_head; previous_reason=trusted_re_review_command",
       event: "COMMENT",
       reviewUrl,
       commandAction: "re-review",
@@ -2613,7 +2613,7 @@ describe("worker review failures", () => {
     });
     expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, headSha)).toMatchObject({
       state: "ready_for_human",
-      reason: "direct_review_reconciled_processed_head",
+      reason: "direct_review_reconciled_processed_head; previous_reason=trusted_re_review_command",
       event: "COMMENT",
       reviewUrl,
       commandAction: "re-review",

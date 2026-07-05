@@ -56,6 +56,7 @@ import {
   ReviewStateStore,
   type ProcessedStatus,
   type ReviewQueueJobState,
+  type ReviewReadinessRecord,
   type ReviewReadinessState,
   type ReviewerSessionJobState,
   type ReviewRunLease,
@@ -1640,6 +1641,7 @@ export async function reconcileProcessedHeadAfterDirectReview(input: {
   const manualCommandJob =
     activeJobs.find((job) => job.source === "manual_command" && job.commentId) ??
     activeJobs.find((job) => job.source === "manual_command");
+  const existingReadiness = input.state.getReviewReadiness(input.repo, input.pull.number, input.pull.head.sha);
 
   for (const job of activeJobs) {
     input.state.updateReviewQueueJobState({
@@ -1666,7 +1668,7 @@ export async function reconcileProcessedHeadAfterDirectReview(input: {
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,
     state: readinessStateForDirectProcessedReview(processed.event),
-    reason: "direct_review_reconciled_processed_head",
+    reason: directReviewReconcileReadinessReason(existingReadiness),
     ...(processed.event ? { event: processed.event } : {}),
     ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
     ...(manualCommandJob?.commentId ? { commandCommentId: manualCommandJob.commentId } : {}),
@@ -1700,11 +1702,20 @@ export async function reconcileProcessedHeadAfterDirectReview(input: {
 }
 
 const DIRECT_REVIEW_RECONCILED_ERROR = "direct_review_reconciled_processed_head=posted";
+const DIRECT_REVIEW_RECONCILED_REASON = "direct_review_reconciled_processed_head";
 
 function directReviewReconcileLastError(previous?: string): string {
   if (!previous) return DIRECT_REVIEW_RECONCILED_ERROR;
   if (previous.includes(DIRECT_REVIEW_RECONCILED_ERROR)) return previous;
   return `${DIRECT_REVIEW_RECONCILED_ERROR}; previous_last_error=${previous}`;
+}
+
+function directReviewReconcileReadinessReason(previous?: ReviewReadinessRecord): string {
+  const previousReason = previous?.reason?.trim();
+  if (!previousReason || previousReason.includes(DIRECT_REVIEW_RECONCILED_REASON)) {
+    return DIRECT_REVIEW_RECONCILED_REASON;
+  }
+  return `${DIRECT_REVIEW_RECONCILED_REASON}; previous_reason=${redactSecrets(previousReason).slice(0, 200)}`;
 }
 
 function readinessStateForDirectProcessedReview(event?: ReviewEvent): ReviewReadinessState {
