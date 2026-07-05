@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
@@ -11,6 +12,8 @@ import { ReviewStateStore } from "../src/state.js";
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
+const { privateKey: testPrivateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const TEST_PRIVATE_KEY_PEM = String(testPrivateKey.export({ type: "pkcs1", format: "pem" }));
 
 describe("build-enrichment-comment issue CLI", () => {
   const roots: string[] = [];
@@ -117,6 +120,20 @@ describe("build-enrichment-comment issue CLI", () => {
       "17"
     ])).rejects.toMatchObject({
       stderr: expect.stringContaining("exactly one of --pr or --issue is required")
+    });
+  });
+
+  it("keeps build-enrichment-comment single-issue only when --issue is repeated", async () => {
+    await expect(runCli([
+      "build-enrichment-comment",
+      "--repo",
+      "owner/repo",
+      "--issue",
+      "17",
+      "--issue",
+      "18"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("--issue must be provided once")
     });
   });
 
@@ -352,9 +369,419 @@ describe("build-enrichment-comment issue CLI", () => {
       });
     });
   });
+
+  it("requires explicit confirmation before live issue enrichment runs", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "false"
+      ])).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue-enrichment-run requires --confirm true when --dry-run false")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
+  it("rejects live issue enrichment when comment posting is disabled", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.issueEnrichment.postIssueComment = false;
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue-enrichment-run live posting requires issueEnrichment.postIssueComment true")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
+  it("surfaces missing live repo thresholds before fetching", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      delete config.issueEnrichment.repos["owner/issue-repo"];
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue-enrichment-run dry-run blocked: issue_enrichment_live_repo_thresholds_required")
+      });
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue-enrichment-run live posting blocked: issue_enrichment_live_repo_thresholds_required")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
+  it("rejects selected issue enrichment for repos outside the issue allowlist", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/not-allowlisted",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("not_issue_enrichment_allowlisted")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
+  it("dry-runs selected issue enrichment and writes JSON plus Markdown evidence", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const outputDir = join(root, "evidence", "issue-run-dry");
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--issue",
+        "20",
+        "--dry-run",
+        "true",
+        "--output-dir",
+        outputDir
+      ], issueRunEnv(root));
+      const parsed = JSON.parse(stdout);
+
+      expect(parsed.summary).toMatchObject({ wouldComment: 2, posted: 0, failed: 0 });
+      expect(parsed.items).toHaveLength(2);
+      expect(readFileSync(join(outputDir, "issue-enrichment-run.json"), "utf8")).toContain("\"issueNumber\": 17");
+      expect(readFileSync(join(outputDir, "issue-17.md"), "utf8")).toContain("## evaOS issue enrichment");
+      const issue20Markdown = readFileSync(join(outputDir, "issue-20.md"), "utf8");
+      expect(issue20Markdown).toContain("Issue: owner/issue-repo#20");
+      expect(issue20Markdown).not.toContain("ghp_secret");
+      expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
+  it("applies comment caps to live selected batches but not dry-run batches", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.issueEnrichment.maxCommentsPerCycle = 1;
+      config.issueEnrichment.globalMaxCommentsPerCycle = 1;
+      config.issueEnrichment.repos["owner/issue-repo"].maxCommentsPerCycle = 1;
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      const dryRun = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--issue",
+        "20",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root));
+      expect(JSON.parse(dryRun.stdout).summary).toMatchObject({ wouldComment: 1, deferred: 1 });
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--issue",
+        "20",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("selected issue count 2 exceeds configured per-run cap 1")
+      });
+      expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
+  it("dedupes repeated selected issue numbers before fetching or posting", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root));
+      const parsed = JSON.parse(stdout);
+
+      expect(parsed.issueNumbers).toEqual([17]);
+      expect(parsed.items).toHaveLength(1);
+      expect(requests.filter((request) => request.path === "/repos/owner/issue-repo/issues/17")).toHaveLength(1);
+      expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
+  it("rejects force for dry-run selected issue enrichment", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "true",
+        "--force",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue-enrichment-run --force true requires --dry-run false")
+      });
+      expect(requests).toHaveLength(0);
+    });
+  });
+
+  it("dry-runs selected issue enrichment on a second allowlisted repo", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeTwoRepoIssueRunConfig(root, apiBaseUrl);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/second-issue-repo",
+        "--issue",
+        "5",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root));
+      const parsed = JSON.parse(stdout);
+
+      expect(parsed.repo).toBe("owner/second-issue-repo");
+      expect(parsed.summary).toMatchObject({ wouldComment: 1, posted: 0, failed: 0 });
+      expect(parsed.items).toContainEqual(expect.objectContaining({
+        repo: "owner/second-issue-repo",
+        issueNumber: 5,
+        action: "would_comment"
+      }));
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "GET",
+        path: "/repos/owner/second-issue-repo/issues/5"
+      }));
+    });
+  });
+
+  it("rejects closed and PR-shaped selected issues before posting", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "18",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("stale_issue_closed")
+      });
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "19",
+        "--dry-run",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stderr: expect.stringContaining("issue_is_pull_request")
+      });
+      expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
+  it("posts selected issue enrichment live, skips unchanged reruns, and force-updates the sticky comment", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+
+      const first = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root));
+      expect(JSON.parse(first.stdout).summary).toMatchObject({ posted: 1, failed: 0 });
+
+      const second = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root));
+      expect(JSON.parse(second.stdout).summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+
+      const forced = await runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true",
+        "--force",
+        "true"
+      ], issueRunEnv(root));
+      expect(JSON.parse(forced.stdout).summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
+
+      const commentPosts = requests.filter((request) => request.method === "POST" && request.path === "/repos/owner/issue-repo/issues/17/comments");
+      const commentPatches = requests.filter((request) => request.method === "PATCH" && request.path === "/repos/owner/issue-repo/issues/comments/9001");
+      expect(commentPosts).toHaveLength(1);
+      expect(commentPatches).toHaveLength(1);
+      const state = new ReviewStateStore(join(root, "state.sqlite"));
+      try {
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 17)).toMatchObject({
+          status: "posted",
+          commentUrl: "https://github.test/owner/issue-repo/issues/17#issuecomment-9001"
+        });
+        expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toBeUndefined();
+      } finally {
+        state.close();
+      }
+    });
+  });
+
+  it("exits nonzero when a confirmed live selected run cannot acquire the worker lease", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const state = new ReviewStateStore(join(root, "state.sqlite"));
+      try {
+        state.tryAcquireIssueEnrichmentRunLease(1, 1_200_000, new Date());
+      } finally {
+        state.close();
+      }
+
+      await expect(runCli([
+        "issue-enrichment-run",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/issue-repo",
+        "--issue",
+        "17",
+        "--dry-run",
+        "false",
+        "--confirm",
+        "true"
+      ], issueRunEnv(root))).rejects.toMatchObject({
+        stdout: expect.stringContaining("\"workerSkipped\": 1")
+      });
+      expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
 });
 
-async function runCli(args: string[]) {
+async function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
   return execFileAsync(process.execPath, [tsxCliPath, "src/cli.ts", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -362,7 +789,8 @@ async function runCli(args: string[]) {
       ...process.env,
       EVAOS_REVIEW_BOT_APP_ID: "",
       EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
-      GITHUB_TOKEN: "test-token"
+      GITHUB_TOKEN: "test-token",
+      ...env
     },
     maxBuffer: 1024 * 1024
   });
@@ -437,16 +865,88 @@ function writeIssueScanConfig(root: string, apiBaseUrl: string): string {
   return path;
 }
 
+function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
+  const path = join(root, "config.json");
+  writeFileSync(path, `${JSON.stringify({
+    pilotRepos: ["owner/pr-review-repo"],
+    statePath: join(root, "state.sqlite"),
+    evidenceDir: join(root, "evidence"),
+    github: {
+      token: "test-token",
+      apiBaseUrl
+    },
+    issueEnrichment: {
+      enabled: true,
+      postIssueComment: true,
+      allowlist: ["owner/issue-repo"],
+      allowedLabels: ["docs", "enhancement"],
+      allowedReviewers: ["issue-owner"],
+      maxIssuesPerCycle: 5,
+      maxCommentsPerCycle: 2,
+      globalMaxIssuesPerCycle: 5,
+      globalMaxCommentsPerCycle: 2,
+      maxActiveRuns: 1,
+      leaseTtlMs: 1_200_000,
+      cooldownMs: 3_600_000,
+      burstWindowMs: 3_600_000,
+      maxIssuesPerBurst: 10,
+      lookbackMs: 600_000,
+      processExistingOpenIssuesOnActivation: false,
+      repos: {
+        "owner/issue-repo": {
+          enabled: true,
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 2,
+          cooldownMs: 3_600_000,
+          burstWindowMs: 3_600_000,
+          maxIssuesPerBurst: 10,
+          lookbackMs: 600_000,
+          processExistingOpenIssuesOnActivation: false
+        }
+      }
+    }
+  }, null, 2)}\n`);
+  return path;
+}
+
+function writeTwoRepoIssueRunConfig(root: string, apiBaseUrl: string): string {
+  const path = writeIssueRunConfig(root, apiBaseUrl);
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  config.issueEnrichment.allowlist = ["owner/issue-repo", "owner/second-issue-repo"];
+  config.issueEnrichment.repos["owner/second-issue-repo"] = {
+    enabled: true,
+    maxIssuesPerCycle: 5,
+    maxCommentsPerCycle: 2,
+    cooldownMs: 3_600_000,
+    burstWindowMs: 3_600_000,
+    maxIssuesPerBurst: 10,
+    lookbackMs: 600_000,
+    processExistingOpenIssuesOnActivation: false
+  };
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+  return path;
+}
+
+function issueRunEnv(root: string): NodeJS.ProcessEnv {
+  const privateKeyPath = join(root, "app.pem");
+  writeFileSync(privateKeyPath, TEST_PRIVATE_KEY_PEM);
+  return {
+    EVAOS_REVIEW_BOT_APP_ID: "4184532",
+    EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: privateKeyPath
+  };
+}
+
 async function withMockGitHub(
   callback: (input: { apiBaseUrl: string; requests: Array<{ method: string; path: string; authorization?: string }> }) => Promise<void>,
   options: { issuePages?: unknown[][] } = {}
 ): Promise<void> {
   const requests: Array<{ method: string; path: string; authorization?: string }> = [];
+  const state: MockGitHubState = {};
   const server = createServer((request, response) => {
     const method = request.method ?? "GET";
     const path = request.url ?? "/";
     requests.push({ method, path, authorization: request.headers.authorization });
-    routeMockGitHub(request, response, options);
+    routeMockGitHub(request, response, { ...options, state });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -458,13 +958,25 @@ async function withMockGitHub(
   }
 }
 
+interface MockGitHubState {
+  issue17CommentBody?: string;
+}
+
 function routeMockGitHub(
   request: IncomingMessage,
   response: ServerResponse,
-  options: { issuePages?: unknown[][] } = {}
+  options: { issuePages?: unknown[][]; state?: MockGitHubState } = {}
 ): void {
-  if (request.method !== "GET") {
-    respondJson(response, 405, { message: "method not allowed" });
+  if (
+    request.method === "GET" &&
+    (request.url === "/repos/owner/issue-repo/installation" ||
+      request.url === "/repos/owner/second-issue-repo/installation")
+  ) {
+    respondJson(response, 200, { id: 123 });
+    return;
+  }
+  if (request.method === "POST" && request.url === "/app/installations/123/access_tokens") {
+    respondJson(response, 200, { token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
     return;
   }
   if (request.url === "/repos/owner/repo/issues/17") {
@@ -490,6 +1002,93 @@ function routeMockGitHub(
   }
   if (request.url === "/repos/owner/repo/issues/404") {
     respondJson(response, 404, { message: "Not Found" });
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/issues/17") {
+    respondJson(response, 200, {
+      number: 17,
+      title: "Open issue #11 #12 #13",
+      state: "open",
+      updated_at: "2026-07-05T00:00:00.000Z",
+      html_url: "https://github.test/owner/issue-repo/issues/17",
+      body: "Acceptance criteria and owner are present.",
+      labels: [{ name: "support" }]
+    });
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/issues/18") {
+    respondJson(response, 200, {
+      number: 18,
+      title: "Closed issue",
+      state: "closed",
+      updated_at: "2026-07-05T00:00:00.000Z",
+      html_url: "https://github.test/owner/issue-repo/issues/18",
+      body: "Done."
+    });
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/issues/19") {
+    respondJson(response, 200, {
+      number: 19,
+      title: "PR shaped issue",
+      state: "open",
+      updated_at: "2026-07-05T00:00:00.000Z",
+      html_url: "https://github.test/owner/issue-repo/pull/19",
+      pull_request: {},
+      body: "Pull request record."
+    });
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/issues/20") {
+    respondJson(response, 200, {
+      number: 20,
+      title: "Another open issue ghp_secret1234567890abcdef",
+      state: "open",
+      updated_at: "2026-07-05T00:01:00.000Z",
+      html_url: "https://github.test/owner/issue-repo/issues/20",
+      body: "Acceptance criteria and owner are present."
+    });
+    return;
+  }
+  if (request.url === "/repos/owner/second-issue-repo/issues/5") {
+    respondJson(response, 200, {
+      number: 5,
+      title: "Second repo open issue",
+      state: "open",
+      updated_at: "2026-07-05T00:02:00.000Z",
+      html_url: "https://github.test/owner/second-issue-repo/issues/5",
+      body: "Acceptance criteria and owner are present."
+    });
+    return;
+  }
+  if (request.method === "GET" && request.url === "/repos/owner/issue-repo/issues/17/comments?per_page=100&page=1") {
+    respondJson(response, 200, options.state?.issue17CommentBody ? [
+      {
+        id: 9001,
+        body: options.state.issue17CommentBody,
+        user: { type: "Bot", login: "evaos-code-review-bot[bot]" }
+      }
+    ] : []);
+    return;
+  }
+  if (request.method === "POST" && request.url === "/repos/owner/issue-repo/issues/17/comments") {
+    if (options.state) {
+      options.state.issue17CommentBody = "<!-- evaos-code-review-bot:enrichment repo=owner/issue-repo issue=17 -->";
+    }
+    respondJson(response, 200, {
+      id: 9001,
+      html_url: "https://github.test/owner/issue-repo/issues/17#issuecomment-9001"
+    });
+    return;
+  }
+  if (request.method === "PATCH" && request.url === "/repos/owner/issue-repo/issues/comments/9001") {
+    if (options.state) {
+      options.state.issue17CommentBody = "<!-- evaos-code-review-bot:enrichment repo=owner/issue-repo issue=17 --> updated";
+    }
+    respondJson(response, 200, {
+      id: 9001,
+      html_url: "https://github.test/owner/issue-repo/issues/17#issuecomment-9001"
+    });
     return;
   }
   const parsed = new URL(request.url ?? "/", "https://github.test");

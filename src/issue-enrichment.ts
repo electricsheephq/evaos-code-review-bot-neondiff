@@ -476,6 +476,8 @@ export async function runIssueEnrichmentCycle(input: {
   repo?: string;
   includeExisting?: boolean;
   since?: string;
+  force?: boolean;
+  advanceWatermarks?: boolean;
   checkedAt?: string;
 }): Promise<IssueEnrichmentCycleResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
@@ -590,7 +592,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
+      return input.force === true || !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt));
     };
     const scanned = reposToScan.length
       ? await collectIssueEnrichmentScan({
@@ -652,7 +654,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      if (existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt)) {
+      if (input.force !== true && existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt)) {
         summary.alreadyProcessed += 1;
         items.push({ ...item, skippedExisting: true, recordStatus: existing.status });
         continue;
@@ -752,7 +754,7 @@ export async function runIssueEnrichmentCycle(input: {
       }
     }
 
-    if (!input.dryRun) {
+    if (!input.dryRun && input.advanceWatermarks !== false) {
       for (const repo of scanned.repos) {
         if (!repo.allowed || !repo.ok || repo.baselined) continue;
         const repoItems = items.filter((item) => item.repo === repo.repo);

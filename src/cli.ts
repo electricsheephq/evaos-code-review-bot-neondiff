@@ -27,11 +27,14 @@ import {
 import { GitHubApi } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitNexusRefreshPreflight } from "./gitnexus-refresh-preflight.js";
-import { buildGitHubRelatedContextPacket } from "./github-related-context.js";
+import { buildGitHubRelatedContextPacket, type GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import {
   buildIssueEnrichmentStatus,
   collectIssueEnrichmentScan,
   resolveIssueEnrichmentRepoPolicy,
+  runIssueEnrichmentCycle,
+  type IssueEnrichmentCycleGithub,
+  type IssueEnrichmentConfig,
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
@@ -1019,6 +1022,112 @@ async function main(): Promise<void> {
     }
     console.log(redactSecrets(JSON.stringify(scan, null, 2)));
     if (!scan.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "issue-enrichment-run") {
+    if (!args.repo) throw new Error("--repo is required for issue-enrichment-run");
+    const repo = parseSingleArg(args.repo, "--repo");
+    const issueNumbers = parseIssueNumberArgs(args.issue);
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    const confirm = args.confirm === undefined ? false : parseBooleanArg(args.confirm, "--confirm");
+    const force = args.force === undefined ? false : parseBooleanArg(args.force, "--force");
+    if (dryRun && force) {
+      throw new Error("issue-enrichment-run --force true requires --dry-run false");
+    }
+    if (!dryRun && !confirm) {
+      throw new Error("issue-enrichment-run requires --confirm true when --dry-run false");
+    }
+    const config = loadConfig(args.config);
+    const issueConfig = config.issueEnrichment;
+    if (!issueConfig) throw new Error("issue-enrichment-run requires issueEnrichment config");
+    if (!issueConfig.enabled) throw new Error("issue-enrichment-run requires issueEnrichment.enabled true");
+    if (!dryRun && !issueConfig.postIssueComment) {
+      throw new Error("issue-enrichment-run live posting requires issueEnrichment.postIssueComment true");
+    }
+    const policy = resolveIssueEnrichmentRepoPolicy(issueConfig, repo);
+    if (!policy.allowed) throw new Error(`Repo ${repo} is skipped by issue-enrichment policy: ${policy.reason}`);
+    const github = new GitHubApi(config.github);
+    const liveStatus = buildIssueEnrichmentStatus({ config, canPostAsApp: github.canPostAsApp() });
+    if (liveStatus.state === "blocked") {
+      const missingThresholds = liveStatus.liveThresholdsMissingRepos.length
+        ? `; liveThresholdsMissingRepos=${liveStatus.liveThresholdsMissingRepos.join(",")}`
+        : "";
+      const mode = dryRun ? "dry-run" : "live posting";
+      throw new Error(`issue-enrichment-run ${mode} blocked: ${liveStatus.blockers.join(", ")}${missingThresholds}`);
+    }
+    const runLimit = effectiveIssueEnrichmentRunLimit(issueConfig, policy, {
+      postIssueComment: !dryRun && issueConfig.postIssueComment
+    });
+    if (issueNumbers.length > runLimit) {
+      throw new Error(`issue-enrichment-run selected issue count ${issueNumbers.length} exceeds configured per-run cap ${runLimit}`);
+    }
+    const issues: GitHubRelatedIssueOrPull[] = [];
+    const previewOutputs = [];
+    for (const issueNumber of issueNumbers) {
+      const issue = await github.getIssueOrPull(repo, issueNumber, { tolerateUnreadable: true });
+      if (!issue) {
+        throw new Error(`Issue ${repo}#${issueNumber} was not found or is not readable; run doctor github and confirm GitHub App Issues permission before live issue enrichment.`);
+      }
+      const preview = buildIssueEnrichmentDryRunOutput({
+        repo,
+        issue,
+        allowedLabels: policy.suggestions.allowedLabels,
+        allowedOwners: policy.suggestions.allowedReviewers,
+        validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
+        maxRelatedRefs: config.enrichment?.maxRelatedRefs,
+        maxSuggestions: config.enrichment?.maxSuggestions,
+        publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+      });
+      if (preview.skipped) {
+        throw new Error(`Issue ${repo}#${issueNumber} is not eligible for issue enrichment: ${preview.reason}`);
+      }
+      issues.push(issue);
+      previewOutputs.push(preview);
+    }
+
+    const state = new ReviewStateStore(args["state-path"] ?? config.statePath);
+    try {
+      const cycleGithub: IssueEnrichmentCycleGithub = {
+        listIssuesForEnrichment: async (requestedRepo) => {
+          if (requestedRepo !== repo) {
+            throw new Error(`issue-enrichment-run internal repo mismatch: requested ${requestedRepo}, expected ${repo}`);
+          }
+          return issues;
+        },
+        canPostAsApp: () => github.canPostAsApp(),
+        upsertIssueComment: (input) => github.upsertIssueComment(input)
+      };
+      const result = await runIssueEnrichmentCycle({
+        config,
+        state,
+        github: cycleGithub,
+        dryRun,
+        repo,
+        includeExisting: true,
+        advanceWatermarks: false,
+        force
+      });
+      const output = {
+        command: "issue-enrichment-run",
+        repo,
+        issueNumbers,
+        force,
+        ...result
+      };
+      if (args["output-dir"]) {
+        const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
+        mkdirSync(safeOutputDir, { recursive: true });
+        writeFileSync(join(safeOutputDir, "issue-enrichment-run.json"), `${redactSecrets(JSON.stringify(output, null, 2))}\n`);
+        for (const preview of previewOutputs) {
+          writeFileSync(join(safeOutputDir, `issue-${preview.issueNumber}.md`), redactSecrets(preview.body));
+        }
+      }
+      console.log(redactSecrets(JSON.stringify(output, null, 2)));
+      if (!result.ok || (!dryRun && result.summary.workerSkipped > 0)) process.exitCode = 1;
+    } finally {
+      state.close();
+    }
     return;
   }
 
@@ -2424,6 +2533,7 @@ function buildHelp(command?: string) {
         "build-skill-pack",
         "build-enrichment-comment",
         "issue-enrichment-scan",
+        "issue-enrichment-run",
         "clear-issue-enrichment-leases",
         "clear-review-queue-leases",
         "finishing-touch-dry-run",
@@ -2480,6 +2590,8 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --pr 123 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts build-enrichment-comment --config /path/to/live.json --repo owner/repo --issue 456 --output-dir /path/to/evidence",
       "npx tsx src/cli.ts issue-enrichment-scan --config /path/to/live.json --dry-run true --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts issue-enrichment-run --config /path/to/live.json --repo owner/repo --issue 456 --dry-run true --output-dir /path/to/evidence",
+      "npx tsx src/cli.ts issue-enrichment-run --config /path/to/live.json --repo owner/repo --issue 456 --dry-run false --confirm true",
       "npx tsx src/cli.ts clear-issue-enrichment-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts clear-review-queue-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
@@ -2568,6 +2680,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   return parsed;
 }
 
+const REPEATABLE_ARGS = new Set(["issue"]);
+
 function licenseConfigFromArgs(base: LicenseConfig, args: ParsedArgs): LicenseConfig {
   const config = {
     ...base,
@@ -2599,7 +2713,12 @@ function parseLicenseStorageBackend(value: string): "keychain" | "file" {
 }
 
 function setParsedArg(parsed: ParsedArgs, key: string, value: string): void {
-  if (parsed[key] !== undefined) throw new Error(`--${key} must be provided once`);
+  const existing = parsed[key];
+  if (existing !== undefined) {
+    if (!REPEATABLE_ARGS.has(key)) throw new Error(`--${key} must be provided once`);
+    parsed[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
+    return;
+  }
   parsed[key] = value;
 }
 
@@ -2620,6 +2739,36 @@ function parseBooleanArg(value: string | string[], label: string): boolean {
   if (parsed === "true") return true;
   if (parsed === "false") return false;
   throw new Error(`${label} must be true or false`);
+}
+
+function parseIssueNumberArgs(value: string | string[] | undefined): number[] {
+  if (value === undefined) throw new Error("--issue is required for issue-enrichment-run");
+  const values = Array.isArray(value) ? value : [value];
+  const issueNumbers: number[] = [];
+  const seen = new Set<number>();
+  for (const entry of values) {
+    const issueNumber = parsePositiveInteger(entry, "--issue");
+    if (seen.has(issueNumber)) continue;
+    seen.add(issueNumber);
+    issueNumbers.push(issueNumber);
+  }
+  return issueNumbers;
+}
+
+function effectiveIssueEnrichmentRunLimit(
+  config: IssueEnrichmentConfig,
+  policy: ReturnType<typeof resolveIssueEnrichmentRepoPolicy>,
+  input: { postIssueComment: boolean }
+): number {
+  const limits = [
+    policy.throttle.maxIssuesPerCycle,
+    policy.throttle.maxIssuesPerBurst,
+    config.globalMaxIssuesPerCycle
+  ];
+  if (input.postIssueComment) {
+    limits.push(policy.throttle.maxCommentsPerCycle, config.globalMaxCommentsPerCycle);
+  }
+  return Math.max(1, Math.min(...limits));
 }
 
 function parseSingleArg(value: string | string[], label: string): string {
@@ -2794,6 +2943,7 @@ interface ParsedArgs {
   config?: string;
   repo?: string;
   pr?: string;
+  issue?: string | string[];
   reason?: string;
   "expected-head"?: string;
   "public-release-manifest"?: string;
@@ -2804,6 +2954,7 @@ interface ParsedArgs {
   "dry-run"?: string;
   "expired-only"?: string;
   "force-active"?: string;
+  force?: string;
   confirm?: string;
   "head-sha"?: string;
   input?: string;

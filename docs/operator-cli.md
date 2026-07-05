@@ -122,6 +122,24 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   reports would-comment/deferred rows without posting comments. Use
   `--include-existing true` only for an explicit scoped audit; do not use it as
   the default live posture for repos with large historic issue backlogs.
+- `issue-enrichment-run --repo <owner/name> --issue <number>`: runs selected
+  issue enrichment through the same sticky comment and SQLite record path used
+  by daemon cycles. The repo must be in `issueEnrichment.allowlist`, the feature
+  must be enabled in config, and live posting requires `--dry-run false
+  --confirm true` plus GitHub App credentials. Repeat `--issue` to process a
+  small selected batch. Closed issues and PR-shaped issue records fail before
+  posting. Unchanged live reruns skip already processed issues; use `--force
+  true` only when deliberately re-upserting the existing bot-owned marker
+  comment; `--force true` requires `--dry-run false`. Selected live runs reject
+  batches that exceed the effective repo/global issue or comment cap before
+  fetching or posting. Dry runs do not post comments, but they still plan
+  against live issue/comment caps and may report deferred rows. A confirmed live
+  run that cannot acquire the shared issue-enrichment worker lease exits
+  nonzero and reports `workerSkipped: 1` in JSON. Use `--output-dir <path>`
+  under the configured `evidenceDir` to write redacted
+  `issue-enrichment-run.json` plus one redacted `issue-<number>.md` preview per
+  issue. This command never applies labels, owners, reviewers, or roadmap
+  fields.
 - `doctor`: auth/config readiness. Use this for GitHub App/ZCode readiness, not
   runtime health.
 - `init --config <path>`: copy `config.example.json` to a local config path
