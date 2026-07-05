@@ -1,10 +1,10 @@
 {
-  "version": "v1.0.0-beta.1",
+  "version": "v0.4.24-beta.1",
   "releaseLevel": "source-beta",
   "docs": {
-    "version": "v1.0.0-beta.1",
+    "version": "v0.4.24-beta.1",
     "setupPath": "docs/SETUP.md",
-    "releaseNotesPath": "docs/releases/v1.0.0-beta.1.md",
+    "releaseNotesPath": "docs/releases/v0.4.24-beta.1.md",
     "websiteRepo": "electricsheephq/neon-diff-agent"
   },
   "licenseApi": {
@@ -16,13 +16,13 @@
     "cli": {
       "requiredForThisRelease": true,
       "state": "source_checkout",
-      "version": "v1.0.0-beta.1",
+      "version": "v0.4.24-beta.1",
       "rollback": "git reset --hard refs/tags/v0.4.9-beta.1"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "launchd_prerelease",
-      "version": "v1.0.0-beta.1",
+      "version": "v0.4.24-beta.1",
       "rollback": "git reset --hard refs/tags/v0.4.9-beta.1"
     },
     "website": {

@@ -7,7 +7,7 @@ const paths = [
   "docs/providers.md",
   "docs/license-boundary.md",
   "docs/pricing.md",
-  "docs/releases/v1.0.0-beta.1.md"
+  "docs/releases/v0.4.24-beta.1.md"
 ];
 
 const required = [

@@ -89,7 +89,7 @@ npm run release:status -- \
 For public source-beta releases, run the same gate with manifest checks:
 
 ```bash
-PUBLIC_BETA_TAG=v1.0.0-beta.1
+PUBLIC_BETA_TAG=v0.4.24-beta.1
 npx tsx src/cli.ts release-status \
   --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
   --expected-head "$(git rev-parse HEAD)" \

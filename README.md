@@ -65,7 +65,7 @@ Requirements:
 Recommended package install for the current beta:
 
 ```bash
-npm install -g neondiff@1.0.0-beta.1
+npm install -g neondiff@0.4.24-beta.1
 ```
 
 Installer script path:
@@ -195,6 +195,6 @@ For public source-beta release readiness, use
 [docs/public-release-manifest.json](docs/public-release-manifest.json) with
 `neondiff release-status --public-release-manifest docs/public-release-manifest.json --expected-public-version <public-beta-tag>`.
 Replace `<public-beta-tag>` with the actual semver prerelease tag, such as
-`v1.0.0-beta.1`; the CLI rejects literal placeholders. The manifest is the
+`v0.4.24-beta.1`; the CLI rejects literal placeholders. The manifest is the
 compact version/alignment surface for setup docs, release notes, license API
 state, and update-channel readiness.

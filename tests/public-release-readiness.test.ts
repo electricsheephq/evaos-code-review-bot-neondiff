@@ -25,7 +25,7 @@ describe("NeonDiff public release readiness", () => {
     };
 
     expect(pkg.name).toBe("neondiff");
-    expect(pkg.version).toBe("1.0.0-beta.1");
+    expect(pkg.version).toBe("0.4.24-beta.1");
     expect(pkg.private).toBeUndefined();
     expect(pkg.description).toMatch(/local-first AI PR reviewer/i);
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
@@ -51,10 +51,10 @@ describe("NeonDiff public release readiness", () => {
     ]);
 
     expect(lock.name).toBe("neondiff");
-    expect(lock.version).toBe("1.0.0-beta.1");
+    expect(lock.version).toBe("0.4.24-beta.1");
     expect(lock.packages?.[""]).toMatchObject({
       name: "neondiff",
-      version: "1.0.0-beta.1",
+      version: "0.4.24-beta.1",
       license: "SEE LICENSE IN LICENSE.md",
       bin: { neondiff: "dist/src/cli.js" }
     });
@@ -64,7 +64,7 @@ describe("NeonDiff public release readiness", () => {
     expect(existsSync("scripts/install.sh")).toBe(true);
     const script = read("scripts/install.sh");
 
-    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.0-beta\.1\}"/);
+    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-0\.4\.24-beta\.1\}"/);
     expect(script).toMatch(/npm[^\n]+install[^\n]+-g[^\n]+neondiff@\$\{NEONDIFF_VERSION\}/);
     expect(script).toMatch(/--dry-run/);
     expect(script).toMatch(/Node\.js 26 or newer/);
@@ -78,11 +78,11 @@ describe("NeonDiff public release readiness", () => {
       read("docs/github-app-setup.md"),
       read("docs/providers.md"),
       read("docs/license-boundary.md"),
-      read("docs/releases/v1.0.0-beta.1.md")
+      read("docs/releases/v0.4.24-beta.1.md")
     ].join("\n\n");
 
     expect(docs).toMatch(/https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot-neondiff/i);
-    expect(docs).toMatch(/npm install -g neondiff@1\.0\.0-beta\.1/i);
+    expect(docs).toMatch(/npm install -g neondiff@0\.4\.24-beta\.1/i);
     expect(docs).toMatch(/curl -fsSL https:\/\/www\.neondiff\.com\/install/i);
     expect(docs).toMatch(/git clone https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot-neondiff\.git/i);
     expect(docs).not.toMatch(/https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot(?!-neondiff)/i);
@@ -108,6 +108,6 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/id-token:\s*write/);
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/npm publish --provenance/);
-    expect(publish).toMatch(/v1\.0\.0-beta\.1/);
+    expect(publish).toMatch(/v0\.4\.24-beta\.1/);
   });
 });
