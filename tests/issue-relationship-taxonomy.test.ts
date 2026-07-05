@@ -302,6 +302,16 @@ describe("issue relationship taxonomy", () => {
           title: "Slash id issue"
         },
         {
+          id: "issue 50",
+          kind: "issue",
+          title: "Space id issue"
+        },
+        {
+          id: "issue.50",
+          kind: "issue",
+          title: "Dot id issue"
+        },
+        {
           id: "issue-50",
           kind: "issue",
           title: "Hyphen id issue"
@@ -311,10 +321,11 @@ describe("issue relationship taxonomy", () => {
 
     const clusterIds = result.publicIssueCommentState.clusters.map((cluster) => cluster.id);
 
-    expect(result.publicIssueCommentState.clusters).toHaveLength(2);
-    expect(new Set(clusterIds).size).toBe(2);
+    expect(result.publicIssueCommentState.clusters).toHaveLength(4);
+    expect(new Set(clusterIds).size).toBe(4);
     expect(clusterIds).toContain("standalone-issue-50");
-    expect(clusterIds.some((id) => /^standalone-issue-50-[a-z0-9]{7}$/.test(id))).toBe(true);
+    expect(clusterIds).toContain("standalone-issue.50");
+    expect(clusterIds.filter((id) => /^standalone-issue-50-[a-z0-9]{7}$/.test(id))).toHaveLength(2);
   });
 
   it("counts private fields that are sanitized out of public output", () => {
@@ -374,6 +385,17 @@ describe("issue relationship taxonomy", () => {
     });
 
     expect(result.suggestedReviewers).toEqual(["valid-bot", "team-reviewer"]);
+  });
+
+  it("canonicalizes suggested labels for advisory public output", () => {
+    const result = classifyIssueRelationshipItem({
+      id: "issue-56",
+      kind: "issue",
+      title: "Needs label routing",
+      suggestedLabels: ["needs proof", "release/risk", "already.clean", "needs-proof"]
+    });
+
+    expect(result.suggestedLabels).toEqual(["needs-proof", "release-risk", "already.clean"]);
   });
 
   it("documents single-item routing narratives", () => {
