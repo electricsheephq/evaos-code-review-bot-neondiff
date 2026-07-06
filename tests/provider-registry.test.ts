@@ -941,6 +941,60 @@ describe("provider registry", () => {
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
+  it("reports hosted remote response construction failures without waiting for timeout", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            timeoutMs: 1_000,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
+      },
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: JSON.stringify({ data: [{ id: "review-model" }] }),
+        headers: {
+          "bad header": "x-provider-secret"
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "unknown",
+      error: expect.stringContaining("unknown:")
+    });
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+    expect(JSON.stringify(result)).not.toContain("x-provider-secret");
+  });
+
   it("does not follow hosted remote redirects or read oversized redirect bodies", async () => {
     const config = loadConfigFromObject({
       providers: {

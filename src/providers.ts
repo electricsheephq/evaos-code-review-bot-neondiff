@@ -749,11 +749,15 @@ async function fetchProviderModelsWithPinnedRequest(
       if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400) {
         settled = true;
         init.signal?.removeEventListener("abort", abort);
-        resolve(new Response(null, {
-          status: response.statusCode,
-          statusText: response.statusMessage,
-          headers: responseHeadersToHeaders(response.headers)
-        }));
+        try {
+          resolve(new Response(null, {
+            status: response.statusCode,
+            statusText: response.statusMessage,
+            headers: responseHeadersToHeaders(response.headers)
+          }));
+        } catch (error) {
+          reject(error);
+        }
         // Redirect bodies are not diagnostic evidence for this smoke check and may contain
         // provider-side secrets. Close the response/socket without attaching data listeners.
         // Redirect targets are never followed, resolved, or connected to by this smoke path.
@@ -778,11 +782,15 @@ async function fetchProviderModelsWithPinnedRequest(
         init.signal?.removeEventListener("abort", abort);
         // request.end() has already finished the single GET request body; Node owns socket
         // reuse/close timing after the response stream ends.
-        resolve(new Response(Buffer.concat(chunks), {
-          status: response.statusCode ?? 0,
-          statusText: response.statusMessage,
-          headers: responseHeadersToHeaders(response.headers)
-        }));
+        try {
+          resolve(new Response(Buffer.concat(chunks), {
+            status: response.statusCode ?? 0,
+            statusText: response.statusMessage,
+            headers: responseHeadersToHeaders(response.headers)
+          }));
+        } catch (error) {
+          reject(error);
+        }
       });
       response.on("error", (error) => {
         if (settled) return;
