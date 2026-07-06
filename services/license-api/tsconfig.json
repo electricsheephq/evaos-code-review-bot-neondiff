@@ -8,8 +8,8 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": ".",
-    "types": ["node", "vitest/globals"]
+    "rootDir": "src",
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "services/license-api/src/**/*.ts"]
+  "include": ["src/**/*.ts"]
 }

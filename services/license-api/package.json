@@ -1,0 +1,19 @@
+{
+  "name": "@neondiff/license-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "NeonDiff production license service: activate/validate/deactivate API + admin issuance CLI (#327).",
+  "bin": {
+    "license-admin": "dist/admin.js"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "admin": "node dist/admin.js",
+    "test": "node --import tsx --test test/*.test.ts"
+  }
+}
