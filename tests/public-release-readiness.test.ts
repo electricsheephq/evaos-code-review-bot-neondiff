@@ -36,7 +36,7 @@ describe("NeonDiff public release readiness", () => {
     };
 
     expect(pkg.name).toBe("neondiff");
-    expect(pkg.version).toBe("0.4.30-beta.1");
+    expect(pkg.version).toBe("0.4.37-beta.1");
     expect(pkg.private).toBeUndefined();
     expect(pkg.description).toMatch(/local-first AI PR reviewer/i);
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
@@ -62,21 +62,22 @@ describe("NeonDiff public release readiness", () => {
     ]);
 
     expect(lock.name).toBe("neondiff");
-    expect(lock.version).toBe("0.4.30-beta.1");
+    expect(lock.version).toBe("0.4.37-beta.1");
     expect(lock.packages?.[""]).toMatchObject({
       name: "neondiff",
-      version: "0.4.30-beta.1",
+      version: "0.4.37-beta.1",
       license: "SEE LICENSE IN LICENSE.md",
       bin: { neondiff: "dist/src/cli.js" }
     });
     expect(manifest.packageArtifact).toMatchObject({
       name: "neondiff",
-      version: "0.4.30-beta.1",
+      version: "0.4.37-beta.1",
       requiredForThisRelease: true,
       state: "pending_publish_after_merge",
-      previousReleasedPackageVersion: "0.4.24-beta.1"
+      previousReleasedPackageVersion: "0.4.30-beta.1"
     });
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.29-beta.1");
+    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.35-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.36-beta.1");
     expect(manifest.packageArtifact?.note).toMatch(/source\/local-worker/i);
   });
@@ -85,7 +86,7 @@ describe("NeonDiff public release readiness", () => {
     expect(existsSync("scripts/install.sh")).toBe(true);
     const script = read("scripts/install.sh");
 
-    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-0\.4\.30-beta\.1\}"/);
+    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-latest\}"/);
     expect(script).toMatch(/npm[^\n]+install[^\n]+-g[^\n]+neondiff@\$\{NEONDIFF_VERSION\}/);
     expect(script).toMatch(/--dry-run/);
     expect(script).toMatch(/Node\.js 26 or newer/);
@@ -99,7 +100,7 @@ describe("NeonDiff public release readiness", () => {
       read("docs/github-app-setup.md"),
       read("docs/providers.md"),
       read("docs/license-boundary.md"),
-      read("docs/releases/v0.4.30-beta.1.md")
+      read("docs/releases/v0.4.37-beta.1.md")
     ].join("\n\n");
     const legacyRepoReferences = docs
       .split(/\s+/)
@@ -110,7 +111,8 @@ describe("NeonDiff public release readiness", () => {
       );
 
     expect(docs).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff");
-    expect(docs).toMatch(/npm install -g neondiff@0\.4\.30-beta\.1/i);
+    expect(docs).toMatch(/npm install -g neondiff/i);
+    expect(docs).toMatch(/NEONDIFF_VERSION=0\.4\.37-beta\.1/i);
     expect(docs).toMatch(/curl -fsSL https:\/\/www\.neondiff\.com\/install/i);
     expect(docs).toContain("git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git");
     expect(legacyRepoReferences).toEqual([]);
@@ -137,6 +139,8 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/npm publish --provenance/);
     expect(publish).toMatch(/--tag beta/);
+    expect(publish).toMatch(/npm dist-tag add "neondiff@\$PACKAGE_VERSION" beta/);
+    expect(publish).toMatch(/npm dist-tag add "neondiff@\$PACKAGE_VERSION" latest/);
     expect(publish).toMatch(/Classify npm package release/);
     expect(publish).toMatch(/Skipping npm publish for source-only prerelease/);
     expect(publish).toMatch(/Manual npm publish tag .* does not match package\.json version/);
@@ -144,6 +148,6 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/skippedPublicPackageVersions/);
     expect(publish.match(/if: steps\.package_release\.outputs\.should_publish == 'true'/g)).toHaveLength(5);
     expect(publish).toMatch(/require\('\.\/package\.json'\)\.version/);
-    expect(publish).toMatch(/already exists; verifying dist-tags/);
+    expect(publish).toMatch(/already exists; ensuring dist-tags/);
   });
 });

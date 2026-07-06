@@ -420,7 +420,8 @@ exit 1
           requiresPaidLicense: true,
           commercialUse: true,
           autoUpdates: true,
-          acceptedPlanIds: ["monthly_support", "yearly_support", "lifetime_support"]
+          acceptedPlanIds: ["monthly_support", "yearly_support", "organization_yearly", "lifetime_support"],
+          legacyReadOnlyPlanIds: ["lifetime_support"]
         }
       }
     });
@@ -448,8 +449,8 @@ exit 1
         providerCreditsIncluded: false
       }),
       expect.objectContaining({
-        id: "lifetime_support",
-        displayPrice: "$100 lifetime",
+        id: "organization_yearly",
+        displayPrice: "$100/yr",
         requiresPaidLicense: true,
         commercialUse: true,
         autoUpdates: true,

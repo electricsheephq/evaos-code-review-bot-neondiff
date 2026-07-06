@@ -16,18 +16,18 @@ for the support-tier pricing contract.
 - optional NeonDiff license key for private or commercial repo use
 
 Public open-source repos are free. Private and commercial repos require a paid
-support license: $1/month, $10/year, or $100 lifetime. Paid support includes
-private repo review, commercial usage, and auto-updates. Provider/model costs
-remain external through your own provider key or local model; NeonDiff does not
-include hosted model credits, unlimited SaaS inference, or bundled provider
-tokens.
+support license: $1/month, $10/year, or $100/year for an organization. Paid
+support includes private repo review, commercial usage, and auto-updates.
+Provider/model costs remain external through your own provider key or local
+model; NeonDiff does not include hosted model credits, unlimited SaaS inference,
+or bundled provider tokens.
 
 ## 1. Install NeonDiff
 
 Recommended package install:
 
 ```bash
-npm install -g neondiff@0.4.30-beta.1
+npm install -g neondiff
 ```
 
 Installer script:
@@ -40,6 +40,12 @@ Preview the installer without changing your machine:
 
 ```bash
 curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
+```
+
+For exact release replay, set `NEONDIFF_VERSION`:
+
+```bash
+NEONDIFF_VERSION=0.4.37-beta.1 curl -fsSL https://www.neondiff.com/install | sh
 ```
 
 Use a temp npm prefix for isolated install proof:

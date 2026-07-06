@@ -10,8 +10,9 @@ with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
 Public open-source repos are free. Private and commercial repos require a paid
-NeonDiff support license: $1/month, $10/year, or $100 lifetime. NeonDiff is a
-source-available beta, not an open-source or GA release.
+NeonDiff support license: $1/month, $10/year, or $100/year for an
+organization. NeonDiff is a source-available beta, not an open-source or GA
+release.
 
 [Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
 [GitHub App Install](docs/github-app-setup.md) · [Contributing](CONTRIBUTING.md) ·
@@ -62,10 +63,10 @@ Requirements:
 - a model/provider path configured locally, such as GLM/Z.ai, Ollama, or a
   future OpenAI-compatible provider slot
 
-Recommended package install for the current beta:
+Recommended package install:
 
 ```bash
-npm install -g neondiff@0.4.30-beta.1
+npm install -g neondiff
 ```
 
 Installer script path:
@@ -75,10 +76,17 @@ curl -fsSL https://www.neondiff.com/install | sh
 ```
 
 The installer script checks for Node.js 26 or newer and installs the same npm
-package. To preview without changing your machine:
+package from npm's current `latest` dist-tag. To preview without changing your
+machine:
 
 ```bash
 curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
+```
+
+For exact release replay, pin the package explicitly:
+
+```bash
+NEONDIFF_VERSION=0.4.37-beta.1 curl -fsSL https://www.neondiff.com/install | sh
 ```
 
 Source checkout fallback:
@@ -225,6 +233,6 @@ For public source-beta release readiness, use
 [docs/public-release-manifest.json](docs/public-release-manifest.json) with
 `neondiff release-status --public-release-manifest docs/public-release-manifest.json --expected-public-version <public-beta-tag>`.
 Replace `<public-beta-tag>` with the actual semver prerelease tag, such as
-`v0.4.30-beta.1`; the CLI rejects literal placeholders. The manifest is the
+`v0.4.37-beta.1`; the CLI rejects literal placeholders. The manifest is the
 compact version/alignment surface for setup docs, release notes, license API
 state, and update-channel readiness.

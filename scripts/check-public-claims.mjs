@@ -7,13 +7,14 @@ const paths = [
   "docs/providers.md",
   "docs/license-boundary.md",
   "docs/pricing.md",
-  "docs/releases/v0.4.30-beta.1.md"
+  "docs/releases/v0.4.37-beta.1.md"
 ];
 
 const required = [
   /source-available beta/i,
   /public open-source repositor(?:y|ies).*free/i,
-  /private.*commercial.*paid|paid.*private.*commercial/i
+  /private.*commercial.*paid|paid.*private.*commercial/i,
+  /\$100\/year|\$100\/yr/i
 ];
 
 const forbiddenClaims = [

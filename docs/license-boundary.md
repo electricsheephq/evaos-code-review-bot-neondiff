@@ -12,9 +12,9 @@ proprietary, hosted, marketplace, binary redistribution, and auto-updates requir
 an active paid NeonDiff license.
 
 Public open-source repositories are free. Private and commercial repository
-review requires a paid NeonDiff support license: $1/month, $10/year, or $100
-lifetime. NeonDiff support tiers do not include hosted model credits, unlimited
-SaaS inference, or bundled provider tokens.
+review requires a paid NeonDiff support license: $1/month, $10/year, or
+$100/year for an organization. NeonDiff support tiers do not include hosted
+model credits, unlimited SaaS inference, or bundled provider tokens.
 
 ## Allowed Without A Paid License
 
@@ -52,7 +52,7 @@ Use:
 - "source-available beta"
 - "free for public open-source repositories"
 - "private and commercial repository review requires a paid NeonDiff license"
-- "$1/month, $10/year, or $100 lifetime support license"
+- "$1/month, $10/year, or $100/year organization support license"
 - "bring your own provider key or local model"
 - "local worker; current-head, secret-redacted review evidence"
 
@@ -86,8 +86,8 @@ CLI setup/help copy should say:
 > NeonDiff is source-available beta software. Public open-source repository
 > review is free. Private, internal, and commercial repository review requires
 > an active paid NeonDiff license. Support tiers are $1/month, $10/year, or
-> $100 lifetime; provider/model costs stay external through BYOK or local
-> providers.
+> $100/year for an organization; provider/model costs stay external through
+> BYOK or local providers.
 
 Private-repo failure copy should say:
 

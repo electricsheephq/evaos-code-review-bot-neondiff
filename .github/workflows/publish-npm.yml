@@ -9,7 +9,7 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v0.4.30-beta.1
+        default: v0.4.37-beta.1
 
 permissions:
   contents: read
@@ -76,10 +76,16 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
-            echo "neondiff@$PACKAGE_VERSION already exists; verifying dist-tags"
-            test "$(npm view neondiff dist-tags.latest)" = "$PACKAGE_VERSION"
+          ensure_dist_tags() {
+            npm dist-tag add "neondiff@$PACKAGE_VERSION" beta
+            npm dist-tag add "neondiff@$PACKAGE_VERSION" latest
             test "$(npm view neondiff dist-tags.beta)" = "$PACKAGE_VERSION"
+            test "$(npm view neondiff dist-tags.latest)" = "$PACKAGE_VERSION"
+          }
+          if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            echo "neondiff@$PACKAGE_VERSION already exists; ensuring dist-tags"
+            ensure_dist_tags
             exit 0
           fi
           npm publish --provenance --access public --tag beta
+          ensure_dist_tags

@@ -15,7 +15,7 @@ credits, unlimited SaaS inference, or bundled provider tokens.
 | Free OSS | $0 | Public open-source projects | No | No | No | Not included |
 | Monthly Support | $1/mo | Low-friction private or commercial use | Yes | Yes | Yes | Not included |
 | Yearly Support | $10/yr | Annual support license | Yes | Yes | Yes | Not included |
-| Lifetime Support | $100 lifetime | One-time support license | Yes | Yes | Yes | Not included |
+| Organization Yearly | $100/yr | Flat organization support license | Yes | Yes | Yes | Not included |
 
 ## CLI Contract
 
@@ -29,7 +29,7 @@ neondiff pricing
 The pricing command emits JSON by default and does not call the network. It reports:
 
 - public open-source repositories are free
-- paid support tiers are `$1/mo`, `$10/yr`, and `$100 lifetime`
+- paid support tiers are `$1/mo`, `$10/yr`, and `$100/yr` for organizations
 - paid support includes private repo review, commercial usage, and auto-updates
 - provider/model costs stay external through BYOK or local providers
 - hosted model credits and unlimited SaaS inference are not included
@@ -42,7 +42,11 @@ usage, and auto-updates:
 
 - `monthly_support`
 - `yearly_support`
-- `lifetime_support`
+- `organization_yearly`
+- `lifetime_support` as legacy read-only compatibility only
+
+Existing legacy lifetime entitlements, if any, remain readable for continuity,
+but lifetime support is no longer an active public sale tier.
 
 Runtime license enforcement is outside this pricing command. This document only
 defines the pricing and entitlement vocabulary that enforcement code and setup
@@ -50,6 +54,7 @@ docs should use.
 
 ## Tracking
 
-- Public product roadmap: https://github.com/electricsheephq/evaos-code-review-bot/issues/103
-- License/commercial boundary gate: https://github.com/electricsheephq/evaos-code-review-bot/issues/104
-- Pricing implementation: https://github.com/electricsheephq/evaos-code-review-bot/issues/105
+- Public product roadmap: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103
+- License/commercial boundary gate: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/104
+- Pricing implementation: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/105
+- Organization entitlement follow-up: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/329
