@@ -30,6 +30,28 @@ export interface EnrichmentConfig {
 export type EnrichmentComment = PlanEnrichmentComment;
 export type EnrichmentCommentPostResult = PlanEnrichmentCommentPostResult;
 type IssueEnrichmentSkipReason = "stale_issue_closed" | "issue_is_pull_request";
+type IssuePlannerSourceKind =
+  | "vision_repo_policy_memory_gitnexus"
+  | "same_repo_issues_prs"
+  | "allowlisted_cross_repo_github"
+  | "external_oss_examples"
+  | "library_api_docs"
+  | "current_market_examples"
+  | "internal_mcp_docs";
+
+interface IssuePlannerPacket {
+  relatedContext: string[];
+  sourceTaxonomy: Array<{ kind: IssuePlannerSourceKind; enabled: boolean; reason: string }>;
+  problemShape: string;
+  productFit: string;
+  buildBorrowBuyScan: string[];
+  candidateSources: string[];
+  implementationWedge: string;
+  acceptanceCriteria: string[];
+  proofPlan: string[];
+  knownTraps: string[];
+  nonGoals: string[];
+}
 
 export type IssueEnrichmentDryRunOutput =
   | {
@@ -118,6 +140,8 @@ export function buildEnrichmentComment(input: {
     "",
     "No labels or reviewers were applied by this bot."
   ].join("\n");
+  // Keep a final redaction pass over the assembled sticky markdown so future
+  // planner fields cannot bypass the field-level formatting helpers.
   const redactedVisibleBody = redactSecrets(visibleBody);
   const bodyHash = hashBody(redactedVisibleBody);
   const stateMarker = buildStateMarker({
@@ -174,6 +198,11 @@ export function buildIssueEnrichmentComment(input: {
   }).slice(0, input.maxSuggestions ?? 8);
   const validationSuggestions = unique(input.validationSuggestions ?? []).slice(0, input.maxSuggestions ?? 8);
   const gaps = inferIssueAcceptanceGaps(input.issue);
+  const planner = buildIssuePlannerPacket({
+    issue: input.issue,
+    relatedRefs,
+    publicConfidencePolicy: input.publicConfidencePolicy
+  });
   const visibleBody = [
     "## evaOS issue enrichment",
     "",
@@ -184,6 +213,37 @@ export function buildIssueEnrichmentComment(input: {
     `Existing labels: ${existingLabels.length ? existingLabels.join(", ") : "none"}.`,
     `Suggested labels: ${suggestedLabels.length ? suggestedLabels.join(", ") : "none"}.`,
     `Suggested owners: ${owners.length ? owners.join(", ") : "none"}.`,
+    "",
+    "### Related context",
+    "",
+    ...planner.relatedContext,
+    "",
+    "### Agent-start packet",
+    "",
+    `Problem shape: ${planner.problemShape}`,
+    `Product fit: ${planner.productFit}`,
+    `Implementation wedge: ${planner.implementationWedge}`,
+    "",
+    "Build / borrow / buy scan:",
+    ...planner.buildBorrowBuyScan,
+    "",
+    "Candidate sources:",
+    ...planner.candidateSources,
+    "",
+    "Acceptance criteria:",
+    ...planner.acceptanceCriteria,
+    "",
+    "Proof plan:",
+    ...planner.proofPlan,
+    "",
+    "Known traps:",
+    ...planner.knownTraps,
+    "",
+    "Non-goals:",
+    ...planner.nonGoals,
+    "",
+    "Context-source taxonomy:",
+    ...planner.sourceTaxonomy.map((source) => `- [${source.enabled ? "enabled" : "deferred"}] ${source.kind}: ${source.reason}`),
     "",
     "### Validation suggestions",
     "",
@@ -384,6 +444,180 @@ function inferIssueAcceptanceGaps(issue: GitHubRelatedIssueOrPull): string[] {
     gaps.push("Owner or reviewer signal not detected in issue body.");
   }
   return gaps;
+}
+
+function buildIssuePlannerPacket(input: {
+  issue: GitHubRelatedIssueOrPull;
+  relatedRefs: string[];
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+}): IssuePlannerPacket {
+  const text = `${input.issue.title ?? ""}\n${input.issue.body ?? ""}`;
+  const classes = classifyIssueForPlanner(text);
+  const shouldResearch = classes.some((issueClass) => ["product", "ux", "library_choice", "build_vs_buy", "market_positioning"].includes(issueClass));
+  const relatedContext = input.relatedRefs.length
+    ? input.relatedRefs.map((ref) => `- ${ref} - mentioned in issue metadata; inspect for dependency, duplicate, or prior-decision risk.`)
+    : ["- No same-repo issue/PR references detected in issue metadata."];
+  const sourceTaxonomy: IssuePlannerPacket["sourceTaxonomy"] = [
+    {
+      kind: "vision_repo_policy_memory_gitnexus",
+      enabled: true,
+      reason: "Use repo vision, policy, memory, and GitNexus first before external research."
+    },
+    {
+      kind: "same_repo_issues_prs",
+      enabled: true,
+      reason: input.relatedRefs.length ? "Issue metadata contains same-repo references." : "No explicit same-repo references detected; still safe as bounded local context."
+    },
+    {
+      kind: "allowlisted_cross_repo_github",
+      enabled: shouldResearch,
+      reason: shouldResearch ? "Triggered by issue class; keep to configured allowlist and source caps." : "Deferred until product, UX, market-positioning, or library-choice signal appears."
+    },
+    {
+      kind: "external_oss_examples",
+      enabled: shouldResearch,
+      reason: shouldResearch ? "Use for build/borrow/buy precedent with citations and observed dates." : "Deferred for low-research-value issue class."
+    },
+    {
+      kind: "library_api_docs",
+      enabled: shouldResearch || classes.includes("library_choice"),
+      reason: shouldResearch || classes.includes("library_choice") ? "Use when implementation may depend on a module, SDK, API, or framework choice." : "Deferred unless a library/API decision is present."
+    },
+    {
+      kind: "current_market_examples",
+      enabled: classes.includes("market_positioning") || classes.includes("product") || classes.includes("ux"),
+      reason: classes.includes("market_positioning") || classes.includes("product") || classes.includes("ux")
+        ? "Use for product/UX/market positioning issues with freshness dates."
+        : "Deferred for implementation-only issues."
+    },
+    {
+      kind: "internal_mcp_docs",
+      enabled: true,
+      reason: "Use internal docs/MCP context when available; missing context is degraded, not blocking."
+    }
+  ];
+  return {
+    relatedContext,
+    sourceTaxonomy,
+    problemShape: summarizeIssueShape(input.issue, input.publicConfidencePolicy),
+    productFit: buildProductFit(classes),
+    buildBorrowBuyScan: buildBuildBorrowBuyScan({ shouldResearch, classes }),
+    candidateSources: buildCandidateSources({ shouldResearch, classes }),
+    implementationWedge: buildImplementationWedge(classes),
+    acceptanceCriteria: buildPlannerAcceptanceCriteria(input.issue),
+    proofPlan: buildPlannerProofPlan(classes),
+    knownTraps: buildPlannerKnownTraps(classes, shouldResearch),
+    nonGoals: [
+      "- Do not auto-apply labels, owners, reviewers, roadmap fields, or milestones.",
+      "- Do not bulk-enrich old backlog issues from this planner output.",
+      "- Do not claim external market or OSS research was performed unless cited sources are present."
+    ]
+  };
+}
+
+function classifyIssueForPlanner(text: string): string[] {
+  const normalized = text.toLowerCase();
+  const classes = new Set<string>();
+  if (/\b(ux|ui|onboarding|experience|design|interaction|flow)\b/.test(normalized)) classes.add("ux");
+  if (/\b(product|pricing|market|positioning|customer|roadmap|vision)\b/.test(normalized)) classes.add("product");
+  if (/\b(architecture|runtime|provider|queue|scheduler|database|migration|api|integration)\b/.test(normalized)) classes.add("architecture");
+  if (/\b(library|sdk|module|package|framework|dependency|build vs buy|borrow|buy)\b/.test(normalized)) classes.add("library_choice");
+  if (/\b(open source|oss|competitor|alternative to|current market|last 30 days)\b/.test(normalized)) classes.add("market_positioning");
+  if (/\b(integration|webhook|oauth|api|connector)\b/.test(normalized)) classes.add("integration");
+  if (/\b(milestone|roadmap|sprint|release|launch)\b/.test(normalized)) classes.add("roadmap");
+  if (classes.size === 0) classes.add("implementation");
+  if (classes.has("library_choice") || classes.has("market_positioning")) classes.add("build_vs_buy");
+  return [...classes].sort();
+}
+
+function summarizeIssueShape(issue: GitHubRelatedIssueOrPull, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
+  const title = formatInlinePublicText(issue.title ?? "(untitled)", publicConfidencePolicy);
+  const body = formatPublicText(issue.body ?? "", publicConfidencePolicy).replace(/\s+/g, " ").trim();
+  const excerpt = body ? trimExcerptAtWhitespaceBoundary(body, 220) : "No issue body supplied.";
+  return `${title} - ${excerpt}`;
+}
+
+function trimExcerptAtWhitespaceBoundary(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const clipped = value.slice(0, maxChars);
+  const lastWhitespace = clipped.lastIndexOf(" ");
+  return (lastWhitespace > 0 ? clipped.slice(0, lastWhitespace) : clipped).trimEnd();
+}
+
+function buildProductFit(classes: string[]): string {
+  if (classes.includes("ux")) return "Product/UX-sensitive issue; review against repo vision and user flow quality, not only technical P0/P1 risk.";
+  if (classes.includes("product") || classes.includes("market_positioning")) return "Product/market issue; check vision fit, customer value, and whether external precedent can reduce time-to-market.";
+  if (classes.includes("architecture") || classes.includes("integration")) return "Architecture/integration issue; check repo policy, prior decisions, and operational constraints before implementation.";
+  return "Implementation issue; keep product fit lightweight unless VISION.md/repo policy raises a constraint.";
+}
+
+function buildBuildBorrowBuyScan(input: { shouldResearch: boolean; classes: string[] }): string[] {
+  const items = [
+    "- Build: identify the smallest implementation wedge that proves the issue without broad rollout.",
+    "- Borrow: inspect same-repo prior art, repo memory, GitNexus context, and allowlisted cross-repo examples first.",
+    input.shouldResearch
+      ? "- Buy/use: run capped external OSS/library/API/current-market research with citations, observed dates, and why each source matters."
+      : "- Buy/use: deferred; no product, architecture, UX, library-choice, integration, roadmap, or market-positioning trigger detected."
+  ];
+  if (input.classes.includes("library_choice")) items.push("- Library choice: compare maintenance, API fit, license, bundle/runtime cost, and integration proof.");
+  return items;
+}
+
+function buildCandidateSources(input: { shouldResearch: boolean; classes: string[] }): string[] {
+  const items = [
+    "- VISION.md / repo policy / repo-memory.md / GitNexus packet.",
+    "- Same-repo issues and PRs referenced by issue metadata."
+  ];
+  if (input.shouldResearch) {
+    items.push("- Allowlisted cross-repo GitHub examples with direct issue/PR/repo URLs.");
+    items.push("- External OSS repositories or library/API docs with freshness dates.");
+  }
+  if (input.classes.includes("product") || input.classes.includes("ux") || input.classes.includes("market_positioning")) {
+    items.push("- Current market/product examples, capped and cited, only when they change implementation direction.");
+  }
+  return items;
+}
+
+function buildImplementationWedge(classes: string[]): string {
+  if (classes.includes("ux")) return "Ship the smallest user-visible path or prototype that can be smoke-tested against the intended experience.";
+  if (classes.includes("architecture") || classes.includes("integration")) return "Start with a bounded adapter/contract or dry-run packet before changing live runtime behavior.";
+  if (classes.includes("library_choice")) return "Prototype the candidate module behind a config flag or fixture before committing to the dependency.";
+  return "Start with a focused fixture or dry-run path that proves the issue shape before widening behavior.";
+}
+
+function buildPlannerAcceptanceCriteria(issue: GitHubRelatedIssueOrPull): string[] {
+  const body = issue.body ?? "";
+  const criteria = [
+    /\b(acceptance|done when|checklist)\b/i.test(body)
+      ? "- Preserve and execute the issue's stated acceptance criteria."
+      : "- Add explicit acceptance criteria before implementation is considered done.",
+    "- Include source citations for any external OSS/library/current-market claims.",
+    "- Keep issue-enrichment comments sticky and idempotent.",
+    "- Keep labels, owners, reviewers, and roadmap fields suggestion-only."
+  ];
+  return criteria;
+}
+
+function buildPlannerProofPlan(classes: string[]): string[] {
+  const plan = [
+    "- Focused unit/fixture test for the changed planner behavior.",
+    "- Dry-run issue-enrichment evidence packet before live comment posting.",
+    "- Redaction check for issue body, citations, and generated markdown."
+  ];
+  if (classes.includes("ux")) plan.push("- UX/product smoke or screenshot proof when implementation changes user flow.");
+  if (classes.includes("architecture") || classes.includes("integration")) plan.push("- Contract or degraded-mode proof before runtime promotion.");
+  if (classes.includes("library_choice")) plan.push("- Dependency/license/API-fit note before adding or relying on a package.");
+  return plan;
+}
+
+function buildPlannerKnownTraps(classes: string[], shouldResearch: boolean): string[] {
+  const traps = [
+    "- Do not treat related links as proof by themselves; each source needs a reason why it matters.",
+    "- Do not scan old issue backlogs or exceed repo-level enrichment throttles."
+  ];
+  if (shouldResearch) traps.push("- External research must stay capped, cited, fresh-dated, and redacted.");
+  if (classes.includes("ux") || classes.includes("product")) traps.push("- Technical severity alone can miss product/UX regressions; include product-manager review framing.");
+  return traps;
 }
 
 function formatInlinePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
