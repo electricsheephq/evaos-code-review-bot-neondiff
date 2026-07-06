@@ -63,6 +63,7 @@ import {
   ReviewStateStore,
   type ProcessedStatus,
   type ReviewQueueJobState,
+  type ReviewHeadClaim,
   type ReviewReadinessRecord,
   type ReviewReadinessState,
   type ReviewerSessionJobState,
@@ -1336,8 +1337,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   let lease: ReviewRunLease | undefined;
+  let headClaim: ReviewHeadClaim | undefined;
   let budgetStarted = false;
   const releaseReviewCapacity = (): void => {
+    // Crash-safe release-on-failure (#295): if we hold the per-head claim and the finally runs
+    // before recordProcessed retired it (error/early return), release it so the head is re-claimable.
+    // recordProcessed already retires it on the success path; the state TTL is the last-resort backstop.
+    if (headClaim) {
+      state.releaseReviewHeadClaim(headClaim.claimId);
+      headClaim = undefined;
+    }
     if (lease) {
       state.releaseReviewRunLease(lease.leaseId);
       lease = undefined;
@@ -1568,8 +1577,24 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     if (input.dryRun) {
+      // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
+      // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
       state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
       return commandReviewRequested ? "reviewed_command" : "reviewed";
+    }
+
+    // Atomic per-head claim (#295): acquired here — after every eligibility/stale check and after the
+    // dry-run branch, immediately before posting — so exactly one of a racing manual-review-pr and
+    // daemon posts a review on this head. The loser records a structured skip and no-ops.
+    headClaim = state.tryClaimReviewHead({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      claimTtlMs: config.reviewConcurrency.leaseTtlMs
+    });
+    if (!headClaim) {
+      recordConcurrentClaimSkip({ state, repo, pull, evidenceDir });
+      return "skipped_processed";
     }
 
     const liveBeforePost = await github.getPull(repo, pull.number);
@@ -2258,6 +2283,36 @@ function recordStaleHeadSkip(input: {
     status: "skipped",
     error: `${input.stale.reason}: live=${input.stale.liveHeadSha}`
   });
+}
+
+export function recordConcurrentClaimSkip(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  evidenceDir: string;
+}): void {
+  // The other claimant owns this head (#295). Do NOT recordProcessed here: that would `insert or
+  // replace` the winner's row AND retire the winner's live claim. Record a skipped readiness note
+  // (separate table) plus an evidence file, matching the existing skip-evidence idiom, and log it.
+  const evidence = {
+    reason: "concurrent_review_claim_held",
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    detail: "Another reviewPull (manual review-pr or daemon) holds the atomic per-head claim for this head; skipping to preserve at-most-one-review-per-head."
+  };
+  mkdirSync(input.evidenceDir, { recursive: true });
+  writeFileSync(join(input.evidenceDir, "concurrent-claim-skip.json"), `${JSON.stringify(evidence, null, 2)}\n`);
+  input.state.recordReviewReadiness({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: "skipped",
+    reason: "concurrent_review_claim_held"
+  });
+  console.warn(
+    `[head-claim] concurrent claim held repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha}: skipping duplicate same-head review`
+  );
 }
 
 export function recordFailedReview(input: {
