@@ -742,6 +742,12 @@ async function fetchProviderModelsWithPinnedRequest(
           headers: responseHeadersToHeaders(response.headers)
         }));
       });
+      response.on("error", (error) => {
+        if (settled) return;
+        settled = true;
+        init.signal?.removeEventListener("abort", abort);
+        reject(error);
+      });
     });
     const abort = () => request.destroy(new Error("Provider smoke request aborted."));
     init.signal?.addEventListener("abort", abort, { once: true });

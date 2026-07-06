@@ -34,12 +34,21 @@ class MockProviderIncomingMessage extends EventEmitter {
   statusMessage?: string;
   headers: Record<string, string | string[] | undefined>;
 
-  constructor(input: { status: number; body: string; headers?: Record<string, string | string[] | undefined> }) {
+  constructor(input: {
+    status: number;
+    body: string;
+    headers?: Record<string, string | string[] | undefined>;
+    responseError?: Error;
+  }) {
     super();
     this.statusCode = input.status;
     this.statusMessage = String(input.status);
     this.headers = input.headers ?? {};
     queueMicrotask(() => {
+      if (input.responseError) {
+        this.emit("error", input.responseError);
+        return;
+      }
       this.emit("data", Buffer.from(input.body));
       this.emit("end");
     });
@@ -50,6 +59,7 @@ function mockProviderRequest(response: {
   status: number;
   body: string;
   headers?: Record<string, string | string[] | undefined>;
+  responseError?: Error;
   onOptions?: (options: ProviderSmokeRequestOptions) => void;
 }): ProviderSmokeRequestImpl {
   return (options, onResponse) => {
@@ -711,6 +721,53 @@ describe("provider registry", () => {
       error: "Models response exceeded 262144 byte limit."
     });
     expect(requestCalls).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("redacts hosted remote response stream errors", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: "{}",
+        responseError: new Error("response reset while using provider-secret")
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "unknown",
+      error: "unknown: response reset while using [redacted-provider-key]"
+    });
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
