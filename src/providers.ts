@@ -695,6 +695,7 @@ async function fetchProviderModelsWithPinnedRequest(
   const parsed = new URL(url);
   const requestFn = parsed.protocol === "https:" ? httpsRequest : httpRequest;
   const headers = new Headers(init.headers);
+  headers.delete("host");
   const requestOptions: ProviderSmokeRequestOptions = {
     protocol: parsed.protocol,
     hostname: parsed.hostname,
@@ -707,6 +708,8 @@ async function fetchProviderModelsWithPinnedRequest(
       ? {
           servername: parsed.hostname,
           lookup: (_hostname, _options, callback) => {
+            // The socket target is the already-validated address; later DNS changes cannot
+            // alter the address used by this single smoke request.
             callback(null, target.pinnedAddress!.address, target.pinnedAddress!.family);
           }
         }
@@ -726,8 +729,15 @@ async function fetchProviderModelsWithPinnedRequest(
   };
   return new Promise((resolve, reject) => {
     let settled = false;
-    let request: ProviderSmokeRequestHandle;
-    const abort = () => request.destroy(new Error("Provider smoke request aborted."));
+    let request: ProviderSmokeRequestHandle | undefined;
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      init.signal?.removeEventListener("abort", abort);
+      const error = new Error("Provider smoke request aborted.");
+      request?.destroy(error);
+      reject(error);
+    };
     request = sendProviderSmokeRequest((response) => {
       if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400) {
         settled = true;
@@ -739,8 +749,9 @@ async function fetchProviderModelsWithPinnedRequest(
         }));
         // Redirect bodies are not diagnostic evidence for this smoke check and may contain
         // provider-side secrets. Close the response/socket without attaching data listeners.
+        // Redirect targets are never followed, resolved, or connected to by this smoke path.
         response.destroy();
-        request.destroy();
+        request?.destroy();
         return;
       }
       const chunks: Buffer[] = [];
@@ -749,7 +760,7 @@ async function fetchProviderModelsWithPinnedRequest(
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         totalBytes += buffer.byteLength;
         if (totalBytes > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
-          request.destroy(new ProviderSmokeResponseTooLargeError());
+          request?.destroy(new ProviderSmokeResponseTooLargeError());
           return;
         }
         chunks.push(buffer);
@@ -773,14 +784,18 @@ async function fetchProviderModelsWithPinnedRequest(
         reject(error);
       });
     });
-    init.signal?.addEventListener("abort", abort, { once: true });
-    request.on("timeout", () => request.destroy(new Error("Provider smoke request timed out.")));
+    request.on("timeout", () => request?.destroy(new Error("Provider smoke request timed out.")));
     request.on("error", (error) => {
       if (settled) return;
       settled = true;
       init.signal?.removeEventListener("abort", abort);
       reject(error);
     });
+    if (init.signal?.aborted) {
+      abort();
+      return;
+    }
+    init.signal?.addEventListener("abort", abort, { once: true });
     request.end();
   });
 }

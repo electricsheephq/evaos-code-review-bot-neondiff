@@ -29,6 +29,21 @@ class MockProviderClientRequest extends EventEmitter {
   }
 }
 
+class QuietDestroyProviderClientRequest extends EventEmitter {
+  ended = false;
+  destroyedWith?: Error;
+
+  end(): this {
+    this.ended = true;
+    return this;
+  }
+
+  destroy(error?: Error): this {
+    this.destroyedWith = error;
+    return this;
+  }
+}
+
 class MockProviderIncomingMessage extends EventEmitter {
   statusCode?: number;
   statusMessage?: string;
@@ -329,6 +344,7 @@ describe("provider registry", () => {
       accept: "application/json",
       authorization: "Bearer provider-secret"
     });
+    expect(requestOptions[0].headers).not.toHaveProperty("host");
     let pinnedLookup: { address?: string; family?: number } = {};
     requestOptions[0].lookup?.("gateway.example.test", {}, (error, address, family) => {
       expect(error).toBeNull();
@@ -415,6 +431,7 @@ describe("provider registry", () => {
         accept: "application/json",
         authorization: "Bearer provider-secret"
       });
+      expect(requestOptions[0].headers).not.toHaveProperty("host");
       expect(requests[0]?.ended).toBe(true);
       expect(JSON.stringify(result)).not.toContain("provider-secret");
     } finally {
@@ -919,6 +936,55 @@ describe("provider registry", () => {
     expect(result.checks[0]?.error).not.toContain("exceeded 262144 byte limit");
     expect(JSON.stringify(result)).not.toContain("provider-secret");
     expect(JSON.stringify(result)).not.toContain("xxxxx");
+  });
+
+  it("settles hosted remote pinned smoke when abort destroys a quiet request", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            timeoutMs: 1,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    const request = new QuietDestroyProviderClientRequest();
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
+      },
+      requestImpl: () => request,
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "timeout",
+      error: expect.stringContaining("Provider smoke request aborted")
+    });
+    expect(request.ended).toBe(true);
+    expect(request.destroyedWith?.message).toBe("Provider smoke request aborted.");
   });
 
   it("rejects invalid percent-encoded smoke paths without crashing the doctor run", async () => {
