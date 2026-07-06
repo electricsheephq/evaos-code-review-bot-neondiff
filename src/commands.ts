@@ -25,13 +25,10 @@ export interface ReviewCommand {
   url?: string;
 }
 
-export type UnauthorizedCommandReason = "untrusted" | "not_public_action" | "public_disabled";
-
 export interface UnauthorizedReviewCommand {
   action: ReviewCommandAction;
   commentId: number;
   author: string;
-  reason?: UnauthorizedCommandReason;
 }
 
 export interface CollectedReviewCommands {
@@ -87,7 +84,7 @@ export function collectTrustedReviewCommands(
       // Pure classification only — the stateful bot + cooldown gate runs in the caller (scheduler).
       publicEligible.push(command);
     } else {
-      unauthorized.push({ action, commentId: comment.id, author, reason: publicUnauthorizedReason(action, config) });
+      unauthorized.push({ action, commentId: comment.id, author });
     }
   }
 
@@ -96,11 +93,6 @@ export function collectTrustedReviewCommands(
     publicEligible: publicEligible.sort((left, right) => left.commentId - right.commentId),
     unauthorized
   };
-}
-
-function publicUnauthorizedReason(action: ReviewCommandAction, config: CommandConfig): UnauthorizedCommandReason {
-  if (!config.publicCommands?.enabled) return "public_disabled";
-  return isReviewCommandAction(action) ? "untrusted" : "not_public_action";
 }
 
 export function decideCommandAction(input: {
@@ -151,10 +143,16 @@ export function classifyCommandAuthorization(
 }
 
 /**
- * The single source of truth for "is this comment authored by a bot" in the public-command path
- * (#345). A comment is a bot command when its GitHub user type is "Bot" (any bot, including our own
- * app login botLogin). Trusted-author authorization is unaffected — this only guards the public path.
- * GitHubApi.isBotAuthoredComment delegates here so there is no second identity definition.
+ * Public-command bot rejection (#345, loop protection). Deliberately BROAD: any Bot-type actor OR the
+ * app's own login is blocked from triggering a public command. The breadth is intentional — a public
+ * path must never let ANY automated actor (dependabot, another app, or ourselves) spin up reviews,
+ * so we reject on user.type === "Bot" OR login === botLogin.
+ *
+ * This is intentionally DIFFERENT from GitHubApi.isBotAuthoredComment, which is the NARROWER
+ * app-own-comment check (type === "Bot" AND login === botLogin) used to detect the bot's OWN status
+ * comments for marker matching. Different questions ("is this any bot?" vs "is this MY comment?"), so
+ * they are not unified; both derive the identity from the same botLogin config value. Trusted-author
+ * authorization is unaffected — this only guards the public path.
  */
 export function isBotCommandComment(user: { login: string; type?: string } | null | undefined, botLogin: string): boolean {
   if (!user) return false;

@@ -915,6 +915,12 @@ export function admitPublicCommands(input: {
     const source = commentsById.get(command.commentId);
     if (isBotCommandComment(source?.user, botLogin)) continue;
     // Atomic per-{repo,pr,head,author,action} cooldown — denied invocations are a no-op.
+    // DELIBERATE: the cooldown is recorded at ADMISSION time (here), before the review runs, not
+    // after a successful review. This is admission-time RATE LIMITING of how often a public author may
+    // TRIGGER the command — recording only after success would let an attacker spam commands that
+    // transiently skip (closed PR, provider cooldown) with no rate limit. The window is short (default
+    // 10m) and per-exact-head, so a new push (new head) is never blocked; only a same-head re-issue
+    // within the window after a transient skip sees one "cooled down" response, which is acceptable.
     const allowed = input.state.tryRecordPublicCommandInvocation({
       repo: input.repo,
       pullNumber: input.pull.number,

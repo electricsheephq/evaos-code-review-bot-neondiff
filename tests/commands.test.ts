@@ -226,6 +226,14 @@ describe("public command bot-author identity (#345)", () => {
     expect(isBotCommandComment({ login: "randopublic", type: "User" }, "evaos-code-review-bot[bot]")).toBe(false);
     expect(isBotCommandComment(null, "evaos-code-review-bot[bot]")).toBe(false);
   });
+
+  it("rejects ANY Bot-type actor, not just the app's own login (deliberate breadth, loop protection)", () => {
+    // Pins the intended breadth vs the narrower GitHubApi.isBotAuthoredComment (which needs BOTH
+    // type === "Bot" AND login === botLogin). A third-party bot triggering a public review must be
+    // blocked, so type === "Bot" alone (any login) rejects.
+    expect(isBotCommandComment({ login: "third-party-app[bot]", type: "Bot" }, "evaos-code-review-bot[bot]")).toBe(true);
+    expect(isBotCommandComment({ login: "renovate[bot]", type: "Bot" }, "evaos-code-review-bot[bot]")).toBe(true);
+  });
 });
 
 describe("public command config validation (#345)", () => {
