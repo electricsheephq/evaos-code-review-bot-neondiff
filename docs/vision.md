@@ -6,7 +6,10 @@ pull requests.**
 This document states what NeonDiff is for, the system design that serves that
 purpose, the invariants that protect it, and what NeonDiff deliberately does
 not do. It exists so contributors, operators, and agents can align with the
-product direction without reconstructing it from issue history.
+product direction without reconstructing it from issue history. The worker
+runs locally with a GitHub App scoped to explicit repositories; public
+repositories are free by default, while private repository review requires an
+active private entitlement.
 
 ## The Problem
 
@@ -79,6 +82,9 @@ them:
   They never promote a finding or escalate the review verdict.
 - **Fail-closed configuration.** Unknown keys, out-of-range values, and
   malformed shapes are rejected at load, not silently ignored.
+- **Entitlement-gated private review.** Private or commercial review requests
+  stop before checkout, file listing, provider calls, or GitHub review posting
+  when entitlement proof is missing.
 - **Additive and default-off.** New gate behavior ships disabled and opt-in,
   with dry-run evidence, before anyone depends on it.
 - **Advisory proof boundaries.** NeonDiff does not claim calibrated accuracy
@@ -90,6 +96,9 @@ them:
   suppressed rather than posted redacted.
 - **Local-first, BYOK.** Diffs go to the providers the operator configured,
   under the operator's keys and budget — not to a hosted review service.
+
+Strong automation should reduce ambiguity for a human maintainer. It should not
+hide the boundary between evidence, judgment, and authority.
 
 ## Provider And BYOK Boundaries
 
@@ -108,6 +117,9 @@ operator chooses.
   NeonDiff entitlements govern which repo visibilities the worker may review.
 - NeonDiff support tiers are software/support entitlement boundaries. Provider
   and model costs stay external through BYOK or local models.
+- Active private entitlement covers private repos and public repos when an
+  operator disables the default public-free path. Public-only entitlement does
+  not unlock private repos.
 - Provider resource catalogs are discovery aids, not proof that a provider can
   run NeonDiff reviews.
 
@@ -163,3 +175,12 @@ the ranking/scoring and calibration program that produced this document is
   statistics
 - [release-governance.md](release-governance.md) — versioning and the GA line
 - [CHANGELOG](../CHANGELOG.md) — shipped changes by version
+
+## Proof Boundary
+
+This vision document states product intent and contributor alignment. It does
+not prove setup, provider quality, release readiness, marketplace readiness,
+desktop readiness, legal readiness, or GA readiness. Those claims need their
+own validation artifacts and tracked issues before they can move into public
+product copy. It also does not prove issue-enrichment rollout readiness for any
+repo unless that repo has separate allowlist, threshold, and evidence coverage.
