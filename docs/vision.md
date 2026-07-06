@@ -91,6 +91,29 @@ them:
 - **Local-first, BYOK.** Diffs go to the providers the operator configured,
   under the operator's keys and budget — not to a hosted review service.
 
+## Provider And BYOK Boundaries
+
+NeonDiff is local-first, but model egress depends on the provider path the
+operator chooses.
+
+- Local or self-hosted endpoints can keep prompts and diffs on the operator's
+  machine or network when the model runtime is actually local.
+- Hosted providers, including ZCode-backed GLM/Z.ai or hosted
+  OpenAI-compatible BYOK gateways, can receive the prompt and diff context
+  needed to produce a review.
+- Provider keys belong in environment variables, local operator wrappers, or
+  supported secret paths. They do not belong in tracked config, GitHub comments,
+  release notes, or evidence packets.
+- Provider keys are not NeonDiff entitlements. They unlock model access, while
+  NeonDiff entitlements govern which repo visibilities the worker may review.
+- NeonDiff support tiers are software/support entitlement boundaries. Provider
+  and model costs stay external through BYOK or local models.
+- Provider resource catalogs are discovery aids, not proof that a provider can
+  run NeonDiff reviews.
+
+See [providers.md](providers.md), [pricing.md](pricing.md), and
+[license-boundary.md](license-boundary.md) for the current public beta wording.
+
 ## What NeonDiff Deliberately Does Not Do
 
 - **No breadth race.** Walkthrough prose, issue planners, and feature parity
@@ -102,6 +125,21 @@ them:
   benchmark claim appears on a public surface before the evidence gate passes.
 - **No hosted diff processing.** There is no NeonDiff server reading your
   code. The worker runs where the operator runs it.
+
+## Issue Enrichment Boundary
+
+Issue enrichment is a separate rollout lane from pull request review.
+
+- PR review allowlists do not opt repositories into issue enrichment.
+- Issue enrichment needs its own allowlist, repo-level throttles, and live-post
+  gate before comments can go out.
+- New issue-enrichment rollouts should keep
+  `processExistingOpenIssuesOnActivation=false` so enabling the lane does not
+  imply scanning or commenting on an existing issue backlog by default.
+
+See [issue-enrichment.md](issue-enrichment.md) for the rollout policy and
+[license-boundary.md](license-boundary.md) for the public/private entitlement
+matrix.
 
 ## Where This Goes
 
