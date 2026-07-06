@@ -1,5 +1,11 @@
 import { redactSecrets } from "./secrets.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
+import {
+  buildIssueHash,
+  mapReviewOutcome,
+  renderMarkerLifecycleFields,
+  type MarkerLifecycleFields
+} from "./marker-lifecycle.js";
 
 export type ReviewStatusCommentState =
   | "queued"
@@ -36,6 +42,14 @@ export interface BuildReviewStatusCommentInput {
   details?: string;
   now?: Date;
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  /**
+   * Optional run id for correlating this marker with the review run (#263). Reuses the run's
+   * existing id (e.g. queue jobId) — this surface does not mint a new one. Absent ⇒ byte-identical
+   * marker.
+   */
+  runId?: string;
+  /** Optional downstream-fixer pointer (#263). Diagnostic-only; rides the state marker. */
+  handoffTarget?: string;
 }
 
 export const REVIEW_STATUS_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-status";
@@ -59,13 +73,18 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
 } {
   const marker = buildReviewStatusMarker(input);
   const updatedAt = (input.now ?? new Date()).toISOString();
+  // Opt-in only: a caller threads a runId/handoffTarget to attach lifecycle metadata. Without an
+  // opt-in the state marker stays byte-identical to today (no role/outcome/issueHash tokens).
+  const lifecycle = hasReviewLifecycleOptIn(input)
+    ? renderMarkerLifecycleFields(buildReviewLifecycleFields(input))
+    : "";
   const title = formatInlinePublicText(input.pullTitle, input.publicConfidencePolicy);
   const details = sanitizePublicText(input.details, input.publicConfidencePolicy);
   const pullUrl = sanitizePublicUrlText(input.pullUrl);
   const reviewUrl = sanitizePublicUrlText(input.reviewUrl);
   const lines = [
     marker,
-    `${REVIEW_STATUS_STATE_MARKER_PREFIX} status=${input.state} updated_at=${updatedAt} -->`,
+    `${REVIEW_STATUS_STATE_MARKER_PREFIX} status=${input.state} updated_at=${updatedAt}${lifecycle} -->`,
     "",
     `## evaOS review status: ${formatStatus(input.state)}`,
     "",
@@ -101,6 +120,8 @@ export async function postReviewStatusComment(input: {
   details?: string;
   now?: Date;
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  runId?: string;
+  handoffTarget?: string;
 }): Promise<ReviewStatusCommentPostResult> {
   if (!input.enabled) return { posted: false, reason: "disabled", state: input.state };
   if (input.dryRun) return { posted: false, reason: "dry_run", state: input.state };
@@ -134,6 +155,23 @@ export async function postReviewStatusComment(input: {
       error: redactSecrets(error instanceof Error ? error.message : String(error))
     };
   }
+}
+
+function hasReviewLifecycleOptIn(input: BuildReviewStatusCommentInput): boolean {
+  return input.runId !== undefined || input.handoffTarget !== undefined;
+}
+
+function buildReviewLifecycleFields(input: BuildReviewStatusCommentInput): MarkerLifecycleFields {
+  // Role is fixed for the review-status surface; outcome is a mapping of the existing decision
+  // (undefined for non-terminal states); issueHash correlates repo+pr+head. runId/handoffTarget
+  // are optional passthroughs. All ride the diagnostic state marker only.
+  return {
+    role: "reviewer",
+    issueHash: buildIssueHash({ repo: input.repo, pullNumber: input.pullNumber, headSha: input.headSha }),
+    ...(mapReviewOutcome(input.state) ? { outcome: mapReviewOutcome(input.state) } : {}),
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.handoffTarget ? { handoffTarget: input.handoffTarget } : {})
+  };
 }
 
 function formatStatus(state: ReviewStatusCommentState): string {

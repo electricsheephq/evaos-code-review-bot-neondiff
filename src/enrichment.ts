@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
+import {
+  buildIssueHash,
+  renderMarkerLifecycleFields,
+  type IssueLifecycleState,
+  type MarkerLifecycleFields
+} from "./marker-lifecycle.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import type {
@@ -171,6 +177,8 @@ export function buildIssueEnrichmentComment(input: {
   maxSuggestions?: number;
   postIssueComment?: boolean;
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  /** Optional lifecycle/handoff metadata (#263). Rides the diagnostic issue state marker only. */
+  lifecycle?: IssueEnrichmentLifecycleInput;
 }): EnrichmentComment {
   validateRepoIssue({ repo: input.repo, issueNumber: input.issue.number });
   const eligibility = getIssueEnrichmentEligibility(input.issue);
@@ -261,7 +269,10 @@ export function buildIssueEnrichmentComment(input: {
     repo: input.repo,
     issueNumber: input.issue.number,
     state,
-    bodyHash
+    bodyHash,
+    // Opt-in only: absent lifecycle input ⇒ no new tokens ⇒ byte-identical marker text.
+    ...(input.lifecycle?.state ? { lifecycleState: input.lifecycle.state } : {}),
+    ...(input.lifecycle ? { lifecycle: buildIssueLifecycleFields(input.repo, input.issue.number, input.lifecycle) } : {})
   });
 
   return {
@@ -269,6 +280,34 @@ export function buildIssueEnrichmentComment(input: {
     body: [marker, stateMarker, redactedVisibleBody].join("\n"),
     bodyHash,
     postIssueComment: input.postIssueComment ?? false
+  };
+}
+
+/**
+ * Optional #263 lifecycle/handoff inputs for an issue enrichment marker. `state` is the mapped
+ * issue-side lifecycle state (a renaming of the existing enrichment decision); the rest are
+ * optional passthroughs. All ride the diagnostic issue state marker only.
+ */
+export interface IssueEnrichmentLifecycleInput {
+  state?: IssueLifecycleState;
+  runId?: string;
+  handoffTarget?: string;
+}
+
+function buildIssueLifecycleFields(
+  repo: string,
+  issueNumber: number,
+  lifecycle: IssueEnrichmentLifecycleInput | undefined
+): MarkerLifecycleFields {
+  // Role is fixed for the enricher surface; issueHash correlates repo+issue. outcome=enriched only
+  // when the mapped lifecycle state is `enriched` (a terminal enrich decision). runId/handoffTarget
+  // are optional passthroughs.
+  return {
+    role: "enricher",
+    issueHash: buildIssueHash({ repo, issueNumber }),
+    ...(lifecycle?.state === "enriched" ? { outcome: "enriched" as const } : {}),
+    ...(lifecycle?.runId ? { runId: lifecycle.runId } : {}),
+    ...(lifecycle?.handoffTarget ? { handoffTarget: lifecycle.handoffTarget } : {})
   };
 }
 
@@ -357,11 +396,22 @@ function buildStateMarker(input: { repo: string; pullNumber: number; headSha: st
   return `${ENRICHMENT_STATE_MARKER_PREFIX} version=${ENRICHMENT_SCHEMA_VERSION} repo=${input.repo} pr=${input.pullNumber} sha=${input.headSha} hash=${input.bodyHash} -->`;
 }
 
-function buildIssueStateMarker(input: { repo: string; issueNumber: number; state: string; bodyHash: string }): string {
+function buildIssueStateMarker(input: {
+  repo: string;
+  issueNumber: number;
+  state: string;
+  bodyHash: string;
+  lifecycle?: MarkerLifecycleFields;
+  lifecycleState?: IssueLifecycleState;
+}): string {
   validateRepoIssue(input);
   if (!/^[0-9a-f]{64}$/i.test(input.bodyHash)) throw new Error(`Invalid enrichment body hash: ${input.bodyHash}`);
   const state = normalizeIssueState({ state: input.state, number: input.issueNumber });
-  return `${ENRICHMENT_STATE_MARKER_PREFIX} version=${ENRICHMENT_SCHEMA_VERSION} repo=${input.repo} issue=${input.issueNumber} state=${state} hash=${input.bodyHash} -->`;
+  // `lifecycle=` is the #263 issue-side lifecycle state; distinct from the `state=` identity token
+  // (open|closed|unknown) so both round-trip. Absent ⇒ token omitted ⇒ byte-identical marker.
+  const lifecycleState = input.lifecycleState ? ` lifecycle=${input.lifecycleState}` : "";
+  const lifecycle = renderMarkerLifecycleFields(input.lifecycle);
+  return `${ENRICHMENT_STATE_MARKER_PREFIX} version=${ENRICHMENT_SCHEMA_VERSION} repo=${input.repo} issue=${input.issueNumber} state=${state}${lifecycleState} hash=${input.bodyHash}${lifecycle} -->`;
 }
 
 function validateIdentity(input: { repo: string; pullNumber: number; headSha: string }): void {

@@ -14,6 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
+import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle } from "../src/issue-enrichment.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
@@ -2343,7 +2344,10 @@ describe("sticky enrichment comments", () => {
           commentUrl: "https://github.test/comment/1",
           bodyHash: firstRecord?.bodyHash
         });
-        expect(posts[0]!.body).toContain(`hash=${firstRecord?.bodyHash} -->`);
+        // #263: live-posted markers now carry the mapped `enriched` lifecycle state + fields after
+        // the hash token, so the hash is no longer the final token. The hash token itself is stable.
+        expect(posts[0]!.body).toContain(`hash=${firstRecord?.bodyHash}`);
+        expect(posts[0]!.body).toContain("lifecycle=enriched");
         expect(refreshedRecord).toMatchObject({
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:07:00.000Z",
@@ -2358,7 +2362,8 @@ describe("sticky enrichment comments", () => {
         });
         expect(changedRecord?.bodyHash).toMatch(/^[a-f0-9]{64}$/);
         expect(changedRecord?.bodyHash).not.toBe(firstRecord?.bodyHash);
-        expect(posts[1]!.body).toContain(`hash=${changedRecord?.bodyHash} -->`);
+        expect(posts[1]!.body).toContain(`hash=${changedRecord?.bodyHash}`);
+        expect(posts[1]!.body).toContain("lifecycle=enriched");
       } finally {
         state.close();
       }
@@ -2682,6 +2687,71 @@ describe("sticky enrichment comments", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("issue enrichment lifecycle markers (#263)", () => {
+  const issue: GitHubRelatedIssueOrPull = {
+    number: 263,
+    title: "Lifecycle markers",
+    state: "open",
+    html_url: "https://github.test/electricsheephq/evaos-code-review-bot/issues/263",
+    body: "Add lifecycle metadata.",
+    user: { login: "issue-author" }
+  };
+
+  it("keeps the issue state marker byte-identical when no lifecycle input is supplied (back-compat)", () => {
+    const comment = buildIssueEnrichmentComment({ repo: "owner/repo", issue, postIssueComment: true });
+    const stateLine = comment.body.split("\n").find((line) => line.includes("enrichment-state"))!;
+    expect(stateLine).toMatch(/^<!-- evaos-code-review-bot:enrichment-state version=1 repo=owner\/repo issue=263 state=open hash=[0-9a-f]{64} -->$/);
+    expect(stateLine).not.toContain("lifecycle=");
+    expect(stateLine).not.toContain("role=");
+    expect(stateLine).not.toContain("issueHash=");
+  });
+
+  it("attaches the issue lifecycle state, role, and hashed issueHash to the diagnostic state marker only", () => {
+    const comment = buildIssueEnrichmentComment({
+      repo: "owner/repo",
+      issue,
+      postIssueComment: true,
+      lifecycle: { state: "enriched", runId: "owner__repo-issue-263" }
+    });
+    const parsed = parseMarkerLifecycleFields(comment.body.split("\n").find((line) => line.includes("enrichment-state"))!);
+    expect(parsed.issueLifecycleState).toBe("enriched");
+    expect(parsed.role).toBe("enricher");
+    expect(parsed.outcome).toBe("enriched");
+    expect(parsed.runId).toBe("owner__repo-issue-263");
+    expect(parsed.issueHash).toMatch(/^[0-9a-f]{16}$/);
+    // Diagnostic fields never leak into the public identity marker (the upsert dedup key).
+    expect(comment.marker).toBe("<!-- evaos-code-review-bot:enrichment repo=owner/repo issue=263 -->");
+    expect(comment.marker).not.toContain("lifecycle=");
+    expect(comment.marker).not.toContain("issueHash=");
+    expect(comment.marker).not.toContain("role=");
+  });
+
+  it("does not change bodyHash when lifecycle fields are attached (idempotency preserved)", () => {
+    const withoutLifecycle = buildIssueEnrichmentComment({ repo: "owner/repo", issue, postIssueComment: true });
+    const withLifecycle = buildIssueEnrichmentComment({
+      repo: "owner/repo",
+      issue,
+      postIssueComment: true,
+      lifecycle: { state: "deferred-by-throttle", handoffTarget: "throttle-queue" }
+    });
+    expect(withLifecycle.bodyHash).toBe(withoutLifecycle.bodyHash);
+  });
+
+  it("redacts and token-strips handoffTarget on the issue state marker", () => {
+    const token = ["ghp", "z".repeat(36)].join("_");
+    const comment = buildIssueEnrichmentComment({
+      repo: "owner/repo",
+      issue,
+      postIssueComment: true,
+      lifecycle: { state: "needs-human-routing", handoffTarget: `route ${token}` }
+    });
+    expect(comment.body).not.toContain(token);
+    const stateLine = comment.body.split("\n").find((line) => line.includes("enrichment-state"))!;
+    expect(stateLine).toContain("handoffTarget=route");
+    expect(comment.marker).not.toContain("handoffTarget=");
   });
 });
 
