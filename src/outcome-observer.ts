@@ -164,14 +164,28 @@ function pullRevertsMerge(
   const title = pull.title ?? "";
   const body = pull.body ?? "";
   // GitHub's default revert PR title: `Revert "<original title>"`. Match the revert prefix AND a
-  // back-reference to the original PR (its title or #number) or the reverted merge commit SHA.
+  // back-reference that specifically identifies THIS PR — never an incidental `#n` mention.
   const isRevertShaped = /^revert\b/i.test(title.trim()) || /this reverts commit/i.test(body);
   if (!isRevertShaped) return false;
   const targetTitle = (target.pullTitle ?? "").trim();
   const referencesTitle = targetTitle.length > 0 && title.includes(targetTitle);
-  const referencesNumber = new RegExp(`(reverts?\\b[^#]*)?#${target.pullNumber}\\b`, "i").test(`${title}\n${body}`);
+  const referencesNumber = revertReferencesPull(`${title}\n${body}`, target.pullNumber);
   const referencesMergeSha = Boolean(target.mergeCommitSha) && body.includes(target.mergeCommitSha as string);
   return referencesTitle || referencesNumber || referencesMergeSha;
+}
+
+/**
+ * True only when `#<n>` appears in a construction that identifies it as a revert OF that PR (#371) —
+ * not merely anywhere in a revert-shaped PR. Accepted forms:
+ *   - `Reverts #n` / `Reverts owner/repo#n`  (GitHub's default revert-PR body line)
+ *   - `Revert "<title>" (#n)`                (GitHub's default revert-PR title tail)
+ * An incidental `#n` (e.g. "see #n for context") in a revert PR does NOT count.
+ */
+function revertReferencesPull(text: string, pullNumber: number): boolean {
+  const n = String(pullNumber);
+  const revertsBody = new RegExp(`\\breverts?\\b[^\\n#]*(?:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#${n}\\b`, "i");
+  const revertTitleTail = new RegExp(`\\brevert\\b[^\\n]*\\(#${n}\\)`, "i");
+  return revertsBody.test(text) || revertTitleTail.test(text);
 }
 
 function mergeLineMap(into: Map<string, Set<number>>, from: Map<string, Set<number>>): void {

@@ -649,6 +649,30 @@ describe("buildObservedPullOutcome enrichment (#371)", () => {
     expect(observed.revertedFlaggedChange).toBe(true);
   });
 
+  it("revert `Reverts #n` body construction matches; an incidental `#n` mention does NOT (correctness)", () => {
+    const revertsBody = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      pullTitle: "Add save path",
+      findings: [OBSERVED_FINDING],
+      // Revert-shaped title but NO title/sha back-ref; the only PR reference is the `Reverts #1` line.
+      subsequentPulls: [{ pullNumber: 2, title: "Revert regression", body: "Reverts owner/repo#1", changedLines: new Map() }],
+      reviewComments: []
+    });
+    expect(revertsBody.revertedFlaggedChange).toBe(true);
+
+    const incidentalMention = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      pullTitle: "Add save path",
+      findings: [OBSERVED_FINDING],
+      // A revert-shaped PR that reverts something ELSE but merely mentions #1 in prose must NOT match.
+      subsequentPulls: [{ pullNumber: 2, title: "Revert unrelated change", body: "See #1 for prior context.", changedLines: new Map() }],
+      reviewComments: []
+    });
+    expect(incidentalMention.revertedFlaggedChange).toBe(false);
+  });
+
   it("does NOT treat the PR as its own revert/hotfix, and ignores unrelated later PRs", () => {
     const observed = buildObservedPullOutcome({
       merged: true,
@@ -757,6 +781,64 @@ describe("scheduled deeper-observation cost caps + invariants (#371)", () => {
     // One window read for the repo (memoized across both heads), and it requested at most maxPullsPerCycle.
     expect(listRecentMergedPulls).toHaveBeenCalledTimes(1);
     expect(listRecentMergedPulls).toHaveBeenCalledWith("owner/repo", 2);
+    store.close();
+  });
+
+  it("bounds per-subsequent-PR file reads: listPullFiles is called at most once per (repo, subsequent-pull) across targets", async () => {
+    const { store } = newStore();
+    // Two merged target heads in the SAME repo share the SAME recent-merged window (PRs #10, #11).
+    store.recordReviewFindings([
+      { ...FINDING, pullNumber: 1, headSha: "sha1", fingerprint: `finding:${"a".repeat(64)}` },
+      { ...FINDING, pullNumber: 2, headSha: "sha2", fingerprint: `finding:${"b".repeat(64)}` }
+    ]);
+    const listPullFiles = vi.fn(async (_repo: string, _pullNumber: number) => [] as PullFilePatch[]);
+    const github: SchedulerGitHubApi = {
+      ...deepGithub({ subsequent: [{ number: 10, title: "later A" }, { number: 11, title: "later B" }] }),
+      listRecentMergedPulls: async () =>
+        [10, 11].map((number) => ({ number, title: "later", body: "", head: { sha: `sha${number}` }, merged_at: "2026-07-05T12:00:00.000Z" }) as unknown as PullRequestSummary),
+      listPullFiles
+    };
+    const config = loadConfigFromObject(
+      baseConfigObject({ calibrationLoop: { observeSchedule: { ...OBSERVE_SCHEDULE, maxPullsPerCycle: 2 } } })
+    );
+
+    await observeScheduledOutcomes({ config, github, state: store, now });
+
+    // Two targets × two subsequent PRs would be 4 reads unmemoized; the (repo, pull) cache holds it to 2.
+    expect(listPullFiles).toHaveBeenCalledTimes(2);
+    expect(new Set(listPullFiles.mock.calls.map((call) => call[1]))).toEqual(new Set([10, 11]));
+    store.close();
+  });
+
+  it("caches the RESOLVED window (not a rejected promise): a first-target failure does not poison later targets", async () => {
+    const { store } = newStore();
+    store.recordReviewFindings([
+      { ...FINDING, pullNumber: 1, headSha: "sha1", fingerprint: `finding:${"a".repeat(64)}` },
+      { ...FINDING, pullNumber: 2, headSha: "sha2", fingerprint: `finding:${"b".repeat(64)}` }
+    ]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let calls = 0;
+    const listRecentMergedPulls = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("transient window read failure");
+      // Second target re-attempts and succeeds with a revert of PR #2.
+      return [{ number: 20, title: 'Revert "x" (#2)', body: "", head: { sha: "sha20" }, merged_at: "2026-07-05T12:00:00.000Z" }] as unknown as PullRequestSummary[];
+    });
+    const github: SchedulerGitHubApi = {
+      ...deepGithub({}),
+      getPull: async (_repo, pullNumber) =>
+        ({ number: pullNumber, title: `PR ${pullNumber}`, head: { sha: `sha${pullNumber}` }, merged_at: "2026-07-05T00:00:00.000Z", merge_commit_sha: `merge${pullNumber}` }) as unknown as PullRequestSummary,
+      listRecentMergedPulls
+    };
+    const config = loadConfigFromObject(baseConfigObject({ calibrationLoop: { observeSchedule: OBSERVE_SCHEDULE } }));
+
+    await observeScheduledOutcomes({ config, github, state: store, now });
+
+    // Both targets attempted the read (rejection was NOT cached): #1 degraded to none_observed, #2 got revert.
+    expect(listRecentMergedPulls).toHaveBeenCalledTimes(2);
+    const bySource = Object.fromEntries(store.listFindingOutcomeLabels().map((label) => [label.pullNumber, label.labelSource]));
+    expect(bySource[1]).toBe("none_observed");
+    expect(bySource[2]).toBe("revert");
     store.close();
   });
 

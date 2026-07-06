@@ -289,10 +289,14 @@ export async function observeScheduledOutcomes(input: {
   // folder is derived from exactly the same instant that is forwarded to runScheduledObservePass.
   const now = input.now ?? new Date();
   const evidenceDir = join(input.config.evidenceDir, localDateFolder(now), "calibration-observe");
-  // Per-repo memo for the recent-merged-PR window: fetched at most ONCE per repo per cycle and shared
-  // across all that repo's target heads, so the deeper reads never scale with findings — the same
-  // maxPullsPerCycle that caps selected heads also caps the recent-merged window we scan for signals.
-  const recentMergedByRepo = new Map<string, Promise<PullRequestSummary[]>>();
+  // Per-cycle read cache so the deeper reads stay bounded regardless of how many target heads a repo
+  // has: the recent-merged-PR window is listed at most ONCE per repo, and each subsequent PR's files
+  // are fetched at most ONCE per (repo, pull) across all targets. The same maxPullsPerCycle that caps
+  // selected heads also caps the recent-merged window, so total deeper reads stay bounded by the caps.
+  const deeperReadCache: DeeperObservationReadCache = {
+    recentMergedByRepo: new Map(),
+    filesByRepoPull: new Map()
+  };
   const fetchOutcome = async (target: ScheduledObserveTarget): Promise<ObservedPullOutcome> => {
     const pull = await input.github.getPull(target.repo, target.pullNumber);
     const merged = Boolean(pull.merged_at);
@@ -311,7 +315,7 @@ export async function observeScheduledOutcomes(input: {
         github: input.github,
         repo: target.repo,
         maxPulls: schedule.maxPullsPerCycle,
-        recentMergedByRepo
+        cache: deeperReadCache
       });
       const reviewComments = input.github.listPullReviewComments
         ? await input.github.listPullReviewComments(target.repo, target.pullNumber)
@@ -345,30 +349,48 @@ export async function observeScheduledOutcomes(input: {
 }
 
 /**
+ * Per-cycle read cache for deeper observation (#371). Caches RESOLVED values (not pending promises) so
+ * a transient failure for one target does not poison the repo's whole cycle: a rejected read is never
+ * cached, letting a later target re-attempt. `recentMergedByRepo` bounds the window list to once per
+ * repo; `filesByRepoPull` bounds each subsequent PR's file read to once per (repo, pull) across all
+ * targets — so total deeper reads never scale with the number of target heads.
+ */
+interface DeeperObservationReadCache {
+  recentMergedByRepo: Map<string, PullRequestSummary[]>;
+  filesByRepoPull: Map<string, PullFilePatch[]>;
+}
+
+/**
  * Read-only, BOUNDED collector of subsequent merged PRs whose right-side changed lines / revert message
- * feed the deeper outcome signals (#371). The recent-merged window is fetched at most once per repo per
- * cycle (memoized) and capped at maxPullsPerCycle; per-PR file reads are likewise capped so the extra
- * reads never scale with the number of findings. When the GitHub surface can't list merged pulls or
- * files, it returns an empty set — the caller then derives the honest merge-state-only cut.
+ * feed the deeper outcome signals (#371). The recent-merged window is listed at most once per repo per
+ * cycle and capped at maxPullsPerCycle; each subsequent PR's files are fetched at most once per (repo,
+ * pull) across all targets. When the GitHub surface can't list merged pulls or files, it returns an
+ * empty set — the caller then derives the honest merge-state-only cut.
  */
 async function collectSubsequentMergedPulls(input: {
   github: SchedulerGitHubApi;
   repo: string;
   maxPulls: number;
-  recentMergedByRepo: Map<string, Promise<PullRequestSummary[]>>;
+  cache: DeeperObservationReadCache;
 }): Promise<ObservedSubsequentPull[]> {
   if (!input.github.listRecentMergedPulls || !input.github.listPullFiles) return [];
-  let pending = input.recentMergedByRepo.get(input.repo);
-  if (!pending) {
-    pending = input.github.listRecentMergedPulls(input.repo, input.maxPulls);
-    input.recentMergedByRepo.set(input.repo, pending);
+  let recent = input.cache.recentMergedByRepo.get(input.repo);
+  if (!recent) {
+    // Cache the RESOLVED value only: if this rejects it propagates (caught by the per-target fail-open),
+    // and nothing is cached, so a later target in the same repo can re-attempt the window read.
+    recent = await input.github.listRecentMergedPulls(input.repo, input.maxPulls);
+    input.cache.recentMergedByRepo.set(input.repo, recent);
   }
-  const recent = await pending;
   const subsequent: ObservedSubsequentPull[] = [];
   // Cap per-PR file reads by maxPulls as well: the recent window is already ≤ maxPulls, but slice
   // defensively so a future window-size change can't blow the per-cycle read budget.
   for (const pull of recent.slice(0, input.maxPulls)) {
-    const files = await input.github.listPullFiles(input.repo, pull.number);
+    const fileKey = `${input.repo}#${pull.number}`;
+    let files = input.cache.filesByRepoPull.get(fileKey);
+    if (!files) {
+      files = await input.github.listPullFiles(input.repo, pull.number);
+      input.cache.filesByRepoPull.set(fileKey, files);
+    }
     subsequent.push({
       pullNumber: pull.number,
       title: pull.title,
