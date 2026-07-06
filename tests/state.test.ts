@@ -1764,4 +1764,38 @@ describe("review state store", () => {
     expect(afterRecord).toBeDefined();
     store.close();
   });
+
+  it("stores finding outcome labels idempotently with a redacted evidence_ref (#286 PR A)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-outcome-labels-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const fingerprint = `finding:${"d".repeat(64)}`;
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const record = {
+      fingerprint,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 289,
+      headSha: "sha-label",
+      severity: "P1",
+      category: "data_loss",
+      confidence: 0.9,
+      labelSource: "merged_fix" as const,
+      verdict: "true_positive" as const,
+      observedAt: "2026-07-06T00:00:00.000Z",
+      evidenceRef: `merge commit ${token}`
+    };
+
+    store.recordFindingOutcomeLabel(record);
+    store.recordFindingOutcomeLabel({ ...record, verdict: "false_positive", labelSource: "human_thread" });
+
+    const labels = store.listFindingOutcomeLabels();
+    expect(labels).toHaveLength(1); // UPSERT on the unique key ⇒ no duplicate row
+    expect(labels[0]).toMatchObject({ verdict: "false_positive", labelSource: "human_thread" });
+    expect(labels[0]?.evidenceRef).not.toContain(token);
+    expect(store.hasFindingOutcomeLabel(fingerprint, record.repo, 289, "sha-label")).toBe(true);
+    expect(store.hasFindingOutcomeLabel(fingerprint, record.repo, 289, "other-head")).toBe(false);
+
+    expect(() => store.recordFindingOutcomeLabel({ ...record, fingerprint: "not-a-fingerprint" })).toThrow(/finding:<64-hex>/);
+    store.close();
+  });
 });

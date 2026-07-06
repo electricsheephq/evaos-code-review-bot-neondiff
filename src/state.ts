@@ -67,6 +67,30 @@ export interface StoredProcessedReviewRecord extends ProcessedReviewRecord {
   createdAt: string;
 }
 
+export type FindingOutcomeLabelSource =
+  | "merged_fix"
+  | "revert"
+  | "hotfix"
+  | "human_thread"
+  | "ci_failure"
+  | "none_observed";
+
+export type FindingOutcomeVerdict = "true_positive" | "false_positive" | "unvalidated";
+
+export interface FindingOutcomeLabelRecord {
+  fingerprint: string;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  severity: string;
+  category: string;
+  confidence: number;
+  labelSource: FindingOutcomeLabelSource;
+  verdict: FindingOutcomeVerdict;
+  observedAt: string;
+  evidenceRef?: string;
+}
+
 export interface RepoActivationRecord {
   repo: string;
   activatedAt: string;
@@ -451,6 +475,21 @@ export class ReviewStateStore {
         primary key (repo, pull_number, head_sha)
       );
 
+      create table if not exists finding_outcome_labels (
+        fingerprint text not null,
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        severity text not null,
+        category text not null,
+        confidence real not null,
+        label_source text not null,
+        verdict text not null,
+        observed_at text not null,
+        evidence_ref text,
+        primary key (fingerprint, repo, pull_number, head_sha)
+      );
+
       create table if not exists repo_activation_watermarks (
         repo text primary key,
         activated_at text not null,
@@ -744,6 +783,65 @@ export class ReviewStateStore {
     this.db
       .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
       .run(record.repo, record.pullNumber, record.headSha);
+  }
+
+  recordFindingOutcomeLabel(record: FindingOutcomeLabelRecord): void {
+    validateRepoName(record.repo, "repo");
+    if (!/^finding:[a-f0-9]{64}$/.test(record.fingerprint)) {
+      throw new Error("finding outcome label fingerprint must match finding:<64-hex>");
+    }
+    if (!Number.isInteger(record.pullNumber) || record.pullNumber < 1) throw new Error("pullNumber must be a positive integer");
+    if (!Number.isFinite(record.confidence) || record.confidence < 0 || record.confidence > 1) {
+      throw new Error("confidence must be a number from 0 to 1");
+    }
+    // Idempotent (#286 PR A): re-observing the same finding on the same head UPSERTs, so a re-run
+    // never accumulates duplicate labels. evidence_ref is redacted before it can reach evidence.
+    this.db
+      .prepare(
+        `insert or replace into finding_outcome_labels
+          (fingerprint, repo, pull_number, head_sha, severity, category, confidence,
+           label_source, verdict, observed_at, evidence_ref)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.fingerprint,
+        record.repo,
+        record.pullNumber,
+        record.headSha,
+        record.severity,
+        record.category,
+        record.confidence,
+        record.labelSource,
+        record.verdict,
+        record.observedAt,
+        record.evidenceRef ? redactSecrets(record.evidenceRef).trim() : null
+      );
+  }
+
+  hasFindingOutcomeLabel(fingerprint: string, repo: string, pullNumber: number, headSha: string): boolean {
+    const row = this.db
+      .prepare("select 1 from finding_outcome_labels where fingerprint = ? and repo = ? and pull_number = ? and head_sha = ? limit 1")
+      .get(fingerprint, repo, pullNumber, headSha);
+    return Boolean(row);
+  }
+
+  listFindingOutcomeLabels(input: { repo?: string } = {}): FindingOutcomeLabelRecord[] {
+    const rows = (input.repo
+      ? this.db
+          .prepare(
+            `select fingerprint, repo, pull_number, head_sha, severity, category, confidence,
+                    label_source, verdict, observed_at, evidence_ref
+             from finding_outcome_labels where repo = ? order by datetime(observed_at) desc`
+          )
+          .all(input.repo)
+      : this.db
+          .prepare(
+            `select fingerprint, repo, pull_number, head_sha, severity, category, confidence,
+                    label_source, verdict, observed_at, evidence_ref
+             from finding_outcome_labels order by datetime(observed_at) desc`
+          )
+          .all()) as unknown as FindingOutcomeLabelRow[];
+    return rows.map(mapFindingOutcomeLabelRow);
   }
 
   getReviewReadiness(repo: string, pullNumber: number, headSha: string): ReviewReadinessRecord | undefined {
@@ -2941,6 +3039,20 @@ interface ProcessedReviewRow {
   created_at: string;
 }
 
+interface FindingOutcomeLabelRow {
+  fingerprint: string;
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  severity: string;
+  category: string;
+  confidence: number;
+  label_source: FindingOutcomeLabelSource;
+  verdict: FindingOutcomeVerdict;
+  observed_at: string;
+  evidence_ref: string | null;
+}
+
 interface RepoActivationRow {
   repo: string;
   activated_at: string;
@@ -3114,6 +3226,22 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),
     createdAt: row.created_at
+  };
+}
+
+function mapFindingOutcomeLabelRow(row: FindingOutcomeLabelRow): FindingOutcomeLabelRecord {
+  return {
+    fingerprint: row.fingerprint,
+    repo: row.repo,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    severity: row.severity,
+    category: row.category,
+    confidence: row.confidence,
+    labelSource: row.label_source,
+    verdict: row.verdict,
+    observedAt: row.observed_at,
+    ...(row.evidence_ref ? { evidenceRef: row.evidence_ref } : {})
   };
 }
 
