@@ -452,11 +452,10 @@ export function buildOperatorStatus(input: {
             ok: issueEnrichmentRuntimeFailed === 0,
             detail: `${issueEnrichmentRuntimeFailed} failed issue-enrichment record(s)`
           },
-          {
-            name: "issue_enrichment_runtime_no_retryable_deferred_records",
-            ok: true,
-            detail: issueEnrichmentRuntimeRetryableDeferredDetail
-          },
+          issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(
+            "issue_enrichment_runtime_no_retryable_deferred_records",
+            issueEnrichmentRuntimeRetryableDeferredDetail
+          ),
           issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(
             "issue_enrichment_runtime_retryable_deferred_records_advisory",
             issueEnrichmentRuntimeRetryableDeferredDetail
@@ -654,11 +653,10 @@ export function buildRuntimeInventory(input: {
             ok: issueEnrichmentRuntimeFailed === 0,
             detail: `${issueEnrichmentRuntimeFailed} failed issue-enrichment record(s)`
           },
-          {
-            name: "runtime_issue_enrichment_no_retryable_deferred_records",
-            ok: true,
-            detail: issueEnrichmentRuntimeRetryableDeferredDetail
-          },
+          issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(
+            "runtime_issue_enrichment_no_retryable_deferred_records",
+            issueEnrichmentRuntimeRetryableDeferredDetail
+          ),
           issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(
             "runtime_issue_enrichment_retryable_deferred_records_advisory",
             issueEnrichmentRuntimeRetryableDeferredDetail
