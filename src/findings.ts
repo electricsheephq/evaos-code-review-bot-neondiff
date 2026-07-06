@@ -139,8 +139,8 @@ export function normalizeFindingsForReview(
   };
 }
 
-const SAME_RUN_DEDUP_MAX_LINE_DELTA = 3;
-const SAME_RUN_DEDUP_MIN_PREFIX_LENGTH = 12;
+export const SAME_RUN_DEDUP_MAX_LINE_DELTA = 3;
+export const SAME_RUN_DEDUP_MIN_PREFIX_LENGTH = 12;
 
 /**
  * Suppress same-run near-duplicate findings (#281): within one review response, collapse a cluster
@@ -175,7 +175,7 @@ export function suppressSameRunNearDuplicates(findings: Finding[]): { kept: Find
   return { kept: kept.map((entry) => entry.finding), dropped };
 }
 
-function normalizeTitleForDedup(title: string): string {
+export function normalizeTitleForDedup(title: string): string {
   return title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
@@ -183,7 +183,7 @@ function normalizeTitleForDedup(title: string): string {
     .replace(/\s+/g, " ");
 }
 
-function titlesAreNearDuplicate(a: string, b: string): boolean {
+export function titlesAreNearDuplicate(a: string, b: string): boolean {
   if (a === b) return a.length > 0;
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   // Prefix match must span a meaningful anchor so short generic titles don't collapse distinct

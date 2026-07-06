@@ -38,7 +38,7 @@ import {
   listReposToScan,
   resolveRepoProfile
 } from "./repo-policy.js";
-import { applyDeterministicReviewGate } from "./review-gate.js";
+import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
 import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
@@ -1490,6 +1490,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       droppedFromSchema: zcodeResult.droppedFromSchema,
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
+      repoMemoryFalsePositives: repoMemory.falsePositives,
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
       ...(config.reviewGate?.requestChangesConfidenceFloors
         ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
@@ -2039,9 +2040,9 @@ export function buildRepoMemoryContext(input: {
   state: ReviewStateStore;
   repo: string;
   evidenceDir: string;
-}): { packet?: RepoMemoryPacket; falsePositiveFingerprints: string[] } {
+}): { packet?: RepoMemoryPacket; falsePositiveFingerprints: string[]; falsePositives: RepoMemoryFalsePositiveEntry[] } {
   const repoMemoryConfig = input.config.repoMemory;
-  if (!repoMemoryConfig?.enabled) return { falsePositiveFingerprints: [] };
+  if (!repoMemoryConfig?.enabled) return { falsePositiveFingerprints: [], falsePositives: [] };
 
   const generatedAt = new Date().toISOString();
   const generatedAtDate = new Date(generatedAt);
@@ -2059,9 +2060,22 @@ export function buildRepoMemoryContext(input: {
     limit: repoMemoryConfig.maxStateNotes,
     kind: "false_positive"
   });
-  const falsePositiveFingerprints = falsePositiveNotes
-    .filter((note) => note.kind === "false_positive" && note.fingerprint && !isRepoMemoryNoteExpired(note, generatedAtDate))
-    .map((note) => note.fingerprint!);
+  const liveFalsePositiveNotes = falsePositiveNotes.filter(
+    (note) => note.kind === "false_positive" && note.fingerprint && !isRepoMemoryNoteExpired(note, generatedAtDate)
+  );
+  const falsePositiveFingerprints = liveFalsePositiveNotes.map((note) => note.fingerprint!);
+  // Structured entries carry the coarse-match fields (#302) when the note has them (v0.2+); notes
+  // that predate the coarse fields still supply their exact fingerprint via the list above.
+  const falsePositives: RepoMemoryFalsePositiveEntry[] = liveFalsePositiveNotes
+    .filter((note) => note.coarsePath && note.coarseCategory && typeof note.coarseLine === "number" && note.coarseTitle)
+    .map((note) => ({
+      fingerprint: note.fingerprint!,
+      path: note.coarsePath!,
+      category: note.coarseCategory!,
+      line: note.coarseLine!,
+      title: note.coarseTitle!,
+      ...(note.confirmedByHuman !== undefined ? { confirmedByHuman: note.confirmedByHuman } : {})
+    }));
   const packetResult = buildRepoMemoryPacket({
     repo: input.repo,
     humanMarkdown: readRepoMemoryMarkdown(repoMemoryConfig.memoryRoot, input.repo),
@@ -2075,7 +2089,7 @@ export function buildRepoMemoryContext(input: {
   if (!packetResult.ok) {
     writeRedactedJson(join(input.evidenceDir, "repo-memory-packet-error.json"), packetResult);
     if (isRepoMemoryBudgetFailure(packetResult)) {
-      return { falsePositiveFingerprints };
+      return { falsePositiveFingerprints, falsePositives };
     }
     throw new Error(`Repo memory packet failed closed: ${packetResult.error}`);
   }
@@ -2093,7 +2107,7 @@ export function buildRepoMemoryContext(input: {
     redactionStatus: packetResult.redactionReport.ok ? "passed" : "failed",
     memoryRoot: repoMemoryConfig.memoryRoot
   });
-  return { packet: packetResult.packet, falsePositiveFingerprints };
+  return { packet: packetResult.packet, falsePositiveFingerprints, falsePositives };
 }
 
 function isRepoMemoryBudgetFailure(packetResult: ReturnType<typeof buildRepoMemoryPacket>): boolean {

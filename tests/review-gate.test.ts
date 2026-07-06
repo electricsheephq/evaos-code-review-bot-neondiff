@@ -329,3 +329,147 @@ describe("deterministic review gate", () => {
     expect(JSON.stringify(gate.dropped)).not.toMatch(/\b\d+(?:\.\d+)?\s*%/);
   });
 });
+
+describe("robust false-positive learning — coarse fallback (#302)", () => {
+  const files: PullFilePatch[] = [
+    {
+      filename: "src/save.ts",
+      patch: "@@ -40,3 +40,6 @@ export function save() {\n+  const a = 1;\n+  const b = 2;\n+  overwriteAllData();\n+  const c = 3;\n }"
+    }
+  ];
+
+  function finding(overrides: Partial<Finding> & Pick<Finding, "severity" | "line" | "title">): Finding {
+    return {
+      category: "runtime_correctness",
+      path: "src/save.ts",
+      body: "A concrete review comment about the save path.",
+      confidence: 0.8,
+      ...overrides
+    };
+  }
+
+  it("suppresses a reworded, line-shifted P3 finding via the coarse path with the distinct reason (#302)", () => {
+    const current = finding({ severity: "P3", line: 44, title: "Save path retry accounting is wrong" });
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [current],
+      repoMemoryFalsePositives: [
+        {
+          // Remembered at line 42 with a slightly different title; exact fingerprint won't match.
+          fingerprint: buildFindingFingerprint({ ...current, line: 42, title: "Save path retry accounting" }),
+          path: "src/save.ts",
+          category: "runtime_correctness",
+          line: 42,
+          title: "Save path retry accounting"
+        }
+      ]
+    });
+
+    expect(gate.comments).toHaveLength(0);
+    expect(gate.dropped).toContainEqual(expect.objectContaining({ reason: "repo_memory_false_positive_coarse_match" }));
+    expect(gate.summary.dropReasonCounts).toMatchObject({ repo_memory_false_positive_coarse_match: 1 });
+  });
+
+  it("does NOT coarse-suppress a different genuine finding at a nearby line with a non-matching title (#302)", () => {
+    const current = finding({ severity: "P3", line: 43, title: "Null deref in error branch" });
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [current],
+      repoMemoryFalsePositives: [
+        {
+          fingerprint: buildFindingFingerprint({ ...current, line: 42, title: "Save path retry accounting" }),
+          path: "src/save.ts",
+          category: "runtime_correctness",
+          line: 42,
+          title: "Save path retry accounting"
+        }
+      ]
+    });
+
+    expect(gate.comments).toHaveLength(1);
+    expect(gate.dropped).not.toContainEqual(expect.objectContaining({ reason: "repo_memory_false_positive_coarse_match" }));
+  });
+
+  it("does NOT coarse-suppress a P1 finding from an AUTO false-positive note (#302)", () => {
+    const current = finding({ severity: "P1", category: "data_loss", line: 44, title: "Rollback clobbers fresh state on retry" });
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [current],
+      repoMemoryFalsePositives: [
+        {
+          fingerprint: buildFindingFingerprint({ ...current, line: 42, title: "Rollback clobbers fresh state" }),
+          path: "src/save.ts",
+          category: "data_loss",
+          line: 42,
+          title: "Rollback clobbers fresh state"
+          // confirmedByHuman omitted ⇒ auto note ⇒ P0/P1 must NOT be suppressed.
+        }
+      ]
+    });
+
+    expect(gate.comments).toHaveLength(1);
+    expect(gate.dropped).not.toContainEqual(expect.objectContaining({ reason: "repo_memory_false_positive_coarse_match" }));
+  });
+
+  it("coarse-suppresses a P1 finding when the false-positive note is human-confirmed (#302)", () => {
+    const current = finding({ severity: "P1", category: "data_loss", line: 44, title: "Rollback clobbers fresh state on retry" });
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [current],
+      repoMemoryFalsePositives: [
+        {
+          fingerprint: buildFindingFingerprint({ ...current, line: 42, title: "Rollback clobbers fresh state" }),
+          path: "src/save.ts",
+          category: "data_loss",
+          line: 42,
+          title: "Rollback clobbers fresh state",
+          confirmedByHuman: true
+        }
+      ]
+    });
+
+    expect(gate.comments).toHaveLength(0);
+    expect(gate.dropped).toContainEqual(expect.objectContaining({ reason: "repo_memory_false_positive_coarse_match" }));
+  });
+
+  it("prefers the exact reason and does not double-count when the exact fingerprint matches (#302)", () => {
+    const current = finding({ severity: "P3", line: 42, title: "Save path retry accounting" });
+    const exactFingerprint = buildFindingFingerprint(current);
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [current],
+      repoMemoryFalsePositives: [
+        { fingerprint: exactFingerprint, path: "src/save.ts", category: "runtime_correctness", line: 42, title: "Save path retry accounting" }
+      ]
+    });
+
+    expect(gate.summary.dropReasonCounts).toMatchObject({ repo_memory_false_positive_match: 1 });
+    expect(gate.summary.dropReasonCounts.repo_memory_false_positive_coarse_match).toBeUndefined();
+  });
+
+  it("redacts a secret-bearing coarse-suppressed finding at the gate boundary (#302)", () => {
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const current = finding({
+      severity: "P3",
+      line: 44,
+      title: "Save path retry accounting is wrong",
+      body: `Leaked token ${token} in the save path retry accounting.`
+    });
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [current],
+      repoMemoryFalsePositives: [
+        {
+          fingerprint: buildFindingFingerprint({ ...current, line: 42, title: "Save path retry accounting" }),
+          path: "src/save.ts",
+          category: "runtime_correctness",
+          line: 42,
+          title: "Save path retry accounting"
+        }
+      ]
+    });
+
+    expect(gate.dropped).toContainEqual(expect.objectContaining({ reason: "repo_memory_false_positive_coarse_match" }));
+    expect(JSON.stringify(gate.dropped)).not.toContain(token);
+  });
+});
