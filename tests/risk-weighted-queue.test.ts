@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadConfigFromObject, type BotConfig } from "../src/config.js";
-import { riskWeightedQueuePriority } from "../src/scheduler.js";
+import { resolveRiskWeightedPriorityOverride, riskWeightedQueuePriority, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { buildChangedSurfaceValidationReport } from "../src/validation-selector.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 
@@ -128,5 +128,104 @@ describe("risk-weighted queue config (#301)", () => {
         riskWeightedQueue: { enabled: true, docsOnlyPriority: 5 }
       })
     ).toThrow(/riskWeightedQueue\.elevatedPriority must be <= .*docsOnlyPriority/);
+  });
+});
+
+describe("resolveRiskWeightedPriorityOverride integration (#301 review follow-up)", () => {
+  function enabledConfig(): BotConfig {
+    return loadConfigFromObject({
+      reviewScheduler: { backgroundPriority: 50 },
+      riskWeightedQueue: { enabled: true, elevatedPriority: 5, docsOnlyPriority: 80 }
+    });
+  }
+
+  function githubWith(listPullFiles: SchedulerGitHubApi["listPullFiles"]): SchedulerGitHubApi {
+    // Only the surface resolveRiskWeightedPriorityOverride touches; cast keeps the stub honest for
+    // the rest of the SchedulerGitHubApi contract without implementing unrelated methods.
+    return { listPullFiles } as unknown as SchedulerGitHubApi;
+  }
+
+  it("fetches changed files and elevates a required-validation PR", async () => {
+    const calls: Array<[string, number]> = [];
+    const override = await resolveRiskWeightedPriorityOverride({
+      config: enabledConfig(),
+      github: githubWith(async (repo, pullNumber) => {
+        calls.push([repo, pullNumber]);
+        return AUTH_FILES;
+      }),
+      repo: "owner/repo",
+      pull: pull()
+    });
+
+    expect(calls).toEqual([["owner/repo", 1]]);
+    expect(override).toBe(5);
+  });
+
+  it("defers a docs-only PR via the configured docsOnlyPriority", async () => {
+    const override = await resolveRiskWeightedPriorityOverride({
+      config: enabledConfig(),
+      github: githubWith(async () => DOCS_FILES),
+      repo: "owner/repo",
+      pull: pull()
+    });
+
+    expect(override).toBe(80);
+  });
+
+  it("falls back to flat priority (undefined) when the file fetch fails, without throwing", async () => {
+    const override = await resolveRiskWeightedPriorityOverride({
+      config: enabledConfig(),
+      github: githubWith(async () => {
+        // Constructed via join so the repo's own secret scan doesn't trip on a literal token shape.
+        throw new Error(`boom: token=${["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_")}`);
+      }),
+      repo: "owner/repo",
+      pull: pull()
+    });
+
+    expect(override).toBeUndefined();
+  });
+
+  it("never calls listPullFiles when the feature is disabled or the API lacks the method", async () => {
+    let called = 0;
+    const disabled = await resolveRiskWeightedPriorityOverride({
+      config: loadConfigFromObject({ reviewScheduler: { backgroundPriority: 50 } }),
+      github: githubWith(async () => {
+        called += 1;
+        return AUTH_FILES;
+      }),
+      repo: "owner/repo",
+      pull: pull()
+    });
+    const noMethod = await resolveRiskWeightedPriorityOverride({
+      config: enabledConfig(),
+      github: {} as unknown as SchedulerGitHubApi,
+      repo: "owner/repo",
+      pull: pull()
+    });
+
+    expect(called).toBe(0);
+    expect(disabled).toBeUndefined();
+    expect(noMethod).toBeUndefined();
+  });
+
+  it("elevates via repo-implied risk through the full fetch->report->tier path", async () => {
+    // buildChangedSurfaceValidationReport marks WorldOS-named repos as Unity-runtime risk even
+    // without Unity paths in the diff — exercising the resolve->report->tier integration end to
+    // end. (The resolved repo profile itself only populates advisory profileHints, which cannot
+    // affect tier; its pass-through is covered by the pure report tests.)
+    const config = loadConfigFromObject({
+      reviewScheduler: { backgroundPriority: 50 },
+      riskWeightedQueue: { enabled: true, elevatedPriority: 5 },
+      repos: { "electricsheephq/worldos": {} }
+    });
+    const override = await resolveRiskWeightedPriorityOverride({
+      config,
+      github: githubWith(async () => [{ filename: "src/engine/turn.ts" }]),
+      repo: "electricsheephq/WorldOS",
+      pull: pull()
+    });
+
+    expect(override).toBe(5);
   });
 });
