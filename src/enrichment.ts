@@ -457,7 +457,7 @@ function buildIssuePlannerPacket(input: {
   const classes = classifyIssueForPlanner(text);
   const shouldResearch = classes.some((issueClass) => ["product", "architecture", "ux", "library_choice", "build_vs_buy", "integration", "roadmap", "market_positioning"].includes(issueClass));
   const relatedContext = input.relatedRefs.length
-    ? input.relatedRefs.slice(0, input.maxItems).map((ref) => `- ${ref} - mentioned in issue metadata; inspect for dependency, duplicate, or prior-decision risk.`)
+    ? input.relatedRefs.map((ref) => `- ${ref} - mentioned in issue metadata; inspect for dependency, duplicate, or prior-decision risk.`)
     : ["- No same-repo issue/PR references detected in issue metadata."];
   const sourceTaxonomy: IssuePlannerPacket["sourceTaxonomy"] = [
     {

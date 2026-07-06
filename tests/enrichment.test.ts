@@ -509,6 +509,31 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).toContain("- Do not claim external market or OSS research was performed unless cited sources are present.");
   });
 
+  it("does not truncate related context with the suggestion cap", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 195,
+      title: "Plan runtime follow-up #12 #13 #14 #15",
+      state: "open",
+      body: "Acceptance criteria and owner present. Related context also mentions #16."
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue,
+      maxRelatedRefs: 3,
+      maxSuggestions: 1
+    });
+
+    expect(comment.body).toContain("Related issues/PRs: #12, #13, #14.");
+
+    const relatedContextSection = comment.body.split("### Related context")[1]!.split("### Agent-start packet")[0]!;
+    expect(relatedContextSection).toContain("- #12 - mentioned in issue metadata");
+    expect(relatedContextSection).toContain("- #13 - mentioned in issue metadata");
+    expect(relatedContextSection).toContain("- #14 - mentioned in issue metadata");
+    expect(relatedContextSection).not.toContain("#15");
+    expect(comment.body).toContain("Suggested labels: none.");
+  });
+
   it("does not trigger external research just because a routine issue mentions GitHub", () => {
     const issue: GitHubRelatedIssueOrPull = {
       number: 95,
