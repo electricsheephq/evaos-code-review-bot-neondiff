@@ -2904,8 +2904,11 @@ async function resolvePullCommandDecision(input: {
   const comments = await input.github.listIssueComments(input.repo, input.pull.number);
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
   const repoProfile = resolveRepoProfile(input.config, input.repo);
+  // A public command (#345) reaching this re-resolution path was already authorized (bot + cooldown
+  // gated) at enqueue, so match it by its known commentId without re-running the cooldown. Without a
+  // specific commentId, only trusted commands act here — the scheduler owns public admission.
   const commands = input.commandCommentId
-    ? collected.commands.filter((command) => command.commentId === input.commandCommentId)
+    ? [...collected.commands, ...collected.publicEligible].filter((command) => command.commentId === input.commandCommentId)
     : collected.commands;
   return decideCommandAction({
     commands: commands.filter((command) =>

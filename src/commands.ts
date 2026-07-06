@@ -25,14 +25,20 @@ export interface ReviewCommand {
   url?: string;
 }
 
+export type UnauthorizedCommandReason = "untrusted" | "not_public_action" | "public_disabled";
+
 export interface UnauthorizedReviewCommand {
   action: ReviewCommandAction;
   commentId: number;
   author: string;
+  reason?: UnauthorizedCommandReason;
 }
 
 export interface CollectedReviewCommands {
   commands: ReviewCommand[];
+  /** Public-eligible candidates (#345): review/re-review from a non-trusted author when publicCommands
+   * is enabled. NOT yet authorized — the caller must apply the stateful bot + cooldown gate. */
+  publicEligible: ReviewCommand[];
   unauthorized: UnauthorizedReviewCommand[];
 }
 
@@ -64,31 +70,37 @@ export function collectTrustedReviewCommands(
   comments: IssueCommentCommandSource[],
   config: CommandConfig
 ): CollectedReviewCommands {
-  if (!config.enabled) return { commands: [], unauthorized: [] };
+  if (!config.enabled) return { commands: [], publicEligible: [], unauthorized: [] };
 
   const commands: ReviewCommand[] = [];
+  const publicEligible: ReviewCommand[] = [];
   const unauthorized: UnauthorizedReviewCommand[] = [];
   for (const comment of comments) {
     const action = parseCommandAction(comment.body, config.botMentions);
     if (!action) continue;
     const author = comment.user?.login ?? "(unknown)";
-    if (!isTrustedAuthor(author, config)) {
-      unauthorized.push({ action, commentId: comment.id, author });
-      continue;
+    const command: ReviewCommand = { action, commentId: comment.id, author, body: comment.body ?? "", url: comment.html_url };
+    const authorization = classifyCommandAuthorization({ action, author }, config);
+    if (authorization === "trusted") {
+      commands.push(command);
+    } else if (authorization === "public-eligible") {
+      // Pure classification only — the stateful bot + cooldown gate runs in the caller (scheduler).
+      publicEligible.push(command);
+    } else {
+      unauthorized.push({ action, commentId: comment.id, author, reason: publicUnauthorizedReason(action, config) });
     }
-    commands.push({
-      action,
-      commentId: comment.id,
-      author,
-      body: comment.body ?? "",
-      url: comment.html_url
-    });
   }
 
   return {
     commands: commands.sort((left, right) => left.commentId - right.commentId),
+    publicEligible: publicEligible.sort((left, right) => left.commentId - right.commentId),
     unauthorized
   };
+}
+
+function publicUnauthorizedReason(action: ReviewCommandAction, config: CommandConfig): UnauthorizedCommandReason {
+  if (!config.publicCommands?.enabled) return "public_disabled";
+  return isReviewCommandAction(action) ? "untrusted" : "not_public_action";
 }
 
 export function decideCommandAction(input: {
@@ -115,6 +127,38 @@ export function decideCommandAction(input: {
     command: latest,
     shouldReview: isReviewCommandAction(latest.action)
   };
+}
+
+export type CommandAuthorization = "trusted" | "public-eligible" | "unauthorized";
+
+/**
+ * Pure authorization classification (#345, NO DB). A trusted author is allowed for ALL actions
+ * exactly as today. A non-trusted author is "public-eligible" ONLY when publicCommands is enabled
+ * AND the action is in publicCommands.actions (structurally only review/re-review can pass) —
+ * otherwise "unauthorized" exactly as today. The stateful bot-author and rate-limit checks run in
+ * the worker (where the store + head SHA are in scope); this classifier never touches them.
+ */
+export function classifyCommandAuthorization(
+  command: { action: ReviewCommandAction; author: string },
+  config: CommandConfig
+): CommandAuthorization {
+  if (isTrustedAuthor(command.author, config)) return "trusted";
+  const publicCommands = config.publicCommands;
+  if (publicCommands?.enabled && (publicCommands.actions as ReviewCommandAction[]).includes(command.action)) {
+    return "public-eligible";
+  }
+  return "unauthorized";
+}
+
+/**
+ * The single source of truth for "is this comment authored by a bot" in the public-command path
+ * (#345). A comment is a bot command when its GitHub user type is "Bot" (any bot, including our own
+ * app login botLogin). Trusted-author authorization is unaffected — this only guards the public path.
+ * GitHubApi.isBotAuthoredComment delegates here so there is no second identity definition.
+ */
+export function isBotCommandComment(user: { login: string; type?: string } | null | undefined, botLogin: string): boolean {
+  if (!user) return false;
+  return user.type === "Bot" || user.login === botLogin;
 }
 
 export function isReviewCommandAction(action: ReviewCommandAction): boolean {

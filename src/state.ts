@@ -518,6 +518,16 @@ export class ReviewStateStore {
         primary key (repo, pull_number, head_sha)
       );
 
+      create table if not exists public_command_invocations (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        author text not null,
+        action text not null,
+        invoked_at text not null,
+        primary key (repo, pull_number, head_sha, author, action)
+      );
+
       create table if not exists repo_provider_cooldowns (
         repo text primary key,
         cooldown_until text not null,
@@ -1312,6 +1322,56 @@ export class ReviewStateStore {
 
   releaseReviewHeadClaim(claimId: string): void {
     this.db.prepare("delete from review_head_claims where claim_id = ?").run(claimId);
+  }
+
+  /**
+   * Atomic public-command rate limit (#345), keyed per {repo, pr, head_sha, author, action}. Returns
+   * true (allowed) and records the invocation when no prior invocation for the tuple falls within the
+   * cooldown window; returns false (cooled-down) without recording otherwise. Consult-and-record run
+   * inside one BEGIN IMMEDIATE transaction (the #295 CAS idiom) so two concurrent public commands on
+   * the same tuple can never both pass. The window is per exact head SHA, so a genuinely new push is
+   * never blocked by a prior head's invocation.
+   */
+  tryRecordPublicCommandInvocation(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    author: string;
+    action: string;
+    cooldownMs: number;
+    now?: Date;
+  }): boolean {
+    if (!Number.isInteger(input.cooldownMs) || input.cooldownMs < 1) throw new Error("cooldownMs must be a positive integer");
+    const now = input.now ?? new Date();
+    const invokedAt = now.toISOString();
+    const windowStart = new Date(now.getTime() - input.cooldownMs).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      const existing = this.db
+        .prepare(
+          `select invoked_at from public_command_invocations
+           where repo = ? and pull_number = ? and head_sha = ? and author = ? and action = ?
+             and datetime(invoked_at) > datetime(?)
+           limit 1`
+        )
+        .get(input.repo, input.pullNumber, input.headSha, input.author, input.action, windowStart);
+      if (existing) {
+        this.db.exec("commit");
+        return false;
+      }
+      this.db
+        .prepare(
+          `insert or replace into public_command_invocations
+            (repo, pull_number, head_sha, author, action, invoked_at)
+           values (?, ?, ?, ?, ?, ?)`
+        )
+        .run(input.repo, input.pullNumber, input.headSha, input.author, input.action, invokedAt);
+      this.db.exec("commit");
+      return true;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   tryAcquireIssueEnrichmentRunLease(
