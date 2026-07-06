@@ -606,7 +606,7 @@ describe("license activation and entitlement cache", () => {
   it("treats entitlement offline grace metadata as diagnostic only", async () => {
     const root = mkRoot(roots);
     const config = licenseConfig(root, "http://127.0.0.1:9");
-    config.offlineGraceMs = 1_000;
+    config.offlineGraceMs = 119_000;
     const licenseKey = "LIC-config-grace-test-123456";
     writeFileSync(join(root, "license.key"), `${licenseKey}\n`, { mode: 0o600 });
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
@@ -633,6 +633,36 @@ describe("license activation and entitlement cache", () => {
       classification: "network"
     });
     expect(status.stale).toBeUndefined();
+
+    const secondRoot = mkRoot(roots);
+    const secondConfig = licenseConfig(secondRoot, "http://127.0.0.1:9");
+    secondConfig.offlineGraceMs = 300_000;
+    const secondLicenseKey = "LIC-config-grace-positive-test-123456";
+    writeFileSync(join(secondRoot, "license.key"), `${secondLicenseKey}\n`, { mode: 0o600 });
+    writeFileSync(join(secondRoot, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true,
+      offlineGraceMs: 1_000,
+      graceUntil: "2026-07-04T00:00:01.000Z",
+      licenseFingerprint: testLicenseFingerprint(secondLicenseKey)
+    })}\n`, { mode: 0o600 });
+
+    const secondStatus = await getLicenseStatus({
+      config: secondConfig,
+      refresh: true,
+      now: new Date("2026-07-04T00:02:00.000Z")
+    });
+
+    expect(secondStatus).toMatchObject({
+      ok: true,
+      status: "active",
+      source: "cache",
+      stale: true,
+      classification: "network"
+    });
   });
 
   it("stamps API entitlement checkedAt locally instead of trusting server time", async () => {
