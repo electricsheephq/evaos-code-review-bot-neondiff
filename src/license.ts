@@ -18,8 +18,24 @@ import { redactSecrets } from "./secrets.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 
 export type LicenseStorageBackend = "keychain" | "file";
-export type LicenseStatus = "active" | "expired" | "revoked" | "invalid" | "missing" | "network" | "server";
+export type LicenseStatus =
+  | "active"
+  | "expired"
+  | "revoked"
+  | "invalid"
+  | "missing"
+  | "network"
+  | "server"
+  | "scope_mismatch"
+  | "rate_limited"
+  | "unsupported_client"
+  | "clock_skew";
+type LicenseApiBodyStatus = Exclude<LicenseStatus, "missing" | "network" | "server">;
+type NonActiveLicenseApiBodyStatus = Exclude<LicenseApiBodyStatus, "active">;
+type LicenseApiErrorStatus = Exclude<LicenseStatus, "active" | "missing" | "network">;
+type LicenseFailureClassification = Exclude<LicenseStatus, "active">;
 export type RepoVisibilityScope = "public" | "private" | "all";
+const MAX_REVOCATION_REASON_LENGTH = 240;
 
 export interface LicenseConfig {
   enabled: boolean;
@@ -37,11 +53,15 @@ export interface LicenseConfig {
 }
 
 export interface LicenseEntitlement {
-  status: Exclude<LicenseStatus, "missing" | "network" | "server">;
+  status: LicenseApiBodyStatus;
   checkedAt: string;
   expiresAt?: string;
   repoVisibilityScope: RepoVisibilityScope;
+  privateRepoAllowed?: boolean;
   updateEntitlement: boolean;
+  offlineGraceMs?: number;
+  graceUntil?: string;
+  revocationReason?: string;
   plan?: string;
   seats?: number;
   licenseFingerprint?: string;
@@ -54,7 +74,7 @@ export interface LicenseStatusResult {
   checkedAt: string;
   entitlement?: LicenseEntitlement;
   stale?: boolean;
-  classification?: "missing" | "expired" | "revoked" | "invalid" | "network" | "server";
+  classification?: LicenseFailureClassification;
   detail: string;
 }
 
@@ -134,7 +154,7 @@ export async function getLicenseStatus(input: {
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
-  const cached = readLicenseCache(input.config.cachePath);
+  const cached = readLicenseCache(input.config.cachePath, () => readCacheRedactionLicenseKey(input.config));
   if (!input.refresh) return statusFromCache(cached, now);
 
   const licenseKey = readLicenseKey(input.config);
@@ -174,10 +194,7 @@ export async function getLicenseStatus(input: {
       detail: `using cached entitlement after ${response.status} license API failure`
     };
   }
-  if (
-    (response.status === "expired" || response.status === "revoked" || response.status === "invalid") &&
-    cachedEntitlementMatchesLicenseKey(cached, licenseKey)
-  ) {
+  if (shouldDeleteLicenseCacheForStatus(response.status) && cachedEntitlementMatchesLicenseKey(cached, licenseKey)) {
     deleteLicenseCache(input.config.cachePath);
   }
   return response;
@@ -279,13 +296,16 @@ export async function evaluateLicenseReviewGate(input: {
     };
   }
   if (!entitlementCoversRepoVisibility(status.entitlement, input.visibility)) {
+    const reason = input.visibility === "private" && status.entitlement.privateRepoAllowed === false
+      ? "entitlement privateRepoAllowed=false does not allow private repos"
+      : `entitlement scope ${status.entitlement.repoVisibilityScope} does not cover ${input.visibility} repos`;
     return {
       ok: false,
       repo: input.repo,
       visibility: input.visibility,
       status: status.status,
       entitlement: status.entitlement,
-      reason: `entitlement scope ${status.entitlement.repoVisibilityScope} does not cover ${input.visibility} repos`
+      reason
     };
   }
   return {
@@ -305,6 +325,7 @@ function repoVisibilityRequiresEntitlement(visibility: "public" | "private" | "u
 }
 
 function entitlementCoversRepoVisibility(entitlement: LicenseEntitlement, visibility: "public" | "private" | "unknown"): boolean {
+  if (visibility === "private" && entitlement.privateRepoAllowed === false) return false;
   if (entitlement.repoVisibilityScope === "all") return true;
   if (visibility === "public") return entitlement.repoVisibilityScope === "public" || entitlement.repoVisibilityScope === "private";
   if (visibility === "private") return entitlement.repoVisibilityScope === "private";
@@ -426,10 +447,13 @@ function apiFailureResult(statusCode: number, body: unknown, now: Date, licenseK
   };
 }
 
-function statusFromApiError(statusCode: number, body: unknown): Exclude<LicenseStatus, "active" | "missing"> {
+function statusFromApiError(statusCode: number, body: unknown): LicenseApiErrorStatus {
   const bodyStatus = readBodyStatus(body);
-  if (bodyStatus === "expired" || bodyStatus === "revoked" || bodyStatus === "invalid") return bodyStatus;
+  if (bodyStatus && shouldTrustApiBodyStatusForError(statusCode, bodyStatus)) return bodyStatus;
   if (statusCode === 402) return "expired";
+  if (statusCode === 429) return "rate_limited";
+  if (statusCode === 426) return "unsupported_client";
+  if (statusCode === 409) return "scope_mismatch";
   if (statusCode === 403 || statusCode === 410) return "revoked";
   if (statusCode === 401 || statusCode === 404) return "invalid";
   return "server";
@@ -440,21 +464,37 @@ function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): Lic
   const status = readBodyStatus(record);
   const repoVisibilityScope = readRepoVisibilityScope(record);
   if (!status || !repoVisibilityScope) return undefined;
+  const revocationReason = status === "active" ? undefined : sanitizeRevocationReason(readString(record, "revocationReason"), licenseKey);
   return {
     status,
     checkedAt: now.toISOString(),
     ...(readString(record, "expiresAt") ? { expiresAt: readString(record, "expiresAt")! } : {}),
     repoVisibilityScope,
+    ...(readBoolean(record, "privateRepoAllowed") !== undefined ? { privateRepoAllowed: readBoolean(record, "privateRepoAllowed")! } : {}),
     updateEntitlement: readBoolean(record, "updateEntitlement") ?? false,
+    ...(readNumber(record, "offlineGraceMs") !== undefined ? { offlineGraceMs: readNumber(record, "offlineGraceMs")! } : {}),
+    ...(readString(record, "graceUntil") ? { graceUntil: readString(record, "graceUntil")! } : {}),
+    ...(revocationReason ? { revocationReason } : {}),
     ...(readString(record, "plan") ? { plan: readString(record, "plan")! } : {}),
     ...(readNumber(record, "seats") !== undefined ? { seats: readNumber(record, "seats")! } : {}),
     licenseFingerprint: fingerprintLicenseKey(licenseKey)
   };
 }
 
-function readBodyStatus(body: unknown): Exclude<LicenseStatus, "missing" | "network" | "server"> | undefined {
+function readBodyStatus(body: unknown): LicenseApiBodyStatus | undefined {
   const value = readString(body, "status");
-  if (value === "active" || value === "expired" || value === "revoked" || value === "invalid") return value;
+  if (
+    value === "active" ||
+    value === "expired" ||
+    value === "revoked" ||
+    value === "invalid" ||
+    value === "scope_mismatch" ||
+    value === "rate_limited" ||
+    value === "unsupported_client" ||
+    value === "clock_skew"
+  ) {
+    return value;
+  }
   return undefined;
 }
 
@@ -497,7 +537,7 @@ function invalidApiResult(now: Date, detail: string): LicenseStatusResult {
   };
 }
 
-function readLicenseCache(path: string): LicenseEntitlement | undefined {
+function readLicenseCache(path: string, readRedactionLicenseKey?: () => string | undefined): LicenseEntitlement | undefined {
   if (!existsSync(path)) return undefined;
   const parsed = safeJsonParse(readFileSync(path, "utf8"));
   if (!isRecord(parsed)) return undefined;
@@ -505,12 +545,20 @@ function readLicenseCache(path: string): LicenseEntitlement | undefined {
   const repoVisibilityScope = readRepoVisibilityScope(parsed);
   const checkedAt = readString(parsed, "checkedAt");
   if (!status || !repoVisibilityScope || !checkedAt) return undefined;
+  const rawRevocationReason = readString(parsed, "revocationReason");
+  const revocationReason = status === "active" || !rawRevocationReason
+    ? undefined
+    : sanitizeRevocationReason(rawRevocationReason, readRedactionLicenseKey?.() ?? "");
   return {
     status,
     checkedAt,
     ...(readString(parsed, "expiresAt") ? { expiresAt: readString(parsed, "expiresAt")! } : {}),
     repoVisibilityScope,
+    ...(readBoolean(parsed, "privateRepoAllowed") !== undefined ? { privateRepoAllowed: readBoolean(parsed, "privateRepoAllowed")! } : {}),
     updateEntitlement: readBoolean(parsed, "updateEntitlement") ?? false,
+    ...(readNumber(parsed, "offlineGraceMs") !== undefined ? { offlineGraceMs: readNumber(parsed, "offlineGraceMs")! } : {}),
+    ...(readString(parsed, "graceUntil") ? { graceUntil: readString(parsed, "graceUntil")! } : {}),
+    ...(revocationReason ? { revocationReason } : {}),
     ...(readString(parsed, "plan") ? { plan: readString(parsed, "plan")! } : {}),
     ...(readNumber(parsed, "seats") !== undefined ? { seats: readNumber(parsed, "seats")! } : {}),
     ...(readString(parsed, "licenseFingerprint") ? { licenseFingerprint: readString(parsed, "licenseFingerprint")! } : {})
@@ -593,6 +641,14 @@ function readFileLicenseKey(path: string | undefined): string | undefined {
   return key || undefined;
 }
 
+function readCacheRedactionLicenseKey(config: LicenseConfig): string | undefined {
+  try {
+    return readLicenseKey(config);
+  } catch {
+    return undefined;
+  }
+}
+
 function readKeychainLicenseKey(config: LicenseConfig): string | undefined {
   if (platform() !== "darwin") {
     throw new Error("macOS Keychain license storage is only available on darwin; use storageBackend=file for headless Linux/CI");
@@ -646,10 +702,39 @@ function cachedEntitlementMatchesLicenseKey(entitlement: LicenseEntitlement | un
   return entitlement?.licenseFingerprint === fingerprintLicenseKey(licenseKey);
 }
 
+function shouldDeleteLicenseCacheForStatus(status: LicenseStatus): boolean {
+  return (
+    status === "expired" ||
+    status === "revoked" ||
+    status === "invalid" ||
+    status === "scope_mismatch" ||
+    status === "unsupported_client"
+  );
+}
+
+function shouldTrustApiBodyStatusForError(statusCode: number, status: LicenseApiBodyStatus): status is NonActiveLicenseApiBodyStatus {
+  if (status === "active") return false;
+  if (shouldDeleteLicenseCacheForStatus(status)) return true;
+  if (status === "rate_limited") return statusCode === 429;
+  if (status === "clock_skew") return statusCode === 400;
+  return false;
+}
+
 function redactSubmittedLicenseKey(text: string, licenseKey: string): string {
-  const genericRedacted = redactSecrets(text);
-  if (!licenseKey) return genericRedacted;
-  return genericRedacted.split(licenseKey).join("[REDACTED_LICENSE_KEY]");
+  if (!licenseKey) return redactSecrets(text);
+  return redactSecrets(text.split(licenseKey).join("[REDACTED_LICENSE_KEY]"));
+}
+
+function sanitizeRevocationReason(value: string | undefined, licenseKey = ""): string | undefined {
+  if (!value) return undefined;
+  const redacted = licenseKey ? redactSubmittedLicenseKey(value, licenseKey) : redactSecrets(value);
+  const normalized = redacted
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return undefined;
+  if (normalized.length <= MAX_REVOCATION_REASON_LENGTH) return normalized;
+  return `${normalized.slice(0, MAX_REVOCATION_REASON_LENGTH - 3)}...`;
 }
 
 function localMachineId(): string {

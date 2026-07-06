@@ -83,23 +83,288 @@ describe("license activation and entitlement cache", () => {
     expect(existsSync(join(root, "entitlement.json"))).toBe(false);
   });
 
-  it("classifies expired, revoked, invalid, network, and server states", async () => {
+  it("classifies expired, revoked, invalid, network, server, and hosted admin denial states", async () => {
     const root = mkRoot(roots);
     const expired = await startLicenseServer((_req, res) => writeJson(res, 402, { status: "expired", detail: "expired" }));
     const revoked = await startLicenseServer((_req, res) => writeJson(res, 410, { status: "revoked", detail: "revoked" }));
+    const legacyForbidden = await startLicenseServer((_req, res) => writeJson(res, 403, { detail: "legacy forbidden" }));
     const invalid = await startLicenseServer((_req, res) => writeJson(res, 401, { status: "invalid", detail: "bad key" }));
     const server = await startLicenseServer((_req, res) => writeJson(res, 503, { detail: "try later" }));
-    servers.push(expired, revoked, invalid, server);
+    const scopeMismatch = await startLicenseServer((_req, res) => writeJson(res, 403, { status: "scope_mismatch", detail: "repo not covered" }));
+    const scopeMismatchFallback = await startLicenseServer((_req, res) => writeJson(res, 409, { detail: "repo not covered" }));
+    const mismatchedTransientStatus = await startLicenseServer((_req, res) => writeJson(res, 401, { status: "clock_skew", detail: "HTTP status wins for mismatched transient body" }));
+    const rateLimited = await startLicenseServer((_req, res) => writeJson(res, 429, { detail: "try later" }));
+    const unsupportedClient = await startLicenseServer((_req, res) => writeJson(res, 426, { status: "unsupported_client", detail: "upgrade required" }));
+    const clockSkew = await startLicenseServer((_req, res) => writeJson(res, 400, { status: "clock_skew", detail: "clock skew too large" }));
+    servers.push(
+      expired,
+      revoked,
+      legacyForbidden,
+      invalid,
+      server,
+      scopeMismatch,
+      scopeMismatchFallback,
+      mismatchedTransientStatus,
+      rateLimited,
+      unsupportedClient,
+      clockSkew
+    );
 
     await expectStatus(licenseConfig(root, expired.url), "expired");
     await expectStatus(licenseConfig(root, revoked.url), "revoked");
+    await expectStatus(licenseConfig(root, legacyForbidden.url), "revoked");
     await expectStatus(licenseConfig(root, invalid.url), "invalid");
     await expectStatus(licenseConfig(root, server.url), "server");
+    await expectStatus(licenseConfig(root, scopeMismatch.url), "scope_mismatch");
+    await expectStatus(licenseConfig(root, scopeMismatchFallback.url), "scope_mismatch");
+    await expectStatus(licenseConfig(root, mismatchedTransientStatus.url), "invalid");
+    await expectStatus(licenseConfig(root, rateLimited.url), "rate_limited");
+    await expectStatus(licenseConfig(root, unsupportedClient.url), "unsupported_client");
+    await expectStatus(licenseConfig(root, clockSkew.url), "clock_skew");
     const network = await activateLicense({
       config: licenseConfig(root, "http://127.0.0.1:9"),
       licenseKey: "LIC-network-test-123456"
     });
     expect(network).toMatchObject({ ok: false, status: "network", classification: "network" });
+  });
+
+  it("preserves entitlement metadata from hosted admin status responses in the cache", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        privateRepoAllowed: true,
+        updateEntitlement: true,
+        offlineGraceMs: 60_000,
+        graceUntil: "2026-07-04T00:15:00.000Z",
+        plan: "supporter"
+      });
+    });
+    servers.push(server);
+
+    const activated = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: "LIC-admin-metadata-test-123456",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+
+    expect(activated.entitlement).toMatchObject({
+      status: "active",
+      repoVisibilityScope: "private",
+      privateRepoAllowed: true,
+      updateEntitlement: true,
+      offlineGraceMs: 60_000,
+      graceUntil: "2026-07-04T00:15:00.000Z",
+      plan: "supporter"
+    });
+
+    const cached = await getLicenseStatus({
+      config: licenseConfig(root, server.url),
+      now: new Date("2026-07-04T00:01:00.000Z")
+    });
+    expect(cached.entitlement).toMatchObject({
+      privateRepoAllowed: true,
+      offlineGraceMs: 60_000,
+      graceUntil: "2026-07-04T00:15:00.000Z"
+    });
+  });
+
+  it("treats a non-active body status on a 2xx response as authoritative and fail-closed", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "scope_mismatch",
+        repoVisibilityScope: "private",
+        updateEntitlement: false
+      });
+    });
+    servers.push(server);
+
+    const result = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: "LIC-2xx-denial-test-123456",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "scope_mismatch",
+      classification: "scope_mismatch",
+      entitlement: {
+        status: "scope_mismatch",
+        repoVisibilityScope: "private"
+      }
+    });
+    expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
+  it("drops active revocation reason metadata before returning or caching it", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-revocation-reason-test-123456";
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "active",
+        repoVisibilityScope: "private",
+        updateEntitlement: true,
+        revocationReason: `manual disable for ${key}`
+      });
+    });
+    servers.push(server);
+
+    const activated = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: key,
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+    const cacheText = readFileSync(join(root, "entitlement.json"), "utf8");
+
+    expect(activated.entitlement?.revocationReason).toBeUndefined();
+    expect(cacheText).not.toContain("revocationReason");
+    expect(JSON.stringify(activated)).not.toContain(key);
+    expect(cacheText).not.toContain(key);
+  });
+
+  it("redacts non-active revocation reason metadata before returning it", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-returned-revocation-test-123456";
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "revoked",
+        repoVisibilityScope: "private",
+        updateEntitlement: false,
+        revocationReason: `manual disable for ${key}`
+      });
+    });
+    servers.push(server);
+
+    const status = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: key,
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      status: "revoked",
+      entitlement: {
+        revocationReason: "manual disable for [REDACTED_LICENSE_KEY]"
+      }
+    });
+    expect(JSON.stringify(status)).not.toContain(key);
+    expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
+  it("redacts cached non-active revocation reason metadata with the stored license key", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-cached-revocation-test-123456";
+    writeFileSync(join(root, "license.key"), `${key}\n`, { mode: 0o600 });
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "revoked",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: false,
+      revocationReason: `manual disable for ${key}`
+    })}\n`, { mode: 0o600 });
+
+    const status = await getLicenseStatus({
+      config: licenseConfig(root, undefined),
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      status: "revoked",
+      entitlement: {
+        revocationReason: "manual disable for [REDACTED_LICENSE_KEY]"
+      }
+    });
+    expect(JSON.stringify(status)).not.toContain(key);
+  });
+
+  it("redacts cached opaque revocation reason metadata with the stored license key", async () => {
+    const root = mkRoot(roots);
+    const key = "opaque_local_license_value_123456";
+    writeFileSync(join(root, "license.key"), `${key}\n`, { mode: 0o600 });
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "revoked",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: false,
+      revocationReason: `manual disable for ${key}`
+    })}\n`, { mode: 0o600 });
+
+    const status = await getLicenseStatus({
+      config: licenseConfig(root, undefined),
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      status: "revoked",
+      entitlement: {
+        revocationReason: "manual disable for [REDACTED_LICENSE_KEY]"
+      }
+    });
+    expect(JSON.stringify(status)).not.toContain(key);
+  });
+
+  it("redacts cached non-active revocation reason metadata without a stored file key", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-cached-keychain-style-test-123456";
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "revoked",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: false,
+      revocationReason: `manual disable for ${key}`
+    })}\n`, { mode: 0o600 });
+
+    const status = await getLicenseStatus({
+      config: licenseConfig(root, undefined),
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      status: "revoked",
+      entitlement: {
+        revocationReason: "manual disable for [redacted-secret]"
+      }
+    });
+    expect(JSON.stringify(status)).not.toContain(key);
+  });
+
+  it("keeps keychain-backed non-active cache reads non-throwing when the key is unavailable", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-keychain-cache-missing-test-123456";
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "revoked",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: false,
+      revocationReason: `manual disable for ${key}`
+    })}\n`, { mode: 0o600 });
+    const config = licenseConfig(root, undefined);
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    config.keychainService = `test.neondiff.missing.${Date.now()}`;
+    config.keychainAccount = `test-${Math.random().toString(16).slice(2)}`;
+
+    const status = await getLicenseStatus({
+      config,
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      status: "revoked",
+      entitlement: {
+        revocationReason: "manual disable for [redacted-secret]"
+      }
+    });
+    expect(JSON.stringify(status)).not.toContain(key);
   });
 
   it("rejects keychain activation before contacting the API", async () => {
@@ -369,6 +634,68 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
+  it("treats entitlement offline grace metadata as diagnostic only", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "http://127.0.0.1:9");
+    config.offlineGraceMs = 119_000;
+    const licenseKey = "LIC-config-grace-test-123456";
+    writeFileSync(join(root, "license.key"), `${licenseKey}\n`, { mode: 0o600 });
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true,
+      offlineGraceMs: 600_000,
+      graceUntil: "2026-07-04T00:10:00.000Z",
+      licenseFingerprint: testLicenseFingerprint(licenseKey)
+    })}\n`, { mode: 0o600 });
+
+    const status = await getLicenseStatus({
+      config,
+      refresh: true,
+      now: new Date("2026-07-04T00:02:00.000Z")
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      status: "network",
+      source: "none",
+      classification: "network"
+    });
+    expect(status.stale).toBeUndefined();
+
+    const secondRoot = mkRoot(roots);
+    const secondConfig = licenseConfig(secondRoot, "http://127.0.0.1:9");
+    secondConfig.offlineGraceMs = 300_000;
+    const secondLicenseKey = "LIC-config-grace-positive-test-123456";
+    writeFileSync(join(secondRoot, "license.key"), `${secondLicenseKey}\n`, { mode: 0o600 });
+    writeFileSync(join(secondRoot, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true,
+      offlineGraceMs: 1_000,
+      graceUntil: "2026-07-04T00:00:01.000Z",
+      licenseFingerprint: testLicenseFingerprint(secondLicenseKey)
+    })}\n`, { mode: 0o600 });
+
+    const secondStatus = await getLicenseStatus({
+      config: secondConfig,
+      refresh: true,
+      now: new Date("2026-07-04T00:02:00.000Z")
+    });
+
+    expect(secondStatus).toMatchObject({
+      ok: true,
+      status: "active",
+      source: "cache",
+      stale: true,
+      classification: "network"
+    });
+  });
+
   it("stamps API entitlement checkedAt locally instead of trusting server time", async () => {
     const root = mkRoot(roots);
     const now = new Date("2026-07-04T00:00:00.000Z");
@@ -423,12 +750,146 @@ describe("license activation and entitlement cache", () => {
     expect(gate).toMatchObject({ ok: true, status: "active" });
   });
 
+  it("allows private review from active cached entitlement with hosted admin metadata", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, undefined);
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      privateRepoAllowed: true,
+      updateEntitlement: true,
+      offlineGraceMs: 60_000,
+      graceUntil: "2026-07-04T00:15:00.000Z"
+    })}\n`, { mode: 0o600 });
+
+    const gate = await evaluateLicenseReviewGate({
+      config,
+      repo: "owner/private",
+      visibility: "private",
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(gate).toMatchObject({
+      ok: true,
+      status: "active",
+      reason: "active entitlement covers private repo review"
+    });
+  });
+
   it("clears cached active entitlement after terminal API denial", async () => {
     const root = mkRoot(roots);
     const server = await startLicenseServer((_req, res) => writeJson(res, 410, { status: "revoked", detail: "revoked" }));
     servers.push(server);
     const config = licenseConfig(root, server.url);
     const licenseKey = "LIC-revoked-cache-test-123456";
+    writeFileSync(join(root, "license.key"), `${licenseKey}\n`, { mode: 0o600 });
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: true,
+      licenseFingerprint: testLicenseFingerprint(licenseKey)
+    })}\n`, { mode: 0o600 });
+
+    const status = await getLicenseStatus({
+      config,
+      refresh: true,
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({ ok: false, status: "revoked", source: "api" });
+    expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
+  it("clears cached active entitlement after durable hosted admin denials", async () => {
+    const rows = [
+      { name: "2xx-scope-mismatch", status: "scope_mismatch", statusCode: 200 },
+      { status: "scope_mismatch", statusCode: 403 },
+      { status: "unsupported_client", statusCode: 426 }
+    ] as const;
+
+    for (const row of rows) {
+      const root = mkRoot(roots);
+      const server = await startLicenseServer((_req, res) => writeJson(res, row.statusCode, {
+        status: row.status,
+        repoVisibilityScope: "private",
+        updateEntitlement: false,
+        detail: `${row.status} denial`
+      }));
+      servers.push(server);
+      const config = licenseConfig(root, server.url);
+      const licenseKey = `LIC-${row.status}-cache-test-123456`;
+      writeFileSync(join(root, "license.key"), `${licenseKey}\n`, { mode: 0o600 });
+      writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+        status: "active",
+        checkedAt: "2026-07-04T00:00:00.000Z",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        updateEntitlement: true,
+        licenseFingerprint: testLicenseFingerprint(licenseKey)
+      })}\n`, { mode: 0o600 });
+
+      const status = await getLicenseStatus({
+        config,
+        refresh: true,
+        now: new Date("2026-07-04T00:00:30.000Z")
+      });
+
+      const label = "name" in row ? row.name : row.status;
+      expect(status, label).toMatchObject({ ok: false, status: row.status, source: "api" });
+      expect(existsSync(join(root, "entitlement.json")), label).toBe(false);
+    }
+  });
+
+  it("retains cached active entitlement after transient refresh denial without consuming offline grace", async () => {
+    const rows = [
+      { status: "clock_skew", statusCode: 400, detail: "client clock drift" },
+      { status: "rate_limited", statusCode: 429, detail: "try later" }
+    ] as const;
+
+    for (const row of rows) {
+      const root = mkRoot(roots);
+      const server = await startLicenseServer((_req, res) => writeJson(res, row.statusCode, {
+        status: row.status,
+        detail: row.detail
+      }));
+      servers.push(server);
+      const config = licenseConfig(root, server.url);
+      const licenseKey = `LIC-${row.status}-cache-test-123456`;
+      writeFileSync(join(root, "license.key"), `${licenseKey}\n`, { mode: 0o600 });
+      writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+        status: "active",
+        checkedAt: "2026-07-04T00:00:00.000Z",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        updateEntitlement: true,
+        licenseFingerprint: testLicenseFingerprint(licenseKey)
+      })}\n`, { mode: 0o600 });
+
+      const status = await getLicenseStatus({
+        config,
+        refresh: true,
+        now: new Date("2026-07-04T00:00:30.000Z")
+      });
+
+      expect(status, row.status).toMatchObject({ ok: false, status: row.status, source: "api" });
+      expect(status.stale, row.status).toBeUndefined();
+      expect(existsSync(join(root, "entitlement.json")), row.status).toBe(true);
+    }
+  });
+
+  it("trusts durable body denial on transient HTTP code and clears matching cached entitlement", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => writeJson(res, 429, {
+      status: "revoked",
+      detail: "revocation body is authoritative"
+    }));
+    servers.push(server);
+    const config = licenseConfig(root, server.url);
+    const licenseKey = "LIC-429-revoked-cache-test-123456";
     writeFileSync(join(root, "license.key"), `${licenseKey}\n`, { mode: 0o600 });
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
       status: "active",
@@ -634,6 +1095,44 @@ describe("license activation and entitlement cache", () => {
     expect(stale).toMatchObject({
       ok: false,
       reason: expect.stringContaining("fresh entitlement cache")
+    });
+
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      privateRepoAllowed: false,
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+    const privateNotAllowed = await evaluateLicenseReviewGate({
+      config,
+      repo: "owner/private",
+      visibility: "private",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+    expect(privateNotAllowed).toMatchObject({
+      ok: false,
+      reason: "entitlement privateRepoAllowed=false does not allow private repos"
+    });
+
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "all",
+      privateRepoAllowed: false,
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+    const allScopePrivateNotAllowed = await evaluateLicenseReviewGate({
+      config,
+      repo: "owner/private",
+      visibility: "private",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+    expect(allScopePrivateNotAllowed).toMatchObject({
+      ok: false,
+      reason: "entitlement privateRepoAllowed=false does not allow private repos"
     });
 
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({

@@ -24,11 +24,24 @@ describe("secret redaction", () => {
     expect(redactSecrets(`license=${license}`)).toBe("license=[redacted-secret]");
   });
 
-  it("does not redact ordinary lowercase hyphenated NeonDiff paths as license tokens", () => {
+  it("redacts hyphenated license-shaped values case-insensitively", () => {
+    const license = "neondiff-revocation-reason-test-123456";
+    const digitPoorLicense = "NDL-XQKM-RPYB-SUTE";
+
+    expect(containsSecretLikeText(license)).toBe(true);
+    expect(redactSecrets(`license=${license}`)).toBe("license=[redacted-secret]");
+    expect(containsSecretLikeText(digitPoorLicense)).toBe(true);
+    expect(redactSecrets(`license=${digitPoorLicense}`)).toBe("license=[redacted-secret]");
+  });
+
+  it("does not redact ordinary lowercase hyphenated NeonDiff paths or labels as license tokens", () => {
     const path = "/tmp/neondiff-launchd-plist-Ov4D5v/com.example.neondiff.plist";
+    const label = "lic-diagnostic-reference-without-key-material";
 
     expect(containsSecretLikeText(path)).toBe(false);
     expect(redactSecrets(path)).toBe(path);
+    expect(containsSecretLikeText(label)).toBe(false);
+    expect(redactSecrets(label)).toBe(label);
   });
 
   it("detects credential URLs, cookie headers, query tokens, and private key bodies", () => {
