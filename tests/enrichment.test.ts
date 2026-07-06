@@ -497,7 +497,9 @@ describe("sticky enrichment comments", () => {
     });
 
     expect(comment.body).toContain("Related issues/PRs: #12, #13.");
-    const relatedContextSection = comment.body.split("### Agent-start packet")[0]!;
+    const relatedContextSection = comment.body.split("### Related context")[1]!.split("### Agent-start packet")[0]!;
+    expect(relatedContextSection).toContain("- #12 - mentioned in issue metadata");
+    expect(relatedContextSection).toContain("- #13 - mentioned in issue metadata");
     expect(relatedContextSection).not.toContain("#14");
     expect(comment.body).toContain("Build / borrow / buy scan:\n- Build:");
     expect(comment.body).toContain("- Buy/use: run capped external OSS/library/API/current-market research with citations");
@@ -559,6 +561,24 @@ describe("sticky enrichment comments", () => {
       title: "Fix GitHub App permission typo",
       state: "open",
       body: "The GitHub App setup docs mention the wrong permission name. Update the text only."
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue
+    });
+
+    expect(comment.body).toContain("[deferred] external_oss_examples");
+    expect(comment.body).toContain("[deferred] current_market_examples");
+    expect(comment.body).not.toContain("run capped external OSS/library/API/current-market research with citations");
+  });
+
+  it("does not trigger external research just because a routine issue mentions release, launch, sprint, or API", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 96,
+      title: "Fix release API wording",
+      state: "open",
+      body: "Release notes mention the wrong API name before launch. Update the sprint copy only."
     };
 
     const comment = buildIssueEnrichmentComment({

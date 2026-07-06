@@ -201,7 +201,6 @@ export function buildIssueEnrichmentComment(input: {
   const planner = buildIssuePlannerPacket({
     issue: input.issue,
     relatedRefs,
-    maxItems: input.maxSuggestions ?? 8,
     publicConfidencePolicy: input.publicConfidencePolicy
   });
   const visibleBody = [
@@ -450,12 +449,11 @@ function inferIssueAcceptanceGaps(issue: GitHubRelatedIssueOrPull): string[] {
 function buildIssuePlannerPacket(input: {
   issue: GitHubRelatedIssueOrPull;
   relatedRefs: string[];
-  maxItems: number;
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): IssuePlannerPacket {
   const text = `${input.issue.title ?? ""}\n${input.issue.body ?? ""}`;
   const classes = classifyIssueForPlanner(text);
-  const shouldResearch = classes.some((issueClass) => ["product", "architecture", "ux", "library_choice", "build_vs_buy", "integration", "roadmap", "market_positioning"].includes(issueClass));
+  const shouldResearch = classes.some((issueClass) => ["product", "ux", "library_choice", "build_vs_buy", "market_positioning"].includes(issueClass));
   const relatedContext = input.relatedRefs.length
     ? input.relatedRefs.map((ref) => `- ${ref} - mentioned in issue metadata; inspect for dependency, duplicate, or prior-decision risk.`)
     : ["- No same-repo issue/PR references detected in issue metadata."];
@@ -473,7 +471,7 @@ function buildIssuePlannerPacket(input: {
     {
       kind: "allowlisted_cross_repo_github",
       enabled: shouldResearch,
-      reason: shouldResearch ? "Triggered by issue class; keep to configured allowlist and source caps." : "Deferred until product, architecture, UX, integration, roadmap, or library-choice signal appears."
+      reason: shouldResearch ? "Triggered by issue class; keep to configured allowlist and source caps." : "Deferred until product, UX, market-positioning, or library-choice signal appears."
     },
     {
       kind: "external_oss_examples",
