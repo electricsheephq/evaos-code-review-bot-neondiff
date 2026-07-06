@@ -77,7 +77,8 @@ describe("NeonDiff public release readiness", () => {
       previousReleasedPackageVersion: "0.4.24-beta.1"
     });
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.29-beta.1");
-    expect(manifest.packageArtifact?.note).toMatch(/source\/daemon-only/i);
+    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.35-beta.1");
+    expect(manifest.packageArtifact?.note).toMatch(/source\/local-worker/i);
   });
 
   it("ships the canonical install script contract", () => {
@@ -136,7 +137,12 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/npm publish --provenance/);
     expect(publish).toMatch(/--tag beta/);
-    expect(publish).toMatch(/Verify release tag matches package version/);
+    expect(publish).toMatch(/Classify npm package release/);
+    expect(publish).toMatch(/Skipping npm publish for source-only prerelease/);
+    expect(publish).toMatch(/Manual npm publish tag .* does not match package\.json version/);
+    expect(publish).toMatch(/docs\/public-release-manifest\.json/);
+    expect(publish).toMatch(/skippedPublicPackageVersions/);
+    expect(publish.match(/if: steps\.package_release\.outputs\.should_publish == 'true'/g)).toHaveLength(5);
     expect(publish).toMatch(/require\('\.\/package\.json'\)\.version/);
     expect(publish).toMatch(/already exists; verifying dist-tags/);
   });
