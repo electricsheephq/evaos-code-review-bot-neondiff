@@ -59,8 +59,10 @@ export function createZCodeReviewFixtureAdapter(options: ZCodeReviewFixtureAdapt
         ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
         ...(options.retryMaxRetries !== undefined ? { retryMaxRetries: options.retryMaxRetries } : {})
       });
+      const reviewJsonValidated = result.droppedFromSchema.length === 0;
       return {
-        text: result.rawResponse,
+        text: reviewJsonValidated ? extractJsonObject(result.rawResponse) : result.rawResponse,
+        reviewJsonValidated,
         rawEvidence: {
           providerId: input.providerId,
           adapterId: input.adapterId,

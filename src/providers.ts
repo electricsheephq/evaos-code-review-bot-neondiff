@@ -24,6 +24,8 @@ export interface ProviderRegistryEntry {
   contextWindowTokens?: number;
   timeoutMs?: number;
   retryMaxRetries?: number;
+  temperature?: number;
+  jsonObjectResponseFormat?: boolean;
   capabilities: ProviderCapabilityFlags;
 }
 

@@ -6,7 +6,9 @@ import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const EVIDENCE_PREVIEW_LIMIT = 500;
 const REVIEW_JSON_EXTRACTION_CHAR_LIMIT = 200_000;
+const REVIEW_JSON_NESTED_OBJECT_MAX_DEPTH = 32;
 const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
+const DEFAULT_OPENAI_COMPATIBLE_REVIEW_TIMEOUT_MS = 180_000;
 const REDACTION_TOKENS = [
   "[redacted-private-evidence]",
   "[redacted-private-field]",
@@ -44,6 +46,7 @@ export interface ProviderAdapterExecutionInput {
 export interface ProviderAdapterExecutionResult {
   text: string;
   rawEvidence?: unknown;
+  reviewJsonValidated?: boolean;
 }
 
 export interface ProviderRuntimeAdapter {
@@ -116,7 +119,9 @@ export async function runProviderAdapterFixture(input: {
       prompt: fixture.prompt
     });
     const evidence = buildFixtureEvidence(fixture.prompt, execution);
-    const reviewJsonError = fixture.expectReviewJson ? validateReviewJsonOutput(execution.text) : undefined;
+    const reviewJsonError = fixture.expectReviewJson && !execution.reviewJsonValidated
+      ? validateReviewJsonOutput(execution.text)
+      : undefined;
     if (reviewJsonError || (fixture.expectJsonObject && !isJsonObject(execution.text))) {
       return {
         ok: false,
@@ -152,10 +157,12 @@ export function classifyProviderAdapterError(message: string): ProviderAdapterEr
   if (/\b(rate[ _-]limit|quota|too many requests|429|insufficient[ _-]quota|throttl(?:e|ed|ing))\b/.test(normalized)) return "throttle";
   // Provider timeout wording wins over network codes in combined messages to keep cooldown evidence deterministic.
   if (/\b(time[ _-]?out|timed[ _-]out|etimedout|abort(?:ed)?|deadline exceeded)\b/.test(normalized)) return "timeout";
-  if (/\b(econnreset|econnrefused|enotfound|eai_again|socket|dns|fetch failed|service unavailable|temporarily unavailable|overload|connection[ _-]refused|connection[ _-]reset|network[ _-](?:error|failure|failed|unreachable|unavailable|down))\b/.test(normalized)) return "network";
-  if (/\b(json|schema|parseable|malformed output|invalid response|invalid output|review object|review json|tool call|structured output)\b/.test(normalized)) {
+  // Strong schema/output tokens win over transport wording; weaker wrapper terms stay below the network branch.
+  if (/\b(json|schema|parseable|malformed output|invalid output|review object|review json|findings array|tool call)\b/.test(normalized)) {
     return "model-output";
   }
+  if (/\b(econnreset|econnrefused|enotfound|eai_again|socket|dns|fetch failed|service unavailable|temporarily unavailable|overload|connection[ _-]refused|connection[ _-]reset|network[ _-](?:error|failure|failed|unreachable|unavailable|down))\b/.test(normalized)) return "network";
+  if (/\b(invalid response|structured output)\b/.test(normalized)) return "model-output";
   return "unknown";
 }
 
@@ -175,9 +182,9 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
       const timeout = createAbortSignal(provider.timeoutMs);
       const requestBody = {
         model: input.model,
-        temperature: 0,
         stream: false,
-        ...(provider.capabilities.jsonOutput ? { response_format: { type: "json_object" } } : {}),
+        ...(provider.temperature === undefined ? {} : { temperature: provider.temperature }),
+        ...(provider.capabilities.jsonOutput && provider.jsonObjectResponseFormat !== false ? { response_format: { type: "json_object" } } : {}),
         messages: [
           {
             role: "system",
@@ -202,17 +209,25 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
         });
 
         if (!response.ok) {
-          throw new Error(openAICompatibleStatusErrorMessage(response.status));
+          const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
+          throw new Error(openAICompatibleStatusErrorMessage(response.status, responseErrorText));
         }
 
         const responseText = await readResponseTextWithAbort(response, timeout.signal);
         const parsed = parseOpenAICompatibleResponse(responseText);
         const content = extractOpenAICompatibleMessageContent(parsed);
         const reviewOutput = normalizeReviewJsonOutput(content);
-        if (!reviewOutput.ok) throw new Error(reviewOutput.error);
+        if (!reviewOutput.ok) {
+          const finishReason = extractOpenAICompatibleFinishReason(parsed);
+          if (finishReason === "length") {
+            throw new Error("OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length).");
+          }
+          throw new Error(reviewOutput.error);
+        }
 
         return {
           text: reviewOutput.text,
+          reviewJsonValidated: true,
           rawEvidence: {
             providerId: options.providerId,
             adapterId: input.adapterId,
@@ -280,10 +295,13 @@ function normalizeReviewJsonOutput(value: string): { ok: true; text: string } | 
       return { ok: false, error: "Adapter output was not a parseable JSON review object." };
     }
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !Array.isArray((parsed as { findings?: unknown }).findings)) {
+  const reviewObject = findReviewJsonObject(parsed);
+  if (!reviewObject) {
     return { ok: false, error: "Adapter output did not contain a review findings array." };
   }
-  const { dropped } = parseFindings(parsed);
+  // Nested provider envelopes are canonicalized; top-level review JSON keeps the adapter's original text.
+  if (reviewObject !== parsed) reviewJson = JSON.stringify(reviewObject);
+  const { dropped } = parseFindings(reviewObject);
   if (dropped.length > 0) return { ok: false, error: "Adapter output contained invalid review findings." };
   return { ok: true, text: reviewJson };
 }
@@ -293,10 +311,12 @@ function extractReviewJsonObject(text: string): string {
   const fencedMatches = [...boundedText.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
   for (const fenced of fencedMatches) {
     const candidate = fenced[1]!.trim();
-    if (isReviewJsonObject(candidate)) return candidate;
+    const reviewJson = reviewJsonObjectText(candidate);
+    if (reviewJson) return reviewJson;
   }
 
-  const starts: number[] = [];
+  let depth = 0;
+  let candidateStart: number | undefined;
   let inString = false;
   let escaped = false;
   for (let index = 0; index < boundedText.length; index += 1) {
@@ -316,26 +336,47 @@ function extractReviewJsonObject(text: string): string {
       continue;
     }
     if (char === "{") {
-      starts.push(index);
+      if (depth === 0) candidateStart = index;
+      depth += 1;
       continue;
     }
     if (char === "}") {
-      const start = starts.pop();
-      if (start === undefined) continue;
-      const candidate = boundedText.slice(start, index + 1).trim();
-      if (candidate.includes("\"findings\"") && isReviewJsonObject(candidate)) return candidate;
+      if (depth === 0 || candidateStart === undefined) continue;
+      depth -= 1;
+      if (depth !== 0) continue;
+      const candidate = boundedText.slice(candidateStart, index + 1).trim();
+      candidateStart = undefined;
+      if (!candidate.includes("\"findings\"")) continue;
+      const reviewJson = reviewJsonObjectText(candidate);
+      if (reviewJson) return reviewJson;
     }
   }
   throw new Error("Adapter output did not contain a parseable JSON review object.");
 }
 
-function isReviewJsonObject(candidate: string): boolean {
+function reviewJsonObjectText(candidate: string): string | undefined {
   try {
-    const parsed = JSON.parse(candidate) as { findings?: unknown };
-    return typeof parsed === "object" && parsed !== null && Array.isArray(parsed.findings);
+    const parsed = JSON.parse(candidate) as unknown;
+    const reviewObject = findReviewJsonObject(parsed);
+    if (!reviewObject) return undefined;
+    return reviewObject === parsed ? candidate : JSON.stringify(reviewObject);
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function findReviewJsonObject(value: unknown, depth = 0): Record<string, unknown> | undefined {
+  if (depth > REVIEW_JSON_NESTED_OBJECT_MAX_DEPTH) return undefined;
+  if (!value || typeof value !== "object") return undefined;
+  if (!Array.isArray(value) && Array.isArray((value as { findings?: unknown }).findings)) {
+    return value as Record<string, unknown>;
+  }
+  const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+  for (const child of children) {
+    const reviewObject = findReviewJsonObject(child, depth + 1);
+    if (reviewObject) return reviewObject;
+  }
+  return undefined;
 }
 
 function resolveOpenAICompatibleApiKey(
@@ -349,30 +390,39 @@ function resolveOpenAICompatibleApiKey(
   return value;
 }
 
-function openAICompatibleStatusErrorMessage(status: number): string {
-  if (status === 401 || status === 403) return `OpenAI-compatible chat completions endpoint returned ${status} auth failure.`;
-  if (status === 429) return "OpenAI-compatible chat completions endpoint returned 429 throttle failure.";
-  if (status === 408 || status === 504) return `OpenAI-compatible chat completions endpoint returned ${status} timeout failure.`;
-  if (status >= 500) return `OpenAI-compatible chat completions endpoint returned ${status} network failure.`;
-  // Non-auth/non-throttle 4xx statuses stay unknown until runtime wiring needs a distinct operator action.
-  return `OpenAI-compatible chat completions endpoint returned ${status}.`;
+function openAICompatibleStatusErrorMessage(status: number, responseText = ""): string {
+  const detail = previewEvidenceText(responseText).trim();
+  const suffix = detail ? `: ${detail}` : ".";
+  if (status === 401 || status === 403) return `OpenAI-compatible chat completions endpoint returned ${status} auth failure${suffix}`;
+  if (status === 429) return `OpenAI-compatible chat completions endpoint returned 429 throttle failure${suffix}`;
+  if (status === 408 || status === 504) return `OpenAI-compatible chat completions endpoint returned ${status} timeout failure${suffix}`;
+  if (status >= 500) return `OpenAI-compatible chat completions endpoint returned ${status} network failure${suffix}`;
+  // Non-special 4xx statuses keep a redacted body hint so adapter-specific auth/model-output wording can classify safely.
+  return `OpenAI-compatible chat completions endpoint returned ${status}${suffix}`;
 }
 
 async function readResponseTextWithAbort(response: Response, signal: AbortSignal): Promise<string> {
   if (signal.aborted) throw new Error("deadline exceeded");
-  let abortHandler: ((event: Event) => void) | undefined;
-  const abortPromise = new Promise<never>((_resolve, reject) => {
-    abortHandler = () => {
-      void response.body?.cancel().catch(() => undefined);
-      reject(new Error("deadline exceeded"));
+  return await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const abortHandler = () => {
+      settle(() => {
+        void response.body?.cancel().catch(() => undefined);
+        reject(new Error("deadline exceeded"));
+      });
+    };
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abortHandler);
+      fn();
     };
     signal.addEventListener("abort", abortHandler, { once: true });
+    response.text().then(
+      (text) => settle(() => resolve(text)),
+      (error: unknown) => settle(() => reject(error))
+    );
   });
-  try {
-    return await Promise.race([response.text(), abortPromise]);
-  } finally {
-    if (abortHandler) signal.removeEventListener("abort", abortHandler);
-  }
 }
 
 function parseOpenAICompatibleResponse(value: string): Record<string, unknown> {
@@ -398,16 +448,37 @@ function extractOpenAICompatibleMessageContent(parsed: Record<string, unknown>):
   }
   const content = (message as { content?: unknown }).content;
   if (typeof content !== "string" || content.trim().length === 0) {
+    const textPart = extractOpenAICompatibleTextPart(content);
+    if (textPart) return textPart;
     throw new Error("OpenAI-compatible chat completions response had invalid response schema.");
   }
   return content;
 }
 
+function extractOpenAICompatibleTextPart(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const textParts = content
+    .map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return undefined;
+      const typedPart = part as { type?: unknown; text?: unknown };
+      if (typedPart.type !== "text" || typeof typedPart.text !== "string") return undefined;
+      const text = typedPart.text.trim();
+      return text.length > 0 ? text : undefined;
+    })
+    .filter((text): text is string => Boolean(text));
+  return textParts.length === 1 ? textParts[0] : undefined;
+}
+
 function extractOpenAICompatibleChoiceEvidence(parsed: Record<string, unknown>): Record<string, unknown> {
+  const finishReason = extractOpenAICompatibleFinishReason(parsed);
+  return finishReason === undefined ? {} : { finishReason };
+}
+
+function extractOpenAICompatibleFinishReason(parsed: Record<string, unknown>): string | undefined {
   const firstChoice = Array.isArray(parsed.choices) ? parsed.choices[0] : undefined;
-  if (!firstChoice || typeof firstChoice !== "object" || Array.isArray(firstChoice)) return {};
+  if (!firstChoice || typeof firstChoice !== "object" || Array.isArray(firstChoice)) return undefined;
   const finishReason = (firstChoice as { finish_reason?: unknown }).finish_reason;
-  return typeof finishReason === "string" ? { finishReason } : {};
+  return typeof finishReason === "string" ? finishReason : undefined;
 }
 
 function extractOpenAICompatibleUsageEvidence(parsed: Record<string, unknown>): Record<string, unknown> {
@@ -423,7 +494,7 @@ function extractOpenAICompatibleUsageEvidence(parsed: Record<string, unknown>): 
 }
 
 function createAbortSignal(timeoutMs: number | undefined): { signal: AbortSignal; dispose: () => void } {
-  const timeout = timeoutMs && timeoutMs > 0 ? timeoutMs : 30_000;
+  const timeout = timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_OPENAI_COMPATIBLE_REVIEW_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const maybeUnref = timer as { unref?: () => void };
