@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "./secrets.js";
+import { writeSecureFileSync } from "./temp-files.js";
+import type { ObserveScheduleConfig } from "./config.js";
 import type { OutcomeLedgerPostMergeStatus } from "./outcome-ledger.js";
 import type {
   FindingOutcomeLabelRecord,
   FindingOutcomeLabelSource,
   FindingOutcomeVerdict,
+  ReviewFindingRecord,
   ReviewStateStore
 } from "./state.js";
 import type { Severity } from "./types.js";
@@ -323,4 +326,168 @@ function escalatePostMergeStatus(current: OutcomeLedgerPostMergeStatus, next: Ou
     reverted: 4
   };
   return rank[next] > rank[current] ? next : current;
+}
+
+const GLOBAL_OBSERVE_SCOPE = "__global__";
+
+export interface ScheduledObserveTarget {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  findings: ObservedFinding[];
+}
+
+export interface ScheduledObservePassResult {
+  ran: boolean;
+  reason: "disabled" | "not_due" | "observed";
+  targets: number;
+  labeled: number;
+}
+
+/**
+ * Daemon-scheduled outcome observation (#357). Bounded, read-only, default-off. When enabled AND due
+ * (now − lastObserveAt ≥ intervalMinutes), it selects recorded review findings within lookbackDays
+ * whose repo is not in per-repo cooldown, capped at maxPullsPerCycle heads, reconstructs
+ * ObservedFinding from the public findings ledger, derives labels via the existing deriveOutcomeLabel,
+ * and records them via the atomic recordFindingOutcomeLabels batch (#286 Part C). It writes a redacted
+ * evidence packet and updates the schedule state. It NEVER aggregates, promotes, writes config,
+ * touches publicDisplay.mode, or posts to GitHub — the `fetchOutcome` reader is injected and read-only.
+ * Disabled/absent config ⇒ zero observer work, zero GitHub reads.
+ */
+export async function runScheduledObservePass(input: {
+  state: ReviewStateStore;
+  config: ObserveScheduleConfig | undefined;
+  evidenceDir: string;
+  fetchOutcome: (target: ScheduledObserveTarget) => ObservedPullOutcome | Promise<ObservedPullOutcome>;
+  now?: Date;
+}): Promise<ScheduledObservePassResult> {
+  const schedule = input.config;
+  if (!schedule?.enabled) return { ran: false, reason: "disabled", targets: 0, labeled: 0 };
+  const now = input.now ?? new Date();
+  const lastGlobal = input.state.getCalibrationObserveAt(GLOBAL_OBSERVE_SCOPE);
+  if (!isScheduleDue(lastGlobal, now, schedule.intervalMinutes)) {
+    return { ran: false, reason: "not_due", targets: 0, labeled: 0 };
+  }
+
+  const since = new Date(now.getTime() - schedule.lookbackDays * 24 * 60 * 60_000).toISOString();
+  const targets = selectObserveTargets(input.state, since, schedule, now);
+
+  const observedAt = now.toISOString();
+  const records: FindingOutcomeLabelRecord[] = [];
+  const observations: Array<{ repo: string; pullNumber: number; headSha: string; postMergeStatus: OutcomeLedgerPostMergeStatus; labeled: number; evidenceRef?: string }> = [];
+  const observedRepos = new Set<string>();
+  for (const target of targets) {
+    const outcome = await input.fetchOutcome(target);
+    let labeled = 0;
+    let postMergeStatus: OutcomeLedgerPostMergeStatus = outcome.merged ? "no_incident_seen" : "not_merged";
+    if (outcome.merged) {
+      for (const finding of target.findings) {
+        const derived = deriveOutcomeLabel({ finding, observed: outcome });
+        postMergeStatus = escalatePostMergeStatus(postMergeStatus, derived.postMergeStatus);
+        records.push({
+          fingerprint: finding.fingerprint,
+          repo: target.repo,
+          pullNumber: target.pullNumber,
+          headSha: target.headSha,
+          severity: finding.severity,
+          category: finding.category,
+          confidence: finding.confidence,
+          labelSource: derived.labelSource,
+          verdict: derived.verdict,
+          observedAt,
+          ...(outcome.evidenceRef ? { evidenceRef: outcome.evidenceRef } : {})
+        });
+        labeled += 1;
+      }
+      // Only a MERGED PR is actually observed (its outcome is terminal for this head), so only then
+      // do we advance the repo's cooldown. An unmerged/not-yet-observable target must NOT cool the
+      // repo down — otherwise we'd wrongly delay re-observing it until it finally merges. The cooldown
+      // exists to space out re-observation of a repo we DID observe, not one we merely selected.
+      observedRepos.add(target.repo);
+    }
+    // evidenceRef may carry free text from the outcome reader; the packet-level redactSecrets wrapper
+    // below strips any secret-shaped content before it is written.
+    observations.push({ repo: target.repo, pullNumber: target.pullNumber, headSha: target.headSha, postMergeStatus, labeled, ...(outcome.evidenceRef ? { evidenceRef: outcome.evidenceRef } : {}) });
+  }
+
+  // Record all derived labels atomically (#286 Part C batch). This is the ONLY write to the label
+  // store — no aggregate, no promote, no config write, no GitHub mutation.
+  input.state.recordFindingOutcomeLabels(records);
+
+  // Schedule bookkeeping: advance the global interval clock and each observed repo's cooldown.
+  // intervalMinutes is a CHECK cadence, not a work cadence: we advance the global clock on EVERY due
+  // pass, including a zero-target one (all repos in cooldown / nothing inside lookback). A no-op due
+  // pass therefore waits a full interval before re-checking — intended, so a barren cycle can't spin
+  // the selection query every tick. (This is not a bug: do not switch to advance-only-on-work.)
+  input.state.recordCalibrationObserveAt(GLOBAL_OBSERVE_SCOPE, observedAt);
+  for (const repo of observedRepos) input.state.recordCalibrationObserveAt(repo, observedAt);
+
+  const packet = {
+    ok: true,
+    observedAt,
+    intervalMinutes: schedule.intervalMinutes,
+    maxPullsPerCycle: schedule.maxPullsPerCycle,
+    perRepoCooldownMinutes: schedule.perRepoCooldownMinutes,
+    lookbackDays: schedule.lookbackDays,
+    targets: targets.length,
+    labeled: records.length,
+    observations
+  };
+  mkdirSync(input.evidenceDir, { recursive: true });
+  writeSecureFileSync(join(input.evidenceDir, "calibration-observe.json"), `${redactSecrets(JSON.stringify(packet, null, 2))}\n`);
+
+  return { ran: true, reason: "observed", targets: targets.length, labeled: records.length };
+}
+
+function isScheduleDue(lastObserveAt: string | undefined, now: Date, intervalMinutes: number): boolean {
+  if (!lastObserveAt) return true;
+  const lastMs = Date.parse(lastObserveAt);
+  if (!Number.isFinite(lastMs)) return true;
+  return now.getTime() - lastMs >= intervalMinutes * 60_000;
+}
+
+function selectObserveTargets(
+  state: ReviewStateStore,
+  since: string,
+  schedule: ObserveScheduleConfig,
+  now: Date
+): ScheduledObserveTarget[] {
+  // Group recorded findings within the lookback window by (repo, pull, head).
+  const byHead = new Map<string, ScheduledObserveTarget>();
+  for (const finding of state.listReviewFindings({ since })) {
+    const key = `${finding.repo}#${finding.pullNumber}@${finding.headSha}`;
+    let target = byHead.get(key);
+    if (!target) {
+      target = { repo: finding.repo, pullNumber: finding.pullNumber, headSha: finding.headSha, findings: [] };
+      byHead.set(key, target);
+    }
+    target.findings.push({
+      fingerprint: finding.fingerprint,
+      path: finding.path,
+      line: finding.line,
+      severity: finding.severity as Severity,
+      category: finding.category,
+      confidence: finding.confidence
+    });
+  }
+
+  const cooldownMs = schedule.perRepoCooldownMinutes * 60_000;
+  const repoInCooldown = new Map<string, boolean>();
+  const selected: ScheduledObserveTarget[] = [];
+  for (const target of byHead.values()) {
+    // Cap counts only ACTUALLY-selected (non-cooldown) heads: it is checked against `selected.length`,
+    // and a cooldown head `continue`s below WITHOUT pushing — so a cooled head never consumes a slot,
+    // and non-cooldown repos that sort later are still reached until the cap fills with real work.
+    if (selected.length >= schedule.maxPullsPerCycle) break;
+    let inCooldown = repoInCooldown.get(target.repo);
+    if (inCooldown === undefined) {
+      const last = state.getCalibrationObserveAt(target.repo);
+      const lastMs = last ? Date.parse(last) : NaN;
+      inCooldown = Number.isFinite(lastMs) && now.getTime() - lastMs < cooldownMs;
+      repoInCooldown.set(target.repo, inCooldown);
+    }
+    if (inCooldown) continue;
+    selected.push(target);
+  }
+  return selected;
 }

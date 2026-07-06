@@ -72,7 +72,8 @@ describe("walkthrough comment rendering", () => {
         category: "data_loss",
         confidence: 0.9,
         title: "Rollback can overwrite fresh saves",
-        body: "The rollback path can clobber newer save data."
+        body: "The rollback path can clobber newer save data.",
+        fingerprint: `finding:${"0".repeat(64)}`
       }
     ];
 
@@ -480,7 +481,8 @@ describe("walkthrough comment rendering", () => {
           category: "security_boundary",
           confidence: 0.91,
           title: "Confidence: 95% should never be quoted",
-          body: "The model says 0.91 reliability in raw finding prose."
+          body: "The model says 0.91 reliability in raw finding prose.",
+          fingerprint: `finding:${"0".repeat(64)}`
         }
       ],
       dropped: [],
@@ -607,7 +609,8 @@ describe("walkthrough comment rendering", () => {
           category: "runtime_correctness",
           confidence: 0.88,
           title: "Model says 88% confidence",
-          body: "Confidence: 88%. The model is 0.88 confident."
+          body: "Confidence: 88%. The model is 0.88 confident.",
+          fingerprint: `finding:${"0".repeat(64)}`
         }
       ],
       dropped: [],
@@ -656,7 +659,8 @@ describe("walkthrough comment rendering", () => {
           category: "runtime_correctness",
           confidence: 0.91,
           title: "Regression with 99% confidence",
-          body: "Model body says `0.91` likely."
+          body: "Model body says `0.91` likely.",
+          fingerprint: `finding:${"0".repeat(64)}`
         }
       ],
       dropped: [],

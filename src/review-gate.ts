@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { validateFindingLocations } from "./diff.js";
 import {
+  buildFindingFingerprint,
   decideReviewEvent,
   normalizeFindingsForReview,
   normalizeTitleForDedup,
@@ -94,20 +94,10 @@ export function applyDeterministicReviewGate(input: {
   };
 }
 
-export function buildFindingFingerprint(
-  finding: Pick<Finding, "severity" | "path" | "line" | "title" | "body" | "category" | "why_this_matters">
-): string {
-  const canonical = JSON.stringify({
-    severity: finding.severity,
-    path: finding.path,
-    line: finding.line,
-    title: finding.title.trim().toLowerCase(),
-    body: finding.body.trim().toLowerCase(),
-    why_this_matters: finding.why_this_matters?.trim().toLowerCase() ?? "",
-    category: finding.category ?? "unknown"
-  });
-  return `finding:${createHash("sha256").update(canonical).digest("hex")}`;
-}
+// Re-exported from findings.ts (the leaf owner) to preserve the historical review-gate import path
+// for existing callers. Definition moved to break the review-gate → findings cycle the comment
+// builder would otherwise create (#357).
+export { buildFindingFingerprint } from "./findings.js";
 
 function applyRepoMemoryFalsePositiveSuppressions(
   findings: Finding[],

@@ -1,7 +1,30 @@
+import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
+
+/**
+ * Deterministic per-finding fingerprint (sha256 over the canonical finding identity). Computed over
+ * the ORIGINAL Finding — including why_this_matters and raw (pre-sanitization) title/body — so the
+ * deterministic gate, the finding_outcome_labels store, and the review_findings ledger (#357) all key
+ * a given finding under the SAME fingerprint. Lives here (a leaf) rather than review-gate.ts so the
+ * comment builder can stamp it without a review-gate → findings import cycle; review-gate re-exports.
+ */
+export function buildFindingFingerprint(
+  finding: Pick<Finding, "severity" | "path" | "line" | "title" | "body" | "category" | "why_this_matters">
+): string {
+  const canonical = JSON.stringify({
+    severity: finding.severity,
+    path: finding.path,
+    line: finding.line,
+    title: finding.title.trim().toLowerCase(),
+    body: finding.body.trim().toLowerCase(),
+    why_this_matters: finding.why_this_matters?.trim().toLowerCase() ?? "",
+    category: finding.category ?? "unknown"
+  });
+  return `finding:${createHash("sha256").update(canonical).digest("hex")}`;
+}
 
 const SEVERITY_RANK: Record<Severity, number> = {
   P0: 0,
@@ -127,6 +150,11 @@ export function normalizeFindingsForReview(
         category,
         // Internal gating/evidence metadata; never rendered into the public body/title.
         confidence: finding.confidence,
+        // Fingerprint over the ORIGINAL finding (raw title/body + why_this_matters, and the
+        // pre-normalized category the gate hashes) — NOT the sanitized publicTitle/publicBody or
+        // the normalized `category` above — so it matches the gate/finding_outcome_labels fingerprint
+        // and the #357 observe→label join stays intact.
+        fingerprint: buildFindingFingerprint(finding),
         title: publicTitle,
         body: formatReviewComment(
           { ...finding, category, title: publicTitle, body: publicBody, ...(publicWhy ? { why_this_matters: publicWhy } : {}) },

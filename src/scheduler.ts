@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./config.js";
 import {
@@ -42,6 +43,11 @@ import type { IssueCommentCommandSource } from "./commands.js";
 import { buildChangedSurfaceValidationReport } from "./validation-selector.js";
 import { redactSecrets } from "./secrets.js";
 import {
+  runScheduledObservePass,
+  type ObservedPullOutcome,
+  type ScheduledObserveTarget
+} from "./outcome-observer.js";
+import {
   activateRepoForNewOnlyReview,
   isCanaryAllowed,
   recordFailedReview,
@@ -49,6 +55,7 @@ import {
   recordProviderRateLimitCooldownIfNeeded,
   providerCooldownDurationMs,
   reviewPull,
+  localDateFolder,
   type ReviewPullInput,
   type ReviewPullResult,
   type RunOnceOptions,
@@ -241,7 +248,54 @@ export async function runScheduledCycleWithDeps(input: {
   }
 
   result.queue.remainingQueued = input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "blocked_on_proof"] }).length;
+
+  // Scheduled outcome observation (#357). Additive, default-off, bounded, READ-ONLY: gated by
+  // calibrationLoop.observeSchedule.enabled. Disabled/absent ⇒ zero observer work and zero GitHub
+  // reads. It records outcome labels only; it never aggregates, promotes, writes config, touches
+  // publicDisplay.mode, or posts to GitHub. Failures here never affect the review cycle result.
+  await observeScheduledOutcomes({ config, github: input.github, state: input.state, now });
+
   return result;
+}
+
+/**
+ * Runs the scheduled, default-off outcome observation pass at the tail of a daemon cycle (#357). The
+ * `fetchOutcome` reader is built from the scheduler's read-only GitHub surface (`getPull` merge state)
+ * and is injected into the pure observe pass so tests stay hermetic. This is a no-op — no GitHub reads,
+ * no writes — unless `calibrationLoop.observeSchedule.enabled` is true AND the interval is due.
+ */
+export async function observeScheduledOutcomes(input: {
+  config: BotConfig;
+  github: SchedulerGitHubApi;
+  state: ReviewStateStore;
+  now?: Date;
+}): Promise<void> {
+  const schedule = input.config.calibrationLoop?.observeSchedule;
+  if (!schedule?.enabled) return;
+  // Bind ONE `now` for this pass so the evidence-folder date and the observe-pass timestamp
+  // (observedAt / schedule bookkeeping) can never drift apart across a future refactor: the date
+  // folder is derived from exactly the same instant that is forwarded to runScheduledObservePass.
+  const now = input.now ?? new Date();
+  const evidenceDir = join(input.config.evidenceDir, localDateFolder(now), "calibration-observe");
+  const fetchOutcome = async (target: ScheduledObserveTarget): Promise<ObservedPullOutcome> => {
+    // Read-only merge-state probe. A merged PR with no additional signal derives `none_observed`;
+    // deeper post-merge signals (revert/hotfix/merged-fix diffs, human-thread resolution) are a
+    // future enrichment and are left empty here (see docs/calibration-loop.md bootstrap note).
+    const pull = await input.github.getPull(target.repo, target.pullNumber);
+    return {
+      merged: Boolean(pull.merged_at),
+      revertedFlaggedChange: false,
+      hotfixLines: new Map(),
+      mergedFixLines: new Map(),
+      humanThreadResolved: false
+    };
+  };
+  try {
+    await runScheduledObservePass({ state: input.state, config: schedule, evidenceDir, fetchOutcome, now });
+  } catch (error) {
+    // Observation is best-effort telemetry: never let a failure here disturb the review cycle.
+    console.warn(`[calibration-observe] scheduled observe pass failed: ${redactSecrets(error instanceof Error ? error.message : String(error))}`);
+  }
 }
 
 type EnqueueStatus =
