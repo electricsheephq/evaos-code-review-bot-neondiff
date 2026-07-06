@@ -113,6 +113,11 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
 
+  if (args.version === "true" || command === "-v") {
+    console.log(resolvePackageVersion());
+    return;
+  }
+
   if (!command || command === "help" || command === "--help" || command === "-h") {
     console.log(JSON.stringify(buildHelp(), null, 2));
     return;
@@ -2047,6 +2052,14 @@ function resolvePackageRoot(): string {
   return process.cwd();
 }
 
+function resolvePackageVersion(): string {
+  const packageJson = JSON.parse(readFileSync(join(resolvePackageRoot(), "package.json"), "utf8"));
+  if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
+    throw new Error("package.json is missing a version string");
+  }
+  return packageJson.version;
+}
+
 function isNeonDiffPackageRoot(candidate: string): boolean {
   if (!existsSync(join(candidate, "package.json")) || !existsSync(join(candidate, "config.example.json"))) {
     return false;
@@ -2811,10 +2824,102 @@ async function collectIssueEnrichmentReadChecks(
   return checks;
 }
 
+interface CommandUsageFlag {
+  name: string;
+  description: string;
+}
+
+interface CommandUsage {
+  description: string;
+  flags: CommandUsageFlag[];
+}
+
+// Minimal per-command usage registry for `neondiff <command> --help`. Kept
+// intentionally small (not every command) - see AGENTS.md "do not rewrite the
+// help system" guidance in issue #319. Unlisted commands fall back to the
+// generic command list in buildHelp, same as before this registry existed.
+const COMMAND_USAGE: Record<string, CommandUsage> = {
+  init: {
+    description: "Create a local config.local.json from the packaged config.example.json.",
+    flags: [
+      { name: "--config", description: "Path to write the local config file (default config.local.json)." },
+      { name: "--force", description: "Overwrite an existing JSON config-looking file at --config." }
+    ]
+  },
+  pricing: {
+    description: "Print the redacted local pricing/cost model output.",
+    flags: []
+  },
+  doctor: {
+    description: "Check repo read access, provider env, and issue-enrichment readiness (add `github` for GitHub-only checks).",
+    flags: [
+      { name: "--config", description: "Path to the config file (default config.local.json)." }
+    ]
+  },
+  status: {
+    description: "Report combined release, coverage, agent, provider-cooldown, and durable-queue health as one gate.",
+    flags: [
+      { name: "--config", description: "Path to the config file (default config.local.json)." },
+      { name: "--repo", description: "Scope provider-cooldown and durable-queue rows to a single repo." },
+      { name: "--limit", description: "Cap the number of provider-cooldown/durable-queue rows returned." },
+      { name: "--expected-head", description: "Expected release head SHA to verify against." },
+      { name: "--launchd-label", description: "launchd label to inspect for daemon liveness." },
+      { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." }
+    ]
+  },
+  "review-pr": {
+    description: "Run a single dry-run-by-default PR review for one repo/PR (public alias of run-once, scoped to one PR).",
+    flags: [
+      { name: "--config", description: "Path to the config file." },
+      { name: "--repo", description: "Repo to review, owner/name (required)." },
+      { name: "--pr", description: "Pull request number to review (required)." },
+      { name: "--dry-run", description: "true (default) or false; false requires --confirm true." },
+      { name: "--confirm", description: "Must be true to allow --dry-run false." }
+    ]
+  },
+  "run-once": {
+    description: "Run a single review cycle across configured repos (internal/operator alias of review-pr's cycle).",
+    flags: [
+      { name: "--config", description: "Path to the config file." },
+      { name: "--repo", description: "Optional repo to scope the cycle to, owner/name." },
+      { name: "--dry-run", description: "true (default) or false; false requires --confirm true." },
+      { name: "--confirm", description: "Must be true to allow --dry-run false." }
+    ]
+  },
+  daemon: {
+    description: "Control or run the review daemon: `daemon start|stop|status`, or no subcommand to run the poll loop directly.",
+    flags: [
+      { name: "--config", description: "Path to the config file." },
+      { name: "--launchd-label", description: "launchd label for start/stop/status subcommands." },
+      { name: "--dry-run", description: "true (default) or false for the direct poll loop." },
+      { name: "--once", description: "true to run a single cycle instead of looping (direct poll loop only)." }
+    ]
+  },
+  providers: {
+    description: "Inspect the provider registry: `providers list` or `providers doctor`.",
+    flags: [
+      { name: "--config", description: "Path to the config file." },
+      { name: "--provider", description: "Scope providers doctor to a single provider id." },
+      { name: "--smoke", description: "true to run a live smoke check in providers doctor." }
+    ]
+  },
+  license: {
+    description: "Manage the license: `license activate|status|deactivate`.",
+    flags: [
+      { name: "--config", description: "Path to the config file." },
+      { name: "--license-key-env", description: "Env var name holding the license key (activate only)." },
+      { name: "--repo", description: "Repo to scope activation/status to, owner/name." },
+      { name: "--refresh", description: "true to force a fresh status check instead of cached." }
+    ]
+  }
+};
+
 function buildHelp(command?: string) {
+  const usage = command ? COMMAND_USAGE[command] : undefined;
   return {
     ok: true,
     ...(command ? { command } : {}),
+    ...(usage ? { usage: { command, ...usage } } : {}),
     commands: {
       public: [
         "init",

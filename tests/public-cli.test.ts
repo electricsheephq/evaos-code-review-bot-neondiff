@@ -934,6 +934,88 @@ exit 1
     }
   });
 
+  it("prints command-scoped usage for a known command's --help instead of only the generic list", async () => {
+    const { stdout } = await runCli(["doctor", "--help"]);
+    const output = JSON.parse(stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe("doctor");
+    // Command-scoped usage must be distinguishable from the generic fallback:
+    // it names the specific command's own flags/description, not just the
+    // full command list every other command's --help would also show.
+    expect(output.usage).toBeDefined();
+    expect(output.usage.command).toBe("doctor");
+    expect(typeof output.usage.description).toBe("string");
+    expect(output.usage.description.length).toBeGreaterThan(0);
+    expect(Array.isArray(output.usage.flags)).toBe(true);
+    expect(output.usage.flags.some((flag: { name: string }) => flag.name === "--config")).toBe(true);
+    // Generic list stays present for backward compatibility with existing callers.
+    expect(output.commands.existing).toContain("doctor");
+  });
+
+  it("prints distinct command-scoped usage per command, not the same generic block reused", async () => {
+    const [doctorResult, statusResult] = await Promise.all([
+      runCli(["doctor", "--help"]),
+      runCli(["status", "--help"])
+    ]);
+    const doctorOutput = JSON.parse(doctorResult.stdout);
+    const statusOutput = JSON.parse(statusResult.stdout);
+
+    expect(doctorOutput.usage.command).toBe("doctor");
+    expect(statusOutput.usage.command).toBe("status");
+    expect(doctorOutput.usage.description).not.toBe(statusOutput.usage.description);
+  });
+
+  it("keeps generic top-level help unscoped when no command is given", async () => {
+    const { stdout } = await runCli(["help"]);
+    const output = JSON.parse(stdout);
+
+    expect(output.command).toBeUndefined();
+    expect(output.usage).toBeUndefined();
+  });
+
+  it("falls back to the generic command list for an unrecognized command's --help", async () => {
+    const { stdout } = await runCli(["totally-unknown-command", "--help"]);
+    const output = JSON.parse(stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe("totally-unknown-command");
+    expect(output.usage).toBeUndefined();
+    expect(output.commands.existing).toContain("doctor");
+  });
+
+  it("prints the package.json version and exits 0 for --version", async () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+
+    const { stdout, stderr } = await runCli(["--version"]);
+
+    expect(stdout.trim()).toBe(packageJson.version);
+    expect(stderr).toBe("");
+  });
+
+  it("prints the package.json version and exits 0 for the -v shorthand", async () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+
+    const { stdout, stderr } = await runCli(["-v"]);
+
+    expect(stdout.trim()).toBe(packageJson.version);
+    expect(stderr).toBe("");
+  });
+
+  it("does not execute a command's logic when --version is requested standalone", async () => {
+    const { stdout } = await runCli(["--version"]);
+
+    expect(stdout).not.toContain("\"dryRun\"");
+    expect(stdout).not.toContain("\"reposScanned\"");
+  });
+
+  it("still shows the generic command list and exits nonzero for a bare unknown command (regression pin)", async () => {
+    await expect(runCli(["totally-unknown-command"])).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("Unknown command: totally-unknown-command")
+    });
+  });
+
   it("initializes a local config from the packaged example outside the repo cwd", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-init-"));
     roots.push(root);
