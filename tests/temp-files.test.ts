@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -39,6 +39,19 @@ describe("temp-files helper", () => {
     writeSecureFileSync(path, "hello world");
 
     expect(readFileSync(path, "utf8")).toBe("hello world");
+    expect(statSync(path).mode & 0o777).toBe(SECURE_TEMP_FILE_MODE);
+  });
+
+  it("tightens permissions when overwriting an existing file", () => {
+    const dir = getProcessTempDir();
+    const path = join(dir, `secure-existing-${randomFileSuffix()}.txt`);
+    written.push(path);
+    writeFileSync(path, "old contents");
+    chmodSync(path, 0o644);
+
+    writeSecureFileSync(path, "new contents");
+
+    expect(readFileSync(path, "utf8")).toBe("new contents");
     expect(statSync(path).mode & 0o777).toBe(SECURE_TEMP_FILE_MODE);
   });
 });
