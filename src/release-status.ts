@@ -183,8 +183,7 @@ export interface ReleaseStatus {
 
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
-const PUBLIC_VERSION_PATTERN =
-  /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const MAX_PUBLIC_VERSION_TAG_LENGTH = 128;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
 const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
   ...REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES,
@@ -455,6 +454,9 @@ export function validatePublicReleaseManifestInputs(input: {
   if (input.expectedPublicVersion && !input.publicReleaseManifestPath) {
     throw new Error("--public-release-manifest is required when --expected-public-version is provided");
   }
+  if (input.expectedPublicVersion && input.expectedPublicVersion.length > MAX_PUBLIC_VERSION_TAG_LENGTH) {
+    throw new Error(`--expected-public-version is too long (max ${MAX_PUBLIC_VERSION_TAG_LENGTH} characters)`);
+  }
   if (input.expectedPublicVersion && !isPublicVersionTag(input.expectedPublicVersion)) {
     throw new Error("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
   }
@@ -711,12 +713,70 @@ function checkRollbackTarget(
 }
 
 function isPublicVersionTag(version: string): boolean {
-  return PUBLIC_VERSION_PATTERN.test(version);
+  if (version.length > MAX_PUBLIC_VERSION_TAG_LENGTH) return false;
+  if (!version.startsWith("v")) return false;
+  return isSemver(version.slice(1));
 }
 
 function isRollbackVersionTagRef(target: string): boolean {
   const prefix = "refs/tags/";
   return target.startsWith(prefix) && isPublicVersionTag(target.slice(prefix.length));
+}
+
+function isSemver(version: string): boolean {
+  const buildIndex = version.indexOf("+");
+  const withoutBuild = buildIndex === -1 ? version : version.slice(0, buildIndex);
+  const build = buildIndex === -1 ? undefined : version.slice(buildIndex + 1);
+  if (build !== undefined && !isDotSeparatedBuildMetadata(build)) return false;
+
+  const prereleaseIndex = withoutBuild.indexOf("-");
+  const core = prereleaseIndex === -1 ? withoutBuild : withoutBuild.slice(0, prereleaseIndex);
+  const prerelease = prereleaseIndex === -1 ? undefined : withoutBuild.slice(prereleaseIndex + 1);
+  const coreParts = core.split(".");
+  if (coreParts.length !== 3 || !coreParts.every(isSemverNumericIdentifier)) return false;
+  return prerelease === undefined || isDotSeparatedPrerelease(prerelease);
+}
+
+function isDotSeparatedPrerelease(value: string): boolean {
+  const parts = value.split(".");
+  return parts.length > 0 && parts.every((part) =>
+    part.length > 0 &&
+    isSemverIdentifier(part) &&
+    (!isAllAsciiDigits(part) || isSemverNumericIdentifier(part))
+  );
+}
+
+function isDotSeparatedBuildMetadata(value: string): boolean {
+  const parts = value.split(".");
+  return parts.length > 0 && parts.every((part) => part.length > 0 && isSemverIdentifier(part));
+}
+
+function isSemverNumericIdentifier(value: string): boolean {
+  if (!isAllAsciiDigits(value)) return false;
+  return value === "0" || !value.startsWith("0");
+}
+
+function isAllAsciiDigits(value: string): boolean {
+  if (value.length === 0) return false;
+  for (const char of value) {
+    if (char < "0" || char > "9") return false;
+  }
+  return true;
+}
+
+function isSemverIdentifier(value: string): boolean {
+  for (const char of value) {
+    if (
+      (char >= "0" && char <= "9") ||
+      (char >= "A" && char <= "Z") ||
+      (char >= "a" && char <= "z") ||
+      char === "-"
+    ) {
+      continue;
+    }
+    return false;
+  }
+  return true;
 }
 
 function isGitWorktree(cwd: string): boolean {

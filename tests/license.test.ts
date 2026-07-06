@@ -134,6 +134,31 @@ describe("license activation and entitlement cache", () => {
     expect(requests).toBe(0);
   });
 
+  it("preserves configured license API base paths when building request URLs", async () => {
+    const root = mkRoot(roots);
+    const urls: string[] = [];
+
+    const result = await activateLicense({
+      config: licenseConfig(root, "https://license.example.invalid/api"),
+      licenseKey: "LIC-path-prefix-test-123456",
+      fetchImpl: (async (url) => {
+        urls.push(String(url));
+        return new Response(JSON.stringify({
+          status: "active",
+          expiresAt: "2026-08-01T00:00:00.000Z",
+          repoVisibilityScope: "private",
+          updateEntitlement: true
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }) as typeof fetch
+    });
+
+    expect(result.ok).toBe(true);
+    expect(urls).toEqual(["https://license.example.invalid/api/v1/license/activate"]);
+  });
+
   it("keeps local license proof and fails when API deactivation notification fails", async () => {
     const root = mkRoot(roots);
     const key = "LIC-deactivate-notify-test-123456";

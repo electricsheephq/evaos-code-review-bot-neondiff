@@ -35,8 +35,10 @@ import {
   type ReviewQueueJobState,
   type ReviewQueueJobSource
 } from "./state.js";
-import type { PullRequestSummary, ReviewEvent } from "./types.js";
+import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, ReviewEvent } from "./types.js";
 import type { IssueCommentCommandSource } from "./commands.js";
+import { buildChangedSurfaceValidationReport } from "./validation-selector.js";
+import { redactSecrets } from "./secrets.js";
 import {
   activateRepoForNewOnlyReview,
   isCanaryAllowed,
@@ -75,6 +77,8 @@ export interface SchedulerGitHubApi {
   listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
   canPostAsApp?: ReviewStatusCommentGithub["canPostAsApp"];
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
+  // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
+  listPullFiles?(repo: string, pullNumber: number): Promise<PullFilePatch[]>;
 }
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
@@ -260,6 +264,7 @@ async function enqueuePullIfEligible(input: {
   allowActivationBaselineCommandLookup?: boolean;
   onStatusCommentFailure?: () => void;
   onCommandFetchError?: () => void;
+  automaticPriorityOverride?: number;
 }): Promise<EnqueueStatus> {
   if (isClosedPull(input.pull)) {
     await retireQueuedJobsForClosedPull(input);
@@ -467,6 +472,10 @@ async function enqueuePullIfEligible(input: {
     return "provider_deferred";
   }
 
+  // Risk-weighted enqueue priority (#301): only when explicitly enabled do we fetch the changed
+  // surface to derive a risk tier. Disabled (default) ⇒ no extra GitHub call, flat priority.
+  input.automaticPriorityOverride = await resolveRiskWeightedPriorityOverride(input);
+
   const enqueued = enqueueReviewJob(input);
   recordReadinessForEnqueue({
     state: input.state,
@@ -508,11 +517,13 @@ function enqueueReviewJob(input: {
   pull: PullRequestSummary;
   providerId: string;
   now: Date;
+  automaticPriorityOverride?: number;
 }, commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>) {
   const source: ReviewQueueJobSource = commandDecision ? "manual_command" : "automatic";
   const sessionId = shouldAssignReviewerSession(commandDecision)
     ? assignReviewerSessionForQueueJob(input, source, commandDecision)?.session?.sessionId
     : undefined;
+  const automaticPriority = input.automaticPriorityOverride ?? automaticQueuePriority(input.config, input.repo);
   return input.state.enqueueReviewQueueJob({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -521,17 +532,91 @@ function enqueueReviewJob(input: {
     source,
     lane: source === "manual_command" ? "manual" : "background",
     providerId: input.providerId,
-    priority: source === "manual_command" ? undefined : automaticQueuePriority(input.config, input.repo),
+    priority: source === "manual_command" ? undefined : automaticPriority,
     ...(commandDecision ? { commentId: commandDecision.commandId } : {}),
     ...(sessionId ? { sessionId } : {}),
     now: input.now
   });
 }
 
+async function resolveRiskWeightedPriorityOverride(input: {
+  config: BotConfig;
+  github: SchedulerGitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+}): Promise<number | undefined> {
+  // Gated (#301): disabled (default) or an API that can't list files ⇒ no fetch, flat priority.
+  if (!input.config.riskWeightedQueue?.enabled || !input.github.listPullFiles) return undefined;
+  let report;
+  try {
+    const files = await input.github.listPullFiles(input.repo, input.pull.number);
+    const profile = resolveRepoProfile(input.config, input.repo);
+    report = buildChangedSurfaceValidationReport({
+      repo: input.repo,
+      pull: input.pull,
+      files,
+      ...(profile.allowed ? { profile: profile.profile } : {})
+    });
+  } catch (error) {
+    // Never block enqueue on a file-fetch failure: log and fall back to flat priority.
+    console.warn(
+      `[risk-queue] changed-surface fetch failed repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha}: ${
+        redactSecrets(error instanceof Error ? error.message : String(error))
+      }`
+    );
+    return undefined;
+  }
+  const { priority, tier, reason } = riskWeightedQueuePriority({ config: input.config, repo: input.repo, report });
+  if (tier !== "default") {
+    console.warn(
+      redactSecrets(
+        `[risk-queue] repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha} tier=${tier} priority=${priority ?? "default"} reason=${reason}`
+      )
+    );
+  }
+  return priority;
+}
+
 function automaticQueuePriority(config: BotConfig, repo: string): number | undefined {
   const backgroundPriority = config.reviewScheduler?.backgroundPriority;
   if (!isSelfRepo(repo)) return backgroundPriority;
   return Math.min(backgroundPriority ?? 50, 1);
+}
+
+export type RiskQueueTier = "elevated" | "docs_only" | "default";
+
+/**
+ * Risk-weighted enqueue priority (#301): derive a queue tier from the already-shipped
+ * changed-surface validation report — a PR whose changed files match a required-validation category
+ * (auth/security/migration/release/runtime) is elevated (numerically lower priority = leased
+ * sooner); a docs-only PR is deferred. When the feature is disabled or no report is available, this
+ * returns the flat automaticQueuePriority so behavior is byte-identical to today. Pure and exported
+ * for tests; no new path-classification logic (the report is the sole risk source).
+ */
+export function riskWeightedQueuePriority(input: {
+  config: BotConfig;
+  repo: string;
+  report?: ChangedSurfaceValidationReport;
+}): { priority: number | undefined; tier: RiskQueueTier; reason: string } {
+  const base = automaticQueuePriority(input.config, input.repo);
+  const risk = input.config.riskWeightedQueue;
+  if (!risk?.enabled || !input.report) {
+    return { priority: base, tier: "default", reason: "risk_weighting_disabled" };
+  }
+  const backgroundPriority = input.config.reviewScheduler?.backgroundPriority ?? 50;
+  const requiresValidation = input.report.recommendations.some((recommendation) => recommendation.status === "required");
+  if (requiresValidation) {
+    const elevated = risk.elevatedPriority ?? Math.min(backgroundPriority, 10);
+    // Never de-prioritize a self-repo below its existing elevation.
+    const priority = base === undefined ? elevated : Math.min(base, elevated);
+    return { priority, tier: "elevated", reason: "risk_elevated_required_validation" };
+  }
+  if (input.report.docsOnly) {
+    const docsOnly = risk.docsOnlyPriority ?? backgroundPriority;
+    const priority = base === undefined ? docsOnly : Math.max(base, docsOnly);
+    return { priority, tier: "docs_only", reason: "risk_docs_only" };
+  }
+  return { priority: base, tier: "default", reason: "risk_no_required_surface" };
 }
 
 const SELF_REPOS = new Set([
@@ -1645,7 +1730,6 @@ function updateQueueJobAfterReviewStatus(input: {
         lastError: "legacy_review_capacity_busy"
       });
       return;
-    case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
     case "skipped_license_gate":
@@ -1656,6 +1740,13 @@ function updateQueueJobAfterReviewStatus(input: {
         lastError: input.status === "skipped_license_gate"
           ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)?.reason ?? "license_entitlement_required"
           : `unexpected_scheduler_review_status=${input.status}`
+      });
+      return;
+    case "skipped_draft":
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "stale_retired",
+        lastError: "draft_pr"
       });
       return;
     case "skipped_command_stop":

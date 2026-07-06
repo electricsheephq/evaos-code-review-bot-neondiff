@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { inferRegressionCategory } from "../src/regression-taxonomy.js";
+import { inferRegressionCategory, normalizeFindingCategory } from "../src/regression-taxonomy.js";
+import type { Finding } from "../src/types.js";
 
 describe("regression taxonomy", () => {
   it("keeps rollback notes in release-regression unless data/state loss is present", () => {
@@ -22,6 +23,87 @@ describe("regression taxonomy", () => {
   });
 });
 
+describe("normalizeFindingCategory precedence (#280)", () => {
+  it("keeps a validated model category even when incidental keywords would infer another", () => {
+    // Before #280 the inference chain ran first and 'token' reclassified this to auth.
+    const result = normalizeFindingCategory(
+      full({
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        title: "Stale token cache",
+        body: "The handler reuses a stale token and returns wrong output."
+      })
+    );
+
+    expect(result).toBe("runtime_correctness");
+  });
+
+  it("does not de-escalate: keeps an RC-eligible model category over a docs-only inference", () => {
+    // model data_loss (eligible) with docs-only path/text; inferred docs_only is INELIGIBLE, so the
+    // escalate-only override does not fire and the model category is preserved. The fixture text
+    // deliberately avoids every prose-category needle so inference genuinely resolves docs_only —
+    // asserted below so the fixture cannot rot back into a trivially-passing case.
+    const docsOnlyFinding = full({
+      category: "data_loss",
+      path: "docs/runbook.md",
+      title: "Runbook restore section is unclear",
+      body: "The runbook paragraph describing the restore workflow is confusing and needs a rewrite."
+    });
+
+    expect(inferRegressionCategory(docsOnlyFinding)).toBe("docs_only");
+    expect(normalizeFindingCategory(docsOnlyFinding)).toBe("data_loss");
+  });
+
+  it("escalates across the eligibility boundary: RC-ineligible model, RC-eligible inference wins", () => {
+    // model docs_only (ineligible) but the body infers security_boundary (eligible) — the safety
+    // net escalates so a mislabeled security finding still blocks. Mirrors the main-test semantics.
+    const result = normalizeFindingCategory(
+      full({
+        category: "docs_only",
+        path: "docs/operator-cli.md",
+        title: "Leaked private key in rollback docs",
+        body: "The private key is pasted into the operator rollback instructions."
+      })
+    );
+
+    expect(result).toBe("security_boundary");
+  });
+
+  it("treats a model category of unknown as absent and falls back to inference", () => {
+    const result = normalizeFindingCategory(
+      full({
+        category: "unknown",
+        path: "src/auth.ts",
+        title: "Session token regression",
+        body: "The session token refresh returns stale credentials."
+      })
+    );
+
+    expect(result).toBe("auth");
+  });
+
+  it("falls back to inference when the model category is absent", () => {
+    const result = normalizeFindingCategory(
+      full({
+        path: "src/auth.ts",
+        title: "Session token regression",
+        body: "The session token refresh returns stale credentials."
+      })
+    );
+
+    expect(result).toBe("auth");
+  });
+});
+
 function finding(path: string, title: string, body: string) {
   return { path, title, body };
+}
+
+function full(overrides: Partial<Finding> & Pick<Finding, "path" | "title" | "body">): Finding {
+  return {
+    severity: "P1",
+    line: 1,
+    confidence: 0.8,
+    ...overrides
+  };
 }
