@@ -1,5 +1,5 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
-import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
+import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
@@ -236,9 +236,12 @@ export function sanitizeDroppedFinding<T extends Partial<Finding>>(finding: T, p
 
 export function decideReviewEvent(
   findings: Pick<ReviewComment, "severity" | "category" | "confidence">[],
-  confidenceFloors?: RequestChangesConfidenceFloors
+  confidenceFloors?: RequestChangesConfidenceFloors,
+  categoryPrecisionFloors?: CategoryPrecisionFloors
 ): ReviewEvent {
-  return findings.some((finding) => isRequestChangesEligible(finding, confidenceFloors)) ? "REQUEST_CHANGES" : "COMMENT";
+  return findings.some((finding) => isRequestChangesEligible(finding, confidenceFloors, categoryPrecisionFloors))
+    ? "REQUEST_CHANGES"
+    : "COMMENT";
 }
 
 export function formatReviewComment(

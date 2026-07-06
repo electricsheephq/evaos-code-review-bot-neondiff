@@ -9,7 +9,7 @@ import {
   titlesAreNearDuplicate
 } from "./findings.js";
 import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
-import { countCategories, isRequestChangesEligible, normalizeFindingCategory, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
+import { countCategories, isRequestChangesEligible, normalizeFindingCategory, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type {
   DeterministicReviewGateSummary,
   DroppedFinding,
@@ -51,6 +51,7 @@ export function applyDeterministicReviewGate(input: {
   repoMemoryFalsePositives?: RepoMemoryFalsePositiveEntry[];
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
+  categoryPrecisionFloors?: CategoryPrecisionFloors;
 }): DeterministicReviewGateResult {
   const located = validateFindingLocations(input.findings, input.files);
   // Memory suppression intentionally precedes normalization; dropReasonCounts reflects that ordering.
@@ -75,7 +76,7 @@ export function applyDeterministicReviewGate(input: {
     ...normalized.dropped
   ].map((finding) => sanitizeDroppedFinding(finding, input.publicConfidencePolicy));
   const comments = normalized.comments;
-  const event = decideReviewEvent(comments, input.requestChangesConfidenceFloors);
+  const event = decideReviewEvent(comments, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors);
 
   return {
     event,
@@ -86,7 +87,7 @@ export function applyDeterministicReviewGate(input: {
       acceptedComments: comments.length,
       droppedFindings: dropped.length,
       event,
-      requestChangesEligible: comments.filter((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors)).length,
+      requestChangesEligible: comments.filter((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors)).length,
       categoryCounts: countCategories(comments),
       dropReasonCounts: countDropReasons(dropped)
     }

@@ -1,5 +1,5 @@
 import { decideReviewEvent } from "./findings.js";
-import { isRequestChangesEligible, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
+import { isRequestChangesEligible, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type { PullFilePatch, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
 export interface SelfConsistencyRecheckConfig {
@@ -49,12 +49,13 @@ export function runSelfConsistencyRecheck(input: {
   files: PullFilePatch[];
   config: SelfConsistencyRecheckConfig;
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
+  categoryPrecisionFloors?: CategoryPrecisionFloors;
   secondDraw: (input: SelfConsistencySecondDrawInput) => SelfConsistencySecondDrawResult;
 }): { comments: ReviewComment[]; event: ReviewEvent; verdicts: SelfConsistencyVerdict[] } {
   if (!input.config.enabled) {
     return {
       comments: input.comments,
-      event: decideReviewEvent(input.comments, input.requestChangesConfidenceFloors),
+      event: decideReviewEvent(input.comments, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors),
       verdicts: []
     };
   }
@@ -101,7 +102,7 @@ export function runSelfConsistencyRecheck(input: {
 
   // Re-derive the event: a refuted comment still POSTS but no longer counts toward REQUEST_CHANGES.
   const eligibleComments = comments.filter((comment) => !refutedKeys.has(commentKey(comment)));
-  const event = eligibleComments.some((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors))
+  const event = eligibleComments.some((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors))
     ? "REQUEST_CHANGES"
     : "COMMENT";
 

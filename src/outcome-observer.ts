@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "./secrets.js";
@@ -171,6 +172,54 @@ export function runOutcomeObserver(input: {
   writeFileSync(join(input.evidenceDir, "outcome-observer.json"), `${redactSecrets(JSON.stringify(packet, null, 2))}\n`);
 
   return { ok: true, observed: input.reviews.length, skipped, labeled, observations };
+}
+
+/**
+ * Record an explicit negative-control label for each supplied review (#286 PR C, --mark-negative-
+ * control). A negative control is EXPLICIT + verifiably CLEAN: it is recorded only for a review that
+ * posted ZERO findings. Any review that posted findings is refused with a clear error — mirroring the
+ * #296 rule that an empty/quiet run is never a negative control by itself. The control marker uses a
+ * deterministic synthetic fingerprint over the review coordinates so re-marking is idempotent.
+ */
+export function recordNegativeControlLabels(input: {
+  store: ReviewStateStore;
+  reviews: OutcomeObserverReview[];
+  now?: Date;
+}): { recorded: number } {
+  for (const review of input.reviews) {
+    if (review.findings.length > 0) {
+      throw new Error(
+        `Refusing to mark ${review.repo}#${review.pullNumber}@${review.headSha} as a negative control: it posted findings. Explicit negative controls require a verifiably clean (zero-finding) run.`
+      );
+    }
+  }
+  const observedAt = (input.now ?? new Date()).toISOString();
+  const records: FindingOutcomeLabelRecord[] = input.reviews.map((review) => ({
+    fingerprint: negativeControlFingerprint(review),
+    repo: review.repo,
+    pullNumber: review.pullNumber,
+    headSha: review.headSha,
+    severity: "P3",
+    category: "unknown",
+    confidence: 0,
+    labelSource: "explicit_control",
+    verdict: "unvalidated",
+    observedAt,
+    evidenceRef: "operator-declared negative control (zero findings posted)"
+  }));
+  // Atomic: a mid-batch write failure leaves zero explicit_control rows, never a partial mark.
+  input.store.recordFindingOutcomeLabels(records);
+  return { recorded: records.length };
+}
+
+// SYNTHETIC control marker (#286 PR C) — never treat as a finding. Consumers must branch on
+// label_source === "explicit_control" FIRST (calibration-aggregate does: it counts these toward
+// negative controls and excludes them from the finding bins/precision). The fingerprint is derived
+// from the review coordinates (a clean run has no finding fingerprint) so re-marking is idempotent;
+// it must never be joined back as a real finding, whose category "unknown" would be RC-eligible.
+function negativeControlFingerprint(review: OutcomeObserverReview): string {
+  const canonical = JSON.stringify({ control: "explicit", repo: review.repo, pullNumber: review.pullNumber, headSha: review.headSha });
+  return `finding:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
 interface OutcomeObserverInputEntry {

@@ -57,7 +57,21 @@ describe("calibration aggregation (#286 PR B)", () => {
     expect(aggregate.p0p1Labels).toBe(2); // P0 tp + P1 fp; P2 not counted; unvalidated P0 excluded
   });
 
-  it("reports negativeControlScenarios as 0 (no explicit-control source in the label store yet)", () => {
+  it("counts explicit_control labels toward negativeControlScenarios but not toward findings (#286 PR C)", () => {
+    const aggregate = aggregateCalibrationLabels([
+      label({ confidence: 0.9, verdict: "true_positive" }),
+      label({ confidence: 0.5, verdict: "false_positive", labelSource: "none_observed" }),
+      label({ confidence: 0, verdict: "unvalidated", labelSource: "explicit_control", severity: "P0" }),
+      label({ confidence: 0, verdict: "unvalidated", labelSource: "explicit_control", severity: "P1" })
+    ]);
+    expect(aggregate.negativeControlScenarios).toBe(2);
+    // Explicit controls are clean-run markers, not findings: they never inflate labeled counts.
+    // The two real labels default to P1, so p0p1Labels counts them but NOT the excluded controls.
+    expect(aggregate.labeledFindings).toBe(2);
+    expect(aggregate.p0p1Labels).toBe(2);
+  });
+
+  it("still reports negativeControlScenarios as 0 when no explicit controls are present", () => {
     const aggregate = aggregateCalibrationLabels([
       label({ confidence: 0.9, verdict: "true_positive" }),
       label({ confidence: 0.5, verdict: "false_positive", labelSource: "none_observed" })
