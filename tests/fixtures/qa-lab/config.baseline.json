@@ -1,0 +1,297 @@
+{
+  "pilotRepos": ["example-org/example-repo"],
+  "pollIntervalMs": 90000,
+  "skipDrafts": true,
+  "canaryPulls": ["example-org/example-repo#1"],
+  "activation": {
+    "reviewExistingOpenPrsOnActivation": false
+  },
+  "reviewConcurrency": {
+    "maxActiveRuns": 5,
+    "leaseTtlMs": 900000
+  },
+  "_reviewGateComment": "Deterministic post-model gate: ranking, comment cap, and REQUEST_CHANGES eligibility. maxInlineComments matches the built-in default; the rest are default-off/quieter-only knobs. See docs/neondiff-config.md.",
+  "reviewGate": {
+    "maxInlineComments": 25,
+    "_requestChangesConfidenceFloorsComment": "Optional per-severity confidence floor for REQUEST_CHANGES eligibility (only P0/P1 keys allowed). Quieter-only: a below-floor finding still posts as a comment. Uncomment to enable.",
+    "_retryDegradedConfidencePenaltyComment": "Optional 0..1 confidence penalty applied to findings recovered via the strict-JSON retry path. Quieter-only; unset means no penalty.",
+    "selfConsistency": {
+      "_comment": "Opt-in second-draw re-check for P0/P1 findings. Adds one provider call per re-checked finding (bounded by maxFindingsPerReview) — keep enabled:false unless you have budget for the extra provider spend.",
+      "enabled": false,
+      "severities": ["P0", "P1"],
+      "maxFindingsPerReview": 5
+    }
+  },
+  "_riskWeightedQueueComment": "Config-gated enqueue priority tiering by changed-surface risk. Disabled means flat FIFO priority and zero extra GitHub calls at enqueue time.",
+  "riskWeightedQueue": {
+    "enabled": false
+  },
+  "_repoMemoryComment": "Durable per-repo memory packet (policy notes, machine facts, learned false positives) surfaced to the model. Disabled means no packet is built.",
+  "repoMemory": {
+    "enabled": false,
+    "memoryRoot": ".evaos/repo-memory",
+    "maxPacketBytes": 12000,
+    "maxStateNotes": 20,
+    "includeStaleNotes": false
+  },
+  "_workRootComment": "workRoot must resolve outside this checkout (enforced at config load: config.workRoot must be outside the current repository checkout). /tmp/neondiff is a placeholder that satisfies that check on any machine without edits; point it at a durable path for real use.",
+  "workRoot": "/tmp/neondiff/runtime",
+  "statePath": "/tmp/neondiff/state/reviews.sqlite",
+  "evidenceDir": "/tmp/neondiff/evidence",
+  "issueEnrichment": {
+    "enabled": false,
+    "postIssueComment": false,
+    "allowlist": [],
+    "_allowedLabelsComment": "Issue-enrichment label suggestions are separate from PR review repoProfiles.suggestedLabels. Empty means no allowlist restriction; fill this only to cap inferred issue labels.",
+    "allowedLabels": [],
+    "_allowedReviewersComment": "Issue-enrichment reviewer/owner suggestions are separate from PR review repoProfiles.suggestedReviewers. Empty means no allowlist restriction; fill this only to cap inferred issue owners.",
+    "allowedReviewers": [],
+    "maxIssuesPerCycle": 5,
+    "maxCommentsPerCycle": 1,
+    "globalMaxIssuesPerCycle": 5,
+    "_globalMaxCommentsPerCycleComment": "Beta safety default: at most one live issue-enrichment comment per daemon cycle globally. Raise only after dry-run evidence.",
+    "globalMaxCommentsPerCycle": 1,
+    "maxActiveRuns": 1,
+    "_leaseTtlMsComment": "Lease TTL bounds stuck-worker recovery and is the worst-case live issue-enrichment stall after abnormal worker exit unless an operator clears leases. It may be shorter than cooldownMs, which controls per-issue deferral cadence.",
+    "leaseTtlMs": 1200000,
+    "cooldownMs": 3600000,
+    "burstWindowMs": 3600000,
+    "maxIssuesPerBurst": 10,
+    "lookbackMs": 600000,
+    "processExistingOpenIssuesOnActivation": false,
+    "repos": {
+      "electricsheephq/evaos-code-review-bot": {
+        "enabled": false,
+        "allowedLabels": [],
+        "allowedReviewers": [],
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "maxIssuesPerBurst": 8,
+        "processExistingOpenIssuesOnActivation": false
+      }
+    }
+  },
+  "license": {
+    "_enabledComment": "Enable this for public/private license enforcement. Public repos may remain free; private repos fail closed without active entitlement.",
+    "enabled": false,
+    "_apiBaseUrlComment": "Set apiBaseUrl when enabling license enforcement.",
+    "_cachePathComment": "Defaults to a license/entitlement-cache.json file next to statePath when omitted.",
+    "_keyPathComment": "For the beta file backend, keyPath defaults to license/license-key.txt next to statePath when omitted. The file is written with 0600 permissions.",
+    "storageBackend": "file",
+    "keychainService": "com.electricsheephq.neondiff.license",
+    "keychainAccount": "default",
+    "requestTimeoutMs": 10000,
+    "_offlineGraceMsComment": "Private-repo entitlement cache grace is capped at 15 minutes to limit revoked-license exposure during API outages.",
+    "offlineGraceMs": 900000,
+    "publicReposFree": true,
+    "privateReposRequireEntitlement": true,
+    "updateEntitlementRequiresLicense": true
+  },
+  "desktop": {
+    "openAICompatibleEndpoint": "http://localhost:8000/v1",
+    "updateChannel": "dev"
+  },
+  "providers": {
+    "_comment": "Provider registry metadata for operator/desktop setup. API keys stay in environment variables or provider app config, never in this JSON file.",
+    "defaultProviderId": "zcode-glm",
+    "providers": {
+      "zcode-glm": {
+        "enabled": true,
+        "adapter": "zcode",
+        "displayName": "GLM/Z.ai through ZCode",
+        "model": "GLM-5.2",
+        "authMode": "zcode-app-config",
+        "contextWindowTokens": 128000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 0,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      },
+      "ollama-local": {
+        "enabled": false,
+        "adapter": "openai-compatible",
+        "displayName": "Ollama local OpenAI-compatible endpoint",
+        "baseUrl": "http://localhost:11434/v1",
+        "model": "qwen2.5-coder:7b",
+        "authMode": "none",
+        "contextWindowTokens": 32000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 1,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": true,
+          "streaming": false
+        }
+      },
+      "openai-compatible": {
+        "enabled": false,
+        "adapter": "openai-compatible",
+        "displayName": "OpenAI-compatible BYOK or gateway endpoint",
+        "baseUrl": "https://example.invalid/v1",
+        "model": "model-id",
+        "authMode": "api-key-env",
+        "apiKeyEnv": "NEONDIFF_PROVIDER_API_KEY",
+        "contextWindowTokens": 128000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 1,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      }
+    }
+  },
+  "commands": {
+    "enabled": false,
+    "botMentions": ["@evaos-code-review-bot"],
+    "trustedAuthors": ["100yenadmin"],
+    "acknowledge": false
+  },
+  "gitnexusContext": {
+    "enabled": false,
+    "packetVersion": "gitnexus-context-packet-v0.1",
+    "maxPacketBytes": 40000,
+    "maxRelatedItems": 8,
+    "queryLimit": 3,
+    "commandTimeoutMs": 10000,
+    "maxCommandOutputBytes": 8000,
+    "includeStaleContext": false,
+    "repoAliases": {
+      "electricsheephq/WorldOS": "worldos",
+      "100yenadmin/evaOS-GUI": "evaos-gui"
+    },
+    "generatedPathPatterns": ["dist/**", "build/**", "coverage/**", "Library/**", "Temp/**", "**/*.min.js", "**/*.bundle.js", "**/*.lock"]
+  },
+  "repoProfiles": {
+    "enableOrgFallbacks": false,
+    "repos": {
+      "electricsheephq/WorldOS": {
+        "displayName": "WorldOS Unity",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize Unity scene, save-state, gameplay, release-regression, and data-loss risks.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "src/**", "tests/**", "!Library/**"],
+        "pathInstructions": {
+          "Assets/**": ["Prioritize scene, prefab, save-state, and gameplay regressions."],
+          "ProjectSettings/**": ["Treat build/release behavior changes as high risk."]
+        },
+        "riskyPaths": ["Assets/**", "ProjectSettings/**", "Packages/manifest.json"],
+        "proofExpectations": ["Mention Unity editor/play-mode or focused smoke evidence when relevant."],
+        "validationHints": ["Prefer correctness, persistence, CI, and release findings over style-only feedback."],
+        "readinessHints": ["Scene, save, build, or package changes need explicit rollback and smoke notes."],
+        "preMergeChecks": {
+          "title": {
+            "mode": "warning",
+            "instructions": "Title should name the gameplay or release behavior changed."
+          },
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused Unity/editor smoke, CI, or fixture evidence when code changes affect runtime behavior."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false,
+            "instructions": "Design-only declaration until finishing-touch commands are explicitly enabled."
+          }
+        },
+        "suggestedLabels": ["unity", "gameplay", "regression-hardening"]
+      },
+      "100yenadmin/evaOS-GUI": {
+        "displayName": "evaOS Workbench",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Prioritize Electron/Workbench runtime regressions, packaged-app resource shape, bridge control, and macOS permission identity risk.",
+        "autoReview": {
+          "baseBranches": ["main"],
+          "labels": ["!wip", "!do-not-review"]
+        },
+        "pathFilters": ["src/**", "apps/**", "scripts/**", "package.json", "package-lock.json", "!dist/**"],
+        "pathInstructions": {
+          "apps/eva-desktop-mac/**": ["Check macOS identity, helper path, and packaged resource shape risk."],
+          "scripts/**": ["Treat release, packaging, and artifact-shape changes as high risk."]
+        },
+        "riskyPaths": ["scripts/**", "apps/eva-desktop-mac/**", "package.json"],
+        "proofExpectations": ["Mention focused app smoke, packaged resource checks, or CI artifact proof when relevant."],
+        "validationHints": ["Do not ask for broad local suites when remote CI or fast-smoke proof is the right gate."],
+        "preMergeChecks": {
+          "description": {
+            "mode": "warning",
+            "instructions": "Description should name app/runtime behavior and validation evidence."
+          },
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused app smoke, packaged resource checks, or CI proof."
+          }
+        },
+        "finishingTouches": {
+          "docstrings": {
+            "enabled": false,
+            "instructions": "Design-only declaration until finishing-touch commands are explicitly enabled."
+          },
+          "unitTests": {
+            "enabled": false
+          }
+        },
+        "suggestedLabels": ["workbench", "macos", "regression-hardening"]
+      },
+      "electricsheephq/evaos-code-review-bot": {
+        "enabled": false,
+        "displayName": "evaOS Code Review Bot",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Self-monitoring profile for dry-run/eval only until the App install and live allowlist gates are approved.",
+        "pathFilters": ["src/**", "tests/**", "docs/**", "config.example.json", "package.json", "package-lock.json"],
+        "riskyPaths": ["src/github.ts", "src/state.ts", "src/worker.ts", "src/zcode.ts"],
+        "proofExpectations": ["Require focused tests, TypeScript build, duplicate-suppression proof, and release-status proof before live promotion."],
+        "readinessHints": ["Do not expand live monitoring from this example profile alone."],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "error",
+            "instructions": "Require focused tests, TypeScript build, and beta release-status proof before live promotion."
+          }
+        },
+        "finishingTouches": {
+          "unitTests": {
+            "enabled": false,
+            "instructions": "Do not auto-generate tests from the bot during live review until opt-in command gates ship."
+          }
+        },
+        "suggestedLabels": ["bot", "regression-hardening"]
+      }
+    },
+    "orgFallbacks": {
+      "electricsheephq": {
+        "displayName": "Electric Sheep conservative fallback",
+        "reviewProfile": "assertive",
+        "promptNote": "Conservative fallback profile for explicitly enabled dry-run scans only.",
+        "validationHints": ["Fallback profiles must not expand runtime permissions or live monitoring by themselves."]
+      }
+    }
+  },
+  "zcode": {
+    "_desktopPathComment": "Developer-machine defaults. Override cliPath and appConfigPath for any non-author workstation or packaged desktop install.",
+    "cliPath": "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+    "appConfigPath": "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+    "model": "GLM-5.2",
+    "timeoutMs": 180000,
+    "maxPatchBytes": 80000,
+    "retryMaxRetries": 0
+  },
+  "github": {
+    "appId": "set via EVAOS_REVIEW_BOT_APP_ID",
+    "privateKeyPath": "set via EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH",
+    "token": "optional fallback token for local development only"
+  }
+}
