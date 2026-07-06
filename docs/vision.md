@@ -6,7 +6,10 @@ pull requests.**
 This document states what NeonDiff is for, the system design that serves that
 purpose, the invariants that protect it, and what NeonDiff deliberately does
 not do. It exists so contributors, operators, and agents can align with the
-product direction without reconstructing it from issue history.
+product direction without reconstructing it from issue history. The worker
+runs locally with a GitHub App scoped to explicit repositories; public
+repositories are free by default, while private repository review requires an
+active private entitlement.
 
 ## The Problem
 
@@ -79,6 +82,9 @@ them:
   They never promote a finding or escalate the review verdict.
 - **Fail-closed configuration.** Unknown keys, out-of-range values, and
   malformed shapes are rejected at load, not silently ignored.
+- **Entitlement-gated private review.** Private or commercial review requests
+  stop before checkout, file listing, provider calls, or GitHub review posting
+  when entitlement proof is missing.
 - **Additive and default-off.** New gate behavior ships disabled and opt-in,
   with dry-run evidence, before anyone depends on it.
 - **Advisory proof boundaries.** NeonDiff does not claim calibrated accuracy
@@ -91,6 +97,35 @@ them:
 - **Local-first, BYOK.** Diffs go to the providers the operator configured,
   under the operator's keys and budget — not to a hosted review service.
 
+Strong automation should reduce ambiguity for a human maintainer. It should not
+hide the boundary between evidence, judgment, and authority.
+
+## Provider And BYOK Boundaries
+
+NeonDiff is local-first, but model egress depends on the provider path the
+operator chooses.
+
+- Local or self-hosted endpoints can keep prompts and diffs on the operator's
+  machine or network when the model runtime is actually local.
+- Hosted providers, including ZCode-backed GLM/Z.ai or hosted
+  OpenAI-compatible BYOK gateways, can receive the prompt and diff context
+  needed to produce a review.
+- Provider keys belong in environment variables, local operator wrappers, or
+  supported secret paths. They do not belong in tracked config, GitHub comments,
+  release notes, or evidence packets.
+- Provider keys are not NeonDiff entitlements. They unlock model access, while
+  NeonDiff entitlements govern which repo visibilities the worker may review.
+- NeonDiff support tiers are software/support entitlement boundaries. Provider
+  and model costs stay external through BYOK or local models.
+- Active private entitlement covers private repos and public repos when an
+  operator disables the default public-free path. Public-only entitlement does
+  not unlock private repos.
+- Provider resource catalogs are discovery aids, not proof that a provider can
+  run NeonDiff reviews.
+
+See [providers.md](providers.md), [pricing.md](pricing.md), and
+[license-boundary.md](license-boundary.md) for the current public beta wording.
+
 ## What NeonDiff Deliberately Does Not Do
 
 - **No breadth race.** Walkthrough prose, issue planners, and feature parity
@@ -102,6 +137,21 @@ them:
   benchmark claim appears on a public surface before the evidence gate passes.
 - **No hosted diff processing.** There is no NeonDiff server reading your
   code. The worker runs where the operator runs it.
+
+## Issue Enrichment Boundary
+
+Issue enrichment is a separate rollout lane from pull request review.
+
+- PR review allowlists do not opt repositories into issue enrichment.
+- Issue enrichment needs its own allowlist, repo-level throttles, and live-post
+  gate before comments can go out.
+- New issue-enrichment rollouts should keep
+  `processExistingOpenIssuesOnActivation=false` so enabling the lane does not
+  imply scanning or commenting on an existing issue backlog by default.
+
+See [issue-enrichment.md](issue-enrichment.md) for the rollout policy and
+[license-boundary.md](license-boundary.md) for the public/private entitlement
+matrix.
 
 ## Where This Goes
 
@@ -125,3 +175,12 @@ the ranking/scoring and calibration program that produced this document is
   statistics
 - [release-governance.md](release-governance.md) — versioning and the GA line
 - [CHANGELOG](../CHANGELOG.md) — shipped changes by version
+
+## Proof Boundary
+
+This vision document states product intent and contributor alignment. It does
+not prove setup, provider quality, release readiness, marketplace readiness,
+desktop readiness, legal readiness, or GA readiness. Those claims need their
+own validation artifacts and tracked issues before they can move into public
+product copy. It also does not prove issue-enrichment rollout readiness for any
+repo unless that repo has separate allowlist, threshold, and evidence coverage.
