@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFindings } from "./findings.js";
 import type { GitNexusContextPacket } from "./gitnexus-context.js";
@@ -223,10 +223,10 @@ export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: stri
   const policy = buildZCodeReviewPolicy();
 
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+  writeFileAtomic(configPath, `${JSON.stringify(policy, null, 2)}\n`, 0o600);
   if (evidenceDir) {
     mkdirSync(evidenceDir, { recursive: true });
-    writeFileSync(join(evidenceDir, "zcode-review-policy.json"), `${JSON.stringify(policy, null, 2)}\n`);
+    writeFileAtomic(join(evidenceDir, "zcode-review-policy.json"), `${JSON.stringify(policy, null, 2)}\n`, 0o600);
   }
 
   try {
@@ -234,7 +234,7 @@ export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: stri
   } finally {
     if (originalConfig) {
       mkdirSync(configDir, { recursive: true });
-      writeFileSync(configPath, originalConfig.contents, { mode: originalConfig.mode });
+      writeFileAtomic(configPath, originalConfig.contents, originalConfig.mode);
     } else {
       rmSync(configPath, { force: true });
       if (!hadConfigDir) {
@@ -245,6 +245,17 @@ export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: stri
         }
       }
     }
+  }
+}
+
+function writeFileAtomic(path: string, contents: string, mode: number): void {
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tempPath, contents, { mode });
+    renameSync(tempPath, path);
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
   }
 }
 

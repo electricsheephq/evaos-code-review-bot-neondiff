@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-NEONDIFF_VERSION="${NEONDIFF_VERSION:-0.4.24-beta.1}"
+NEONDIFF_VERSION="${NEONDIFF_VERSION:-0.4.30-beta.1}"
 DRY_RUN=0
 NPM_PREFIX="${NPM_PREFIX:-}"
 
@@ -13,7 +13,7 @@ Usage:
   sh install.sh [--dry-run] [--prefix /path/to/prefix]
 
 Environment:
-  NEONDIFF_VERSION  Version to install, defaults to 0.4.24-beta.1.
+  NEONDIFF_VERSION  Version to install, defaults to 0.4.30-beta.1.
   NPM_PREFIX        Optional npm global prefix.
 
 Requires Node.js 26 or newer and npm.

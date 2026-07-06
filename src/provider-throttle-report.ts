@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { textMentionsHost } from "./url-safety.js";
 
 export interface ProviderThrottleReportOptions {
   statePath: string;
@@ -497,7 +498,6 @@ function extractProviderCodes(error: string): string[] {
 
 function isNetworkOrGithubDependencySignal(normalizedError: string): boolean {
   return normalizedError.includes("github api fetch failed") ||
-    normalizedError.includes("api.github.com") ||
     normalizedError.includes("enotfound") ||
     normalizedError.includes("econnreset") ||
     normalizedError.includes("eaddrnotavail") ||
@@ -506,10 +506,7 @@ function isNetworkOrGithubDependencySignal(normalizedError: string): boolean {
     normalizedError.includes("unable to verify first certificate") ||
     (
       normalizedError.includes("fetch failed") &&
-      (
-        normalizedError.includes("github") ||
-        normalizedError.includes("api.github.com")
-      )
+      textMentionsHost(normalizedError, "github.com")
     );
 }
 

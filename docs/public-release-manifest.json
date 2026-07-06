@@ -1,23 +1,29 @@
 {
-  "version": "v0.4.29-beta.1",
+  "version": "v0.4.30-beta.1",
   "releaseLevel": "source-beta",
   "packageArtifact": {
     "name": "neondiff",
-    "version": "0.4.24-beta.1",
-    "requiredForThisRelease": false,
-    "state": "held_at_previous_npm_release",
-    "heldReason": "v0.4.29-beta.1 is a source/daemon-only live beta; no npm artifact is published for this queue terminal-state hardening release.",
-    "currentSourceVersion": "v0.4.29-beta.1",
-    "previousReleasedPackageVersion": "0.4.24-beta.1"
+    "version": "0.4.30-beta.1",
+    "requiredForThisRelease": true,
+    "state": "pending_publish_after_merge",
+    "previousReleasedPackageVersion": "0.4.24-beta.1",
+    "skippedPublicPackageVersions": [
+      "v0.4.25-beta.1",
+      "v0.4.26-beta.1",
+      "v0.4.27-beta.1",
+      "v0.4.28-beta.1",
+      "v0.4.29-beta.1"
+    ],
+    "note": "v0.4.25 through v0.4.29 were source/local-worker beta releases; v0.4.29-beta.1 is already tagged as source/daemon-only, so v0.4.30-beta.1 is the next public npm/site beta."
   },
   "source": {
-    "shaState": "set_after_manifest_reconciliation_merge",
+    "shaState": "set_after_codeql_hardening_merge",
     "proof": "release:status --expected-head $(git rev-parse HEAD)"
   },
   "docs": {
-    "version": "v0.4.29-beta.1",
+    "version": "v0.4.30-beta.1",
     "setupPath": "docs/SETUP.md",
-    "releaseNotesPath": "docs/releases/v0.4.29-beta.1.md",
+    "releaseNotesPath": "docs/releases/v0.4.30-beta.1.md",
     "websiteRepo": "electricsheephq/neon-diff-agent"
   },
   "licenseApi": {
@@ -28,19 +34,20 @@
   "updateChannels": {
     "cli": {
       "requiredForThisRelease": true,
-      "state": "source_checkout",
-      "version": "v0.4.29-beta.1",
-      "rollback": "git reset --hard refs/tags/v0.4.9-beta.1"
+      "state": "published",
+      "version": "v0.4.30-beta.1",
+      "rollback": "git reset --hard refs/tags/v0.4.29-beta.1"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "launchd_prerelease",
-      "version": "v0.4.29-beta.1",
-      "rollback": "git reset --hard refs/tags/v0.4.9-beta.1"
+      "version": "v0.4.30-beta.1",
+      "rollback": "git reset --hard refs/tags/v0.4.29-beta.1"
     },
     "website": {
       "requiredForThisRelease": false,
-      "state": "pending-site-sync",
+      "state": "published",
+      "version": "v0.4.30-beta.1",
       "trackingIssue": "https://github.com/electricsheephq/neon-diff-agent/issues/3"
     },
     "desktop": {

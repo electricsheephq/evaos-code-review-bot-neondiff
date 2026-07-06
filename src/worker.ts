@@ -1276,7 +1276,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       acknowledge: false
     });
     writeRedactedJson(join(evidenceDir, "finishing-touch-draft.json"), { draft, stored });
-    writeFileSync(join(evidenceDir, "finishing-touch-draft.md"), draft.markdown);
+    writeRedactedText(join(evidenceDir, "finishing-touch-draft.md"), draft.markdown);
     return "skipped_finishing_touch_draft";
   }
 
@@ -1436,12 +1436,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(githubRelatedContext.packet ? { githubRelatedContextPacket: githubRelatedContext.packet } : {}),
       maxPatchBytes: config.zcode.maxPatchBytes
     });
-    writeFileSync(join(evidenceDir, "repo-profile.json"), `${JSON.stringify(repoPolicy.profile, null, 2)}\n`);
-    writeFileSync(join(evidenceDir, "filter-impact.json"), `${JSON.stringify(filterImpact, null, 2)}\n`);
+    writeRedactedJson(join(evidenceDir, "repo-profile.json"), repoPolicy.profile);
+    writeRedactedJson(join(evidenceDir, "filter-impact.json"), filterImpact);
     const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
-      writeFileSync(join(evidenceDir, "command.json"), `${JSON.stringify(commandDecision.command, null, 2)}\n`);
+      writeRedactedJson(join(evidenceDir, "command.json"), commandDecision.command);
     }
     writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
     writeRedactedJson(join(evidenceDir, "validation-selector.json"), validation);
@@ -1542,8 +1542,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(enrichment ? { enrichment } : {})
     };
 
-    if (walkthrough) writeFileSync(join(evidenceDir, "walkthrough.md"), walkthrough.body);
-    if (enrichment) writeFileSync(join(evidenceDir, "enrichment.md"), enrichment.body);
+    if (walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
+    if (enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
     if (input.dryRun) {
       writeDryRunOutcomeLedgerEvidence({
         evidenceDir,
@@ -1565,7 +1565,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
             }
       });
     }
-    writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
+    writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     if (input.dryRun) {
       state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
@@ -1596,7 +1596,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       enrichment: plan.enrichment,
       evidenceDir
     });
-    writeFileSync(join(evidenceDir, "review-plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
+    writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
     const review = await reviewGithub.createReview({
       repo,
       pullNumber: pull.number,
@@ -2056,7 +2056,7 @@ export function buildRepoMemoryContext(input: {
   }
 
   writeRedactedJson(join(input.evidenceDir, "repo-memory-packet.json"), packetResult);
-  writeFileSync(join(input.evidenceDir, "repo-memory-packet.md"), packetResult.packet.markdown);
+  writeRedactedText(join(input.evidenceDir, "repo-memory-packet.md"), packetResult.packet.markdown);
   input.state.recordRepoMemoryPacketBuild({
     packetSha: packetResult.packet.sha256,
     repo: packetResult.packet.repo,
@@ -2111,7 +2111,7 @@ export function buildGitNexusContext(input: {
   }
 
   writeRedactedJson(join(input.evidenceDir, "gitnexus-context-packet.json"), packetResult);
-  writeFileSync(join(input.evidenceDir, "gitnexus-context-packet.md"), packetResult.packet.markdown);
+  writeRedactedText(join(input.evidenceDir, "gitnexus-context-packet.md"), packetResult.packet.markdown);
   return { packet: packetResult.packet };
 }
 
@@ -2138,7 +2138,7 @@ export function buildSkillPackContext(input: {
   }
 
   writeRedactedJson(join(input.evidenceDir, "skill-pack-context-packet.json"), packetResult);
-  writeFileSync(join(input.evidenceDir, "skill-pack-context-packet.md"), packetResult.packet.markdown);
+  writeRedactedText(join(input.evidenceDir, "skill-pack-context-packet.md"), packetResult.packet.markdown);
   return { packet: packetResult.packet };
 }
 
@@ -2165,7 +2165,7 @@ export async function buildGitHubRelatedContext(input: {
   }
 
   writeRedactedJson(join(input.evidenceDir, "github-related-context-packet.json"), packetResult);
-  writeFileSync(join(input.evidenceDir, "github-related-context-packet.md"), packetResult.packet.markdown);
+  writeRedactedText(join(input.evidenceDir, "github-related-context-packet.md"), packetResult.packet.markdown);
   return { packet: packetResult.packet };
 }
 
@@ -2224,7 +2224,7 @@ export function writeDryRunOutcomeLedgerEvidence(input: {
     const markdown = renderOutcomeLedgerMarkdown(outcomeLedger);
     try {
       writeRedactedJson(jsonPath, outcomeLedger);
-      writeFileSync(markdownPath, markdown);
+      writeRedactedText(markdownPath, markdown);
     } catch (error) {
       rmSync(jsonPath, { force: true, recursive: true });
       rmSync(markdownPath, { force: true, recursive: true });
@@ -2250,7 +2250,7 @@ function recordStaleHeadSkip(input: {
   evidenceDir: string;
 }): void {
   mkdirSync(input.evidenceDir, { recursive: true });
-  writeFileSync(join(input.evidenceDir, "stale-head.json"), `${JSON.stringify(input.stale, null, 2)}\n`);
+  writeRedactedJson(join(input.evidenceDir, "stale-head.json"), input.stale);
   input.state.recordProcessed({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -2276,13 +2276,13 @@ export function recordFailedReview(input: {
     timeoutMs: input.config.zcode.timeoutMs ?? 180_000
   }) ?? rawErrorMessage;
   mkdirSync(evidenceDir, { recursive: true });
-  writeFileSync(join(evidenceDir, "review-error.json"), `${JSON.stringify({
+  writeRedactedJson(join(evidenceDir, "review-error.json"), {
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,
     error: errorMessage,
     recordedAt: new Date().toISOString()
-  }, null, 2)}\n`);
+  });
   input.state.recordProcessed({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -2525,7 +2525,7 @@ function providerRetryDelayMs(config: BotConfig, attempt: number, retryAfterMs?:
 
 function writeProviderRetryEvidence(evidenceDir: string, attempts: unknown): void {
   mkdirSync(evidenceDir, { recursive: true });
-  writeFileSync(join(evidenceDir, "provider-retry.json"), `${JSON.stringify(attempts, null, 2)}\n`);
+  writeRedactedJson(join(evidenceDir, "provider-retry.json"), attempts);
 }
 
 function extractProviderCode(message: string): string | undefined {
@@ -2777,6 +2777,10 @@ function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"], publicConfidenc
 
 function writeRedactedJson(path: string, value: unknown): void {
   writeFileSync(path, `${redactSecrets(JSON.stringify(value, null, 2))}\n`);
+}
+
+function writeRedactedText(path: string, value: string): void {
+  writeFileSync(path, redactSecrets(value));
 }
 
 function buildSummary(input: {

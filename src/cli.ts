@@ -5,7 +5,19 @@ import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./con
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
 import { runDaemonCycle } from "./daemon.js";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from "node:fs";
 import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from "node:path";
 import {
   assertEvalOutputDirSafe,
@@ -775,7 +787,7 @@ async function main(): Promise<void> {
       const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
       mkdirSync(safeOutputDir, { recursive: true });
       writeFileSync(join(safeOutputDir, "repo-memory-packet.json"), `${JSON.stringify(result, null, 2)}\n`);
-      writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), result.packet.markdown);
+      writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), redactSecrets(result.packet.markdown));
     }
     const format = args.format ?? "json";
     const jsonOutput = redactSecrets(JSON.stringify(result, null, 2));
@@ -899,7 +911,7 @@ async function main(): Promise<void> {
       mkdirSync(safeOutputDir, { recursive: true });
       const jsonName = result.ok ? "github-related-context-packet.json" : "github-related-context-packet-error.json";
       writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
-      if (result.ok) writeFileSync(join(safeOutputDir, "github-related-context-packet.md"), result.packet.markdown);
+      if (result.ok) writeFileSync(join(safeOutputDir, "github-related-context-packet.md"), redactSecrets(result.packet.markdown));
     }
     const format = args.format ?? "json";
     if (format === "markdown") {
@@ -929,7 +941,7 @@ async function main(): Promise<void> {
       mkdirSync(safeOutputDir, { recursive: true });
       const jsonName = result.ok ? "skill-pack-context-packet.json" : "skill-pack-context-packet-error.json";
       writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
-      if (result.ok) writeFileSync(join(safeOutputDir, "skill-pack-context-packet.md"), result.packet.markdown);
+      if (result.ok) writeFileSync(join(safeOutputDir, "skill-pack-context-packet.md"), redactSecrets(result.packet.markdown));
     }
     const jsonOutput = redactSecrets(JSON.stringify(result, null, 2));
     console.log(jsonOutput);
@@ -965,7 +977,7 @@ async function main(): Promise<void> {
         const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
         mkdirSync(safeOutputDir, { recursive: true });
         writeFileSync(join(safeOutputDir, "enrichment-comment.json"), `${redactSecrets(JSON.stringify(output, null, 2))}\n`);
-        if (!output.skipped) writeFileSync(join(safeOutputDir, "enrichment.md"), output.body);
+        if (!output.skipped) writeFileSync(join(safeOutputDir, "enrichment.md"), redactSecrets(output.body));
       }
       console.log(redactSecrets(JSON.stringify(output, null, 2)));
       return;
@@ -1009,7 +1021,7 @@ async function main(): Promise<void> {
       const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
       mkdirSync(safeOutputDir, { recursive: true });
       writeFileSync(join(safeOutputDir, "enrichment-comment.json"), `${redactSecrets(JSON.stringify(output, null, 2))}\n`);
-      writeFileSync(join(safeOutputDir, "enrichment.md"), enrichment.body);
+      writeFileSync(join(safeOutputDir, "enrichment.md"), redactSecrets(enrichment.body));
     }
     console.log(redactSecrets(JSON.stringify(output, null, 2)));
     return;
@@ -1898,7 +1910,12 @@ function runInitCommand(args: ParsedArgs): {
   }
   const backupPath = force && existsSync(configPath) ? backupInitForceTarget(configPath) : undefined;
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, readFileSync(examplePath, "utf8"));
+  const exampleConfig = readFileSync(examplePath, "utf8");
+  if (force) {
+    writeFileAtomic(configPath, exampleConfig);
+  } else {
+    writeNewFile(configPath, exampleConfig);
+  }
   return {
     ok: true,
     command: "init",
@@ -1982,8 +1999,28 @@ function validateInitForceTarget(configPath: string): string | undefined {
 function backupInitForceTarget(configPath: string): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupPath = `${configPath}.${timestamp}.bak`;
-  writeFileSync(backupPath, readFileSync(configPath, "utf8"));
+  writeNewFile(backupPath, readFileSync(configPath, "utf8"));
   return backupPath;
+}
+
+function writeNewFile(path: string, contents: string): void {
+  const fd = openSync(path, "wx", 0o600);
+  try {
+    writeFileSync(fd, contents);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeFileAtomic(path: string, contents: string): void {
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tempPath, contents, { mode: 0o600 });
+    renameSync(tempPath, path);
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
 }
 
 type DaemonControlResult = {
