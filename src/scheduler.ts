@@ -201,6 +201,9 @@ export async function runScheduledCycleWithDeps(input: {
       reservedActiveJobs: attemptedJobs,
       limit: 1,
       leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
+      // Lease-time rescue aging (#346): pass through only when configured — the comparator no-ops
+      // when aging is unset/disabled, keeping the default lease order byte-identical to today.
+      ...(config.riskWeightedQueue?.aging ? { aging: config.riskWeightedQueue.aging } : {}),
       now: eventClock()
     });
     const job = leased[0];

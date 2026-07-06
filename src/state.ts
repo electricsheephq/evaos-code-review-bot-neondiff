@@ -1765,6 +1765,7 @@ export class ReviewStateStore {
     reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "jobId" | "providerId" | "org" | "repo">>;
     limit?: number;
     leaseTtlMs?: number;
+    aging?: { enabled: boolean; maxWaitMinutes: number };
     now?: Date;
   }): ReviewQueueJobRecord[] {
     validatePositiveQueueLimit(input.maxProviderActive, "maxProviderActive");
@@ -1809,7 +1810,7 @@ export class ReviewStateStore {
       const jobs = this.listReviewQueueJobs();
       const eligible = jobs
         .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
-        .sort(compareQueueJobsForLease);
+        .sort(buildLeaseComparator(input.aging, nowIso));
       const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
       const active = [
         ...jobs.filter((job) => (job.state === "leased" || job.state === "running") && !reservedJobIds.has(job.jobId)),
@@ -2996,6 +2997,37 @@ function compareQueueJobsForLease(left: ReviewQueueJobRecord, right: ReviewQueue
   const leftCreated = Date.parse(left.createdAt);
   const rightCreated = Date.parse(right.createdAt);
   return leftCreated - rightCreated;
+}
+
+/**
+ * Lease-time aging via a two-tier RESCUE ordering (#346, amended). A queued job whose wait
+ * (now − createdAt) exceeds maxWaitMinutes enters the RESCUE tier and leases AHEAD of every
+ * non-rescued job regardless of priority class, FIFO among rescued jobs by createdAt (oldest first).
+ * Non-rescued (fresh, sub-maxWait) jobs keep strict priority ordering exactly as today, so elevated
+ * always wins among non-starved work. The ONLY thing that overtakes elevated is a job that already
+ * waited the full maxWaitMinutes — the bounded anti-starvation backstop. Computed at lease time,
+ * never stored, idempotent, no migration. Unset/disabled aging ⇒ the original comparator, byte-
+ * identical to today.
+ */
+function isRescued(job: ReviewQueueJobRecord, aging: { enabled: boolean; maxWaitMinutes: number }, nowMs: number): boolean {
+  return nowMs - Date.parse(job.createdAt) > aging.maxWaitMinutes * 60_000;
+}
+
+function buildLeaseComparator(
+  aging: { enabled: boolean; maxWaitMinutes: number } | undefined,
+  nowIso: string
+): (left: ReviewQueueJobRecord, right: ReviewQueueJobRecord) => number {
+  if (!aging?.enabled) return compareQueueJobsForLease;
+  const nowMs = Date.parse(nowIso);
+  return (left, right) => {
+    const leftRescued = isRescued(left, aging, nowMs);
+    const rightRescued = isRescued(right, aging, nowMs);
+    // Rescued tier first; among rescued, oldest-enqueued leases first (FIFO).
+    if (leftRescued !== rightRescued) return leftRescued ? -1 : 1;
+    if (leftRescued) return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+    // Non-rescued: strict priority then FIFO within class — unchanged from today.
+    return compareQueueJobsForLease(left, right);
+  };
 }
 
 function buildManualEligibilitySuffix(jobs: ReviewQueueJobRecord[]): boolean[] {

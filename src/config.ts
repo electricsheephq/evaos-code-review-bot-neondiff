@@ -224,6 +224,15 @@ export interface RiskWeightedQueueConfig {
   elevatedPriority?: number;
   /** Priority for docs-only PRs (typically >= backgroundPriority to defer them). */
   docsOnlyPriority?: number;
+  /** Lease-time aging guarantee (#346, default off). Prevents starvation of below-baseline jobs. */
+  aging?: QueueAgingConfig;
+}
+
+export interface QueueAgingConfig {
+  /** When false (default/unset), lease order is byte-identical to today. */
+  enabled: boolean;
+  /** A queued job waiting longer than this is aged UP to baseline at lease time (never demoted). */
+  maxWaitMinutes: number;
 }
 
 export interface RepoMemoryConfig {
@@ -756,6 +765,18 @@ function validateRiskWeightedQueueConfig(value: unknown, label: string, backgrou
       throw new Error(`${label}.elevatedPriority must be <= ${label}.docsOnlyPriority because lower priority values lease sooner`);
     }
   }
+  if (value.aging !== undefined) validateQueueAgingConfig(value.aging, `${label}.aging`);
+}
+
+function validateQueueAgingConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "enabled" && key !== "maxWaitMinutes") {
+      throw new Error(`${label} has unknown key "${key}"; expected only enabled or maxWaitMinutes`);
+    }
+  }
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validatePositiveInteger(value.maxWaitMinutes, `${label}.maxWaitMinutes`);
 }
 
 function validateRepoMemoryConfig(value: unknown, label: string): void {

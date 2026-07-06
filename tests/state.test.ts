@@ -1798,4 +1798,52 @@ describe("review state store", () => {
     expect(() => store.recordFindingOutcomeLabel({ ...record, fingerprint: "not-a-fingerprint" })).toThrow(/finding:<64-hex>/);
     store.close();
   });
+
+  it("rescues a past-max-wait job ahead of a fresh elevated job, but not a fresh docs job (#346)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-queue-rescue-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-07-06T12:00:00.000Z");
+    // Starved docs job (demoted to 70) that has waited 90m (> 60m maxWait) ⇒ RESCUED.
+    const starvedDocs = store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 1, headSha: "starved-docs", priority: 70, now: new Date(now.getTime() - 90 * 60_000) }).job;
+    // Fresh elevated (20) and fresh docs (70), both enqueued now (sub-maxWait, NOT rescued).
+    store.enqueueReviewQueueJob({ repo: "owner/repo2", pullNumber: 2, headSha: "fresh-elevated", priority: 20, now });
+    store.enqueueReviewQueueJob({ repo: "owner/repo3", pullNumber: 3, headSha: "fresh-docs", priority: 70, now });
+
+    const aging = { enabled: true, maxWaitMinutes: 60 };
+    // The rescued starved job overtakes even the fresh elevated job — the anti-starvation backstop.
+    const first = store.leaseNextReviewQueueJobs({ maxProviderActive: 3, maxOrgActive: 5, maxRepoActive: 5, limit: 3, now, aging });
+    expect(first.map((job) => job.headSha)).toEqual(["starved-docs", "fresh-elevated", "fresh-docs"]);
+    // And a FRESH docs job (not past maxWait) does NOT overtake fresh elevated — strict priority holds.
+    expect(first[0]?.jobId).toBe(starvedDocs.jobId);
+    store.close();
+  });
+
+  it("orders multiple rescued jobs FIFO by enqueue time, oldest first (#346)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-queue-rescue-fifo-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-07-06T12:00:00.000Z");
+    // Two rescued jobs (both past maxWait); the OLDER one leases first regardless of priority number.
+    const older = store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 1, headSha: "older", priority: 70, now: new Date(now.getTime() - 120 * 60_000) }).job;
+    const newer = store.enqueueReviewQueueJob({ repo: "owner/repo2", pullNumber: 2, headSha: "newer", priority: 20, now: new Date(now.getTime() - 90 * 60_000) }).job;
+
+    const leased = store.leaseNextReviewQueueJobs({ maxProviderActive: 2, maxOrgActive: 5, maxRepoActive: 5, limit: 2, now, aging: { enabled: true, maxWaitMinutes: 60 } });
+    expect(leased.map((job) => job.jobId)).toEqual([older.jobId, newer.jobId]);
+    store.close();
+  });
+
+  it("leaves lease order byte-identical to today when aging is unset (#346)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-queue-noaging-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-07-06T12:00:00.000Z");
+    store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 1, headSha: "docs-old", priority: 70, now: new Date(now.getTime() - 90 * 60_000) });
+    store.enqueueReviewQueueJob({ repo: "owner/repo2", pullNumber: 2, headSha: "baseline-new", priority: 50, now });
+
+    // No aging config ⇒ pure priority ASC then FIFO: baseline (50) leases before docs (70) despite age.
+    const leased = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 5, maxRepoActive: 5, limit: 1, now });
+    expect(leased.map((job) => job.headSha)).toEqual(["baseline-new"]);
+    store.close();
+  });
 });
