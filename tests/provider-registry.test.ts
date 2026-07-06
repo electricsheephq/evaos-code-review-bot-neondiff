@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { ClientRequest, IncomingMessage } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import {
@@ -56,7 +56,7 @@ function mockProviderRequest(response: {
     response.onOptions?.(options);
     const request = new MockProviderClientRequest();
     queueMicrotask(() => onResponse(new MockProviderIncomingMessage(response) as IncomingMessage));
-    return request as unknown as ClientRequest;
+    return request;
   };
 }
 

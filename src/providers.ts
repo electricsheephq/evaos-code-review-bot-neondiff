@@ -1,5 +1,5 @@
 import { lookup as defaultDnsLookup } from "node:dns/promises";
-import { request as httpRequest, type ClientRequest, type IncomingHttpHeaders, type IncomingMessage, type RequestOptions } from "node:http";
+import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -31,10 +31,17 @@ export interface ProviderSmokeRequestOptions {
   ) => void;
 }
 
+export interface ProviderSmokeRequestHandle {
+  on(event: "timeout", listener: () => void): ProviderSmokeRequestHandle;
+  on(event: "error", listener: (error: Error) => void): ProviderSmokeRequestHandle;
+  end(): ProviderSmokeRequestHandle | void;
+  destroy(error?: Error): ProviderSmokeRequestHandle | void;
+}
+
 export type ProviderSmokeRequestImpl = (
   options: ProviderSmokeRequestOptions,
   onResponse: (response: IncomingMessage) => void
-) => ClientRequest;
+) => ProviderSmokeRequestHandle;
 
 export type ProviderAdapter = "zcode" | "openai-compatible" | "anthropic" | "openai" | "gemini";
 export type ProviderAuthMode = "zcode-app-config" | "api-key-env" | "none";
@@ -701,7 +708,7 @@ async function fetchProviderModelsWithPinnedRequest(
         }
       : {})
   };
-  const sendProviderSmokeRequest = (onResponse: (response: IncomingMessage) => void): ClientRequest => {
+  const sendProviderSmokeRequest = (onResponse: (response: IncomingMessage) => void): ProviderSmokeRequestHandle => {
     if (requestImpl) return requestImpl(requestOptions, onResponse);
 
     // Provider smoke intentionally contacts a config-selected endpoint only after
