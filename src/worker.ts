@@ -38,7 +38,7 @@ import {
   listReposToScan,
   resolveRepoProfile
 } from "./repo-policy.js";
-import { applyDeterministicReviewGate } from "./review-gate.js";
+import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
 import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
@@ -63,6 +63,7 @@ import {
   ReviewStateStore,
   type ProcessedStatus,
   type ReviewQueueJobState,
+  type ReviewHeadClaim,
   type ReviewReadinessRecord,
   type ReviewReadinessState,
   type ReviewerSessionJobState,
@@ -1336,8 +1337,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   let lease: ReviewRunLease | undefined;
+  let headClaim: ReviewHeadClaim | undefined;
   let budgetStarted = false;
   const releaseReviewCapacity = (): void => {
+    // Crash-safe release-on-failure (#295): if we hold the per-head claim and the finally runs
+    // before recordProcessed retired it (error/early return), release it so the head is re-claimable.
+    // recordProcessed already retires it on the success path; the state TTL is the last-resort backstop.
+    if (headClaim) {
+      state.releaseReviewHeadClaim(headClaim.claimId);
+      headClaim = undefined;
+    }
     if (lease) {
       state.releaseReviewRunLease(lease.leaseId);
       lease = undefined;
@@ -1488,6 +1497,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       droppedFromSchema: zcodeResult.droppedFromSchema,
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
+      repoMemoryFalsePositives: repoMemory.falsePositives,
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
       ...(config.reviewGate?.requestChangesConfidenceFloors
         ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
@@ -1575,8 +1585,24 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     if (input.dryRun) {
+      // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
+      // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
       state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
       return commandReviewRequested ? "reviewed_command" : "reviewed";
+    }
+
+    // Atomic per-head claim (#295): acquired here — after every eligibility/stale check and after the
+    // dry-run branch, immediately before posting — so exactly one of a racing manual-review-pr and
+    // daemon posts a review on this head. The loser records a structured skip and no-ops.
+    headClaim = state.tryClaimReviewHead({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      claimTtlMs: config.reviewConcurrency.leaseTtlMs
+    });
+    if (!headClaim) {
+      recordConcurrentClaimSkip({ state, repo, pull, evidenceDir });
+      return "skipped_processed";
     }
 
     const liveBeforePost = await github.getPull(repo, pull.number);
@@ -2021,9 +2047,9 @@ export function buildRepoMemoryContext(input: {
   state: ReviewStateStore;
   repo: string;
   evidenceDir: string;
-}): { packet?: RepoMemoryPacket; falsePositiveFingerprints: string[] } {
+}): { packet?: RepoMemoryPacket; falsePositiveFingerprints: string[]; falsePositives: RepoMemoryFalsePositiveEntry[] } {
   const repoMemoryConfig = input.config.repoMemory;
-  if (!repoMemoryConfig?.enabled) return { falsePositiveFingerprints: [] };
+  if (!repoMemoryConfig?.enabled) return { falsePositiveFingerprints: [], falsePositives: [] };
 
   const generatedAt = new Date().toISOString();
   const generatedAtDate = new Date(generatedAt);
@@ -2041,9 +2067,22 @@ export function buildRepoMemoryContext(input: {
     limit: repoMemoryConfig.maxStateNotes,
     kind: "false_positive"
   });
-  const falsePositiveFingerprints = falsePositiveNotes
-    .filter((note) => note.kind === "false_positive" && note.fingerprint && !isRepoMemoryNoteExpired(note, generatedAtDate))
-    .map((note) => note.fingerprint!);
+  const liveFalsePositiveNotes = falsePositiveNotes.filter(
+    (note) => note.kind === "false_positive" && note.fingerprint && !isRepoMemoryNoteExpired(note, generatedAtDate)
+  );
+  const falsePositiveFingerprints = liveFalsePositiveNotes.map((note) => note.fingerprint!);
+  // Structured entries carry the coarse-match fields (#302) when the note has them (v0.2+); notes
+  // that predate the coarse fields still supply their exact fingerprint via the list above.
+  const falsePositives: RepoMemoryFalsePositiveEntry[] = liveFalsePositiveNotes
+    .filter((note) => note.coarsePath && note.coarseCategory && typeof note.coarseLine === "number" && note.coarseTitle)
+    .map((note) => ({
+      fingerprint: note.fingerprint!,
+      path: note.coarsePath!,
+      category: note.coarseCategory!,
+      line: note.coarseLine!,
+      title: note.coarseTitle!,
+      ...(note.confirmedByHuman !== undefined ? { confirmedByHuman: note.confirmedByHuman } : {})
+    }));
   const packetResult = buildRepoMemoryPacket({
     repo: input.repo,
     humanMarkdown: readRepoMemoryMarkdown(repoMemoryConfig.memoryRoot, input.repo),
@@ -2057,7 +2096,7 @@ export function buildRepoMemoryContext(input: {
   if (!packetResult.ok) {
     writeRedactedJson(join(input.evidenceDir, "repo-memory-packet-error.json"), packetResult);
     if (isRepoMemoryBudgetFailure(packetResult)) {
-      return { falsePositiveFingerprints };
+      return { falsePositiveFingerprints, falsePositives };
     }
     throw new Error(`Repo memory packet failed closed: ${packetResult.error}`);
   }
@@ -2075,7 +2114,7 @@ export function buildRepoMemoryContext(input: {
     redactionStatus: packetResult.redactionReport.ok ? "passed" : "failed",
     memoryRoot: repoMemoryConfig.memoryRoot
   });
-  return { packet: packetResult.packet, falsePositiveFingerprints };
+  return { packet: packetResult.packet, falsePositiveFingerprints, falsePositives };
 }
 
 function isRepoMemoryBudgetFailure(packetResult: ReturnType<typeof buildRepoMemoryPacket>): boolean {
@@ -2265,6 +2304,39 @@ function recordStaleHeadSkip(input: {
     status: "skipped",
     error: `${input.stale.reason}: live=${input.stale.liveHeadSha}`
   });
+}
+
+export function recordConcurrentClaimSkip(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  evidenceDir: string;
+}): void {
+  // The other claimant owns this head (#295). Do NOT recordProcessed here: that would `insert or
+  // replace` the winner's row AND retire the winner's live claim. Record a skipped readiness note
+  // (separate table) plus an evidence file, matching the existing skip-evidence idiom, and log it.
+  const evidence = {
+    reason: "concurrent_review_claim_held",
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    detail: "Another reviewPull (manual review-pr or daemon) holds the atomic per-head claim for this head; skipping to preserve at-most-one-review-per-head."
+  };
+  mkdirSync(input.evidenceDir, { recursive: true });
+  // Through the redacting writer like every other evidence write (defense-in-depth; the
+  // network-data-to-evidence-file pattern itself is the evidence-packet design, triaged as a
+  // class under #249).
+  writeRedactedJson(join(input.evidenceDir, "concurrent-claim-skip.json"), evidence);
+  input.state.recordReviewReadiness({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: "skipped",
+    reason: "concurrent_review_claim_held"
+  });
+  console.warn(
+    `[head-claim] concurrent claim held repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha}: skipping duplicate same-head review`
+  );
 }
 
 export function recordFailedReview(input: {

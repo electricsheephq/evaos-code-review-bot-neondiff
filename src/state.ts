@@ -94,6 +94,12 @@ export interface ReviewRunLease {
   ownerPid: number;
 }
 
+export interface ReviewHeadClaim {
+  claimId: string;
+  expiresAt: string;
+  ownerPid: number;
+}
+
 export interface IssueEnrichmentRunLease {
   leaseId: string;
   expiresAt: string;
@@ -298,6 +304,11 @@ export interface RepoMemoryNoteRecord {
   source: string;
   confidence?: number;
   fingerprint?: string;
+  coarsePath?: string;
+  coarseCategory?: string;
+  coarseLine?: number;
+  coarseTitle?: string;
+  confirmedByHuman?: boolean;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
@@ -312,6 +323,12 @@ export interface RecordRepoMemoryNoteInput {
   source: string;
   confidence?: number;
   fingerprint?: string;
+  // Coarse false-positive-match fields (#302, additive). confirmedByHuman gates P0/P1 suppression.
+  coarsePath?: string;
+  coarseCategory?: string;
+  coarseLine?: number;
+  coarseTitle?: string;
+  confirmedByHuman?: boolean;
   expiresAt?: string;
   now?: Date;
 }
@@ -447,6 +464,17 @@ export class ReviewStateStore {
         owner_pid integer
       );
 
+      create table if not exists review_head_claims (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        claim_id text not null,
+        owner_pid integer,
+        claimed_at text not null,
+        expires_at text not null,
+        primary key (repo, pull_number, head_sha)
+      );
+
       create table if not exists repo_provider_cooldowns (
         repo text primary key,
         cooldown_until text not null,
@@ -561,6 +589,11 @@ export class ReviewStateStore {
         source text not null,
         confidence real,
         fingerprint text,
+        coarse_path text,
+        coarse_category text,
+        coarse_line integer,
+        coarse_title text,
+        confirmed_by_human integer,
         created_at text not null,
         updated_at text not null,
         expires_at text,
@@ -626,6 +659,7 @@ export class ReviewStateStore {
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
     this.ensureReviewQueueJobColumns();
+    this.ensureRepoMemoryNoteCoarseColumns();
     this.db.exec(`
       create table if not exists processed_commands (
         repo text not null,
@@ -705,6 +739,11 @@ export class ReviewStateStore {
         record.reviewUrl ?? null,
         record.error ?? null
       );
+    // A recorded outcome for this head supersedes any in-flight per-head claim (#295): retire it so
+    // no stale claim row lingers to its TTL after the review is durable.
+    this.db
+      .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
+      .run(record.repo, record.pullNumber, record.headSha);
   }
 
   getReviewReadiness(repo: string, pullNumber: number, headSha: string): ReviewReadinessRecord | undefined {
@@ -1094,6 +1133,62 @@ export class ReviewStateStore {
 
   releaseReviewRunLease(leaseId: string): void {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  /**
+   * Atomic per-head review claim (#295): defends the at-most-one-review-per-{repo,pr,head_sha}
+   * invariant against the manual-review-pr vs daemon race (both passed the getProcessedReview read
+   * window before either recordProcessed'd). The {repo, pull_number, head_sha} PRIMARY KEY makes the
+   * INSERT a compare-and-set — exactly one concurrent caller wins; the loser gets undefined. Claims
+   * are crash-safe two ways: a completed review retires the claim in recordProcessed (release-on-
+   * success), reviewPull releases it in a finally (release-on-failure), and a TTL backstop sweeps
+   * claims whose holder died mid-review — mirroring the review_run_leases TTL idiom.
+   */
+  tryClaimReviewHead(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    claimTtlMs: number;
+    now?: Date;
+    ownerPid?: number;
+  }): ReviewHeadClaim | undefined {
+    if (!Number.isInteger(input.claimTtlMs)) throw new Error("claimTtlMs must be an integer");
+    if (input.claimTtlMs < 1) throw new Error("claimTtlMs must be at least 1");
+    const ownerPid = input.ownerPid ?? process.pid;
+    if (!Number.isInteger(ownerPid) || ownerPid < 1) throw new Error("ownerPid must be a positive integer");
+
+    const now = input.now ?? new Date();
+    const claimId = randomUUID();
+    const claimedAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + input.claimTtlMs).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      // TTL backstop: sweep this head's claim if a prior holder died mid-review without releasing.
+      this.db
+        .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ? and expires_at <= ?")
+        .run(input.repo, input.pullNumber, input.headSha, claimedAt);
+      const existing = this.db
+        .prepare("select claim_id from review_head_claims where repo = ? and pull_number = ? and head_sha = ? limit 1")
+        .get(input.repo, input.pullNumber, input.headSha) as { claim_id: string } | undefined;
+      if (existing) {
+        this.db.exec("commit");
+        return undefined;
+      }
+      this.db
+        .prepare(
+          "insert into review_head_claims (repo, pull_number, head_sha, claim_id, owner_pid, claimed_at, expires_at) values (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .run(input.repo, input.pullNumber, input.headSha, claimId, ownerPid, claimedAt, expiresAt);
+      this.db.exec("commit");
+      return { claimId, expiresAt, ownerPid };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  releaseReviewHeadClaim(claimId: string): void {
+    this.db.prepare("delete from review_head_claims where claim_id = ?").run(claimId);
   }
 
   tryAcquireIssueEnrichmentRunLease(
@@ -2335,8 +2430,10 @@ export class ReviewStateStore {
     this.db
       .prepare(
         `insert into repo_memory_notes
-          (note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (note_id, repo, kind, title, body, source, confidence, fingerprint,
+           coarse_path, coarse_category, coarse_line, coarse_title, confirmed_by_human,
+           created_at, updated_at, expires_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(repo, note_id) do update set
            kind = excluded.kind,
            title = excluded.title,
@@ -2344,6 +2441,11 @@ export class ReviewStateStore {
            source = excluded.source,
            confidence = excluded.confidence,
            fingerprint = excluded.fingerprint,
+           coarse_path = excluded.coarse_path,
+           coarse_category = excluded.coarse_category,
+           coarse_line = excluded.coarse_line,
+           coarse_title = excluded.coarse_title,
+           confirmed_by_human = excluded.confirmed_by_human,
            updated_at = excluded.updated_at,
            expires_at = excluded.expires_at`
       )
@@ -2356,6 +2458,11 @@ export class ReviewStateStore {
         redactSecrets(input.source).trim(),
         input.confidence ?? null,
         input.fingerprint ? redactSecrets(input.fingerprint).trim() : null,
+        input.coarsePath ? redactSecrets(input.coarsePath).trim() : null,
+        input.coarseCategory ?? null,
+        input.coarseLine ?? null,
+        input.coarseTitle ? redactSecrets(input.coarseTitle).trim() : null,
+        input.confirmedByHuman === undefined ? null : input.confirmedByHuman ? 1 : 0,
         existing?.createdAt ?? nowIso,
         nowIso,
         input.expiresAt ?? null
@@ -2368,7 +2475,9 @@ export class ReviewStateStore {
     if (!noteId.trim()) throw new Error("noteId must be non-empty");
     const row = this.db
       .prepare(
-        `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
+        `select note_id, repo, kind, title, body, source, confidence, fingerprint,
+                coarse_path, coarse_category, coarse_line, coarse_title, confirmed_by_human,
+                created_at, updated_at, expires_at
          from repo_memory_notes
          where repo = ? and note_id = ?
          limit 1`
@@ -2478,6 +2587,18 @@ export class ReviewStateStore {
       this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
     }
   }
+
+  private ensureRepoMemoryNoteCoarseColumns(): void {
+    // Additive migration (#302): older DBs gain the coarse false-positive-match columns; existing
+    // rows keep NULLs and fall back to exact-only matching.
+    const columns = this.db.prepare("pragma table_info(repo_memory_notes)").all() as unknown as Array<{ name: string }>;
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("coarse_path")) this.db.exec("alter table repo_memory_notes add column coarse_path text");
+    if (!names.has("coarse_category")) this.db.exec("alter table repo_memory_notes add column coarse_category text");
+    if (!names.has("coarse_line")) this.db.exec("alter table repo_memory_notes add column coarse_line integer");
+    if (!names.has("coarse_title")) this.db.exec("alter table repo_memory_notes add column coarse_title text");
+    if (!names.has("confirmed_by_human")) this.db.exec("alter table repo_memory_notes add column confirmed_by_human integer");
+  }
 }
 
 export function listRepoMemoryNotesReadOnly(dbPath: string, input: ListRepoMemoryNotesInput): RepoMemoryNoteRecord[] {
@@ -2517,7 +2638,9 @@ function listRepoMemoryNotesFromDb(db: DatabaseSync, input: ListRepoMemoryNotesI
   if (input.limit) params.push(input.limit);
   const rows = db
     .prepare(
-      `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
+      `select note_id, repo, kind, title, body, source, confidence, fingerprint,
+              coarse_path, coarse_category, coarse_line, coarse_title, confirmed_by_human,
+              created_at, updated_at, expires_at
        from repo_memory_notes
        where ${predicates.join(" and ")}
        order by datetime(updated_at) desc, note_id asc
@@ -2922,6 +3045,11 @@ interface RepoMemoryNoteRow {
   source: string;
   confidence: number | null;
   fingerprint: string | null;
+  coarse_path: string | null;
+  coarse_category: string | null;
+  coarse_line: number | null;
+  coarse_title: string | null;
+  confirmed_by_human: number | null;
   created_at: string;
   updated_at: string;
   expires_at: string | null;
@@ -3151,6 +3279,11 @@ function mapRepoMemoryNoteRow(row: RepoMemoryNoteRow): RepoMemoryNoteRecord {
     source: row.source,
     ...(row.confidence !== null ? { confidence: row.confidence } : {}),
     ...(row.fingerprint ? { fingerprint: row.fingerprint } : {}),
+    ...(row.coarse_path ? { coarsePath: row.coarse_path } : {}),
+    ...(row.coarse_category ? { coarseCategory: row.coarse_category } : {}),
+    ...(row.coarse_line !== null ? { coarseLine: row.coarse_line } : {}),
+    ...(row.coarse_title ? { coarseTitle: row.coarse_title } : {}),
+    ...(row.confirmed_by_human !== null ? { confirmedByHuman: row.confirmed_by_human === 1 } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.expires_at ? { expiresAt: row.expires_at } : {})
