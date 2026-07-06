@@ -187,7 +187,13 @@ Default behavior:
 - at most one review per `{repo, pr, head_sha}`
 - never submit `APPROVE`
 - request changes only for validated high-severity findings
-- suppress secret-looking findings instead of posting redacted secrets
+- rank findings by severity, then validated confidence; the inline-comment cap
+  keeps the highest-confidence findings
+- suppress same-run near-duplicate findings and secret-looking findings instead
+  of posting them
+- learned signals (confidence floors, category precision floors, repo-memory
+  false-positive suppression, self-consistency refutation) only ever make the
+  review quieter — they demote or suppress, never escalate
 - re-fetch PR state before live operations
 - keep ZCode/model tools read-only during review
 - fail closed when credentials, provider readiness, repo policy, or current-head
@@ -201,7 +207,9 @@ Not claimed:
 - auto-merge or branch repair
 - generic GitHub issue mutation
 - enterprise or customer-ready security
-- calibrated CodeRabbit-level accuracy
+- calibrated confidence display (stays redacted until the evidence gate in
+  [docs/calibration-loop.md](docs/calibration-loop.md) passes and a human
+  flips it)
 - desktop client readiness
 
 ## Roadmap Vs Shipped
@@ -209,9 +217,20 @@ Not claimed:
 The current repo is a source-available beta implementation. The public MVP is
 tracked in [#103](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103).
 Provider registry, `.neondiff.yml`, public package publishing, license activation,
-desktop client, wiki exports, marketplace packaging, and confidence calibration
-each have separate issues and must not be treated as shipped until their PRs and
-proof gates close.
+desktop client, wiki exports, and marketplace packaging each have separate
+issues and must not be treated as shipped until their PRs and proof gates close.
+
+The ranking/scoring and calibration program
+([#278](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/278))
+is shipped: confidence-aware ranking and caps, validated-category precedence,
+same-run near-duplicate suppression, robust false-positive learning, opt-in
+self-consistency re-checks, risk-weighted queue priority, and the full
+calibration loop (post-merge outcome observer → label aggregation → human-gated
+promotion — see [docs/calibration-loop.md](docs/calibration-loop.md) and
+[docs/vision.md](docs/vision.md)). Shipping the loop's tooling does not flip
+the calibrated display: that remains off until the evidence gate passes on
+real review volume and a human applies it. See [CHANGELOG.md](CHANGELOG.md)
+for the per-version record.
 
 Use [LICENSE.md](LICENSE.md) and [docs/license-boundary.md](docs/license-boundary.md)
 as the canonical public-beta license language. Do not copy older issue comments
