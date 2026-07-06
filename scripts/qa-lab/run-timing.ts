@@ -33,22 +33,31 @@ import { parseFindings } from "../../src/findings.js";
 import { redactSecrets } from "../../src/secrets.js";
 import { applyDeterministicReviewGate } from "../../src/review-gate.js";
 import { QA_LAB_SCENARIOS, type QaLabScenario } from "./scenarios.js";
-import { findConfigVariant, HERMETIC_EXECUTABLE_VARIANTS, type QaLabConfigVariantId } from "./config-variants.js";
+import {
+  findConfigVariant,
+  HERMETIC_EXECUTABLE_VARIANTS,
+  QA_LAB_CONFIG_VARIANT_IDS,
+  type QaLabConfigVariantId
+} from "./config-variants.js";
 import { summarizePercentiles, type PercentileSummary } from "./stats.js";
 
-interface ParsedArgs {
+/** Discarded, untimed iterations run per scenario before recording samples, to burn off cold-start/JIT bias. */
+export const WARMUP_ITERATIONS = 5;
+
+export interface ParsedArgs {
   config?: string;
   "config-variant"?: string;
   samples?: string;
   "output-dir"?: string;
 }
 
-interface ScenarioTimingResult {
+export interface ScenarioTimingResult {
   scenarioId: string;
   scenarioClass: string;
   description: string;
   configVariant: QaLabConfigVariantId;
   samples: number;
+  warmupIterations: number;
   stats: PercentileSummary;
   /** Deterministic-gate outcome from the LAST sample run, as a sanity spot-check evidence field. */
   lastRunOutcome: {
@@ -58,7 +67,7 @@ interface ScenarioTimingResult {
   };
 }
 
-interface TimingEvidence {
+export interface TimingEvidence {
   evidenceVersion: "0.1";
   generatedAt: string;
   commitSha: string;
@@ -66,11 +75,12 @@ interface TimingEvidence {
   configVariant: QaLabConfigVariantId;
   configPath: string;
   samplesPerScenario: number;
+  warmupIterations: number;
   proofBoundary: string;
   scenarios: ScenarioTimingResult[];
 }
 
-function parseArgs(argv: string[]): ParsedArgs {
+export function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {};
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -84,6 +94,26 @@ function parseArgs(argv: string[]): ParsedArgs {
     index += 1;
   }
   return args;
+}
+
+/**
+ * Resolve and validate `--config-variant` against the fixture registry (extracted from `main` so
+ * both the CLI entrypoint and unit tests can exercise the unknown-variant and
+ * requires-live-provider rejection paths without spawning a process).
+ */
+export function resolveConfigVariant(configVariantId: QaLabConfigVariantId) {
+  const variant = findConfigVariant(configVariantId);
+  if (!variant) {
+    throw new Error(`unknown --config-variant "${configVariantId}"; known variants: ${QA_LAB_CONFIG_VARIANT_IDS.join(", ")}`);
+  }
+  if (!HERMETIC_EXECUTABLE_VARIANTS.includes(configVariantId)) {
+    throw new Error(
+      `--config-variant "${configVariantId}" requires live provider/GitHub calls (${variant.description}) and is out of ` +
+        `scope for the hermetic pass-1 timing runner. Pass 1 only executes: ${HERMETIC_EXECUTABLE_VARIANTS.join(", ")}. ` +
+        "This variant exists as a config fixture for pass 2 to wire real timing against."
+    );
+  }
+  return variant;
 }
 
 function writeRedactedJson(path: string, value: unknown): void {
@@ -109,9 +139,9 @@ function timeScenarioOnce(scenario: QaLabScenario, config: BotConfig): { elapsed
   };
 }
 
-function resolveCommitSha(): string {
+export function resolveCommitSha(): string {
   try {
-    return execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+    return execSync("git rev-parse HEAD", { encoding: "utf8", timeout: 15_000 }).trim();
   } catch {
     return "unknown";
   }
@@ -125,19 +155,7 @@ function main(): void {
   if (!Number.isInteger(samples) || samples < 1) throw new Error("--samples must be a positive integer");
   if (!args["output-dir"]) throw new Error("--output-dir is required");
 
-  const variant = findConfigVariant(configVariantId);
-  if (!variant) {
-    throw new Error(
-      `unknown --config-variant "${configVariantId}"; known variants: baseline, github_related_context, gitnexus_context, repo_memory, enrichment, self_consistency`
-    );
-  }
-  if (!HERMETIC_EXECUTABLE_VARIANTS.includes(configVariantId)) {
-    throw new Error(
-      `--config-variant "${configVariantId}" requires live provider/GitHub calls (${variant.description}) and is out of ` +
-        `scope for the hermetic pass-1 timing runner. Pass 1 only executes: ${HERMETIC_EXECUTABLE_VARIANTS.join(", ")}. ` +
-        "This variant exists as a config fixture for pass 2 to wire real timing against."
-    );
-  }
+  const variant = resolveConfigVariant(configVariantId);
 
   if (!existsSync(args.config)) throw new Error(`--config path does not exist: ${args.config}`);
   const rawConfig = JSON.parse(readFileSync(args.config, "utf8"));
@@ -148,6 +166,10 @@ function main(): void {
   mkdirSync(outputDir, { recursive: true });
 
   const scenarioResults: ScenarioTimingResult[] = QA_LAB_SCENARIOS.map((scenario) => {
+    // Discarded warm-up iterations first (cold-start/JIT bias), then the timed samples.
+    for (let warmupIndex = 0; warmupIndex < WARMUP_ITERATIONS; warmupIndex += 1) {
+      timeScenarioOnce(scenario, effectiveConfig);
+    }
     const timingsMs: number[] = [];
     let lastRun: { elapsedMs: number; event: string; acceptedComments: number; droppedFindings: number } | undefined;
     for (let sampleIndex = 0; sampleIndex < samples; sampleIndex += 1) {
@@ -161,6 +183,7 @@ function main(): void {
       description: scenario.description,
       configVariant: configVariantId,
       samples,
+      warmupIterations: WARMUP_ITERATIONS,
       stats: summarizePercentiles(timingsMs),
       lastRunOutcome: {
         event: lastRun.event,
@@ -178,6 +201,7 @@ function main(): void {
     configVariant: configVariantId,
     configPath: args.config,
     samplesPerScenario: samples,
+    warmupIterations: WARMUP_ITERATIONS,
     proofBoundary:
       "hermetic deterministic-pipeline timing only (parseFindings -> applyDeterministicReviewGate); " +
       "no provider calls, no GitHub calls, no launchd, no live/active config read or write, no repo mutation",
@@ -190,7 +214,7 @@ function main(): void {
   console.log(JSON.stringify({ ok: true, outputDir, scenarioCount: scenarioResults.length }, null, 2));
 }
 
-function buildBaselineTable(evidence: TimingEvidence): string {
+export function buildBaselineTable(evidence: TimingEvidence): string {
   const rows = evidence.scenarios.map((scenario) => {
     const { p50Ms, p90Ms } = scenario.stats;
     return `| ${scenario.scenarioId} | ${scenario.scenarioClass} | ${scenario.samples} | ${p50Ms.toFixed(3)} | ${p90Ms.toFixed(3)} |`;
@@ -217,4 +241,9 @@ function buildBaselineTable(evidence: TimingEvidence): string {
   ].join("\n");
 }
 
-main();
+// Guard direct-execution so unit tests can import parseArgs/resolveConfigVariant/buildBaselineTable
+// without running the CLI (this file is invoked directly via `tsx scripts/qa-lab/run-timing.ts`).
+const isDirectlyExecuted = process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`;
+if (isDirectlyExecuted) {
+  main();
+}

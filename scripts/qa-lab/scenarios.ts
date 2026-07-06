@@ -40,6 +40,30 @@ function patch(newStartLine: number, addedLines: string[]): string {
   return `${header}\n${body}`;
 }
 
+/**
+ * Derive additions/deletions/changes straight from a unified-diff patch body, so a scenario's
+ * `PullFilePatch` metadata can never drift from what `patch()` actually produced (#341 review:
+ * previously several scenarios had hand-written additions/deletions literals that didn't match the
+ * patch body). Every added/removed content line in these fixtures is a whole-line `+`/`-` hunk line;
+ * no `\ No newline at end of file` markers or context lines are used, so a plain per-line prefix
+ * count is exact for this module's fixtures.
+ */
+export function countPatchLines(patchText: string): { additions: number; deletions: number; changes: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of patchText.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) additions += 1;
+    else if (line.startsWith("-")) deletions += 1;
+  }
+  return { additions, deletions, changes: additions + deletions };
+}
+
+/** Builds a `PullFilePatch` whose additions/deletions/changes are always derived from `patchText`. */
+function filePatch(filename: string, status: string, patchText: string): PullFilePatch {
+  return { filename, status, ...countPatchLines(patchText), patch: patchText };
+}
+
 export const QA_LAB_SCENARIOS: QaLabScenario[] = [
   {
     id: "docs-only-readme-typo",
@@ -59,14 +83,7 @@ export const QA_LAB_SCENARIOS: QaLabScenario[] = [
       ]
     },
     files: [
-      {
-        filename: "docs/SETUP.md",
-        status: "modified",
-        additions: 3,
-        deletions: 1,
-        changes: 4,
-        patch: patch(10, ["## Setup", "", "Follow these steps to install the CLI locally."])
-      }
+      filePatch("docs/SETUP.md", "modified", patch(10, ["## Setup", "", "Follow these steps to install the CLI locally."]))
     ]
   },
   {
@@ -96,31 +113,25 @@ export const QA_LAB_SCENARIOS: QaLabScenario[] = [
       ]
     },
     files: [
-      {
-        filename: "src/example-helper.ts",
-        status: "modified",
-        additions: 12,
-        deletions: 4,
-        changes: 16,
-        patch: patch(
-          15,
-          [
-            "export function retryWithBackoff(fn: () => Promise<void>, maxAttempts: number): Promise<void> {",
-            "  let attempt = 0;",
-            "  return (async () => {",
-            "    while (attempt <= maxAttempts) {",
-            "      try {",
-            "        await fn();",
-            "        return;",
-            "      } catch (error) {",
-            "        attempt += 1;",
-            "      }",
-            "    }",
-            "  })();",
-            "}"
-          ]
-        )
-      }
+      filePatch(
+        "src/example-helper.ts",
+        "modified",
+        patch(15, [
+          "export function retryWithBackoff(fn: () => Promise<void>, maxAttempts: number): Promise<void> {",
+          "  let attempt = 0;",
+          "  return (async () => {",
+          "    while (attempt <= maxAttempts) {",
+          "      try {",
+          "        await fn();",
+          "        return;",
+          "      } catch (error) {",
+          "        attempt += 1;",
+          "      }",
+          "    }",
+          "  })();",
+          "}"
+        ])
+      )
     ]
   },
   {
@@ -151,27 +162,21 @@ export const QA_LAB_SCENARIOS: QaLabScenario[] = [
       ]
     },
     files: [
-      {
-        filename: "src/example-auth.ts",
-        status: "modified",
-        additions: 10,
-        deletions: 6,
-        changes: 16,
-        patch: patch(
-          5,
-          [
-            "export function handlePrivilegedAction(user: { role: string }, token: string, expected: string): void {",
-            "  if (token === expected) {",
-            "    performPrivilegedAction();",
-            "  }",
-            "}",
-            "",
-            "function performPrivilegedAction(): void {",
-            "  // ...",
-            "}"
-          ]
-        )
-      }
+      filePatch(
+        "src/example-auth.ts",
+        "modified",
+        patch(5, [
+          "export function handlePrivilegedAction(user: { role: string }, token: string, expected: string): void {",
+          "  if (token === expected) {",
+          "    performPrivilegedAction();",
+          "  }",
+          "}",
+          "",
+          "function performPrivilegedAction(): void {",
+          "  // ...",
+          "}"
+        ])
+      )
     ]
   },
   {
@@ -192,23 +197,17 @@ export const QA_LAB_SCENARIOS: QaLabScenario[] = [
       ]
     },
     files: [
-      {
-        filename: "migrations/0042_add_status_column.sql",
-        status: "added",
-        additions: 6,
-        deletions: 0,
-        changes: 6,
-        patch: patch(
-          1,
-          [
-            "-- Up",
-            "ALTER TABLE accounts ADD COLUMN status TEXT NOT NULL DEFAULT 'active';",
-            "UPDATE accounts SET status = 'active' WHERE status IS NULL;",
-            "",
-            "-- (no corresponding down migration file in this PR)"
-          ]
-        )
-      }
+      filePatch(
+        "migrations/0042_add_status_column.sql",
+        "added",
+        patch(1, [
+          "-- Up",
+          "ALTER TABLE accounts ADD COLUMN status TEXT NOT NULL DEFAULT 'active';",
+          "UPDATE accounts SET status = 'active' WHERE status IS NULL;",
+          "",
+          "-- (no corresponding down migration file in this PR)"
+        ])
+      )
     ]
   },
   {
@@ -228,16 +227,7 @@ export const QA_LAB_SCENARIOS: QaLabScenario[] = [
         }
       ]
     },
-    files: [
-      {
-        filename: "config.example.json",
-        status: "modified",
-        additions: 2,
-        deletions: 2,
-        changes: 4,
-        patch: patch(1, ['{', '  "updateChannel": "stable",'])
-      }
-    ]
+    files: [filePatch("config.example.json", "modified", patch(1, ["{", '  "updateChannel": "stable",']))]
   },
   {
     id: "issue-burst-duplicate-reports",
@@ -260,14 +250,11 @@ export const QA_LAB_SCENARIOS: QaLabScenario[] = [
       ]
     },
     files: [
-      {
-        filename: "src/example-queue.ts",
-        status: "modified",
-        additions: 5,
-        deletions: 1,
-        changes: 6,
-        patch: patch(28, ["export function enqueueIssue(issue: { id: string }): void {", "  queue.push(issue);", "}"])
-      }
+      filePatch(
+        "src/example-queue.ts",
+        "modified",
+        patch(28, ["export function enqueueIssue(issue: { id: string }): void {", "  queue.push(issue);", "}"])
+      )
     ]
   }
 ];

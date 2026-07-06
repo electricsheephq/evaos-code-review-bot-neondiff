@@ -15,6 +15,12 @@ describe("percentile", () => {
     expect(percentile(samples, 0.9)).toBe(90);
   });
 
+  it("returns the min at p=0 and the max at p=1 (nearest-rank boundaries)", () => {
+    const samples = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    expect(percentile(samples, 0)).toBe(Math.min(...samples));
+    expect(percentile(samples, 1)).toBe(Math.max(...samples));
+  });
+
   it("is insensitive to input order", () => {
     const ascending = [1, 2, 3, 4, 5];
     const shuffled = [3, 1, 5, 2, 4];
