@@ -24,7 +24,7 @@
     "note": "v0.4.25 through v0.4.29 and v0.4.31 through v0.4.37 were source/local-worker beta releases; v0.4.30-beta.1 remains the current public npm/site beta."
   },
   "source": {
-    "shaState": "set_after_codeql_hardening_merge",
+    "shaState": "77f49abfbe36e47855df3361780d0efad813d72e",
     "proof": "release:status --expected-head $(git rev-parse HEAD)"
   },
   "docs": {
