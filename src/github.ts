@@ -4,6 +4,7 @@ import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
+import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 
 export interface GitHubApiOptions {
   appId?: string;
@@ -18,7 +19,7 @@ export class GitHubApi {
   private readonly appId?: string;
   private readonly privateKey?: string;
   private readonly token?: string;
-  private readonly apiBaseUrl: string;
+  private readonly apiBaseUrl: URL;
   private readonly botLogin: string;
   private readonly requestTimeoutMs?: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
@@ -27,7 +28,7 @@ export class GitHubApi {
     this.appId = options.appId;
     this.privateKey = options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined;
     this.token = options.token;
-    this.apiBaseUrl = options.apiBaseUrl ?? "https://api.github.com";
+    this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
     this.botLogin = options.botLogin ?? "evaos-code-review-bot[bot]";
     this.requestTimeoutMs = options.requestTimeoutMs;
   }
@@ -246,7 +247,7 @@ export class GitHubApi {
       ? setTimeout(() => controller.abort(new Error(`GitHub API request timed out after ${this.requestTimeoutMs}ms for ${path}`)), this.requestTimeoutMs)
       : undefined;
     try {
-      response = await fetch(`${this.apiBaseUrl}${path}`, {
+      response = await fetch(buildApiUrl(this.apiBaseUrl, path, "GitHub API request path"), {
         method: options.method ?? "GET",
         signal: controller?.signal,
         headers: {
