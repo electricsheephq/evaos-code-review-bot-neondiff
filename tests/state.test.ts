@@ -1690,4 +1690,78 @@ describe("review state store", () => {
     })).toThrow(/secret-like/);
     store.close();
   });
+
+  it("grants an atomic per-head review claim to exactly one concurrent claimant (#295)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "electricsheephq/WorldOS", pullNumber: 289, headSha: "head-abc" };
+
+    const first = store.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:00.000Z") });
+    const second = store.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:06.000Z") });
+
+    expect(first).toBeDefined();
+    expect(second).toBeUndefined();
+    store.close();
+  });
+
+  it("lets a NEW head on the same PR claim while another head is held (#295)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-newhead-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const held = store.tryClaimReviewHead({ repo: "r/x", pullNumber: 1, headSha: "sha-1", claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:00.000Z") });
+    const newHead = store.tryClaimReviewHead({ repo: "r/x", pullNumber: 1, headSha: "sha-2", claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:01.000Z") });
+
+    expect(held).toBeDefined();
+    expect(newHead).toBeDefined();
+    store.close();
+  });
+
+  it("expires a stale per-head claim after its TTL so a new claimant can proceed (#295)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-ttl-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "r/x", pullNumber: 2, headSha: "sha-ttl" };
+
+    const first = store.tryClaimReviewHead({ ...head, claimTtlMs: 1_000, now: new Date("2026-07-06T00:00:00.000Z"), ownerPid: 999_999_999 });
+    const beforeExpiry = store.tryClaimReviewHead({ ...head, claimTtlMs: 1_000, now: new Date("2026-07-06T00:00:00.500Z") });
+    const afterExpiry = store.tryClaimReviewHead({ ...head, claimTtlMs: 1_000, now: new Date("2026-07-06T00:00:01.001Z") });
+
+    expect(first).toBeDefined();
+    expect(beforeExpiry).toBeUndefined();
+    expect(afterExpiry).toBeDefined();
+    store.close();
+  });
+
+  it("releases a per-head claim so it can be re-acquired (#295)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-release-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "r/x", pullNumber: 3, headSha: "sha-rel" };
+
+    const first = store.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:00.000Z") });
+    store.releaseReviewHeadClaim(first!.claimId);
+    const afterRelease = store.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:01.000Z") });
+
+    expect(first).toBeDefined();
+    expect(afterRelease).toBeDefined();
+    store.close();
+  });
+
+  it("retires the per-head claim when the review is recorded so it is not re-claimed (#295)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-retire-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "r/x", pullNumber: 4, headSha: "sha-done" };
+
+    const claim = store.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:00.000Z") });
+    expect(claim).toBeDefined();
+    store.recordProcessed({ repo: head.repo, pullNumber: head.pullNumber, headSha: head.headSha, status: "posted" });
+
+    // A completed review supersedes the claim: the claim row is retired (no stale row lingers to TTL).
+    const afterRecord = store.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:02.000Z") });
+    expect(afterRecord).toBeDefined();
+    store.close();
+  });
 });

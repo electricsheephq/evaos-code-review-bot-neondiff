@@ -94,6 +94,12 @@ export interface ReviewRunLease {
   ownerPid: number;
 }
 
+export interface ReviewHeadClaim {
+  claimId: string;
+  expiresAt: string;
+  ownerPid: number;
+}
+
 export interface IssueEnrichmentRunLease {
   leaseId: string;
   expiresAt: string;
@@ -458,6 +464,17 @@ export class ReviewStateStore {
         owner_pid integer
       );
 
+      create table if not exists review_head_claims (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        claim_id text not null,
+        owner_pid integer,
+        claimed_at text not null,
+        expires_at text not null,
+        primary key (repo, pull_number, head_sha)
+      );
+
       create table if not exists repo_provider_cooldowns (
         repo text primary key,
         cooldown_until text not null,
@@ -722,6 +739,11 @@ export class ReviewStateStore {
         record.reviewUrl ?? null,
         record.error ?? null
       );
+    // A recorded outcome for this head supersedes any in-flight per-head claim (#295): retire it so
+    // no stale claim row lingers to its TTL after the review is durable.
+    this.db
+      .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
+      .run(record.repo, record.pullNumber, record.headSha);
   }
 
   getReviewReadiness(repo: string, pullNumber: number, headSha: string): ReviewReadinessRecord | undefined {
@@ -1111,6 +1133,62 @@ export class ReviewStateStore {
 
   releaseReviewRunLease(leaseId: string): void {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  /**
+   * Atomic per-head review claim (#295): defends the at-most-one-review-per-{repo,pr,head_sha}
+   * invariant against the manual-review-pr vs daemon race (both passed the getProcessedReview read
+   * window before either recordProcessed'd). The {repo, pull_number, head_sha} PRIMARY KEY makes the
+   * INSERT a compare-and-set — exactly one concurrent caller wins; the loser gets undefined. Claims
+   * are crash-safe two ways: a completed review retires the claim in recordProcessed (release-on-
+   * success), reviewPull releases it in a finally (release-on-failure), and a TTL backstop sweeps
+   * claims whose holder died mid-review — mirroring the review_run_leases TTL idiom.
+   */
+  tryClaimReviewHead(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    claimTtlMs: number;
+    now?: Date;
+    ownerPid?: number;
+  }): ReviewHeadClaim | undefined {
+    if (!Number.isInteger(input.claimTtlMs)) throw new Error("claimTtlMs must be an integer");
+    if (input.claimTtlMs < 1) throw new Error("claimTtlMs must be at least 1");
+    const ownerPid = input.ownerPid ?? process.pid;
+    if (!Number.isInteger(ownerPid) || ownerPid < 1) throw new Error("ownerPid must be a positive integer");
+
+    const now = input.now ?? new Date();
+    const claimId = randomUUID();
+    const claimedAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + input.claimTtlMs).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      // TTL backstop: sweep this head's claim if a prior holder died mid-review without releasing.
+      this.db
+        .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ? and expires_at <= ?")
+        .run(input.repo, input.pullNumber, input.headSha, claimedAt);
+      const existing = this.db
+        .prepare("select claim_id from review_head_claims where repo = ? and pull_number = ? and head_sha = ? limit 1")
+        .get(input.repo, input.pullNumber, input.headSha) as { claim_id: string } | undefined;
+      if (existing) {
+        this.db.exec("commit");
+        return undefined;
+      }
+      this.db
+        .prepare(
+          "insert into review_head_claims (repo, pull_number, head_sha, claim_id, owner_pid, claimed_at, expires_at) values (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .run(input.repo, input.pullNumber, input.headSha, claimId, ownerPid, claimedAt, expiresAt);
+      this.db.exec("commit");
+      return { claimId, expiresAt, ownerPid };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  releaseReviewHeadClaim(claimId: string): void {
+    this.db.prepare("delete from review_head_claims where claim_id = ?").run(claimId);
   }
 
   tryAcquireIssueEnrichmentRunLease(
