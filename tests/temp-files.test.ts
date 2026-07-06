@@ -1,40 +1,24 @@
-import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getProcessTempDir, randomFileSuffix, SECURE_TEMP_FILE_MODE, writeSecureFileSync } from "../src/temp-files.js";
+import { SECURE_TEMP_FILE_MODE, writeSecureFileSync } from "../src/temp-files.js";
 
 describe("temp-files helper", () => {
-  const written: string[] = [];
+  const tempDirs: string[] = [];
+
+  function makeTempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "neondiff-test-"));
+    tempDirs.push(dir);
+    return dir;
+  }
 
   afterEach(() => {
-    for (const path of written.splice(0)) rmSync(path, { recursive: true, force: true });
-  });
-
-  it("creates the process temp dir under the OS tmp root with mode 0700", () => {
-    const dir = getProcessTempDir();
-    expect(dir.startsWith(join(tmpdir(), "neondiff-")) || dir.startsWith(tmpdir())).toBe(true);
-    expect(existsSync(dir)).toBe(true);
-    expect(statSync(dir).mode & 0o777).toBe(0o700);
-  });
-
-  it("reuses the same process temp dir across calls", () => {
-    const first = getProcessTempDir();
-    const second = getProcessTempDir();
-    expect(second).toBe(first);
-  });
-
-  it("produces different random suffixes across calls", () => {
-    const a = randomFileSuffix();
-    const b = randomFileSuffix();
-    expect(a).not.toBe(b);
-    expect(a).toMatch(/^[0-9a-f]+$/);
+    for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });
   });
 
   it("writes files with mode 0600 and the exact given contents", () => {
-    const dir = getProcessTempDir();
-    const path = join(dir, `secure-${randomFileSuffix()}.txt`);
-    written.push(path);
+    const path = join(makeTempDir(), "secure.txt");
 
     writeSecureFileSync(path, "hello world");
 
@@ -43,9 +27,7 @@ describe("temp-files helper", () => {
   });
 
   it("tightens permissions when overwriting an existing file", () => {
-    const dir = getProcessTempDir();
-    const path = join(dir, `secure-existing-${randomFileSuffix()}.txt`);
-    written.push(path);
+    const path = join(makeTempDir(), "secure-existing.txt");
     writeFileSync(path, "old contents");
     chmodSync(path, 0o644);
 
