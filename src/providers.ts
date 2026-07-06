@@ -278,7 +278,8 @@ async function smokeOpenAICompatibleProvider(input: {
     provider: input.provider,
     env: input.env,
     allowRemoteSmoke: input.allowRemoteSmoke,
-    dnsLookupImpl: input.dnsLookupImpl
+    dnsLookupImpl: input.dnsLookupImpl,
+    timeoutMs: input.provider.timeoutMs
   });
   if (target.error) return { ...baseCheck, ok: false, error: target.error };
   if (input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv && !input.env[input.provider.apiKeyEnv]) {
@@ -319,6 +320,16 @@ async function smokeOpenAICompatibleProvider(input: {
       throw error;
     }
     if (!response.ok) {
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        const redactedLocation = location ? redactProviderSmokeText(location, input.provider, input.env) : undefined;
+        return {
+          ...baseCheck,
+          ok: false,
+          errorCategory: "unknown",
+          error: `OpenAI-compatible models endpoint redirected with ${response.status}; remote smoke does not follow redirects. Update baseUrl to the canonical /models endpoint.${redactedLocation ? ` Location: ${redactedLocation}` : ""}`
+        };
+      }
       const redactedText = redactProviderSmokeText(text, input.provider, input.env);
       const error = `OpenAI-compatible models endpoint returned ${response.status}: ${redactedText.slice(0, 300)}`;
       return {
@@ -380,12 +391,16 @@ function isRemoteSmokeEnvOptIn(env: Record<string, string | undefined>): boolean
 }
 
 function signalWithTimeout(timeoutMs: number | undefined): AbortSignal | undefined {
-  const timeout = timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS;
+  const timeout = providerSmokeTimeoutMs(timeoutMs);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const maybeUnref = timer as { unref?: () => void };
   if (typeof maybeUnref.unref === "function") maybeUnref.unref();
   return controller.signal;
+}
+
+function providerSmokeTimeoutMs(timeoutMs: number | undefined): number {
+  return timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS;
 }
 
 function providerReadinessCapabilityError(provider: ProviderRegistryEntry): string | undefined {
@@ -435,7 +450,9 @@ export function openAICompatibleProviderTargetError(
   if (parsed.username || parsed.password) {
     return `OpenAI-compatible ${targetLabel} must not include username or password credentials.`;
   }
-  if (containsSecretLikeText(decodeURIComponent(`${parsed.pathname}${parsed.hash}`))) {
+  const decodedPathAndFragment = decodeProviderPathAndFragment(parsed, targetLabel);
+  if (!decodedPathAndFragment.ok) return decodedPathAndFragment.error;
+  if (containsSecretLikeText(decodedPathAndFragment.value)) {
     return `OpenAI-compatible ${targetLabel} must not include secret-like path or fragment values.`;
   }
   for (const key of parsed.searchParams.keys()) {
@@ -466,6 +483,7 @@ async function resolveProviderSmokeTarget(input: {
   env: Record<string, string | undefined>;
   allowRemoteSmoke: boolean;
   dnsLookupImpl: DnsLookupImpl;
+  timeoutMs: number | undefined;
 }): Promise<{ target?: ProviderSmokeTarget; error?: string }> {
   let parsed: URL;
   try {
@@ -476,7 +494,9 @@ async function resolveProviderSmokeTarget(input: {
   if (parsed.username || parsed.password) {
     return { error: "OpenAI-compatible smoke target must not include username or password credentials." };
   }
-  if (containsSecretLikeText(decodeURIComponent(`${parsed.pathname}${parsed.hash}`))) {
+  const decodedPathAndFragment = decodeProviderPathAndFragment(parsed, "smoke target");
+  if (!decodedPathAndFragment.ok) return { error: decodedPathAndFragment.error };
+  if (containsSecretLikeText(decodedPathAndFragment.value)) {
     return { error: "OpenAI-compatible smoke target must not include secret-like path or fragment values." };
   }
   for (const key of parsed.searchParams.keys()) {
@@ -501,7 +521,7 @@ async function resolveProviderSmokeTarget(input: {
   if (!input.env[input.provider.apiKeyEnv]) {
     return { error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
   }
-  const pinnedAddress = await resolvePinnedRemoteSmokeAddress(parsed.hostname, input.dnsLookupImpl);
+  const pinnedAddress = await resolvePinnedRemoteSmokeAddress(parsed.hostname, input.dnsLookupImpl, input.timeoutMs);
   if (pinnedAddress.error) return { error: pinnedAddress.error };
   return {
     target: {
@@ -514,14 +534,28 @@ async function resolveProviderSmokeTarget(input: {
 
 async function resolvePinnedRemoteSmokeAddress(
   hostname: string,
-  dnsLookupImpl: DnsLookupImpl
+  dnsLookupImpl: DnsLookupImpl,
+  timeoutMs: number | undefined
 ): Promise<{ address?: DnsLookupAddress; error?: string }> {
   let addresses: DnsLookupAddress[];
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    addresses = await dnsLookupImpl(hostname, { all: true, verbatim: true });
+    addresses = await Promise.race([
+      dnsLookupImpl(hostname, { all: true, verbatim: true }),
+      new Promise<DnsLookupAddress[]>((_, reject) => {
+        timeout = setTimeout(() => reject(new ProviderSmokeDnsTimeoutError()), providerSmokeTimeoutMs(timeoutMs));
+        const maybeUnref = timeout as { unref?: () => void };
+        if (typeof maybeUnref.unref === "function") maybeUnref.unref();
+      })
+    ]);
   } catch (error) {
+    if (error instanceof ProviderSmokeDnsTimeoutError) {
+      return { error: "Remote OpenAI-compatible smoke DNS lookup timed out." };
+    }
     const message = error instanceof Error ? error.message : String(error);
     return { error: `Remote OpenAI-compatible smoke DNS lookup failed: ${redactSecrets(message)}` };
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
   if (addresses.length === 0) {
     return { error: "Remote OpenAI-compatible smoke DNS lookup returned no addresses." };
@@ -534,6 +568,17 @@ async function resolvePinnedRemoteSmokeAddress(
     return { error: "Remote OpenAI-compatible smoke DNS lookup returned no IPv4 or IPv6 addresses." };
   }
   return { address };
+}
+
+function decodeProviderPathAndFragment(
+  parsed: URL,
+  targetLabel: string
+): { ok: true; value: string } | { ok: false; error: string } {
+  try {
+    return { ok: true, value: decodeURIComponent(`${parsed.pathname}${parsed.hash}`) };
+  } catch {
+    return { ok: false, error: `OpenAI-compatible ${targetLabel} contains an invalid percent-encoded path or fragment.` };
+  }
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -603,6 +648,12 @@ class ProviderSmokeResponseTooLargeError extends Error {
   }
 }
 
+class ProviderSmokeDnsTimeoutError extends Error {
+  constructor() {
+    super("Remote OpenAI-compatible smoke DNS lookup timed out.");
+  }
+}
+
 async function fetchProviderModels(input: {
   fetchImpl: typeof fetch;
   requestImpl?: ProviderSmokeRequestImpl;
@@ -633,7 +684,7 @@ async function fetchProviderModelsWithPinnedRequest(
     path: `${parsed.pathname}${parsed.search}`,
     method: "GET",
     headers: Object.fromEntries(headers.entries()),
-    timeout: timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS,
+    timeout: providerSmokeTimeoutMs(timeoutMs),
     ...(target.pinnedAddress
       ? {
           servername: parsed.hostname,
@@ -703,7 +754,9 @@ function responseHeadersToHeaders(headers: IncomingHttpHeaders): Headers {
 async function readResponseTextBounded(response: Response): Promise<string> {
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (Number.isFinite(contentLength) && contentLength > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
-    throw new ProviderSmokeResponseTooLargeError();
+    const tooLargeError = new ProviderSmokeResponseTooLargeError();
+    await response.body?.cancel(tooLargeError).catch(() => {});
+    throw tooLargeError;
   }
   if (!response.body) return response.text();
   const reader = response.body.getReader();
@@ -716,12 +769,18 @@ async function readResponseTextBounded(response: Response): Promise<string> {
       if (!value) continue;
       totalBytes += value.byteLength;
       if (totalBytes > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
-        throw new ProviderSmokeResponseTooLargeError();
+        const tooLargeError = new ProviderSmokeResponseTooLargeError();
+        await reader.cancel(tooLargeError).catch(() => {});
+        throw tooLargeError;
       }
       chunks.push(value);
     }
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // The stream may already be released by cancellation in non-browser runtimes.
+    }
   }
   const output = new Uint8Array(totalBytes);
   let offset = 0;

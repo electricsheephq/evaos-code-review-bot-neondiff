@@ -490,6 +490,57 @@ describe("provider registry", () => {
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
+  it("fails hosted remote DNS lookup closed on provider timeout", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            timeoutMs: 1,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let requestCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => new Promise(() => {}),
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: "{}",
+        onOptions: () => {
+          requestCalls += 1;
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "Remote OpenAI-compatible smoke DNS lookup timed out."
+    });
+    expect(requestCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
   it("does not follow hosted remote redirects or leak provider response secrets", async () => {
     const config = loadConfigFromObject({
       providers: {
@@ -536,11 +587,53 @@ describe("provider registry", () => {
 
     expect(result.checks[0]).toMatchObject({
       ok: false,
-      error: expect.stringContaining("OpenAI-compatible models endpoint returned 302")
+      error: expect.stringContaining("OpenAI-compatible models endpoint redirected with 302")
     });
-    expect(JSON.stringify(result)).toContain("[redacted-provider-key]");
+    expect(result.checks[0]?.error).toContain("remote smoke does not follow redirects");
     expect(JSON.stringify(result)).not.toContain("provider-secret");
     expect(JSON.stringify(result)).not.toContain("password");
+  });
+
+  it("rejects invalid percent-encoded smoke paths without crashing the doctor run", async () => {
+    let dnsCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1%",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      },
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => {
+        dnsCalls += 1;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "OpenAI-compatible smoke target contains an invalid percent-encoded path or fragment."
+    });
+    expect(dnsCalls).toBe(0);
   });
 
   it("classifies provider failures and redacts provider URLs", () => {
@@ -1094,6 +1187,53 @@ describe("provider registry", () => {
       errorCategory: "model_output_schema",
       error: "Models response was not valid JSON."
     });
+  });
+
+  it("cancels oversized fetch response bodies immediately", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            model: "review-model",
+            authMode: "none",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: true,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let canceled = false;
+    const body = new ReadableStream({
+      cancel() {
+        canceled = true;
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => new Response(body, {
+        status: 200,
+        headers: {
+          "content-length": String(256 * 1024 + 1)
+        }
+      })
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "model_output_schema",
+      error: "Models response exceeded 262144 byte limit."
+    });
+    expect(canceled).toBe(true);
   });
 
   it("aborts OpenAI-compatible smoke checks using provider timeoutMs", async () => {
