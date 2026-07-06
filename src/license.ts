@@ -31,6 +31,7 @@ export type LicenseStatus =
   | "unsupported_client"
   | "clock_skew";
 type LicenseApiBodyStatus = Exclude<LicenseStatus, "missing" | "network" | "server">;
+type NonActiveLicenseApiBodyStatus = Exclude<LicenseApiBodyStatus, "active">;
 type LicenseApiErrorStatus = Exclude<LicenseStatus, "active" | "missing" | "network">;
 type LicenseFailureClassification = Exclude<LicenseStatus, "active">;
 export type RepoVisibilityScope = "public" | "private" | "all";
@@ -448,7 +449,7 @@ function apiFailureResult(statusCode: number, body: unknown, now: Date, licenseK
 
 function statusFromApiError(statusCode: number, body: unknown): LicenseApiErrorStatus {
   const bodyStatus = readBodyStatus(body);
-  if (bodyStatus && bodyStatus !== "active" && shouldTrustApiBodyStatusForError(statusCode, bodyStatus)) return bodyStatus;
+  if (bodyStatus && shouldTrustApiBodyStatusForError(statusCode, bodyStatus)) return bodyStatus;
   if (statusCode === 402) return "expired";
   if (statusCode === 429) return "rate_limited";
   if (statusCode === 426) return "unsupported_client";
@@ -638,8 +639,11 @@ function readFileLicenseKey(path: string | undefined): string | undefined {
 }
 
 function readCacheRedactionLicenseKey(config: LicenseConfig): string | undefined {
-  if (config.storageBackend !== "file") return undefined;
-  return readFileLicenseKey(config.keyPath);
+  try {
+    return readLicenseKey(config);
+  } catch {
+    return undefined;
+  }
 }
 
 function readKeychainLicenseKey(config: LicenseConfig): string | undefined {
@@ -705,7 +709,8 @@ function shouldDeleteLicenseCacheForStatus(status: LicenseStatus): boolean {
   );
 }
 
-function shouldTrustApiBodyStatusForError(statusCode: number, status: Exclude<LicenseApiBodyStatus, "active">): boolean {
+function shouldTrustApiBodyStatusForError(statusCode: number, status: LicenseApiBodyStatus): status is NonActiveLicenseApiBodyStatus {
+  if (status === "active") return false;
   if (shouldDeleteLicenseCacheForStatus(status)) return true;
   if (status === "rate_limited") return statusCode === 429;
   if (status === "clock_skew") return statusCode === 400;

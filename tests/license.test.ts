@@ -283,6 +283,33 @@ describe("license activation and entitlement cache", () => {
     expect(JSON.stringify(status)).not.toContain(key);
   });
 
+  it("redacts cached opaque revocation reason metadata with the stored license key", async () => {
+    const root = mkRoot(roots);
+    const key = "opaque_local_license_value_123456";
+    writeFileSync(join(root, "license.key"), `${key}\n`, { mode: 0o600 });
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "revoked",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: false,
+      revocationReason: `manual disable for ${key}`
+    })}\n`, { mode: 0o600 });
+
+    const status = await getLicenseStatus({
+      config: licenseConfig(root, undefined),
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      status: "revoked",
+      entitlement: {
+        revocationReason: "manual disable for [REDACTED_LICENSE_KEY]"
+      }
+    });
+    expect(JSON.stringify(status)).not.toContain(key);
+  });
+
   it("redacts cached non-active revocation reason metadata without a stored file key", async () => {
     const root = mkRoot(roots);
     const key = "LIC-cached-keychain-style-test-123456";
