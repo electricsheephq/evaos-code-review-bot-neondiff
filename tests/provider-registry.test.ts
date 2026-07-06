@@ -541,6 +541,59 @@ describe("provider registry", () => {
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
+  it("redacts hosted remote DNS lookup failures before request", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let requestCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => {
+        throw new Error("lookup failed for sk-testsecret12345");
+      },
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: "{}",
+        onOptions: () => {
+          requestCalls += 1;
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "Remote OpenAI-compatible smoke DNS lookup failed: lookup failed for [redacted-secret]"
+    });
+    expect(requestCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("sk-testsecret12345");
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
   it("does not follow hosted remote redirects or leak provider response secrets", async () => {
     const config = loadConfigFromObject({
       providers: {

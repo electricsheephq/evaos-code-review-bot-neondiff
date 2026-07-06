@@ -367,6 +367,7 @@ async function smokeOpenAICompatibleProvider(input: {
     };
   } catch (error) {
     if (error instanceof ProviderSmokeResponseTooLargeError) {
+      // The pinned Node transport can reject this before readResponseTextBounded receives a Response.
       return {
         ...baseCheck,
         ok: false,
@@ -694,15 +695,19 @@ async function fetchProviderModelsWithPinnedRequest(
         }
       : {})
   };
-  const transport = requestImpl ?? ((options, onResponse) => {
+  const sendProviderSmokeRequest = (onResponse: (response: IncomingMessage) => void): ClientRequest => {
+    if (requestImpl) return requestImpl(requestOptions, onResponse);
+
     // Provider smoke intentionally contacts a config-selected endpoint only after
     // explicit remote opt-in, env-key auth, HTTPS validation, safe DNS, and pinned lookup.
+    //
     // codeql[js/file-access-to-http]
-    return requestFn(options as RequestOptions, onResponse);
-  });
+    // lgtm[js/file-access-to-http]
+    return requestFn(requestOptions as RequestOptions, onResponse);
+  };
   return new Promise((resolve, reject) => {
     let settled = false;
-    const request = transport(requestOptions, (response) => {
+    const request = sendProviderSmokeRequest((response) => {
       const chunks: Buffer[] = [];
       let totalBytes = 0;
       response.on("data", (chunk: Buffer | string) => {
@@ -754,6 +759,8 @@ function responseHeadersToHeaders(headers: IncomingHttpHeaders): Headers {
 async function readResponseTextBounded(response: Response): Promise<string> {
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (Number.isFinite(contentLength) && contentLength > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
+    // Pinned Node transport enforces streaming byte limits before constructing a Response;
+    // this early guard covers fetch/local Response bodies.
     const tooLargeError = new ProviderSmokeResponseTooLargeError();
     await response.body?.cancel(tooLargeError).catch(() => {});
     throw tooLargeError;
