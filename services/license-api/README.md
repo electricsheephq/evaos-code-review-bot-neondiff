@@ -74,10 +74,13 @@ See [`docs/admin-runbook.md`](docs/admin-runbook.md) for the operator runbook.
 ## Deploy
 
 Deploy is a **separate, gated step** (not part of the PR that adds this
-service). The target is fly.io with SQLite on a mounted volume; the orchestrator
-drives `flyctl` (staging → owner confirm → production) and wires the prod URL
-into `docs/public-release-manifest.json`'s `licenseApi` slot once live. No
-secrets live in the repo.
+service). The target is fly.io with SQLite on a mounted volume; the owner
+drives `flyctl` (login → launch → volume → deploy → verify → promote) and
+wires the prod URL into `docs/public-release-manifest.json`'s `licenseApi`
+slot once live. No secrets live in the repo.
+
+Deploy-ready assets (`Dockerfile`, `fly.toml`, `.dockerignore`) and the exact
+command sequence live at [`docs/deploy.md`](docs/deploy.md).
 
 ## Tests
 

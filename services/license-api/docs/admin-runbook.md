@@ -4,6 +4,8 @@ Operator procedures for the NeonDiff license service
 ([#327](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327)).
 This runbook covers key issuance and lifecycle. It does **not** cover payment,
 billing, or deploy — deploy is a separate gated step driven by the orchestrator.
+See [`deploy.md`](deploy.md) for the fly.io deploy sequence (`Dockerfile`,
+`fly.toml`, volume/secrets setup, and rollback).
 
 All commands open the SQLite database at `LICENSE_DB_PATH`. In production this is
 the file on the mounted fly volume; run the CLI on the instance (or against a

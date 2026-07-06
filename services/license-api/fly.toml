@@ -1,0 +1,73 @@
+# NeonDiff license-api (#327) — fly.io app config.
+#
+# Placeholder app name — the owner renames this at deploy time
+# (`flyctl launch` will prompt, or edit `app` below before `flyctl deploy`).
+app = "neondiff-license"
+primary_region = "iad"  # placeholder — set to wherever the fleet/owner is closest to.
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Build context must be the repo root (the Dockerfile compiles the service
+# with the root TypeScript devDependency). Deploy from the repo root with:
+#   flyctl deploy --config services/license-api/fly.toml --dockerfile services/license-api/Dockerfile
+# or `cd` to repo root first so relative paths resolve; see docs/deploy.md.
+
+[env]
+  PORT = "8080"
+  HOST = "0.0.0.0"
+  LICENSE_DB_PATH = "/data/license.sqlite"
+
+# --- Storage -----------------------------------------------------------------
+# SQLite (node:sqlite, see src/store.ts) is a single-writer embedded file DB —
+# it lives on ONE machine's local volume, not shared/replicated storage. A Fly
+# Volume is machine-pinned, so this app must run as a single machine bound to
+# that volume (no horizontal scaling across machines without moving the DB to
+# a real network-attached store first).
+[mounts]
+  source = "license_data"
+  destination = "/data"
+
+# --- HTTP service --------------------------------------------------------------
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # see min_machines_running note below
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.checks]
+    [http_service.checks.healthz]
+      grace_period = "10s"
+      interval = "15s"
+      method = "GET"
+      path = "/healthz"
+      protocol = "http"
+      timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+# --- Why min_machines_running = 1 (not 0) --------------------------------------
+# This is a licensing gate for PAID private-repo entitlements (see README.md /
+# docs/admin-runbook.md) — every `activate`/`validate` call on a private repo
+# blocks on this service being reachable. Two reasons to keep it warm instead
+# of scale-to-zero:
+#   1. UX: scale-to-zero means the first request after idle eats a cold-start
+#      (new machine boot + SQLite file open) before a customer's private-repo
+#      review can proceed — a bad place to add multi-second latency.
+#   2. Volume semantics: Fly volumes are machine-local. Scaling to zero and
+#      letting Fly schedule the next start on a DIFFERENT machine in the same
+#      region would detach it from this app's existing volume mount unless
+#      it's the same single machine/volume pairing Fly already tracks — safer
+#      to just keep the one machine (and its attached volume) continuously
+#      running than to lean on stop/start + reattach behavior for a database.
+# Public repos never call this service at all (license gating is client-side
+# and only fires for private repos — see README.md "Contract"), so traffic
+# here is inherently low-volume; the cost of staying warm on a single
+# shared-cpu-1x/256mb machine is small relative to the availability win.
+#
+# If cost becomes a real concern later: raise `auto_stop_machines` cautiously
+# only after confirming Fly's volume-reattach behavior for this app, and only
+# with a single machine (never > 1 with a single SQLite volume).

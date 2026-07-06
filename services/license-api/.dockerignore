@@ -1,0 +1,26 @@
+# Applies when building with build context = repo root:
+#   docker build -f services/license-api/Dockerfile .
+# (see Dockerfile header). Keeps the build context small and keeps local
+# SQLite files / dependency trees out of the image entirely.
+
+**/node_modules
+**/dist
+**/.git
+
+# Local SQLite databases (never ship real data in the image).
+**/runtime/
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+**/*.db
+
+# Tests and dev-only files — not needed in the build or runtime image.
+services/license-api/test
+**/*.test.ts
+**/vitest.config.*
+
+# Editor/OS cruft and secrets.
+**/.env
+**/.env.*
+**/*.pem
+**/.DS_Store
