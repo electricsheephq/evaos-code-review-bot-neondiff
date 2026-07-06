@@ -26,13 +26,29 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.event.release.tag_name }}
 
-      - name: Verify release tag matches package version
+      - name: Classify npm package release
+        id: package_release
         run: |
           TAG="${{ github.event.inputs.tag || github.event.release.tag_name }}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          test "$TAG" = "v$PACKAGE_VERSION"
+          if [ "$TAG" != "v$PACKAGE_VERSION" ]; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "::error::Manual npm publish tag $TAG does not match package.json version v$PACKAGE_VERSION"
+              exit 1
+            fi
+            SKIPPED_SOURCE_RELEASE="$(TAG="$TAG" node -e 'const manifest = require("./docs/public-release-manifest.json"); const skippedVersions = manifest.packageArtifact?.skippedPublicPackageVersions ?? []; process.stdout.write(manifest.releaseLevel === "source-beta" && skippedVersions.includes(process.env.TAG) ? "true" : "false");')"
+            if [ "$SKIPPED_SOURCE_RELEASE" = "true" ]; then
+              echo "::notice::Skipping npm publish for source-only prerelease $TAG; package.json remains v$PACKAGE_VERSION"
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::Release tag $TAG does not match package.json version v$PACKAGE_VERSION and is not listed in docs/public-release-manifest.json packageArtifact.skippedPublicPackageVersions"
+            exit 1
+          fi
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
+        if: steps.package_release.outputs.should_publish == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 26
@@ -40,18 +56,22 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        if: steps.package_release.outputs.should_publish == 'true'
         run: npm ci
 
       - name: Build
+        if: steps.package_release.outputs.should_publish == 'true'
         run: npm run build
 
       - name: Verify package
+        if: steps.package_release.outputs.should_publish == 'true'
         run: |
           npx vitest run tests/public-release-readiness.test.ts --pool=forks --maxWorkers=1
           npm pack --dry-run --json > pack.json
           node scripts/check-packlist.mjs pack.json
 
       - name: Publish or verify existing package
+        if: steps.package_release.outputs.should_publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
