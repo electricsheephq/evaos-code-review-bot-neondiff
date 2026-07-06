@@ -18,10 +18,10 @@ in this slice is limited to mocked API responses and local cache behavior:
   status outcomes;
 - private and unknown repo review gates still fail closed when entitlement is
   missing, stale, non-active, or not scoped for the requested visibility;
-- active entitlement cache metadata can include the license fingerprint, plan,
+- entitlement cache metadata can include the license fingerprint, plan,
   repo visibility coverage, private-repo allowance, update entitlement,
-  expiry, offline grace metadata, and revocation reason when supplied by a
-  service response;
+  expiry, offline grace metadata, and non-active revocation reason when supplied
+  by a service response;
 - secret-bearing values remain outside tracked config, GitHub evidence, and
   operator docs.
 
@@ -36,7 +36,7 @@ private repo contents, provider keys, or customer secrets:
 
 | Admin outcome | Client-facing status | Operator note |
 | --- | --- | --- |
-| License covers the requested repo visibility | `active` | Review may proceed to the next setup/provider gate. |
+| License covers the requested repo visibility | `active` | Review may proceed to the next setup/provider gate unless `privateRepoAllowed=false` denies a private repo. |
 | License exists but does not cover the requested repo or visibility | `scope_mismatch` | Keep the gate closed and inspect entitlement scope. |
 | License is expired | `expired` | Keep the gate closed until billing/support resolves renewal. |
 | License is revoked, refunded, charged back, or manually disabled | `revoked` | Keep the gate closed and include a redacted revocation reason when available. |
@@ -46,10 +46,15 @@ private repo contents, provider keys, or customer secrets:
 | Client/server time drift is outside service tolerance | `clock_skew` | Ask the operator to correct time sync before retrying. |
 | Network or service failure | `network` or `server` | Use only the existing short offline cache grace for active cached entitlements; otherwise fail closed. |
 
-When a response body provides an explicit non-`active` status, that status is
-authoritative and takes precedence over the HTTP-status fallback. Legacy service
+When a 2xx response body provides a non-`active` status, that status is
+authoritative and the gate fails closed without writing an active cache.
+For non-2xx responses, durable denial statuses (`expired`, `revoked`, `invalid`,
+`scope_mismatch`, and `unsupported_client`) are authoritative when present in the
+body. Transient statuses only override when the HTTP code matches the transient
+contract (`429` for `rate_limited`, `400` for `clock_skew`). Legacy service
 responses remain supported: for example, a bare HTTP 403 without an explicit
-`scope_mismatch` body remains classified as `revoked`.
+`scope_mismatch` body remains classified as `revoked`, and a bare HTTP 409
+remains classified as `scope_mismatch`.
 
 ## Entitlement Metadata
 
@@ -60,18 +65,21 @@ response supplies them:
   license key, never the raw key;
 - `plan`: human-readable support or entitlement tier;
 - `repoVisibilityScope`: `public`, `private`, or `all`;
-- `privateRepoAllowed`: whether private-repo review is allowed by this
-  entitlement;
+- `privateRepoAllowed`: when present as `false`, private-repo review fails
+  closed even if `repoVisibilityScope` is `private` or `all`;
 - `updateEntitlement`: whether update-channel access is allowed;
 - `expiresAt`: entitlement expiry time;
 - `offlineGraceMs` and `graceUntil`: cache-grace metadata for operator
-  diagnosis;
+  diagnosis; local `config.license.offlineGraceMs` remains the authority for
+  whether cached entitlement grace is accepted;
 - `revocationReason`: redacted, printable, length-capped reason such as refund,
-  chargeback, manual disable, or policy violation.
+  chargeback, manual disable, or policy violation; preserved only when the
+  entitlement status is not `active`.
 
-Metadata is evidence, not authority. Review gating still requires an active
-entitlement that covers the requested repo visibility and passes the existing
-freshness rules.
+Metadata is evidence, not authority, except that `privateRepoAllowed=false` is
+treated as an explicit fail-closed private-repo denial. Review gating still
+requires an active entitlement that covers the requested repo visibility and
+passes the existing freshness rules.
 
 ## Required Live Readiness Inputs
 

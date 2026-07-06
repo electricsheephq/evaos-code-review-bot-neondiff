@@ -24,6 +24,13 @@ describe("secret redaction", () => {
     expect(redactSecrets(`license=${license}`)).toBe("license=[redacted-secret]");
   });
 
+  it("redacts hyphenated license-shaped values case-insensitively", () => {
+    const license = "LIC-revocation-reason-test-123456";
+
+    expect(containsSecretLikeText(license)).toBe(true);
+    expect(redactSecrets(`license=${license}`)).toBe("license=[redacted-secret]");
+  });
+
   it("does not redact ordinary lowercase hyphenated NeonDiff paths as license tokens", () => {
     const path = "/tmp/neondiff-launchd-plist-Ov4D5v/com.example.neondiff.plist";
 

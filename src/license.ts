@@ -31,6 +31,7 @@ export type LicenseStatus =
   | "unsupported_client"
   | "clock_skew";
 type LicenseApiBodyStatus = Exclude<LicenseStatus, "missing" | "network" | "server">;
+type LicenseApiErrorStatus = Exclude<LicenseStatus, "active" | "missing" | "network">;
 type LicenseFailureClassification = Exclude<LicenseStatus, "active">;
 export type RepoVisibilityScope = "public" | "private" | "all";
 const MAX_REVOCATION_REASON_LENGTH = 240;
@@ -152,7 +153,7 @@ export async function getLicenseStatus(input: {
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
-  const cached = readLicenseCache(input.config.cachePath);
+  const cached = readLicenseCache(input.config.cachePath, readCacheRedactionLicenseKey(input.config));
   if (!input.refresh) return statusFromCache(cached, now);
 
   const licenseKey = readLicenseKey(input.config);
@@ -192,10 +193,7 @@ export async function getLicenseStatus(input: {
       detail: `using cached entitlement after ${response.status} license API failure`
     };
   }
-  if (
-    (response.status === "expired" || response.status === "revoked" || response.status === "invalid") &&
-    cachedEntitlementMatchesLicenseKey(cached, licenseKey)
-  ) {
+  if (shouldDeleteLicenseCacheForStatus(response.status) && cachedEntitlementMatchesLicenseKey(cached, licenseKey)) {
     deleteLicenseCache(input.config.cachePath);
   }
   return response;
@@ -297,13 +295,16 @@ export async function evaluateLicenseReviewGate(input: {
     };
   }
   if (!entitlementCoversRepoVisibility(status.entitlement, input.visibility)) {
+    const reason = input.visibility === "private" && status.entitlement.privateRepoAllowed === false
+      ? "entitlement privateRepoAllowed=false does not allow private repos"
+      : `entitlement scope ${status.entitlement.repoVisibilityScope} does not cover ${input.visibility} repos`;
     return {
       ok: false,
       repo: input.repo,
       visibility: input.visibility,
       status: status.status,
       entitlement: status.entitlement,
-      reason: `entitlement scope ${status.entitlement.repoVisibilityScope} does not cover ${input.visibility} repos`
+      reason
     };
   }
   return {
@@ -323,6 +324,7 @@ function repoVisibilityRequiresEntitlement(visibility: "public" | "private" | "u
 }
 
 function entitlementCoversRepoVisibility(entitlement: LicenseEntitlement, visibility: "public" | "private" | "unknown"): boolean {
+  if (visibility === "private" && entitlement.privateRepoAllowed === false) return false;
   if (entitlement.repoVisibilityScope === "all") return true;
   if (visibility === "public") return entitlement.repoVisibilityScope === "public" || entitlement.repoVisibilityScope === "private";
   if (visibility === "private") return entitlement.repoVisibilityScope === "private";
@@ -444,9 +446,9 @@ function apiFailureResult(statusCode: number, body: unknown, now: Date, licenseK
   };
 }
 
-function statusFromApiError(statusCode: number, body: unknown): Exclude<LicenseStatus, "active" | "missing"> {
+function statusFromApiError(statusCode: number, body: unknown): LicenseApiErrorStatus {
   const bodyStatus = readBodyStatus(body);
-  if (bodyStatus && bodyStatus !== "active") return bodyStatus;
+  if (bodyStatus && bodyStatus !== "active" && shouldTrustApiBodyStatusForError(statusCode, bodyStatus)) return bodyStatus;
   if (statusCode === 402) return "expired";
   if (statusCode === 429) return "rate_limited";
   if (statusCode === 426) return "unsupported_client";
@@ -461,7 +463,7 @@ function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): Lic
   const status = readBodyStatus(record);
   const repoVisibilityScope = readRepoVisibilityScope(record);
   if (!status || !repoVisibilityScope) return undefined;
-  const revocationReason = sanitizeRevocationReason(readString(record, "revocationReason"), licenseKey);
+  const revocationReason = status === "active" ? undefined : sanitizeRevocationReason(readString(record, "revocationReason"), licenseKey);
   return {
     status,
     checkedAt: now.toISOString(),
@@ -534,7 +536,7 @@ function invalidApiResult(now: Date, detail: string): LicenseStatusResult {
   };
 }
 
-function readLicenseCache(path: string): LicenseEntitlement | undefined {
+function readLicenseCache(path: string, licenseKey = ""): LicenseEntitlement | undefined {
   if (!existsSync(path)) return undefined;
   const parsed = safeJsonParse(readFileSync(path, "utf8"));
   if (!isRecord(parsed)) return undefined;
@@ -542,7 +544,7 @@ function readLicenseCache(path: string): LicenseEntitlement | undefined {
   const repoVisibilityScope = readRepoVisibilityScope(parsed);
   const checkedAt = readString(parsed, "checkedAt");
   if (!status || !repoVisibilityScope || !checkedAt) return undefined;
-  const revocationReason = sanitizeRevocationReason(readString(parsed, "revocationReason"));
+  const revocationReason = status === "active" ? undefined : sanitizeRevocationReason(readString(parsed, "revocationReason"), licenseKey);
   return {
     status,
     checkedAt,
@@ -635,6 +637,11 @@ function readFileLicenseKey(path: string | undefined): string | undefined {
   return key || undefined;
 }
 
+function readCacheRedactionLicenseKey(config: LicenseConfig): string | undefined {
+  if (config.storageBackend !== "file") return undefined;
+  return readFileLicenseKey(config.keyPath);
+}
+
 function readKeychainLicenseKey(config: LicenseConfig): string | undefined {
   if (platform() !== "darwin") {
     throw new Error("macOS Keychain license storage is only available on darwin; use storageBackend=file for headless Linux/CI");
@@ -688,10 +695,26 @@ function cachedEntitlementMatchesLicenseKey(entitlement: LicenseEntitlement | un
   return entitlement?.licenseFingerprint === fingerprintLicenseKey(licenseKey);
 }
 
+function shouldDeleteLicenseCacheForStatus(status: LicenseStatus): boolean {
+  return (
+    status === "expired" ||
+    status === "revoked" ||
+    status === "invalid" ||
+    status === "scope_mismatch" ||
+    status === "unsupported_client"
+  );
+}
+
+function shouldTrustApiBodyStatusForError(statusCode: number, status: Exclude<LicenseApiBodyStatus, "active">): boolean {
+  if (shouldDeleteLicenseCacheForStatus(status)) return true;
+  if (status === "rate_limited") return statusCode === 429;
+  if (status === "clock_skew") return statusCode === 400;
+  return false;
+}
+
 function redactSubmittedLicenseKey(text: string, licenseKey: string): string {
-  const genericRedacted = redactSecrets(text);
-  if (!licenseKey) return genericRedacted;
-  return genericRedacted.split(licenseKey).join("[REDACTED_LICENSE_KEY]");
+  if (!licenseKey) return redactSecrets(text);
+  return redactSecrets(text.split(licenseKey).join("[REDACTED_LICENSE_KEY]"));
 }
 
 function sanitizeRevocationReason(value: string | undefined, licenseKey = ""): string | undefined {
