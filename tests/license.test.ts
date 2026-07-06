@@ -689,6 +689,34 @@ describe("license activation and entitlement cache", () => {
     expect(gate).toMatchObject({ ok: true, status: "active" });
   });
 
+  it("allows private review from active cached entitlement with hosted admin metadata", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, undefined);
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "active",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      privateRepoAllowed: true,
+      updateEntitlement: true,
+      offlineGraceMs: 60_000,
+      graceUntil: "2026-07-04T00:15:00.000Z"
+    })}\n`, { mode: 0o600 });
+
+    const gate = await evaluateLicenseReviewGate({
+      config,
+      repo: "owner/private",
+      visibility: "private",
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(gate).toMatchObject({
+      ok: true,
+      status: "active",
+      reason: "active entitlement covers private repo review"
+    });
+  });
+
   it("clears cached active entitlement after terminal API denial", async () => {
     const root = mkRoot(roots);
     const server = await startLicenseServer((_req, res) => writeJson(res, 410, { status: "revoked", detail: "revoked" }));

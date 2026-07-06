@@ -25,7 +25,7 @@ describe("secret redaction", () => {
   });
 
   it("redacts hyphenated license-shaped values case-insensitively", () => {
-    const license = "LIC-revocation-reason-test-123456";
+    const license = "neondiff-revocation-reason-test-123456";
 
     expect(containsSecretLikeText(license)).toBe(true);
     expect(redactSecrets(`license=${license}`)).toBe("license=[redacted-secret]");
