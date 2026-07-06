@@ -82,7 +82,7 @@ describe("worker review settings preview evidence", () => {
     expect(walkthrough).toContain("### Review Settings Preview");
     expect(walkthrough).toContain("Provider: GLM/Z.ai through ZCode (`zcode-glm`, zcode, model `GLM-5.2`).");
     expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");
-    expect(walkthrough).toContain("- Path instructions: `src/\\`templates\\`/**`");
+    expectSettingsPathInstructionCodeSpan(walkthrough, "src/`templates`/**");
     expect(walkthrough).not.toContain(secretLikeToken);
     expect(ledger.runtime).toMatchObject({
       provider: "zcode-glm",
@@ -174,6 +174,18 @@ describe("worker review settings preview evidence", () => {
     });
   });
 });
+
+function expectSettingsPathInstructionCodeSpan(body: string, expectedPattern: string): void {
+  const line = body.split("\n").find((candidate) => candidate.startsWith("- Path instructions: "));
+  expect(line).toBeDefined();
+  const remainder = line!.slice("- Path instructions: ".length);
+  const delimiter = remainder.match(/^`+/)?.[0];
+  expect(delimiter).toBeDefined();
+  const closingIndex = remainder.indexOf(delimiter!, delimiter!.length);
+  expect(closingIndex).toBeGreaterThan(delimiter!.length - 1);
+  expect(remainder.slice(delimiter!.length, closingIndex)).toBe(expectedPattern);
+  expect(remainder.slice(closingIndex + delimiter!.length)).toBe(" - Do not quote [redacted-secret] in public comments.");
+}
 
 function minimalConfig(root: string): BotConfig {
   return {

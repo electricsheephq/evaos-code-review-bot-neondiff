@@ -252,6 +252,17 @@ describe("beta release status", () => {
     ).not.toThrow();
   });
 
+  it("rejects oversized public release version inputs before semver matching", () => {
+    const oversizedVersion = `v1.0.0-${"a.".repeat(300)}`;
+
+    expect(() =>
+      validatePublicReleaseManifestInputs({
+        publicReleaseManifestPath: "docs/public-release-manifest.json",
+        expectedPublicVersion: oversizedVersion
+      })
+    ).toThrow("--expected-public-version is too long (max 128 characters)");
+  });
+
   it("collects public release manifest gates through release-status wiring", () => {
     // Intentional shipped-manifest smoke: surrounding repo/live-path status is machine-local.
     const root = mkdtempSync(join(tmpdir(), "release-status-public-manifest-"));

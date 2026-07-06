@@ -183,6 +183,7 @@ export interface ReleaseStatus {
 
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
+const MAX_PUBLIC_VERSION_TAG_LENGTH = 128;
 const PUBLIC_VERSION_PATTERN =
   /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
@@ -455,6 +456,9 @@ export function validatePublicReleaseManifestInputs(input: {
   if (input.expectedPublicVersion && !input.publicReleaseManifestPath) {
     throw new Error("--public-release-manifest is required when --expected-public-version is provided");
   }
+  if (input.expectedPublicVersion && input.expectedPublicVersion.length > MAX_PUBLIC_VERSION_TAG_LENGTH) {
+    throw new Error(`--expected-public-version is too long (max ${MAX_PUBLIC_VERSION_TAG_LENGTH} characters)`);
+  }
   if (input.expectedPublicVersion && !isPublicVersionTag(input.expectedPublicVersion)) {
     throw new Error("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
   }
@@ -711,6 +715,7 @@ function checkRollbackTarget(
 }
 
 function isPublicVersionTag(version: string): boolean {
+  if (version.length > MAX_PUBLIC_VERSION_TAG_LENGTH) return false;
   return PUBLIC_VERSION_PATTERN.test(version);
 }
 
