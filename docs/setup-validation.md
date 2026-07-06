@@ -10,7 +10,8 @@ The validation target is a literal pass through:
 install -> init -> doctor -> providers -> first dry-run review
 ```
 
-Run this twice before using the result as issue #319 evidence:
+For maintainer setup-readiness evidence, run this twice before attaching the
+result to the relevant readiness tracker:
 
 - human transcript: a human follows README and [docs/SETUP.md](SETUP.md)
   without hidden repo knowledge
@@ -22,6 +23,15 @@ Run this twice before using the result as issue #319 evidence:
 Use a clean machine, clean container, or clean macOS user/session. If that is
 not available, use an isolated temp npm prefix plus fresh config, state, and
 evidence directories outside the repository.
+
+All command examples below assume these scratch paths are defined first:
+
+```bash
+export scratch_parent="${TMPDIR:-/tmp}"
+export work_dir="${work_dir:-$(mktemp -d "$scratch_parent/neondiff-setup-validation.XXXXXX")}"
+export tmp_prefix="$work_dir/npm-prefix"
+mkdir -p "$tmp_prefix" "$work_dir/evidence"
+```
 
 Record:
 
@@ -39,11 +49,14 @@ Record:
 Do not record raw private keys, provider API keys, GitHub tokens, license keys,
 raw customer data, or unredacted model transcripts.
 
-Suggested evidence root:
+Suggested local evidence root:
 
 ```text
-/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/setup-validation/YYYY-MM-DD/<human-or-agent>/
+$work_dir/evidence/setup-validation/YYYY-MM-DD/<human-or-agent>/
 ```
+
+Maintainers can copy or link the sanitized transcript from that root into the
+relevant GitHub issue or release evidence packet after the run completes.
 
 ## Transcript Format
 
