@@ -1,6 +1,4 @@
 import { lookup as defaultDnsLookup } from "node:dns/promises";
-import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
-import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
@@ -262,7 +260,6 @@ async function smokeOpenAICompatibleProvider(input: {
   }
 
   try {
-    const requestUrl = buildOpenAIModelsUrl(input.provider.baseUrl);
     const requestInit: RequestInit = {
       method: "GET",
       signal: signalWithTimeout(input.provider.timeoutMs),
@@ -274,9 +271,7 @@ async function smokeOpenAICompatibleProvider(input: {
           : {})
       }
     };
-    const response = input.fetchImpl === fetch
-      ? await fetchProviderModels(requestUrl, requestInit, target.target, input.provider.timeoutMs)
-      : await input.fetchImpl(requestUrl, requestInit);
+    const response = await fetchProviderModels(input.fetchImpl, target.target, requestInit);
     let text: string;
     try {
       text = await readResponseTextBounded(response);
@@ -428,8 +423,7 @@ export function openAICompatibleProviderTargetError(
 }
 
 interface ProviderSmokeTarget {
-  remote: boolean;
-  pinnedAddress?: DnsLookupAddress;
+  modelsUrl: string;
 }
 
 async function resolveProviderSmokeTarget(input: {
@@ -457,7 +451,9 @@ async function resolveProviderSmokeTarget(input: {
     }
   }
   const loopback = isLoopbackHost(parsed.hostname);
-  if (loopback && input.provider.capabilities.local) return { target: { remote: false } };
+  if (loopback && input.provider.capabilities.local) {
+    return { target: { modelsUrl: buildOpenAIModelsUrl(parsed.toString()) } };
+  }
   if (isUnsafeSmokeHost(parsed.hostname)) {
     return { error: "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts." };
   }
@@ -471,33 +467,37 @@ async function resolveProviderSmokeTarget(input: {
   if (!input.env[input.provider.apiKeyEnv]) {
     return { error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
   }
-  const pinnedAddress = await resolvePinnedRemoteSmokeAddress(parsed.hostname, input.dnsLookupImpl);
-  if (pinnedAddress.error) return { error: pinnedAddress.error };
-  return { target: { remote: true, pinnedAddress: pinnedAddress.address } };
+  const dnsError = await validateSafeRemoteSmokeDns(parsed.hostname, input.dnsLookupImpl);
+  if (dnsError) return { error: dnsError };
+  return {
+    target: {
+      modelsUrl: buildOpenAIModelsUrl(parsed.toString())
+    }
+  };
 }
 
-async function resolvePinnedRemoteSmokeAddress(
+async function validateSafeRemoteSmokeDns(
   hostname: string,
   dnsLookupImpl: DnsLookupImpl
-): Promise<{ address?: DnsLookupAddress; error?: string }> {
+): Promise<string | undefined> {
   let addresses: DnsLookupAddress[];
   try {
     addresses = await dnsLookupImpl(hostname, { all: true, verbatim: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { error: `Remote OpenAI-compatible smoke DNS lookup failed: ${redactSecrets(message)}` };
+    return `Remote OpenAI-compatible smoke DNS lookup failed: ${redactSecrets(message)}`;
   }
   if (addresses.length === 0) {
-    return { error: "Remote OpenAI-compatible smoke DNS lookup returned no addresses." };
+    return "Remote OpenAI-compatible smoke DNS lookup returned no addresses.";
   }
   if (addresses.some((entry) => isUnsafeSmokeHost(entry.address))) {
-    return { error: "Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address." };
+    return "Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address.";
   }
   const address = addresses.find((entry) => entry.family === 4 || entry.family === 6);
   if (!address) {
-    return { error: "Remote OpenAI-compatible smoke DNS lookup returned no IPv4 or IPv6 addresses." };
+    return "Remote OpenAI-compatible smoke DNS lookup returned no IPv4 or IPv6 addresses.";
   }
-  return { address };
+  return undefined;
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -568,80 +568,12 @@ class ProviderSmokeResponseTooLargeError extends Error {
 }
 
 async function fetchProviderModels(
-  url: string,
-  init: RequestInit,
+  fetchImpl: typeof fetch,
   target: ProviderSmokeTarget | undefined,
-  timeoutMs: number | undefined
+  init: RequestInit
 ): Promise<Response> {
-  const parsed = new URL(url);
-  const requestFn = parsed.protocol === "https:" ? httpsRequest : httpRequest;
-  const headers = new Headers(init.headers);
-  const headerObject = Object.fromEntries(headers.entries());
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const request = requestFn({
-      protocol: parsed.protocol,
-      hostname: parsed.hostname,
-      port: parsed.port,
-      path: `${parsed.pathname}${parsed.search}`,
-      method: "GET",
-      headers: headerObject,
-      timeout: timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS,
-      ...(target?.remote && target.pinnedAddress
-        ? {
-            servername: parsed.hostname,
-            lookup: (_hostname, _options, callback) => {
-              callback(null, target.pinnedAddress!.address, target.pinnedAddress!.family);
-            }
-          }
-        : {})
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-      response.on("data", (chunk: Buffer | string) => {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        totalBytes += buffer.byteLength;
-        if (totalBytes > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
-          request.destroy(new ProviderSmokeResponseTooLargeError());
-          return;
-        }
-        chunks.push(buffer);
-      });
-      response.on("end", () => {
-        if (settled) return;
-        settled = true;
-        init.signal?.removeEventListener("abort", abort);
-        resolve(new Response(Buffer.concat(chunks), {
-          status: response.statusCode ?? 0,
-          statusText: response.statusMessage,
-          headers: responseHeadersToHeaders(response.headers)
-        }));
-      });
-    });
-    const abort = () => request.destroy(new Error("Provider smoke request aborted."));
-    init.signal?.addEventListener("abort", abort, { once: true });
-    request.on("timeout", () => request.destroy(new Error("Provider smoke request timed out.")));
-    request.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      init.signal?.removeEventListener("abort", abort);
-      reject(error);
-    });
-    request.end();
-  });
-}
-
-function responseHeadersToHeaders(headers: IncomingHttpHeaders): Headers {
-  const output = new Headers();
-  for (const [key, value] of Object.entries(headers)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value)) {
-      for (const entry of value) output.append(key, entry);
-    } else {
-      output.set(key, String(value));
-    }
-  }
-  return output;
+  if (!target) throw new Error("Provider smoke target was not validated.");
+  return fetchImpl(target.modelsUrl, init);
 }
 
 async function readResponseTextBounded(response: Response): Promise<string> {
