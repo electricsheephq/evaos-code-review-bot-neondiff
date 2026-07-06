@@ -33,6 +33,8 @@ class MockProviderIncomingMessage extends EventEmitter {
   statusCode?: number;
   statusMessage?: string;
   headers: Record<string, string | string[] | undefined>;
+  destroyed = false;
+  destroyedWith?: Error;
 
   constructor(input: {
     status: number;
@@ -52,6 +54,15 @@ class MockProviderIncomingMessage extends EventEmitter {
       this.emit("data", Buffer.from(input.body));
       this.emit("end");
     });
+  }
+
+  destroy(error?: Error): this {
+    this.destroyed = true;
+    this.destroyedWith = error;
+    this.removeAllListeners("data");
+    this.removeAllListeners("end");
+    if (error) this.emit("error", error);
+    return this;
   }
 }
 
@@ -325,6 +336,91 @@ describe("provider registry", () => {
     });
     expect(pinnedLookup).toEqual({ address: "93.184.216.34", family: 4 });
     expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("uses the production https request path for hosted BYOK remote smoke without test transport injection", async () => {
+    vi.resetModules();
+    const requestOptions: ProviderSmokeRequestOptions[] = [];
+    const requests: MockProviderClientRequest[] = [];
+    vi.doMock("node:https", async () => {
+      const actual = await vi.importActual<typeof import("node:https")>("node:https");
+      return {
+        ...actual,
+        request: (options: ProviderSmokeRequestOptions, onResponse: (response: IncomingMessage) => void) => {
+          requestOptions.push(options);
+          const request = new MockProviderClientRequest();
+          requests.push(request);
+          queueMicrotask(() => onResponse(new MockProviderIncomingMessage({
+            status: 200,
+            body: JSON.stringify({ data: [{ id: "review-model" }] }),
+            headers: { "Content-Type": "application/json" }
+          }) as IncomingMessage));
+          return request;
+        }
+      };
+    });
+    try {
+      const { doctorProviderRegistry: doctorProviderRegistryWithNativeTransport } = await import("../src/providers.js");
+      const config = loadConfigFromObject({
+        providers: {
+          defaultProviderId: "hosted-byok",
+          providers: {
+            "hosted-byok": {
+              enabled: true,
+              adapter: "openai-compatible",
+              baseUrl: "https://gateway.example.test/v1",
+              model: "review-model",
+              authMode: "api-key-env",
+              apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            }
+          }
+        }
+      });
+
+      const result = await doctorProviderRegistryWithNativeTransport({
+        registry: config.providers!,
+        providerId: "hosted-byok",
+        smoke: true,
+        allowRemoteSmoke: true,
+        dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+        fetchImpl: async () => {
+          throw new Error("remote smoke must not use fetch");
+        },
+        env: {
+          NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+        }
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.checks[0]).toMatchObject({
+        ok: true,
+        providerId: "hosted-byok",
+        modelCount: 1
+      });
+      expect(requestOptions).toHaveLength(1);
+      expect(requestOptions[0]).toMatchObject({
+        protocol: "https:",
+        hostname: "gateway.example.test",
+        path: "/v1/models",
+        method: "GET",
+        servername: "gateway.example.test"
+      });
+      expect(requestOptions[0].headers).toMatchObject({
+        accept: "application/json",
+        authorization: "Bearer provider-secret"
+      });
+      expect(requests[0]?.ended).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("provider-secret");
+    } finally {
+      vi.doUnmock("node:https");
+      vi.resetModules();
+    }
   });
 
   it("allows hosted BYOK smoke through an explicit environment opt-in", async () => {

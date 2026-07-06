@@ -737,7 +737,10 @@ async function fetchProviderModelsWithPinnedRequest(
           statusText: response.statusMessage,
           headers: responseHeadersToHeaders(response.headers)
         }));
-        queueMicrotask(() => request.destroy());
+        // Redirect bodies are not diagnostic evidence for this smoke check and may contain
+        // provider-side secrets. Close the response/socket without attaching data listeners.
+        response.destroy();
+        request.destroy();
         return;
       }
       const chunks: Buffer[] = [];
