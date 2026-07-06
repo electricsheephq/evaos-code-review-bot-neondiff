@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import {
@@ -6,8 +8,57 @@ import {
   classifyProviderError,
   doctorProviderRegistry,
   isProviderId,
+  type ProviderSmokeRequestImpl,
+  type ProviderSmokeRequestOptions,
   redactProviderUrl
 } from "../src/providers.js";
+
+class MockProviderClientRequest extends EventEmitter {
+  ended = false;
+  destroyedWith?: Error;
+
+  end(): this {
+    this.ended = true;
+    return this;
+  }
+
+  destroy(error?: Error): this {
+    this.destroyedWith = error;
+    if (error) this.emit("error", error);
+    return this;
+  }
+}
+
+class MockProviderIncomingMessage extends EventEmitter {
+  statusCode?: number;
+  statusMessage?: string;
+  headers: Record<string, string | string[] | undefined>;
+
+  constructor(input: { status: number; body: string; headers?: Record<string, string | string[] | undefined> }) {
+    super();
+    this.statusCode = input.status;
+    this.statusMessage = String(input.status);
+    this.headers = input.headers ?? {};
+    queueMicrotask(() => {
+      this.emit("data", Buffer.from(input.body));
+      this.emit("end");
+    });
+  }
+}
+
+function mockProviderRequest(response: {
+  status: number;
+  body: string;
+  headers?: Record<string, string | string[] | undefined>;
+  onOptions?: (options: ProviderSmokeRequestOptions) => void;
+}): ProviderSmokeRequestImpl {
+  return (options, onResponse) => {
+    response.onOptions?.(options);
+    const request = new MockProviderClientRequest();
+    queueMicrotask(() => onResponse(new MockProviderIncomingMessage(response) as IncomingMessage));
+    return request as unknown as ClientRequest;
+  };
+}
 
 describe("provider registry", () => {
   it("loads safe default providers and doctors only enabled/default entries by default", async () => {
@@ -184,7 +235,7 @@ describe("provider registry", () => {
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
-  it("allows explicitly opted-in hosted BYOK smoke after safe DNS validation", async () => {
+  it("allows explicitly opted-in hosted BYOK smoke through DNS-pinned transport", async () => {
     const config = loadConfigFromObject({
       providers: {
         defaultProviderId: "hosted-byok",
@@ -207,7 +258,7 @@ describe("provider registry", () => {
       }
     });
     const dnsCalls: string[] = [];
-    const fetchCalls: string[] = [];
+    const requestOptions: ProviderSmokeRequestOptions[] = [];
 
     const result = await doctorProviderRegistry({
       registry: config.providers!,
@@ -218,18 +269,17 @@ describe("provider registry", () => {
         dnsCalls.push(hostname);
         return [{ address: "93.184.216.34", family: 4 }];
       },
-      fetchImpl: async (url, init) => {
-        fetchCalls.push(String(url));
-        expect(init?.method).toBe("GET");
-        expect(init?.redirect).toBe("manual");
-        expect(init?.signal).toBeInstanceOf(AbortSignal);
-        expect(new Headers(init?.headers).get("accept")).toBe("application/json");
-        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer provider-secret");
-        return new Response(JSON.stringify({ data: [{ id: "review-model" }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
       },
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: JSON.stringify({ data: [{ id: "review-model" }] }),
+        headers: { "Content-Type": "application/json" },
+        onOptions: (options) => {
+          requestOptions.push(options);
+        }
+      }),
       env: {
         NEONDIFF_PROVIDER_API_KEY: "provider-secret"
       }
@@ -246,7 +296,24 @@ describe("provider registry", () => {
       modelCount: 1
     });
     expect(dnsCalls).toEqual(["gateway.example.test"]);
-    expect(fetchCalls).toEqual(["https://gateway.example.test/v1/models"]);
+    expect(requestOptions).toHaveLength(1);
+    expect(requestOptions[0]).toMatchObject({
+      protocol: "https:",
+      hostname: "gateway.example.test",
+      path: "/v1/models",
+      method: "GET",
+      servername: "gateway.example.test"
+    });
+    expect(requestOptions[0].headers).toMatchObject({
+      accept: "application/json",
+      authorization: "Bearer provider-secret"
+    });
+    let pinnedLookup: { address?: string; family?: number } = {};
+    requestOptions[0].lookup?.("gateway.example.test", {}, (error, address, family) => {
+      expect(error).toBeNull();
+      pinnedLookup = { address, family };
+    });
+    expect(pinnedLookup).toEqual({ address: "93.184.216.34", family: 4 });
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
@@ -278,8 +345,12 @@ describe("provider registry", () => {
       providerId: "hosted-byok",
       smoke: true,
       dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
-      fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "review-model" }] }), {
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
+      },
+      requestImpl: mockProviderRequest({
         status: 200,
+        body: JSON.stringify({ data: [{ id: "review-model" }] }),
         headers: { "Content-Type": "application/json" }
       }),
       env: {
@@ -448,15 +519,16 @@ describe("provider registry", () => {
       smoke: true,
       allowRemoteSmoke: true,
       dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
-      fetchImpl: async (_url, init) => {
-        expect(init?.redirect).toBe("manual");
-        return new Response("redirect includes provider-secret and https://user:password@example.test", {
-          status: 302,
-          headers: {
-            Location: "https://redirect.example.test/v1/models"
-          }
-        });
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
       },
+      requestImpl: mockProviderRequest({
+        status: 302,
+        body: "redirect includes provider-secret and https://user:password@example.test",
+        headers: {
+          Location: "https://redirect.example.test/v1/models"
+        }
+      }),
       env: {
         NEONDIFF_PROVIDER_API_KEY: "provider-secret"
       }
