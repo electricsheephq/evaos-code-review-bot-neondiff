@@ -38,13 +38,16 @@ import {
   type ReviewQueueJobState,
   type ReviewQueueJobSource
 } from "./state.js";
-import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, ReviewEvent } from "./types.js";
+import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, PullReviewComment, ReviewEvent } from "./types.js";
 import type { IssueCommentCommandSource } from "./commands.js";
 import { buildChangedSurfaceValidationReport } from "./validation-selector.js";
+import { collectRightSideLines } from "./diff.js";
 import { redactSecrets } from "./secrets.js";
 import {
+  buildObservedPullOutcome,
   runScheduledObservePass,
   type ObservedPullOutcome,
+  type ObservedSubsequentPull,
   type ScheduledObserveTarget
 } from "./outcome-observer.js";
 import {
@@ -88,6 +91,10 @@ export interface SchedulerGitHubApi {
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
   // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
   listPullFiles?(repo: string, pullNumber: number): Promise<PullFilePatch[]>;
+  // Optional deeper-observation reads (#371): only invoked by the scheduled outcome observer to enrich
+  // a merged PR's outcome (revert/hotfix/human-thread). All read-only; absent ⇒ merge-state-only cut.
+  listRecentMergedPulls?(repo: string, limit: number): Promise<PullRequestSummary[]>;
+  listPullReviewComments?(repo: string, pullNumber: number): Promise<PullReviewComment[]>;
 }
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
@@ -259,10 +266,15 @@ export async function runScheduledCycleWithDeps(input: {
 }
 
 /**
- * Runs the scheduled, default-off outcome observation pass at the tail of a daemon cycle (#357). The
- * `fetchOutcome` reader is built from the scheduler's read-only GitHub surface (`getPull` merge state)
- * and is injected into the pure observe pass so tests stay hermetic. This is a no-op — no GitHub reads,
- * no writes — unless `calibrationLoop.observeSchedule.enabled` is true AND the interval is due.
+ * Runs the scheduled, default-off outcome observation pass at the tail of a daemon cycle (#357, deepened
+ * in #371). The `fetchOutcome` reader is built from the scheduler's read-only GitHub surface and injected
+ * into the pure observe pass so tests stay hermetic. For a MERGED reviewed PR it now derives the deeper
+ * post-merge signals (revert of the merge, a subsequent merged fix touching a finding's line, a human
+ * dismissal thread) — bounded by the SAME cost caps as #357 (the recent-merged-PR window and per-target
+ * fix-file reads are capped by maxPullsPerCycle; per-repo cooldown + lookbackDays gate selection). Every
+ * read is read-only; a reader error degrades fail-open to the merge-state cut, never throwing into the
+ * cycle. This is a no-op — no GitHub reads, no writes — unless observeSchedule.enabled AND the interval
+ * is due.
  */
 export async function observeScheduledOutcomes(input: {
   config: BotConfig;
@@ -277,18 +289,52 @@ export async function observeScheduledOutcomes(input: {
   // folder is derived from exactly the same instant that is forwarded to runScheduledObservePass.
   const now = input.now ?? new Date();
   const evidenceDir = join(input.config.evidenceDir, localDateFolder(now), "calibration-observe");
+  // Per-repo memo for the recent-merged-PR window: fetched at most ONCE per repo per cycle and shared
+  // across all that repo's target heads, so the deeper reads never scale with findings — the same
+  // maxPullsPerCycle that caps selected heads also caps the recent-merged window we scan for signals.
+  const recentMergedByRepo = new Map<string, Promise<PullRequestSummary[]>>();
   const fetchOutcome = async (target: ScheduledObserveTarget): Promise<ObservedPullOutcome> => {
-    // Read-only merge-state probe. A merged PR with no additional signal derives `none_observed`;
-    // deeper post-merge signals (revert/hotfix/merged-fix diffs, human-thread resolution) are a
-    // future enrichment and are left empty here (see docs/calibration-loop.md bootstrap note).
     const pull = await input.github.getPull(target.repo, target.pullNumber);
-    return {
-      merged: Boolean(pull.merged_at),
+    const merged = Boolean(pull.merged_at);
+    // Merge-state cut (the honest #357 floor). An UNMERGED PR has no terminal post-merge signal; a
+    // merged PR is enriched below. Any enrichment-read failure falls back to exactly this cut.
+    const mergeStateOnly: ObservedPullOutcome = {
+      merged,
       revertedFlaggedChange: false,
       hotfixLines: new Map(),
       mergedFixLines: new Map(),
       humanThreadResolved: false
     };
+    if (!merged) return mergeStateOnly;
+    try {
+      const subsequentPulls = await collectSubsequentMergedPulls({
+        github: input.github,
+        repo: target.repo,
+        maxPulls: schedule.maxPullsPerCycle,
+        recentMergedByRepo
+      });
+      const reviewComments = input.github.listPullReviewComments
+        ? await input.github.listPullReviewComments(target.repo, target.pullNumber)
+        : [];
+      return buildObservedPullOutcome({
+        merged,
+        mergeCommitSha: pull.merge_commit_sha,
+        pullNumber: target.pullNumber,
+        pullTitle: pull.title,
+        findings: target.findings,
+        subsequentPulls,
+        reviewComments
+      });
+    } catch (error) {
+      // Fail-open per target: a deeper-read error degrades to the merge-state cut, never throwing into
+      // the observe pass (which itself is wrapped below). The label stays honest (none_observed).
+      console.warn(
+        `[calibration-observe] deeper observation degraded to merge-state for ${target.repo}#${target.pullNumber}: ${
+          redactSecrets(error instanceof Error ? error.message : String(error))
+        }`
+      );
+      return mergeStateOnly;
+    }
   };
   try {
     await runScheduledObservePass({ state: input.state, config: schedule, evidenceDir, fetchOutcome, now });
@@ -296,6 +342,41 @@ export async function observeScheduledOutcomes(input: {
     // Observation is best-effort telemetry: never let a failure here disturb the review cycle.
     console.warn(`[calibration-observe] scheduled observe pass failed: ${redactSecrets(error instanceof Error ? error.message : String(error))}`);
   }
+}
+
+/**
+ * Read-only, BOUNDED collector of subsequent merged PRs whose right-side changed lines / revert message
+ * feed the deeper outcome signals (#371). The recent-merged window is fetched at most once per repo per
+ * cycle (memoized) and capped at maxPullsPerCycle; per-PR file reads are likewise capped so the extra
+ * reads never scale with the number of findings. When the GitHub surface can't list merged pulls or
+ * files, it returns an empty set — the caller then derives the honest merge-state-only cut.
+ */
+async function collectSubsequentMergedPulls(input: {
+  github: SchedulerGitHubApi;
+  repo: string;
+  maxPulls: number;
+  recentMergedByRepo: Map<string, Promise<PullRequestSummary[]>>;
+}): Promise<ObservedSubsequentPull[]> {
+  if (!input.github.listRecentMergedPulls || !input.github.listPullFiles) return [];
+  let pending = input.recentMergedByRepo.get(input.repo);
+  if (!pending) {
+    pending = input.github.listRecentMergedPulls(input.repo, input.maxPulls);
+    input.recentMergedByRepo.set(input.repo, pending);
+  }
+  const recent = await pending;
+  const subsequent: ObservedSubsequentPull[] = [];
+  // Cap per-PR file reads by maxPulls as well: the recent window is already ≤ maxPulls, but slice
+  // defensively so a future window-size change can't blow the per-cycle read budget.
+  for (const pull of recent.slice(0, input.maxPulls)) {
+    const files = await input.github.listPullFiles(input.repo, pull.number);
+    subsequent.push({
+      pullNumber: pull.number,
+      title: pull.title,
+      body: pull.body,
+      changedLines: collectRightSideLines(files)
+    });
+  }
+  return subsequent;
 }
 
 type EnqueueStatus =

@@ -78,6 +78,129 @@ function diffTouchesFinding(lines: Map<string, Set<number>>, finding: ObservedFi
   return false;
 }
 
+/**
+ * A minimal, read-only PR review comment shape (#371) — the deeper-observation enrichment consumes
+ * only what it needs to detect a human dismissal thread on a finding, decoupling outcome-observer
+ * from the full GitHub type.
+ */
+export interface ObservedReviewComment {
+  path?: string | null;
+  line?: number | null;
+  original_line?: number | null;
+  in_reply_to_id?: number | null;
+  user?: { login: string; type?: string } | null;
+}
+
+/**
+ * A recently-merged PR the scheduled observer scans for deeper post-merge signals (#371). `title`/
+ * `body` carry the revert convention; `changedLines` is collectRightSideLines over the PR's files so
+ * the hotfix/merged-fix "touches flagged lines" match reuses the exact review-gate primitive.
+ */
+export interface ObservedSubsequentPull {
+  pullNumber: number;
+  title?: string | null;
+  body?: string | null;
+  changedLines: Map<string, Set<number>>;
+}
+
+/**
+ * Pure enrichment builder (#371). Turns the read-only GitHub reads for ONE merged reviewed PR into the
+ * fuller ObservedPullOutcome that deriveOutcomeLabel already understands — WITHOUT changing the
+ * labeler. This is the parity seam: fed the same revert/hotfix/human-thread facts the CLI observer's
+ * dry-run input carries, it produces the identical ObservedPullOutcome (hence the identical label).
+ *
+ * - revert: a subsequent merged PR whose message reverts THIS PR's merge (GitHub's `Revert "<title>"`
+ *   PR title, `Reverts #<n>`, or `This reverts commit <merge_commit_sha>`).
+ * - hotfixLines / mergedFixLines: right-side changed lines of subsequent merged PRs. A revert is not
+ *   double-counted as a hotfix. All subsequent-fix line-touch signals feed `hotfixLines` (the labeler
+ *   treats hotfix and merged_fix as the same true-positive class via distinct label sources; the
+ *   scheduled reader has one bounded source of "a later merged PR touched the flagged line", so it
+ *   populates hotfixLines — merged-fix vs hotfix is a provenance distinction the CLI input can still
+ *   express separately, and parity holds because both derive true_positive).
+ * - humanThreadResolved: a HUMAN (non-bot) reply thread on the finding's path/line.
+ */
+export function buildObservedPullOutcome(input: {
+  merged: boolean;
+  mergeCommitSha?: string | null;
+  pullNumber: number;
+  pullTitle?: string | null;
+  findings: ObservedFinding[];
+  subsequentPulls: ObservedSubsequentPull[];
+  reviewComments: ObservedReviewComment[];
+  evidenceRef?: string;
+}): ObservedPullOutcome {
+  if (!input.merged) {
+    return { merged: false, revertedFlaggedChange: false, hotfixLines: new Map(), mergedFixLines: new Map(), humanThreadResolved: false };
+  }
+
+  let revertedFlaggedChange = false;
+  const hotfixLines = new Map<string, Set<number>>();
+  for (const pull of input.subsequentPulls) {
+    if (pull.pullNumber === input.pullNumber) continue; // never treat the PR as its own revert/hotfix.
+    if (pullRevertsMerge(pull, input)) {
+      revertedFlaggedChange = true;
+      continue; // a revert is not also counted as a hotfix touching flagged lines.
+    }
+    mergeLineMap(hotfixLines, pull.changedLines);
+  }
+
+  return {
+    merged: true,
+    revertedFlaggedChange,
+    hotfixLines,
+    // The scheduled reader collapses subsequent-fix line touches into hotfixLines (see doc above);
+    // mergedFixLines stays empty here. Both hotfix and merged_fix derive true_positive, so label
+    // richness/parity is preserved — a merged PR whose later fix touches a flagged line is validated.
+    mergedFixLines: new Map(),
+    humanThreadResolved: humanThreadTouchesFinding(input.reviewComments, input.findings),
+    ...(input.evidenceRef ? { evidenceRef: input.evidenceRef } : {})
+  };
+}
+
+function pullRevertsMerge(
+  pull: ObservedSubsequentPull,
+  target: { pullNumber: number; pullTitle?: string | null; mergeCommitSha?: string | null }
+): boolean {
+  const title = pull.title ?? "";
+  const body = pull.body ?? "";
+  // GitHub's default revert PR title: `Revert "<original title>"`. Match the revert prefix AND a
+  // back-reference to the original PR (its title or #number) or the reverted merge commit SHA.
+  const isRevertShaped = /^revert\b/i.test(title.trim()) || /this reverts commit/i.test(body);
+  if (!isRevertShaped) return false;
+  const targetTitle = (target.pullTitle ?? "").trim();
+  const referencesTitle = targetTitle.length > 0 && title.includes(targetTitle);
+  const referencesNumber = new RegExp(`(reverts?\\b[^#]*)?#${target.pullNumber}\\b`, "i").test(`${title}\n${body}`);
+  const referencesMergeSha = Boolean(target.mergeCommitSha) && body.includes(target.mergeCommitSha as string);
+  return referencesTitle || referencesNumber || referencesMergeSha;
+}
+
+function mergeLineMap(into: Map<string, Set<number>>, from: Map<string, Set<number>>): void {
+  for (const [path, lines] of from) {
+    let set = into.get(path);
+    if (!set) {
+      set = new Set<number>();
+      into.set(path, set);
+    }
+    for (const line of lines) set.add(line);
+  }
+}
+
+function humanThreadTouchesFinding(comments: ObservedReviewComment[], findings: ObservedFinding[]): boolean {
+  for (const comment of comments) {
+    // A human REPLY thread (in_reply_to_id set) is the dismissal signal; a bot author never counts.
+    if (comment.in_reply_to_id === undefined || comment.in_reply_to_id === null) continue;
+    if (comment.user?.type === "Bot") continue;
+    const path = comment.path;
+    if (!path) continue;
+    const line = typeof comment.line === "number" ? comment.line : comment.original_line;
+    if (typeof line !== "number") continue;
+    for (const finding of findings) {
+      if (finding.path === path && Math.abs(line - finding.line) <= OUTCOME_LINE_WINDOW) return true;
+    }
+  }
+  return false;
+}
+
 export interface OutcomeObserverReview {
   repo: string;
   pullNumber: number;

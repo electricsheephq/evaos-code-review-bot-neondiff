@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import { redactSecrets } from "./secrets.js";
-import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
+import type { PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 
 /** The bot's own GitHub App login — single source of truth for "who am I" (#345 reuse). */
@@ -193,6 +193,36 @@ export class GitHubApi {
       files.push(...chunk);
       if (chunk.length < 100) return files;
     }
+  }
+
+  /**
+   * Read-only PR review (inline-diff) comments (#371), paged. Used by the scheduled outcome observer
+   * to detect a human reply thread on a finding's path/line. No mutation, no posting.
+   */
+  async listPullReviewComments(repo: string, pullNumber: number): Promise<PullReviewComment[]> {
+    const comments: PullReviewComment[] = [];
+    for (let page = 1; ; page += 1) {
+      const chunk = await this.request<PullReviewComment[]>(
+        `/repos/${repo}/pulls/${pullNumber}/comments?per_page=100&page=${page}`,
+        { token: await this.getReadToken(repo) }
+      );
+      comments.push(...chunk);
+      if (chunk.length < 100) return comments;
+    }
+  }
+
+  /**
+   * Read-only, BOUNDED list of recently-merged PRs (#371), most-recent-first, capped at `limit`. Used
+   * by the scheduled outcome observer to find a revert / subsequent fix touching a finding's lines.
+   * Bounded: at most `limit` closed PRs are scanned (one page window), and only merged ones returned.
+   */
+  async listRecentMergedPulls(repo: string, limit: number): Promise<PullRequestSummary[]> {
+    const perPage = Math.min(Math.max(1, limit), 100);
+    const chunk = await this.request<PullRequestSummary[]>(
+      `/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=${perPage}&page=1`,
+      { token: await this.getReadToken(repo) }
+    );
+    return chunk.map(normalizePullRequestSummary).filter((pull) => Boolean(pull.merged_at)).slice(0, limit);
   }
 
   async listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]> {

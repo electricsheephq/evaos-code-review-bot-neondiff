@@ -9,13 +9,16 @@ import {
   recordPostedReviewFindings
 } from "../src/worker.js";
 import {
+  buildObservedPullOutcome,
+  runOutcomeObserverFromInput,
   runScheduledObservePass,
+  type ObservedFinding,
   type ObservedPullOutcome,
   type ScheduledObserveTarget
 } from "../src/outcome-observer.js";
 import { observeScheduledOutcomes, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { applyDeterministicReviewGate, buildFindingFingerprint } from "../src/review-gate.js";
-import type { Finding, PullFilePatch, PullRequestSummary, ReviewComment } from "../src/types.js";
+import type { Finding, PullFilePatch, PullRequestSummary, PullReviewComment, ReviewComment } from "../src/types.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -557,3 +560,262 @@ describe("observeScheduledOutcomes scheduler wiring (#357)", () => {
     store.close();
   });
 });
+
+// ---------------------------------------------------------------------------------------------------
+// #371: deepen scheduled observation to revert / hotfix-line-touch / human-thread signals.
+// ---------------------------------------------------------------------------------------------------
+
+const OBSERVED_FINDING: ObservedFinding = {
+  fingerprint: FINDING.fingerprint,
+  path: FINDING.path,
+  line: FINDING.line,
+  severity: "P1",
+  category: "data_loss",
+  confidence: 0.9
+};
+
+// A merged fix / hotfix diff that touches the flagged line (src/save.ts:42) via a +line at 42.
+const HOTFIX_FILES: PullFilePatch[] = [
+  { filename: "src/save.ts", patch: "@@ -40,3 +40,4 @@\n export function save() {\n+  flushBeforeOverwrite();\n   overwriteAllData();\n }" }
+];
+// A human reply thread on the finding's path/line — the false-positive dismissal signal.
+const HUMAN_THREAD: PullReviewComment[] = [
+  { id: 10, path: "src/save.ts", line: 42, in_reply_to_id: 9, user: { login: "maintainer", type: "User" } }
+];
+
+/**
+ * Build a hermetic scheduler GitHub stub exposing the deeper-observation read surface (#371). The
+ * target merged PR is #1@sha1; `subsequent` are later merged PRs (revert / hotfix) the reader scans.
+ */
+function deepGithub(input: {
+  merged?: boolean;
+  mergeCommitSha?: string;
+  pullTitle?: string;
+  subsequent?: Array<{ number: number; title?: string; body?: string; files?: PullFilePatch[] }>;
+  reviewComments?: PullReviewComment[];
+}): SchedulerGitHubApi {
+  const subsequent = input.subsequent ?? [];
+  return {
+    listOpenPulls: async () => [],
+    listIssueComments: async () => [],
+    getPull: async (_repo, pullNumber) =>
+      ({
+        number: pullNumber,
+        title: input.pullTitle ?? "Add save path",
+        head: { sha: `sha${pullNumber}` },
+        merged_at: (input.merged ?? true) ? "2026-07-05T00:00:00.000Z" : null,
+        merge_commit_sha: input.mergeCommitSha ?? "mergesha1"
+      }) as unknown as PullRequestSummary,
+    listRecentMergedPulls: async () =>
+      subsequent.map(
+        (pull) =>
+          ({
+            number: pull.number,
+            title: pull.title ?? "",
+            body: pull.body ?? "",
+            head: { sha: `sha${pull.number}` },
+            merged_at: "2026-07-05T12:00:00.000Z"
+          }) as unknown as PullRequestSummary
+      ),
+    listPullFiles: async (_repo, pullNumber) => subsequent.find((pull) => pull.number === pullNumber)?.files ?? [],
+    listPullReviewComments: async () => input.reviewComments ?? []
+  };
+}
+
+describe("buildObservedPullOutcome enrichment (#371)", () => {
+  it("detects a revert PR that back-references the original PR number", () => {
+    const observed = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      pullTitle: "Add save path",
+      mergeCommitSha: "mergesha1",
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [{ pullNumber: 2, title: 'Revert "Add save path" (#1)', body: "", changedLines: new Map() }],
+      reviewComments: []
+    });
+    expect(observed.revertedFlaggedChange).toBe(true);
+  });
+
+  it("detects a revert via `This reverts commit <merge_commit_sha>` body", () => {
+    const observed = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      pullTitle: "Add save path",
+      mergeCommitSha: "mergesha1",
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [{ pullNumber: 2, title: "Revert regression", body: "This reverts commit mergesha1.", changedLines: new Map() }],
+      reviewComments: []
+    });
+    expect(observed.revertedFlaggedChange).toBe(true);
+  });
+
+  it("does NOT treat the PR as its own revert/hotfix, and ignores unrelated later PRs", () => {
+    const observed = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      pullTitle: "Add save path",
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [{ pullNumber: 1, title: 'Revert "Add save path" (#1)', body: "", changedLines: new Map() }],
+      reviewComments: []
+    });
+    expect(observed.revertedFlaggedChange).toBe(false);
+    expect(observed.hotfixLines.size).toBe(0);
+  });
+});
+
+describe("scheduled reader reaches CLI-observer label parity (#371 acceptance)", () => {
+  const now = new Date("2026-07-06T10:00:00.000Z");
+
+  // The parity contract: fed the same underlying facts, the scheduled reader must record the SAME
+  // label the CLI observer (runOutcomeObserverFromInput) records from the equivalent ObservedPullOutcome.
+  async function scheduledLabel(github: SchedulerGitHubApi): Promise<FindingOutcomeLabelRecordLike> {
+    const { store } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const config = loadConfigFromObject(baseConfigObject({ calibrationLoop: { observeSchedule: OBSERVE_SCHEDULE } }));
+    await observeScheduledOutcomes({ config, github, state: store, now });
+    const labels = store.listFindingOutcomeLabels();
+    store.close();
+    expect(labels).toHaveLength(1);
+    return labels[0];
+  }
+
+  function cliLabel(observed: ObservedPullOutcome): FindingOutcomeLabelRecordLike {
+    const { store, root } = newStore();
+    const result = runOutcomeObserverFromInput({
+      store,
+      entries: [{ review: { repo: "owner/repo", pullNumber: 1, headSha: "sha1", findings: [OBSERVED_FINDING] }, observed }],
+      evidenceDir: join(root, "cli-evidence"),
+      dryRun: false,
+      now
+    });
+    expect(result.labeled).toBe(1);
+    const labels = store.listFindingOutcomeLabels();
+    store.close();
+    return labels[0];
+  }
+
+  function assertParity(scheduled: FindingOutcomeLabelRecordLike, cli: FindingOutcomeLabelRecordLike): void {
+    expect(scheduled.labelSource).toBe(cli.labelSource);
+    expect(scheduled.verdict).toBe(cli.verdict);
+  }
+
+  it("revert: scheduled reader and CLI observer both label `revert` / true_positive", async () => {
+    const scheduled = await scheduledLabel(
+      deepGithub({ subsequent: [{ number: 2, title: 'Revert "Add save path" (#1)' }] })
+    );
+    const cli = cliLabel(fullObserved({ merged: true, revertedFlaggedChange: true }));
+    expect(scheduled.labelSource).toBe("revert");
+    assertParity(scheduled, cli);
+  });
+
+  it("hotfix touching the flagged line: both label a true_positive fix (hotfix)", async () => {
+    const scheduled = await scheduledLabel(
+      deepGithub({ subsequent: [{ number: 2, title: "Fix data loss on save", files: HOTFIX_FILES }] })
+    );
+    const cli = cliLabel(fullObserved({ merged: true, hotfixLines: new Map([["src/save.ts", new Set([42])]]) }));
+    expect(scheduled.labelSource).toBe("hotfix");
+    expect(scheduled.verdict).toBe("true_positive");
+    assertParity(scheduled, cli);
+  });
+
+  it("human thread on the finding: both label `human_thread` / false_positive", async () => {
+    const scheduled = await scheduledLabel(deepGithub({ reviewComments: HUMAN_THREAD }));
+    const cli = cliLabel(fullObserved({ merged: true, humanThreadResolved: true }));
+    expect(scheduled.labelSource).toBe("human_thread");
+    expect(scheduled.verdict).toBe("false_positive");
+    assertParity(scheduled, cli);
+  });
+
+  it("merged with no deeper signal stays none_observed (honest floor preserved)", async () => {
+    const scheduled = await scheduledLabel(deepGithub({ subsequent: [] }));
+    expect(scheduled.labelSource).toBe("none_observed");
+    expect(scheduled.verdict).toBe("unvalidated");
+  });
+});
+
+describe("scheduled deeper-observation cost caps + invariants (#371)", () => {
+  const now = new Date("2026-07-06T10:00:00.000Z");
+
+  it("bounds deeper reads: recent-merged window is fetched ONCE per repo and capped at maxPullsPerCycle", async () => {
+    const { store } = newStore();
+    // Two merged target heads in the SAME repo — the recent-merged window must be read once, shared.
+    store.recordReviewFindings([
+      { ...FINDING, pullNumber: 1, headSha: "sha1", fingerprint: `finding:${"a".repeat(64)}` },
+      { ...FINDING, pullNumber: 2, headSha: "sha2", fingerprint: `finding:${"b".repeat(64)}` }
+    ]);
+    const listRecentMergedPulls = vi.fn(async () => [] as PullRequestSummary[]);
+    const github: SchedulerGitHubApi = {
+      ...deepGithub({ subsequent: [] }),
+      listRecentMergedPulls
+    };
+    const config = loadConfigFromObject(
+      baseConfigObject({ calibrationLoop: { observeSchedule: { ...OBSERVE_SCHEDULE, maxPullsPerCycle: 2 } } })
+    );
+
+    await observeScheduledOutcomes({ config, github, state: store, now });
+
+    // One window read for the repo (memoized across both heads), and it requested at most maxPullsPerCycle.
+    expect(listRecentMergedPulls).toHaveBeenCalledTimes(1);
+    expect(listRecentMergedPulls).toHaveBeenCalledWith("owner/repo", 2);
+    store.close();
+  });
+
+  it("fails open: a throwing deeper-read degrades to the merge-state cut (none_observed), never throws", async () => {
+    const { store } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const token = ["ghp", "q".repeat(36)].join("_");
+    const github: SchedulerGitHubApi = {
+      ...deepGithub({ subsequent: [{ number: 2, title: "Fix", files: HOTFIX_FILES }] }),
+      listRecentMergedPulls: async () => {
+        throw new Error(`recent-merged read boom ${token}`);
+      }
+    };
+    const config = loadConfigFromObject(baseConfigObject({ calibrationLoop: { observeSchedule: OBSERVE_SCHEDULE } }));
+
+    await expect(observeScheduledOutcomes({ config, github, state: store, now })).resolves.toBeUndefined();
+    const labels = store.listFindingOutcomeLabels();
+    // The merged PR still gets an HONEST none_observed label (never a mislabel), and the pass advances.
+    expect(labels).toHaveLength(1);
+    expect(labels[0].labelSource).toBe("none_observed");
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls.flat().join(" ")).not.toContain(token);
+    store.close();
+  });
+
+  it("never posts/aggregates/writes config: only finding_outcome_labels + schedule state are written", async () => {
+    const { store } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const github = deepGithub({ subsequent: [{ number: 2, title: 'Revert "Add save path" (#1)' }] });
+    // Fail loudly if any WRITE-shaped GitHub surface is invoked by the observe pass.
+    const forbidden = {
+      createReview: vi.fn(),
+      upsertIssueComment: vi.fn()
+    };
+    const config = loadConfigFromObject(baseConfigObject({ calibrationLoop: { observeSchedule: OBSERVE_SCHEDULE } }));
+
+    await observeScheduledOutcomes({ config, github: { ...github, ...forbidden } as SchedulerGitHubApi, state: store, now });
+
+    expect(forbidden.createReview).not.toHaveBeenCalled();
+    expect(forbidden.upsertIssueComment).not.toHaveBeenCalled();
+    expect(store.listFindingOutcomeLabels()).toHaveLength(1);
+    store.close();
+  });
+
+  it("disabled ⇒ byte-identical no-op: no deeper reads, no labels", async () => {
+    const { store } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const listRecentMergedPulls = vi.fn(async () => [] as PullRequestSummary[]);
+    const github: SchedulerGitHubApi = { ...deepGithub({}), listRecentMergedPulls };
+    const config = loadConfigFromObject(baseConfigObject());
+
+    await observeScheduledOutcomes({ config, github, state: store, now });
+
+    expect(listRecentMergedPulls).not.toHaveBeenCalled();
+    expect(store.listFindingOutcomeLabels()).toHaveLength(0);
+    store.close();
+  });
+});
+
+// The label-record shape the parity assertions read (subset of the store record).
+type FindingOutcomeLabelRecordLike = { labelSource: string; verdict: string };
