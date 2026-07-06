@@ -99,6 +99,7 @@ import {
   type ReviewQueueJobState
 } from "./state.js";
 import { readOutcomeObserverInput, runOutcomeObserverFromInput } from "./outcome-observer.js";
+import { writeCalibrationAggregatePacket } from "./calibration-aggregate.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -1525,6 +1526,37 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "calibration-aggregate") {
+    if (args["output-dir"] === undefined || (Array.isArray(args["output-dir"]) && args["output-dir"].length === 0)) {
+      throw new Error("--output-dir is required for calibration-aggregate");
+    }
+    // Read-only aggregation (#286 PR B): reads finding_outcome_labels; evaluates the public-confidence
+    // floors and reports eligibility, but NEVER mutates config or switches public display.
+    const config = loadConfig(args.config ? parseSingleArg(args.config, "--config") : undefined);
+    const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
+    assertEvalOutputDirSafe(outputDir);
+    const repo = args.repo ? parseSingleArg(args.repo, "--repo") : undefined;
+    const store = new ReviewStateStore(config.statePath);
+    try {
+      const labels = store.listFindingOutcomeLabels(repo ? { repo } : {});
+      const result = writeCalibrationAggregatePacket({ labels, outputDir });
+      console.log(stringifyRedactedJson({
+        command: "calibration-aggregate",
+        outputDir,
+        ok: result.ok,
+        labeledFindings: result.aggregate.labeledFindings,
+        p0p1Labels: result.aggregate.p0p1Labels,
+        negativeControlScenarios: result.aggregate.negativeControlScenarios,
+        eligible: result.aggregate.eligible,
+        reason: result.aggregate.reason
+      }));
+      if (!result.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+    return;
+  }
+
   if (command === "run-once" || command === "review-pr") {
     if (command === "review-pr" && (!args.repo || !args.pr)) {
       console.log(JSON.stringify({
@@ -2705,7 +2737,8 @@ function buildHelp(command?: string) {
         "eval-sticky-vs-cold",
         "outcome-ledger",
         "outcome-scorecard",
-        "outcome-observe"
+        "outcome-observe",
+        "calibration-aggregate"
       ]
     },
     examples: [
@@ -2757,6 +2790,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
       "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",
       "npx tsx src/cli.ts outcome-observe --config /path/to/live.json --input /path/to/outcome-observer-input.json --dry-run true --output-dir /path/to/evidence/outcome-observe-run",
+      "npx tsx src/cli.ts calibration-aggregate --config /path/to/live.json --output-dir /path/to/evidence/calibration-aggregate-run",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ],
