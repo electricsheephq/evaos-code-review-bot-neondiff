@@ -93,6 +93,14 @@ export interface ReviewComment {
   /** Model confidence (0..1); internal gating/evidence metadata, never rendered publicly. */
   confidence: number;
   title: string;
+  /**
+   * Deterministic finding fingerprint computed at the gate over the ORIGINAL Finding (including
+   * why_this_matters and raw title/body), so it matches the fingerprint used by the deterministic
+   * gate and the finding_outcome_labels store. Never recompute this from the public/sanitized
+   * comment fields — that would drop why_this_matters and hash the redacted text, breaking the
+   * observe→label→calibration-aggregate join (#357).
+   */
+  fingerprint: string;
 }
 
 export interface ReviewPlan {

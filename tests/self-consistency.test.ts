@@ -8,6 +8,7 @@ function comment(overrides: Partial<ReviewComment> & Pick<ReviewComment, "severi
     side: "RIGHT",
     body: "A concrete review comment.",
     category: "data_loss",
+    fingerprint: `finding:${"0".repeat(64)}`,
     ...overrides
   };
 }

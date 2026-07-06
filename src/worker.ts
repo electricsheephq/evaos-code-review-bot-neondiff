@@ -38,7 +38,7 @@ import {
   listReposToScan,
   resolveRepoProfile
 } from "./repo-policy.js";
-import { applyDeterministicReviewGate, buildFindingFingerprint, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
 import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
@@ -2354,14 +2354,11 @@ export function recordPostedReviewFindings(input: {
     if (input.comments.length === 0) return;
     const recordedAt = (input.now ?? new Date()).toISOString();
     const records: ReviewFindingRecord[] = input.comments.map((comment) => ({
-      fingerprint: buildFindingFingerprint({
-        severity: comment.severity,
-        path: comment.path,
-        line: comment.line,
-        title: comment.title,
-        body: comment.body,
-        category: comment.category
-      }),
+      // Use the gate-computed fingerprint threaded onto the comment (over the ORIGINAL finding,
+      // incl. why_this_matters + raw title/body). Recomputing here from the sanitized comment would
+      // hash a DIFFERENT identity (why_this_matters="", redacted title/body) and key the ledger under
+      // a fingerprint that finding_outcome_labels never uses — silently breaking the #357 join.
+      fingerprint: comment.fingerprint,
       repo: input.repo,
       pullNumber: input.pull.number,
       headSha: input.pull.head.sha,

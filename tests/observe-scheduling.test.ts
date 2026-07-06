@@ -13,7 +13,8 @@ import {
   type ScheduledObserveTarget
 } from "../src/outcome-observer.js";
 import { observeScheduledOutcomes, type SchedulerGitHubApi } from "../src/scheduler.js";
-import type { PullRequestSummary, ReviewComment } from "../src/types.js";
+import { applyDeterministicReviewGate, buildFindingFingerprint } from "../src/review-gate.js";
+import type { Finding, PullFilePatch, PullRequestSummary, ReviewComment } from "../src/types.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -106,7 +107,8 @@ describe("findings-ledger recording is fail-open (#357)", () => {
     severity: "P1",
     category: "data_loss",
     confidence: 0.9,
-    title: "Data loss on save"
+    title: "Data loss on save",
+    fingerprint: `finding:${"a".repeat(64)}`
   };
 
   it("records posted findings into review_findings", () => {
@@ -118,6 +120,52 @@ describe("findings-ledger recording is fail-open (#357)", () => {
     // Public-safe: no title/body text is persisted (only the fingerprint that encodes them).
     expect(JSON.stringify(rows[0])).not.toContain("Data loss on save");
     expect(JSON.stringify(rows[0])).not.toContain("loses data");
+    store.close();
+  });
+
+  it("ledger fingerprint EQUALS the gate/finding_outcome_labels fingerprint (end-to-end join works)", () => {
+    // A finding whose why_this_matters is load-bearing for the fingerprint: recomputing the hash from
+    // the sanitized ReviewComment (no why_this_matters, public title/body) would produce a DIFFERENT
+    // key. This test pins that the ledger stores the SAME fingerprint the observe→label path uses.
+    const finding: Finding = {
+      severity: "P1",
+      path: "src/save.ts",
+      line: 42,
+      title: "Data loss on save",
+      body: "overwriteAllData() clobbers the file before the retry lands",
+      confidence: 0.9,
+      category: "data_loss",
+      why_this_matters: "silent, unrecoverable user data loss on the common save path"
+    };
+    const files: PullFilePatch[] = [
+      { filename: "src/save.ts", patch: "@@ -40,2 +40,3 @@\n export function save() {\n+  overwriteAllData();\n }" }
+    ];
+    const gate = applyDeterministicReviewGate({ findings: [finding], files });
+    expect(gate.comments).toHaveLength(1);
+
+    const { store } = newStore();
+    recordPostedReviewFindings({
+      state: store,
+      repo: "owner/repo",
+      pull: { number: 1, head: { sha: "sha1" } } as PullRequestSummary,
+      comments: gate.comments
+    });
+
+    const expected = buildFindingFingerprint(finding); // the key finding_outcome_labels uses
+    const ledgerFingerprint = store.listReviewFindings({})[0]?.fingerprint;
+    expect(ledgerFingerprint).toBe(expected);
+
+    // Guard against regression to the lossy recompute: hashing the sanitized comment (no
+    // why_this_matters) yields a DIFFERENT fingerprint, which is exactly what we must NOT store.
+    const lossy = buildFindingFingerprint({
+      severity: gate.comments[0].severity,
+      path: gate.comments[0].path,
+      line: gate.comments[0].line,
+      title: gate.comments[0].title,
+      body: gate.comments[0].body,
+      category: gate.comments[0].category
+    });
+    expect(ledgerFingerprint).not.toBe(lossy);
     store.close();
   });
 
@@ -261,6 +309,78 @@ describe("runScheduledObservePass gating + selection (#357)", () => {
 
     expect(result.targets).toBe(0);
     expect(fetchOutcome).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  it("cap interacts with multi-repo cooldown: cooled heads are skipped WITHOUT consuming a slot, cap applies across the post-cooldown set", async () => {
+    const { store, root } = newStore();
+    const now = new Date("2026-07-06T10:00:00.000Z");
+    // repoA is in cooldown (observed 1h ago, 720min cooldown); repoB and repoC are eligible.
+    // Order the ledger so the cooled repoA head is encountered FIRST — it must not eat a slot, and
+    // with maxPullsPerCycle=2 both eligible heads (B and C) must still be selected.
+    store.recordCalibrationObserveAt("owner/repoA", "2026-07-06T09:00:00.000Z");
+    store.recordReviewFindings([
+      { ...FINDING, repo: "owner/repoA", pullNumber: 1, headSha: "shaA", fingerprint: `finding:${"a".repeat(64)}`, recordedAt: "2026-07-06T09:59:59.000Z" },
+      { ...FINDING, repo: "owner/repoB", pullNumber: 2, headSha: "shaB", fingerprint: `finding:${"b".repeat(64)}`, recordedAt: "2026-07-06T09:59:58.000Z" },
+      { ...FINDING, repo: "owner/repoC", pullNumber: 3, headSha: "shaC", fingerprint: `finding:${"c".repeat(64)}`, recordedAt: "2026-07-06T09:59:57.000Z" }
+    ]);
+    const observedRepos: string[] = [];
+
+    const result = await runScheduledObservePass({
+      state: store,
+      config: { ...OBSERVE_SCHEDULE, maxPullsPerCycle: 2 },
+      evidenceDir: join(root, "evidence"),
+      fetchOutcome: (target) => {
+        observedRepos.push(target.repo);
+        return fullObserved({ merged: false });
+      },
+      now
+    });
+
+    expect(result.targets).toBe(2);
+    // The cooled repoA is absent; the two eligible repos consumed the two slots.
+    expect(observedRepos.sort()).toEqual(["owner/repoB", "owner/repoC"]);
+    store.close();
+  });
+
+  it("advances the global interval clock on a ZERO-target due pass (intervalMinutes is a check cadence)", async () => {
+    const { store, root } = newStore();
+    // A due pass with nothing to observe (no findings at all). The clock must still advance so a
+    // barren cycle waits a full interval before re-checking rather than re-querying every tick.
+    const now = new Date("2026-07-06T10:00:00.000Z");
+    expect(store.getCalibrationObserveAt("__global__")).toBeUndefined();
+
+    const result = await runScheduledObservePass({
+      state: store,
+      config: OBSERVE_SCHEDULE,
+      evidenceDir: join(root, "evidence"),
+      fetchOutcome: () => fullObserved({ merged: false }),
+      now
+    });
+
+    expect(result).toMatchObject({ ran: true, targets: 0, labeled: 0 });
+    expect(store.getCalibrationObserveAt("__global__")).toBe(now.toISOString());
+    store.close();
+  });
+
+  it("redacts secret-shaped CONTENT in the written evidence packet, not just its structure", async () => {
+    const { store, root } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const token = ["ghp", "x".repeat(36)].join("_");
+
+    await runScheduledObservePass({
+      state: store,
+      config: OBSERVE_SCHEDULE,
+      evidenceDir: join(root, "evidence"),
+      fetchOutcome: () => fullObserved({ merged: true, revertedFlaggedChange: true, evidenceRef: `revert ${token}` }),
+      now: new Date("2026-07-06T10:00:00.000Z")
+    });
+
+    const raw = readFileSync(join(root, "evidence", "calibration-observe.json"), "utf8");
+    expect(raw).toContain("revert"); // the observation surfaced
+    expect(raw).not.toContain(token); // ...but the secret-shaped token was redacted
+    // And the token never reached the persisted label evidenceRef either.
+    expect(JSON.stringify(store.listFindingOutcomeLabels())).not.toContain(token);
     store.close();
   });
 });

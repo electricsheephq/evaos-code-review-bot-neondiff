@@ -374,7 +374,7 @@ export async function runScheduledObservePass(input: {
 
   const observedAt = now.toISOString();
   const records: FindingOutcomeLabelRecord[] = [];
-  const observations: Array<{ repo: string; pullNumber: number; headSha: string; postMergeStatus: OutcomeLedgerPostMergeStatus; labeled: number }> = [];
+  const observations: Array<{ repo: string; pullNumber: number; headSha: string; postMergeStatus: OutcomeLedgerPostMergeStatus; labeled: number; evidenceRef?: string }> = [];
   const observedRepos = new Set<string>();
   for (const target of targets) {
     const outcome = await input.fetchOutcome(target);
@@ -401,7 +401,9 @@ export async function runScheduledObservePass(input: {
       }
     }
     observedRepos.add(target.repo);
-    observations.push({ repo: target.repo, pullNumber: target.pullNumber, headSha: target.headSha, postMergeStatus, labeled });
+    // evidenceRef may carry free text from the outcome reader; the packet-level redactSecrets wrapper
+    // below strips any secret-shaped content before it is written.
+    observations.push({ repo: target.repo, pullNumber: target.pullNumber, headSha: target.headSha, postMergeStatus, labeled, ...(outcome.evidenceRef ? { evidenceRef: outcome.evidenceRef } : {}) });
   }
 
   // Record all derived labels atomically (#286 Part C batch). This is the ONLY write to the label
@@ -409,6 +411,10 @@ export async function runScheduledObservePass(input: {
   input.state.recordFindingOutcomeLabels(records);
 
   // Schedule bookkeeping: advance the global interval clock and each observed repo's cooldown.
+  // intervalMinutes is a CHECK cadence, not a work cadence: we advance the global clock on EVERY due
+  // pass, including a zero-target one (all repos in cooldown / nothing inside lookback). A no-op due
+  // pass therefore waits a full interval before re-checking — intended, so a barren cycle can't spin
+  // the selection query every tick. (This is not a bug: do not switch to advance-only-on-work.)
   input.state.recordCalibrationObserveAt(GLOBAL_OBSERVE_SCOPE, observedAt);
   for (const repo of observedRepos) input.state.recordCalibrationObserveAt(repo, observedAt);
 

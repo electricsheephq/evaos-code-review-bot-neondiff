@@ -558,7 +558,8 @@ function sampleReviewPlan(): ReviewPlan {
         severity: "P1",
         category: "runtime_correctness",
         confidence: 0.9,
-        title: "Preserve provider state"
+        title: "Preserve provider state",
+        fingerprint: `finding:${"0".repeat(64)}`
       }
     ],
     dropped: [],
