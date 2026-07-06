@@ -20,6 +20,7 @@ import {
   prepareFailedHeadRetry,
   providerCooldownDurationMs,
   reconcileProcessedHeadAfterDirectReview,
+  recordConcurrentClaimSkip,
   recordFailedReview,
   recordProviderRateLimitCooldownIfNeeded,
   restoreFailedRetryRowIfNeeded,
@@ -2975,6 +2976,47 @@ describe("worker review failures", () => {
     expect(isSuccessfulRetryStatus("skipped_capacity")).toBe(false);
     expect(isSuccessfulRetryStatus("skipped_provider_cooldown")).toBe(false);
     expect(isSuccessfulRetryStatus("skipped_stale_head")).toBe(false);
+  });
+
+  it("lets exactly one of two interleaved same-head claimants proceed (#295)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-head-claim-race-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "electricsheephq/WorldOS", pullNumber: 289, headSha: "race-head" };
+
+    // Manual review-pr and daemon both pass the getProcessedReview read window, then both try to
+    // claim before posting: the atomic per-head claim admits exactly one.
+    const daemon = state.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:00.000Z") });
+    const manual = state.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:06.000Z") });
+
+    expect([daemon, manual].filter(Boolean)).toHaveLength(1);
+    state.close();
+  });
+
+  it("records a concurrent-claim skip as a no-op that does not clobber the winner's processed row (#295)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-claim-skip-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const repo = "electricsheephq/WorldOS";
+    const pull = pullSummary(289, "winner-head");
+
+    // The winner has posted a real review + holds no lingering claim.
+    state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "posted", event: "COMMENT", reviewUrl: "https://github.test/r/1" });
+    const evidenceDir = join(root, "evidence");
+
+    recordConcurrentClaimSkip({ state, repo, pull, evidenceDir });
+
+    // Loser must NOT overwrite the winner's processed row...
+    expect(state.getProcessedReview(repo, pull.number, pull.head.sha)).toMatchObject({ status: "posted", event: "COMMENT" });
+    // ...and records a skipped readiness note + evidence file instead.
+    expect(state.getReviewReadiness(repo, pull.number, pull.head.sha)).toMatchObject({
+      state: "skipped",
+      reason: "concurrent_review_claim_held"
+    });
+    expect(JSON.parse(readFileSync(join(evidenceDir, "concurrent-claim-skip.json"), "utf8"))).toMatchObject({
+      reason: "concurrent_review_claim_held"
+    });
+    state.close();
   });
 });
 
