@@ -1270,14 +1270,32 @@ function maxRawWilsonLowerBound(botFindings: NormalizedEvalFinding[], matches: E
   return Math.max(0, ...computeConfidenceBinStats(botFindings, matches).map((bin) => bin.rawWilsonLowerBound));
 }
 
-function computeConfidenceBinStats(botFindings: NormalizedEvalFinding[], matches: EvalMatch[]): Array<{
+export interface ConfidenceBinStat {
   minConfidence: number;
   maxConfidence: number;
   findings: number;
   matched: number;
   empiricalPrecision: number;
   rawWilsonLowerBound: number;
-}> {
+}
+
+/** Minimal shapes computeConfidenceBinStats needs — satisfied by NormalizedEvalFinding/EvalMatch and by the label-store adapter. */
+export interface ConfidenceBinFinding {
+  id: string;
+  confidence: number;
+}
+
+export interface ConfidenceBinMatch {
+  botFindingId: string;
+}
+
+/**
+ * Shared Wilson-bin math (#286 PR B reuses this verbatim; never fork). Given normalized findings and
+ * the matches that validated them, returns per-bin finding/matched counts, empirical precision, and
+ * the raw (unrounded) Wilson lower bound. The batch calibration aggregator maps outcome labels into
+ * these same inputs so per-run and cross-run bins are computed by identical code.
+ */
+export function computeConfidenceBinStats(botFindings: ConfidenceBinFinding[], matches: ConfidenceBinMatch[]): ConfidenceBinStat[] {
   const matchedBotIds = new Set(matches.map((match) => match.botFindingId));
   return CONFIDENCE_BINS.map((bin) => {
     const findings = botFindings.filter((finding) => finding.confidence >= bin.minConfidence && finding.confidence < bin.maxConfidence);
