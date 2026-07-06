@@ -174,6 +174,20 @@ export NEONDIFF_PROVIDER_API_KEY="..."
 neondiff providers doctor --config config.local.json --provider openai-compatible --smoke true --json
 ```
 
+## Agent Runtime Adapters
+
+Codex CLI, Claude Code, and OpenCode are not ordinary provider adapters in this
+registry. Treat them as discovery-stage agent-runtime adapter or invocation
+plugin candidates: their CLIs may call tools, read a checkout, use their own
+model/provider settings, and produce review output after an agent loop.
+
+NeonDiff does not currently claim live review support for Codex CLI, Claude
+Code, or OpenCode. Do not list them as provider registry entries until a later
+implementation proves a bounded no-write runtime contract, schema-valid output,
+redacted evidence, timeout/error handling, and current-head review behavior. The
+discovery contract is documented in
+[docs/agent-runtime-adapters.md](agent-runtime-adapters.md).
+
 ## Error Categories
 
 Provider checks normalize common failures into these categories:
