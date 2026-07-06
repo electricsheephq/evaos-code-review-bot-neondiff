@@ -9,7 +9,7 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v0.4.24-beta.1
+        default: v0.4.30-beta.1
 
 permissions:
   contents: read
@@ -26,9 +26,11 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.event.release.tag_name }}
 
-      - name: Require v0.4.24-beta.1
+      - name: Verify release tag matches package version
         run: |
-          test "${{ github.event.inputs.tag || github.event.release.tag_name }}" = "v0.4.24-beta.1"
+          TAG="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          test "$TAG" = "v$PACKAGE_VERSION"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -49,7 +51,15 @@ jobs:
           npm pack --dry-run --json > pack.json
           node scripts/check-packlist.mjs pack.json
 
-      - name: Publish
+      - name: Publish or verify existing package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            echo "neondiff@$PACKAGE_VERSION already exists; verifying dist-tags"
+            test "$(npm view neondiff dist-tags.latest)" = "$PACKAGE_VERSION"
+            test "$(npm view neondiff dist-tags.beta)" = "$PACKAGE_VERSION"
+            exit 0
+          fi
+          npm publish --provenance --access public --tag beta

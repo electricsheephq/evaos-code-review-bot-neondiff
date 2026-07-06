@@ -161,6 +161,8 @@ export interface OperatorIssueEnrichmentRuntime {
   records: OperatorIssueEnrichmentRuntimeRecord[];
 }
 
+type OperatorGate = { name: string; ok: boolean; detail: string };
+
 export interface RuntimeProcessRow {
   pid: number;
   ppid: number;
@@ -390,6 +392,8 @@ export function buildOperatorStatus(input: {
   const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
   const issueEnrichmentRuntimeFailed = issueEnrichmentRuntime?.summary.failed ?? 0;
   const issueEnrichmentRuntimeRetryableDeferred = issueEnrichmentRuntime?.summary.retryableDeferred ?? 0;
+  const issueEnrichmentRuntimeRetryableDeferredDetail =
+    describeIssueEnrichmentRuntimeRetryableDeferred(issueEnrichmentRuntimeRetryableDeferred);
 
   const gates = [
     ...input.release.gates,
@@ -448,11 +452,14 @@ export function buildOperatorStatus(input: {
             ok: issueEnrichmentRuntimeFailed === 0,
             detail: `${issueEnrichmentRuntimeFailed} failed issue-enrichment record(s)`
           },
-          {
-            name: "issue_enrichment_runtime_no_retryable_deferred_records",
-            ok: issueEnrichmentRuntimeRetryableDeferred === 0,
-            detail: `${issueEnrichmentRuntimeRetryableDeferred} retryable deferred issue-enrichment record(s)`
-          }
+          issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(
+            "issue_enrichment_runtime_no_retryable_deferred_records",
+            issueEnrichmentRuntimeRetryableDeferredDetail
+          ),
+          issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(
+            "issue_enrichment_runtime_retryable_deferred_records_advisory",
+            issueEnrichmentRuntimeRetryableDeferredDetail
+          )
         ]
       : [])
   ];
@@ -569,6 +576,8 @@ export function buildRuntimeInventory(input: {
   const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
   const issueEnrichmentRuntimeFailed = issueEnrichmentRuntime?.summary.failed ?? 0;
   const issueEnrichmentRuntimeRetryableDeferred = issueEnrichmentRuntime?.summary.retryableDeferred ?? 0;
+  const issueEnrichmentRuntimeRetryableDeferredDetail =
+    describeIssueEnrichmentRuntimeRetryableDeferred(issueEnrichmentRuntimeRetryableDeferred);
 
   const gates = [
     ...input.release.gates,
@@ -644,11 +653,14 @@ export function buildRuntimeInventory(input: {
             ok: issueEnrichmentRuntimeFailed === 0,
             detail: `${issueEnrichmentRuntimeFailed} failed issue-enrichment record(s)`
           },
-          {
-            name: "runtime_issue_enrichment_no_retryable_deferred_records",
-            ok: issueEnrichmentRuntimeRetryableDeferred === 0,
-            detail: `${issueEnrichmentRuntimeRetryableDeferred} retryable deferred issue-enrichment record(s)`
-          }
+          issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(
+            "runtime_issue_enrichment_no_retryable_deferred_records",
+            issueEnrichmentRuntimeRetryableDeferredDetail
+          ),
+          issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(
+            "runtime_issue_enrichment_retryable_deferred_records_advisory",
+            issueEnrichmentRuntimeRetryableDeferredDetail
+          )
         ]
       : [])
   ];
@@ -1002,7 +1014,8 @@ export function collectOperatorIssueEnrichmentRuntime(
         ? "deferred"
         : "idle";
     return {
-      ok: summary.failed === 0 && summary.retryableDeferred === 0,
+      // Deferrals are backlog signals for the separate issue-enrichment lane; only failures make this runtime unhealthy.
+      ok: summary.failed === 0,
       checkedAt,
       state,
       summary,
@@ -1735,6 +1748,18 @@ function displayIssueEnrichmentRuntimeState(
   if (!runtime) return issueEnrichment?.enabled === false ? "disabled" : undefined;
   if (issueEnrichment?.enabled === false && runtime.summary.total === 0) return "disabled";
   return runtime.state;
+}
+
+function describeIssueEnrichmentRuntimeRetryableDeferred(count: number): string {
+  return `${count} retryable deferred issue-enrichment record(s); advisory only`;
+}
+
+function issueEnrichmentRuntimeRetryableDeferredAdvisoryGate(name: string, detail: string): OperatorGate {
+  return {
+    name,
+    ok: true,
+    detail
+  };
 }
 
 function mapIssueEnrichmentRuntimeRow(

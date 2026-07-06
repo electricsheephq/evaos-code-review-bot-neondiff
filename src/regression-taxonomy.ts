@@ -47,8 +47,24 @@ export function categoryLabel(category: RegressionCategory): string {
   return REGRESSION_CATEGORY_POLICY[category].label;
 }
 
-export function isRequestChangesEligible(input: Pick<ReviewComment, "severity" | "category">): boolean {
-  return isHighSeverity(input.severity) && REGRESSION_CATEGORY_POLICY[input.category].requestChangesEligible;
+/** Optional per-severity confidence floors for REQUEST_CHANGES eligibility (default off). */
+export interface RequestChangesConfidenceFloors {
+  P0?: number;
+  P1?: number;
+}
+
+export function isRequestChangesEligible(
+  input: Pick<ReviewComment, "severity" | "category" | "confidence">,
+  confidenceFloors?: RequestChangesConfidenceFloors
+): boolean {
+  if (!isHighSeverity(input.severity) || !REGRESSION_CATEGORY_POLICY[input.category].requestChangesEligible) {
+    return false;
+  }
+  const floor = confidenceFloors?.[input.severity as "P0" | "P1"];
+  // A configured floor may only make the gate quieter: below-floor findings stop counting toward
+  // REQUEST_CHANGES but still post as comments. When unset, behavior is byte-identical to before.
+  if (typeof floor === "number" && input.confidence < floor) return false;
+  return true;
 }
 
 export function isHighSeverity(severity: Severity): boolean {
@@ -56,9 +72,22 @@ export function isHighSeverity(severity: Severity): boolean {
 }
 
 export function normalizeFindingCategory(finding: Finding): RegressionCategory {
+  // Asymmetric precedence (#280): the model's validated category wins whenever it is present and
+  // != "unknown", with ONE exception — inference may override only when it ESCALATES across the
+  // REQUEST_CHANGES eligibility boundary (model category RC-ineligible, inferred category RC-eligible
+  // and != "unknown"). This is an escalate-only safety net: it never de-escalates a model category
+  // and never relabels within the same eligibility tier (the incidental-"token" bug #280 verified).
+  // Absent or "unknown" model category falls through to inference as before. The first-match-wins
+  // chain in inferRegressionCategory is a deliberate risk-priority arbiter (scoring was evaluated
+  // and dropped after it misclassified security findings on the overlapping needle substrate).
   const inferred = inferRegressionCategory(finding);
-  if (inferred !== "unknown") return inferred;
-  return finding.category ?? inferred;
+  if (finding.category && finding.category !== "unknown") {
+    const modelEligible = REGRESSION_CATEGORY_POLICY[finding.category].requestChangesEligible;
+    const inferredEligible = inferred !== "unknown" && REGRESSION_CATEGORY_POLICY[inferred].requestChangesEligible;
+    if (!modelEligible && inferredEligible) return inferred;
+    return finding.category;
+  }
+  return inferred;
 }
 
 export function countCategories(comments: Pick<ReviewComment, "category">[]): Partial<Record<RegressionCategory, number>> {

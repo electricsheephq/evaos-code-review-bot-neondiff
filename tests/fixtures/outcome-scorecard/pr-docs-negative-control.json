@@ -1,0 +1,101 @@
+{
+  "evalName": "evaos-outcome-scorecard-fixture-v0.1",
+  "runId": "pr-docs-negative-control",
+  "surface": "pr_review",
+  "scenario": {
+    "id": "pr-docs-negative-control",
+    "title": "Docs-only PR should favor latency and low noise",
+    "repo": "electricsheephq/evaos-code-review-bot-neondiff",
+    "url": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/274",
+    "negativeControl": true
+  },
+  "thresholds": {
+    "minWeightedScore": 3.5
+  },
+  "metrics": [
+    {
+      "id": "regression_prevention",
+      "label": "Regression prevention",
+      "weight": 30,
+      "rawScore": 3,
+      "denominator": "Docs-only negative controls should not invent blocker findings.",
+      "dataSource": "sampled PR replay",
+      "scoringRule": "3 means no false blocker and no regression claim.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/274"
+      ]
+    },
+    {
+      "id": "signal_to_noise",
+      "label": "Signal to noise",
+      "weight": 20,
+      "rawScore": 4,
+      "denominator": "Review should stay compact on docs-only changes.",
+      "dataSource": "review packet and review comments",
+      "scoringRule": "4 means compact review with no irrelevant inline comments.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/274"
+      ]
+    },
+    {
+      "id": "latency_flow",
+      "label": "Latency and PR flow",
+      "weight": 20,
+      "rawScore": 4,
+      "denominator": "Fast-mode target is <=5 minutes for docs-only or metadata-only PRs.",
+      "dataSource": "review-mode router dry-run",
+      "scoringRule": "4 means target mode is fast and no deep-review escalation is requested.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/266"
+      ]
+    },
+    {
+      "id": "context_proof_awareness",
+      "label": "Context and proof awareness",
+      "weight": 15,
+      "rawScore": 3,
+      "denominator": "Docs-only review should still cite changed artifacts.",
+      "dataSource": "outcome ledger packet",
+      "scoringRule": "3 means changed artifacts and proof boundary are explicit.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/267"
+      ]
+    },
+    {
+      "id": "glm_cost_efficiency",
+      "label": "GLM cost efficiency",
+      "weight": 10,
+      "rawScore": 4,
+      "denominator": "Low-risk PRs should not burn deep-mode review budget.",
+      "dataSource": "mode selection and budget disposition",
+      "scoringRule": "4 means low budget mode selected and no context expansion requested.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/266"
+      ]
+    },
+    {
+      "id": "safety_lifecycle_gate",
+      "label": "Safety and lifecycle gate",
+      "weight": 5,
+      "rawScore": 4,
+      "denominator": "Review must remain current-head, no-duplicate, and advisory-only.",
+      "dataSource": "worker safety gates",
+      "scoringRule": "4 means safety gates are explicit with no failed gate.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/260"
+      ]
+    }
+  ],
+  "hardGates": [
+    {
+      "name": "unredacted_secret",
+      "ok": true,
+      "detail": "Fixture contains no secret-like strings."
+    },
+    {
+      "name": "stale_head_post",
+      "ok": true,
+      "detail": "Fixture is read-only and cannot post stale-head comments."
+    }
+  ]
+}

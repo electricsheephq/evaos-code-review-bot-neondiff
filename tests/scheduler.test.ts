@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
 import { runScheduledCycleWithDeps, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
@@ -1482,6 +1482,94 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("retires a queued job as skipped, not failed, when it becomes draft after in-progress", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-draft-skip-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+    let listedPull = pull("org/repo-a", 1, HEAD_A);
+    let refetchedPull = pull("org/repo-a", 1, HEAD_A, "base", { draft: true });
+    const github: SchedulerGitHubApi = {
+      ...githubFromMap(new Map(), new Map(), statusCalls),
+      listOpenPulls: async () => [listedPull],
+      getPull: async () => refetchedPull
+    };
+
+    const first = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ pull: reviewPull }) => reviewPull.draft ? "skipped_draft" : "reviewed",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(first.skippedDraft).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
+    expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(0);
+    expect(state.listReviewQueueJobs({ state: "stale_retired" })).toEqual([
+      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, lastError: "draft_pr" })
+    ]);
+    expect(state.getProcessedReview("org/repo-a", 1, HEAD_A)).toBeUndefined();
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "skipped",
+      reason: "draft_pr"
+    });
+
+    listedPull = pull("org/repo-a", 1, HEAD_A, "base", { draft: true });
+    refetchedPull = listedPull;
+    const stillDraft = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("draft pull should skip before review work");
+      },
+      now: new Date("2026-07-02T00:00:30.000Z")
+    });
+
+    expect(stillDraft.skippedDraft).toBe(1);
+    expect(stillDraft.queue.enqueued).toBe(0);
+    expect(stillDraft.reviewed).toBe(0);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
+    expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(0);
+
+    listedPull = pull("org/repo-a", 1, HEAD_A);
+    refetchedPull = listedPull;
+    const second = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl: `https://github.com/${repo}/pull/${reviewPull.number}#pullrequestreview-1`
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:01:00.000Z")
+    });
+
+    expect(second.queue.enqueued).toBe(1);
+    expect(second.reviewed).toBe(1);
+    expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
+      expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A })
+    ]);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted"
+    });
+    state.close();
+  });
+
   it("sets blocked proof readiness when a queued job becomes license-skipped after in-progress", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-status-license-skip-"));
     roots.push(root);
@@ -1646,6 +1734,52 @@ describe("provider-aware review scheduler", () => {
     expect(statusCalls.map(statusFromBody)).toEqual(["stale_head"]);
     expect(statusCalls[0]?.marker).toBe(`<!-- evaos-code-review-bot:review-status repo=org/repo-a pr=1 sha=${HEAD_A} -->`);
     expect(state.listReviewQueueJobs({ state: "stale_retired" })).toHaveLength(1);
+    state.close();
+  });
+
+  it("retires an expired running closed job without failing the queue", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-expired-running-closed-"));
+    roots.push(root);
+    const config = schedulerConfig(root, []);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const job = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base"
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "running",
+      leaseId: "expired-running-lease",
+      leaseExpiresAt: "2026-07-02T00:00:00.000Z",
+      clearLease: false,
+      now: new Date("2026-07-01T23:58:00.000Z")
+    });
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_A, "base", { state: "closed", mergedAt: "2026-07-02T00:00:30Z" })]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("expired closed active jobs must not run review work");
+      },
+      now: new Date("2026-07-02T00:01:00.000Z")
+    });
+
+    expect(result.queue.closedRetired).toBe(1);
+    expect(result.queue.failedQueueJobs).toBe(0);
+    expect(statusCalls.map(statusFromBody)).toEqual(["closed_or_merged_before_review"]);
+    expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+      state: "closed_retired",
+      lastError: "closed_or_merged_before_review state=closed"
+    });
+    expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(0);
     state.close();
   });
 
@@ -3041,6 +3175,161 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("does not fetch changed files for risk weighting while a repo provider cooldown is active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-risk-cooldown-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.riskWeightedQueue = {
+      enabled: true,
+      elevatedPriority: 5,
+      docsOnlyPriority: 80
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.recordRepoProviderCooldown({
+      repo: "org/repo-a",
+      cooldownUntil: new Date("2026-07-01T00:05:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+    let fileFetches = 0;
+    const github: SchedulerGitHubApi = {
+      ...githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      listPullFiles: async () => {
+        fileFetches += 1;
+        return [{ filename: "src/auth/session.ts" }];
+      }
+    };
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("provider-deferred head must not run review work");
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(fileFetches).toBe(0);
+    expect(result.skippedProviderCooldown).toBe(1);
+    expect(result.queue.providerDeferred).toBe(1);
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({
+        pullNumber: 1,
+        state: "provider_deferred",
+        priority: 50,
+        nextEligibleAt: "2026-07-01T00:05:00.000Z"
+      })
+    ]);
+    state.close();
+  });
+
+  it("does not fetch changed files when risk weighting is disabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-risk-disabled-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.riskWeightedQueue = { enabled: false };
+    const state = new ReviewStateStore(config.statePath);
+    let fileFetches = 0;
+    const github: SchedulerGitHubApi = {
+      ...githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      listPullFiles: async () => {
+        fileFetches += 1;
+        throw new Error("listPullFiles must not be called when risk weighting is disabled");
+      }
+    };
+    let reviewed = 0;
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewed += 1;
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(fileFetches).toBe(0);
+    expect(reviewed).toBe(1);
+    expect(result.reviewed).toBe(1);
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({ pullNumber: 1, priority: 50 })
+    ]);
+    state.close();
+  });
+
+  it("falls back to flat priority and redacted logs when risk file fetch fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-risk-fetch-fail-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.riskWeightedQueue = {
+      enabled: true,
+      elevatedPriority: 5,
+      docsOnlyPriority: 80
+    };
+    const state = new ReviewStateStore(config.statePath);
+    let fileFetches = 0;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const github: SchedulerGitHubApi = {
+      ...githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, "a1")]]
+      ])),
+      listPullFiles: async () => {
+        fileFetches += 1;
+        throw new Error("GitHub failed with ghp_fake_token");
+      }
+    };
+    let reviewed = 0;
+
+    try {
+      const result = await runScheduledCycleWithDeps({
+        config,
+        github,
+        state,
+        options: { dryRun: true, useZCode: false },
+        reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+          reviewed += 1;
+          reviewState.recordProcessed({
+            repo,
+            pullNumber: reviewPull.number,
+            headSha: reviewPull.head.sha,
+            status: "dry_run",
+            event: "COMMENT"
+          });
+          return "reviewed";
+        },
+        now: new Date("2026-07-01T00:00:00.000Z")
+      });
+
+      const warning = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(fileFetches).toBe(1);
+      expect(reviewed).toBe(1);
+      expect(result.reviewed).toBe(1);
+      expect(warning).toContain("[risk-queue] changed-surface fetch failed");
+      expect(warning).not.toContain("ghp_fake_token");
+      expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+        expect.objectContaining({ pullNumber: 1, priority: 50 })
+      ]);
+    } finally {
+      warn.mockRestore();
+      state.close();
+    }
+  });
+
   it("uses repo-profile queue overflow policy to mark burst heads explicitly provider-deferred", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-profile-capacity-"));
     roots.push(root);
@@ -3556,12 +3845,12 @@ function pull(
   number: number,
   headSha: string,
   baseSha = "base",
-  options: { state?: string; mergedAt?: string | null; createdAt?: string } = {}
+  options: { state?: string; mergedAt?: string | null; createdAt?: string; draft?: boolean } = {}
 ): PullRequestSummary {
   return {
     number,
     title: `${repo} PR ${number}`,
-    draft: false,
+    draft: options.draft ?? false,
     ...(options.state ? { state: options.state } : {}),
     ...(options.createdAt ? { created_at: options.createdAt } : {}),
     ...(options.mergedAt !== undefined ? { merged_at: options.mergedAt } : {}),

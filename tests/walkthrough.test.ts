@@ -32,6 +32,18 @@ const pull: PullRequestSummary = {
   requested_reviewers: [{ login: "reviewer-one" }]
 };
 
+function expectPathInstructionCodeSpan(body: string, expectedContent: string): void {
+  const line = body.split("\n").find((candidate) => candidate.startsWith("- Path instructions: "));
+  expect(line).toBeDefined();
+  const remainder = line!.slice("- Path instructions: ".length);
+  const delimiter = remainder.match(/^`+/)?.[0];
+  expect(delimiter).toBeDefined();
+  const closingIndex = remainder.indexOf(delimiter!, delimiter!.length);
+  expect(closingIndex).toBeGreaterThan(delimiter!.length - 1);
+  expect(remainder.slice(delimiter!.length, closingIndex)).toBe(expectedContent);
+  expect(remainder.slice(closingIndex + delimiter!.length)).toMatch(/^ - /);
+}
+
 describe("walkthrough comment rendering", () => {
   it("renders a stable marked walkthrough with files, effort, related refs, and text-only suggestions", () => {
     const files: PullFilePatch[] = [
@@ -58,6 +70,7 @@ describe("walkthrough comment rendering", () => {
         side: "RIGHT",
         severity: "P1",
         category: "data_loss",
+        confidence: 0.9,
         title: "Rollback can overwrite fresh saves",
         body: "The rollback path can clobber newer save data."
       }
@@ -340,10 +353,59 @@ describe("walkthrough comment rendering", () => {
       settingsPreview
     });
 
-    expect(walkthrough.body).toContain("- Path instructions: `src/\\`templates\\`/**`");
+    expectPathInstructionCodeSpan(walkthrough.body, "src/`templates`/**");
     expect(walkthrough.body).not.toContain(secretLikeToken);
     expect(walkthrough.body).toContain("[redacted-secret]");
     expect(walkthrough.body).toContain("Provider: Gateway [redacted-secret] (`openai-compatible`, openai-compatible, model `review-[redacted-secret]`).");
+  });
+
+  it("uses variable-length code spans for backticks inside inline-code markdown", () => {
+    const settingsPreview: ReviewSettingsPreview = {
+      profile: "assertive",
+      sections: [
+        { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" }
+      ],
+      pathInstructions: [
+        {
+          pattern: "src/path\\`template\\`/**",
+          instructions: ["Keep inline code markdown intact."]
+        }
+      ],
+      suggestions: {
+        labels: [],
+        reviewers: [],
+        autoApply: false
+      },
+      roadmapOnly: []
+    };
+
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: {
+        ...pull,
+        head: {
+          ...pull.head,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        },
+        base: {
+          ...pull.base,
+          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
+        }
+      },
+      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT",
+      provider: {
+        providerId: "provider`id",
+        adapter: "openai-compatible",
+        model: "model`name"
+      },
+      settingsPreview
+    });
+
+    expectPathInstructionCodeSpan(walkthrough.body, "src/path\\`template\\`/**");
+    expect(walkthrough.body).toContain("Provider: (``provider`id``, openai-compatible, model ``model`name``).");
   });
 
   it("sanitizes confidence settings preview metadata while preserving ordinary likely wording", () => {
@@ -416,6 +478,7 @@ describe("walkthrough comment rendering", () => {
           side: "RIGHT",
           severity: "P3",
           category: "security_boundary",
+          confidence: 0.91,
           title: "Confidence: 95% should never be quoted",
           body: "The model says 0.91 reliability in raw finding prose."
         }
@@ -542,6 +605,7 @@ describe("walkthrough comment rendering", () => {
           side: "RIGHT",
           severity: "P2",
           category: "runtime_correctness",
+          confidence: 0.88,
           title: "Model says 88% confidence",
           body: "Confidence: 88%. The model is 0.88 confident."
         }
@@ -590,6 +654,7 @@ describe("walkthrough comment rendering", () => {
           side: "RIGHT",
           severity: "P1",
           category: "runtime_correctness",
+          confidence: 0.91,
           title: "Regression with 99% confidence",
           body: "Model body says `0.91` likely."
         }

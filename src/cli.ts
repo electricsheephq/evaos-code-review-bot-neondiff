@@ -5,7 +5,19 @@ import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./con
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
 import { runDaemonCycle } from "./daemon.js";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from "node:fs";
 import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from "node:path";
 import {
   assertEvalOutputDirSafe,
@@ -40,6 +52,15 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
+import {
+  assertOutcomeLedgerOutputDirEmpty,
+  readOutcomeLedgerInput,
+  writeOutcomeLedgerPacket
+} from "./outcome-ledger.js";
+import {
+  readOutcomeScorecardInput,
+  writeOutcomeScorecardPacket
+} from "./outcome-scorecard.js";
 import { buildReviewBudgetStatus } from "./review-budget.js";
 import {
   buildOperatorDashboard,
@@ -256,7 +277,7 @@ async function main(): Promise<void> {
       issueReadChecks: await collectIssueEnrichmentReadChecks(config, github)
     });
     const ok = readChecks.every((check) => check.ok) && issueEnrichment.ok;
-    console.log(JSON.stringify({
+    console.log(stringifyRedactedJson({
       ok,
       pilotRepos: config.pilotRepos,
       monitoredRepos,
@@ -277,7 +298,7 @@ async function main(): Promise<void> {
         hasFallbackReadToken: Boolean(config.github.token),
         readChecks
       }
-    }, null, 2));
+    }));
     if (!ok) process.exitCode = 1;
     return;
   }
@@ -377,7 +398,7 @@ async function main(): Promise<void> {
         detail: `${failed} failed durable queue job(s)`
       }
     ];
-    console.log(JSON.stringify({
+    console.log(stringifyRedactedJson({
       ok,
       healthState: ok ? "runtime_ok" : "runtime_blocked",
       runtimeOk: ok,
@@ -395,7 +416,7 @@ async function main(): Promise<void> {
       ],
       gates,
       budget: status.budget
-    }, null, 2));
+    }));
     if (!ok) process.exitCode = 1;
     return;
   }
@@ -475,7 +496,7 @@ async function main(): Promise<void> {
       }),
       issueEnrichmentRuntime
     });
-    console.log(JSON.stringify(status, null, 2));
+    console.log(stringifyRedactedJson(status));
     if (!status.ok) process.exitCode = 1;
     return;
   }
@@ -624,7 +645,7 @@ async function main(): Promise<void> {
         ...(args.limit ? { limit: parsePositiveInteger(args.limit, "--limit") } : {})
       }
     });
-    console.log(args.human === "true" ? formatOperatorDashboardHuman(dashboard) : JSON.stringify(dashboard, null, 2));
+    console.log(args.human === "true" ? formatOperatorDashboardHuman(dashboard) : stringifyRedactedJson(dashboard));
     if (!dashboard.ok) process.exitCode = 1;
     return;
   }
@@ -766,7 +787,7 @@ async function main(): Promise<void> {
       const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
       mkdirSync(safeOutputDir, { recursive: true });
       writeFileSync(join(safeOutputDir, "repo-memory-packet.json"), `${JSON.stringify(result, null, 2)}\n`);
-      writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), result.packet.markdown);
+      writeFileSync(join(safeOutputDir, "repo-memory-packet.md"), redactSecrets(result.packet.markdown));
     }
     const format = args.format ?? "json";
     const jsonOutput = redactSecrets(JSON.stringify(result, null, 2));
@@ -813,15 +834,17 @@ async function main(): Promise<void> {
       mkdirSync(safeOutputDir, { recursive: true });
       const jsonName = result.ok ? "gitnexus-context-packet.json" : "gitnexus-context-packet-error.json";
       writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
-      if (result.ok) writeFileSync(join(safeOutputDir, "gitnexus-context-packet.md"), result.packet.markdown);
+      if (result.ok) writeFileSync(join(safeOutputDir, "gitnexus-context-packet.md"), redactSecrets(result.packet.markdown));
     }
     const format = args.format ?? "json";
+    const redactedJson = stringifyRedactedJson(result);
+    const redactedMarkdown = result.ok ? redactSecrets(result.packet.markdown) : undefined;
     if (format === "markdown") {
-      console.log(result.ok ? result.packet.markdown : JSON.stringify(result, null, 2));
+      console.log(redactedMarkdown ?? redactedJson);
     } else if (format === "both" && result.ok) {
-      console.log(`${JSON.stringify(result, null, 2)}\n\n${result.packet.markdown}`);
+      console.log(`${redactedJson}\n\n${redactedMarkdown}`);
     } else {
-      console.log(JSON.stringify(result, null, 2));
+      console.log(redactedJson);
     }
     if (!result.ok) process.exitCode = 1;
     return;
@@ -888,7 +911,7 @@ async function main(): Promise<void> {
       mkdirSync(safeOutputDir, { recursive: true });
       const jsonName = result.ok ? "github-related-context-packet.json" : "github-related-context-packet-error.json";
       writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
-      if (result.ok) writeFileSync(join(safeOutputDir, "github-related-context-packet.md"), result.packet.markdown);
+      if (result.ok) writeFileSync(join(safeOutputDir, "github-related-context-packet.md"), redactSecrets(result.packet.markdown));
     }
     const format = args.format ?? "json";
     if (format === "markdown") {
@@ -918,7 +941,7 @@ async function main(): Promise<void> {
       mkdirSync(safeOutputDir, { recursive: true });
       const jsonName = result.ok ? "skill-pack-context-packet.json" : "skill-pack-context-packet-error.json";
       writeFileSync(join(safeOutputDir, jsonName), `${redactSecrets(JSON.stringify(result, null, 2))}\n`);
-      if (result.ok) writeFileSync(join(safeOutputDir, "skill-pack-context-packet.md"), result.packet.markdown);
+      if (result.ok) writeFileSync(join(safeOutputDir, "skill-pack-context-packet.md"), redactSecrets(result.packet.markdown));
     }
     const jsonOutput = redactSecrets(JSON.stringify(result, null, 2));
     console.log(jsonOutput);
@@ -954,7 +977,7 @@ async function main(): Promise<void> {
         const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
         mkdirSync(safeOutputDir, { recursive: true });
         writeFileSync(join(safeOutputDir, "enrichment-comment.json"), `${redactSecrets(JSON.stringify(output, null, 2))}\n`);
-        if (!output.skipped) writeFileSync(join(safeOutputDir, "enrichment.md"), output.body);
+        if (!output.skipped) writeFileSync(join(safeOutputDir, "enrichment.md"), redactSecrets(output.body));
       }
       console.log(redactSecrets(JSON.stringify(output, null, 2)));
       return;
@@ -998,7 +1021,7 @@ async function main(): Promise<void> {
       const safeOutputDir = assertMemoryPacketOutputDirSafe(args["output-dir"], config.evidenceDir);
       mkdirSync(safeOutputDir, { recursive: true });
       writeFileSync(join(safeOutputDir, "enrichment-comment.json"), `${redactSecrets(JSON.stringify(output, null, 2))}\n`);
-      writeFileSync(join(safeOutputDir, "enrichment.md"), enrichment.body);
+      writeFileSync(join(safeOutputDir, "enrichment.md"), redactSecrets(enrichment.body));
     }
     console.log(redactSecrets(JSON.stringify(output, null, 2)));
     return;
@@ -1431,6 +1454,52 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "outcome-ledger") {
+    if (args.input === undefined || (Array.isArray(args.input) && args.input.length === 0)) {
+      throw new Error("--input is required for outcome-ledger");
+    }
+    if (args["output-dir"] === undefined || (Array.isArray(args["output-dir"]) && args["output-dir"].length === 0)) {
+      throw new Error("--output-dir is required for outcome-ledger");
+    }
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    if (!dryRun) throw new Error("outcome-ledger is dry-run only in this release");
+    const ledgerInput = readOutcomeLedgerInput(parseSingleArg(args.input, "--input"));
+    const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
+    assertEvalOutputDirSafe(outputDir);
+    assertOutcomeLedgerOutputDirEmpty(outputDir);
+    const result = writeOutcomeLedgerPacket({ ledgerInput, outputDir });
+    console.log(stringifyRedactedJson({
+      command: "outcome-ledger",
+      dryRun,
+      ...result
+    }));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "outcome-scorecard") {
+    if (args.input === undefined || (Array.isArray(args.input) && args.input.length === 0)) {
+      throw new Error("--input is required for outcome-scorecard");
+    }
+    if (args["output-dir"] === undefined || (Array.isArray(args["output-dir"]) && args["output-dir"].length === 0)) {
+      throw new Error("--output-dir is required for outcome-scorecard");
+    }
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    if (!dryRun) throw new Error("outcome-scorecard is dry-run only in this release");
+    const scorecardInput = readOutcomeScorecardInput(parseSingleArg(args.input, "--input"));
+    const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
+    assertEvalOutputDirSafe(outputDir);
+    const result = writeOutcomeScorecardPacket({ scorecardInput, outputDir });
+    console.log(stringifyRedactedJson({
+      command: "outcome-scorecard",
+      dryRun,
+      outputDir,
+      ...result
+    }));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
   if (command === "run-once" || command === "review-pr") {
     if (command === "review-pr" && (!args.repo || !args.pr)) {
       console.log(JSON.stringify({
@@ -1742,7 +1811,7 @@ async function main(): Promise<void> {
     const daemonAction = args._[1];
     if (daemonAction === "start" || daemonAction === "stop" || daemonAction === "status") {
       const result = runDaemonControlCommandSafely(daemonAction, args);
-      console.log(JSON.stringify(result, null, 2));
+      console.log(stringifyRedactedJson(result));
       if (!result.ok) process.exitCode = 1;
       return;
     }
@@ -1841,7 +1910,12 @@ function runInitCommand(args: ParsedArgs): {
   }
   const backupPath = force && existsSync(configPath) ? backupInitForceTarget(configPath) : undefined;
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, readFileSync(examplePath, "utf8"));
+  const exampleConfig = readFileSync(examplePath, "utf8");
+  if (force) {
+    writeFileAtomic(configPath, exampleConfig);
+  } else {
+    writeNewFile(configPath, exampleConfig);
+  }
   return {
     ok: true,
     command: "init",
@@ -1853,7 +1927,7 @@ function runInitCommand(args: ParsedArgs): {
       `neondiff doctor --config ${configPath} --json`,
       `neondiff review-pr --config ${configPath} --repo owner/name --pr 123 --dry-run true --zcode false`,
       `neondiff status --config ${configPath} --json`
-    ]
+    ],
   };
 }
 
@@ -1925,8 +1999,28 @@ function validateInitForceTarget(configPath: string): string | undefined {
 function backupInitForceTarget(configPath: string): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupPath = `${configPath}.${timestamp}.bak`;
-  writeFileSync(backupPath, readFileSync(configPath, "utf8"));
+  writeNewFile(backupPath, readFileSync(configPath, "utf8"));
   return backupPath;
+}
+
+function writeNewFile(path: string, contents: string): void {
+  const fd = openSync(path, "wx", 0o600);
+  try {
+    writeFileSync(fd, contents);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeFileAtomic(path: string, contents: string): void {
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tempPath, contents, { mode: 0o600 });
+    renameSync(tempPath, path);
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
 }
 
 type DaemonControlResult = {
@@ -2583,7 +2677,9 @@ function buildHelp(command?: string) {
         "daemon",
         "eval-offline",
         "eval-suite",
-        "eval-sticky-vs-cold"
+        "eval-sticky-vs-cold",
+        "outcome-ledger",
+        "outcome-scorecard"
       ]
     },
     examples: [
@@ -2632,9 +2728,25 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts clear-issue-enrichment-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts clear-review-queue-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
+      "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
+      "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
-    ]
+    ],
+    outcomeLedger: {
+      notes: [
+        "The outcome-ledger command is dry-run only.",
+        "--dry-run defaults to true for outcome-ledger; --dry-run false is rejected until live posting is explicitly implemented.",
+        "Failed safety gates or secret redaction failures exit non-zero; unknown gates remain visible in the packet but do not fail the dry run."
+      ]
+    },
+    outcomeScorecard: {
+      notes: [
+        "The outcome-scorecard command is dry-run only.",
+        "Scores above 3 require direct evidence links.",
+        "Safety failures cap the score at 1 and all public claims remain advisory-only."
+      ]
+    }
   };
 }
 

@@ -181,6 +181,21 @@ Classify whether the bot is idle, healthy-active, or blocked:
 npx tsx src/cli.ts runtime-inventory --json --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
+`runtime-inventory` treats issue-enrichment runtime as a separate lane from PR
+review health. Failed issue-enrichment records remain blocking because an
+operator must inspect them before promotion. Deferred issue-enrichment records
+from normal per-repo or global throttles are advisory: they stay visible in the
+summary and recommended actions, but they do not make a clear PR-review runtime
+look blocked.
+
+For compatibility, operator JSON keeps the older advisory gate names
+`issue_enrichment_runtime_no_retryable_deferred_records` and
+`runtime_issue_enrichment_no_retryable_deferred_records`. New integrations
+should prefer the clearer aliases
+`issue_enrichment_runtime_retryable_deferred_records_advisory` and
+`runtime_issue_enrichment_retryable_deferred_records_advisory`; both old and
+new names report the same advisory-only count.
+
 Show the same runtime inventory as a short human summary:
 
 ```bash

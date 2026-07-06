@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -72,6 +72,205 @@ describe("public NeonDiff CLI surface", () => {
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
     );
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
+  });
+
+  it("redacts secret-like values from structured status JSON stdout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cli-status-"));
+    roots.push(root);
+    const secretSegment = "config-secret-value";
+    const configPath = join(root, secretSegment, "config.json");
+    const statePath = join(root, "state.sqlite");
+    const workRoot = join(root, "work");
+    const evidenceDir = join(root, "evidence");
+    const fakeGithubToken = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      workRoot,
+      statePath,
+      evidenceDir,
+      github: {
+        token: fakeGithubToken
+      }
+    }));
+
+    let failure: unknown;
+    try {
+      await runCli([
+        "daemon",
+        "status",
+        "--config",
+        configPath,
+        "--state-path",
+        statePath,
+        "--launchd-label",
+        "com.example.neondiff"
+      ]);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ stdout: expect.any(String) });
+    const stdout = (failure as { stdout: string }).stdout;
+    const output = JSON.parse(stdout);
+
+    expect(output.status.releaseUnit.configPath).toContain("[redacted-secret]");
+    expect(stdout).not.toContain(secretSegment);
+    expect(stdout).not.toContain(fakeGithubToken);
+  });
+
+  it("redacts gitnexus context packet JSON stdout for markdown and both formats", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-gitnexus-cli-"));
+    roots.push(root);
+    const baseSha = "b".repeat(40);
+    const headSha = "a".repeat(40);
+    const fakeToken = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "gitnexus"), `#!/bin/sh
+	if [ "$1" = "list" ]; then
+	  if [ "$GITNEXUS_SECRET_MODE" = "1" ]; then
+	    index_path="/repos/${fakeToken}/acme-demo"
+	  else
+	    index_path="/repos/acme-demo"
+	  fi
+	  printf '%s\\n' "Indexed Repositories" "  acme-demo" "    Path: $index_path" "    Indexed: 2026-07-05T00:00:00Z" "    Commit: ${baseSha}"
+	  exit 0
+	fi
+	if [ "$1" = "query" ]; then
+	  echo "safe related context"
+	  exit 0
+	fi
+echo "unexpected gitnexus args: $*" >&2
+exit 1
+`, { mode: 0o755 });
+
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo/pulls/7") {
+        response.end(JSON.stringify({
+          number: 7,
+          title: "Review GitNexus CLI output",
+          draft: false,
+          body: "",
+          html_url: "https://github.com/acme/demo/pull/7",
+          requested_reviewers: [],
+          head: {
+            sha: headSha,
+            ref: "feature/gitnexus",
+            repo: { full_name: "acme/demo" }
+          },
+          base: {
+            sha: baseSha,
+            ref: "main",
+            repo: { full_name: "acme/demo" }
+          }
+        }));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo/pulls/7/files") {
+        response.end(JSON.stringify([
+          {
+            filename: "src/index.ts",
+            status: "modified",
+            additions: 2,
+            deletions: 1,
+            changes: 3
+          }
+        ]));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: `unexpected ${request.method} ${url.pathname}` }));
+    });
+
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, JSON.stringify({
+        workRoot: join(root, "work"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        github: {
+          token: fakeToken,
+          apiBaseUrl: `http://127.0.0.1:${address.port}`
+        },
+        gitnexusContext: {
+          enabled: true,
+          packetVersion: "gitnexus-context-packet-v0.1",
+          maxPacketBytes: 40_000,
+          maxRelatedItems: 1,
+          queryLimit: 1,
+          commandTimeoutMs: 1_000,
+          maxCommandOutputBytes: 1_000,
+          includeStaleContext: false,
+          repoAliases: { "acme/demo": "acme-demo" },
+          generatedPathPatterns: []
+        }
+      }));
+      const env = { PATH: `${binDir}:${process.env.PATH ?? ""}` };
+      let markdownFailure: unknown;
+      try {
+        await runCli([
+          "build-gitnexus-context-packet",
+          "--config",
+          configPath,
+          "--repo",
+          "acme/demo",
+          "--pr",
+          "7",
+          "--format",
+          "markdown",
+          "--generated-at",
+          "2026-07-05T00:00:00.000Z"
+        ], { env: { ...env, GITNEXUS_SECRET_MODE: "1" } });
+      } catch (error) {
+        markdownFailure = error;
+      }
+
+      expect(markdownFailure).toMatchObject({ stdout: expect.any(String) });
+      const markdownOutput = JSON.parse((markdownFailure as { stdout: string }).stdout);
+      expect(markdownOutput.ok).toBe(false);
+      expect((markdownFailure as { stdout: string }).stdout).toContain("[redacted-secret]");
+      expect((markdownFailure as { stdout: string }).stdout).not.toContain(fakeToken);
+
+      const { stdout } = await runCli([
+        "build-gitnexus-context-packet",
+        "--config",
+        configPath,
+        "--repo",
+        "acme/demo",
+        "--pr",
+        "7",
+        "--format",
+        "both",
+        "--generated-at",
+        "2026-07-05T00:00:00.000Z"
+      ], { env });
+      const [jsonPart, markdownPart] = stdout.split("\n\n# GitNexus context packet");
+      expect(JSON.parse(jsonPart!).ok).toBe(true);
+      expect(markdownPart).toContain("Repository: acme/demo");
+      expect(stdout).not.toContain(fakeToken);
+
+      const markdownSuccess = await runCli([
+        "build-gitnexus-context-packet",
+        "--config",
+        configPath,
+        "--repo",
+        "acme/demo",
+        "--pr",
+        "7",
+        "--format",
+        "markdown",
+        "--generated-at",
+        "2026-07-05T00:00:00.000Z"
+      ], { env });
+      expect(markdownSuccess.stdout).toContain("# GitNexus context packet");
+      expect(markdownSuccess.stdout).not.toContain(fakeToken);
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("prints finishing-touch dry-run output as a default-off draft-only contract", async () => {

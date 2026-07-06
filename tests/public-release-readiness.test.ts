@@ -29,14 +29,14 @@ describe("NeonDiff public release readiness", () => {
         version?: string;
         requiredForThisRelease?: boolean;
         state?: string;
-        heldReason?: string;
-        currentSourceVersion?: string;
         previousReleasedPackageVersion?: string;
+        skippedPublicPackageVersions?: string[];
+        note?: string;
       };
     };
 
     expect(pkg.name).toBe("neondiff");
-    expect(pkg.version).toBe("0.4.24-beta.1");
+    expect(pkg.version).toBe("0.4.30-beta.1");
     expect(pkg.private).toBeUndefined();
     expect(pkg.description).toMatch(/local-first AI PR reviewer/i);
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
@@ -62,29 +62,29 @@ describe("NeonDiff public release readiness", () => {
     ]);
 
     expect(lock.name).toBe("neondiff");
-    expect(lock.version).toBe("0.4.24-beta.1");
+    expect(lock.version).toBe("0.4.30-beta.1");
     expect(lock.packages?.[""]).toMatchObject({
       name: "neondiff",
-      version: "0.4.24-beta.1",
+      version: "0.4.30-beta.1",
       license: "SEE LICENSE IN LICENSE.md",
       bin: { neondiff: "dist/src/cli.js" }
     });
     expect(manifest.packageArtifact).toMatchObject({
       name: "neondiff",
-      version: "0.4.24-beta.1",
-      requiredForThisRelease: false,
-      state: "held_at_previous_npm_release",
-      currentSourceVersion: "v0.4.25-beta.1",
+      version: "0.4.30-beta.1",
+      requiredForThisRelease: true,
+      state: "pending_publish_after_merge",
       previousReleasedPackageVersion: "0.4.24-beta.1"
     });
-    expect(manifest.packageArtifact?.heldReason).toMatch(/source\/daemon-only live beta/i);
+    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.29-beta.1");
+    expect(manifest.packageArtifact?.note).toMatch(/source\/daemon-only/i);
   });
 
   it("ships the canonical install script contract", () => {
     expect(existsSync("scripts/install.sh")).toBe(true);
     const script = read("scripts/install.sh");
 
-    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-0\.4\.24-beta\.1\}"/);
+    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-0\.4\.30-beta\.1\}"/);
     expect(script).toMatch(/npm[^\n]+install[^\n]+-g[^\n]+neondiff@\$\{NEONDIFF_VERSION\}/);
     expect(script).toMatch(/--dry-run/);
     expect(script).toMatch(/Node\.js 26 or newer/);
@@ -98,7 +98,7 @@ describe("NeonDiff public release readiness", () => {
       read("docs/github-app-setup.md"),
       read("docs/providers.md"),
       read("docs/license-boundary.md"),
-      read("docs/releases/v0.4.24-beta.1.md")
+      read("docs/releases/v0.4.30-beta.1.md")
     ].join("\n\n");
     const legacyRepoReferences = docs
       .split(/\s+/)
@@ -109,7 +109,7 @@ describe("NeonDiff public release readiness", () => {
       );
 
     expect(docs).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff");
-    expect(docs).toMatch(/npm install -g neondiff@0\.4\.24-beta\.1/i);
+    expect(docs).toMatch(/npm install -g neondiff@0\.4\.30-beta\.1/i);
     expect(docs).toMatch(/curl -fsSL https:\/\/www\.neondiff\.com\/install/i);
     expect(docs).toContain("git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git");
     expect(legacyRepoReferences).toEqual([]);
@@ -135,6 +135,9 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/id-token:\s*write/);
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/npm publish --provenance/);
-    expect(publish).toMatch(/v0\.4\.24-beta\.1/);
+    expect(publish).toMatch(/--tag beta/);
+    expect(publish).toMatch(/Verify release tag matches package version/);
+    expect(publish).toMatch(/require\('\.\/package\.json'\)\.version/);
+    expect(publish).toMatch(/already exists; verifying dist-tags/);
   });
 });

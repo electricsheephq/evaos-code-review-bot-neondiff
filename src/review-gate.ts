@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { validateFindingLocations } from "./diff.js";
-import { decideReviewEvent, normalizeFindingsForReview } from "./findings.js";
+import { decideReviewEvent, normalizeFindingsForReview, sanitizeDroppedFinding } from "./findings.js";
 import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
-import { countCategories, isRequestChangesEligible } from "./regression-taxonomy.js";
+import { countCategories, isRequestChangesEligible, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type {
   DeterministicReviewGateSummary,
   DroppedFinding,
@@ -26,6 +26,7 @@ export function applyDeterministicReviewGate(input: {
   maxInlineComments?: number;
   repoMemoryFalsePositiveFingerprints?: string[];
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
 }): DeterministicReviewGateResult {
   const located = validateFindingLocations(input.findings, input.files);
   // Memory suppression intentionally precedes normalization; dropReasonCounts reflects that ordering.
@@ -37,14 +38,19 @@ export function applyDeterministicReviewGate(input: {
     maxInlineComments: input.maxInlineComments,
     publicConfidencePolicy: input.publicConfidencePolicy
   });
+  // Enforce redaction at the module boundary (#283): every drop the gate emits — repo-memory
+  // suppressions, location drops, and schema drops that may still carry raw finding text — is
+  // sanitized here so a leak cannot depend on the caller re-sanitizing. normalized.dropped is
+  // already sanitized inside normalizeFindingsForReview; re-running the idempotent sanitizer on it
+  // is a no-op, and the same idempotency makes worker.ts's second pass a no-op too.
   const dropped = [
     ...(input.droppedFromSchema ?? []),
     ...located.dropped,
     ...repoMemoryFiltered.dropped,
     ...normalized.dropped
-  ];
+  ].map((finding) => sanitizeDroppedFinding(finding, input.publicConfidencePolicy));
   const comments = normalized.comments;
-  const event = decideReviewEvent(comments);
+  const event = decideReviewEvent(comments, input.requestChangesConfidenceFloors);
 
   return {
     event,
@@ -55,7 +61,7 @@ export function applyDeterministicReviewGate(input: {
       acceptedComments: comments.length,
       droppedFindings: dropped.length,
       event,
-      requestChangesEligible: comments.filter((comment) => isRequestChangesEligible(comment)).length,
+      requestChangesEligible: comments.filter((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors)).length,
       categoryCounts: countCategories(comments),
       dropReasonCounts: countDropReasons(dropped)
     }

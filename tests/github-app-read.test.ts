@@ -46,6 +46,31 @@ describe("GitHub App read authentication", () => {
     expect(readCall?.authorization).not.toBe("Bearer fallback-token");
   });
 
+  it("preserves GitHub Enterprise API base paths for read calls", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      calls.push(String(url));
+      if (String(url) === "https://ghe.example.com/api/v3/repos/owner/repo/pulls?state=open&per_page=100&page=1") {
+        return jsonResponse([]);
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({
+      token: "fallback-token",
+      apiBaseUrl: "https://ghe.example.com/api/v3"
+    });
+    await github.listOpenPulls("owner/repo");
+
+    expect(calls).toEqual(["https://ghe.example.com/api/v3/repos/owner/repo/pulls?state=open&per_page=100&page=1"]);
+  });
+
+  it("rejects credentialed and non-loopback HTTP GitHub API bases", () => {
+    expect(() => new GitHubApi({ apiBaseUrl: "https://token@ghe.example.com/api/v3" })).toThrow(/must not include username or password/);
+    expect(() => new GitHubApi({ apiBaseUrl: "http://ghe.example.com/api/v3" })).toThrow(/must use https/);
+    expect(() => new GitHubApi({ apiBaseUrl: "http://127.0.0.1:3000/api/v3" })).not.toThrow();
+  });
+
   it("paginates open PR reads so activation can baseline every listed open head", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-read-pages-"));
     roots.push(root);
