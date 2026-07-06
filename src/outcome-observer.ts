@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "./secrets.js";
+import { writeSecureFileSync } from "./temp-files.js";
 import type { ObserveScheduleConfig } from "./config.js";
 import type { OutcomeLedgerPostMergeStatus } from "./outcome-ledger.js";
 import type {
@@ -423,7 +424,7 @@ export async function runScheduledObservePass(input: {
     observations
   };
   mkdirSync(input.evidenceDir, { recursive: true });
-  writeFileSync(join(input.evidenceDir, "calibration-observe.json"), `${redactSecrets(JSON.stringify(packet, null, 2))}\n`);
+  writeSecureFileSync(join(input.evidenceDir, "calibration-observe.json"), `${redactSecrets(JSON.stringify(packet, null, 2))}\n`);
 
   return { ran: true, reason: "observed", targets: targets.length, labeled: records.length };
 }
