@@ -489,6 +489,12 @@ describe("provider registry", () => {
         authorization: "Bearer provider-secret"
       });
       expect(requestOptions[0].headers).not.toHaveProperty("host");
+      let pinnedLookup: { address?: string; family?: number } = {};
+      requestOptions[0].lookup?.("gateway.example.test", {}, (error, address, family) => {
+        expect(error).toBeNull();
+        pinnedLookup = { address, family };
+      });
+      expect(pinnedLookup).toEqual({ address: "93.184.216.34", family: 4 });
       expect(requests[0]?.ended).toBe(true);
       expect(JSON.stringify(result)).not.toContain("provider-secret");
     } finally {
@@ -1018,6 +1024,7 @@ describe("provider registry", () => {
       }
     });
 
+    const longLocation = `https://redirect.example.test/${"l".repeat(900)}?api_key=provider-secret`;
     const result = await doctorProviderRegistry({
       registry: config.providers!,
       providerId: "hosted-byok",
@@ -1031,7 +1038,7 @@ describe("provider registry", () => {
         status: 302,
         body: "x".repeat(256 * 1024 + 1),
         headers: {
-          Location: "https://redirect.example.test/v1/models"
+          Location: longLocation
         }
       }),
       env: {
@@ -1044,8 +1051,10 @@ describe("provider registry", () => {
       error: expect.stringContaining("OpenAI-compatible models endpoint redirected with 302")
     });
     expect(result.checks[0]?.error).toContain("remote smoke does not follow redirects");
+    expect(result.checks[0]?.error?.length).toBeLessThan(500);
     expect(result.checks[0]?.error).not.toContain("exceeded 262144 byte limit");
     expect(JSON.stringify(result)).not.toContain("provider-secret");
+    expect(JSON.stringify(result)).not.toContain("l".repeat(400));
     expect(JSON.stringify(result)).not.toContain("xxxxx");
   });
 

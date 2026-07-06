@@ -315,7 +315,9 @@ async function smokeOpenAICompatibleProvider(input: {
     });
     if (target.target?.remote && response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
-      const redactedLocation = location ? redactProviderSmokeText(location, input.provider, input.env) : undefined;
+      const redactedLocation = location
+        ? truncateProviderSmokeText(redactProviderSmokeText(location, input.provider, input.env))
+        : undefined;
       return {
         ...baseCheck,
         ok: false,
@@ -415,6 +417,10 @@ function signalWithTimeout(timeoutMs: number | undefined): { signal: AbortSignal
 
 function providerSmokeTimeoutMs(timeoutMs: number | undefined): number {
   return timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS;
+}
+
+function truncateProviderSmokeText(value: string): string {
+  return value.length > 300 ? `${value.slice(0, 300)}...` : value;
 }
 
 function remainingProviderSmokeTimeoutMs(timeoutMs: number | undefined, startedAt: number): number {
