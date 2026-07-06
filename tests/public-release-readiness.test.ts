@@ -136,6 +136,8 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/npm publish --provenance/);
     expect(publish).toMatch(/--tag beta/);
-    expect(publish).toMatch(/v0\.4\.24-beta\.1/);
+    expect(publish).toMatch(/Verify release tag matches package version/);
+    expect(publish).toMatch(/require\('\.\/package\.json'\)\.version/);
+    expect(publish).toMatch(/already exists; verifying dist-tags/);
   });
 });
