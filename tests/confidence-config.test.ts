@@ -171,6 +171,34 @@ describe("review gate config", () => {
     ).toThrow(/reviewGate\.retryDegradedConfidencePenalty must be a number from 0 to 1/);
   });
 
+  it("defaults selfConsistency to unset (off) and accepts a full valid config (#303)", () => {
+    expect(loadConfigFromObject({}).reviewGate?.selfConsistency).toBeUndefined();
+    const config = loadConfigFromObject({
+      reviewGate: { selfConsistency: { enabled: true, severities: ["P0"], provider: "zcode-glm", maxFindingsPerReview: 3 } }
+    });
+    expect(config.reviewGate?.selfConsistency).toEqual({
+      enabled: true,
+      severities: ["P0"],
+      provider: "zcode-glm",
+      maxFindingsPerReview: 3
+    });
+  });
+
+  it("fails closed on malformed selfConsistency fields (#303)", () => {
+    expect(() => loadConfigFromObject({ reviewGate: { selfConsistency: { enabled: "yes" } } })).toThrow(
+      /reviewGate\.selfConsistency\.enabled must be a boolean/
+    );
+    expect(() => loadConfigFromObject({ reviewGate: { selfConsistency: { enabled: true, maxFindingsPerReview: 0 } } })).toThrow(
+      /reviewGate\.selfConsistency\.maxFindingsPerReview must be a positive integer/
+    );
+    expect(() => loadConfigFromObject({ reviewGate: { selfConsistency: { enabled: true, severities: ["P2"] } } })).toThrow(
+      /reviewGate\.selfConsistency\.severities.* P0 or P1/
+    );
+    expect(() => loadConfigFromObject({ reviewGate: { selfConsistency: { enabled: true, provider: 42 } } })).toThrow(
+      /reviewGate\.selfConsistency\.provider must be a string/
+    );
+  });
+
   it("rejects unknown keys in the confidence floors map", () => {
     expect(() =>
       loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { p0: 0.8 } } })
