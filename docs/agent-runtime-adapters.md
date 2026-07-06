@@ -13,11 +13,11 @@ adapters unless a later implementation proves a bounded contract.
 
 ## Classification
 
-| Candidate | Classification | Why | Current NeonDiff claim |
+| Candidate | Classification | Dated observation | Current NeonDiff claim |
 | --- | --- | --- | --- |
-| Codex CLI | Agent-runtime adapter candidate; possible invocation plugin | It is a local coding agent CLI with non-interactive/scriptable execution and JSONL event output. Its model access and approval/sandbox settings are owned by Codex, not by NeonDiff's provider registry. | No live support. Do not list as a NeonDiff provider. |
-| Claude Code | Agent-runtime adapter candidate; possible invocation plugin or SDK bridge | It is an agentic coding CLI with print mode, structured output options, permission modes, tools, plugins, and its own Anthropic/account/provider configuration. | No live support. Do not list as a NeonDiff provider. |
-| OpenCode | Agent-runtime adapter candidate; possible invocation plugin | It is an AI coding agent with CLI commands, agents, permission configuration, and internal model/provider selection. Even when OpenCode is configured for GLM, Z.AI, or another provider, NeonDiff would be invoking OpenCode, not directly calling that provider. | No live support. Do not list as a NeonDiff provider. |
+| Codex CLI | Agent-runtime adapter candidate; possible invocation plugin | Observed on 2026-07-05 as a local coding agent CLI with non-interactive/scriptable execution and JSONL event output. Its model access and approval/sandbox settings are owned by Codex, not by NeonDiff's provider registry. | No live support. Do not list as a NeonDiff provider. |
+| Claude Code | Agent-runtime adapter candidate; possible invocation plugin or SDK bridge | Observed on 2026-07-05 as an agentic coding CLI with print mode, structured output options, permission modes, tools, plugins, and its own Anthropic/account/provider configuration. | No live support. Do not list as a NeonDiff provider. |
+| OpenCode | Agent-runtime adapter candidate; possible invocation plugin | Observed on 2026-07-05 as an AI coding agent with CLI commands, agents, permission configuration, and internal model/provider selection. Even when OpenCode is configured for GLM, Z.AI, or another provider, NeonDiff would be invoking OpenCode, not directly calling that provider. | No live support. Do not list as a NeonDiff provider. |
 
 Related orchestration layers such as Looper are not provider adapters either.
 They can schedule or supervise agent CLIs, but they are not model gateways and
@@ -174,6 +174,10 @@ This discovery document does not claim:
 
 These references informed the classification above on 2026-07-05:
 
+They are point-in-time reference surfaces, not durable support claims. The
+classification should continue to stand on the documented runtime properties
+and proof gates even if a vendor moves or rewrites one URL.
+
 - [OpenAI Codex CLI overview](https://developers.openai.com/codex/cli)
 - [OpenAI Codex non-interactive mode](https://developers.openai.com/codex/noninteractive)
 - [Claude Code quickstart](https://code.claude.com/docs/en/quickstart)
@@ -185,6 +189,11 @@ These references informed the classification above on 2026-07-05:
 ## Follow-Up Gates
 
 Before any agent-runtime implementation PR claims readiness, it should add:
+
+Tracking starts in discovery issue
+[#243](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/243)
+and should be split into a dedicated implementation issue before any runtime
+adapter code ships.
 
 - mocked adapter contract tests for input shaping, command construction, and
   output parsing
