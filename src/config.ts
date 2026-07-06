@@ -875,6 +875,29 @@ function validateGitHubRelatedContextConfig(value: unknown, label: string): void
   if (typeof value.maxTitleChars === "number" && value.maxTitleChars < 20) {
     throw new Error(`${label}.maxTitleChars must be at least 20`);
   }
+  if (value.relevanceScoring !== undefined) {
+    validateRelevanceScoringConfig(value.relevanceScoring, `${label}.relevanceScoring`);
+  }
+}
+
+function validateRelevanceScoringConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "enabled" && key !== "weights") {
+      throw new Error(`${label} has unknown key "${key}"; expected only enabled or weights`);
+    }
+  }
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (value.weights !== undefined) {
+    if (!isRecord(value.weights)) throw new Error(`${label}.weights must be an object`);
+    const allowed = new Set(["kind", "pathOverlap", "lexical", "recency", "state"]);
+    for (const [key, weight] of Object.entries(value.weights)) {
+      if (!allowed.has(key)) throw new Error(`${label}.weights has unknown key "${key}"`);
+      if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > 1) {
+        throw new Error(`${label}.weights.${key} must be a number from 0 to 1`);
+      }
+    }
+  }
 }
 
 function validateSkillPacksConfig(value: unknown, label: string): void {
