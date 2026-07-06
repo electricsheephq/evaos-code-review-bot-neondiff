@@ -399,8 +399,12 @@ export async function runScheduledObservePass(input: {
         });
         labeled += 1;
       }
+      // Only a MERGED PR is actually observed (its outcome is terminal for this head), so only then
+      // do we advance the repo's cooldown. An unmerged/not-yet-observable target must NOT cool the
+      // repo down — otherwise we'd wrongly delay re-observing it until it finally merges. The cooldown
+      // exists to space out re-observation of a repo we DID observe, not one we merely selected.
+      observedRepos.add(target.repo);
     }
-    observedRepos.add(target.repo);
     // evidenceRef may carry free text from the outcome reader; the packet-level redactSecrets wrapper
     // below strips any secret-shaped content before it is written.
     observations.push({ repo: target.repo, pullNumber: target.pullNumber, headSha: target.headSha, postMergeStatus, labeled, ...(outcome.evidenceRef ? { evidenceRef: outcome.evidenceRef } : {}) });
@@ -471,6 +475,9 @@ function selectObserveTargets(
   const repoInCooldown = new Map<string, boolean>();
   const selected: ScheduledObserveTarget[] = [];
   for (const target of byHead.values()) {
+    // Cap counts only ACTUALLY-selected (non-cooldown) heads: it is checked against `selected.length`,
+    // and a cooldown head `continue`s below WITHOUT pushing — so a cooled head never consumes a slot,
+    // and non-cooldown repos that sort later are still reached until the cap fills with real work.
     if (selected.length >= schedule.maxPullsPerCycle) break;
     let inCooldown = repoInCooldown.get(target.repo);
     if (inCooldown === undefined) {

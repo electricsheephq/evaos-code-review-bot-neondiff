@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import { ReviewStateStore, type ReviewFindingRecord } from "../src/state.js";
 import {
+  localDateFolder,
   recordPostedReviewFindings
 } from "../src/worker.js";
 import {
@@ -312,6 +313,46 @@ describe("runScheduledObservePass gating + selection (#357)", () => {
     store.close();
   });
 
+  it("does NOT advance a repo's cooldown for a selected-but-UNMERGED target (re-observable next cycle)", async () => {
+    const { store, root } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const now = new Date("2026-07-06T10:00:00.000Z");
+
+    const result = await runScheduledObservePass({
+      state: store,
+      config: OBSERVE_SCHEDULE,
+      evidenceDir: join(root, "evidence"),
+      fetchOutcome: () => fullObserved({ merged: false }), // selected, read, but not yet merged
+      now
+    });
+
+    // The target was selected + read (so the global check-clock advances) but produced NO label,
+    // so the repo cooldown must NOT advance — otherwise we'd delay re-observing until it merges.
+    expect(result).toMatchObject({ ran: true, targets: 1, labeled: 0 });
+    expect(store.listFindingOutcomeLabels()).toHaveLength(0);
+    expect(store.getCalibrationObserveAt("__global__")).toBe(now.toISOString());
+    expect(store.getCalibrationObserveAt("owner/repo")).toBeUndefined();
+    store.close();
+  });
+
+  it("DOES advance a repo's cooldown for a merged+observed target (a label was recorded)", async () => {
+    const { store, root } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const now = new Date("2026-07-06T10:00:00.000Z");
+
+    const result = await runScheduledObservePass({
+      state: store,
+      config: OBSERVE_SCHEDULE,
+      evidenceDir: join(root, "evidence"),
+      fetchOutcome: () => fullObserved({ merged: true, revertedFlaggedChange: true }),
+      now
+    });
+
+    expect(result).toMatchObject({ ran: true, targets: 1, labeled: 1 });
+    expect(store.getCalibrationObserveAt("owner/repo")).toBe(now.toISOString());
+    store.close();
+  });
+
   it("cap interacts with multi-repo cooldown: cooled heads are skipped WITHOUT consuming a slot, cap applies across the post-cooldown set", async () => {
     const { store, root } = newStore();
     const now = new Date("2026-07-06T10:00:00.000Z");
@@ -431,6 +472,88 @@ describe("observeScheduledOutcomes scheduler wiring (#357)", () => {
     // A merged PR with no additional signal derives none_observed (bounded reader).
     expect(store.listFindingOutcomeLabels()).toHaveLength(1);
     expect(store.getCalibrationObserveAt("__global__")).toBeDefined();
+    store.close();
+  });
+
+  it("is fail-open: a throwing observe pass never propagates out of the daemon cycle", async () => {
+    const { store } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // getPull throws INSIDE runScheduledObservePass (at the fetchOutcome boundary) with a secret-shaped
+    // token in the message; observeScheduledOutcomes must swallow it (never disturb the review cycle)
+    // and redact the token in the warning.
+    const token = ["ghp", "z".repeat(36)].join("_");
+    const github: SchedulerGitHubApi = {
+      listOpenPulls: async () => [],
+      getPull: async () => {
+        throw new Error(`boom ${token}`);
+      },
+      listIssueComments: async () => []
+    };
+    const config = loadConfigFromObject(
+      baseConfigObject({ calibrationLoop: { observeSchedule: OBSERVE_SCHEDULE } })
+    );
+
+    await expect(
+      observeScheduledOutcomes({ config, github, state: store, now: new Date("2026-07-06T10:00:00.000Z") })
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls.flat().join(" ")).not.toContain(token);
+    store.close();
+  });
+
+  it("exercises the PRODUCTION deriveOutcomeLabel path end-to-end (merged getPull ⇒ recorded label)", async () => {
+    const { store } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const github = stubGithub();
+    // Real merged PR shape flowing through the production fetchOutcome ⇒ deriveOutcomeLabel. The
+    // bounded reader supplies no revert/hotfix/merged-fix signal, so the honest derived label is
+    // none_observed / unvalidated (a merged PR with no post-merge evidence).
+    github.getPull.mockResolvedValueOnce({
+      number: 1,
+      head: { sha: "sha1" },
+      merged_at: "2026-07-05T00:00:00.000Z"
+    } as unknown as PullRequestSummary);
+    const config = loadConfigFromObject(
+      baseConfigObject({ calibrationLoop: { observeSchedule: OBSERVE_SCHEDULE } })
+    );
+
+    await observeScheduledOutcomes({ config, github, state: store, now: new Date("2026-07-06T10:00:00.000Z") });
+
+    const labels = store.listFindingOutcomeLabels();
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toMatchObject({
+      fingerprint: FINDING.fingerprint,
+      labelSource: "none_observed",
+      verdict: "unvalidated"
+    });
+    store.close();
+  });
+
+  it("writes the evidence packet under the SAME date the observe pass timestamps (single now)", async () => {
+    const { store, root } = newStore();
+    store.recordReviewFindings([FINDING]);
+    const github = stubGithub();
+    github.getPull.mockResolvedValueOnce({
+      number: 1,
+      head: { sha: "sha1" },
+      merged_at: "2026-07-05T00:00:00.000Z"
+    } as unknown as PullRequestSummary);
+    // evidenceDir is config.evidenceDir/<localDateFolder(now)>/calibration-observe. Use a fixed now
+    // and assert the folder and the packet's observedAt derive from that same instant.
+    const now = new Date("2026-07-06T10:00:00.000Z");
+    const config = loadConfigFromObject(
+      baseConfigObject({ evidenceDir: join(root, "evidence"), calibrationLoop: { observeSchedule: OBSERVE_SCHEDULE } })
+    );
+
+    await observeScheduledOutcomes({ config, github, state: store, now });
+
+    const dateFolder = localDateFolder(now);
+    const packetPath = join(root, "evidence", dateFolder, "calibration-observe", "calibration-observe.json");
+    const packet = JSON.parse(readFileSync(packetPath, "utf8"));
+    // The packet's observedAt is the same instant that named the date folder.
+    expect(localDateFolder(new Date(packet.observedAt))).toBe(dateFolder);
+    expect(packet.observedAt).toBe(now.toISOString());
     store.close();
   });
 });

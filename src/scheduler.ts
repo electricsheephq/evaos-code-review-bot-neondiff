@@ -272,7 +272,11 @@ export async function observeScheduledOutcomes(input: {
 }): Promise<void> {
   const schedule = input.config.calibrationLoop?.observeSchedule;
   if (!schedule?.enabled) return;
-  const evidenceDir = join(input.config.evidenceDir, localDateFolder(input.now), "calibration-observe");
+  // Bind ONE `now` for this pass so the evidence-folder date and the observe-pass timestamp
+  // (observedAt / schedule bookkeeping) can never drift apart across a future refactor: the date
+  // folder is derived from exactly the same instant that is forwarded to runScheduledObservePass.
+  const now = input.now ?? new Date();
+  const evidenceDir = join(input.config.evidenceDir, localDateFolder(now), "calibration-observe");
   const fetchOutcome = async (target: ScheduledObserveTarget): Promise<ObservedPullOutcome> => {
     // Read-only merge-state probe. A merged PR with no additional signal derives `none_observed`;
     // deeper post-merge signals (revert/hotfix/merged-fix diffs, human-thread resolution) are a
@@ -287,7 +291,7 @@ export async function observeScheduledOutcomes(input: {
     };
   };
   try {
-    await runScheduledObservePass({ state: input.state, config: schedule, evidenceDir, fetchOutcome, now: input.now });
+    await runScheduledObservePass({ state: input.state, config: schedule, evidenceDir, fetchOutcome, now });
   } catch (error) {
     // Observation is best-effort telemetry: never let a failure here disturb the review cycle.
     console.warn(`[calibration-observe] scheduled observe pass failed: ${redactSecrets(error instanceof Error ? error.message : String(error))}`);
