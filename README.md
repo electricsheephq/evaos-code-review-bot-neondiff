@@ -144,7 +144,10 @@ Small NeonDiff compatibility matrix:
 
 ## First Dry-Run Review
 
-Run a dry-run review before any live posting:
+Run a dry-run review before any live posting. Replace `--repo owner/name` and
+`--pr 123` below with a repo already listed in your local config's
+`pilotRepos` and an open PR number on that repo — `review-pr` fails with "repo
+must be present in configured repos" if the repo is not in `pilotRepos`:
 
 ```bash
 neondiff review-pr \

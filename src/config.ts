@@ -236,12 +236,14 @@ export interface RepoMemoryConfig {
 }
 
 const DEFAULT_CONFIG: BotConfig = {
-  pilotRepos: ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
+  pilotRepos: ["example-org/example-repo"],
   pollIntervalMs: 90_000,
   skipDrafts: true,
-  workRoot: "/Volumes/LEXAR/repos/evaos-code-review-bot-runtime",
-  statePath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
-  evidenceDir: "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
+  // workRoot must resolve outside this checkout (validateWorkRootIsolation); /tmp/neondiff is a
+  // portable placeholder that satisfies that check on any machine without edits.
+  workRoot: "/tmp/neondiff/runtime",
+  statePath: "/tmp/neondiff/state/reviews.sqlite",
+  evidenceDir: "/tmp/neondiff/evidence",
   canaryPulls: undefined,
   activation: {
     reviewExistingOpenPrsOnActivation: false
