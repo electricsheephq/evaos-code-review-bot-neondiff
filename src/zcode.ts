@@ -16,6 +16,44 @@ export interface ZCodeReviewResult {
   findings: Finding[];
   droppedFromSchema: ReturnType<typeof parseFindings>["dropped"];
   rawResponse: string;
+  // Provenance (#304): how many parse attempts ran and whether the strict-JSON retry path produced
+  // the accepted parse. degradedRecovery is true iff a non-first attempt supplied the findings.
+  attempts: number;
+  degradedRecovery: boolean;
+}
+
+// Distinct, detectable schema/parse-failure marker so runWithProviderRetry can classify persistent
+// model_output_schema failures as their own bounded retryable category instead of falling through
+// as non-retryable (#304).
+export const ZCODE_SCHEMA_FAILURE_ERROR_PREFIX = "zcode_model_output_schema_failure";
+
+export function isZCodeSchemaFailureError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(ZCODE_SCHEMA_FAILURE_ERROR_PREFIX);
+}
+
+/**
+ * Parse the first attempt whose stdout yields a valid review JSON (#304). Attempt 1 is the original
+ * prompt; later attempts are strict-JSON retries. Returns provenance so callers can tag degraded
+ * recoveries. Throws a ZCODE_SCHEMA_FAILURE_ERROR_PREFIX error when no attempt parses.
+ */
+export function parseZCodeReviewOutput(rawStdouts: string[]): ZCodeReviewResult {
+  let lastParseError: unknown;
+  for (let attempt = 1; attempt <= rawStdouts.length; attempt += 1) {
+    try {
+      const rawResponse = extractZCodeResponse(rawStdouts[attempt - 1]!);
+      const parsed = JSON.parse(extractJsonObject(rawResponse));
+      const { findings, dropped } = parseFindings(parsed);
+      return { findings, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
+    } catch (error) {
+      lastParseError = error;
+    }
+  }
+  throw new Error(
+    `${ZCODE_SCHEMA_FAILURE_ERROR_PREFIX}: ZCode response did not contain a parseable JSON review after ${rawStdouts.length} attempts: ${
+      lastParseError instanceof Error ? lastParseError.message : String(lastParseError)
+    }`
+  );
 }
 
 export interface ZCodeReviewFixtureAdapterOptions {
@@ -246,14 +284,15 @@ export function runZCodeReview(input: {
       const rawResponse = extractZCodeResponse(result.stdout);
       const parsed = JSON.parse(extractJsonObject(rawResponse));
       const { findings, dropped } = parseFindings(parsed);
-      return { findings, droppedFromSchema: dropped, rawResponse };
+      // Provenance (#304): a non-first successful attempt is a degraded (strict-JSON retry) recovery.
+      return { findings, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
     } catch (error) {
       lastParseError = error;
     }
   }
 
   throw new Error(
-    `ZCode response did not contain a parseable JSON review after ${prompts.length} attempts: ${
+    `${ZCODE_SCHEMA_FAILURE_ERROR_PREFIX}: ZCode response did not contain a parseable JSON review after ${prompts.length} attempts: ${
       lastParseError instanceof Error ? lastParseError.message : String(lastParseError)
     }`
   );

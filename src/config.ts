@@ -195,6 +195,9 @@ export interface ReviewGateConfig {
   maxInlineComments: number;
   /** Optional per-severity confidence floors for REQUEST_CHANGES eligibility (default off). */
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
+  /** Optional confidence subtracted (0..1, floor 0) from findings recovered via the strict-JSON
+   * retry path (#304). Default off; quieter-only — lower confidence can only demote ranking/floors. */
+  retryDegradedConfidencePenalty?: number;
 }
 
 export interface RiskWeightedQueueConfig {
@@ -683,6 +686,9 @@ function validateReviewGateConfig(value: unknown, label: string): void {
       const floor = value.requestChangesConfidenceFloors[severity];
       if (floor !== undefined) validateProbability(floor, `${label}.requestChangesConfidenceFloors.${severity}`);
     }
+  }
+  if (value.retryDegradedConfidencePenalty !== undefined) {
+    validateProbability(value.retryDegradedConfidencePenalty, `${label}.retryDegradedConfidencePenalty`);
   }
 }
 

@@ -152,6 +152,25 @@ describe("review gate config", () => {
     );
   });
 
+  it("defaults retryDegradedConfidencePenalty to unset (off) and accepts a valid penalty (#304)", () => {
+    expect(loadConfigFromObject({}).reviewGate?.retryDegradedConfidencePenalty).toBeUndefined();
+    expect(
+      loadConfigFromObject({ reviewGate: { retryDegradedConfidencePenalty: 0.2 } }).reviewGate?.retryDegradedConfidencePenalty
+    ).toBe(0.2);
+  });
+
+  it("rejects an out-of-range or non-number retryDegradedConfidencePenalty (#304)", () => {
+    expect(() => loadConfigFromObject({ reviewGate: { retryDegradedConfidencePenalty: -0.1 } })).toThrow(
+      /reviewGate\.retryDegradedConfidencePenalty must be a number from 0 to 1/
+    );
+    expect(() => loadConfigFromObject({ reviewGate: { retryDegradedConfidencePenalty: 1.5 } })).toThrow(
+      /reviewGate\.retryDegradedConfidencePenalty must be a number from 0 to 1/
+    );
+    expect(() =>
+      loadConfigFromObject({ reviewGate: { retryDegradedConfidencePenalty: "high" as unknown as number } })
+    ).toThrow(/reviewGate\.retryDegradedConfidencePenalty must be a number from 0 to 1/);
+  });
+
   it("rejects unknown keys in the confidence floors map", () => {
     expect(() =>
       loadConfigFromObject({ reviewGate: { requestChangesConfidenceFloors: { p0: 0.8 } } })

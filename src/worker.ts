@@ -73,9 +73,9 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { buildReviewPrompt, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
+import { buildReviewPrompt, isZCodeSchemaFailureError, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
-import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import type { Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
@@ -177,7 +177,7 @@ export interface RetryProviderCooldownsResult {
   };
 }
 
-export type ProviderErrorCategory = "none" | "request_rate_limit" | "overloaded" | "quota_exhausted";
+export type ProviderErrorCategory = "none" | "request_rate_limit" | "overloaded" | "quota_exhausted" | "model_output_schema";
 
 export interface ProviderErrorClassification {
   category: ProviderErrorCategory;
@@ -1467,6 +1467,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           findings: [],
           droppedFromSchema: [],
           rawResponse: "{\"findings\":[]}",
+          attempts: 0,
+          degradedRecovery: false,
           runtime: {
             provider: config.zcode.providerId,
             model: config.zcode.model,
@@ -1484,8 +1486,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_stale_head";
     }
 
+    const gatedFindings = applyRetryDegradedConfidencePenalty(
+      zcodeResult.findings,
+      zcodeResult.degradedRecovery,
+      config.reviewGate?.retryDegradedConfidencePenalty
+    );
     const gate = applyDeterministicReviewGate({
-      findings: zcodeResult.findings,
+      findings: gatedFindings,
       files: reviewFiles,
       droppedFromSchema: zcodeResult.droppedFromSchema,
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
@@ -2401,6 +2408,27 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   return true;
 }
 
+/**
+ * Config-gated retry-degraded confidence penalty (#304, default off). When a review's findings came
+ * from a degraded (strict-JSON retry) parse and a penalty is configured, subtract it from each
+ * finding's confidence (floored at 0) BEFORE the gate. Quieter-only by construction: lower confidence
+ * can only demote ranking/floor eligibility, never promote. A no-op when not degraded or unconfigured.
+ */
+export function applyRetryDegradedConfidencePenalty(
+  findings: Finding[],
+  degradedRecovery: boolean,
+  penalty: number | undefined
+): Finding[] {
+  if (!degradedRecovery || penalty === undefined || penalty <= 0) return findings;
+  return findings.map((finding) => ({ ...finding, confidence: Math.max(0, finding.confidence - penalty) }));
+}
+
+/** Runtime-note provenance line for the outcome ledger (#304); undefined for a clean first-pass parse. */
+export function buildRetryDegradedRuntimeNote(attempts: number, degradedRecovery: boolean): string | undefined {
+  if (!degradedRecovery) return undefined;
+  return `Findings recovered via the strict-JSON retry path (degraded): parsed on attempt ${attempts} of the ZCode review, not the first pass.`;
+}
+
 export function classifyProviderError(error: unknown): ProviderErrorClassification {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
@@ -2439,6 +2467,12 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
   }
   if (requestRateLimited) {
     return { ...base, category: "request_rate_limit", reason: "provider_request_rate_limit", retryable: true, cooldown: true };
+  }
+  // Persistent model-output-schema/parse failures (#304): retryable within runWithProviderRetry's
+  // bounded attempt budget (attempt < maxAttempts), but NOT a provider cooldown — it is a model
+  // formatting problem, not a rate/quota/overload signal. The bound guarantees no infinite loop.
+  if (isZCodeSchemaFailureError(error)) {
+    return { ...base, category: "model_output_schema", reason: "model_output_schema_failure", retryable: true, cooldown: false };
   }
   return {
     ...base,
@@ -2528,7 +2562,12 @@ async function runZCodeReviewWithProviderRetry(input: {
       latencyMs: completedAt.getTime() - startedAt.getTime(),
       notes: [
         `Observed outer provider retry attempts: ${providerAttempts}.`,
-        "Internal ZCode retry attempts and token usage are not exposed by the configured provider path; providerAttempts and token metrics remain null."
+        "Internal ZCode retry attempts and token usage are not exposed by the configured provider path; providerAttempts and token metrics remain null.",
+        // Retry-degraded provenance (#304): surfaced only when the strict-JSON retry path produced
+        // the accepted parse, so evidence packets and the ledger runtime honestly flag it.
+        ...(result.degradedRecovery
+          ? [buildRetryDegradedRuntimeNote(result.attempts, result.degradedRecovery)!]
+          : [])
       ]
     }
   };
