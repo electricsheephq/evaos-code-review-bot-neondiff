@@ -474,6 +474,106 @@ describe("license activation and entitlement cache", () => {
     expect(existsSync(join(root, "entitlement.json"))).toBe(true);
   });
 
+  it("proves public/private repo entitlement outcomes at the license gate", async () => {
+    const now = new Date("2026-07-04T00:00:30.000Z");
+    const rows: Array<{
+      name: string;
+      visibility: "public" | "private" | "unknown";
+      publicReposFree?: boolean;
+      entitlement?: "active-public" | "active-private" | "expired-private" | "revoked-private" | "revoked-expired-private";
+      expected: {
+        ok: boolean;
+        status: string;
+        reason: string | RegExp;
+      };
+    }> = [
+      {
+        name: "public repo, no license",
+        visibility: "public",
+        expected: { ok: true, status: "active", reason: "public repo path is free" }
+      },
+      {
+        name: "public repo, commercial entitlement mode, no license",
+        visibility: "public",
+        publicReposFree: false,
+        expected: { ok: false, status: "missing", reason: /public repo review requires active entitlement/ }
+      },
+      {
+        name: "public repo, commercial entitlement mode, active public entitlement",
+        visibility: "public",
+        publicReposFree: false,
+        entitlement: "active-public",
+        expected: { ok: true, status: "active", reason: "active entitlement covers public repo review" }
+      },
+      {
+        name: "public repo, commercial entitlement mode, active private entitlement",
+        visibility: "public",
+        publicReposFree: false,
+        entitlement: "active-private",
+        expected: { ok: true, status: "active", reason: "active entitlement covers public repo review" }
+      },
+      {
+        name: "private repo, no license",
+        visibility: "private",
+        expected: { ok: false, status: "missing", reason: /private repo review requires active entitlement/ }
+      },
+      {
+        name: "private repo, active private entitlement",
+        visibility: "private",
+        entitlement: "active-private",
+        expected: { ok: true, status: "active", reason: "active entitlement covers private repo review" }
+      },
+      {
+        name: "private repo, expired entitlement",
+        visibility: "private",
+        entitlement: "expired-private",
+        expected: { ok: false, status: "expired", reason: /private repo review requires active entitlement/ }
+      },
+      {
+        name: "private repo, revoked entitlement",
+        visibility: "private",
+        entitlement: "revoked-private",
+        expected: { ok: false, status: "revoked", reason: /private repo review requires active entitlement/ }
+      },
+      {
+        name: "private repo, revoked and expired entitlement",
+        visibility: "private",
+        entitlement: "revoked-expired-private",
+        expected: { ok: false, status: "revoked", reason: /private repo review requires active entitlement/ }
+      },
+      {
+        name: "unknown visibility, active private entitlement",
+        visibility: "unknown",
+        entitlement: "active-private",
+        expected: { ok: false, status: "network", reason: /repo visibility is unknown/ }
+      }
+    ];
+
+    for (const row of rows) {
+      const root = mkRoot(roots);
+      const config = licenseConfig(root, undefined);
+      config.publicReposFree = row.publicReposFree ?? true;
+      if (row.entitlement) writeEntitlementFixture(root, row.entitlement);
+
+      const result = await evaluateLicenseReviewGate({
+        config,
+        repo: `owner/${row.visibility}-matrix`,
+        visibility: row.visibility,
+        now
+      });
+
+      expect(result, row.name).toMatchObject({
+        ok: row.expected.ok,
+        status: row.expected.status
+      });
+      if (typeof row.expected.reason === "string") {
+        expect(result.reason, row.name).toBe(row.expected.reason);
+      } else {
+        expect(result.reason, row.name).toMatch(row.expected.reason);
+      }
+    }
+  });
+
   it("fails private repo review closed without an active private entitlement", async () => {
     const root = mkRoot(roots);
     const config = licenseConfig(root, undefined);
@@ -694,13 +794,39 @@ describe("license activation and entitlement cache", () => {
     expect(statSync(keyPath).mode & 0o777).toBe(0o600);
   });
 
-  it("blocks private repo worker reviews before ZCode or posting when entitlement is missing", async () => {
+  it("blocks provider-configured private repo worker reviews before checkout, provider, or posting when entitlement is missing", async () => {
     const root = mkRoot(roots);
     const state = new ReviewStateStore(join(root, "state.sqlite"));
     const config = minimalConfig(root);
+    config.zcode.providerId = "local-provider";
+    config.providers = {
+      defaultProviderId: "local-provider",
+      providers: {
+        "local-provider": {
+          enabled: true,
+          adapter: "openai-compatible",
+          displayName: "Local provider configured for license-gate ordering proof",
+          baseUrl: "http://127.0.0.1:11434/v1",
+          model: "qwen2.5-coder:7b",
+          authMode: "none",
+          capabilities: {
+            review: true,
+            jsonOutput: true,
+            local: true,
+            streaming: false
+          }
+        }
+      }
+    };
     const pull = pullSummary(7, "private-head");
     const github = new GitHubApi({});
     github.getRepo = async () => ({ full_name: "owner/private", private: true as const, visibility: "private" as const });
+    github.listPullFiles = async () => {
+      throw new Error("license gate should block before checkout/file listing/provider work");
+    };
+    github.createReview = async () => {
+      throw new Error("license gate should block before GitHub review posting");
+    };
 
     const status = await reviewPull({
       config,
@@ -1033,6 +1159,22 @@ function licenseConfig(root: string, apiBaseUrl?: string): LicenseConfig {
     privateReposRequireEntitlement: true,
     updateEntitlementRequiresLicense: true
   };
+}
+
+function writeEntitlementFixture(
+  root: string,
+  fixture: "active-public" | "active-private" | "expired-private" | "revoked-private" | "revoked-expired-private"
+): void {
+  const entitlement = {
+    status: fixture === "revoked-private" || fixture === "revoked-expired-private" ? "revoked" : "active",
+    checkedAt: "2026-07-04T00:00:00.000Z",
+    expiresAt: fixture === "expired-private" || fixture === "revoked-expired-private"
+      ? "2026-07-03T00:00:00.000Z"
+      : "2026-08-01T00:00:00.000Z",
+    repoVisibilityScope: fixture === "active-public" ? "public" : "private",
+    updateEntitlement: true
+  };
+  writeFileSync(join(root, "entitlement.json"), `${JSON.stringify(entitlement)}\n`, { mode: 0o600 });
 }
 
 function writeConfig(path: string, root: string, apiBaseUrl: string): void {

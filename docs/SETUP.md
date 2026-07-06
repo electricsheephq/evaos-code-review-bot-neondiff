@@ -157,6 +157,26 @@ GitHub review posting unless the cached entitlement is active and covers private
 repos. Public repo review may run without a license when `license.publicReposFree`
 is true.
 
+Use this matrix when reading doctor or review evidence:
+
+| Repo visibility | License state | Provider state | Expected setup result |
+| --- | --- | --- | --- |
+| public | no license | provider present | license allows; provider output decides review success |
+| public | no license | provider absent | license allows; setup/provider check blocks |
+| public with `publicReposFree=false` | no license | provider present | license blocks before checkout/provider/post |
+| public with `publicReposFree=false` | no license | provider absent | license blocks before checkout/provider/post |
+| public with `publicReposFree=false` | active entitlement | provider present | license allows; provider output decides review success |
+| private | no license | provider present | license blocks before checkout/provider/post |
+| private | active private entitlement | provider present | license allows; provider output decides review success |
+| private | expired or revoked entitlement | provider present | license blocks before checkout/provider/post |
+| unknown | any state | provider present | fail closed before checkout/provider/post |
+
+Provider API keys are BYOK model credentials only. They do not unlock private
+repo review and should not be used as proof of a NeonDiff paid entitlement.
+For `review-pr` license blocks, the gate writes its local proof under the
+configured `evidenceDir` as
+`<date>/<owner__repo>/pr-<number>/<head-sha>/license-gate.json`.
+
 The `keychain` backend remains listed for future native macOS storage support,
 but headless CLI activation currently rejects Keychain writes rather than passing
 license keys through `security add-generic-password` process arguments.
