@@ -83,23 +83,76 @@ describe("license activation and entitlement cache", () => {
     expect(existsSync(join(root, "entitlement.json"))).toBe(false);
   });
 
-  it("classifies expired, revoked, invalid, network, and server states", async () => {
+  it("classifies expired, revoked, invalid, network, server, and hosted admin denial states", async () => {
     const root = mkRoot(roots);
     const expired = await startLicenseServer((_req, res) => writeJson(res, 402, { status: "expired", detail: "expired" }));
     const revoked = await startLicenseServer((_req, res) => writeJson(res, 410, { status: "revoked", detail: "revoked" }));
+    const legacyForbidden = await startLicenseServer((_req, res) => writeJson(res, 403, { detail: "legacy forbidden" }));
     const invalid = await startLicenseServer((_req, res) => writeJson(res, 401, { status: "invalid", detail: "bad key" }));
     const server = await startLicenseServer((_req, res) => writeJson(res, 503, { detail: "try later" }));
-    servers.push(expired, revoked, invalid, server);
+    const scopeMismatch = await startLicenseServer((_req, res) => writeJson(res, 403, { status: "scope_mismatch", detail: "repo not covered" }));
+    const rateLimited = await startLicenseServer((_req, res) => writeJson(res, 429, { detail: "try later" }));
+    const unsupportedClient = await startLicenseServer((_req, res) => writeJson(res, 426, { status: "unsupported_client", detail: "upgrade required" }));
+    const clockSkew = await startLicenseServer((_req, res) => writeJson(res, 400, { status: "clock_skew", detail: "clock skew too large" }));
+    servers.push(expired, revoked, legacyForbidden, invalid, server, scopeMismatch, rateLimited, unsupportedClient, clockSkew);
 
     await expectStatus(licenseConfig(root, expired.url), "expired");
     await expectStatus(licenseConfig(root, revoked.url), "revoked");
+    await expectStatus(licenseConfig(root, legacyForbidden.url), "revoked");
     await expectStatus(licenseConfig(root, invalid.url), "invalid");
     await expectStatus(licenseConfig(root, server.url), "server");
+    await expectStatus(licenseConfig(root, scopeMismatch.url), "scope_mismatch");
+    await expectStatus(licenseConfig(root, rateLimited.url), "rate_limited");
+    await expectStatus(licenseConfig(root, unsupportedClient.url), "unsupported_client");
+    await expectStatus(licenseConfig(root, clockSkew.url), "clock_skew");
     const network = await activateLicense({
       config: licenseConfig(root, "http://127.0.0.1:9"),
       licenseKey: "LIC-network-test-123456"
     });
     expect(network).toMatchObject({ ok: false, status: "network", classification: "network" });
+  });
+
+  it("preserves entitlement metadata from hosted admin status responses in the cache", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        privateRepoAllowed: true,
+        updateEntitlement: true,
+        offlineGraceMs: 60_000,
+        graceUntil: "2026-07-04T00:15:00.000Z",
+        plan: "supporter"
+      });
+    });
+    servers.push(server);
+
+    const activated = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: "LIC-admin-metadata-test-123456",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+
+    expect(activated.entitlement).toMatchObject({
+      status: "active",
+      repoVisibilityScope: "private",
+      privateRepoAllowed: true,
+      updateEntitlement: true,
+      offlineGraceMs: 60_000,
+      graceUntil: "2026-07-04T00:15:00.000Z",
+      plan: "supporter"
+    });
+
+    const cached = await getLicenseStatus({
+      config: licenseConfig(root, server.url),
+      now: new Date("2026-07-04T00:01:00.000Z")
+    });
+    expect(cached.entitlement).toMatchObject({
+      privateRepoAllowed: true,
+      offlineGraceMs: 60_000,
+      graceUntil: "2026-07-04T00:15:00.000Z"
+    });
   });
 
   it("rejects keychain activation before contacting the API", async () => {
