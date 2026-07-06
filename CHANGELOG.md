@@ -16,10 +16,6 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
-## [1.0.0-beta.1] - docs/releases/v1.0.0-beta.1.md
-
-This tag was an early mislabel from the first public npm/site release pass (incorrectly implying a jump to v1.0); it was corrected and superseded by `0.4.24-beta.1`, which the 0.4.x beta train continues from.
-
 ## [0.4.32-beta.1] - docs/releases/v0.4.32-beta.1.md
 
 ### Added
@@ -74,6 +70,10 @@ This tag was an early mislabel from the first public npm/site release pass (inco
 
 ### Fixed
 - Fix issue-enrichment self-trigger loop: the bot's own sticky comment was advancing GitHub's `issue.updated_at`, causing repeated reruns to re-post/update the same comment unnecessarily. Enrichment now stores a structured body hash and skips unchanged records regardless of noisy `updated_at` changes, while still re-posting when content genuinely changes.
+
+## [1.0.0-beta.1] - docs/releases/v1.0.0-beta.1.md
+
+This tag was an early mislabel from the first public npm/site release pass (incorrectly implying a jump to v1.0); it was corrected and superseded by `0.4.24-beta.1`, which the 0.4.x beta train continues from.
 
 ## [0.4.24-beta.1] - docs/releases/v0.4.24-beta.1.md
 
