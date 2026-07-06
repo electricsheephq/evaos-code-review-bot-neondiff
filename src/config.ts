@@ -19,6 +19,7 @@ import {
 } from "./public-confidence.js";
 import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
 import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
+import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -46,6 +47,8 @@ export interface BotConfig {
   };
   reviewScheduler?: ReviewSchedulerConfig;
   riskWeightedQueue?: RiskWeightedQueueConfig;
+  /** Review mode router (#266, default off / absent). Absent ⇒ byte-identical + zero evidence. */
+  reviewModes?: ReviewModesConfig;
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -565,6 +568,11 @@ function validateConfig(config: BotConfig): void {
   const riskWeightedQueue = config.riskWeightedQueue ?? DEFAULT_CONFIG.riskWeightedQueue!;
   config.riskWeightedQueue = riskWeightedQueue;
   validateRiskWeightedQueueConfig(riskWeightedQueue, "config.riskWeightedQueue", reviewScheduler.backgroundPriority);
+  // reviewModes is absent-by-default (#266): never default it in, so absent ⇒ byte-identical + zero
+  // evidence. Validate only when the operator supplies it; validation is fail-closed and demote-only.
+  if (config.reviewModes !== undefined) {
+    validateReviewModesConfig(config.reviewModes, "config.reviewModes", config);
+  }
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
@@ -810,6 +818,81 @@ function validateQueueAgingConfig(value: unknown, label: string): void {
   }
   validateBoolean(value.enabled, `${label}.enabled`);
   validatePositiveInteger(value.maxWaitMinutes, `${label}.maxWaitMinutes`);
+}
+
+const REVIEW_MODES: ReviewMode[] = ["light", "standard", "deep"];
+const REVIEW_MODE_DEFINITION_KEYS = new Set(["selfConsistency", "contextAddons", "targetMinutes"]);
+const REVIEW_MODES_TOP_KEYS = new Set(["enabled", "defaultMode", "modes", "routing"]);
+const REVIEW_MODE_ROUTING_KEYS = new Set(["docsOnly", "elevatedSurfaces", "floorCalibratedCategories"]);
+
+/**
+ * Validate the reviewModes config (#266), fail-closed and demote-only:
+ * - unknown keys anywhere are rejected;
+ * - every mode key (light/standard/deep) must be present;
+ * - a mode may only DEMOTE from base config — a mode that would enable selfConsistency when base has
+ *   it off (or context add-ons when base has them off) is rejected at load, not silently ignored.
+ */
+function validateReviewModesConfig(value: unknown, label: string, config: BotConfig): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!REVIEW_MODES_TOP_KEYS.has(key)) {
+      throw new Error(`${label} has unknown key "${key}"; expected only enabled, defaultMode, modes, or routing`);
+    }
+  }
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (!(REVIEW_MODES as string[]).includes(String(value.defaultMode))) {
+    throw new Error(`${label}.defaultMode must be light, standard, or deep`);
+  }
+  if (!isRecord(value.modes)) throw new Error(`${label}.modes must be an object`);
+  for (const key of Object.keys(value.modes)) {
+    if (!(REVIEW_MODES as string[]).includes(key)) {
+      throw new Error(`${label}.modes has unknown mode "${key}"; expected only light, standard, or deep`);
+    }
+  }
+  const baseSelfConsistency = config.reviewGate?.selfConsistency?.enabled ?? false;
+  const baseContextAddons = (config.gitnexusContext?.enabled ?? false) || (config.githubRelatedContext?.enabled ?? false);
+  for (const mode of REVIEW_MODES) {
+    validateReviewModeDefinition(value.modes[mode], `${label}.modes.${mode}`, baseSelfConsistency, baseContextAddons);
+  }
+  if (value.routing !== undefined) validateReviewModeRouting(value.routing, `${label}.routing`);
+}
+
+function validateReviewModeDefinition(
+  value: unknown,
+  label: string,
+  baseSelfConsistency: boolean,
+  baseContextAddons: boolean
+): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!REVIEW_MODE_DEFINITION_KEYS.has(key)) {
+      throw new Error(`${label} has unknown key "${key}"; expected only selfConsistency, contextAddons, or targetMinutes`);
+    }
+  }
+  const definition = value as ReviewModeDefinition;
+  if (definition.selfConsistency !== undefined) validateBoolean(definition.selfConsistency, `${label}.selfConsistency`);
+  if (definition.contextAddons !== undefined) validateBoolean(definition.contextAddons, `${label}.contextAddons`);
+  if (definition.targetMinutes !== undefined) validatePositiveInteger(definition.targetMinutes, `${label}.targetMinutes`);
+  // Demote-only: a mode may only turn a stage OFF. Enabling a stage the base config has disabled is a
+  // load-time error, so the router can never make the bot do MORE analysis than base config allows.
+  if (definition.selfConsistency === true && !baseSelfConsistency) {
+    throw new Error(`${label}.selfConsistency cannot be true when base config disables selfConsistency (modes are demote-only)`);
+  }
+  if (definition.contextAddons === true && !baseContextAddons) {
+    throw new Error(`${label}.contextAddons cannot be true when base config disables context add-ons (modes are demote-only)`);
+  }
+}
+
+function validateReviewModeRouting(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!REVIEW_MODE_ROUTING_KEYS.has(key)) {
+      throw new Error(`${label} has unknown key "${key}"; expected only docsOnly, elevatedSurfaces, or floorCalibratedCategories`);
+    }
+    if (!(REVIEW_MODES as string[]).includes(String((value as Record<string, unknown>)[key]))) {
+      throw new Error(`${label}.${key} must be light, standard, or deep`);
+    }
+  }
 }
 
 function validateRepoMemoryConfig(value: unknown, label: string): void {

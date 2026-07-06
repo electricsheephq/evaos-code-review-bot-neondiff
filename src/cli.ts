@@ -62,6 +62,9 @@ import {
   writeOutcomeScorecardPacket
 } from "./outcome-scorecard.js";
 import { buildReviewBudgetStatus } from "./review-budget.js";
+import { selectReviewMode } from "./review-mode-router.js";
+import type { ReviewMode } from "./review-mode-types.js";
+import type { PullFilePatch, PullRequestSummary } from "./types.js";
 import {
   buildOperatorDashboard,
   buildRuntimeInventory,
@@ -1505,6 +1508,34 @@ async function main(): Promise<void> {
       ...result
     }));
     if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "review-mode") {
+    if (args.input === undefined || (Array.isArray(args.input) && args.input.length === 0)) {
+      throw new Error("--input is required for review-mode");
+    }
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    if (!dryRun) throw new Error("review-mode is dry-run only in this release");
+    const config = loadConfig(args.config);
+    const routerInput = readReviewModeInput(parseSingleArg(args.input, "--input"));
+    const selection = selectReviewMode({ config, ...routerInput });
+    if (args["output-dir"] !== undefined) {
+      const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
+      assertEvalOutputDirSafe(outputDir);
+      mkdirSync(outputDir, { recursive: true });
+      // Zero evidence writes when the router is disabled/absent (selection === undefined).
+      if (selection !== undefined) {
+        writeFileSync(join(outputDir, "review-mode.json"), `${stringifyRedactedJson(selection)}\n`);
+      }
+    }
+    console.log(stringifyRedactedJson({
+      ok: true,
+      command: "review-mode",
+      dryRun,
+      enabled: selection !== undefined,
+      selection: selection ?? null
+    }));
     return;
   }
 
@@ -2979,6 +3010,7 @@ function buildHelp(command?: string) {
         "eval-sticky-vs-cold",
         "outcome-ledger",
         "outcome-scorecard",
+        "review-mode",
         "outcome-observe",
         "calibration-aggregate",
         "calibration-promote"
@@ -3050,6 +3082,13 @@ function buildHelp(command?: string) {
         "The outcome-scorecard command is dry-run only.",
         "Scores above 3 require direct evidence links.",
         "Safety failures cap the score at 1 and all public claims remain advisory-only."
+      ]
+    },
+    reviewMode: {
+      notes: [
+        "The review-mode command is dry-run only.",
+        "It previews light/standard/deep routing from the changed surface and config-promoted precision (reviewGate.categoryPrecisionFloors) and reports the resolved demote-only analysis plan.",
+        "A mode selects analysis depth and spend only; posting behavior (gate, caps, floors, REQUEST_CHANGES eligibility, redaction) is identical across modes. When reviewModes is absent or disabled the selection is null and no evidence is written."
       ]
     }
   };
@@ -3394,6 +3433,50 @@ function readJsonInput(path: string, flagName: string): unknown {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`failed to parse ${flagName} ${path}: ${detail}`);
   }
+}
+
+function readReviewModeInput(path: string): {
+  repo: string;
+  pull: PullRequestSummary;
+  files: PullFilePatch[];
+  repoOverrideMode?: ReviewMode;
+} {
+  const value = readJsonInput(path, "--input");
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("review-mode --input must be a JSON object with repo, pull, and files");
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.repo !== "string" || record.repo.length === 0) {
+    throw new Error("review-mode --input.repo must be a non-empty string");
+  }
+  // Validate the pull shape the changed-surface classifier and evidence writers dereference, so a
+  // malformed dry-run input fails here with an actionable message instead of an opaque downstream error.
+  if (!record.pull || typeof record.pull !== "object" || Array.isArray(record.pull)) {
+    throw new Error("review-mode --input.pull must be an object");
+  }
+  const pull = record.pull as Record<string, unknown>;
+  if (typeof pull.number !== "number" || !Number.isInteger(pull.number)) {
+    throw new Error("review-mode --input.pull.number must be an integer");
+  }
+  if (typeof pull.title !== "string") {
+    throw new Error("review-mode --input.pull.title must be a string");
+  }
+  if (!Array.isArray(record.files)) throw new Error("review-mode --input.files must be an array");
+  record.files.forEach((file, index) => {
+    if (!file || typeof file !== "object" || Array.isArray(file) || typeof (file as Record<string, unknown>).filename !== "string") {
+      throw new Error(`review-mode --input.files[${index}] must be an object with a string filename`);
+    }
+  });
+  const override = record.repoOverrideMode;
+  if (override !== undefined && override !== "light" && override !== "standard" && override !== "deep") {
+    throw new Error("review-mode --input.repoOverrideMode must be light, standard, or deep");
+  }
+  return {
+    repo: record.repo,
+    pull: record.pull as PullRequestSummary,
+    files: record.files as PullFilePatch[],
+    ...(override !== undefined ? { repoOverrideMode: override as ReviewMode } : {})
+  };
 }
 
 function listJsonFiles(inputDir: string): string[] {

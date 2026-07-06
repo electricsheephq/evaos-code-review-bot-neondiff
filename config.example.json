@@ -26,6 +26,21 @@
   "riskWeightedQueue": {
     "enabled": false
   },
+  "_reviewModesComment": "Review mode router (#266): selects ANALYSIS DEPTH AND SPEND ONLY per PR (whether selfConsistency runs, whether context add-ons are consulted, an advisory target-minutes). It NEVER changes posting behavior — the gate, caps, floors, REQUEST_CHANGES eligibility, and redaction run identically for every mode. Modes may only DEMOTE from base config (turn a stage off; never on). Absent or enabled:false means byte-identical behavior and zero evidence writes. Routing reuses the shipped changed-surface classifier (docs-only / elevated required-validation surface). floorCalibratedCategories routes deeper any changed-surface category the operator has attached a calibration precision-floor to via reviewGate.categoryPrecisionFloors — i.e. categories the operator flagged for calibrated scrutiny (config only; the live calibration aggregate is never read at review time; presence-of-floor is the signal, not a measured-low-precision value).",
+  "reviewModes": {
+    "enabled": false,
+    "defaultMode": "standard",
+    "modes": {
+      "light": { "selfConsistency": false, "contextAddons": false, "targetMinutes": 3 },
+      "standard": {},
+      "deep": { "targetMinutes": 12 }
+    },
+    "routing": {
+      "docsOnly": "light",
+      "elevatedSurfaces": "deep",
+      "floorCalibratedCategories": "deep"
+    }
+  },
   "_repoMemoryComment": "Durable per-repo memory packet (policy notes, machine facts, learned false positives) surfaced to the model. Disabled means no packet is built.",
   "repoMemory": {
     "enabled": false,
