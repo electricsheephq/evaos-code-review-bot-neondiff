@@ -535,8 +535,15 @@ function classifyIssueForPlanner(text: string): string[] {
 function summarizeIssueShape(issue: GitHubRelatedIssueOrPull, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
   const title = formatInlinePublicText(issue.title ?? "(untitled)", publicConfidencePolicy);
   const body = formatPublicText(issue.body ?? "", publicConfidencePolicy).replace(/\s+/g, " ").trim();
-  const excerpt = body ? body.slice(0, 220) : "No issue body supplied.";
+  const excerpt = body ? trimExcerptAtWhitespaceBoundary(body, 220) : "No issue body supplied.";
   return `${title} - ${excerpt}`;
+}
+
+function trimExcerptAtWhitespaceBoundary(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const clipped = value.slice(0, maxChars);
+  const lastWhitespace = clipped.lastIndexOf(" ");
+  return (lastWhitespace > 0 ? clipped.slice(0, lastWhitespace) : clipped).trimEnd();
 }
 
 function buildProductFit(classes: string[]): string {

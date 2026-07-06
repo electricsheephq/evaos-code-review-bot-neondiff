@@ -534,6 +534,25 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).toContain("Suggested labels: none.");
   });
 
+  it("trims planner problem-shape excerpts on whitespace boundaries", () => {
+    const safePrefix = "context ".repeat(27).trimEnd();
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 196,
+      title: "Preserve excerpt boundaries",
+      state: "open",
+      body: `${"context ".repeat(27)}boundarytoken should remain whole after trimming. Acceptance criteria and owner present.`
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/evaos-code-review-bot",
+      issue
+    });
+
+    const problemShapeLine = comment.body.split("\n").find((line) => line.startsWith("Problem shape:"))!;
+    expect(problemShapeLine).toBe(`Problem shape: Preserve excerpt boundaries - ${safePrefix}`);
+    expect(problemShapeLine).not.toMatch(/\bboun$/);
+  });
+
   it("does not trigger external research just because a routine issue mentions GitHub", () => {
     const issue: GitHubRelatedIssueOrPull = {
       number: 95,
