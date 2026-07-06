@@ -1,13 +1,13 @@
 import { chmodSync, writeFileSync } from "node:fs";
 
-// Restrictive mode for evidence/scratch files written under a temp-ish directory: owner
-// read/write only, no group/other access (js/insecure-temporary-file remediation, #359).
+// Restrictive mode for evidence/scratch files: owner read/write only, no group/other access.
+// If this ever gains group/other bits, re-check the write+chmod umask/race properties.
 export const SECURE_TEMP_FILE_MODE = 0o600;
 
 /**
- * writeFileSync with the restrictive 0600 mode applied. Behavior (what is written, when, and
- * any caller-side cleanup) is unchanged from a bare writeFileSync call; this tightens the
- * permissions for both newly created and pre-existing files.
+ * Writes evidence/scratch data while enforcing restrictive 0600 permissions.
+ * New files request 0600 at creation; pre-existing files are chmodded after overwrite because
+ * Node's write mode option does not change permissions on an existing file.
  */
 export function writeSecureFileSync(path: string, data: string): void {
   // Review/evidence artifacts intentionally persist model/API-derived diagnostics locally.
