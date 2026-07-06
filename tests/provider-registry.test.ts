@@ -188,6 +188,7 @@ describe("provider registry", () => {
     });
     const fetchImpl: typeof fetch = async (url, init) => {
       expect(String(url)).toBe("http://127.0.0.1:8080/v1/models");
+      expect(init?.redirect).toBeUndefined();
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer provider-secret");
       return new Response(JSON.stringify({ data: [{ id: "review-model" }] }), {
         status: 200,
@@ -352,6 +353,62 @@ describe("provider registry", () => {
     });
     expect(pinnedLookup).toEqual({ address: "93.184.216.34", family: 4 });
     expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("subtracts DNS elapsed time from hosted remote pinned request timeout", async () => {
+    const dateNow = vi.spyOn(Date, "now");
+    dateNow.mockReturnValueOnce(1_000).mockReturnValue(1_027);
+    try {
+      const config = loadConfigFromObject({
+        providers: {
+          defaultProviderId: "hosted-byok",
+          providers: {
+            "hosted-byok": {
+              enabled: true,
+              adapter: "openai-compatible",
+              baseUrl: "https://gateway.example.test/v1",
+              model: "review-model",
+              authMode: "api-key-env",
+              apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+              timeoutMs: 30,
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            }
+          }
+        }
+      });
+      const requestOptions: ProviderSmokeRequestOptions[] = [];
+
+      const result = await doctorProviderRegistry({
+        registry: config.providers!,
+        providerId: "hosted-byok",
+        smoke: true,
+        allowRemoteSmoke: true,
+        dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+        fetchImpl: async () => {
+          throw new Error("remote smoke must not use fetch");
+        },
+        requestImpl: mockProviderRequest({
+          status: 200,
+          body: JSON.stringify({ data: [{ id: "review-model" }] }),
+          onOptions: (options) => {
+            requestOptions.push(options);
+          }
+        }),
+        env: {
+          NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+        }
+      });
+
+      expect(result.ok).toBe(true);
+      expect(requestOptions[0]?.timeout).toBe(3);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("uses the production https request path for hosted BYOK remote smoke without test transport injection", async () => {

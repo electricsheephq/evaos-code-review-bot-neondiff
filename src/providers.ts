@@ -293,12 +293,12 @@ async function smokeOpenAICompatibleProvider(input: {
     return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
   }
 
-  const timeoutSignal = signalWithTimeout(input.provider.timeoutMs);
+  const requestTimeoutMs = remainingProviderSmokeTimeoutMs(input.provider.timeoutMs, target.startedAt);
+  const timeoutSignal = signalWithTimeout(requestTimeoutMs);
   try {
     const requestInit: RequestInit = {
       method: "GET",
       signal: timeoutSignal.signal,
-      redirect: "manual",
       headers: {
         Accept: "application/json",
         ...(input.provider.authMode === "api-key-env" && input.provider.apiKeyEnv
@@ -311,16 +311,16 @@ async function smokeOpenAICompatibleProvider(input: {
       requestImpl: input.requestImpl,
       target: target.target,
       init: requestInit,
-      timeoutMs: input.provider.timeoutMs
+      timeoutMs: requestTimeoutMs
     });
-    if (response.status >= 300 && response.status < 400) {
+    if (target.target?.remote && response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       const redactedLocation = location ? redactProviderSmokeText(location, input.provider, input.env) : undefined;
       return {
         ...baseCheck,
         ok: false,
         errorCategory: "unknown",
-        error: `OpenAI-compatible models endpoint redirected with ${response.status}; remote smoke does not follow redirects. Update baseUrl to the canonical /models endpoint.${redactedLocation ? ` Location: ${redactedLocation}` : ""}`
+        error: `Hosted remote OpenAI-compatible models endpoint redirected with ${response.status}; remote smoke does not follow redirects. Update baseUrl to the canonical /models endpoint.${redactedLocation ? ` Location: ${redactedLocation}` : ""}`
       };
     }
     let text: string;
@@ -417,6 +417,11 @@ function providerSmokeTimeoutMs(timeoutMs: number | undefined): number {
   return timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS;
 }
 
+function remainingProviderSmokeTimeoutMs(timeoutMs: number | undefined, startedAt: number): number {
+  const elapsedMs = Math.max(0, Date.now() - startedAt);
+  return Math.max(1, providerSmokeTimeoutMs(timeoutMs) - elapsedMs);
+}
+
 function providerReadinessCapabilityError(provider: ProviderRegistryEntry): string | undefined {
   if (!provider.capabilities.review) return "Provider is not review-capable.";
   if (!provider.capabilities.jsonOutput) return "Provider does not declare JSON output support.";
@@ -498,48 +503,50 @@ async function resolveProviderSmokeTarget(input: {
   allowRemoteSmoke: boolean;
   dnsLookupImpl: DnsLookupImpl;
   timeoutMs: number | undefined;
-}): Promise<{ target?: ProviderSmokeTarget; error?: string }> {
+}): Promise<{ target?: ProviderSmokeTarget; startedAt: number; error?: string }> {
+  const startedAt = Date.now();
   let parsed: URL;
   try {
     parsed = new URL(input.baseUrl);
   } catch {
-    return { error: "OpenAI-compatible provider baseUrl must be a valid URL for smoke checks." };
+    return { startedAt, error: "OpenAI-compatible provider baseUrl must be a valid URL for smoke checks." };
   }
   if (parsed.username || parsed.password) {
-    return { error: "OpenAI-compatible smoke target must not include username or password credentials." };
+    return { startedAt, error: "OpenAI-compatible smoke target must not include username or password credentials." };
   }
   const decodedPathAndFragment = decodeProviderPathAndFragment(parsed, "smoke target");
-  if (!decodedPathAndFragment.ok) return { error: decodedPathAndFragment.error };
+  if (!decodedPathAndFragment.ok) return { startedAt, error: decodedPathAndFragment.error };
   if (containsSecretLikeText(decodedPathAndFragment.value)) {
-    return { error: "OpenAI-compatible smoke target must not include secret-like path or fragment values." };
+    return { startedAt, error: "OpenAI-compatible smoke target must not include secret-like path or fragment values." };
   }
   for (const key of parsed.searchParams.keys()) {
     if (/(key|token|secret|password|session|cookie)/i.test(key)) {
-      return { error: "OpenAI-compatible smoke target must not include credential query parameters." };
+      return { startedAt, error: "OpenAI-compatible smoke target must not include credential query parameters." };
     }
   }
   const loopback = isLoopbackHost(parsed.hostname);
   if (loopback && input.provider.capabilities.local) {
-    return { target: { modelsUrl: buildOpenAIModelsUrl(parsed.toString()), remote: false } };
+    return { startedAt, target: { modelsUrl: buildOpenAIModelsUrl(parsed.toString()), remote: false } };
   }
   // Literal/private hostnames are rejected here; ordinary DNS names are checked after resolution
   // and then pinned into the Node transport lookup below.
   if (isUnsafeSmokeHost(parsed.hostname)) {
-    return { error: "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts." };
+    return { startedAt, error: "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts." };
   }
   if (parsed.protocol !== "https:") {
-    return { error: "Remote OpenAI-compatible smoke target must use HTTPS." };
+    return { startedAt, error: "Remote OpenAI-compatible smoke target must use HTTPS." };
   }
-  if (!input.allowRemoteSmoke) return { error: REMOTE_SMOKE_OPT_IN_ERROR };
+  if (!input.allowRemoteSmoke) return { startedAt, error: REMOTE_SMOKE_OPT_IN_ERROR };
   if (input.provider.authMode !== "api-key-env" || !input.provider.apiKeyEnv) {
-    return { error: "Hosted remote smoke requires authMode api-key-env and apiKeyEnv." };
+    return { startedAt, error: "Hosted remote smoke requires authMode api-key-env and apiKeyEnv." };
   }
   if (!input.env[input.provider.apiKeyEnv]) {
-    return { error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
+    return { startedAt, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
   }
   const pinnedAddress = await resolvePinnedRemoteSmokeAddress(parsed.hostname, input.dnsLookupImpl, input.timeoutMs);
-  if (pinnedAddress.error) return { error: pinnedAddress.error };
+  if (pinnedAddress.error) return { startedAt, error: pinnedAddress.error };
   return {
+    startedAt,
     target: {
       modelsUrl: buildOpenAIModelsUrl(parsed.toString()),
       remote: true,
