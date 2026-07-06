@@ -38,7 +38,7 @@ import {
   listReposToScan,
   resolveRepoProfile
 } from "./repo-policy.js";
-import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import { applyDeterministicReviewGate, buildFindingFingerprint, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
 import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
@@ -65,6 +65,7 @@ import {
   type ProcessedStatus,
   type ReviewQueueJobState,
   type ReviewHeadClaim,
+  type ReviewFindingRecord,
   type ReviewReadinessRecord,
   type ReviewReadinessState,
   type ReviewerSessionJobState,
@@ -78,7 +79,7 @@ import { buildReviewPrompt, extractJsonObject, extractZCodeResponse, isZCodeSche
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
-import type { Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import type { Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
@@ -1665,6 +1666,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       event,
       reviewUrl: review.html_url
     });
+    // Public-safe findings ledger (#357): record the coordinates we just posted publicly so the
+    // daemon calibration-observe pass can re-derive outcome labels later. BEST-EFFORT / FAIL-OPEN —
+    // the review is already durable; observation bookkeeping must never block or fail the review.
+    recordPostedReviewFindings({ state, repo, pull, comments });
     releaseReviewCapacity();
     if (input.processedHeadPolicy !== "retry_failed_head") {
       await reconcileProcessedHeadAfterDirectReviewSafely({
@@ -2330,6 +2335,51 @@ function recordStaleHeadSkip(input: {
     status: "skipped",
     error: `${input.stale.reason}: live=${input.stale.liveHeadSha}`
   });
+}
+
+/**
+ * Best-effort, FAIL-OPEN recording of the posted findings' public coordinates (#357). The fingerprint
+ * is derived from the same fields as the gate so it matches label-store rows; title/body are used only
+ * to compute the fingerprint and are NEVER stored. Any failure is swallowed — the review is already
+ * posted and durable, so observation bookkeeping must never block or fail it.
+ */
+export function recordPostedReviewFindings(input: {
+  state: Pick<ReviewStateStore, "recordReviewFindings">;
+  repo: string;
+  pull: PullRequestSummary;
+  comments: ReviewComment[];
+  now?: Date;
+}): void {
+  try {
+    if (input.comments.length === 0) return;
+    const recordedAt = (input.now ?? new Date()).toISOString();
+    const records: ReviewFindingRecord[] = input.comments.map((comment) => ({
+      fingerprint: buildFindingFingerprint({
+        severity: comment.severity,
+        path: comment.path,
+        line: comment.line,
+        title: comment.title,
+        body: comment.body,
+        category: comment.category
+      }),
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      path: comment.path,
+      line: comment.line,
+      severity: comment.severity,
+      category: comment.category,
+      confidence: comment.confidence,
+      recordedAt
+    }));
+    input.state.recordReviewFindings(records);
+  } catch (error) {
+    console.warn(
+      `[findings-ledger] best-effort review-findings record failed repo=${input.repo} pr=${input.pull.number}: ${
+        redactSecrets(error instanceof Error ? error.message : String(error))
+      }`
+    );
+  }
 }
 
 export function recordConcurrentClaimSkip(input: {

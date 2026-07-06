@@ -49,6 +49,7 @@ export interface BotConfig {
   riskWeightedQueue?: RiskWeightedQueueConfig;
   /** Review mode router (#266, default off / absent). Absent ⇒ byte-identical + zero evidence. */
   reviewModes?: ReviewModesConfig;
+  calibrationLoop?: CalibrationLoopConfig;
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -247,6 +248,25 @@ export interface QueueAgingConfig {
   enabled: boolean;
   /** A queued job waiting longer than this is aged UP to baseline at lease time (never demoted). */
   maxWaitMinutes: number;
+}
+
+export interface CalibrationLoopConfig {
+  /** Daemon-scheduled outcome observation (#357, default off). Records outcome labels + evidence
+   * only — never aggregates, promotes, writes config, or posts to GitHub. */
+  observeSchedule?: ObserveScheduleConfig;
+}
+
+export interface ObserveScheduleConfig {
+  /** When false (default/unset), zero observer calls / zero observation GitHub reads — byte-identical. */
+  enabled: boolean;
+  /** Minimum minutes between observe passes (schedule is "due" when now − lastObserveAt ≥ this). */
+  intervalMinutes: number;
+  /** Hard bound on GitHub reads per observe pass. */
+  maxPullsPerCycle: number;
+  /** Do not re-observe the same repo more often than this. */
+  perRepoCooldownMinutes: number;
+  /** Only revisit findings/PRs recorded within this window. */
+  lookbackDays: number;
 }
 
 export interface RepoMemoryConfig {
@@ -573,6 +593,7 @@ function validateConfig(config: BotConfig): void {
   if (config.reviewModes !== undefined) {
     validateReviewModesConfig(config.reviewModes, "config.reviewModes", config);
   }
+  if (config.calibrationLoop !== undefined) validateCalibrationLoopConfig(config.calibrationLoop, "config.calibrationLoop");
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
@@ -792,6 +813,27 @@ function validateSelfConsistencyConfig(value: unknown, label: string): void {
   if (value.maxFindingsPerReview !== undefined) {
     validatePositiveInteger(value.maxFindingsPerReview, `${label}.maxFindingsPerReview`);
   }
+}
+
+function validateCalibrationLoopConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "observeSchedule") throw new Error(`${label} has unknown key "${key}"; expected only observeSchedule`);
+  }
+  if (value.observeSchedule !== undefined) validateObserveScheduleConfig(value.observeSchedule, `${label}.observeSchedule`);
+}
+
+function validateObserveScheduleConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const allowed = new Set(["enabled", "intervalMinutes", "maxPullsPerCycle", "perRepoCooldownMinutes", "lookbackDays"]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new Error(`${label} has unknown key "${key}"; expected only enabled, intervalMinutes, maxPullsPerCycle, perRepoCooldownMinutes, lookbackDays`);
+  }
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validatePositiveInteger(value.intervalMinutes, `${label}.intervalMinutes`);
+  validatePositiveInteger(value.maxPullsPerCycle, `${label}.maxPullsPerCycle`);
+  validatePositiveInteger(value.perRepoCooldownMinutes, `${label}.perRepoCooldownMinutes`);
+  validatePositiveInteger(value.lookbackDays, `${label}.lookbackDays`);
 }
 
 function validateRiskWeightedQueueConfig(value: unknown, label: string, backgroundPriority: number): void {

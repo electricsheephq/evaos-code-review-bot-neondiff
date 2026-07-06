@@ -95,6 +95,20 @@ export interface FindingOutcomeLabelRecord {
   evidenceRef?: string;
 }
 
+/** Public-safe posted-finding coordinates (#357) — reconstructable into an ObservedFinding. */
+export interface ReviewFindingRecord {
+  fingerprint: string;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  path: string;
+  line: number;
+  severity: string;
+  category: string;
+  confidence: number;
+  recordedAt: string;
+}
+
 export interface RepoActivationRecord {
   repo: string;
   activatedAt: string;
@@ -494,6 +508,30 @@ export class ReviewStateStore {
         primary key (fingerprint, repo, pull_number, head_sha)
       );
 
+      -- Public-safe findings ledger (#357): records the coordinates the bot ALREADY posted publicly
+      -- (fingerprint/path/line/severity/category/confidence — deliberately NO title/body), so the
+      -- daemon observe pass can reconstruct ObservedFinding and re-derive outcome labels later.
+      create table if not exists review_findings (
+        fingerprint text not null,
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        path text not null,
+        line integer not null,
+        severity text not null,
+        category text not null,
+        confidence real not null,
+        recorded_at text not null,
+        primary key (fingerprint, repo, pull_number, head_sha)
+      );
+
+      -- Calibration observe-pass schedule state (#357): one global row (scope='__global__') tracks
+      -- lastObserveAt for the interval gate; per-repo rows (scope=repo) track per-repo cooldown.
+      create table if not exists calibration_observe_runs (
+        scope text primary key,
+        observed_at text not null
+      );
+
       create table if not exists repo_activation_watermarks (
         repo text primary key,
         activated_at text not null,
@@ -877,6 +915,89 @@ export class ReviewStateStore {
           )
           .all()) as unknown as FindingOutcomeLabelRow[];
     return rows.map(mapFindingOutcomeLabelRow);
+  }
+
+  /**
+   * Best-effort atomic write of posted-finding coordinates (#357). All rows land or none do (one
+   * BEGIN IMMEDIATE txn). Callers at the review-post seam MUST wrap this so a throw never blocks the
+   * review — this is benign posting bookkeeping, never a gate on posting.
+   */
+  recordReviewFindings(records: ReviewFindingRecord[]): void {
+    if (records.length === 0) return;
+    this.db.exec("begin immediate");
+    try {
+      for (const record of records) this.writeReviewFinding(record);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  private writeReviewFinding(record: ReviewFindingRecord): void {
+    validateRepoName(record.repo, "repo");
+    if (!/^finding:[a-f0-9]{64}$/.test(record.fingerprint)) {
+      throw new Error("review finding fingerprint must match finding:<64-hex>");
+    }
+    if (!Number.isInteger(record.pullNumber) || record.pullNumber < 1) throw new Error("pullNumber must be a positive integer");
+    if (!Number.isInteger(record.line) || record.line < 1) throw new Error("line must be a positive integer");
+    if (!Number.isFinite(record.confidence) || record.confidence < 0 || record.confidence > 1) {
+      throw new Error("confidence must be a number from 0 to 1");
+    }
+    // Idempotent: re-posting the same head UPSERTs. path is public (already posted); redact defensively.
+    this.db
+      .prepare(
+        `insert or replace into review_findings
+          (fingerprint, repo, pull_number, head_sha, path, line, severity, category, confidence, recorded_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        record.fingerprint,
+        record.repo,
+        record.pullNumber,
+        record.headSha,
+        redactSecrets(record.path).trim(),
+        record.line,
+        record.severity,
+        record.category,
+        record.confidence,
+        record.recordedAt
+      );
+  }
+
+  /**
+   * List recorded review findings (#357), newest first, optionally scoped by repo and to those
+   * recorded on/after `since` (the lookback window). Used by the daemon observe pass to reconstruct
+   * ObservedFinding candidates.
+   */
+  listReviewFindings(input: { repo?: string; since?: string } = {}): ReviewFindingRecord[] {
+    const predicates: string[] = [];
+    const params: Array<string> = [];
+    if (input.repo) { predicates.push("repo = ?"); params.push(input.repo); }
+    if (input.since) { predicates.push("datetime(recorded_at) >= datetime(?)"); params.push(input.since); }
+    const where = predicates.length ? `where ${predicates.join(" and ")}` : "";
+    const rows = this.db
+      .prepare(
+        `select fingerprint, repo, pull_number, head_sha, path, line, severity, category, confidence, recorded_at
+         from review_findings ${where} order by datetime(recorded_at) desc`
+      )
+      .all(...params) as unknown as ReviewFindingRow[];
+    return rows.map(mapReviewFindingRow);
+  }
+
+  /** Last calibration observe-pass timestamp for a scope (#357): "__global__" for the interval gate,
+   * a repo slug for per-repo cooldown. Undefined ⇒ never observed. */
+  getCalibrationObserveAt(scope: string): string | undefined {
+    const row = this.db
+      .prepare("select observed_at from calibration_observe_runs where scope = ? limit 1")
+      .get(scope) as { observed_at: string } | undefined;
+    return row?.observed_at;
+  }
+
+  recordCalibrationObserveAt(scope: string, observedAt: string): void {
+    this.db
+      .prepare("insert or replace into calibration_observe_runs (scope, observed_at) values (?, ?)")
+      .run(scope, observedAt);
   }
 
   getReviewReadiness(repo: string, pullNumber: number, headSha: string): ReviewReadinessRecord | undefined {
@@ -3170,6 +3291,19 @@ interface FindingOutcomeLabelRow {
   evidence_ref: string | null;
 }
 
+interface ReviewFindingRow {
+  fingerprint: string;
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  path: string;
+  line: number;
+  severity: string;
+  category: string;
+  confidence: number;
+  recorded_at: string;
+}
+
 interface RepoActivationRow {
   repo: string;
   activated_at: string;
@@ -3359,6 +3493,21 @@ function mapFindingOutcomeLabelRow(row: FindingOutcomeLabelRow): FindingOutcomeL
     verdict: row.verdict,
     observedAt: row.observed_at,
     ...(row.evidence_ref ? { evidenceRef: row.evidence_ref } : {})
+  };
+}
+
+function mapReviewFindingRow(row: ReviewFindingRow): ReviewFindingRecord {
+  return {
+    fingerprint: row.fingerprint,
+    repo: row.repo,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    path: row.path,
+    line: row.line,
+    severity: row.severity,
+    category: row.category,
+    confidence: row.confidence,
+    recordedAt: row.recorded_at
   };
 }
 

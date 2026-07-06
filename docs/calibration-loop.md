@@ -50,6 +50,48 @@ neondiff outcome-observe \
   writes. Negative controls are never inferred from missing labels; a clean
   run only counts when you explicitly mark it.
 
+### Scheduling the loop (daemon-integrated observation)
+
+The observe step above is a manual CLI. To run it hands-off, the review daemon
+can perform a bounded, read-only observe pass at the tail of each scheduled
+cycle. It is **additive and default-off** — enable it under `calibrationLoop`:
+
+```jsonc
+{
+  "calibrationLoop": {
+    "observeSchedule": {
+      "enabled": true,          // default false ⇒ zero observer work, zero extra GitHub reads
+      "intervalMinutes": 720,   // minimum spacing between observe passes (global gate)
+      "maxPullsPerCycle": 25,   // upper bound on heads observed per cycle
+      "perRepoCooldownMinutes": 720, // skip a repo observed within this window
+      "lookbackDays": 14        // only consider findings recorded within this window
+    }
+  }
+}
+```
+
+When enabled and due, the pass selects recently-recorded review findings within
+`lookbackDays`, groups them by `(repo, pull, head)`, skips repos still inside
+`perRepoCooldownMinutes`, caps the batch at `maxPullsPerCycle`, reads each PR's
+merge state read-only, derives outcome labels via the same precedence resolver
+as the CLI, and records them into `finding_outcome_labels`. It writes a redacted
+`calibration-observe.json` evidence packet. It **never** aggregates, promotes,
+mutates config, switches the public display, or posts to GitHub — those stay
+manual, human-gated steps. A failure in the pass never disturbs the review
+cycle.
+
+**Observation source — the findings ledger.** Reconstructing an outcome needs
+each finding's path and line. Every posted review therefore records its findings
+into a `review_findings` ledger (fingerprint, repo, pull, head, path, line,
+severity, category, confidence — **never title or body text**, all fields already
+public in the posted review). This write is **best-effort and fail-open**: if it
+throws, the review still posts — observation bookkeeping never gates a review.
+
+**Bootstrap note.** The scheduled pass can only observe findings recorded into
+`review_findings` *after this ships*. PRs reviewed before the ledger existed are
+invisible to the scheduled pass; use the manual `outcome-observe` CLI to backfill
+them if needed.
+
 ## 2. Aggregate Labels: `neondiff calibration-aggregate`
 
 Reads accumulated outcome labels from the state DB and produces
