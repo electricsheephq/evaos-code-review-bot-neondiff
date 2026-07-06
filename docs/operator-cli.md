@@ -7,15 +7,15 @@ launchd, SQLite, or GitHub state by hand.
 Run commands from the repository checkout:
 
 ```bash
-npx tsx src/cli.ts status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
+npx tsx src/cli.ts status --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
-After `npm run build` and `npm link`, the package exposes both the public beta
-binary and the legacy internal binary:
+After `npm run build` and `npm link`, the package exposes the `neondiff`
+binary and the `evaos-review-bot` compatibility alias (same CLI, older name):
 
 ```bash
-neondiff status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
-evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+neondiff status --config config.local.json
+evaos-review-bot status --config config.local.json
 ```
 
 ## Commands
@@ -162,7 +162,7 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
   path check, not a realpath/symlink containment proof.
   If a live `bootstrap` fails because the LaunchAgent is already loaded, rerun
   `daemon start` without `--plist` to use the kickstart-only restart path.
-- `daemon --config <config.json> --dry-run true --once true`: runs one legacy
+- `daemon --config <config.json> --dry-run true --once true`: runs one
   daemon cycle and exits. This is intended for deterministic local smoke tests
   and operator diagnostics; omit `--once true` for the normal long-running
   worker loop.
@@ -172,13 +172,13 @@ evaos-review-bot status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/conf
 Check whether the live bot is healthy:
 
 ```bash
-npx tsx src/cli.ts status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
+npx tsx src/cli.ts status --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
 Classify whether the bot is idle, healthy-active, or blocked:
 
 ```bash
-npx tsx src/cli.ts runtime-inventory --json --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
+npx tsx src/cli.ts runtime-inventory --json --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
 `runtime-inventory` treats issue-enrichment runtime as a separate lane from PR
@@ -199,25 +199,25 @@ new names report the same advisory-only count.
 Show the same runtime inventory as a short human summary:
 
 ```bash
-npx tsx src/cli.ts runtime-inventory --human --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
+npx tsx src/cli.ts runtime-inventory --human --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
 See whether review agents are active, idle, or stale:
 
 ```bash
-npx tsx src/cli.ts agents --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+npx tsx src/cli.ts agents --config config.local.json
 ```
 
 Find open PR heads that still need review work:
 
 ```bash
-npx tsx src/cli.ts queue --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+npx tsx src/cli.ts queue --config config.local.json
 ```
 
 Run one scoped review pass and inspect the structured result:
 
 ```bash
-npx tsx src/cli.ts run-once --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --repo electricsheephq/evaos-code-review-bot --pr 142 --dry-run true --zcode false
+npx tsx src/cli.ts run-once --config config.local.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 142 --dry-run true --zcode false
 ```
 
 `run-once` always prints a JSON report on stdout before returning. Treat that
@@ -232,7 +232,7 @@ promoting, retrying, or treating the run as a total outage.
 Inspect only durable provider-deferred jobs:
 
 ```bash
-npx tsx src/cli.ts queue --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --state provider_deferred
+npx tsx src/cli.ts queue --config config.local.json --state provider_deferred
 ```
 
 If `queue` returns `coverageOk: true` and `runtimeOk: false`, coverage has found
@@ -243,31 +243,31 @@ restarting launchd or retrying provider work.
 Show the review dashboard:
 
 ```bash
-npx tsx src/cli.ts dashboard --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+npx tsx src/cli.ts dashboard --config config.local.json
 ```
 
 Show dashboard rows blocked on proof:
 
 ```bash
-npx tsx src/cli.ts dashboard --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --status blocked_on_proof
+npx tsx src/cli.ts dashboard --config config.local.json --status blocked_on_proof
 ```
 
 Include stale-only historical rows when diagnosing old heads:
 
 ```bash
-npx tsx src/cli.ts dashboard --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --include-history true
+npx tsx src/cli.ts dashboard --config config.local.json --include-history true
 ```
 
 Show one repo as a short human dashboard:
 
 ```bash
-npx tsx src/cli.ts dashboard --human --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --repo electricsheephq/evaos-code-review-bot
+npx tsx src/cli.ts dashboard --human --config config.local.json --repo electricsheephq/evaos-code-review-bot
 ```
 
 Inspect only the scheduler budget projection:
 
 ```bash
-npx tsx src/cli.ts budget-status --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --launchd-label com.electricsheephq.evaos-code-review-bot
+npx tsx src/cli.ts budget-status --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
 Use `--limit <n>` to cap returned `wouldLease`/`delayed` rows and
@@ -277,13 +277,13 @@ truncation metadata when either cap is hit.
 Explain one PR:
 
 ```bash
-npx tsx src/cli.ts why --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --repo 100yenadmin/Lossless-Codex-Orchestrator-LCO --pr 253
+npx tsx src/cli.ts why --config config.local.json --repo example-org/example-repo --pr 253
 ```
 
 Inspect provider cooldowns:
 
 ```bash
-npx tsx src/cli.ts provider-cooldowns --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --expired-only true
+npx tsx src/cli.ts provider-cooldowns --config config.local.json --expired-only true
 ```
 
 The provider-cooldown output includes `runtimeOk`, `healthState`, `failedGates`,
@@ -295,13 +295,13 @@ active run; wait for that run to finish before retrying.
 Dry-run stale review queue lease cleanup:
 
 ```bash
-npx tsx src/cli.ts clear-review-queue-leases --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --dry-run true --expired-only true
+npx tsx src/cli.ts clear-review-queue-leases --config config.local.json --dry-run true --expired-only true
 ```
 
 Apply expired-only cleanup after inspecting the dry-run output:
 
 ```bash
-npx tsx src/cli.ts clear-review-queue-leases --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json --dry-run false --confirm true --expired-only true
+npx tsx src/cli.ts clear-review-queue-leases --config config.local.json --dry-run false --confirm true --expired-only true
 ```
 
 `--force-active true` only applies to queue jobs matched by the explicit filters.
@@ -311,7 +311,7 @@ only when they are independently expired or owned by a dead worker.
 Build a repo-memory packet for dry-run evidence:
 
 ```bash
-npx tsx src/cli.ts build-memory-packet --config <config.json> --repo electricsheephq/evaos-code-review-bot --output-dir <configured-evidence-dir>/repo-memory-packets/evaos-code-review-bot
+npx tsx src/cli.ts build-memory-packet --config <config.json> --repo electricsheephq/evaos-code-review-bot-neondiff --output-dir <configured-evidence-dir>/repo-memory-packets/evaos-code-review-bot-neondiff
 ```
 
 Use `--fingerprint <finding-fingerprint>` to include exact-match false-positive
@@ -321,7 +321,7 @@ when the packet SHA should be recorded in SQLite provenance.
 Build a GitNexus context packet for dry-run evidence:
 
 ```bash
-npx tsx src/cli.ts build-gitnexus-context-packet --config <config.json> --repo electricsheephq/evaos-code-review-bot --pr 102 --output-dir <configured-evidence-dir>/gitnexus-context/evaos-code-review-bot-pr-102
+npx tsx src/cli.ts build-gitnexus-context-packet --config <config.json> --repo electricsheephq/evaos-code-review-bot-neondiff --pr 102 --output-dir <configured-evidence-dir>/gitnexus-context/evaos-code-review-bot-neondiff-pr-102
 ```
 
 Missing or stale GitNexus indexes produce `degradedMode: true` packets and do
@@ -331,7 +331,7 @@ redacted `gitnexus-context-packet-error.json` evidence file.
 Build a GitHub related-context packet for dry-run evidence:
 
 ```bash
-npx tsx src/cli.ts build-github-related-context-packet --config <config.json> --repo electricsheephq/evaos-code-review-bot --pr 102 --output-dir <configured-evidence-dir>/github-related-context/evaos-code-review-bot-pr-102
+npx tsx src/cli.ts build-github-related-context-packet --config <config.json> --repo electricsheephq/evaos-code-review-bot-neondiff --pr 102 --output-dir <configured-evidence-dir>/github-related-context/evaos-code-review-bot-neondiff-pr-102
 ```
 
 The packet is advisory only. It cannot justify posted findings without
@@ -351,7 +351,7 @@ packet is enabled by config.
 Build a sticky enrichment comment for dry-run evidence:
 
 ```bash
-npx tsx src/cli.ts build-enrichment-comment --config <config.json> --repo electricsheephq/evaos-code-review-bot --pr 102 --output-dir <configured-evidence-dir>/enrichment/evaos-code-review-bot-pr-102
+npx tsx src/cli.ts build-enrichment-comment --config <config.json> --repo electricsheephq/evaos-code-review-bot-neondiff --pr 102 --output-dir <configured-evidence-dir>/enrichment/evaos-code-review-bot-neondiff-pr-102
 ```
 
 The dry-run output includes the hidden sticky marker used for future update
@@ -360,7 +360,7 @@ behavior, but it does not post the comment or apply suggested labels/reviewers.
 Build a sticky issue enrichment comment for dry-run evidence:
 
 ```bash
-npx tsx src/cli.ts build-enrichment-comment --config <config.json> --repo electricsheephq/evaos-code-review-bot --issue 10 --output-dir <configured-evidence-dir>/enrichment/evaos-code-review-bot-issue-10
+npx tsx src/cli.ts build-enrichment-comment --config <config.json> --repo electricsheephq/evaos-code-review-bot-neondiff --issue 10 --output-dir <configured-evidence-dir>/enrichment/evaos-code-review-bot-neondiff-issue-10
 ```
 
 Closed issues are reported as `skipped: true` with reason

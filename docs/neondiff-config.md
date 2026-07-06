@@ -125,12 +125,14 @@ comments, and decides `REQUEST_CHANGES` vs `COMMENT` (`src/review-gate.ts`, `src
 | `requestChangesConfidenceFloors` | `{ P0?: number, P1?: number }` | unset (no floors) | Optional per-severity confidence floor, each `0..1`, for counting a P0/P1 finding toward `REQUEST_CHANGES` eligibility. |
 | `retryDegradedConfidencePenalty` | `number` (`0..1`) | unset (no penalty) | Optional confidence subtracted (floored at 0) from findings recovered via the strict-JSON retry path (#304) before the gate runs. |
 | `selfConsistency` | `SelfConsistencyConfig` | unset (disabled) | Opt-in second-draw re-check for high-severity findings (#303). See below. |
+| `categoryPrecisionFloors` | `{ [category]: number }` | unset (no floors) | Optional per-category confidence floor, each `0..1`, curated from the calibration aggregate report (#286). A finding whose category is listed loses `REQUEST_CHANGES` eligibility when its confidence is below the floor; it still posts as a comment. See [calibration-loop.md](calibration-loop.md). |
 
 **Safety invariants:**
 
 - **`maxInlineComments` default matches the pre-#287 hardcoded literal.** Setting it explicitly only changes *which* findings survive the cap (confidence-ranked instead of alphabetical-by-path); it does not change default behavior.
 - **`requestChangesConfidenceFloors` is quieter-only and unknown keys are rejected.** The object accepts only the literal keys `P0` and `P1` — any other key (including lowercase `p0`, or a typo) throws a config validation error rather than being silently ignored. A configured floor can only *demote* a finding out of `REQUEST_CHANGES` eligibility; a below-floor P0/P1 still posts as an inline comment, it just no longer forces the stricter review event. Leaving both floors unset is byte-identical to the pre-#287 gate.
 - **`retryDegradedConfidencePenalty` is quieter-only and default-off.** It only ever lowers a degraded finding's confidence (floored at 0), which can only remove it from ranking/cap contention or push it below a `requestChangesConfidenceFloors` floor — never raise confidence or add a finding. Unset means retry-recovered findings are scored identically to clean first-pass findings.
+- **`categoryPrecisionFloors` is quieter-only and unknown categories are rejected.** Keys must be valid regression-taxonomy categories — anything else throws a config validation error. A floor can only demote a finding out of `REQUEST_CHANGES` eligibility (the finding still posts); a floor of `0` never demotes. Nothing reads the calibration aggregate at review time — the config file remains the single inspectable source of gate behavior.
 
 #### `selfConsistency`
 
