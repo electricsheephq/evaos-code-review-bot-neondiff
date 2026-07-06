@@ -35,7 +35,9 @@ describe("provider adapter fixtures", () => {
         return {
           findings: [],
           droppedFromSchema: [],
-          rawResponse: reviewJson
+          rawResponse: reviewJson,
+          attempts: 1,
+          degradedRecovery: false
         };
       }
     });
@@ -125,7 +127,9 @@ describe("provider adapter fixtures", () => {
         return {
           findings: [],
           droppedFromSchema: [],
-          rawResponse: `Here is the review:\n\`\`\`json\n${reviewJson}\n\`\`\``
+          rawResponse: `Here is the review:\n\`\`\`json\n${reviewJson}\n\`\`\``,
+          attempts: 1,
+          degradedRecovery: false
         };
       }
     });
