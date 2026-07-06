@@ -24,6 +24,24 @@
   "activation": {
     "reviewExistingOpenPrsOnActivation": false
   },
+  "reviewGate": {
+    "maxInlineComments": 25,
+    "selfConsistency": {
+      "enabled": false,
+      "severities": ["P0", "P1"],
+      "maxFindingsPerReview": 5
+    }
+  },
+  "riskWeightedQueue": {
+    "enabled": false
+  },
+  "repoMemory": {
+    "enabled": false,
+    "memoryRoot": ".evaos/repo-memory",
+    "maxPacketBytes": 12000,
+    "maxStateNotes": 20,
+    "includeStaleNotes": false
+  },
   "commands": {
     "enabled": false,
     "botMentions": ["@evaos-code-review-bot"],

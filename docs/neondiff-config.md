@@ -105,3 +105,90 @@ The current proof is limited to schema structure, docs, and fixtures. Runtime be
 - no CLI generation or validation command
 - no review filtering from config
 - no dry-run evidence proving config controls posted versus dropped findings
+
+## Ranking And Scoring Config Surface (Program #278)
+
+The sections below document the live `BotConfig` ranking/scoring surface shipped by the #278
+program. Unlike the `.neondiff.yml` draft above, these keys are wired into runtime config loading
+today (`src/config.ts`) and take effect on every review. Every key in this surface is either
+default-off or quieter-only: leaving it unset reproduces the exact behavior that shipped before
+the #278 program started.
+
+### `reviewGate`
+
+`config.reviewGate` controls the deterministic post-model gate that ranks findings, caps inline
+comments, and decides `REQUEST_CHANGES` vs `COMMENT` (`src/review-gate.ts`, `src/findings.ts`).
+
+| Key | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `maxInlineComments` | `integer` | `25` | Hard cap on inline comments posted per review. Findings are sorted severity-first, then by `confidence` descending (ties broken by path, line, title), so when the cap trims the list it always keeps the highest-confidence findings within each severity tier. |
+| `requestChangesConfidenceFloors` | `{ P0?: number, P1?: number }` | unset (no floors) | Optional per-severity confidence floor, each `0..1`, for counting a P0/P1 finding toward `REQUEST_CHANGES` eligibility. |
+| `retryDegradedConfidencePenalty` | `number` (`0..1`) | unset (no penalty) | Optional confidence subtracted (floored at 0) from findings recovered via the strict-JSON retry path (#304) before the gate runs. |
+| `selfConsistency` | `SelfConsistencyConfig` | unset (disabled) | Opt-in second-draw re-check for high-severity findings (#303). See below. |
+
+**Safety invariants:**
+
+- **`maxInlineComments` default matches the pre-#287 hardcoded literal.** Setting it explicitly only changes *which* findings survive the cap (confidence-ranked instead of alphabetical-by-path); it does not change default behavior.
+- **`requestChangesConfidenceFloors` is quieter-only and unknown keys are rejected.** The object accepts only the literal keys `P0` and `P1` — any other key (including lowercase `p0`, or a typo) throws a config validation error rather than being silently ignored. A configured floor can only *demote* a finding out of `REQUEST_CHANGES` eligibility; a below-floor P0/P1 still posts as an inline comment, it just no longer forces the stricter review event. Leaving both floors unset is byte-identical to the pre-#287 gate.
+- **`retryDegradedConfidencePenalty` is quieter-only and default-off.** It only ever lowers a degraded finding's confidence (floored at 0), which can only remove it from ranking/cap contention or push it below a `requestChangesConfidenceFloors` floor — never raise confidence or add a finding. Unset means retry-recovered findings are scored identically to clean first-pass findings.
+
+#### `selfConsistency`
+
+`config.reviewGate.selfConsistency` adds an opt-in second model draw that verifies or refutes each
+gate-accepted P0/P1 finding before the review posts (#303, `src/self-consistency.ts`).
+
+| Key | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | When `false` (the default), no second draw runs at all — zero extra provider calls, byte-identical output to a config with `selfConsistency` omitted entirely. |
+| `severities` | `Array<"P0" \| "P1">` | `["P0", "P1"]` | Which severities get re-checked. Only `P0` and `P1` are accepted; any other value fails config validation. |
+| `provider` | `string` | unset (same provider as the main review) | Provider-registry id to use for the second draw. Absent means the second draw runs on the same provider/model as the primary review call. |
+| `maxFindingsPerReview` | `integer` (`>= 1`) | `5` | Cost bound: at most this many findings (in the gate's ranked, highest-confidence-first order) are re-checked per review. This is the knob that bounds the extra provider spend `selfConsistency` adds — each re-checked finding is one additional model call. |
+
+**Safety invariants:**
+
+- **Default-off, zero-cost when disabled.** `enabled: false` (or omitting `selfConsistency` entirely) means `runSelfConsistencyRecheck` returns the original comments and event untouched, with no second-draw calls issued.
+- **Quieter-only merge semantics.** Agreement between the first and second draw keeps the *original* confidence (the second draw can never raise it). Refutation sets confidence to `min(original, second)` and strips that finding's `REQUEST_CHANGES` eligibility for this review — but the finding still posts as a comment; self-consistency never drops a finding outright. The review event (`REQUEST_CHANGES` vs `COMMENT`) is re-derived only from findings that still carry eligibility after the recheck.
+- **Fail-closed on failure, not fail-open.** Any error from the second-draw call (timeout, malformed response, provider failure) leaves that finding completely untouched — the recheck can only ever make a review quieter, never block, delay, or drop it.
+- **Cost note.** Because each configured severity/cap combination issues one additional model call per re-checked finding, `selfConsistency` is the only key in this surface with a direct, ongoing provider-cost implication proportional to `maxFindingsPerReview`. Keep the cap conservative on high-volume repos.
+
+### `riskWeightedQueue`
+
+`config.riskWeightedQueue` lets the review scheduler tier its enqueue priority by the risk of a
+PR's changed surface instead of a flat FIFO priority (#301, `src/scheduler.ts`).
+
+| Key | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | When `false` (the default), enqueue priority stays the flat `reviewScheduler.backgroundPriority` for every PR — byte-identical to pre-#301 behavior. |
+| `elevatedPriority` | `integer` (`>= 0`) | `min(backgroundPriority, 10)` | Priority assigned to PRs whose changed surface matches a required-validation category (auth, security, migration, release, runtime-correctness, etc., via the existing changed-surface validation report). Lower numeric values lease sooner. |
+| `docsOnlyPriority` | `integer` (`>= 0`) | `backgroundPriority` | Priority assigned to PRs whose changed surface is docs-only, typically set `>= backgroundPriority` to defer them behind riskier work. |
+
+**Safety invariants:**
+
+- **Only fetches files when enabled.** The scheduler's `listPullFiles` call is invoked *only* when `riskWeightedQueue.enabled` is `true`. When disabled (the default), zero extra GitHub API calls are made at enqueue time. A file-fetch failure while enabled never blocks enqueue — it logs a redacted warning and falls back to the flat priority for that PR.
+- **Deferred-by-cooldown jobs stay flat.** Risk-weighting only changes *enqueue-time* priority; it does not re-tier a job that is already queued or that re-enters the queue after a provider-cooldown deferral. Those jobs keep whatever flat priority they were assigned.
+- **`elevatedPriority` must be `<= docsOnlyPriority` whenever `enabled` is `true`.** Config validation fails closed if this invariant is violated, since a higher numeric value leases *later* and an inverted ordering would mean docs-only PRs jump ahead of elevated-risk ones.
+- **Never de-prioritizes a self-repo below its existing elevation**, and elevation is derived solely from the already-shipped changed-surface validation report — this feature introduces no new path-classification logic.
+
+### `repoMemory`
+
+`config.repoMemory` controls the durable per-repo memory packet (policy notes, machine facts,
+learned false positives) surfaced to the model on each review (`src/repo-memory.ts`).
+
+| Key | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | Master switch for building and including the repo-memory packet. |
+| `memoryRoot` | `string` | `.evaos/repo-memory` | Root directory for the per-repo `repo-memory.md` human notes file. |
+| `packetVersion` | `string` | `repo-memory-packet-v0.2` | Packet schema version. v0.2 additively carries the coarse false-positive-match fields and `confirmedByHuman` (#302); older v0.1 notes simply lack them and fall back to exact-only fingerprint matching. |
+| `maxPacketBytes` | `integer` (`>= 1`) | `12000` | Byte budget for the rendered packet; building fails closed if the packet would exceed it. |
+| `maxStateNotes` | `integer` (`>= 1`) | `20` | Maximum number of SQLite state notes considered for inclusion. |
+| `includeStaleNotes` | `boolean` | `false` | Whether notes past their `expiresAt` are still included (marked `stale=true`) rather than excluded. |
+
+**False-positive note fields (packet v0.2, #302):** each `false_positive`-kind memory note may
+additionally carry `coarsePath`, `coarseCategory`, `coarseLine`, `coarseTitle`, and
+`confirmedByHuman`. These are the fields the review gate uses to match a *reworded or line-shifted*
+recurrence of a previously-suppressed false positive, not just a byte-exact repeat:
+
+- **Exact match first.** The gate always tries the exact sha256 fingerprint match before anything else (unchanged #294 semantics).
+- **Coarse fallback only on exact-miss.** When the exact fingerprint doesn't match, the gate falls back to matching `coarsePath` + normalized category + a line window (`|Δ| <= 3`) + a near-duplicate normalized title, reusing the same near-match helpers as same-run deduplication (#294) so the two matching semantics can never drift apart.
+- **`confirmedByHuman` is honor-only — nothing auto-sets it.** This PR/field only *honors* a note that already carries `confirmedByHuman: true`; no code path in this surface automatically promotes an auto-learned note to human-confirmed.
+- **Severity invariant: auto-learned notes stay P2/P3-only.** A false-positive note without `confirmedByHuman: true` may only suppress `P2`/`P3` findings, exact or coarse. Only a note with `confirmedByHuman: true` may suppress a finding of *any* severity, including `P0`/`P1`. This means a mistakenly-learned auto false positive can never silently suppress a high-severity finding — only an explicit human confirmation can widen suppression to `P0`/`P1`.
