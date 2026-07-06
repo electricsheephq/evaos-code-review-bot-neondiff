@@ -539,7 +539,7 @@ function enqueueReviewJob(input: {
   });
 }
 
-async function resolveRiskWeightedPriorityOverride(input: {
+export async function resolveRiskWeightedPriorityOverride(input: {
   config: BotConfig;
   github: SchedulerGitHubApi;
   repo: string;
