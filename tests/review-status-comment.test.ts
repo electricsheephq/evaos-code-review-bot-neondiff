@@ -217,6 +217,59 @@ describe("review status comment", () => {
     expect(comment.body).not.toContain("repo=evil/repo");
   });
 
+  it("keeps the state marker byte-identical when no lifecycle fields are supplied (back-compat)", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 274,
+      headSha: HEAD_A,
+      state: "queued",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    // No opt-in ⇒ the state marker is byte-identical to today (no role/outcome/issueHash tokens).
+    expect(comment.body).toContain(
+      "<!-- evaos-code-review-bot:review-status-state status=queued updated_at=2026-07-02T00:00:00.000Z -->"
+    );
+    expect(comment.body).not.toContain("role=");
+    expect(comment.body).not.toContain("issueHash=");
+  });
+
+  it("adds role, derived outcome, and issueHash to the diagnostic state marker (not the identity marker)", () => {
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 274,
+      headSha: HEAD_A,
+      state: "completed",
+      runId: "owner__repo-pr-274-abc123",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    const stateLine = comment.body.split("\n").find((line) => line.includes("review-status-state"))!;
+    expect(stateLine).toContain("role=reviewer");
+    expect(stateLine).toContain("outcome=reviewed");
+    expect(stateLine).toContain("runId=owner__repo-pr-274-abc123");
+    expect(stateLine).toMatch(/issueHash=[0-9a-f]{16}/);
+    // Diagnostic fields must NOT leak into the public identity marker (the upsert dedup key).
+    expect(comment.marker).toBe(`<!-- evaos-code-review-bot:review-status repo=owner/repo pr=274 sha=${HEAD_A} -->`);
+    expect(comment.marker).not.toContain("role=");
+    expect(comment.marker).not.toContain("outcome=");
+    expect(comment.marker).not.toContain("issueHash=");
+    expect(comment.marker).not.toContain("runId=");
+  });
+
+  it("keeps handoffTarget diagnostic-only and redacted", () => {
+    const token = ["ghp", "y".repeat(36)].join("_");
+    const comment = buildReviewStatusComment({
+      repo: "owner/repo",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "failed",
+      handoffTarget: `fixer ${token}`
+    });
+    const stateLine = comment.body.split("\n").find((line) => line.includes("review-status-state"))!;
+    expect(stateLine).toContain("handoffTarget=fixer");
+    expect(comment.body).not.toContain(token);
+    expect(comment.marker).not.toContain("handoffTarget=");
+  });
+
   it("rejects invalid marker identity values", () => {
     expect(() => buildReviewStatusMarker({ repo: "owner/repo with space", pullNumber: 1, headSha: HEAD_A }))
       .toThrow("Invalid review status repo slug");

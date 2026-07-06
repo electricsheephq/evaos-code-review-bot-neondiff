@@ -3,7 +3,8 @@ import {
   buildIssueEnrichmentDryRunOutput,
   postEnrichmentComment,
   type EnrichmentComment,
-  type EnrichmentCommentGithub
+  type EnrichmentCommentGithub,
+  type IssueEnrichmentLifecycleInput
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import { redactSecrets } from "./secrets.js";
@@ -772,8 +773,10 @@ export async function runIssueEnrichmentCycle(input: {
 
       try {
         if (!issue) throw new Error(`Issue metadata missing for ${item.repo}#${item.issueNumber}`);
-        const plannedEnrichment = plannedEnrichmentForItem(item);
-        const enrichment = plannedEnrichment ?? buildIssueEnrichmentForCycle(config, item.repo, issue);
+        // #263: attach the mapped lifecycle state (`enriched`) to the marker at post time. This is a
+        // renaming of the decision already made (status=posted) and rides the diagnostic state marker
+        // only; bodyHash excludes the marker, so idempotency is unaffected.
+        const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue, { state: "enriched" });
         const postBodyHash = plannedBodyHashForItem(item) ?? enrichment.bodyHash;
         const post = await postEnrichmentComment({
           enabled: true,
@@ -1188,7 +1191,8 @@ function isIssueEnrichmentCommentAction(action: IssueEnrichmentScanAction): bool
 function buildIssueEnrichmentForCycle(
   config: IssueEnrichmentConfig,
   repo: string,
-  issue: GitHubRelatedIssueOrPull
+  issue: GitHubRelatedIssueOrPull,
+  lifecycle?: IssueEnrichmentLifecycleInput
 ): EnrichmentComment {
   const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
   const allowlists = issueSuggestionAllowlists(policy.suggestions);
@@ -1197,7 +1201,8 @@ function buildIssueEnrichmentForCycle(
     issue,
     allowedLabels: allowlists.allowedLabels,
     allowedOwners: allowlists.allowedOwners,
-    postIssueComment: true
+    postIssueComment: true,
+    ...(lifecycle ? { lifecycle } : {})
   });
 }
 
