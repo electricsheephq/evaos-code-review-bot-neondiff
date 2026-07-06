@@ -178,6 +178,17 @@ export interface CommandConfig {
   botMentions: string[];
   trustedAuthors: string[];
   acknowledge: boolean;
+  /** Public review/re-review command policy (#345, default off). Separate from trustedAuthors. */
+  publicCommands?: PublicCommandsConfig;
+}
+
+export interface PublicCommandsConfig {
+  /** When false (default/unset), only trusted authors trigger anything — byte-identical to today. */
+  enabled: boolean;
+  /** Actions a non-trusted author may trigger. Validation permits ONLY "review"/"re-review". */
+  actions: Array<"review" | "re-review">;
+  /** Per-{repo,pr,head,author,action} cooldown window for public invocations. */
+  cooldownMinutes: number;
 }
 
 export interface ReviewSchedulerConfig {
@@ -618,6 +629,9 @@ function validateConfig(config: BotConfig): void {
   validateStringArray(config.commands.botMentions, "config.commands.botMentions");
   validateStringArray(config.commands.trustedAuthors, "config.commands.trustedAuthors");
   validateBoolean(config.commands.acknowledge, "config.commands.acknowledge");
+  if (config.commands.publicCommands !== undefined) {
+    validatePublicCommandsConfig(config.commands.publicCommands, "config.commands.publicCommands");
+  }
   validateNonEmptyString(config.zcode.cliPath, "config.zcode.cliPath");
   validateNonEmptyString(config.zcode.appConfigPath, "config.zcode.appConfigPath");
   validateNonEmptyString(config.zcode.model, "config.zcode.model");
@@ -696,6 +710,25 @@ function validatePublicConfidenceDisplayFloorOverrides(value: unknown, label: st
   if (value.minWilsonLowerBound !== undefined && (value.minWilsonLowerBound as number) < PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND) {
     throw new Error(`${label}.minWilsonLowerBound must be >= ${PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND}`);
   }
+}
+
+function validatePublicCommandsConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "enabled" && key !== "actions" && key !== "cooldownMinutes") {
+      throw new Error(`${label} has unknown key "${key}"; expected only enabled, actions, or cooldownMinutes`);
+    }
+  }
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (!Array.isArray(value.actions) || value.actions.length === 0) {
+    throw new Error(`${label}.actions must be a non-empty array`);
+  }
+  for (const action of value.actions) {
+    if (action !== "review" && action !== "re-review") {
+      throw new Error(`${label}.actions entries must be one of review, re-review`);
+    }
+  }
+  validatePositiveInteger(value.cooldownMinutes, `${label}.cooldownMinutes`);
 }
 
 function validateReviewGateConfig(value: unknown, label: string): void {

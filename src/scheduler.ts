@@ -3,12 +3,14 @@ import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./co
 import {
   collectTrustedReviewCommands,
   decideCommandAction,
+  isBotCommandComment,
   isFinishingTouchCommandAction,
   isReviewCommandAction,
-  type CommandDecision
+  type CommandDecision,
+  type ReviewCommand
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
-import { GitHubApi } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
 import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import {
   postReviewStatusComment,
@@ -868,8 +870,21 @@ async function resolveSchedulerCommandDecision(input: {
   }
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
   const repoProfile = resolveRepoProfile(input.config, input.repo);
+  // Public review/re-review policy (#345): the stateful bot + per-head cooldown gate runs HERE, where
+  // the store and head SHA are in scope (mirrors the #295 per-head-claim placement). Admitted public
+  // commands then flow through the exact same pipeline as trusted ones — authorization only decides
+  // whether a command may enqueue a review; nothing downstream changes.
+  const admittedPublic = admitPublicCommands({
+    config: input.config,
+    state: input.state,
+    repo: input.repo,
+    pull: input.pull,
+    publicEligible: collected.publicEligible,
+    comments
+  });
+  const authorizedCommands = [...collected.commands, ...admittedPublic].sort((left, right) => left.commentId - right.commentId);
   return decideCommandAction({
-    commands: collected.commands.filter((command) =>
+    commands: authorizedCommands.filter((command) =>
       !isFinishingTouchCommandAction(command.action) ||
       (repoProfile.allowed && isFinishingTouchActionEnabled(command.action, repoProfile.profile.finishingTouches))
     ),
@@ -879,6 +894,45 @@ async function resolveSchedulerCommandDecision(input: {
     hasProcessedCommand: (repo, pullNumber, headSha, commentId) =>
       input.state.hasProcessedCommand(repo, pullNumber, headSha, commentId)
   });
+}
+
+export function admitPublicCommands(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  publicEligible: ReviewCommand[];
+  comments: IssueCommentCommandSource[];
+  now?: Date;
+}): ReviewCommand[] {
+  const publicCommands = input.config.commands.publicCommands;
+  if (!publicCommands?.enabled || input.publicEligible.length === 0) return [];
+  const botLogin = input.config.github.botLogin ?? DEFAULT_BOT_LOGIN;
+  const commentsById = new Map(input.comments.map((comment) => [comment.id, comment]));
+  const admitted: ReviewCommand[] = [];
+  for (const command of input.publicEligible) {
+    // Bot-author rejection (loop protection): a bot's own review comment never triggers a review.
+    const source = commentsById.get(command.commentId);
+    if (isBotCommandComment(source?.user, botLogin)) continue;
+    // Atomic per-{repo,pr,head,author,action} cooldown — denied invocations are a no-op.
+    // DELIBERATE: the cooldown is recorded at ADMISSION time (here), before the review runs, not
+    // after a successful review. This is admission-time RATE LIMITING of how often a public author may
+    // TRIGGER the command — recording only after success would let an attacker spam commands that
+    // transiently skip (closed PR, provider cooldown) with no rate limit. The window is short (default
+    // 10m) and per-exact-head, so a new push (new head) is never blocked; only a same-head re-issue
+    // within the window after a transient skip sees one "cooled down" response, which is acceptable.
+    const allowed = input.state.tryRecordPublicCommandInvocation({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      author: command.author,
+      action: command.action,
+      cooldownMs: publicCommands.cooldownMinutes * 60_000,
+      ...(input.now ? { now: input.now } : {})
+    });
+    if (allowed) admitted.push(command);
+  }
+  return admitted;
 }
 
 function shouldAssignReviewerSession(commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>): boolean {

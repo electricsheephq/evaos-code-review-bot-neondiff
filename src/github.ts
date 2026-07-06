@@ -6,6 +6,9 @@ import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 
+/** The bot's own GitHub App login — single source of truth for "who am I" (#345 reuse). */
+export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
+
 export interface GitHubApiOptions {
   appId?: string;
   privateKeyPath?: string;
@@ -81,7 +84,7 @@ export class GitHubApi {
     this.privateKey = options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined;
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
-    this.botLogin = options.botLogin ?? "evaos-code-review-bot[bot]";
+    this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;
     this.requestTimeoutMs = options.requestTimeoutMs;
   }
 

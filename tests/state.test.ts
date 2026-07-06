@@ -1846,4 +1846,40 @@ describe("review state store", () => {
     expect(leased.map((job) => job.headSha)).toEqual(["baseline-new"]);
     store.close();
   });
+
+  it("atomically rate-limits a public command per {repo,pr,head,author,action} within the cooldown window (#345)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-pubcmd-cooldown-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const tuple = { repo: "owner/repo", pullNumber: 42, headSha: "head-a", author: "randopublic", action: "review", cooldownMs: 10 * 60_000 };
+    const t0 = new Date("2026-07-06T12:00:00.000Z");
+
+    // First invocation is allowed and recorded.
+    expect(store.tryRecordPublicCommandInvocation({ ...tuple, now: t0 })).toBe(true);
+    // Second within the window is denied (cooled down), no new record.
+    expect(store.tryRecordPublicCommandInvocation({ ...tuple, now: new Date(t0.getTime() + 5 * 60_000) })).toBe(false);
+    // After the window it is allowed again.
+    expect(store.tryRecordPublicCommandInvocation({ ...tuple, now: new Date(t0.getTime() + 11 * 60_000) })).toBe(true);
+    store.close();
+  });
+
+  it("scopes the public-command cooldown per head, author, and action (#345)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-pubcmd-scope-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const base = { repo: "owner/repo", pullNumber: 42, headSha: "head-a", author: "randopublic", action: "review", cooldownMs: 10 * 60_000 };
+    const t0 = new Date("2026-07-06T12:00:00.000Z");
+    const soon = new Date(t0.getTime() + 60_000);
+
+    expect(store.tryRecordPublicCommandInvocation({ ...base, now: t0 })).toBe(true);
+    // Same tuple within window → denied.
+    expect(store.tryRecordPublicCommandInvocation({ ...base, now: soon })).toBe(false);
+    // A NEW head (genuinely new push) is not blocked by the prior head's invocation.
+    expect(store.tryRecordPublicCommandInvocation({ ...base, headSha: "head-b", now: soon })).toBe(true);
+    // A different author on the same head is independent.
+    expect(store.tryRecordPublicCommandInvocation({ ...base, author: "otherpublic", now: soon })).toBe(true);
+    // A different action on the same head/author is independent.
+    expect(store.tryRecordPublicCommandInvocation({ ...base, action: "re-review", now: soon })).toBe(true);
+    store.close();
+  });
 });
