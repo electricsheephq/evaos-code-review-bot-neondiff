@@ -66,8 +66,8 @@ response supplies them:
 - `expiresAt`: entitlement expiry time;
 - `offlineGraceMs` and `graceUntil`: cache-grace metadata for operator
   diagnosis;
-- `revocationReason`: redacted reason such as refund, chargeback, manual
-  disable, or policy violation.
+- `revocationReason`: redacted, printable, length-capped reason such as refund,
+  chargeback, manual disable, or policy violation.
 
 Metadata is evidence, not authority. Review gating still requires an active
 entitlement that covers the requested repo visibility and passes the existing

@@ -157,6 +157,61 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
+  it("treats a non-active body status on a 2xx response as authoritative and fail-closed", async () => {
+    const root = mkRoot(roots);
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "scope_mismatch",
+        repoVisibilityScope: "private",
+        updateEntitlement: false
+      });
+    });
+    servers.push(server);
+
+    const result = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: "LIC-2xx-denial-test-123456",
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "scope_mismatch",
+      classification: "scope_mismatch",
+      entitlement: {
+        status: "scope_mismatch",
+        repoVisibilityScope: "private"
+      }
+    });
+    expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
+  it("redacts revocation reason metadata before returning or caching it", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-revocation-reason-test-123456";
+    const server = await startLicenseServer((_req, res) => {
+      writeJson(res, 200, {
+        status: "active",
+        repoVisibilityScope: "private",
+        updateEntitlement: true,
+        revocationReason: `manual disable for ${key}`
+      });
+    });
+    servers.push(server);
+
+    const activated = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: key,
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+    const cacheText = readFileSync(join(root, "entitlement.json"), "utf8");
+
+    expect(activated.entitlement?.revocationReason).toBe("manual disable for [REDACTED_LICENSE_KEY]");
+    expect(cacheText).toContain("[REDACTED_LICENSE_KEY]");
+    expect(JSON.stringify(activated)).not.toContain(key);
+    expect(cacheText).not.toContain(key);
+  });
+
   it("rejects keychain activation before contacting the API", async () => {
     const root = mkRoot(roots);
     let requests = 0;

@@ -33,6 +33,7 @@ export type LicenseStatus =
 type LicenseApiBodyStatus = Exclude<LicenseStatus, "missing" | "network" | "server">;
 type LicenseFailureClassification = Exclude<LicenseStatus, "active">;
 export type RepoVisibilityScope = "public" | "private" | "all";
+const MAX_REVOCATION_REASON_LENGTH = 240;
 
 export interface LicenseConfig {
   enabled: boolean;
@@ -460,6 +461,7 @@ function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): Lic
   const status = readBodyStatus(record);
   const repoVisibilityScope = readRepoVisibilityScope(record);
   if (!status || !repoVisibilityScope) return undefined;
+  const revocationReason = sanitizeRevocationReason(readString(record, "revocationReason"), licenseKey);
   return {
     status,
     checkedAt: now.toISOString(),
@@ -469,7 +471,7 @@ function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): Lic
     updateEntitlement: readBoolean(record, "updateEntitlement") ?? false,
     ...(readNumber(record, "offlineGraceMs") !== undefined ? { offlineGraceMs: readNumber(record, "offlineGraceMs")! } : {}),
     ...(readString(record, "graceUntil") ? { graceUntil: readString(record, "graceUntil")! } : {}),
-    ...(readString(record, "revocationReason") ? { revocationReason: readString(record, "revocationReason")! } : {}),
+    ...(revocationReason ? { revocationReason } : {}),
     ...(readString(record, "plan") ? { plan: readString(record, "plan")! } : {}),
     ...(readNumber(record, "seats") !== undefined ? { seats: readNumber(record, "seats")! } : {}),
     licenseFingerprint: fingerprintLicenseKey(licenseKey)
@@ -540,6 +542,7 @@ function readLicenseCache(path: string): LicenseEntitlement | undefined {
   const repoVisibilityScope = readRepoVisibilityScope(parsed);
   const checkedAt = readString(parsed, "checkedAt");
   if (!status || !repoVisibilityScope || !checkedAt) return undefined;
+  const revocationReason = sanitizeRevocationReason(readString(parsed, "revocationReason"));
   return {
     status,
     checkedAt,
@@ -549,7 +552,7 @@ function readLicenseCache(path: string): LicenseEntitlement | undefined {
     updateEntitlement: readBoolean(parsed, "updateEntitlement") ?? false,
     ...(readNumber(parsed, "offlineGraceMs") !== undefined ? { offlineGraceMs: readNumber(parsed, "offlineGraceMs")! } : {}),
     ...(readString(parsed, "graceUntil") ? { graceUntil: readString(parsed, "graceUntil")! } : {}),
-    ...(readString(parsed, "revocationReason") ? { revocationReason: readString(parsed, "revocationReason")! } : {}),
+    ...(revocationReason ? { revocationReason } : {}),
     ...(readString(parsed, "plan") ? { plan: readString(parsed, "plan")! } : {}),
     ...(readNumber(parsed, "seats") !== undefined ? { seats: readNumber(parsed, "seats")! } : {}),
     ...(readString(parsed, "licenseFingerprint") ? { licenseFingerprint: readString(parsed, "licenseFingerprint")! } : {})
@@ -689,6 +692,18 @@ function redactSubmittedLicenseKey(text: string, licenseKey: string): string {
   const genericRedacted = redactSecrets(text);
   if (!licenseKey) return genericRedacted;
   return genericRedacted.split(licenseKey).join("[REDACTED_LICENSE_KEY]");
+}
+
+function sanitizeRevocationReason(value: string | undefined, licenseKey = ""): string | undefined {
+  if (!value) return undefined;
+  const redacted = licenseKey ? redactSubmittedLicenseKey(value, licenseKey) : redactSecrets(value);
+  const normalized = redacted
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return undefined;
+  if (normalized.length <= MAX_REVOCATION_REASON_LENGTH) return normalized;
+  return `${normalized.slice(0, MAX_REVOCATION_REASON_LENGTH - 3)}...`;
 }
 
 function localMachineId(): string {
