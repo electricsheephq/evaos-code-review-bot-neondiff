@@ -7,7 +7,8 @@ The product starts from a simple belief: review automation should make the PR
 outcome easier to trust, not just add another confident comment. NeonDiff runs
 from a local worker, uses a GitHub App with explicit repository scope, records
 redacted evidence for each review decision, and keeps provider choice under the
-operator's control.
+operator's control. Public repositories are free by default; private repository
+review requires an active private entitlement.
 
 This document is directional alignment for contributors and agents. It does not
 claim GA readiness, hosted-service readiness, or parity with any hosted review
@@ -61,6 +62,8 @@ NeonDiff should fail closed before it creates surprise work for maintainers.
 The default posture is:
 
 - review only configured repositories
+- fail private or commercial review requests before checkout, file listing,
+  provider calls, or GitHub review posting when entitlement proof is missing
 - re-check pull request head state before planning, finding placement, and live
   posting
 - post at most one review for a given `{repo, pr, head_sha}` decision surface
@@ -89,8 +92,13 @@ operator chooses.
 - Provider keys belong in environment variables, local operator wrappers, or
   supported secret paths. They do not belong in tracked config, GitHub comments,
   release notes, or evidence packets.
+- Provider keys are not NeonDiff entitlements. They unlock model access, while
+  NeonDiff entitlements govern which repo visibilities the worker may review.
 - NeonDiff support tiers are software/support entitlement boundaries. Provider
   and model costs stay external through BYOK or local models.
+- Active private entitlement covers private repos and public repos when an
+  operator disables the default public-free path. Public-only entitlement does
+  not unlock private repos.
 - Provider resource catalogs are discovery aids, not proof that a provider can
   run NeonDiff reviews.
 
@@ -119,10 +127,26 @@ boundary, and release gate. The near-term shape is narrower: local worker,
 explicit repo scope, current-head review, redacted evidence, BYOK/local provider
 choice, and conservative outcome auditing for risky PRs.
 
+## Issue Enrichment Boundary
+
+Issue enrichment is a separate rollout lane from pull request review.
+
+- PR review allowlists do not opt repositories into issue enrichment.
+- Issue enrichment needs its own allowlist, repo-level throttles, and live-post
+  gate before comments can go out.
+- New issue-enrichment rollouts should keep
+  `processExistingOpenIssuesOnActivation=false` so enabling the lane does not
+  imply scanning or commenting on an existing 50+ issue backlog by default.
+
+See [docs/issue-enrichment.md](issue-enrichment.md) for the rollout policy and
+[docs/license-boundary.md](license-boundary.md) for the public/private
+entitlement matrix.
+
 ## Proof Boundary
 
 This vision document states product intent and contributor alignment. It does
 not prove setup, provider quality, release readiness, marketplace readiness,
 desktop readiness, legal readiness, or GA readiness. Those claims need their
 own validation artifacts and tracked issues before they can move into public
-product copy.
+product copy. It also does not prove issue-enrichment rollout readiness for any
+repo unless that repo has separate allowlist, threshold, and evidence coverage.

@@ -86,6 +86,11 @@ Keep long JSON output in separate files and link it from the transcript.
 Validate the package install path first. Use the version named by the docs or
 the issue under test.
 
+Public install proof currently means the npm package `neondiff@0.4.30-beta.1`.
+Source-only beta releases `v0.4.31-beta.1` through `v0.4.37-beta.1` are held
+from npm; validate those by source SHA or local build path, not by expecting a
+new public npm artifact.
+
 ```bash
 npm install -g neondiff@<version-under-test> --prefix "$tmp_prefix"
 "$tmp_prefix/bin/neondiff" help
@@ -125,6 +130,16 @@ Then edit only local, untracked values for:
 - provider id and model path
 - license settings when validating a private or commercial repo path
 
+Provider keys and NeonDiff entitlements are separate inputs. Provider keys are
+for model access; they are not proof that private-repo review is licensed.
+Record whether the transcript is proving:
+
+- public repo review on the default free path
+- public repo review with `license.publicReposFree=false`
+- private repo review with an active private entitlement
+
+Do not treat a public-only entitlement as proof for a private repo path.
+
 Evidence to capture:
 
 - `init.log`: sanitized init output
@@ -161,6 +176,11 @@ Expected shape:
 Stop if the App cannot read the target repo, the target repo is not explicitly
 selected, issue-enrichment permissions are enabled unintentionally, or the
 doctor path requires a personal access token for the PR review path.
+
+Issue enrichment is out of scope for this setup pass unless the transcript is
+explicitly about that lane. PR review allowlists do not opt a repo into issue
+enrichment, and enabling issue enrichment should not imply processing an
+existing open-issue backlog by default.
 
 ## Step 4: Provider Readiness
 
@@ -249,9 +269,19 @@ Evidence to capture:
   private keys, provider API keys, GitHub tokens, license keys, or raw customer
   data
 
+When validating a blocked private or commercial path, the expected result is an
+early license gate before checkout, file listing, provider calls, or GitHub
+review posting. Capture that path with:
+
+- `license-gate.json` or equivalent redacted gate evidence
+- `license-summary.md`: repo visibility, entitlement scope/status, and why the
+  worker stopped before review execution
+
 Stop if the command attempts to post a live review, uses `--dry-run false`,
 cannot prove current head state, writes evidence into the repo, or produces
-artifact names/fields the setup docs do not explain.
+artifact names/fields the setup docs do not explain. Stop and file a docs or
+product bug if a blocked private/commercial run reaches checkout, file listing,
+provider setup, or posting before the license gate fires.
 
 ## Clean Setup Pass Criteria
 
@@ -262,6 +292,9 @@ A transcript can be attached as setup evidence only when:
 - every expected JSON output file exists and is parseable
 - the target repo and PR are explicit
 - the dry-run review did not post comments, reviews, labels, or branch changes
+- blocked private/commercial proofs stop before checkout, file listing,
+  provider calls, and review posting while still capturing license-gate
+  evidence
 - secrets are absent from transcript and evidence
 - every deviation from README or docs/SETUP.md is listed as a docs bug or setup
   bug
