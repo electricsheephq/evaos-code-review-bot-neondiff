@@ -16,6 +16,12 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.39-beta.1] - docs/releases/v0.4.39-beta.1.md
+
+### Fixed
+- Fix insecure evidence and review artifact writes by routing them through an owner-only, same-directory temp-file replacement helper that atomically renames into place and avoids preserving looser permissions from pre-existing files
+- Add focused temp-file regression coverage for new-file and overwrite paths while keeping the public npm package held at `neondiff@0.4.30-beta.1`
+
 ## [0.4.38-beta.1] - docs/releases/v0.4.38-beta.1.md
 
 ### Added
