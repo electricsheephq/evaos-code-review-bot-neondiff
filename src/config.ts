@@ -198,6 +198,19 @@ export interface ReviewGateConfig {
   /** Optional confidence subtracted (0..1, floor 0) from findings recovered via the strict-JSON
    * retry path (#304). Default off; quieter-only — lower confidence can only demote ranking/floors. */
   retryDegradedConfidencePenalty?: number;
+  /** Opt-in P0/P1 self-consistency re-check (#303, default off). Owner-approved; adds provider cost. */
+  selfConsistency?: SelfConsistencyConfig;
+}
+
+export interface SelfConsistencyConfig {
+  /** When false (default), no second draw runs — byte-identical output, zero extra provider calls. */
+  enabled: boolean;
+  /** Severities to re-check; default ["P0","P1"]. Only P0/P1 are permitted. */
+  severities?: Array<"P0" | "P1">;
+  /** Provider-registry id for the second draw; absent ⇒ same provider as the main review. */
+  provider?: string;
+  /** Cost bound: max findings re-checked per review, in ranked order. Default 5. */
+  maxFindingsPerReview?: number;
 }
 
 export interface RiskWeightedQueueConfig {
@@ -689,6 +702,28 @@ function validateReviewGateConfig(value: unknown, label: string): void {
   }
   if (value.retryDegradedConfidencePenalty !== undefined) {
     validateProbability(value.retryDegradedConfidencePenalty, `${label}.retryDegradedConfidencePenalty`);
+  }
+  if (value.selfConsistency !== undefined) validateSelfConsistencyConfig(value.selfConsistency, `${label}.selfConsistency`);
+}
+
+function validateSelfConsistencyConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (value.severities !== undefined) {
+    if (!Array.isArray(value.severities) || value.severities.length === 0) {
+      throw new Error(`${label}.severities must be a non-empty array of P0 or P1`);
+    }
+    for (const severity of value.severities) {
+      if (severity !== "P0" && severity !== "P1") {
+        throw new Error(`${label}.severities entries must be P0 or P1`);
+      }
+    }
+  }
+  if (value.provider !== undefined && typeof value.provider !== "string") {
+    throw new Error(`${label}.provider must be a string`);
+  }
+  if (value.maxFindingsPerReview !== undefined) {
+    validatePositiveInteger(value.maxFindingsPerReview, `${label}.maxFindingsPerReview`);
   }
 }
 
