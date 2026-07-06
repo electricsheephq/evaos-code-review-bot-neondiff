@@ -188,6 +188,14 @@ from normal per-repo or global throttles are advisory: they stay visible in the
 summary and recommended actions, but they do not make a clear PR-review runtime
 look blocked.
 
+For compatibility, operator JSON keeps the older advisory gate names
+`issue_enrichment_runtime_no_retryable_deferred_records` and
+`runtime_issue_enrichment_no_retryable_deferred_records`. New integrations
+should prefer the clearer aliases
+`issue_enrichment_runtime_retryable_deferred_records_advisory` and
+`runtime_issue_enrichment_retryable_deferred_records_advisory`; both old and
+new names report the same advisory-only count.
+
 Show the same runtime inventory as a short human summary:
 
 ```bash

@@ -427,6 +427,11 @@ describe("operator CLI summaries", () => {
       ok: true,
       detail: "1 retryable deferred issue-enrichment record(s); advisory only"
     });
+    expect(status.gates).toContainEqual({
+      name: "issue_enrichment_runtime_retryable_deferred_records_advisory",
+      ok: true,
+      detail: "1 retryable deferred issue-enrichment record(s); advisory only"
+    });
     expect(status.recommendedActions).toContain("retry or inspect deferred issue-enrichment records");
 
     const inventory = buildRuntimeInventory({
@@ -446,6 +451,11 @@ describe("operator CLI summaries", () => {
     expect(inventory.summary.issueEnrichmentRuntimeState).toBe("deferred");
     expect(inventory.gates).toContainEqual({
       name: "runtime_issue_enrichment_no_retryable_deferred_records",
+      ok: true,
+      detail: "1 retryable deferred issue-enrichment record(s); advisory only"
+    });
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_issue_enrichment_retryable_deferred_records_advisory",
       ok: true,
       detail: "1 retryable deferred issue-enrichment record(s); advisory only"
     });
