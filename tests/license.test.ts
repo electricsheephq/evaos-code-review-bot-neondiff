@@ -336,6 +336,37 @@ describe("license activation and entitlement cache", () => {
     expect(JSON.stringify(status)).not.toContain(key);
   });
 
+  it("keeps keychain-backed non-active cache reads non-throwing when the key is unavailable", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-keychain-cache-missing-test-123456";
+    writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
+      status: "revoked",
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      repoVisibilityScope: "private",
+      updateEntitlement: false,
+      revocationReason: `manual disable for ${key}`
+    })}\n`, { mode: 0o600 });
+    const config = licenseConfig(root, undefined);
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    config.keychainService = `test.neondiff.missing.${Date.now()}`;
+    config.keychainAccount = `test-${Math.random().toString(16).slice(2)}`;
+
+    const status = await getLicenseStatus({
+      config,
+      now: new Date("2026-07-04T00:00:30.000Z")
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      status: "revoked",
+      entitlement: {
+        revocationReason: "manual disable for [redacted-secret]"
+      }
+    });
+    expect(JSON.stringify(status)).not.toContain(key);
+  });
+
   it("rejects keychain activation before contacting the API", async () => {
     const root = mkRoot(roots);
     let requests = 0;
