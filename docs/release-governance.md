@@ -30,6 +30,85 @@ Patch beta tags are for runtime/reliability fixes. Minor beta tags are for new
 reviewer behavior, policy shape, eval/capability expansion, or operator-facing
 workflow changes.
 
+## Versioning And GA Line
+
+This is the owner-decided policy for the GA cutover. It records a decision,
+not a proposal; do not re-litigate it in a future release packet without a
+new explicit owner decision.
+
+### Semver Policy
+
+- The GA version line target is `v1.0.0`.
+- Prereleases continue as `v0.4.x-beta.N` until the GA cutover. Do not jump
+  the tag train to `1.0.0-beta.N` or any other `1.x` prerelease shape before
+  GA; `docs/releases/v1.0.0-beta.1.md` is the historical example of exactly
+  that mistake (see the annotation at the top of that file), and
+  `v0.4.24-beta.1` is the release that corrected it.
+- Patch and minor beta tags keep following the existing convention in
+  [Version Names](#version-names) above: patch for runtime/reliability fixes,
+  minor for new reviewer behavior, policy shape, eval/capability expansion, or
+  operator-facing workflow changes.
+- The first stable tag after the GA cut is `v1.0.0`. Normal semver applies
+  from that point forward (`v1.0.1` patches, `v1.1.0` minors, and so on);
+  this runbook does not need a separate post-GA numbering scheme.
+
+### Dist-Tag Policy
+
+NeonDiff publishes to npm under two dist-tags:
+
+- `beta`: tracks the active `0.4.x-beta.N` prerelease train. This is the
+  correct install target for anyone testing pre-GA builds.
+- `latest`: today, before GA, `latest` still points at a beta package
+  version. This is expected pre-GA state, not a packaging bug — document any
+  release packet that publishes a new beta as leaving `latest` on the prior
+  beta unless the packet explicitly repoints it. Do not assume `latest`
+  means stable while the project is pre-GA.
+
+At GA cutover, `latest` is repointed to the stable GA release so that a
+plain `npm install -g neondiff` (no tag suffix) installs GA, and `beta`
+keeps tracking whatever prerelease train is active after GA (for example, a
+`v1.1.0-beta.N` line preparing the next minor). The cutover step is a single
+explicit command run once the GA package version is published:
+
+```bash
+npm dist-tag add neondiff@<ga> latest
+```
+
+Replace `<ga>` with the exact published GA package version, e.g.
+`neondiff@1.0.0`. Run this only after the GA package itself is on the
+registry (`npm view neondiff versions` includes `<ga>`) and after the GA
+release has passed the same gates as any other release in this runbook.
+Do not repoint `latest` speculatively ahead of the GA package existing.
+
+### What Qualifies A GA Cut
+
+A GA cut is not a new gate system. It is the existing [Pre-Release
+Gate](#pre-release-gate) and [Post-Release Gate](#post-release-gate) machinery
+in this runbook, plus the existing `docs/public-release-manifest.json` and
+`release-status --public-release-manifest` surface, applied to a release that
+is tagged `v1.0.0` instead of a beta tag. Concretely, a GA cut requires:
+
+- Every condition in [Pre-Release Gate](#pre-release-gate) passes for the
+  candidate GA source SHA, including a `docs/releases/v1.0.0.md` packet with
+  source SHA, issue/PR links, validation commands, live config path, rollback
+  command, and known caveats.
+- `docs/public-release-manifest.json` is updated for the GA version and
+  passes `release-status --public-release-manifest
+  docs/public-release-manifest.json --expected-public-version v1.0.0`, with
+  every `requiredForThisRelease: true` channel healthy, not pending.
+- Every condition in [Post-Release Gate](#post-release-gate) is green against
+  the GA release, including coverage-audit, provider cooldowns, and durable
+  queue health.
+- The npm dist-tag cutover step above has run and `npm view neondiff
+  dist-tags` shows `latest` pointing at the GA version.
+- The CHANGELOG.md `[Unreleased]` section for the GA cut has been folded into
+  a dated `[1.0.0]` entry.
+
+This section intentionally does not invent new promotion gates beyond the
+existing release-status/public-release-manifest machinery; it only names the
+version string and dist-tag step that make a promotion a GA promotion instead
+of another beta promotion.
+
 ## Cadence
 
 - Batch normal improvements into a daily beta promotion window when practical.

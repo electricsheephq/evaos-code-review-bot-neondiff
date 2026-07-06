@@ -66,6 +66,14 @@ bounded to what was actually promoted.
 
 ## Promotion Flow
 
+Before running the flow below, append the release's entries to the root
+`CHANGELOG.md` (Keep a Changelog format): move the relevant `[Unreleased]`
+bullets into a new dated `[<version>]` section, or add one if this release's
+changes were not already tracked under `[Unreleased]`. Link the new section
+to its `docs/releases/<version>.md` packet the same way existing entries do.
+Commit this alongside the release packet PR so `CHANGELOG.md` never lags the
+tagged version.
+
 Run from a clean release checkout on `main`:
 
 ```bash
@@ -204,6 +212,9 @@ npx tsx src/cli.ts review-head-gate \
   head; it does not independently prove GitHub App authorship. Pair it with
   `release-status`, which verifies the live App-backed launchd configuration.
 - Release checkout is clean and exactly at the intended source SHA.
+- Root `CHANGELOG.md` has a dated section for this version (moved out of
+  `[Unreleased]` if it was tracked there) linking to
+  `docs/releases/<version>.md`.
 - `npm test` and `npm run build` pass from the release checkout.
 - `release:status` records exact source SHA, branch, config path, launchd job,
   launchd dry-run mode, state DB row count, and error count.
