@@ -154,7 +154,7 @@ export async function getLicenseStatus(input: {
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
-  const cached = readLicenseCache(input.config.cachePath, readCacheRedactionLicenseKey(input.config));
+  const cached = readLicenseCache(input.config.cachePath, () => readCacheRedactionLicenseKey(input.config));
   if (!input.refresh) return statusFromCache(cached, now);
 
   const licenseKey = readLicenseKey(input.config);
@@ -537,7 +537,7 @@ function invalidApiResult(now: Date, detail: string): LicenseStatusResult {
   };
 }
 
-function readLicenseCache(path: string, licenseKey = ""): LicenseEntitlement | undefined {
+function readLicenseCache(path: string, readRedactionLicenseKey?: () => string | undefined): LicenseEntitlement | undefined {
   if (!existsSync(path)) return undefined;
   const parsed = safeJsonParse(readFileSync(path, "utf8"));
   if (!isRecord(parsed)) return undefined;
@@ -545,7 +545,10 @@ function readLicenseCache(path: string, licenseKey = ""): LicenseEntitlement | u
   const repoVisibilityScope = readRepoVisibilityScope(parsed);
   const checkedAt = readString(parsed, "checkedAt");
   if (!status || !repoVisibilityScope || !checkedAt) return undefined;
-  const revocationReason = status === "active" ? undefined : sanitizeRevocationReason(readString(parsed, "revocationReason"), licenseKey);
+  const rawRevocationReason = readString(parsed, "revocationReason");
+  const revocationReason = status === "active" || !rawRevocationReason
+    ? undefined
+    : sanitizeRevocationReason(rawRevocationReason, readRedactionLicenseKey?.() ?? "");
   return {
     status,
     checkedAt,
