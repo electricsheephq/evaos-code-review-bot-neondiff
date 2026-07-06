@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
+import { writeSecureFileSync } from "./temp-files.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import type {
   EnrichmentComment as PlanEnrichmentComment,
@@ -346,7 +346,7 @@ export async function postEnrichmentComment(input: {
     return { posted: true, ...result };
   } catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error));
-    if (input.evidenceDir) writeFileSync(join(input.evidenceDir, "enrichment-comment-error.txt"), `${message}\n`);
+    if (input.evidenceDir) writeSecureFileSync(join(input.evidenceDir, "enrichment-comment-error.txt"), `${message}\n`);
     return { posted: false, reason: "upsert_failed", error: message };
   }
 }

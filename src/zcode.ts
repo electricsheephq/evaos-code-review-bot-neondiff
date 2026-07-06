@@ -9,6 +9,7 @@ import type { RepoMemoryPacket } from "./repo-memory.js";
 import { buildRepoProfilePromptSection, type ResolvedRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
 import type { SkillPackContextPacket } from "./skill-packs.js";
+import { writeSecureFileSync } from "./temp-files.js";
 import { buildZCodeRuntimeEnv, resolveZCodeProviderEnv } from "./zcode-env.js";
 import type { Finding, PullFilePatch, PullRequestSummary } from "./types.js";
 
@@ -262,10 +263,10 @@ export function runZCodeReview(input: {
     const stderr = redactSecrets(result.stderr.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
     if (input.evidenceDir) {
       mkdirSync(input.evidenceDir, { recursive: true });
-      writeFileSync(join(input.evidenceDir, `zcode-attempt-${attempt}-stdout.jsonl`), stdout);
-      writeFileSync(join(input.evidenceDir, `zcode-attempt-${attempt}-stderr.txt`), stderr);
-      writeFileSync(join(input.evidenceDir, "zcode-last-stdout.jsonl"), stdout);
-      writeFileSync(join(input.evidenceDir, "zcode-last-stderr.txt"), stderr);
+      writeSecureFileSync(join(input.evidenceDir, `zcode-attempt-${attempt}-stdout.jsonl`), stdout);
+      writeSecureFileSync(join(input.evidenceDir, `zcode-attempt-${attempt}-stderr.txt`), stderr);
+      writeSecureFileSync(join(input.evidenceDir, "zcode-last-stdout.jsonl"), stdout);
+      writeSecureFileSync(join(input.evidenceDir, "zcode-last-stderr.txt"), stderr);
     }
 
     if (result.status !== 0) {
