@@ -561,6 +561,54 @@ exit 1
     }
   });
 
+  it("fails hosted remote smoke through the public CLI without explicit remote opt-in", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-remote-provider-cli-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/demo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })}\n`);
+
+    await expect(runCli([
+      "providers",
+      "doctor",
+      "--config",
+      configPath,
+      "--provider",
+      "openai-compatible",
+      "--smoke",
+      "true"
+    ], {
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    })).rejects.toMatchObject({
+      stdout: expect.stringContaining("Remote OpenAI-compatible smoke checks require explicit remote opt-in and --provider <id>.")
+    });
+  });
+
   it("rejects malformed provider ids before reflecting them", async () => {
     const secretLikeProviderId = `sk-${"fixturesecretfixturesecret"}`;
     await expect(runCli(["providers", "doctor", "--provider", secretLikeProviderId])).rejects.toMatchObject({
