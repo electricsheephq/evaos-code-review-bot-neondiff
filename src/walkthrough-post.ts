@@ -1,6 +1,6 @@
-import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "./secrets.js";
+import { writeSecureFileSync } from "./temp-files.js";
 import type { ReviewPlan, WalkthroughComment, WalkthroughCommentPostResult } from "./types.js";
 
 export interface WalkthroughCommentGithub {
@@ -30,11 +30,11 @@ export async function postWalkthroughComment(input: {
       marker: input.walkthrough.marker,
       body: input.walkthrough.body
     });
-    writeFileSync(join(input.evidenceDir, "walkthrough-comment.json"), `${redactSecrets(JSON.stringify(comment, null, 2))}\n`);
+    writeSecureFileSync(join(input.evidenceDir, "walkthrough-comment.json"), `${redactSecrets(JSON.stringify(comment, null, 2))}\n`);
     return { posted: true, ...comment };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    writeFileSync(join(input.evidenceDir, "walkthrough-comment-error.txt"), `${redactSecrets(message)}\n`);
+    writeSecureFileSync(join(input.evidenceDir, "walkthrough-comment-error.txt"), `${redactSecrets(message)}\n`);
     return { posted: false, reason: "upsert_failed" };
   }
 }

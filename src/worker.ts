@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
@@ -56,6 +56,7 @@ import {
 } from "./review-status-comment.js";
 import { redactSecrets } from "./secrets.js";
 import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skill-packs.js";
+import { writeSecureFileSync } from "./temp-files.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
   isActivationBaselineProcessedReview,
@@ -1454,7 +1455,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (commandDecision.action !== "none") {
       writeRedactedJson(join(evidenceDir, "command.json"), commandDecision.command);
     }
-    writeFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
+    writeSecureFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
     writeRedactedJson(join(evidenceDir, "validation-selector.json"), validation);
     writeRedactedJson(join(evidenceDir, "proof-requirements.json"), proof);
 
@@ -2991,11 +2992,11 @@ function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"], publicConfidenc
 }
 
 function writeRedactedJson(path: string, value: unknown): void {
-  writeFileSync(path, `${redactSecrets(JSON.stringify(value, null, 2))}\n`);
+  writeSecureFileSync(path, `${redactSecrets(JSON.stringify(value, null, 2))}\n`);
 }
 
 function writeRedactedText(path: string, value: string): void {
-  writeFileSync(path, redactSecrets(value));
+  writeSecureFileSync(path, redactSecrets(value));
 }
 
 function buildSummary(input: {
