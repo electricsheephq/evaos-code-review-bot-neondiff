@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "./secrets.js";
@@ -171,6 +172,51 @@ export function runOutcomeObserver(input: {
   writeFileSync(join(input.evidenceDir, "outcome-observer.json"), `${redactSecrets(JSON.stringify(packet, null, 2))}\n`);
 
   return { ok: true, observed: input.reviews.length, skipped, labeled, observations };
+}
+
+/**
+ * Record an explicit negative-control label for each supplied review (#286 PR C, --mark-negative-
+ * control). A negative control is EXPLICIT + verifiably CLEAN: it is recorded only for a review that
+ * posted ZERO findings. Any review that posted findings is refused with a clear error — mirroring the
+ * #296 rule that an empty/quiet run is never a negative control by itself. The control marker uses a
+ * deterministic synthetic fingerprint over the review coordinates so re-marking is idempotent.
+ */
+export function recordNegativeControlLabels(input: {
+  store: ReviewStateStore;
+  reviews: OutcomeObserverReview[];
+  now?: Date;
+}): { recorded: number } {
+  for (const review of input.reviews) {
+    if (review.findings.length > 0) {
+      throw new Error(
+        `Refusing to mark ${review.repo}#${review.pullNumber}@${review.headSha} as a negative control: it posted findings. Explicit negative controls require a verifiably clean (zero-finding) run.`
+      );
+    }
+  }
+  const observedAt = (input.now ?? new Date()).toISOString();
+  let recorded = 0;
+  for (const review of input.reviews) {
+    input.store.recordFindingOutcomeLabel({
+      fingerprint: negativeControlFingerprint(review),
+      repo: review.repo,
+      pullNumber: review.pullNumber,
+      headSha: review.headSha,
+      severity: "P3",
+      category: "unknown",
+      confidence: 0,
+      labelSource: "explicit_control",
+      verdict: "unvalidated",
+      observedAt,
+      evidenceRef: "operator-declared negative control (zero findings posted)"
+    });
+    recorded += 1;
+  }
+  return { recorded };
+}
+
+function negativeControlFingerprint(review: OutcomeObserverReview): string {
+  const canonical = JSON.stringify({ control: "explicit", repo: review.repo, pullNumber: review.pullNumber, headSha: review.headSha });
+  return `finding:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
 interface OutcomeObserverInputEntry {

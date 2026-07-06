@@ -73,7 +73,11 @@ export type FindingOutcomeLabelSource =
   | "hotfix"
   | "human_thread"
   | "ci_failure"
-  | "none_observed";
+  | "none_observed"
+  // Explicit, operator-declared negative control (#286 PR C): recorded ONLY for a run that posted
+  // zero findings (verifiably clean) AND was flagged by the operator — mirrors the #296 semantics
+  // that an empty label set is never a negative control by itself.
+  | "explicit_control";
 
 export type FindingOutcomeVerdict = "true_positive" | "false_positive" | "unvalidated";
 

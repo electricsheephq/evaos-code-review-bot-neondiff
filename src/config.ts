@@ -18,7 +18,7 @@ import {
   type PublicConfidenceDisplayPolicy
 } from "./public-confidence.js";
 import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
-import type { RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
+import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -200,6 +200,10 @@ export interface ReviewGateConfig {
   retryDegradedConfidencePenalty?: number;
   /** Opt-in P0/P1 self-consistency re-check (#303, default off). Owner-approved; adds provider cost. */
   selfConsistency?: SelfConsistencyConfig;
+  /** Optional per-category precision floors (#286 PR C, default off). Operator-curated from the
+   * aggregate calibration report: a listed category loses REQUEST_CHANGES eligibility (quieter-only).
+   * Values come from the aggregate via the operator; nothing reads the aggregate at review time. */
+  categoryPrecisionFloors?: CategoryPrecisionFloors;
 }
 
 export interface SelfConsistencyConfig {
@@ -702,6 +706,17 @@ function validateReviewGateConfig(value: unknown, label: string): void {
   }
   if (value.retryDegradedConfidencePenalty !== undefined) {
     validateProbability(value.retryDegradedConfidencePenalty, `${label}.retryDegradedConfidencePenalty`);
+  }
+  if (value.categoryPrecisionFloors !== undefined) {
+    if (!isRecord(value.categoryPrecisionFloors)) {
+      throw new Error(`${label}.categoryPrecisionFloors must be an object`);
+    }
+    for (const [category, floor] of Object.entries(value.categoryPrecisionFloors)) {
+      if (!(REGRESSION_CATEGORIES as string[]).includes(category)) {
+        throw new Error(`${label}.categoryPrecisionFloors has unknown category "${category}"`);
+      }
+      validateProbability(floor, `${label}.categoryPrecisionFloors.${category}`);
+    }
   }
   if (value.selfConsistency !== undefined) validateSelfConsistencyConfig(value.selfConsistency, `${label}.selfConsistency`);
 }

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ReviewStateStore } from "../src/state.js";
 
 const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
-import { deriveOutcomeLabel, runOutcomeObserver, type ObservedPullOutcome } from "../src/outcome-observer.js";
+import { deriveOutcomeLabel, recordNegativeControlLabels, runOutcomeObserver, type ObservedPullOutcome } from "../src/outcome-observer.js";
 
 const FINDING = {
   fingerprint: `finding:${"a".repeat(64)}`,
@@ -172,6 +172,46 @@ describe("outcome-observe CLI (#286 PR A)", () => {
 
     // Dry-run persisted nothing.
     const store = new ReviewStateStore(join(dir, "state.sqlite"));
+    expect(store.listFindingOutcomeLabels()).toHaveLength(0);
+    store.close();
+  });
+});
+
+describe("explicit negative-control marking (#286 PR C)", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("records an explicit_control label for a verifiably-clean (zero-finding) run", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-negctl-clean-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const result = recordNegativeControlLabels({
+      store,
+      reviews: [{ repo: "owner/repo", pullNumber: 9, headSha: "sha9", findings: [] }],
+      now: new Date("2026-07-06T00:00:00.000Z")
+    });
+
+    const labels = store.listFindingOutcomeLabels();
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toMatchObject({ labelSource: "explicit_control", verdict: "unvalidated" });
+    expect(result.recorded).toBe(1);
+    store.close();
+  });
+
+  it("refuses to mark a run that posted findings (mirrors #296: explicit + clean only)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-negctl-dirty-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    expect(() =>
+      recordNegativeControlLabels({
+        store,
+        reviews: [{ repo: "owner/repo", pullNumber: 10, headSha: "sha10", findings: [FINDING] }]
+      })
+    ).toThrow(/posted findings/i);
     expect(store.listFindingOutcomeLabels()).toHaveLength(0);
     store.close();
   });

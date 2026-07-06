@@ -98,8 +98,9 @@ import {
   type ReviewQueueJobRecord,
   type ReviewQueueJobState
 } from "./state.js";
-import { readOutcomeObserverInput, runOutcomeObserverFromInput } from "./outcome-observer.js";
+import { readOutcomeObserverInput, recordNegativeControlLabels, runOutcomeObserverFromInput } from "./outcome-observer.js";
 import { writeCalibrationAggregatePacket } from "./calibration-aggregate.js";
+import { runCalibrationPromotion } from "./calibration-promote.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -1511,12 +1512,23 @@ async function main(): Promise<void> {
     }
     // Dry-run-first (#286 PR A): default reads-and-reports without persisting labels.
     const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    const markNegativeControl = args["mark-negative-control"] === undefined
+      ? false
+      : parseBooleanArg(args["mark-negative-control"], "--mark-negative-control");
     const config = loadConfig(args.config ? parseSingleArg(args.config, "--config") : undefined);
     const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
     assertEvalOutputDirSafe(outputDir);
     const entries = readOutcomeObserverInput(parseSingleArg(args.input, "--input"));
     const store = new ReviewStateStore(config.statePath);
     try {
+      if (markNegativeControl) {
+        // Explicit negative control (#286 PR C): a WRITE, so it requires --dry-run false. Refuses any
+        // run that posted findings (recordNegativeControlLabels enforces the clean-run precondition).
+        if (dryRun) throw new Error("outcome-observe --mark-negative-control requires --dry-run false because it records explicit_control labels");
+        const result = recordNegativeControlLabels({ store, reviews: entries.map((entry) => entry.review) });
+        console.log(stringifyRedactedJson({ command: "outcome-observe", mode: "mark-negative-control", dryRun, outputDir, ok: true, recorded: result.recorded }));
+        return;
+      }
       const result = runOutcomeObserverFromInput({ store, entries, evidenceDir: outputDir, dryRun });
       console.log(stringifyRedactedJson({ command: "outcome-observe", dryRun, outputDir, ...result }));
       if (!result.ok) process.exitCode = 1;
@@ -1554,6 +1566,32 @@ async function main(): Promise<void> {
     } finally {
       store.close();
     }
+    return;
+  }
+
+  if (command === "calibration-promote") {
+    if (args.input === undefined || (Array.isArray(args.input) && args.input.length === 0)) {
+      throw new Error("--input is required for calibration-promote (the aggregate-calibration.json)");
+    }
+    if (args["output-dir"] === undefined || (Array.isArray(args["output-dir"]) && args["output-dir"].length === 0)) {
+      throw new Error("--output-dir is required for calibration-promote");
+    }
+    // Human-gated (#286 PR C): requires --confirm; default writes a config PATCH FILE the operator
+    // applies by hand. --apply additionally requires --i-understand-live-config. It NEVER sets
+    // publicDisplay.mode — flipping to "calibrated" stays a deliberate manual human edit.
+    const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
+    assertEvalOutputDirSafe(outputDir);
+    const result = runCalibrationPromotion({
+      aggregatePath: parseSingleArg(args.input, "--input"),
+      outputDir,
+      confirm: args.confirm === undefined ? false : parseBooleanArg(args.confirm, "--confirm"),
+      apply: args.apply === undefined ? false : parseBooleanArg(args.apply, "--apply"),
+      iUnderstandLiveConfig: args["i-understand-live-config"] === undefined
+        ? false
+        : parseBooleanArg(args["i-understand-live-config"], "--i-understand-live-config")
+    });
+    console.log(stringifyRedactedJson({ command: "calibration-promote", ...result }));
+    if (!result.ok) process.exitCode = 1;
     return;
   }
 
@@ -2831,7 +2869,8 @@ function buildHelp(command?: string) {
         "outcome-ledger",
         "outcome-scorecard",
         "outcome-observe",
-        "calibration-aggregate"
+        "calibration-aggregate",
+        "calibration-promote"
       ]
     },
     examples: [
@@ -2884,6 +2923,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",
       "npx tsx src/cli.ts outcome-observe --config /path/to/live.json --input /path/to/outcome-observer-input.json --dry-run true --output-dir /path/to/evidence/outcome-observe-run",
       "npx tsx src/cli.ts calibration-aggregate --config /path/to/live.json --output-dir /path/to/evidence/calibration-aggregate-run",
+      "npx tsx src/cli.ts calibration-promote --input /path/to/evidence/calibration-aggregate-run/aggregate-calibration.json --output-dir /path/to/evidence/calibration-promote-run --confirm true",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ],

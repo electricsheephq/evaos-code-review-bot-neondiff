@@ -38,13 +38,16 @@ export interface CalibrationAggregate {
  * excluded entirely. The public-confidence floors are EVALUATED and reported but NEVER applied here —
  * this function computes evidence; flipping public display remains a human config edit downstream.
  *
- * negativeControlScenarios is 0 by construction: the label store has no explicit-control concept yet,
- * and none_observed/unvalidated labels are NOT negative controls (that conflation is exactly the bug
- * #296 fixed on the eval path). A principled explicit-control source must be added before this can be
- * non-zero.
+ * negativeControlScenarios counts ONLY explicit_control labels (#286 PR C) — operator-declared,
+ * verifiably-clean runs. none_observed/unvalidated labels are NOT negative controls (that conflation
+ * is exactly the bug #296 fixed on the eval path), so they never count here.
  */
 export function aggregateCalibrationLabels(labels: FindingOutcomeLabelRecord[]): CalibrationAggregate {
-  const validated = labels.filter((label) => label.verdict !== "unvalidated");
+  // Explicit negative controls (#286 PR C) are clean-run markers, NOT findings: they count toward
+  // negativeControlScenarios but never enter the finding-based bins/precision math. Unvalidated
+  // labels earn nothing at all.
+  const negativeControlScenarios = labels.filter((label) => label.labelSource === "explicit_control").length;
+  const validated = labels.filter((label) => label.verdict !== "unvalidated" && label.labelSource !== "explicit_control");
   const findings = validated.map((label) => ({ id: label.fingerprint, confidence: label.confidence }));
   const matches = validated
     .filter((label) => label.verdict === "true_positive")
@@ -54,7 +57,6 @@ export function aggregateCalibrationLabels(labels: FindingOutcomeLabelRecord[]):
   const bestWilsonLowerBound = bins.reduce((max, bin) => Math.max(max, bin.rawWilsonLowerBound), 0);
   const labeledFindings = validated.length;
   const p0p1Labels = validated.filter((label) => label.severity === "P0" || label.severity === "P1").length;
-  const negativeControlScenarios = 0;
 
   const categoryPrecision = computeCategoryPrecision(validated);
   const thresholds: CalibrationAggregateThresholds = {

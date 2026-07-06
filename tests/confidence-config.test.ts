@@ -152,6 +152,21 @@ describe("review gate config", () => {
     );
   });
 
+  it("accepts categoryPrecisionFloors and defaults it unset (#286 PR C)", () => {
+    expect(loadConfigFromObject({}).reviewGate?.categoryPrecisionFloors).toBeUndefined();
+    const config = loadConfigFromObject({ reviewGate: { categoryPrecisionFloors: { data_loss: 0.9, auth: 0.8 } } });
+    expect(config.reviewGate?.categoryPrecisionFloors).toEqual({ data_loss: 0.9, auth: 0.8 });
+  });
+
+  it("fails closed on malformed categoryPrecisionFloors (#286 PR C)", () => {
+    expect(() => loadConfigFromObject({ reviewGate: { categoryPrecisionFloors: { data_loss: 1.5 } } })).toThrow(
+      /reviewGate\.categoryPrecisionFloors\.data_loss must be a number from 0 to 1/
+    );
+    expect(() => loadConfigFromObject({ reviewGate: { categoryPrecisionFloors: { not_a_category: 0.5 } } })).toThrow(
+      /reviewGate\.categoryPrecisionFloors has unknown category "not_a_category"/
+    );
+  });
+
   it("defaults retryDegradedConfidencePenalty to unset (off) and accepts a valid penalty (#304)", () => {
     expect(loadConfigFromObject({}).reviewGate?.retryDegradedConfidencePenalty).toBeUndefined();
     expect(

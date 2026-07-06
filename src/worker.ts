@@ -1503,6 +1503,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
       ...(config.reviewGate?.requestChangesConfidenceFloors
         ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
+        : {}),
+      ...(config.reviewGate?.categoryPrecisionFloors
+        ? { categoryPrecisionFloors: config.reviewGate.categoryPrecisionFloors }
         : {})
     });
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
@@ -2559,6 +2562,9 @@ function applySelfConsistencyRecheck(input: {
     config: selfConsistencyConfig,
     ...(input.config.reviewGate?.requestChangesConfidenceFloors
       ? { requestChangesConfidenceFloors: input.config.reviewGate.requestChangesConfidenceFloors }
+      : {}),
+    ...(input.config.reviewGate?.categoryPrecisionFloors
+      ? { categoryPrecisionFloors: input.config.reviewGate.categoryPrecisionFloors }
       : {}),
     secondDraw: ({ comment, hunk }) => {
       const draw = runZCodeReview({

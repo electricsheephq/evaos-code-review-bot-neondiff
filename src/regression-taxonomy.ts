@@ -53,13 +53,22 @@ export interface RequestChangesConfidenceFloors {
   P1?: number;
 }
 
+/** Optional per-category precision floors (#286 PR C). A category present here has been marked
+ * below-floor by the operator (from the aggregate calibration report) and loses eligibility. */
+export type CategoryPrecisionFloors = Partial<Record<RegressionCategory, number>>;
+
 export function isRequestChangesEligible(
   input: Pick<ReviewComment, "severity" | "category" | "confidence">,
-  confidenceFloors?: RequestChangesConfidenceFloors
+  confidenceFloors?: RequestChangesConfidenceFloors,
+  categoryPrecisionFloors?: CategoryPrecisionFloors
 ): boolean {
   if (!isHighSeverity(input.severity) || !REGRESSION_CATEGORY_POLICY[input.category].requestChangesEligible) {
     return false;
   }
+  // Category precision floor (#286 PR C, quieter-only): a category the operator configured below its
+  // floor loses REQUEST_CHANGES eligibility. The finding still POSTS as a comment; only the event is
+  // demoted. Values are operator-curated from the aggregate report — nothing is read at review time.
+  if (categoryPrecisionFloors && typeof categoryPrecisionFloors[input.category] === "number") return false;
   const floor = confidenceFloors?.[input.severity as "P0" | "P1"];
   // A configured floor may only make the gate quieter: below-floor findings stop counting toward
   // REQUEST_CHANGES but still post as comments. When unset, behavior is byte-identical to before.

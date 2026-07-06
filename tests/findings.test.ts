@@ -330,6 +330,16 @@ describe("finding normalization and review policy", () => {
     expect(decideReviewEvent([{ severity: "P0", category: "security_boundary", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
   });
 
+  it("strips REQUEST_CHANGES eligibility for a category configured below its precision floor (#286 PR C)", () => {
+    const comments = [{ severity: "P1" as const, category: "data_loss" as const, confidence: 0.99 }];
+    // No floors ⇒ eligible as before.
+    expect(decideReviewEvent(comments)).toBe("REQUEST_CHANGES");
+    // data_loss configured below-floor ⇒ demoted to COMMENT (quieter-only).
+    expect(decideReviewEvent(comments, undefined, { data_loss: 0.9 })).toBe("COMMENT");
+    // A different category's floor does not affect this finding.
+    expect(decideReviewEvent(comments, undefined, { auth: 0.9 })).toBe("REQUEST_CHANGES");
+  });
+
   it("ignores unsupported optional model categories without dropping the finding", () => {
     const parsed = parseFindings({
       findings: [
