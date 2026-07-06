@@ -851,8 +851,12 @@ function validateReviewModesConfig(value: unknown, label: string, config: BotCon
   }
   const baseSelfConsistency = config.reviewGate?.selfConsistency?.enabled ?? false;
   const baseContextAddons = (config.gitnexusContext?.enabled ?? false) || (config.githubRelatedContext?.enabled ?? false);
+  const modes = value.modes as Record<string, unknown>;
   for (const mode of REVIEW_MODES) {
-    validateReviewModeDefinition(value.modes[mode], `${label}.modes.${mode}`, baseSelfConsistency, baseContextAddons);
+    // Distinguish an entirely ABSENT required mode key from a present-but-wrong-type value, so the
+    // error matches the docstring ("every mode key must be present") instead of a generic type error.
+    if (!(mode in modes)) throw new Error(`${label}.modes.${mode} is required`);
+    validateReviewModeDefinition(modes[mode], `${label}.modes.${mode}`, baseSelfConsistency, baseContextAddons);
   }
   if (value.routing !== undefined) validateReviewModeRouting(value.routing, `${label}.routing`);
 }

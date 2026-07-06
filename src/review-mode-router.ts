@@ -140,12 +140,16 @@ export function resolveAnalysisPlan(mode: ReviewMode, config: BotConfig): Review
   };
 }
 
-function surfaceCategoriesFromReport(report: ChangedSurfaceValidationReport): RegressionCategory[] {
+export function surfaceCategoriesFromReport(report: ChangedSurfaceValidationReport): RegressionCategory[] {
   const categories = new Set<RegressionCategory>();
   for (const recommendation of report.recommendations) {
     if (recommendation.status !== "required") continue;
-    const category = categoryForRecommendation(recommendation);
-    if (category) categories.add(category);
+    // Fail-safe: a REQUIRED recommendation whose id is absent from RECOMMENDATION_CATEGORY (e.g. a
+    // future validation-selector id we have not mapped yet) must NEVER be silently dropped from
+    // routing. Fall back to "runtime_correctness" — a real elevated category — so an unmapped
+    // required surface still counts as an elevated surface and routes DEEPER. Routing is demote-only,
+    // so erring toward deeper analysis is the safe direction.
+    categories.add(categoryForRecommendation(recommendation) ?? "runtime_correctness");
   }
   return [...categories].sort();
 }

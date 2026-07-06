@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import { applyDeterministicReviewGate } from "../src/review-gate.js";
-import { selectReviewMode } from "../src/review-mode-router.js";
+import { selectReviewMode, surfaceCategoriesFromReport } from "../src/review-mode-router.js";
 import type { ReviewMode } from "../src/review-mode-types.js";
-import type { Finding, PullFilePatch, PullRequestSummary } from "../src/types.js";
+import type { ChangedSurfaceValidationReport, Finding, PullFilePatch, PullRequestSummary } from "../src/types.js";
 
 function pull(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary {
   return {
@@ -125,6 +125,20 @@ describe("reviewModes config validation (#266, fail-closed + demote-only)", () =
       /reviewModes\.modes\.deep\.targetMinutes must be a positive integer/
     );
   });
+
+  it("reports a required mode key as absent (not a generic type error) when it is missing", () => {
+    const modes = { light: {}, deep: {} }; // standard entirely absent
+    expect(() => loadConfigFromObject({ reviewModes: { ...reviewModes(), modes } })).toThrow(
+      /reviewModes\.modes\.standard is required/
+    );
+  });
+
+  it("still reports a present-but-wrong-type mode as needing to be an object", () => {
+    const modes = { light: {}, standard: 42, deep: {} };
+    expect(() => loadConfigFromObject({ reviewModes: { ...reviewModes(), modes } })).toThrow(
+      /reviewModes\.modes\.standard must be an object/
+    );
+  });
 });
 
 describe("selectReviewMode routing decision table (#266)", () => {
@@ -175,6 +189,20 @@ describe("selectReviewMode routing decision table (#266)", () => {
     const selection = select(config, CI_FILES);
     expect(selection?.configPromotedPrecision).toEqual([]);
     expect(selection?.matchedRule).toBe("elevated_surfaces");
+  });
+
+  it("fail-safe: a REQUIRED recommendation with an unmapped id still yields an elevated category", () => {
+    // Simulate a future validation-selector recommendation id we have not mapped yet. It must not be
+    // silently dropped from routing — it falls back to runtime_correctness (a real elevated category).
+    const report = {
+      summary: "future required surface",
+      docsOnly: false,
+      recommendations: [
+        { id: "future_new_smoke", title: "Future smoke", status: "required", reason: "r", matchedPaths: [], proofTypes: [] }
+      ],
+      profileHints: { validationHints: [], proofExpectations: [] }
+    } as unknown as ChangedSurfaceValidationReport;
+    expect(surfaceCategoriesFromReport(report)).toEqual(["runtime_correctness"]);
   });
 
   it("honors an explicit repo override at highest precedence", () => {
@@ -302,16 +330,14 @@ describe("posting invariant: mode selection cannot reach the review gate (#266 l
     }
   ];
 
-  it("the review gate signature accepts no mode/reviewMode parameter (mode is unobservable by the gate)", () => {
-    // Structural: applyDeterministicReviewGate takes a single named-argument object. Its TypeScript
-    // input type has no `mode`/`reviewMode` field, so no caller can thread a mode into it. Enumerate
-    // the runtime-visible argument keys a real caller passes and assert none is a mode channel.
-    const gateArgKeys = ["findings", "files", "droppedFromSchema", "maxInlineComments",
-      "repoMemoryFalsePositiveFingerprints", "repoMemoryFalsePositives", "publicConfidencePolicy",
-      "requestChangesConfidenceFloors", "categoryPrecisionFloors"];
-    expect(gateArgKeys).not.toContain("mode");
-    expect(gateArgKeys).not.toContain("reviewMode");
-    // A spread that (incorrectly) tried to inject a mode is silently dropped by the gate's typed input.
+  it("the review gate input TYPE has no mode/reviewMode property (compile-time structural guard)", () => {
+    // Type-level, not a hardcoded key list: this genuinely inspects applyDeterministicReviewGate's
+    // input type at typecheck time. If the gate input ever gains a `mode`/`reviewMode` field, `npm run
+    // build` (tsc) fails here — that is the real structural guard proving the gate cannot observe the
+    // routed mode by construction.
+    expectTypeOf<Parameters<typeof applyDeterministicReviewGate>[0]>().not.toHaveProperty("mode");
+    expectTypeOf<Parameters<typeof applyDeterministicReviewGate>[0]>().not.toHaveProperty("reviewMode");
+    // Runtime corroboration: a stray mode spread is silently dropped by the gate's typed input.
     const withStrayMode = applyDeterministicReviewGate({ findings, files, ...( { mode: "deep" } as object) });
     const clean = applyDeterministicReviewGate({ findings, files });
     expect(JSON.stringify(withStrayMode)).toBe(JSON.stringify(clean));
