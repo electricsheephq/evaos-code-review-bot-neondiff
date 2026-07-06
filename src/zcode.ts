@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { parseFindings } from "./findings.js";
 import type { GitNexusContextPacket } from "./gitnexus-context.js";
 import type { GitHubRelatedContextPacket } from "./github-related-context.js";
+import type { ProviderRuntimeAdapter } from "./provider-adapters.js";
 import type { RepoMemoryPacket } from "./repo-memory.js";
 import { buildRepoProfilePromptSection, type ResolvedRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
@@ -15,6 +16,63 @@ export interface ZCodeReviewResult {
   findings: Finding[];
   droppedFromSchema: ReturnType<typeof parseFindings>["dropped"];
   rawResponse: string;
+}
+
+export interface ZCodeReviewFixtureAdapterOptions {
+  cwd: string;
+  cliPath: string;
+  appConfigPath: string;
+  evidenceDir?: string;
+  timeoutMs?: number;
+  retryMaxRetries?: number;
+  runReview?: (input: {
+    cwd: string;
+    prompt: string;
+    cliPath: string;
+    appConfigPath: string;
+    model: string;
+    providerId?: string;
+    evidenceDir?: string;
+    timeoutMs?: number;
+    retryMaxRetries?: number;
+  }) => ZCodeReviewResult;
+}
+
+/**
+ * Fixture-only wrapper for same-prompt adapter proof. Live review execution
+ * continues to call runZCodeReview directly until a separate runtime adapter
+ * proves async behavior, transport evidence, and selection policy.
+ */
+export function createZCodeReviewFixtureAdapter(options: ZCodeReviewFixtureAdapterOptions): ProviderRuntimeAdapter {
+  return {
+    id: "zcode",
+    async execute(input) {
+      const runReview = options.runReview ?? runZCodeReview;
+      const result = runReview({
+        cwd: options.cwd,
+        prompt: input.prompt,
+        cliPath: options.cliPath,
+        appConfigPath: options.appConfigPath,
+        model: input.model,
+        providerId: input.providerId,
+        ...(options.evidenceDir ? { evidenceDir: options.evidenceDir } : {}),
+        ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+        ...(options.retryMaxRetries !== undefined ? { retryMaxRetries: options.retryMaxRetries } : {})
+      });
+      const reviewJsonValidated = result.droppedFromSchema.length === 0;
+      return {
+        text: reviewJsonValidated ? extractJsonObject(result.rawResponse) : result.rawResponse,
+        reviewJsonValidated,
+        rawEvidence: {
+          providerId: input.providerId,
+          adapterId: input.adapterId,
+          model: input.model,
+          findings: result.findings.length,
+          droppedFromSchema: result.droppedFromSchema.length
+        }
+      };
+    }
+  };
 }
 
 export function buildReviewPrompt(input: {
