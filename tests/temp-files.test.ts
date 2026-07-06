@@ -1,8 +1,10 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { SECURE_TEMP_FILE_MODE, writeSecureFileSync } from "../src/temp-files.js";
+import { writeSecureFileSync } from "../src/temp-files.js";
+
+const SECURE_TEMP_FILE_MODE = 0o600;
 
 describe("temp-files helper", () => {
   const tempDirs: string[] = [];
@@ -18,16 +20,19 @@ describe("temp-files helper", () => {
   });
 
   it("writes files with mode 0600 and the exact given contents", () => {
-    const path = join(makeTempDir(), "secure.txt");
+    const dir = makeTempDir();
+    const path = join(dir, "secure.txt");
 
     writeSecureFileSync(path, "hello world");
 
     expect(readFileSync(path, "utf8")).toBe("hello world");
     expect(statSync(path).mode & 0o777).toBe(SECURE_TEMP_FILE_MODE);
+    expect(readdirSync(dir).filter((entry) => entry.includes(".tmp"))).toEqual([]);
   });
 
   it("tightens permissions when overwriting an existing file", () => {
-    const path = join(makeTempDir(), "secure-existing.txt");
+    const dir = makeTempDir();
+    const path = join(dir, "secure-existing.txt");
     writeFileSync(path, "old contents");
     chmodSync(path, 0o644);
 
@@ -35,5 +40,6 @@ describe("temp-files helper", () => {
 
     expect(readFileSync(path, "utf8")).toBe("new contents");
     expect(statSync(path).mode & 0o777).toBe(SECURE_TEMP_FILE_MODE);
+    expect(readdirSync(dir).filter((entry) => entry.includes(".tmp"))).toEqual([]);
   });
 });
