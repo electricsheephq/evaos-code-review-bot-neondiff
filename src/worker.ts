@@ -73,7 +73,9 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { buildReviewPrompt, isZCodeSchemaFailureError, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
+import { buildReviewPrompt, extractJsonObject, extractZCodeResponse, isZCodeSchemaFailureError, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
+import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
+import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
 import type { Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 
@@ -1503,11 +1505,24 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
         : {})
     });
-    const comments = gate.comments;
+    // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
+    // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
+    // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.
+    const selfConsistency = applySelfConsistencyRecheck({
+      config,
+      gate,
+      files: reviewFiles,
+      worktreePath: worktree.path,
+      evidenceDir
+    });
+    if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
+      zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
+    }
+    const comments = selfConsistency.comments;
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
     const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
-    const event = gate.event;
+    const event = selfConsistency.event;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
     const summary = buildSummary({
       repo,
@@ -2523,6 +2538,89 @@ function providerCooldownJitterMs(
   const max = config.providerCooldown.overloadBackoffJitterMs;
   if (max <= 0) return 0;
   return Math.floor(Math.random() * (max + 1));
+}
+
+function applySelfConsistencyRecheck(input: {
+  config: BotConfig;
+  gate: DeterministicReviewGateResult;
+  files: PullFilePatch[];
+  worktreePath: string;
+  evidenceDir: string;
+}): { comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string } {
+  const selfConsistencyConfig = input.config.reviewGate?.selfConsistency;
+  if (!selfConsistencyConfig?.enabled) {
+    return { comments: input.gate.comments, event: input.gate.event };
+  }
+
+  const providerId = selfConsistencyConfig.provider ?? input.config.zcode.providerId;
+  const result = runSelfConsistencyRecheck({
+    comments: input.gate.comments,
+    files: input.files,
+    config: selfConsistencyConfig,
+    ...(input.config.reviewGate?.requestChangesConfidenceFloors
+      ? { requestChangesConfidenceFloors: input.config.reviewGate.requestChangesConfidenceFloors }
+      : {}),
+    secondDraw: ({ comment, hunk }) => {
+      const draw = runZCodeReview({
+        cwd: input.worktreePath,
+        prompt: buildSelfConsistencyPrompt(comment, hunk),
+        cliPath: input.config.zcode.cliPath,
+        appConfigPath: input.config.zcode.appConfigPath,
+        model: input.config.zcode.model,
+        ...(providerId ? { providerId } : {}),
+        timeoutMs: input.config.zcode.timeoutMs,
+        retryMaxRetries: input.config.zcode.retryMaxRetries
+      });
+      return parseSelfConsistencyVerdict(draw.rawResponse);
+    }
+  });
+
+  // Redacted evidence: verdicts + both confidences, never raw model prose beyond the sanitized fields.
+  writeRedactedJson(join(input.evidenceDir, "self-consistency.json"), {
+    enabled: true,
+    provider: providerId,
+    maxFindingsPerReview: selfConsistencyConfig.maxFindingsPerReview ?? 5,
+    verdicts: result.verdicts
+  });
+
+  const agreed = result.verdicts.filter((verdict) => verdict.agreed === true).length;
+  const refuted = result.verdicts.filter((verdict) => verdict.refuted === true).length;
+  const failed = result.verdicts.filter((verdict) => verdict.error !== undefined).length;
+  const runtimeNote = result.verdicts.length
+    ? `Self-consistency re-check (#303): ${result.verdicts.length} P0/P1 finding(s) re-drawn — ${agreed} agreed, ${refuted} refuted (downgraded/ineligible), ${failed} second-draw failure(s) left untouched.`
+    : undefined;
+
+  return { comments: result.comments, event: result.event, ...(runtimeNote ? { runtimeNote } : {}) };
+}
+
+function buildSelfConsistencyPrompt(comment: DeterministicReviewGateResult["comments"][number], hunk: string): string {
+  return [
+    "You are re-checking a SINGLE prior code-review finding for self-consistency.",
+    "Do not modify files, run commands, or inspect anything beyond the finding and diff hunk below.",
+    "Decide independently whether the finding is a genuine, actionable issue on the current diff.",
+    "Return JSON ONLY: {\"verified\": true|false, \"confidence\": 0.0}. No prose, no code fences.",
+    "verified=true means you AGREE the finding is real; verified=false means you REFUTE it.",
+    "",
+    `Finding severity: ${comment.severity}`,
+    `Finding file: ${comment.path} (line ${comment.line})`,
+    `Finding title: ${comment.title}`,
+    `Finding detail: ${comment.body}`,
+    "",
+    "Relevant diff hunk:",
+    "```diff",
+    hunk,
+    "```"
+  ].join("\n");
+}
+
+function parseSelfConsistencyVerdict(rawResponse: string): SelfConsistencySecondDrawResult {
+  const parsed = JSON.parse(extractJsonObject(extractZCodeResponse(rawResponse))) as { verified?: unknown; confidence?: unknown };
+  const verified = parsed.verified === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.min(1, Math.max(0, parsed.confidence))
+      : verified ? 1 : 0;
+  return { verified, confidence };
 }
 
 async function runZCodeReviewWithProviderRetry(input: {
