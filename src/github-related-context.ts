@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
-import type { PullRequestSummary } from "./types.js";
+import type { PullFilePatch, PullRequestSummary } from "./types.js";
 
 export const GITHUB_RELATED_CONTEXT_PACKET_VERSION = "github-related-context-packet-v0.1";
 export const GITHUB_RELATED_CONTEXT_ADVISORY_LINE =
@@ -15,6 +15,38 @@ export interface GitHubRelatedContextConfig {
   maxPacketBytes: number;
   requestTimeoutMs: number;
   includeCrossRepoRefs: boolean;
+  /** Weighted relevance ranking (#119 R8, default off). Absent/disabled ⇒ byte-identical ordering. */
+  relevanceScoring?: RelevanceScoringConfig;
+}
+
+export interface RelevanceScoringConfig {
+  enabled: boolean;
+  weights?: Partial<RelevanceWeights>;
+}
+
+export interface RelevanceWeights {
+  kind: number;
+  pathOverlap: number;
+  lexical: number;
+  recency: number;
+  state: number;
+}
+
+/** Default component weights: `kind` dominates (preserving today's closing-ref-first ordering). */
+export const DEFAULT_RELEVANCE_WEIGHTS: RelevanceWeights = {
+  kind: 1,
+  pathOverlap: 0.6,
+  lexical: 0.4,
+  recency: 0.2,
+  state: 0.3
+};
+
+export interface RelevanceComponents {
+  kind: number;
+  pathOverlap: number;
+  lexical: number;
+  recency: number;
+  state: number;
 }
 
 export type GitHubReferenceSource = "title" | "body";
@@ -93,11 +125,19 @@ export interface GitHubRelatedContextPacket {
   redactionReportSha256: string;
 }
 
+export interface RelevanceBreakdownEntry {
+  id: string;
+  score: number;
+  components: RelevanceComponents;
+}
+
 export type GitHubRelatedContextBuildResult =
   | {
       ok: true;
       packet: GitHubRelatedContextPacket;
       redactionReport: GitHubRelatedContextRedactionReport;
+      /** Per-reference relevance breakdown (#119 R8); present only when relevanceScoring is enabled. */
+      relevanceBreakdown?: RelevanceBreakdownEntry[];
     }
   | {
       ok: false;
@@ -111,6 +151,9 @@ export async function buildGitHubRelatedContextPacket(input: {
   pull: PullRequestSummary;
   config: GitHubRelatedContextConfig;
   reader: GitHubRelatedContextReader;
+  /** Changed files (already fetched for the review). Feeds pathOverlap/lexical when relevanceScoring
+   * is enabled; ignored (and the ordering byte-identical) when disabled. */
+  files?: PullFilePatch[];
   generatedAt?: string;
 }): Promise<GitHubRelatedContextBuildResult> {
   validateConfig(input.config);
@@ -144,6 +187,8 @@ export async function buildGitHubRelatedContextPacket(input: {
   }
 
   const fetched: GitHubRelatedReference[] = [];
+  // Internal-only: updated_at per fetched ref feeds recency/state scoring; never rendered into the packet.
+  const updatedAtById = new Map<string, string | null | undefined>();
   const redactionSources: Array<{ id: string; text: string }> = [];
   for (let index = 0; index < boundedRefs.length; index += 1) {
     const ref = boundedRefs[index]!;
@@ -165,6 +210,7 @@ export async function buildGitHubRelatedContextPacket(input: {
       const milestone = item.milestone?.title ? truncateChars(redactSecrets(item.milestone.title), input.config.maxTitleChars) : undefined;
       const bodyExcerpt = item.body ? truncateBytes(redactSecrets(item.body), input.config.maxBodyBytes) : undefined;
       redactionSources.push({ id, text: `${item.title ?? ""}\n${item.html_url ?? ""}\n${item.body ?? ""}` });
+      updatedAtById.set(id, item.updated_at);
       fetched.push({
         repo: ref.repo,
         number: ref.number,
@@ -199,6 +245,18 @@ export async function buildGitHubRelatedContextPacket(input: {
     }
   }
 
+  // Relevance re-ordering (#119 R8) operates ONLY on the already-fetched, already-capped references —
+  // packet bounds, redaction, and omitted-reference reporting are untouched. Disabled/absent ⇒ the
+  // exact existing compareReferences order (byte-identical).
+  const ordered = orderReferencesByRelevance({
+    references: fetched,
+    config: input.config,
+    prTitle: input.pull.title,
+    files: input.files ?? [],
+    updatedAtById,
+    now: new Date(generatedAt)
+  });
+
   const base = {
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -207,7 +265,7 @@ export async function buildGitHubRelatedContextPacket(input: {
     packetVersion: input.config.packetVersion,
     generatedAt,
     advisory: GITHUB_RELATED_CONTEXT_ADVISORY_LINE,
-    references: fetched.sort(compareReferences),
+    references: ordered.references,
     omittedReferences: omittedReferences.sort(compareOmitted)
   };
   const budgeted = renderWithinBudget(base, input.config.maxPacketBytes);
@@ -249,7 +307,7 @@ export async function buildGitHubRelatedContextPacket(input: {
     tokenEstimate: Math.max(1, Math.ceil(Buffer.byteLength(budgeted.markdown, "utf8") / 4)),
     redactionReportSha256: sha256(JSON.stringify(redactionReport))
   };
-  return { ok: true, packet, redactionReport };
+  return { ok: true, packet, redactionReport, ...(ordered.breakdown ? { relevanceBreakdown: ordered.breakdown } : {}) };
 }
 
 export function extractGitHubReferences(input: { repo: string; title?: string | null; body?: string | null }): ExtractedGitHubReference[] {
@@ -328,7 +386,9 @@ function renderWithinBudget(input: {
   references: GitHubRelatedReference[];
   omittedReferences: GitHubRelatedOmittedReference[];
 } {
-  const references = [...input.references].sort(compareReferences);
+  // Preserve the caller's ordering (already sorted upstream: compareReferences when relevance is
+  // disabled, or the relevance ranking when enabled). Budget drops trim from the low-priority tail.
+  const references = [...input.references];
   const omittedReferences = [...input.omittedReferences].sort(compareOmitted);
   for (;;) {
     const markdown = renderMarkdown({ ...input, references, omittedReferences });
@@ -418,6 +478,151 @@ function rankReference(ref: ExtractedGitHubReference): number {
   return (ref.relationship === "closing" ? 0 : 10) + (ref.source === "body" ? 0 : 1);
 }
 
+const RECENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60_000; // 30-day half-life decay
+const RECENTLY_CLOSED_MS = 30 * 24 * 60 * 60_000; // a closed ref updated within 30d is "recently closed"
+const RELEVANCE_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "is", "are", "be", "fix", "fixes",
+  "add", "adds", "update", "updates", "issue", "pr", "bug", "when", "that", "this", "from", "into", "via"
+]);
+
+/**
+ * Pure, deterministic, hermetic relevance score for a related-context reference (#119 R8, pass 1).
+ * Computed only from data the packet builder already has — no API calls, no embeddings, no graph
+ * distance (graph distance is an explicit pass-2 candidate, gated on #344). score = Σ wᵢ·componentᵢ;
+ * each component is in [0,1]. `kind` preserves today's closing-ref-first dominance under default
+ * weights. The component breakdown is returned so the ranking is replayable and evidence-inspectable.
+ */
+export function scoreReferenceRelevance(input: {
+  reference: {
+    relationship: GitHubReferenceRelationship;
+    source: GitHubReferenceSource;
+    state: string;
+    title: string;
+    bodyExcerpt?: string;
+    updatedAt?: string | null;
+  };
+  prTitle: string;
+  changedPaths: string[];
+  hunkHeaders: string[];
+  weights: RelevanceWeights;
+  now: Date;
+}): { score: number; components: RelevanceComponents } {
+  const ref = input.reference;
+  const components: RelevanceComponents = {
+    kind: ref.relationship === "closing" ? 1 : ref.source === "title" ? 0.5 : 0,
+    pathOverlap: pathOverlapComponent(`${ref.title} ${ref.bodyExcerpt ?? ""}`, input.changedPaths),
+    lexical: lexicalComponent(ref.title, `${input.prTitle} ${input.hunkHeaders.join(" ")}`),
+    recency: recencyComponent(ref.updatedAt, input.now),
+    state: stateComponent(ref.state, ref.updatedAt, input.now)
+  };
+  const w = input.weights;
+  const score =
+    w.kind * components.kind +
+    w.pathOverlap * components.pathOverlap +
+    w.lexical * components.lexical +
+    w.recency * components.recency +
+    w.state * components.state;
+  return { score, components };
+}
+
+function orderReferencesByRelevance(input: {
+  references: GitHubRelatedReference[];
+  config: GitHubRelatedContextConfig;
+  prTitle: string;
+  files: PullFilePatch[];
+  updatedAtById: Map<string, string | null | undefined>;
+  now: Date;
+}): { references: GitHubRelatedReference[]; breakdown?: RelevanceBreakdownEntry[] } {
+  const relevance = input.config.relevanceScoring;
+  if (!relevance?.enabled) {
+    // Disabled/absent ⇒ byte-identical to today.
+    return { references: [...input.references].sort(compareReferences) };
+  }
+  const weights: RelevanceWeights = { ...DEFAULT_RELEVANCE_WEIGHTS, ...(relevance.weights ?? {}) };
+  const changedPaths = input.files.map((file) => file.filename);
+  const hunkHeaders = input.files.flatMap((file) => extractHunkHeaders(file.patch ?? ""));
+  const scored = input.references.map((reference) => {
+    const id = `${reference.repo}#${reference.number}`;
+    const { score, components } = scoreReferenceRelevance({
+      reference: {
+        relationship: reference.relationship,
+        source: reference.source,
+        state: reference.state,
+        title: reference.title,
+        ...(reference.bodyExcerpt ? { bodyExcerpt: reference.bodyExcerpt } : {}),
+        updatedAt: input.updatedAtById.get(id)
+      },
+      prTitle: input.prTitle,
+      changedPaths,
+      hunkHeaders,
+      weights,
+      now: input.now
+    });
+    return { reference, id, score, components };
+  });
+  // Highest score first; deterministic tie-break via the existing compareReferences so the order is
+  // stable and replayable.
+  scored.sort((left, right) => right.score - left.score || compareReferences(left.reference, right.reference));
+  return {
+    references: scored.map((entry) => entry.reference),
+    breakdown: scored.map((entry) => ({ id: entry.id, score: entry.score, components: entry.components }))
+  };
+}
+
+function extractHunkHeaders(patch: string): string[] {
+  return patch.split("\n").filter((line) => line.startsWith("@@"));
+}
+
+function pathSegments(paths: string[]): Set<string> {
+  const segments = new Set<string>();
+  for (const path of paths) {
+    for (const segment of path.toLowerCase().split(/[\/.]+/)) {
+      if (segment.length >= 3) segments.add(segment);
+    }
+  }
+  return segments;
+}
+
+function pathOverlapComponent(refText: string, changedPaths: string[]): number {
+  const changed = pathSegments(changedPaths);
+  if (changed.size === 0) return 0;
+  const refTokens = new Set(refText.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 3));
+  if (refTokens.size === 0) return 0;
+  let hits = 0;
+  for (const segment of changed) if (refTokens.has(segment)) hits += 1;
+  return hits / changed.size;
+}
+
+function relevanceTokens(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 3 && !RELEVANCE_STOPWORDS.has(token))
+  );
+}
+
+function lexicalComponent(refTitle: string, prText: string): number {
+  const a = relevanceTokens(refTitle);
+  const b = relevanceTokens(prText);
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection += 1;
+  return intersection / (a.size + b.size - intersection); // Jaccard
+}
+
+function recencyComponent(updatedAt: string | null | undefined, now: Date): number {
+  if (!updatedAt) return 0;
+  const updatedMs = Date.parse(updatedAt);
+  if (!Number.isFinite(updatedMs)) return 0;
+  const ageMs = Math.max(0, now.getTime() - updatedMs);
+  return 2 ** (-ageMs / RECENCY_HALF_LIFE_MS); // exponential decay, 1.0 fresh → 0 old
+}
+
+function stateComponent(state: string, updatedAt: string | null | undefined, now: Date): number {
+  if (state.toLowerCase() === "open") return 1;
+  const updatedMs = updatedAt ? Date.parse(updatedAt) : NaN;
+  if (Number.isFinite(updatedMs) && now.getTime() - updatedMs <= RECENTLY_CLOSED_MS) return 0.5;
+  return 0;
+}
+
 function compareExtractedReferences(left: ExtractedGitHubReference, right: ExtractedGitHubReference): number {
   return left.repo.localeCompare(right.repo) ||
     left.number - right.number ||
@@ -453,6 +658,16 @@ function validateConfig(config: GitHubRelatedContextConfig): void {
   if (!Number.isInteger(config.maxBodyBytes) || config.maxBodyBytes < 0) throw new Error("githubRelatedContext.maxBodyBytes must be a non-negative integer");
   if (!Number.isInteger(config.requestTimeoutMs) || config.requestTimeoutMs < 1) throw new Error("githubRelatedContext.requestTimeoutMs must be a positive integer");
   if (!Number.isInteger(config.maxPacketBytes) || config.maxPacketBytes < 500) throw new Error("githubRelatedContext.maxPacketBytes must be at least 500");
+  const relevance = config.relevanceScoring;
+  if (relevance !== undefined) {
+    if (typeof relevance.enabled !== "boolean") throw new Error("githubRelatedContext.relevanceScoring.enabled must be a boolean");
+    for (const [key, weight] of Object.entries(relevance.weights ?? {})) {
+      if (!(key in DEFAULT_RELEVANCE_WEIGHTS)) throw new Error(`githubRelatedContext.relevanceScoring.weights has unknown key "${key}"`);
+      if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > 1) {
+        throw new Error(`githubRelatedContext.relevanceScoring.weights.${key} must be a number from 0 to 1`);
+      }
+    }
+  }
 }
 
 function parseRepo(repo: string): [string, string] {

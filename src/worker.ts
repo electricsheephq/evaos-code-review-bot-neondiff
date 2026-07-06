@@ -1434,6 +1434,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       github: createGitHubRelatedContextReader(config, github),
       repo,
       pull,
+      files: reviewFiles,
       evidenceDir
     });
 
@@ -2212,6 +2213,7 @@ export async function buildGitHubRelatedContext(input: {
   github: GitHubRelatedContextReader;
   repo: string;
   pull: PullRequestSummary;
+  files?: PullFilePatch[];
   evidenceDir: string;
 }): Promise<{ packet?: GitHubRelatedContextPacket }> {
   const relatedConfig = input.config.githubRelatedContext;
@@ -2221,7 +2223,8 @@ export async function buildGitHubRelatedContext(input: {
     repo: input.repo,
     pull: input.pull,
     config: relatedConfig,
-    reader: input.github
+    reader: input.github,
+    ...(input.files ? { files: input.files } : {})
   });
 
   if (!packetResult.ok) {
@@ -2231,6 +2234,10 @@ export async function buildGitHubRelatedContext(input: {
 
   writeRedactedJson(join(input.evidenceDir, "github-related-context-packet.json"), packetResult);
   writeRedactedText(join(input.evidenceDir, "github-related-context-packet.md"), packetResult.packet.markdown);
+  // Evidence: the relevance component breakdown (#119 R8) makes the ranking replayable/inspectable.
+  if (packetResult.relevanceBreakdown) {
+    writeRedactedJson(join(input.evidenceDir, "github-related-context-relevance.json"), packetResult.relevanceBreakdown);
+  }
   return { packet: packetResult.packet };
 }
 
