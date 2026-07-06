@@ -298,6 +298,11 @@ export interface RepoMemoryNoteRecord {
   source: string;
   confidence?: number;
   fingerprint?: string;
+  coarsePath?: string;
+  coarseCategory?: string;
+  coarseLine?: number;
+  coarseTitle?: string;
+  confirmedByHuman?: boolean;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
@@ -312,6 +317,12 @@ export interface RecordRepoMemoryNoteInput {
   source: string;
   confidence?: number;
   fingerprint?: string;
+  // Coarse false-positive-match fields (#302, additive). confirmedByHuman gates P0/P1 suppression.
+  coarsePath?: string;
+  coarseCategory?: string;
+  coarseLine?: number;
+  coarseTitle?: string;
+  confirmedByHuman?: boolean;
   expiresAt?: string;
   now?: Date;
 }
@@ -561,6 +572,11 @@ export class ReviewStateStore {
         source text not null,
         confidence real,
         fingerprint text,
+        coarse_path text,
+        coarse_category text,
+        coarse_line integer,
+        coarse_title text,
+        confirmed_by_human integer,
         created_at text not null,
         updated_at text not null,
         expires_at text,
@@ -626,6 +642,7 @@ export class ReviewStateStore {
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
     this.ensureReviewQueueJobColumns();
+    this.ensureRepoMemoryNoteCoarseColumns();
     this.db.exec(`
       create table if not exists processed_commands (
         repo text not null,
@@ -2335,8 +2352,10 @@ export class ReviewStateStore {
     this.db
       .prepare(
         `insert into repo_memory_notes
-          (note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (note_id, repo, kind, title, body, source, confidence, fingerprint,
+           coarse_path, coarse_category, coarse_line, coarse_title, confirmed_by_human,
+           created_at, updated_at, expires_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(repo, note_id) do update set
            kind = excluded.kind,
            title = excluded.title,
@@ -2344,6 +2363,11 @@ export class ReviewStateStore {
            source = excluded.source,
            confidence = excluded.confidence,
            fingerprint = excluded.fingerprint,
+           coarse_path = excluded.coarse_path,
+           coarse_category = excluded.coarse_category,
+           coarse_line = excluded.coarse_line,
+           coarse_title = excluded.coarse_title,
+           confirmed_by_human = excluded.confirmed_by_human,
            updated_at = excluded.updated_at,
            expires_at = excluded.expires_at`
       )
@@ -2356,6 +2380,11 @@ export class ReviewStateStore {
         redactSecrets(input.source).trim(),
         input.confidence ?? null,
         input.fingerprint ? redactSecrets(input.fingerprint).trim() : null,
+        input.coarsePath ? redactSecrets(input.coarsePath).trim() : null,
+        input.coarseCategory ?? null,
+        input.coarseLine ?? null,
+        input.coarseTitle ? redactSecrets(input.coarseTitle).trim() : null,
+        input.confirmedByHuman === undefined ? null : input.confirmedByHuman ? 1 : 0,
         existing?.createdAt ?? nowIso,
         nowIso,
         input.expiresAt ?? null
@@ -2368,7 +2397,9 @@ export class ReviewStateStore {
     if (!noteId.trim()) throw new Error("noteId must be non-empty");
     const row = this.db
       .prepare(
-        `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
+        `select note_id, repo, kind, title, body, source, confidence, fingerprint,
+                coarse_path, coarse_category, coarse_line, coarse_title, confirmed_by_human,
+                created_at, updated_at, expires_at
          from repo_memory_notes
          where repo = ? and note_id = ?
          limit 1`
@@ -2478,6 +2509,18 @@ export class ReviewStateStore {
       this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
     }
   }
+
+  private ensureRepoMemoryNoteCoarseColumns(): void {
+    // Additive migration (#302): older DBs gain the coarse false-positive-match columns; existing
+    // rows keep NULLs and fall back to exact-only matching.
+    const columns = this.db.prepare("pragma table_info(repo_memory_notes)").all() as unknown as Array<{ name: string }>;
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("coarse_path")) this.db.exec("alter table repo_memory_notes add column coarse_path text");
+    if (!names.has("coarse_category")) this.db.exec("alter table repo_memory_notes add column coarse_category text");
+    if (!names.has("coarse_line")) this.db.exec("alter table repo_memory_notes add column coarse_line integer");
+    if (!names.has("coarse_title")) this.db.exec("alter table repo_memory_notes add column coarse_title text");
+    if (!names.has("confirmed_by_human")) this.db.exec("alter table repo_memory_notes add column confirmed_by_human integer");
+  }
 }
 
 export function listRepoMemoryNotesReadOnly(dbPath: string, input: ListRepoMemoryNotesInput): RepoMemoryNoteRecord[] {
@@ -2517,7 +2560,9 @@ function listRepoMemoryNotesFromDb(db: DatabaseSync, input: ListRepoMemoryNotesI
   if (input.limit) params.push(input.limit);
   const rows = db
     .prepare(
-      `select note_id, repo, kind, title, body, source, confidence, fingerprint, created_at, updated_at, expires_at
+      `select note_id, repo, kind, title, body, source, confidence, fingerprint,
+              coarse_path, coarse_category, coarse_line, coarse_title, confirmed_by_human,
+              created_at, updated_at, expires_at
        from repo_memory_notes
        where ${predicates.join(" and ")}
        order by datetime(updated_at) desc, note_id asc
@@ -2922,6 +2967,11 @@ interface RepoMemoryNoteRow {
   source: string;
   confidence: number | null;
   fingerprint: string | null;
+  coarse_path: string | null;
+  coarse_category: string | null;
+  coarse_line: number | null;
+  coarse_title: string | null;
+  confirmed_by_human: number | null;
   created_at: string;
   updated_at: string;
   expires_at: string | null;
@@ -3151,6 +3201,11 @@ function mapRepoMemoryNoteRow(row: RepoMemoryNoteRow): RepoMemoryNoteRecord {
     source: row.source,
     ...(row.confidence !== null ? { confidence: row.confidence } : {}),
     ...(row.fingerprint ? { fingerprint: row.fingerprint } : {}),
+    ...(row.coarse_path ? { coarsePath: row.coarse_path } : {}),
+    ...(row.coarse_category ? { coarseCategory: row.coarse_category } : {}),
+    ...(row.coarse_line !== null ? { coarseLine: row.coarse_line } : {}),
+    ...(row.coarse_title ? { coarseTitle: row.coarse_title } : {}),
+    ...(row.confirmed_by_human !== null ? { confirmedByHuman: row.confirmed_by_human === 1 } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.expires_at ? { expiresAt: row.expires_at } : {})

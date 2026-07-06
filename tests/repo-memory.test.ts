@@ -509,6 +509,58 @@ describe("repo memory packets", () => {
     store.close();
   });
 
+  it("round-trips coarse false-positive-match fields and the confirmedByHuman flag (#302)", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-memory-coarse-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const fingerprint = `finding:${"b".repeat(64)}`;
+
+    store.recordRepoMemoryNote({
+      noteId: "confirmed-fp",
+      repo,
+      kind: "false_positive",
+      title: "Confirmed noisy rollback finding",
+      body: "Operator-confirmed false positive to suppress on coarse recurrence.",
+      source: "operator",
+      fingerprint,
+      coarsePath: "src/save.ts",
+      coarseCategory: "data_loss",
+      coarseLine: 42,
+      coarseTitle: "Rollback clobbers fresh state",
+      confirmedByHuman: true,
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      now: new Date(generatedAt)
+    });
+
+    const stored = store.getRepoMemoryNote(repo, "confirmed-fp");
+    expect(stored).toMatchObject({
+      coarsePath: "src/save.ts",
+      coarseCategory: "data_loss",
+      coarseLine: 42,
+      coarseTitle: "Rollback clobbers fresh state",
+      confirmedByHuman: true
+    });
+
+    // An auto note without the flag reads back without confirmedByHuman (stays P2/P3-only downstream).
+    store.recordRepoMemoryNote({
+      noteId: "auto-fp",
+      repo,
+      kind: "false_positive",
+      title: "Auto-learned churn",
+      body: "Auto-learned false positive with coarse fields but no human confirmation.",
+      source: "review#91",
+      fingerprint: `finding:${"c".repeat(64)}`,
+      coarsePath: "src/save.ts",
+      coarseCategory: "runtime_correctness",
+      coarseLine: 10,
+      coarseTitle: "Retry accounting is wrong",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      now: new Date(generatedAt)
+    });
+    expect(store.getRepoMemoryNote(repo, "auto-fp")?.confirmedByHuman).toBeUndefined();
+    store.close();
+  });
+
   it("reads human repo-memory.md outside the target checkout", () => {
     const root = mkdtempSync(join(tmpdir(), "repo-memory-root-"));
     roots.push(root);

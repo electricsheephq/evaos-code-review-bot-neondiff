@@ -3,7 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
-export const REPO_MEMORY_PACKET_VERSION = "repo-memory-packet-v0.1";
+// v0.2 additively carries coarse false-positive-match fields + confirmedByHuman (#302). Older v0.1
+// notes simply lack them and fall back to exact-only matching.
+export const REPO_MEMORY_PACKET_VERSION = "repo-memory-packet-v0.2";
 export const REPO_MEMORY_ADVISORY_LINE =
   "This memory is advisory. Current PR diff and current repository files override memory.";
 
@@ -23,6 +25,13 @@ export interface RepoMemoryNote {
   source: string;
   confidence?: number;
   fingerprint?: string;
+  // Coarse false-positive-match fields (#302, additive): present on false_positive notes so the gate
+  // can match a reworded / line-shifted recurrence. confirmedByHuman gates the P0/P1 override.
+  coarsePath?: string;
+  coarseCategory?: string;
+  coarseLine?: number;
+  coarseTitle?: string;
+  confirmedByHuman?: boolean;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
