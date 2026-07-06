@@ -46,8 +46,10 @@ private repo contents, provider keys, or customer secrets:
 | Client/server time drift is outside service tolerance | `clock_skew` | Ask the operator to correct time sync before retrying. |
 | Network or service failure | `network` or `server` | Use only the existing short offline cache grace for active cached entitlements; otherwise fail closed. |
 
-Legacy service responses remain supported: for example, a bare HTTP 403 without
-an explicit `scope_mismatch` body remains classified as `revoked`.
+When a response body provides an explicit non-`active` status, that status is
+authoritative and takes precedence over the HTTP-status fallback. Legacy service
+responses remain supported: for example, a bare HTTP 403 without an explicit
+`scope_mismatch` body remains classified as `revoked`.
 
 ## Entitlement Metadata
 

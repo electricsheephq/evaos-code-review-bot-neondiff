@@ -91,10 +91,11 @@ describe("license activation and entitlement cache", () => {
     const invalid = await startLicenseServer((_req, res) => writeJson(res, 401, { status: "invalid", detail: "bad key" }));
     const server = await startLicenseServer((_req, res) => writeJson(res, 503, { detail: "try later" }));
     const scopeMismatch = await startLicenseServer((_req, res) => writeJson(res, 403, { status: "scope_mismatch", detail: "repo not covered" }));
+    const statusPrecedence = await startLicenseServer((_req, res) => writeJson(res, 401, { status: "clock_skew", detail: "body status wins" }));
     const rateLimited = await startLicenseServer((_req, res) => writeJson(res, 429, { detail: "try later" }));
     const unsupportedClient = await startLicenseServer((_req, res) => writeJson(res, 426, { status: "unsupported_client", detail: "upgrade required" }));
     const clockSkew = await startLicenseServer((_req, res) => writeJson(res, 400, { status: "clock_skew", detail: "clock skew too large" }));
-    servers.push(expired, revoked, legacyForbidden, invalid, server, scopeMismatch, rateLimited, unsupportedClient, clockSkew);
+    servers.push(expired, revoked, legacyForbidden, invalid, server, scopeMismatch, statusPrecedence, rateLimited, unsupportedClient, clockSkew);
 
     await expectStatus(licenseConfig(root, expired.url), "expired");
     await expectStatus(licenseConfig(root, revoked.url), "revoked");
@@ -102,6 +103,7 @@ describe("license activation and entitlement cache", () => {
     await expectStatus(licenseConfig(root, invalid.url), "invalid");
     await expectStatus(licenseConfig(root, server.url), "server");
     await expectStatus(licenseConfig(root, scopeMismatch.url), "scope_mismatch");
+    await expectStatus(licenseConfig(root, statusPrecedence.url), "clock_skew");
     await expectStatus(licenseConfig(root, rateLimited.url), "rate_limited");
     await expectStatus(licenseConfig(root, unsupportedClient.url), "unsupported_client");
     await expectStatus(licenseConfig(root, clockSkew.url), "clock_skew");
