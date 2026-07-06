@@ -10,6 +10,30 @@
     "maxActiveRuns": 5,
     "leaseTtlMs": 900000
   },
+  "_reviewGateComment": "Deterministic post-model gate: ranking, comment cap, and REQUEST_CHANGES eligibility. maxInlineComments matches the built-in default; the rest are default-off/quieter-only knobs. See docs/neondiff-config.md.",
+  "reviewGate": {
+    "maxInlineComments": 25,
+    "_requestChangesConfidenceFloorsComment": "Optional per-severity confidence floor for REQUEST_CHANGES eligibility (only P0/P1 keys allowed). Quieter-only: a below-floor finding still posts as a comment. Uncomment to enable.",
+    "_retryDegradedConfidencePenaltyComment": "Optional 0..1 confidence penalty applied to findings recovered via the strict-JSON retry path. Quieter-only; unset means no penalty.",
+    "selfConsistency": {
+      "_comment": "Opt-in second-draw re-check for P0/P1 findings. Adds one provider call per re-checked finding (bounded by maxFindingsPerReview) — keep enabled:false unless you have budget for the extra provider spend.",
+      "enabled": false,
+      "severities": ["P0", "P1"],
+      "maxFindingsPerReview": 5
+    }
+  },
+  "_riskWeightedQueueComment": "Config-gated enqueue priority tiering by changed-surface risk. Disabled means flat FIFO priority and zero extra GitHub calls at enqueue time.",
+  "riskWeightedQueue": {
+    "enabled": false
+  },
+  "_repoMemoryComment": "Durable per-repo memory packet (policy notes, machine facts, learned false positives) surfaced to the model. Disabled means no packet is built.",
+  "repoMemory": {
+    "enabled": false,
+    "memoryRoot": ".evaos/repo-memory",
+    "maxPacketBytes": 12000,
+    "maxStateNotes": 20,
+    "includeStaleNotes": false
+  },
   "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot-runtime",
   "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
   "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
