@@ -106,7 +106,9 @@ When the promoted numbers meet the floors, a human — not a tool — edits
 `confidenceCalibration.publicDisplay.mode` to `"calibrated"`. Config
 validation enforces the floors again at load and fails closed, so a premature
 flip is rejected even if made by hand. See
-[neondiff-config.md](neondiff-config.md) for the full key reference.
+[neondiff-config.md](neondiff-config.md) for the full key reference and
+[evals/confidence-calibration.md](evals/confidence-calibration.md) for the
+calibration policy behind the floors.
 
 ## Feeding Ranking: `reviewGate.categoryPrecisionFloors`
 

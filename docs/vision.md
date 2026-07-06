@@ -28,7 +28,17 @@ NeonDiff competes on trust, not breadth:
 
 That claim is only meaningful if the system can back it with data, which is why
 the core of NeonDiff is not a prompt — it is a closed measurement loop around
-every finding it posts.
+every finding it posts. The core job is not to sound smart about every diff;
+it is to make high-risk PRs harder to merge without a visible proof trail.
+
+Where NeonDiff fits first:
+
+- AI-authored PRs that touch runtime, security, release, billing, data, or
+  customer paths
+- docs or config PRs where public claims can drift ahead of shipped behavior
+- agent-produced changes that need a durable checklist before human review
+- teams that want BYOK or local-model review without handing every diff to a
+  hosted review SaaS
 
 ## The Calibration Loop
 
