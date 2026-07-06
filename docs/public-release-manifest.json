@@ -17,9 +17,10 @@
       "v0.4.32-beta.1",
       "v0.4.33-beta.1",
       "v0.4.34-beta.1",
-      "v0.4.35-beta.1"
+      "v0.4.35-beta.1",
+      "v0.4.36-beta.1"
     ],
-    "note": "v0.4.25 through v0.4.29 and v0.4.31 through v0.4.35 were source/local-worker beta releases; v0.4.30-beta.1 remains the current public npm/site beta."
+    "note": "v0.4.25 through v0.4.29 and v0.4.31 through v0.4.36 were source/local-worker beta releases; v0.4.30-beta.1 remains the current public npm/site beta."
   },
   "source": {
     "shaState": "set_after_codeql_hardening_merge",

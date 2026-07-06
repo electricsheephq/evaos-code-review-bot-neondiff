@@ -77,7 +77,7 @@ describe("NeonDiff public release readiness", () => {
       previousReleasedPackageVersion: "0.4.24-beta.1"
     });
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.29-beta.1");
-    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.35-beta.1");
+    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.36-beta.1");
     expect(manifest.packageArtifact?.note).toMatch(/source\/local-worker/i);
   });
 
