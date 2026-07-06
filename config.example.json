@@ -1,8 +1,8 @@
 {
-  "pilotRepos": ["electricsheephq/WorldOS", "100yenadmin/evaOS-GUI"],
+  "pilotRepos": ["example-org/example-repo"],
   "pollIntervalMs": 90000,
   "skipDrafts": true,
-  "canaryPulls": ["electricsheephq/WorldOS#1161", "100yenadmin/evaOS-GUI#497"],
+  "canaryPulls": ["example-org/example-repo#1"],
   "activation": {
     "reviewExistingOpenPrsOnActivation": false
   },
@@ -34,9 +34,10 @@
     "maxStateNotes": 20,
     "includeStaleNotes": false
   },
-  "workRoot": "/Volumes/LEXAR/repos/evaos-code-review-bot-runtime",
-  "statePath": "/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews.sqlite",
-  "evidenceDir": "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence",
+  "_workRootComment": "workRoot must resolve outside this checkout (enforced at config load: config.workRoot must be outside the current repository checkout). /tmp/neondiff is a placeholder that satisfies that check on any machine without edits; point it at a durable path for real use.",
+  "workRoot": "/tmp/neondiff/runtime",
+  "statePath": "/tmp/neondiff/state/reviews.sqlite",
+  "evidenceDir": "/tmp/neondiff/evidence",
   "issueEnrichment": {
     "enabled": false,
     "postIssueComment": false,

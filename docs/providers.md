@@ -96,6 +96,15 @@ resolution to the local ZCode app config referenced by `zcode.appConfigPath`.
 NeonDiff derives a transient runtime environment for the ZCode child process and
 writes only redacted provider metadata into evidence.
 
+The ZCode child process inherits the full ambient environment of the shell
+that runs `neondiff`, not a filtered subset — `resolveZCodeProviderEnv`/
+`buildZCodeRuntimeEnv` in `src/zcode-env.ts` layer the resolved
+`ZCODE_MODEL`/`ZCODE_BASE_URL`/`ZCODE_API_KEY` on top of a copy of
+`process.env`. See [docs/SETUP.md](SETUP.md#environment-variables) for the
+full list of environment variables NeonDiff itself reads and why this matters
+if you have other providers' credentials (for example `ANTHROPIC_API_KEY`)
+exported in the same shell.
+
 ```json
 {
   "providers": {

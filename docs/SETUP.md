@@ -125,6 +125,11 @@ permissions under the configured `license.keyPath`, which defaults next to
 Private-repo review only accepts a cached entitlement during a transient API
 outage for up to 15 minutes; longer grace windows are rejected at config load.
 
+`license.apiBaseUrl` must be set in `config.local.json` before you set
+`license.enabled: true` — config load throws
+`license.apiBaseUrl is required when license.enabled=true` otherwise, and
+`license activate` cannot run against a config that fails to load.
+
 ```bash
 NEONDIFF_LICENSE_KEY="..." \
   neondiff license activate \
@@ -224,7 +229,10 @@ The full doctor output is JSON. Check:
 ## 5. Run A Dry-Run Review
 
 Use a known repo, PR number, and current head. A dry-run review should produce
-structured output and evidence without posting comments:
+structured output and evidence without posting comments. Substitute
+`--repo owner/name` with one of the repos you added to `pilotRepos` in step 3
+and `--pr 123` with an open PR number on that repo — `review-pr` fails with
+"repo must be present in configured repos" for any repo not in `pilotRepos`:
 
 ```bash
 neondiff review-pr \
@@ -289,6 +297,33 @@ declares the current public beta version, setup/release-notes alignment, license
 API state, and update-channel readiness. A local source beta may explicitly
 defer license API, website, or desktop channels only when the manifest marks
 that channel as `requiredForThisRelease: false`.
+
+## Environment Variables
+
+Commands such as `doctor` read these ambient environment variables in
+addition to `config.local.json`. None of them are printed by `--json` output.
+Environment values override the matching config-file value where both are
+set.
+
+| Variable | Read by | Overrides config value | Notes |
+| --- | --- | --- | --- |
+| `EVAOS_REVIEW_BOT_APP_ID` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.appId` | Set once per step 2; unset falls back to the config-file value. |
+| `EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.privateKeyPath` | Path to the GitHub App private key; keep the key itself outside the repo. |
+| `GITHUB_TOKEN` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.token` | Local-development fallback token only; App auth is required for App-authored posting. |
+| `EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT` | `getProtectedCheckoutRoots` (`src/path-safety.ts`) | Adds to the built-in checkout-isolation boundary | Advanced use only: an additional path `config.workRoot` must stay outside of, alongside the current package checkout. Unset by default. |
+| `NEONDIFF_ALLOW_REMOTE_SMOKE` | `providers doctor` remote smoke path (`src/providers.ts`) | N/A (opt-in gate, not a config override) | Required before a hosted (non-loopback) provider smoke check is allowed to run. See [docs/providers.md](providers.md). |
+| A provider's configured `apiKeyEnv` name (e.g. `ANTHROPIC_API_KEY`, `NEONDIFF_PROVIDER_API_KEY`) | Provider adapters for any `authMode: "api-key-env"` provider (`src/providers.ts`, `src/provider-adapters.ts`) | N/A (the config only stores the variable *name*, never the key) | Applies to `anthropic`, `openai`, and `openai-compatible` adapters. See [docs/providers.md](providers.md) for the per-provider list. |
+
+The default `zcode-glm` provider (`authMode: "zcode-app-config"`) spawns the
+ZCode CLI with the full ambient environment inherited (`buildZCodeRuntimeEnv`
+in `src/zcode-env.ts` layers `ZCODE_MODEL`/`ZCODE_BASE_URL`/`ZCODE_API_KEY` on
+top of a copy of `process.env`, it does not start from an empty environment).
+Any credential-shaped variable already exported in the shell that runs
+`neondiff` (for example `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or
+`ANTHROPIC_BASE_URL` if you have one of Anthropic's own tools configured in
+the same shell) is visible to that child process. Run `neondiff` from a shell
+that only exports the variables listed above if you need to bound exactly
+what the ZCode child process can read.
 
 ## Troubleshooting
 
