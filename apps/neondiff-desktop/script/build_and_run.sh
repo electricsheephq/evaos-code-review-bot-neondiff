@@ -6,7 +6,16 @@ APP_NAME="NeonDiffDesktop"
 BUNDLE_ID="com.electricsheephq.NeonDiffDesktop"
 MIN_SYSTEM_VERSION="14.0"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# preflight: run the credential doctor (reports signing/notarization/Sparkle
+# credential presence) and exit before any build. Additive, read-only mode —
+# it mutates nothing and does not touch the default run/build behavior below.
+if [ "$MODE" = "preflight" ] || [ "$MODE" = "--preflight" ]; then
+  exec "$SCRIPT_DIR/preflight-credentials.sh" "${@:2}"
+fi
+
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
@@ -127,7 +136,7 @@ case "$MODE" in
     fi
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--bundle-check]" >&2
+    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--bundle-check|preflight]" >&2
     exit 2
     ;;
 esac
