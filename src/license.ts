@@ -313,17 +313,6 @@ function entitlementCoversRepoVisibility(entitlement: LicenseEntitlement, visibi
 
 function statusFromCache(entitlement: LicenseEntitlement | undefined, now: Date): LicenseStatusResult {
   if (!entitlement) return missingResult(now, "no entitlement cache exists");
-  if (!entitlementCurrentlyUsable(entitlement, now)) {
-    return {
-      ok: false,
-      status: "expired",
-      source: "cache",
-      checkedAt: now.toISOString(),
-      entitlement,
-      classification: "expired",
-      detail: `cached entitlement expired at ${entitlement.expiresAt ?? "unknown"}`
-    };
-  }
   if (entitlement.status !== "active") {
     return {
       ok: false,
@@ -333,6 +322,17 @@ function statusFromCache(entitlement: LicenseEntitlement | undefined, now: Date)
       entitlement,
       classification: entitlement.status,
       detail: `cached entitlement status is ${entitlement.status}`
+    };
+  }
+  if (!entitlementCurrentlyUsable(entitlement, now)) {
+    return {
+      ok: false,
+      status: "expired",
+      source: "cache",
+      checkedAt: now.toISOString(),
+      entitlement,
+      classification: "expired",
+      detail: `cached entitlement expired at ${entitlement.expiresAt ?? "unknown"}`
     };
   }
   return {

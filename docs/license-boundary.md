@@ -45,6 +45,29 @@ The default config may keep license enforcement disabled for internal beta
 workers. Public/private product installs should enable license enforcement and
 keep `license.publicReposFree` true when the public free path is intended.
 
+## Review Gate Proof Matrix
+
+The license gate is separate from provider setup. A provider API key or local
+model path can satisfy the model/provider setup gate, but it never grants
+private repository entitlement.
+
+| Repo visibility | NeonDiff entitlement | Provider configured | License gate result | Next blocking layer |
+| --- | --- | --- | --- | --- |
+| public | none | yes | allow | provider output may still fail normally |
+| public | none | no | allow | setup/provider blocked, not license blocked |
+| public with `publicReposFree=false` | none | yes | block before checkout, provider call, or post | license blocked |
+| public with `publicReposFree=false` | none | no | block before checkout, provider call, or post | license blocked |
+| public with `publicReposFree=false` | active public/private entitlement | yes | allow | provider output may still fail normally |
+| private | none | yes | block before checkout, provider call, or post | license blocked |
+| private | active private entitlement | yes | allow | provider output may still fail normally |
+| private | expired or revoked entitlement | yes | block before checkout, provider call, or post | license blocked |
+| unknown | any | yes | fail closed before checkout, provider call, or post | visibility/license blocked |
+
+Evidence should name the command, repo visibility source, license gate result,
+pre-checkout gate result, and redacted evidence path. It must not include raw
+private diffs, provider keys, GitHub App private keys, license keys, or customer
+logs.
+
 ## Product Surface Wording
 
 Use:

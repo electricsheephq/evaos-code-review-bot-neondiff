@@ -100,6 +100,15 @@ pre-checkout blocker. Unknown or unreadable visibility is never public-free
 evidence; confirm the App installation scope, selected repositories, and
 permissions before widening provider/model settings.
 
+For public/private entitlement proof, keep the GitHub doctor JSON and the review
+evidence path together. The proof packet should show `visibility_result`,
+`visibility_source`, `license_gate_decision`, and `pre_checkout_gate_result`.
+Public repos with no license may pass this gate, then fail later if no provider
+is configured. Private repos without an active private entitlement, expired or
+revoked entitlements, and unknown visibility must block before checkout,
+provider calls, or GitHub review posting. A provider API key alone is not
+private-repo entitlement evidence.
+
 ## First Review Path
 
 Start with a dry run on a known PR:
