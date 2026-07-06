@@ -2302,7 +2302,10 @@ export function recordConcurrentClaimSkip(input: {
     detail: "Another reviewPull (manual review-pr or daemon) holds the atomic per-head claim for this head; skipping to preserve at-most-one-review-per-head."
   };
   mkdirSync(input.evidenceDir, { recursive: true });
-  writeFileSync(join(input.evidenceDir, "concurrent-claim-skip.json"), `${JSON.stringify(evidence, null, 2)}\n`);
+  // Through the redacting writer like every other evidence write (defense-in-depth; the
+  // network-data-to-evidence-file pattern itself is the evidence-packet design, triaged as a
+  // class under #249).
+  writeRedactedJson(join(input.evidenceDir, "concurrent-claim-skip.json"), evidence);
   input.state.recordReviewReadiness({
     repo: input.repo,
     pullNumber: input.pull.number,
