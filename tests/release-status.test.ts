@@ -193,16 +193,16 @@ describe("beta release status", () => {
     const manifest = readPublicReleaseManifestStatus({
       cwd: repoRoot,
       manifestPath: "docs/public-release-manifest.json",
-      expectedVersion: "v1.0.0-beta.1"
+      expectedVersion: "v0.4.30-beta.1"
     });
 
     expect(manifest).toMatchObject({
       ok: true,
-      version: "v1.0.0-beta.1",
+      version: "v0.4.30-beta.1",
       docs: {
         ok: true,
         setupPath: "docs/SETUP.md",
-        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+        releaseNotesPath: "docs/releases/v0.4.30-beta.1.md"
       },
       updateChannels: {
         ok: true
@@ -213,12 +213,12 @@ describe("beta release status", () => {
         expect.objectContaining({
           name: "cli",
           requiredForThisRelease: true,
-          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+          rollback: "git reset --hard refs/tags/v0.4.29-beta.1"
         }),
         expect.objectContaining({
           name: "daemon",
           requiredForThisRelease: true,
-          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+          rollback: "git reset --hard refs/tags/v0.4.29-beta.1"
         })
       ])
     );
@@ -250,6 +250,29 @@ describe("beta release status", () => {
         expectedPublicVersion: "v1.0.0"
       })
     ).not.toThrow();
+    expect(() =>
+      validatePublicReleaseManifestInputs({
+        publicReleaseManifestPath: "docs/public-release-manifest.json",
+        expectedPublicVersion: "v1.0.0-beta.1+build.5"
+      })
+    ).not.toThrow();
+    expect(() =>
+      validatePublicReleaseManifestInputs({
+        publicReleaseManifestPath: "docs/public-release-manifest.json",
+        expectedPublicVersion: "v01.0.0"
+      })
+    ).toThrow("--expected-public-version must be a semver tag like v1.0.0 or v1.0.0-beta.1");
+  });
+
+  it("rejects oversized public release version inputs before semver matching", () => {
+    const oversizedVersion = `v1.0.0-${"a.".repeat(300)}`;
+
+    expect(() =>
+      validatePublicReleaseManifestInputs({
+        publicReleaseManifestPath: "docs/public-release-manifest.json",
+        expectedPublicVersion: oversizedVersion
+      })
+    ).toThrow("--expected-public-version is too long (max 128 characters)");
   });
 
   it("collects public release manifest gates through release-status wiring", () => {
@@ -262,26 +285,26 @@ describe("beta release status", () => {
       statePath: join(root, "missing-live-state.sqlite"),
       configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
       publicReleaseManifestPath: "docs/public-release-manifest.json",
-      expectedPublicVersion: "v1.0.0-beta.1",
+      expectedPublicVersion: "v0.4.30-beta.1",
       launchdLabel: "com.electricsheephq.evaos-code-review-bot"
     });
 
     expect(status.publicRelease).toMatchObject({
       ok: true,
-      version: "v1.0.0-beta.1"
+      version: "v0.4.30-beta.1"
     });
     expect(status.gates).toContainEqual({
       name: "public_update_channels",
       ok: true,
-      detail: "cli=source_checkout; daemon=launchd_prerelease; website=pending-site-sync (not required); desktop=post_1_0 (not required)"
+      detail: "cli=published; daemon=launchd_prerelease; website=published (not required); desktop=post_1_0 (not required)"
     });
     const redactedOutput = stringifyRedactedJson({
       ...status,
       healthState: status.ok ? "runtime_ok" : "runtime_blocked",
       runtimeOk: status.ok
     });
-    expect(redactedOutput).toContain("git reset --hard refs/tags/v0.4.9-beta.1");
-    expect(redactedOutput).toContain("cli=source_checkout; daemon=launchd_prerelease");
+    expect(redactedOutput).toContain("git reset --hard refs/tags/v0.4.29-beta.1");
+    expect(redactedOutput).toContain("cli=published; daemon=launchd_prerelease");
     expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/111");
   });
 

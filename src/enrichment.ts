@@ -119,16 +119,18 @@ export function buildEnrichmentComment(input: {
     "No labels or reviewers were applied by this bot."
   ].join("\n");
   const redactedVisibleBody = redactSecrets(visibleBody);
+  const bodyHash = hashBody(redactedVisibleBody);
   const stateMarker = buildStateMarker({
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,
-    bodyHash: hashBody(redactedVisibleBody)
+    bodyHash
   });
 
   return {
     marker,
     body: [marker, stateMarker, redactedVisibleBody].join("\n"),
+    bodyHash,
     postIssueComment: input.postIssueComment ?? false
   };
 }
@@ -194,16 +196,18 @@ export function buildIssueEnrichmentComment(input: {
     "No labels, owners, reviewers, or roadmap fields were changed by this bot."
   ].join("\n");
   const redactedVisibleBody = redactSecrets(visibleBody);
+  const bodyHash = hashBody(redactedVisibleBody);
   const stateMarker = buildIssueStateMarker({
     repo: input.repo,
     issueNumber: input.issue.number,
     state,
-    bodyHash: hashBody(redactedVisibleBody)
+    bodyHash
   });
 
   return {
     marker,
     body: [marker, stateMarker, redactedVisibleBody].join("\n"),
+    bodyHash,
     postIssueComment: input.postIssueComment ?? false
   };
 }

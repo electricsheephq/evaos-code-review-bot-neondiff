@@ -15,6 +15,7 @@ import {
 import { hostname, platform } from "node:os";
 import { dirname } from "node:path";
 import { redactSecrets } from "./secrets.js";
+import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 
 export type LicenseStorageBackend = "keychain" | "file";
 export type LicenseStatus = "active" | "expired" | "revoked" | "invalid" | "missing" | "network" | "server";
@@ -370,7 +371,8 @@ async function callLicenseApi(input: {
   const timeout = setTimeout(() => controller.abort(new Error("license API request timed out")), input.config.requestTimeoutMs);
   try {
     const fetcher = input.fetchImpl ?? fetch;
-    const response = await fetcher(`${input.config.apiBaseUrl}${input.path}`, {
+    const apiBaseUrl = normalizeHttpApiBaseUrl(input.config.apiBaseUrl, "config.license.apiBaseUrl", "");
+    const response = await fetcher(buildApiUrl(apiBaseUrl, input.path, "license API request path"), {
       method: "POST",
       signal: controller.signal,
       headers: { "Content-Type": "application/json" },

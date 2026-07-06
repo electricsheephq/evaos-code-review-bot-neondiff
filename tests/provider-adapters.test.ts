@@ -1,12 +1,764 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  buildOpenAIChatCompletionsUrl,
   classifyProviderAdapterError,
+  createOpenAICompatibleReviewAdapter,
   runProviderAdapterFixture,
   type ProviderRuntimeAdapter
 } from "../src/provider-adapters.js";
+import type { ProviderRegistryEntry } from "../src/providers.js";
+import { createZCodeReviewFixtureAdapter } from "../src/zcode.js";
 
 describe("provider adapter fixtures", () => {
+  it("runs one shared review fixture through mocked ZCode and local OpenAI-compatible adapters", async () => {
+    const reviewJson = '{"findings":[],"summary":"No validated current-diff findings."}';
+    const sharedFixture = makeFixture({
+      id: "shared-review-fixture",
+      prompt: [
+        "Review this private patch content before posting a comment.",
+        "diff --git a/private.ts b/private.ts",
+        "@@ -1 +1 @@",
+        "-secret",
+        "+fixed"
+      ].join("\n"),
+      expectReviewJson: true
+    });
+    const zcodeAdapter = createZCodeReviewFixtureAdapter({
+      cwd: "/repo",
+      cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+      appConfigPath: "/Users/example/.zcode/app-config.json",
+      runReview(input) {
+        expect(input.prompt).toBe(sharedFixture.prompt);
+        expect(input.model).toBe("GLM-5.2");
+        expect(input.providerId).toBe("zcode-glm");
+        return {
+          findings: [],
+          droppedFromSchema: [],
+          rawResponse: reviewJson
+        };
+      }
+    });
+    const localAdapter = createOpenAICompatibleReviewAdapter({
+      providerId: "ollama-local",
+      provider: makeOpenAICompatibleProvider({
+        baseUrl: "http://127.0.0.1:11434/v1",
+        model: "qwen2.5-coder:7b",
+        authMode: "none",
+        capabilities: {
+          review: true,
+          jsonOutput: true,
+          local: true,
+          streaming: false
+        }
+      }),
+      fetchImpl: async (url, init) => {
+        expect(String(url)).toBe("http://127.0.0.1:11434/v1/chat/completions");
+        expect(new Headers(init?.headers).has("authorization")).toBe(false);
+        const body = JSON.parse(String(init?.body)) as {
+          model?: string;
+          stream?: boolean;
+          messages?: Array<{ role?: string; content?: string }>;
+          response_format?: { type?: string };
+        };
+        expect(body).toMatchObject({
+          model: "qwen2.5-coder:7b",
+          stream: false,
+          response_format: { type: "json_object" }
+        });
+        expect(body.messages?.at(-1)).toEqual({ role: "user", content: sharedFixture.prompt });
+        return jsonResponse({
+          id: "chatcmpl-local-fixture",
+          choices: [
+            {
+              message: {
+                content: reviewJson
+              }
+            }
+          ],
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 5
+          }
+        });
+      }
+    });
+
+    const zcode = await runProviderAdapterFixture({
+      adapter: zcodeAdapter,
+      fixture: {
+        ...sharedFixture,
+        providerId: "zcode-glm",
+        adapterId: "zcode",
+        model: "GLM-5.2"
+      }
+    });
+    const local = await runProviderAdapterFixture({
+      adapter: localAdapter,
+      fixture: {
+        ...sharedFixture,
+        providerId: "ollama-local",
+        adapterId: "openai-compatible",
+        model: "qwen2.5-coder:7b"
+      }
+    });
+
+    expect(zcode.ok).toBe(true);
+    expect(local.ok).toBe(true);
+    expect(zcode.fixtureId).toBe(local.fixtureId);
+    expect(zcode.evidence.promptSha256).toBe(local.evidence.promptSha256);
+    expect(zcode.evidence.outputPreview).toBe(reviewJson);
+    expect(local.evidence.outputPreview).toBe(reviewJson);
+    expect(JSON.stringify([zcode, local])).not.toContain("private patch content");
+    expect(JSON.stringify([zcode, local])).not.toContain("diff --git");
+    expect(local.evidence.rawEvidencePreview).toContain('"providerId":"ollama-local"');
+    expect(local.evidence.rawEvidencePreview).not.toContain(sharedFixture.prompt);
+  });
+
+  it("normalizes prose-wrapped ZCode fixture responses before adapter evidence", async () => {
+    const reviewJson = '{"findings":[],"summary":"Recovered from fenced ZCode output."}';
+    const zcodeAdapter = createZCodeReviewFixtureAdapter({
+      cwd: "/repo",
+      cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+      appConfigPath: "/Users/example/.zcode/app-config.json",
+      runReview() {
+        return {
+          findings: [],
+          droppedFromSchema: [],
+          rawResponse: `Here is the review:\n\`\`\`json\n${reviewJson}\n\`\`\``
+        };
+      }
+    });
+
+    const result = await runProviderAdapterFixture({
+      adapter: zcodeAdapter,
+      fixture: makeFixture({
+        id: "wrapped-zcode-fixture",
+        providerId: "zcode-glm",
+        adapterId: "zcode",
+        model: "GLM-5.2",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toBe(reviewJson);
+    expect(result.evidence.redactedOutputSha256).toBe(sha256(reviewJson));
+  });
+
+  it("executes OpenAI-compatible chat-completions reviews with env-backed bearer auth and redacted evidence", async () => {
+    const providerKey = "sk-live-openai-compatible-secret";
+    const adapter = createOpenAICompatibleReviewAdapter({
+      providerId: "openai-compatible",
+      provider: makeOpenAICompatibleProvider({
+        baseUrl: "http://localhost:1234/v1",
+        model: "lm-studio-review-model",
+        authMode: "api-key-env",
+        apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+        capabilities: {
+          review: true,
+          jsonOutput: true,
+          local: true,
+          streaming: false
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: providerKey
+      },
+      fetchImpl: async (url, init) => {
+        expect(String(url)).toBe("http://localhost:1234/v1/chat/completions");
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${providerKey}`);
+        return jsonResponse({
+          id: "chatcmpl-env-auth-fixture",
+          choices: [
+            {
+              message: {
+                content: '{"findings":[{"severity":"P2","path":"src/app.ts","line":12,"title":"Bug","body":"Fix the regression.","confidence":0.91}],"summary":"One finding."}'
+              }
+            }
+          ]
+        });
+      }
+    });
+
+    const result = await runProviderAdapterFixture({
+      adapter,
+      fixture: makeFixture({
+        id: "env-auth-openai-compatible-fixture",
+        providerId: "openai-compatible",
+        adapterId: "openai-compatible",
+        model: "lm-studio-review-model",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toContain('"findings"');
+    expect(result.evidence.rawEvidencePreview).toContain('"status":200');
+    expect(result.evidence.rawEvidencePreview).not.toContain(providerKey);
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+  });
+
+  it("blocks unsafe OpenAI-compatible review targets before fetching private prompts", async () => {
+    let fetched = false;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "unsafe-openai-compatible",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://169.254.169.254/latest/meta-data",
+          capabilities: {
+            review: true,
+            jsonOutput: true,
+            local: false,
+            streaming: false
+          }
+        }),
+        fetchImpl: async () => {
+          fetched = true;
+          return jsonResponse({ unreachable: true });
+        }
+      }),
+      fixture: makeFixture({
+        id: "unsafe-openai-compatible-fixture",
+        providerId: "unsafe-openai-compatible",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(fetched).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "unknown",
+        message: "OpenAI-compatible review target must not point to private, link-local, loopback, or cloud metadata hosts."
+      }
+    });
+  });
+
+  it("omits strict response_format when provider capabilities do not declare JSON mode", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "json-parser-only-local",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://127.0.0.1:8080/v1",
+          capabilities: {
+            review: true,
+            jsonOutput: false,
+            local: true,
+            streaming: false
+          }
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as { response_format?: unknown; temperature?: unknown };
+          expect(body).not.toHaveProperty("response_format");
+          expect(body).not.toHaveProperty("temperature");
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[],"summary":"Parsed without provider-side JSON mode."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "json-parser-only-local-fixture",
+        providerId: "json-parser-only-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("can opt out of strict JSON response_format for OpenAI-compatible providers that reject it", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "json-parser-compat-local",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://127.0.0.1:8080/v1",
+          jsonObjectResponseFormat: false
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as { response_format?: unknown; temperature?: unknown };
+          expect(body).not.toHaveProperty("response_format");
+          expect(body).not.toHaveProperty("temperature");
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[],"summary":"Parsed after provider-side JSON mode opt-out."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "json-parser-compat-local-fixture",
+        providerId: "json-parser-compat-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("sends configured temperature together with strict JSON response_format when supported", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "json-temperature-local",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://127.0.0.1:8080/v1",
+          temperature: 0.2,
+          jsonObjectResponseFormat: true
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as {
+            response_format?: { type?: string };
+            temperature?: number;
+          };
+          expect(body).toMatchObject({
+            temperature: 0.2,
+            response_format: { type: "json_object" }
+          });
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[],"summary":"Parsed with provider-side JSON mode and temperature."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "json-temperature-local-fixture",
+        providerId: "json-temperature-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("times out OpenAI-compatible responses that stall after headers", async () => {
+    let bodyCancelled = false;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "slow-body-local",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://127.0.0.1:8080/v1",
+          timeoutMs: 25
+        }),
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          text: async () => new Promise<string>(() => undefined),
+          body: {
+            cancel: async () => {
+              bodyCancelled = true;
+            }
+          }
+        }) as Response
+      }),
+      fixture: makeFixture({
+        id: "slow-body-openai-compatible-fixture",
+        providerId: "slow-body-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "timeout",
+        message: "deadline exceeded"
+      }
+    });
+    expect(bodyCancelled).toBe(true);
+  });
+
+  it.each([
+    {
+      expectedClass: "auth",
+      provider: makeOpenAICompatibleProvider({
+        authMode: "api-key-env",
+        apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
+      }),
+      env: {},
+      fetchImpl: async () => jsonResponse({ unreachable: true })
+    },
+    {
+      expectedClass: "throttle",
+      fetchImpl: async () => new Response("too many requests with sk-live-secret-secret", { status: 429 })
+    },
+    {
+      expectedClass: "network",
+      fetchImpl: async () => new Response("service unavailable with sk-live-secret-secret", { status: 503 })
+    },
+    {
+      expectedClass: "auth",
+      fetchImpl: async () => new Response("invalid api key with sk-live-secret-secret", { status: 400 })
+    },
+    {
+      expectedClass: "timeout",
+      fetchImpl: async () => {
+        throw new Error("deadline exceeded");
+      }
+    },
+    {
+      expectedClass: "model-output",
+      fetchImpl: async () => jsonResponse({
+        choices: [
+          {
+            message: {
+              content: "not json with sk-live-secret-secret"
+            }
+          }
+        ]
+      })
+    },
+    {
+      expectedClass: "unknown",
+      fetchImpl: async () => new Response("provider returned a teapot with sk-live-secret-secret", { status: 418 })
+    }
+  ] as const)(
+    "bounds OpenAI-compatible adapter failures as $expectedClass",
+    async ({ expectedClass, provider, env, fetchImpl }) => {
+      const result = await runProviderAdapterFixture({
+        adapter: createOpenAICompatibleReviewAdapter({
+          providerId: "openai-compatible",
+          provider: provider ?? makeOpenAICompatibleProvider(),
+          env,
+          fetchImpl
+        }),
+        fixture: makeFixture({
+          id: `${expectedClass}-openai-compatible-fixture`,
+          providerId: "openai-compatible",
+          adapterId: "openai-compatible",
+          expectReviewJson: true
+        })
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          class: expectedClass
+        }
+      });
+      expect(JSON.stringify(result)).not.toContain("sk-live-secret-secret");
+    }
+  );
+
+  it("keeps model-output wording ahead of generic HTTP status tokens", () => {
+    expect(classifyProviderAdapterError("500 invalid output from provider")).toBe("model-output");
+    expect(classifyProviderAdapterError("upstream returned invalid output: service unavailable")).toBe("model-output");
+    expect(classifyProviderAdapterError("invalid output from provider during ECONNRESET")).toBe("model-output");
+    expect(classifyProviderAdapterError("schema parse failed after provider overload")).toBe("model-output");
+    expect(classifyProviderAdapterError("structured output validation failed")).toBe("model-output");
+    expect(classifyProviderAdapterError("500 network failure from provider")).toBe("network");
+    expect(classifyProviderAdapterError("network-error while parsing invalid response")).toBe("network");
+    expect(classifyProviderAdapterError("OpenAI-compatible chat completions endpoint returned 418.")).toBe("unknown");
+  });
+
+  it("keeps redacted diagnostic hints for special OpenAI-compatible HTTP status failures", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "overloaded-local-model",
+        provider: makeOpenAICompatibleProvider(),
+        fetchImpl: async () => new Response("queue full for sk-live-secret-secret", { status: 503 })
+      }),
+      fixture: makeFixture({
+        id: "overloaded-local-model-fixture",
+        providerId: "overloaded-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "network",
+        message: "OpenAI-compatible chat completions endpoint returned 503 network failure: queue full for [redacted-secret]"
+      }
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-live-secret-secret");
+  });
+
+  it("builds OpenAI-compatible chat-completions URLs for Ollama, LM Studio, vLLM, and gateway shapes", () => {
+    expect(buildOpenAIChatCompletionsUrl("http://localhost:11434/v1")).toBe("http://localhost:11434/v1/chat/completions");
+    expect(buildOpenAIChatCompletionsUrl("http://127.0.0.1:1234/v1/")).toBe("http://127.0.0.1:1234/v1/chat/completions");
+    expect(buildOpenAIChatCompletionsUrl("http://localhost:8000/v1/chat/completions")).toBe("http://localhost:8000/v1/chat/completions");
+    expect(buildOpenAIChatCompletionsUrl("http://localhost:8000/v1/chat/completions/")).toBe("http://localhost:8000/v1/chat/completions");
+    expect(buildOpenAIChatCompletionsUrl("http://localhost:8000/v1//chat/completions?x=1")).toBe("http://localhost:8000/v1/chat/completions?x=1");
+    expect(buildOpenAIChatCompletionsUrl("https://gateway.example.test/openai/v1")).toBe("https://gateway.example.test/openai/v1/chat/completions");
+  });
+
+  it("bounds review JSON extraction work for large malformed local-model responses", async () => {
+    const noisyPrefix = Array.from({ length: 5_000 }, (_, index) => `{noise-${index}}`).join("");
+    const extractedReviewJson = '{"findings":[],"summary":"Found after noisy braces."}';
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "noisy-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => jsonResponse({
+          choices: [
+            {
+              message: {
+                content: `${noisyPrefix} ${extractedReviewJson}`
+              }
+            }
+          ]
+        })
+      }),
+      fixture: makeFixture({
+        id: "noisy-local-model-fixture",
+        providerId: "noisy-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toBe(extractedReviewJson);
+    expect(result.evidence.redactedOutputSha256).toBe(sha256(extractedReviewJson));
+  });
+
+  it("preserves finish_reason length when OpenAI-compatible review JSON is truncated", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "truncated-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => jsonResponse({
+          choices: [
+            {
+              finish_reason: "length",
+              message: {
+                content: '{"findings":[{"severity":"P1"'
+              }
+            }
+          ]
+        })
+      }),
+      fixture: makeFixture({
+        id: "truncated-local-model-fixture",
+        providerId: "truncated-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length)."
+      }
+    });
+  });
+
+  it("extracts trailing review JSON after deeply nested non-review braces", async () => {
+    const nestedPrefix = `${"{".repeat(50_000)}${"}".repeat(50_000)}`;
+    const extractedReviewJson = '{"findings":[],"summary":"Found after nested braces."}';
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "nested-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => jsonResponse({
+          choices: [
+            {
+              message: {
+                content: `${nestedPrefix} ${extractedReviewJson}`
+              }
+            }
+          ]
+        })
+      }),
+      fixture: makeFixture({
+        id: "nested-local-model-fixture",
+        providerId: "nested-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toBe(extractedReviewJson);
+    expect(result.evidence.redactedOutputSha256).toBe(sha256(extractedReviewJson));
+  });
+
+  it("extracts nested review JSON from valid OpenAI-compatible wrapper JSON", async () => {
+    const extractedReviewJson = '{"findings":[],"summary":"Inside envelope."}';
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "wrapped-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => jsonResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  object: "response",
+                  body: {
+                    findings: [],
+                    summary: "Inside envelope."
+                  }
+                })
+              }
+            }
+          ]
+        })
+      }),
+      fixture: makeFixture({
+        id: "wrapped-local-model-fixture",
+        providerId: "wrapped-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toBe(extractedReviewJson);
+    expect(result.evidence.redactedOutputSha256).toBe(sha256(extractedReviewJson));
+  });
+
+  it("accepts single text-part array content from OpenAI-compatible responses", async () => {
+    const reviewJson = '{"findings":[],"summary":"Recovered from array content."}';
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "array-content-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => jsonResponse({
+          choices: [
+            {
+              message: {
+                content: [
+                  {
+                    type: "text",
+                    text: reviewJson
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      }),
+      fixture: makeFixture({
+        id: "array-content-local-model-fixture",
+        providerId: "array-content-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toBe(reviewJson);
+  });
+
+  it("bounds nested review object traversal depth for provider-controlled JSON", async () => {
+    let nested: unknown = { findings: [], summary: "Too deeply nested." };
+    for (let index = 0; index < 40; index += 1) {
+      nested = { wrapper: nested };
+    }
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "deep-wrapper-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => jsonResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(nested)
+              }
+            }
+          ]
+        })
+      }),
+      fixture: makeFixture({
+        id: "deep-wrapper-local-model-fixture",
+        providerId: "deep-wrapper-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "Adapter output did not contain a review findings array."
+      }
+    });
+  });
+
+  it("does not duplicate-validate adapter-validated review JSON at the fixture layer", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "validated-fixture-adapter",
+        async execute() {
+          return {
+            text: '{"findings":[{"confidence":1.0000001}]}',
+            reviewJsonValidated: true
+          };
+        }
+      },
+      fixture: makeFixture({
+        id: "adapter-validated-review-json-fixture",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toBe('{"findings":[{"confidence":1.0000001}]}');
+  });
+
+  it("rejects invalid review JSON when an adapter has not already validated it", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: {
+        id: "unvalidated-fixture-adapter",
+        async execute() {
+          return {
+            text: '{"findings":[{"confidence":1.0000001}]}'
+          };
+        }
+      },
+      fixture: makeFixture({
+        id: "unvalidated-review-json-fixture",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "Adapter output contained invalid review findings."
+      }
+    });
+  });
+
   it("runs adapter fixtures deterministically without exposing prompt text or secrets in evidence", async () => {
     function makeAdapter(rawEvidence: Record<string, unknown>): ProviderRuntimeAdapter {
       return {
@@ -516,6 +1268,7 @@ function makeFixture(overrides: Partial<{
   model: string;
   prompt: string;
   expectJsonObject: boolean;
+  expectReviewJson: boolean;
 }> = {}) {
   return {
     id: "fixture",
@@ -525,4 +1278,32 @@ function makeFixture(overrides: Partial<{
     prompt: "Review this private patch content before posting a comment.",
     ...overrides
   };
+}
+
+function makeOpenAICompatibleProvider(overrides: Partial<ProviderRegistryEntry> = {}): ProviderRegistryEntry {
+  return {
+    enabled: true,
+    adapter: "openai-compatible",
+    displayName: "OpenAI-compatible fixture endpoint",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    model: "review-model",
+    authMode: "none",
+    timeoutMs: 1_000,
+    retryMaxRetries: 0,
+    capabilities: {
+      review: true,
+      jsonOutput: true,
+      local: true,
+      streaming: false
+    },
+    ...overrides
+  };
+}
+
+function jsonResponse(value: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init
+  });
 }

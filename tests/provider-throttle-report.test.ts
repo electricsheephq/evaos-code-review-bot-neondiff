@@ -140,6 +140,38 @@ describe("provider throttle report", () => {
     })).toThrow("Invalid --timezone value: Foo/Bar");
   });
 
+  it("does not classify GitHub lookalike hosts as GitHub dependency failures", () => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-github-lookalike-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      insertQueueJob(db, {
+        repo: "owner/repo",
+        pullNumber: 16,
+        headSha: "lookalike-head",
+        providerId: "GLM-5.2",
+        state: "failed",
+        lastError: "fetch failed for https://api.github.com.attacker.invalid/repos/owner/repo",
+        createdAt: "2026-07-01T11:00:00.000Z",
+        updatedAt: "2026-07-01T11:01:00.000Z"
+      });
+    } finally {
+      db.close();
+    }
+
+    const report = collectProviderThrottleReport({
+      statePath,
+      now: new Date("2026-07-08T00:00:00.000Z"),
+      since: "7d",
+      timezone: "Asia/Singapore"
+    });
+
+    expect(report.summary.providerErrors).toBe(0);
+    expect(report.summary.networkOrGithubDependency).toBe(0);
+  });
+
   it("rejects invalid peak-window hour values before aggregating", () => {
     const root = mkdtempSync(join(tmpdir(), "provider-throttle-report-peak-hour-"));
     roots.push(root);

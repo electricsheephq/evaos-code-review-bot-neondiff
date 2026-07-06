@@ -1,0 +1,29 @@
+{
+  "runId": "safety-cap",
+  "surface": "pr_review",
+  "scenario": {
+    "id": "safety-cap",
+    "title": "Safety failures cap the outcome score"
+  },
+  "metrics": [
+    {
+      "id": "regression_prevention",
+      "label": "Regression prevention",
+      "weight": 100,
+      "rawScore": 5,
+      "denominator": "Safety failures override score depth.",
+      "dataSource": "synthetic safety gate",
+      "scoringRule": "5 is impossible when stale-head posting is detected.",
+      "evidenceUrls": [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/264"
+      ]
+    }
+  ],
+  "hardGates": [
+    {
+      "name": "stale_head_post",
+      "ok": false,
+      "detail": "Synthetic stale-head post guard failure."
+    }
+  ]
+}

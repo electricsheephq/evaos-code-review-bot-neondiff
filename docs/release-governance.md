@@ -23,7 +23,7 @@ Use semver prerelease tags for live beta promotions:
 v0.2.5-beta.1
 v0.2.5-beta.2
 v0.3.0-beta.1
-v1.0.0-beta.1
+v0.4.24-beta.1
 ```
 
 Patch beta tags are for runtime/reliability fixes. Minor beta tags are for new

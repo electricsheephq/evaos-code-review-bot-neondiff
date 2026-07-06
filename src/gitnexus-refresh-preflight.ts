@@ -1,3 +1,5 @@
+import { isSameHostOrSubdomain } from "./url-safety.js";
+
 export type GitNexusRefreshAction = "analyze_with_embeddings" | "index_only_fallback" | "blocked";
 
 export interface GitNexusRefreshPreflightInput {
@@ -197,8 +199,14 @@ function parseGitNexusCommandFailures(text: string): string[] {
 
 function inferProviderFromUrl(url?: string): string | undefined {
   if (!url) return undefined;
-  if (url.includes("voyageai.com")) return "voyage";
-  if (url.includes("openai.com")) return "openai";
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "http";
+  }
+  if (isSameHostOrSubdomain(parsed.hostname, "voyageai.com")) return "voyage";
+  if (isSameHostOrSubdomain(parsed.hostname, "openai.com")) return "openai";
   return "http";
 }
 

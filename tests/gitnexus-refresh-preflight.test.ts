@@ -33,6 +33,26 @@ describe("GitNexus refresh preflight", () => {
     expect(result.recommendedCommand).toBe("gitnexus analyze . --name evaos-code-review-bot-neondiff --embeddings");
   });
 
+  it("infers embedding providers only from exact hosts or subdomains", () => {
+    const openai = buildGitNexusRefreshPreflight({
+      indexInfoText: "Embedding dimensions: 1536\n",
+      env: {
+        GITNEXUS_EMBEDDING_URL: "https://api.openai.com/v1/embeddings",
+        GITNEXUS_EMBEDDING_DIMS: "1536"
+      }
+    });
+    const lookalike = buildGitNexusRefreshPreflight({
+      indexInfoText: "Embedding dimensions: 1536\n",
+      env: {
+        GITNEXUS_EMBEDDING_URL: "https://openai.com.attacker.invalid/v1/embeddings",
+        GITNEXUS_EMBEDDING_DIMS: "1536"
+      }
+    });
+
+    expect(openai.intended.provider).toBe("openai");
+    expect(lookalike.intended.provider).toBe("http");
+  });
+
   it("fails closed before vector rebuild when provider configuration is missing", () => {
     const result = buildGitNexusRefreshPreflight({
       repoAlias: "evaos-code-review-bot-neondiff",

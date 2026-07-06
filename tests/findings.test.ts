@@ -1,9 +1,88 @@
 import { describe, expect, it } from "vitest";
-import { decideReviewEvent, formatReviewComment, normalizeFindingsForReview, parseFindings } from "../src/findings.js";
+import { decideReviewEvent, formatReviewComment, normalizeFindingsForReview, parseFindings, suppressSameRunNearDuplicates } from "../src/findings.js";
 import type { PublicConfidenceDisplayPolicy } from "../src/public-confidence.js";
 import type { Finding } from "../src/types.js";
 
 describe("finding normalization and review policy", () => {
+  it("orders same-severity findings by confidence and caps the lowest-confidence first", () => {
+    const findings: Finding[] = [
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "a.ts",
+        line: 1,
+        title: "Low confidence concern",
+        body: "A concrete review comment.",
+        confidence: 0.1
+      },
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "a.ts",
+        line: 1,
+        title: "High confidence concern",
+        body: "A concrete review comment.",
+        confidence: 0.99
+      }
+    ];
+
+    const result = normalizeFindingsForReview(findings, { maxInlineComments: 1 });
+
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.title).toBe("High confidence concern");
+    expect(result.comments[0]?.confidence).toBe(0.99);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ title: "Low confidence concern", reason: "comment_cap_exceeded" })
+    ]);
+  });
+
+  it("keeps cross-severity ordering independent of confidence", () => {
+    const findings: Finding[] = [
+      {
+        severity: "P2",
+        category: "runtime_correctness",
+        path: "a.ts",
+        line: 1,
+        title: "High confidence low severity",
+        body: "A concrete review comment.",
+        confidence: 0.99
+      },
+      {
+        severity: "P1",
+        category: "runtime_correctness",
+        path: "a.ts",
+        line: 1,
+        title: "Low confidence high severity",
+        body: "A concrete review comment.",
+        confidence: 0.1
+      }
+    ];
+
+    const result = normalizeFindingsForReview(findings);
+
+    expect(result.comments[0]?.severity).toBe("P1");
+    expect(result.comments[0]?.title).toBe("Low confidence high severity");
+    expect(result.comments[1]?.severity).toBe("P2");
+  });
+
+  it("carries confidence metadata on review comments without rendering it in the body or title", () => {
+    const result = normalizeFindingsForReview([
+      {
+        severity: "P1",
+        category: "runtime_correctness",
+        path: "src/reviewer.ts",
+        line: 12,
+        title: "Regression concern",
+        body: "A concrete review comment.",
+        confidence: 0.73
+      }
+    ]);
+
+    expect(result.comments[0]?.confidence).toBe(0.73);
+    expect(result.comments[0]?.title).not.toContain("0.73");
+    expect(result.comments[0]?.body).not.toContain("0.73");
+  });
+
   it("keeps validated findings, caps aggressive inline comments, and sorts by severity", () => {
     const findings: Finding[] = Array.from({ length: 30 }, (_, index) => ({
       severity: index === 29 ? "P0" : index % 2 === 0 ? "P2" : "P3",
@@ -241,14 +320,14 @@ describe("finding normalization and review policy", () => {
   });
 
   it("requests changes only for P0 or P1 findings in eligible regression categories", () => {
-    expect(decideReviewEvent([{ severity: "P2", category: "data_loss" }, { severity: "P3", category: "auth" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "docs_only" }])).toBe("COMMENT");
-    expect(decideReviewEvent([{ severity: "P1", category: "flaky_test_risk" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P1", category: "dependency" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P1", category: "unknown" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P1", category: "data_loss" }])).toBe("REQUEST_CHANGES");
-    expect(decideReviewEvent([{ severity: "P0", category: "security_boundary" }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P2", category: "data_loss", confidence: 0.9 }, { severity: "P3", category: "auth", confidence: 0.9 }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "proof_gap", confidence: 0.9 }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "docs_only", confidence: 0.9 }])).toBe("COMMENT");
+    expect(decideReviewEvent([{ severity: "P1", category: "flaky_test_risk", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P1", category: "dependency", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P1", category: "unknown", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P1", category: "data_loss", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent([{ severity: "P0", category: "security_boundary", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
   });
 
   it("ignores unsupported optional model categories without dropping the finding", () => {
@@ -298,5 +377,125 @@ describe("finding normalization and review policy", () => {
       category: "security_boundary"
     });
     expect(decideReviewEvent(result.comments)).toBe("REQUEST_CHANGES");
+  });
+});
+
+describe("same-run near-duplicate suppression (#281)", () => {
+  function base(overrides: Partial<Finding> & Pick<Finding, "path" | "line" | "title">): Finding {
+    return {
+      severity: "P1",
+      category: "runtime_correctness",
+      body: "A concrete review comment.",
+      confidence: 0.8,
+      ...overrides
+    };
+  }
+
+  it("drops a near-duplicate on an adjacent line and keeps the higher-confidence member", () => {
+    const findings: Finding[] = [
+      base({ path: "src/save.ts", line: 42, title: "Rollback clobbers fresh state", confidence: 0.95 }),
+      base({ path: "src/save.ts", line: 44, title: "rollback clobbers fresh state!", confidence: 0.6 })
+    ];
+
+    const kept = suppressSameRunNearDuplicates(findings);
+
+    expect(kept.kept).toHaveLength(1);
+    expect(kept.kept[0]?.confidence).toBe(0.95);
+    // The pure helper returns the raw dropped finding; the caller attaches the reason (see the
+    // cap-interaction test for the reason on the normalizeFindingsForReview dropped[] output).
+    expect(kept.dropped).toEqual([expect.objectContaining({ line: 44, confidence: 0.6 })]);
+  });
+
+  it("keeps both when the line delta exceeds the window", () => {
+    const findings: Finding[] = [
+      base({ path: "src/save.ts", line: 10, title: "Rollback clobbers fresh state" }),
+      base({ path: "src/save.ts", line: 40, title: "Rollback clobbers fresh state" })
+    ];
+
+    const kept = suppressSameRunNearDuplicates(findings);
+
+    expect(kept.kept).toHaveLength(2);
+    expect(kept.dropped).toEqual([]);
+  });
+
+  it("keeps both when categories differ on adjacent lines", () => {
+    const findings: Finding[] = [
+      base({ path: "src/save.ts", line: 42, title: "Rollback clobbers fresh state", category: "runtime_correctness" }),
+      base({ path: "src/save.ts", line: 43, title: "Rollback clobbers fresh state", category: "data_loss" })
+    ];
+
+    const kept = suppressSameRunNearDuplicates(findings);
+
+    expect(kept.kept).toHaveLength(2);
+    expect(kept.dropped).toEqual([]);
+  });
+
+  it("keeps both when the same title appears on different paths", () => {
+    const findings: Finding[] = [
+      base({ path: "src/save.ts", line: 42, title: "Rollback clobbers fresh state" }),
+      base({ path: "src/load.ts", line: 42, title: "Rollback clobbers fresh state" })
+    ];
+
+    const kept = suppressSameRunNearDuplicates(findings);
+
+    expect(kept.kept).toHaveLength(2);
+    expect(kept.dropped).toEqual([]);
+  });
+
+  it("treats a normalized-title prefix as a duplicate but not a short prefix under 12 chars", () => {
+    const prefixDup: Finding[] = [
+      base({ path: "src/save.ts", line: 42, title: "Race in save path" }),
+      base({ path: "src/save.ts", line: 43, title: "Race in save path corrupts state on retry" })
+    ];
+    const shortPrefix: Finding[] = [
+      base({ path: "src/save.ts", line: 42, title: "Bad flag" }),
+      base({ path: "src/save.ts", line: 43, title: "Bad flag breaks retry accounting entirely" })
+    ];
+
+    expect(suppressSameRunNearDuplicates(prefixDup).kept).toHaveLength(1);
+    expect(suppressSameRunNearDuplicates(shortPrefix).kept).toHaveLength(2);
+  });
+
+  it("runs before the cap so a freed slot lets the distinct pair post (cap interaction)", () => {
+    const findings: Finding[] = [
+      base({ path: "src/save.ts", line: 42, title: "Rollback clobbers fresh state", confidence: 0.95 }),
+      base({ path: "src/save.ts", line: 43, title: "rollback clobbers fresh state", confidence: 0.6 }),
+      base({ path: "src/load.ts", line: 5, title: "Distinct unrelated concern", confidence: 0.9 })
+    ];
+
+    const result = normalizeFindingsForReview(findings, { maxInlineComments: 2 });
+
+    expect(result.comments).toHaveLength(2);
+    const titles = result.comments.map((comment) => comment.title);
+    expect(titles).toContain("Rollback clobbers fresh state");
+    expect(titles).toContain("Distinct unrelated concern");
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ line: 43, reason: "same_run_near_duplicate" })
+    ]);
+  });
+
+  it("redacts a secret-containing dropped duplicate that reaches dropped[]", () => {
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const findings: Finding[] = [
+      base({ path: "src/save.ts", line: 42, title: "Rollback clobbers fresh state", confidence: 0.95 }),
+      base({
+        path: "src/save.ts",
+        line: 43,
+        title: "Rollback clobbers fresh state",
+        body: `Duplicate concern; raw token ${token} leaked here.`,
+        confidence: 0.6
+      })
+    ];
+
+    const result = normalizeFindingsForReview(findings);
+
+    // A duplicate whose body contains a secret is dropped by the secret filter first (never reaches
+    // dedup). Asserting the explicit secret_detected reason makes that ordering invariant loud: if
+    // the pipeline were ever reordered so dedup ran first, the reason would flip to
+    // same_run_near_duplicate and this test would fail instead of silently passing.
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.title).toBe("Rollback clobbers fresh state");
+    expect(result.dropped).toEqual([expect.objectContaining({ line: 43, reason: "secret_detected" })]);
+    expect(JSON.stringify(result.dropped)).not.toContain(token);
   });
 });

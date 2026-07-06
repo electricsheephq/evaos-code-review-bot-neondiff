@@ -30,11 +30,11 @@ export async function postWalkthroughComment(input: {
       marker: input.walkthrough.marker,
       body: input.walkthrough.body
     });
-    writeFileSync(join(input.evidenceDir, "walkthrough-comment.json"), `${JSON.stringify(comment, null, 2)}\n`);
+    writeFileSync(join(input.evidenceDir, "walkthrough-comment.json"), `${redactSecrets(JSON.stringify(comment, null, 2))}\n`);
     return { posted: true, ...comment };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    writeFileSync(join(input.evidenceDir, "walkthrough-comment-error.txt"), redactSecrets(message));
+    writeFileSync(join(input.evidenceDir, "walkthrough-comment-error.txt"), `${redactSecrets(message)}\n`);
     return { posted: false, reason: "upsert_failed" };
   }
 }

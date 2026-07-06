@@ -18,6 +18,7 @@ import {
   type PublicConfidenceDisplayPolicy
 } from "./public-confidence.js";
 import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
+import type { RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -44,6 +45,7 @@ export interface BotConfig {
     headCountLimit: number;
   };
   reviewScheduler?: ReviewSchedulerConfig;
+  riskWeightedQueue?: RiskWeightedQueueConfig;
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -66,6 +68,7 @@ export interface BotConfig {
   confidenceCalibration?: {
     publicDisplay: PublicConfidenceDisplayPolicy;
   };
+  reviewGate?: ReviewGateConfig;
   repoMemory?: RepoMemoryConfig;
   gitnexusContext?: GitNexusContextConfig;
   githubRelatedContext?: GitHubRelatedContextConfig;
@@ -187,6 +190,22 @@ export interface ReviewSchedulerConfig {
   backgroundPriority: number;
 }
 
+export interface ReviewGateConfig {
+  /** Max inline comments posted per review; the highest-ranked findings survive the cap. */
+  maxInlineComments: number;
+  /** Optional per-severity confidence floors for REQUEST_CHANGES eligibility (default off). */
+  requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
+}
+
+export interface RiskWeightedQueueConfig {
+  /** When false (default), enqueue priority stays the flat backgroundPriority — byte-identical. */
+  enabled: boolean;
+  /** Priority for PRs whose changed surface matches a required-validation category (lower = sooner). */
+  elevatedPriority?: number;
+  /** Priority for docs-only PRs (typically >= backgroundPriority to defer them). */
+  docsOnlyPriority?: number;
+}
+
 export interface RepoMemoryConfig {
   enabled: boolean;
   memoryRoot: string;
@@ -225,6 +244,9 @@ const DEFAULT_CONFIG: BotConfig = {
     manualCommandReserve: 1,
     backgroundPriority: 50
   },
+  riskWeightedQueue: {
+    enabled: false
+  },
   providerCooldown: {
     enabled: true,
     durationMs: 15 * 60_000,
@@ -246,6 +268,9 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   confidenceCalibration: {
     publicDisplay: buildPublicConfidencePolicy()
+  },
+  reviewGate: {
+    maxInlineComments: 25
   },
   repoMemory: {
     enabled: false,
@@ -495,6 +520,9 @@ function validateConfig(config: BotConfig): void {
   const reviewScheduler = config.reviewScheduler ?? DEFAULT_CONFIG.reviewScheduler!;
   config.reviewScheduler = reviewScheduler;
   validateReviewSchedulerConfig(reviewScheduler, "config.reviewScheduler");
+  const riskWeightedQueue = config.riskWeightedQueue ?? DEFAULT_CONFIG.riskWeightedQueue!;
+  config.riskWeightedQueue = riskWeightedQueue;
+  validateRiskWeightedQueueConfig(riskWeightedQueue, "config.riskWeightedQueue", reviewScheduler.backgroundPriority);
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");
@@ -521,6 +549,9 @@ function validateConfig(config: BotConfig): void {
   confidenceCalibration.publicDisplay = buildPublicConfidencePolicy(confidenceCalibration.publicDisplay);
   validatePublicConfidenceDisplayConfig(confidenceCalibration.publicDisplay, "config.confidenceCalibration.publicDisplay");
   config.confidenceCalibration = confidenceCalibration;
+  const reviewGate = config.reviewGate ?? DEFAULT_CONFIG.reviewGate!;
+  config.reviewGate = reviewGate;
+  validateReviewGateConfig(reviewGate, "config.reviewGate");
   const repoMemory = config.repoMemory ?? DEFAULT_CONFIG.repoMemory!;
   config.repoMemory = repoMemory;
   validateRepoMemoryConfig(repoMemory, "config.repoMemory");
@@ -633,6 +664,39 @@ function validatePublicConfidenceDisplayFloorOverrides(value: unknown, label: st
   }
   if (value.minWilsonLowerBound !== undefined && (value.minWilsonLowerBound as number) < PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND) {
     throw new Error(`${label}.minWilsonLowerBound must be >= ${PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND}`);
+  }
+}
+
+function validateReviewGateConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validatePositiveInteger(value.maxInlineComments, `${label}.maxInlineComments`);
+  if (value.requestChangesConfidenceFloors !== undefined) {
+    if (!isRecord(value.requestChangesConfidenceFloors)) {
+      throw new Error(`${label}.requestChangesConfidenceFloors must be an object`);
+    }
+    for (const key of Object.keys(value.requestChangesConfidenceFloors)) {
+      if (key !== "P0" && key !== "P1") {
+        throw new Error(`${label}.requestChangesConfidenceFloors has unknown key "${key}"; expected only P0 or P1`);
+      }
+    }
+    for (const severity of ["P0", "P1"] as const) {
+      const floor = value.requestChangesConfidenceFloors[severity];
+      if (floor !== undefined) validateProbability(floor, `${label}.requestChangesConfidenceFloors.${severity}`);
+    }
+  }
+}
+
+function validateRiskWeightedQueueConfig(value: unknown, label: string, backgroundPriority: number): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (value.elevatedPriority !== undefined) validateNonNegativeInteger(value.elevatedPriority, `${label}.elevatedPriority`);
+  if (value.docsOnlyPriority !== undefined) validateNonNegativeInteger(value.docsOnlyPriority, `${label}.docsOnlyPriority`);
+  if (value.enabled) {
+    const elevatedPriority = value.elevatedPriority ?? Math.min(backgroundPriority, 10);
+    const docsOnlyPriority = value.docsOnlyPriority ?? backgroundPriority;
+    if (elevatedPriority > docsOnlyPriority) {
+      throw new Error(`${label}.elevatedPriority must be <= ${label}.docsOnlyPriority because lower priority values lease sooner`);
+    }
   }
 }
 

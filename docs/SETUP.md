@@ -27,7 +27,7 @@ tokens.
 Recommended package install:
 
 ```bash
-npm install -g neondiff@1.0.0-beta.1
+npm install -g neondiff@0.4.30-beta.1
 ```
 
 Installer script:
