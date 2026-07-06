@@ -771,7 +771,7 @@ describe("provider registry", () => {
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
-  it("does not follow hosted remote redirects or leak provider response secrets", async () => {
+  it("does not follow hosted remote redirects or read oversized redirect bodies", async () => {
     const config = loadConfigFromObject({
       providers: {
         defaultProviderId: "hosted-byok",
@@ -805,7 +805,7 @@ describe("provider registry", () => {
       },
       requestImpl: mockProviderRequest({
         status: 302,
-        body: "redirect includes provider-secret and https://user:password@example.test",
+        body: "x".repeat(256 * 1024 + 1),
         headers: {
           Location: "https://redirect.example.test/v1/models"
         }
@@ -820,8 +820,9 @@ describe("provider registry", () => {
       error: expect.stringContaining("OpenAI-compatible models endpoint redirected with 302")
     });
     expect(result.checks[0]?.error).toContain("remote smoke does not follow redirects");
+    expect(result.checks[0]?.error).not.toContain("exceeded 262144 byte limit");
     expect(JSON.stringify(result)).not.toContain("provider-secret");
-    expect(JSON.stringify(result)).not.toContain("password");
+    expect(JSON.stringify(result)).not.toContain("xxxxx");
   });
 
   it("rejects invalid percent-encoded smoke paths without crashing the doctor run", async () => {

@@ -313,6 +313,16 @@ async function smokeOpenAICompatibleProvider(input: {
       init: requestInit,
       timeoutMs: input.provider.timeoutMs
     });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      const redactedLocation = location ? redactProviderSmokeText(location, input.provider, input.env) : undefined;
+      return {
+        ...baseCheck,
+        ok: false,
+        errorCategory: "unknown",
+        error: `OpenAI-compatible models endpoint redirected with ${response.status}; remote smoke does not follow redirects. Update baseUrl to the canonical /models endpoint.${redactedLocation ? ` Location: ${redactedLocation}` : ""}`
+      };
+    }
     let text: string;
     try {
       text = await readResponseTextBounded(response);
@@ -328,16 +338,6 @@ async function smokeOpenAICompatibleProvider(input: {
       throw error;
     }
     if (!response.ok) {
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
-        const redactedLocation = location ? redactProviderSmokeText(location, input.provider, input.env) : undefined;
-        return {
-          ...baseCheck,
-          ok: false,
-          errorCategory: "unknown",
-          error: `OpenAI-compatible models endpoint redirected with ${response.status}; remote smoke does not follow redirects. Update baseUrl to the canonical /models endpoint.${redactedLocation ? ` Location: ${redactedLocation}` : ""}`
-        };
-      }
       const redactedText = redactProviderSmokeText(text, input.provider, input.env);
       const error = `OpenAI-compatible models endpoint returned ${response.status}: ${redactedText.slice(0, 300)}`;
       return {
@@ -522,6 +522,8 @@ async function resolveProviderSmokeTarget(input: {
   if (loopback && input.provider.capabilities.local) {
     return { target: { modelsUrl: buildOpenAIModelsUrl(parsed.toString()), remote: false } };
   }
+  // Literal/private hostnames are rejected here; ordinary DNS names are checked after resolution
+  // and then pinned into the Node transport lookup below.
   if (isUnsafeSmokeHost(parsed.hostname)) {
     return { error: "OpenAI-compatible smoke target must not point to private, link-local, loopback, or cloud metadata hosts." };
   }
@@ -557,6 +559,8 @@ async function resolvePinnedRemoteSmokeAddress(
     addresses = await Promise.race([
       dnsLookupImpl(hostname, { all: true, verbatim: true }),
       new Promise<DnsLookupAddress[]>((_, reject) => {
+        // Node dns.promises.lookup is not cancellable; the timeout fails this smoke attempt
+        // closed while any underlying OS lookup may still finish in the background.
         timeout = setTimeout(() => reject(new ProviderSmokeDnsTimeoutError()), providerSmokeTimeoutMs(timeoutMs));
         const maybeUnref = timeout as { unref?: () => void };
         if (typeof maybeUnref.unref === "function") maybeUnref.unref();
@@ -713,6 +717,8 @@ async function fetchProviderModelsWithPinnedRequest(
 
     // Provider smoke intentionally contacts a config-selected endpoint only after
     // explicit remote opt-in, env-key auth, HTTPS validation, safe DNS, and pinned lookup.
+    // Focused tests exercise this path through ProviderSmokeRequestImpl because local
+    // loopback/private endpoints are intentionally rejected by the remote-smoke guard.
     //
     // codeql[js/file-access-to-http]
     // lgtm[js/file-access-to-http]
@@ -720,7 +726,20 @@ async function fetchProviderModelsWithPinnedRequest(
   };
   return new Promise((resolve, reject) => {
     let settled = false;
-    const request = sendProviderSmokeRequest((response) => {
+    let request: ProviderSmokeRequestHandle;
+    const abort = () => request.destroy(new Error("Provider smoke request aborted."));
+    request = sendProviderSmokeRequest((response) => {
+      if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400) {
+        settled = true;
+        init.signal?.removeEventListener("abort", abort);
+        resolve(new Response(null, {
+          status: response.statusCode,
+          statusText: response.statusMessage,
+          headers: responseHeadersToHeaders(response.headers)
+        }));
+        queueMicrotask(() => request.destroy());
+        return;
+      }
       const chunks: Buffer[] = [];
       let totalBytes = 0;
       response.on("data", (chunk: Buffer | string) => {
@@ -736,6 +755,8 @@ async function fetchProviderModelsWithPinnedRequest(
         if (settled) return;
         settled = true;
         init.signal?.removeEventListener("abort", abort);
+        // request.end() has already finished the single GET request body; Node owns socket
+        // reuse/close timing after the response stream ends.
         resolve(new Response(Buffer.concat(chunks), {
           status: response.statusCode ?? 0,
           statusText: response.statusMessage,
@@ -749,7 +770,6 @@ async function fetchProviderModelsWithPinnedRequest(
         reject(error);
       });
     });
-    const abort = () => request.destroy(new Error("Provider smoke request aborted."));
     init.signal?.addEventListener("abort", abort, { once: true });
     request.on("timeout", () => request.destroy(new Error("Provider smoke request timed out.")));
     request.on("error", (error) => {
