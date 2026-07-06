@@ -1581,6 +1581,11 @@ async function main(): Promise<void> {
     // publicDisplay.mode — flipping to "calibrated" stays a deliberate manual human edit.
     const outputDir = parseSingleArg(args["output-dir"], "--output-dir");
     assertEvalOutputDirSafe(outputDir);
+    // When --config is supplied, gate against the operator's EFFECTIVE floors (Math.max(hard,
+    // configured)) so promote can't declare numbers eligible that the live config would reject.
+    const policyOverride = args.config
+      ? loadConfig(parseSingleArg(args.config, "--config")).confidenceCalibration?.publicDisplay
+      : undefined;
     const result = runCalibrationPromotion({
       aggregatePath: parseSingleArg(args.input, "--input"),
       outputDir,
@@ -1588,7 +1593,8 @@ async function main(): Promise<void> {
       apply: args.apply === undefined ? false : parseBooleanArg(args.apply, "--apply"),
       iUnderstandLiveConfig: args["i-understand-live-config"] === undefined
         ? false
-        : parseBooleanArg(args["i-understand-live-config"], "--i-understand-live-config")
+        : parseBooleanArg(args["i-understand-live-config"], "--i-understand-live-config"),
+      ...(policyOverride ? { policyOverride } : {})
     });
     console.log(stringifyRedactedJson({ command: "calibration-promote", ...result }));
     if (!result.ok) process.exitCode = 1;

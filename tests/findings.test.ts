@@ -330,14 +330,28 @@ describe("finding normalization and review policy", () => {
     expect(decideReviewEvent([{ severity: "P0", category: "security_boundary", confidence: 0.9 }])).toBe("REQUEST_CHANGES");
   });
 
-  it("strips REQUEST_CHANGES eligibility for a category configured below its precision floor (#286 PR C)", () => {
-    const comments = [{ severity: "P1" as const, category: "data_loss" as const, confidence: 0.99 }];
+  it("demotes REQUEST_CHANGES only when confidence is below the category precision floor (#286 PR C)", () => {
+    const belowFloor = [{ severity: "P1" as const, category: "data_loss" as const, confidence: 0.6 }];
+    const atFloor = [{ severity: "P1" as const, category: "data_loss" as const, confidence: 0.9 }];
     // No floors ⇒ eligible as before.
-    expect(decideReviewEvent(comments)).toBe("REQUEST_CHANGES");
-    // data_loss configured below-floor ⇒ demoted to COMMENT (quieter-only).
-    expect(decideReviewEvent(comments, undefined, { data_loss: 0.9 })).toBe("COMMENT");
+    expect(decideReviewEvent(belowFloor)).toBe("REQUEST_CHANGES");
+    // Confidence 0.6 < floor 0.9 ⇒ demoted to COMMENT (quieter-only). The finding still POSTS.
+    expect(decideReviewEvent(belowFloor, undefined, { data_loss: 0.9 })).toBe("COMMENT");
+    // Confidence 0.9 >= floor 0.9 ⇒ stays REQUEST_CHANGES (value is load-bearing, not mere presence).
+    expect(decideReviewEvent(atFloor, undefined, { data_loss: 0.9 })).toBe("REQUEST_CHANGES");
+    // A 0 floor never demotes.
+    expect(decideReviewEvent(belowFloor, undefined, { data_loss: 0 })).toBe("REQUEST_CHANGES");
     // A different category's floor does not affect this finding.
-    expect(decideReviewEvent(comments, undefined, { auth: 0.9 })).toBe("REQUEST_CHANGES");
+    expect(decideReviewEvent(belowFloor, undefined, { auth: 0.99 })).toBe("REQUEST_CHANGES");
+  });
+
+  it("keeps a below-category-floor finding posting as a comment (quieter-only, never dropped) (#286 PR C)", () => {
+    const result = normalizeFindingsForReview([
+      { severity: "P1", category: "data_loss", path: "a.ts", line: 1, title: "Low-confidence data loss", body: "A concern.", confidence: 0.3 }
+    ]);
+    // The finding survives normalization as a posted comment; only its RC-eligibility is stripped.
+    expect(result.comments).toHaveLength(1);
+    expect(decideReviewEvent(result.comments, undefined, { data_loss: 0.9 })).toBe("COMMENT");
   });
 
   it("ignores unsupported optional model categories without dropping the finding", () => {

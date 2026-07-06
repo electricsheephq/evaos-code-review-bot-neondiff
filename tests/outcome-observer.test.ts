@@ -215,6 +215,26 @@ describe("explicit negative-control marking (#286 PR C)", () => {
     expect(store.listFindingOutcomeLabels()).toHaveLength(0);
     store.close();
   });
+
+  it("writes the batch atomically: a mid-batch failure leaves zero explicit_control rows (#286 PR C)", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-negctl-atomic-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    // Both reviews are clean (zero findings) so the precondition passes, but the second has an
+    // invalid pullNumber that the write validation rejects — the whole batch must roll back.
+    expect(() =>
+      recordNegativeControlLabels({
+        store,
+        reviews: [
+          { repo: "owner/repo", pullNumber: 11, headSha: "sha11", findings: [] },
+          { repo: "owner/repo", pullNumber: 0, headSha: "sha0", findings: [] }
+        ]
+      })
+    ).toThrow(/pullNumber/i);
+    expect(store.listFindingOutcomeLabels()).toHaveLength(0);
+    store.close();
+  });
 });
 
 function mapOf(entries: Record<string, number[]> = {}): Map<string, Set<number>> {

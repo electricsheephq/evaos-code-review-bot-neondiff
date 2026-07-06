@@ -24,6 +24,14 @@ describe("calibration promotion gate (#286 PR C)", () => {
     expect(evaluateCalibrationPromotion({ ...ELIGIBLE, bestWilsonLowerBound: 0.94 }).failingGate).toBe("min_wilson_lower_bound");
     expect(evaluateCalibrationPromotion(ELIGIBLE).eligible).toBe(true);
   });
+
+  it("evaluates against the operator's RAISED effective floors when a policy override is supplied (#286 PR C)", () => {
+    // ELIGIBLE clears the hard floor (30 P0/P1) but the operator raised the minimum to 50.
+    expect(evaluateCalibrationPromotion(ELIGIBLE).eligible).toBe(true);
+    const gate = evaluateCalibrationPromotion(ELIGIBLE, { minP0P1Labels: 50 });
+    expect(gate.eligible).toBe(false);
+    expect(gate.failingGate).toBe("min_p0_p1_labels");
+  });
 });
 
 describe("calibration promotion run (#286 PR C)", () => {

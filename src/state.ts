@@ -790,6 +790,27 @@ export class ReviewStateStore {
   }
 
   recordFindingOutcomeLabel(record: FindingOutcomeLabelRecord): void {
+    this.writeFindingOutcomeLabel(record);
+  }
+
+  /**
+   * Atomic batch write (#286 PR C): all records land or none do. The inserts execute inside a single
+   * BEGIN IMMEDIATE transaction (mirroring the review_run_leases idiom), so a mid-batch validation or
+   * write failure rolls back to zero rows rather than leaving a partial write.
+   */
+  recordFindingOutcomeLabels(records: FindingOutcomeLabelRecord[]): void {
+    if (records.length === 0) return;
+    this.db.exec("begin immediate");
+    try {
+      for (const record of records) this.writeFindingOutcomeLabel(record);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  private writeFindingOutcomeLabel(record: FindingOutcomeLabelRecord): void {
     validateRepoName(record.repo, "repo");
     if (!/^finding:[a-f0-9]{64}$/.test(record.fingerprint)) {
       throw new Error("finding outcome label fingerprint must match finding:<64-hex>");

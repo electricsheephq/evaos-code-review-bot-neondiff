@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildPublicConfidencePolicy } from "./public-confidence.js";
+import { buildPublicConfidencePolicy, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
 
 export interface AggregateCalibrationInput {
@@ -22,12 +22,18 @@ export interface CalibrationPromotionGate {
 }
 
 /**
- * Evaluate aggregate calibration evidence against the public-confidence HARD floors (#286 PR C). This
- * is the SAME floor source (buildPublicConfidencePolicy) the live gate uses. Returns the failing gate
- * by name when below threshold. It NEVER decides display mode — that stays a human edit.
+ * Evaluate aggregate calibration evidence against the public-confidence floors (#286 PR C). Uses the
+ * SAME floor source (buildPublicConfidencePolicy) the live gate uses, which applies Math.max(hard,
+ * configured): when the operator's publicDisplay policy is supplied, its RAISED minimums govern so
+ * promote never declares numbers eligible that the live config validation would fail-closed reject.
+ * Without an override it evaluates against the hard floors. Returns the failing gate by name when
+ * below threshold. It NEVER decides display mode — that stays a human edit.
  */
-export function evaluateCalibrationPromotion(aggregate: AggregateCalibrationInput): CalibrationPromotionGate {
-  const floors = buildPublicConfidencePolicy();
+export function evaluateCalibrationPromotion(
+  aggregate: AggregateCalibrationInput,
+  policyOverride?: Partial<PublicConfidenceDisplayPolicy>
+): CalibrationPromotionGate {
+  const floors = buildPublicConfidencePolicy(policyOverride);
   const numbers = {
     labeledFindings: aggregate.labeledFindings,
     p0p1Labels: aggregate.p0p1Labels,
@@ -70,6 +76,7 @@ export function runCalibrationPromotion(input: {
   confirm: boolean;
   apply?: boolean;
   iUnderstandLiveConfig?: boolean;
+  policyOverride?: Partial<PublicConfidenceDisplayPolicy>;
   now?: Date;
 }): CalibrationPromotionResult {
   if (!input.confirm) throw new Error("calibration-promote requires --confirm to acknowledge it writes calibration evidence");
@@ -79,7 +86,7 @@ export function runCalibrationPromotion(input: {
   }
 
   const aggregate = readAggregate(input.aggregatePath);
-  const gate = evaluateCalibrationPromotion(aggregate);
+  const gate = evaluateCalibrationPromotion(aggregate, input.policyOverride);
   if (!gate.eligible) {
     throw new Error(`calibration-promote refuses below-threshold evidence: failing gate ${gate.failingGate}`);
   }

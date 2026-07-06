@@ -194,26 +194,29 @@ export function recordNegativeControlLabels(input: {
     }
   }
   const observedAt = (input.now ?? new Date()).toISOString();
-  let recorded = 0;
-  for (const review of input.reviews) {
-    input.store.recordFindingOutcomeLabel({
-      fingerprint: negativeControlFingerprint(review),
-      repo: review.repo,
-      pullNumber: review.pullNumber,
-      headSha: review.headSha,
-      severity: "P3",
-      category: "unknown",
-      confidence: 0,
-      labelSource: "explicit_control",
-      verdict: "unvalidated",
-      observedAt,
-      evidenceRef: "operator-declared negative control (zero findings posted)"
-    });
-    recorded += 1;
-  }
-  return { recorded };
+  const records: FindingOutcomeLabelRecord[] = input.reviews.map((review) => ({
+    fingerprint: negativeControlFingerprint(review),
+    repo: review.repo,
+    pullNumber: review.pullNumber,
+    headSha: review.headSha,
+    severity: "P3",
+    category: "unknown",
+    confidence: 0,
+    labelSource: "explicit_control",
+    verdict: "unvalidated",
+    observedAt,
+    evidenceRef: "operator-declared negative control (zero findings posted)"
+  }));
+  // Atomic: a mid-batch write failure leaves zero explicit_control rows, never a partial mark.
+  input.store.recordFindingOutcomeLabels(records);
+  return { recorded: records.length };
 }
 
+// SYNTHETIC control marker (#286 PR C) — never treat as a finding. Consumers must branch on
+// label_source === "explicit_control" FIRST (calibration-aggregate does: it counts these toward
+// negative controls and excludes them from the finding bins/precision). The fingerprint is derived
+// from the review coordinates (a clean run has no finding fingerprint) so re-marking is idempotent;
+// it must never be joined back as a real finding, whose category "unknown" would be RC-eligible.
 function negativeControlFingerprint(review: OutcomeObserverReview): string {
   const canonical = JSON.stringify({ control: "explicit", repo: review.repo, pullNumber: review.pullNumber, headSha: review.headSha });
   return `finding:${createHash("sha256").update(canonical).digest("hex")}`;
