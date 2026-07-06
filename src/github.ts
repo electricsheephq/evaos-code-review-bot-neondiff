@@ -15,6 +15,57 @@ export interface GitHubApiOptions {
   requestTimeoutMs?: number;
 }
 
+export type GitHubRepositoryVisibility = "public" | "private" | "internal" | "unknown";
+export type GitHubRepositoryVisibilitySource = "repository_api" | "private_flag" | "unavailable";
+export type GitHubRepositoryAccessErrorClass =
+  | "missing_app_credentials"
+  | "not_found"
+  | "forbidden"
+  | "resource_not_accessible"
+  | "rate_limited"
+  | "suspended_installation"
+  | "renamed_or_transferred"
+  | "server_error"
+  | "network"
+  | "unknown";
+
+export interface GitHubRepositoryAccessProof {
+  repo_full_name: string;
+  readMode: "app_installation" | "fallback_token" | "unconfigured";
+  visibility_result: GitHubRepositoryVisibility;
+  visibility_source: GitHubRepositoryVisibilitySource;
+  installation_id_present: boolean;
+  app_can_read_metadata: boolean;
+  app_can_read_pull_requests: boolean;
+  openPullCount?: number;
+  github_api_status?: number;
+  github_api_error_class?: GitHubRepositoryAccessErrorClass;
+  github_api_error?: string;
+}
+
+export class GitHubApiRequestError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+  readonly path: string;
+  readonly responseText: string;
+
+  constructor(input: { status: number; statusText: string; path: string; responseText: string }) {
+    const responseText = redactSecrets(input.responseText);
+    super(`GitHub API ${input.status} ${input.statusText} for ${input.path}: ${responseText.slice(0, 400)}`);
+    this.name = "GitHubApiRequestError";
+    this.status = input.status;
+    this.statusText = input.statusText;
+    this.path = input.path;
+    this.responseText = responseText;
+    Object.defineProperty(this, "responseText", {
+      value: responseText,
+      enumerable: false,
+      configurable: false,
+      writable: false
+    });
+  }
+}
+
 export class GitHubApi {
   private readonly appId?: string;
   private readonly privateKey?: string;
@@ -23,6 +74,7 @@ export class GitHubApi {
   private readonly botLogin: string;
   private readonly requestTimeoutMs?: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
+  private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
 
   constructor(options: GitHubApiOptions) {
     this.appId = options.appId;
@@ -59,6 +111,73 @@ export class GitHubApi {
     return this.request<RepositorySummary>(`/repos/${repo}`, {
       token: await this.getReadToken(repo)
     });
+  }
+
+  async probeRepositoryAccess(repo: string): Promise<GitHubRepositoryAccessProof> {
+    const readMode = this.canPostAsApp() ? "app_installation" : this.token ? "fallback_token" : "unconfigured";
+    const base: GitHubRepositoryAccessProof = {
+      repo_full_name: repo,
+      readMode,
+      visibility_result: "unknown",
+      visibility_source: "unavailable",
+      installation_id_present: false,
+      app_can_read_metadata: false,
+      app_can_read_pull_requests: false
+    };
+    if (!this.canPostAsApp()) {
+      return {
+        ...base,
+        github_api_error_class: "missing_app_credentials",
+        github_api_error: "GitHub App credentials are required for installation-scope proof."
+      };
+    }
+
+    let installationId: number;
+    try {
+      installationId = await this.getInstallationId(repo, { followRedirects: false });
+    } catch (error) {
+      return { ...base, ...describeGitHubAccessError(error) };
+    }
+
+    let token: string;
+    try {
+      token = await this.getInstallationTokenForId(repo, installationId);
+    } catch (error) {
+      return { ...base, installation_id_present: true, ...describeGitHubAccessError(error) };
+    }
+
+    let metadata: RepositorySummary;
+    try {
+      metadata = await this.request<RepositorySummary>(`/repos/${repo}`, { token, followRedirects: false });
+    } catch (error) {
+      return { ...base, installation_id_present: true, ...describeGitHubAccessError(error) };
+    }
+
+    const visibility = visibilityFromRepositorySummary(metadata);
+    try {
+      const pulls = await this.listOpenPullsWithToken(repo, token, { followRedirects: false });
+      return {
+        repo_full_name: metadata.full_name || repo,
+        readMode,
+        visibility_result: visibility.result,
+        visibility_source: visibility.source,
+        installation_id_present: true,
+        app_can_read_metadata: true,
+        app_can_read_pull_requests: true,
+        openPullCount: pulls.length
+      };
+    } catch (error) {
+      return {
+        repo_full_name: metadata.full_name || repo,
+        readMode,
+        visibility_result: visibility.result,
+        visibility_source: visibility.source,
+        installation_id_present: true,
+        app_can_read_metadata: true,
+        app_can_read_pull_requests: false,
+        ...describeGitHubAccessError(error)
+      };
+    }
   }
 
   async listPullFiles(repo: string, pullNumber: number): Promise<PullFilePatch[]> {
@@ -213,22 +332,73 @@ export class GitHubApi {
   }
 
   private async getInstallationToken(repo: string): Promise<string> {
-    const cached = this.installationTokens.get(repo);
+    const cached = this.repoInstallationTokens.get(repo);
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
 
+    const installationId = await this.getInstallationId(repo);
+    return this.getInstallationTokenForId(repo, installationId);
+  }
+
+  private async getInstallationId(repo: string, options: { followRedirects?: boolean } = {}): Promise<number> {
+    if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
     const jwt = createAppJwt(this.appId, this.privateKey);
-    const installation = await this.request<{ id: number }>(`/repos/${repo}/installation`, { token: jwt });
+    const installation = await this.request<{ id: number }>(`/repos/${repo}/installation`, {
+      token: jwt,
+      followRedirects: options.followRedirects
+    });
+    return installation.id;
+  }
+
+  private async getInstallationTokenForId(repo: string, installationId: number): Promise<string> {
+    const repoCached = this.repoInstallationTokens.get(repo);
+    if (repoCached && repoCached.installationId === installationId && repoCached.expiresAt > Date.now() + 60_000) {
+      return repoCached.token;
+    }
+    const tokenCacheKey = `${repo}:${installationId}`;
+    const cached = this.installationTokens.get(tokenCacheKey);
+    if (cached && cached.expiresAt > Date.now() + 60_000) {
+      this.repoInstallationTokens.set(repo, {
+        installationId,
+        token: cached.token,
+        expiresAt: cached.expiresAt
+      });
+      return cached.token;
+    }
+    if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
+    const jwt = createAppJwt(this.appId, this.privateKey);
     const token = await this.request<{ token: string; expires_at: string }>(
-      `/app/installations/${installation.id}/access_tokens`,
+      `/app/installations/${installationId}/access_tokens`,
       { method: "POST", token: jwt, body: { repositories: [repo.split("/")[1]] } }
     );
 
-    this.installationTokens.set(repo, {
+    const expiresAt = new Date(token.expires_at).getTime();
+    this.installationTokens.set(tokenCacheKey, {
       token: token.token,
-      expiresAt: new Date(token.expires_at).getTime()
+      expiresAt
+    });
+    this.repoInstallationTokens.set(repo, {
+      installationId,
+      token: token.token,
+      expiresAt
     });
     return token.token;
+  }
+
+  private async listOpenPullsWithToken(
+    repo: string,
+    token: string,
+    options: { followRedirects?: boolean } = {}
+  ): Promise<PullRequestSummary[]> {
+    const pulls: PullRequestSummary[] = [];
+    for (let page = 1; ; page += 1) {
+      const chunk = await this.request<PullRequestSummary[]>(`/repos/${repo}/pulls?state=open&per_page=100&page=${page}`, {
+        token,
+        followRedirects: options.followRedirects
+      });
+      pulls.push(...chunk.map(normalizePullRequestSummary));
+      if (chunk.length < 100) return pulls;
+    }
   }
 
   private async getReadToken(repo: string): Promise<string | undefined> {
@@ -238,7 +408,7 @@ export class GitHubApi {
 
   private async request<T>(
     path: string,
-    options: { method?: string; token?: string; body?: unknown } = {}
+    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
     let response: Response;
@@ -249,6 +419,7 @@ export class GitHubApi {
     try {
       response = await fetch(buildApiUrl(this.apiBaseUrl, path, "GitHub API request path"), {
         method: options.method ?? "GET",
+        ...(options.followRedirects === false ? { redirect: "manual" } : {}),
         signal: controller?.signal,
         headers: {
           Accept: "application/vnd.github+json",
@@ -266,7 +437,12 @@ export class GitHubApi {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`GitHub API ${response.status} ${response.statusText} for ${path}: ${redactSecrets(text).slice(0, 400)}`);
+      throw new GitHubApiRequestError({
+        status: response.status,
+        statusText: response.statusText,
+        path,
+        responseText: text
+      });
     }
 
     return (await response.json()) as T;
@@ -293,6 +469,47 @@ function normalizePullRepoSummary<T extends PullRequestSummary["base"]["repo"]>(
     ...repo,
     ...(visibility ? { visibility } : {})
   };
+}
+
+function visibilityFromRepositorySummary(repository: RepositorySummary): {
+  result: GitHubRepositoryVisibility;
+  source: GitHubRepositoryVisibilitySource;
+} {
+  if (repository.visibility === "public" || repository.visibility === "private" || repository.visibility === "internal") {
+    return { result: repository.visibility, source: "repository_api" };
+  }
+  if (repository.private === true) return { result: "private", source: "private_flag" };
+  if (repository.private === false) return { result: "public", source: "private_flag" };
+  return { result: "unknown", source: "unavailable" };
+}
+
+function describeGitHubAccessError(error: unknown): Pick<
+  GitHubRepositoryAccessProof,
+  "github_api_status" | "github_api_error_class" | "github_api_error"
+> {
+  if (error instanceof GitHubApiRequestError) {
+    return {
+      github_api_status: error.status,
+      github_api_error_class: classifyGitHubApiRequestError(error),
+      github_api_error: `GitHub API ${error.status} ${error.statusText} for ${error.path}: ${error.responseText.slice(0, 400)}`
+    };
+  }
+  return {
+    github_api_error_class: error instanceof Error && /fetch failed|timed out|AbortError/i.test(error.message) ? "network" : "unknown",
+    github_api_error: redactSecrets(error instanceof Error ? error.message : String(error))
+  };
+}
+
+function classifyGitHubApiRequestError(error: GitHubApiRequestError): GitHubRepositoryAccessErrorClass {
+  const body = error.responseText;
+  if (/\bsuspended\b/i.test(body)) return "suspended_installation";
+  if (/\b(rate limit|secondary rate limit|abuse detection)\b/i.test(body)) return "rate_limited";
+  if (/\bResource not accessible by integration\b/i.test(body)) return "resource_not_accessible";
+  if (error.status === 404) return "not_found";
+  if (error.status === 301 || error.status === 302 || error.status === 307 || error.status === 308) return "renamed_or_transferred";
+  if (error.status === 403) return "forbidden";
+  if (error.status >= 500) return "server_error";
+  return "unknown";
 }
 
 function isIssueLookupMissingOrUnreadable(message: string, path: string): boolean {

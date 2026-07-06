@@ -36,7 +36,7 @@ import {
   validateFinishingTouchRequest,
   type FinishingTouchAction
 } from "./finishing-touches.js";
-import { GitHubApi } from "./github.js";
+import { GitHubApi, type GitHubRepositoryAccessProof, type GitHubRepositoryVisibility } from "./github.js";
 import { buildGitNexusContextPacket } from "./gitnexus-context.js";
 import { buildGitNexusRefreshPreflight } from "./gitnexus-refresh-preflight.js";
 import { buildGitHubRelatedContextPacket, type GitHubRelatedIssueOrPull } from "./github-related-context.js";
@@ -2563,9 +2563,41 @@ async function buildDoctorGithubReport(config: BotConfig) {
       });
       continue;
     }
+    if (appCredentialsConfigured) {
+      const proof = await github.probeRepositoryAccess(repo);
+      const gatePreview = buildDoctorGithubLicenseGatePreview(config, proof);
+      readChecks.push({
+        repo,
+        ok: proof.app_can_read_metadata && proof.app_can_read_pull_requests,
+        policy,
+        ...proof,
+        ...gatePreview
+      });
+      continue;
+    }
     try {
       const pulls = await github.listOpenPulls(repo);
-      readChecks.push({ repo, ok: true, policy, openPullCount: pulls.length });
+      const gatePreview = buildDoctorGithubLicenseGatePreview(config, {
+        visibility_result: "unknown",
+        app_can_read_metadata: false,
+        app_can_read_pull_requests: false
+      });
+      readChecks.push({
+        repo,
+        ok: false,
+        policy,
+        openPullCount: pulls.length,
+        repo_full_name: repo,
+        readMode: "fallback_token",
+        visibility_result: "unknown",
+        visibility_source: "unavailable",
+        installation_id_present: false,
+        app_can_read_metadata: false,
+        app_can_read_pull_requests: false,
+        github_api_error_class: "missing_app_credentials",
+        github_api_error: "Fallback-token reads are not GitHub App installation-scope proof.",
+        ...gatePreview
+      });
     } catch (error) {
       readChecks.push({
         repo,
@@ -2630,6 +2662,67 @@ async function buildDoctorGithubReport(config: BotConfig) {
       ...(readChecks.some((check) => !check.ok) ? ["Confirm the GitHub App is installed on selected repositories with the required repository permissions."] : [])
     ]
   };
+}
+
+function buildDoctorGithubLicenseGatePreview(
+  config: BotConfig,
+  proof: Pick<GitHubRepositoryAccessProof, "visibility_result" | "app_can_read_metadata" | "app_can_read_pull_requests">
+): {
+  license_gate_decision: string;
+  pre_checkout_gate_result: string;
+} {
+  const visibility: GitHubRepositoryVisibility = proof.visibility_result;
+  const publicReposFree = config.license?.publicReposFree ?? true;
+  const privateReposRequireEntitlement = config.license?.privateReposRequireEntitlement ?? true;
+  const appScopeBlocksCheckout = !proof.app_can_read_metadata || !proof.app_can_read_pull_requests;
+  if (appScopeBlocksCheckout) {
+    return {
+      license_gate_decision: licenseGateDecisionForVisibility(visibility, publicReposFree, privateReposRequireEntitlement),
+      pre_checkout_gate_result: "blocked_before_checkout"
+    };
+  }
+  if (visibility === "public" && publicReposFree) {
+    return {
+      license_gate_decision: "public_free_allowed",
+      pre_checkout_gate_result: "allowed"
+    };
+  }
+  if (visibility === "unknown" && privateReposRequireEntitlement) {
+    return {
+      license_gate_decision: "unknown_visibility_fail_closed",
+      pre_checkout_gate_result: "blocked_before_checkout"
+    };
+  }
+  if ((visibility === "private" || visibility === "internal") && privateReposRequireEntitlement) {
+    return {
+      license_gate_decision: "active_private_entitlement_required",
+      pre_checkout_gate_result: "blocked_until_entitlement_proof"
+    };
+  }
+  if (visibility === "public" && !publicReposFree) {
+    return {
+      license_gate_decision: "active_public_entitlement_required",
+      pre_checkout_gate_result: "blocked_until_entitlement_proof"
+    };
+  }
+  return {
+    license_gate_decision: "repo_visibility_allowed_by_policy",
+    pre_checkout_gate_result: "allowed"
+  };
+}
+
+function licenseGateDecisionForVisibility(
+  visibility: GitHubRepositoryVisibility,
+  publicReposFree: boolean,
+  privateReposRequireEntitlement: boolean
+): string {
+  if (visibility === "public" && publicReposFree) return "public_free_allowed";
+  if (visibility === "public" && !publicReposFree) return "active_public_entitlement_required";
+  if (visibility === "unknown" && privateReposRequireEntitlement) return "unknown_visibility_fail_closed";
+  if (visibility === "private" || visibility === "internal") {
+    return privateReposRequireEntitlement ? "active_private_entitlement_required" : "repo_visibility_allowed_by_policy";
+  }
+  return "app_installation_scope_required";
 }
 
 async function collectIssueEnrichmentReadChecks(
