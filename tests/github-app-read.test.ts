@@ -131,6 +131,214 @@ describe("GitHub App read authentication", () => {
     expect(result.base.repo.visibility).toBe("private");
   });
 
+  it("probes App installation scope, repo visibility, and pull request read access", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-scope-proof-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    const calls: Array<{ url: string; authorization?: string }> = [];
+    globalThis.fetch = vi.fn(async (url, init) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
+      calls.push({ url: String(url), authorization });
+      if (String(url).endsWith("/repos/owner/repo/installation")) {
+        return jsonResponse({ id: 123 });
+      }
+      if (String(url).endsWith("/app/installations/123/access_tokens")) {
+        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (String(url).endsWith("/repos/owner/repo")) {
+        return jsonResponse({ full_name: "owner/repo", private: false, visibility: "public" });
+      }
+      if (String(url).endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1")) {
+        return jsonResponse([pull(1, { private: false, visibility: "public" })]);
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    const proof = await github.probeRepositoryAccess("owner/repo");
+
+    expect(proof).toMatchObject({
+      repo_full_name: "owner/repo",
+      readMode: "app_installation",
+      visibility_result: "public",
+      visibility_source: "repository_api",
+      installation_id_present: true,
+      app_can_read_metadata: true,
+      app_can_read_pull_requests: true,
+      openPullCount: 1
+    });
+    expect(calls.find((call) => call.url.endsWith("/repos/owner/repo"))?.authorization).toBe("Bearer installation-token");
+    expect(calls.find((call) => call.url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1"))?.authorization)
+      .toBe("Bearer installation-token");
+  });
+
+  it("classifies App install-scope and visibility lookup failures without treating them as public", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-scope-failures-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    const scenarios: Array<{
+      name: string;
+      handler: (url: string) => Response;
+      expected: Record<string, unknown>;
+    }> = [
+      {
+        name: "missing installation",
+        handler: (url) => url.endsWith("/repos/owner/repo/installation")
+          ? jsonResponse({ message: "Not Found" }, 404, "Not Found")
+          : jsonResponse({ message: "unexpected" }, 404),
+        expected: {
+          installation_id_present: false,
+          app_can_read_metadata: false,
+          app_can_read_pull_requests: false,
+          github_api_status: 404,
+          github_api_error_class: "not_found"
+        }
+      },
+      {
+        name: "suspended installation",
+        handler: (url) => url.endsWith("/repos/owner/repo/installation")
+          ? jsonResponse({ message: "This installation has been suspended" }, 403, "Forbidden")
+          : jsonResponse({ message: "unexpected" }, 404),
+        expected: {
+          installation_id_present: false,
+          github_api_status: 403,
+          github_api_error_class: "suspended_installation"
+        }
+      },
+      {
+        name: "metadata resource inaccessible",
+        handler: installThenTokenThen((url) => url.endsWith("/repos/owner/repo")
+          ? jsonResponse({ message: "Resource not accessible by integration" }, 403, "Forbidden")
+          : jsonResponse({ message: "unexpected" }, 404)),
+        expected: {
+          installation_id_present: true,
+          app_can_read_metadata: false,
+          github_api_status: 403,
+          github_api_error_class: "resource_not_accessible"
+        }
+      },
+      {
+        name: "removed repo metadata",
+        handler: installThenTokenThen((url) => url.endsWith("/repos/owner/repo")
+          ? jsonResponse({ message: "Not Found" }, 404, "Not Found")
+          : jsonResponse({ message: "unexpected" }, 404)),
+        expected: {
+          installation_id_present: true,
+          app_can_read_metadata: false,
+          github_api_status: 404,
+          github_api_error_class: "not_found"
+        }
+      },
+      {
+        name: "renamed or transferred repo metadata",
+        handler: installThenTokenThen((url) => url.endsWith("/repos/owner/repo")
+          ? jsonResponse({ message: "Moved Permanently" }, 301, "Moved Permanently")
+          : jsonResponse({ message: "unexpected" }, 404)),
+        expected: {
+          installation_id_present: true,
+          app_can_read_metadata: false,
+          github_api_status: 301,
+          github_api_error_class: "renamed_or_transferred"
+        }
+      },
+      {
+        name: "rate limited metadata",
+        handler: installThenTokenThen((url) => url.endsWith("/repos/owner/repo")
+          ? jsonResponse({ message: "API rate limit exceeded" }, 403, "Forbidden")
+          : jsonResponse({ message: "unexpected" }, 404)),
+        expected: {
+          installation_id_present: true,
+          app_can_read_metadata: false,
+          github_api_status: 403,
+          github_api_error_class: "rate_limited"
+        }
+      },
+      {
+        name: "missing pull request permission",
+        handler: installThenTokenThen((url) => {
+          if (url.endsWith("/repos/owner/repo")) {
+            return jsonResponse({ full_name: "owner/repo", private: true, visibility: "private" });
+          }
+          if (url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1")) {
+            return jsonResponse({ message: "Resource not accessible by integration" }, 403, "Forbidden");
+          }
+          return jsonResponse({ message: "unexpected" }, 404);
+        }),
+        expected: {
+          visibility_result: "private",
+          visibility_source: "repository_api",
+          installation_id_present: true,
+          app_can_read_metadata: true,
+          app_can_read_pull_requests: false,
+          github_api_status: 403,
+          github_api_error_class: "resource_not_accessible"
+        }
+      }
+    ];
+
+    for (const scenario of scenarios) {
+      globalThis.fetch = vi.fn(async (url) => scenario.handler(String(url))) as typeof fetch;
+      const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+
+      await expect(github.probeRepositoryAccess("owner/repo")).resolves.toMatchObject({
+        repo_full_name: "owner/repo",
+        visibility_result: scenario.expected.visibility_result ?? "unknown",
+        visibility_source: scenario.expected.visibility_source ?? "unavailable",
+        ...scenario.expected
+      });
+    }
+  });
+
+  it("keeps manual redirects scoped to access probes and reuses installation-specific tokens", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-redirect-scope-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+
+    const calls: Array<{ url: string; method: string; redirect?: RequestRedirect }> = [];
+    globalThis.fetch = vi.fn(async (url, init) => {
+      const requestUrl = String(url);
+      const method = init?.method ?? "GET";
+      const redirect = init?.redirect;
+      calls.push({ url: requestUrl, method, redirect });
+      if (requestUrl.endsWith("/repos/owner/repo/installation")) {
+        return jsonResponse({ id: 123 });
+      }
+      if (requestUrl.endsWith("/app/installations/123/access_tokens")) {
+        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (requestUrl.endsWith("/repos/owner/repo") && redirect === "manual") {
+        return jsonResponse({ message: "Moved Permanently" }, 301, "Moved Permanently");
+      }
+      if (requestUrl.endsWith("/repos/owner/repo/pulls/42/files?per_page=100&page=1")) {
+        return jsonResponse([{ filename: "src/index.ts", patch: "@@ -1 +1 @@" }]);
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    await expect(github.probeRepositoryAccess("owner/repo")).resolves.toMatchObject({
+      visibility_result: "unknown",
+      github_api_status: 301,
+      github_api_error_class: "renamed_or_transferred"
+    });
+    await expect(github.listPullFiles("owner/repo", 42)).resolves.toEqual([{ filename: "src/index.ts", patch: "@@ -1 +1 @@" }]);
+
+    const tokenCalls = calls.filter((call) => call.url.endsWith("/app/installations/123/access_tokens"));
+    expect(tokenCalls).toHaveLength(1);
+    const installationCalls = calls.filter((call) => call.url.endsWith("/repos/owner/repo/installation"));
+    expect(installationCalls).toHaveLength(1);
+    const fileReadCall = calls.find((call) => call.url.endsWith("/repos/owner/repo/pulls/42/files?per_page=100&page=1"));
+    expect(fileReadCall?.redirect).toBeUndefined();
+  });
+
   it("uses installation tokens for related issue reads", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-related-issue-"));
     roots.push(root);
@@ -392,6 +600,16 @@ function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
     statusText,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+function installThenTokenThen(handler: (url: string) => Response): (url: string) => Response {
+  return (url: string) => {
+    if (url.endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+    if (url.endsWith("/app/installations/123/access_tokens")) {
+      return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+    }
+    return handler(url);
+  };
 }
 
 function pull(number: number, repo: { private?: boolean; visibility?: "public" | "private" | "internal" } = {}) {

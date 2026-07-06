@@ -81,10 +81,24 @@ Expected signs of a usable install:
 - `github.canPostAsApp: true`
 - each enabled repo has `ok: true`
 - `activeRepoChecks` is greater than zero
+- each enabled repo read check includes:
+  - `repo_full_name`
+  - `visibility_result`: `public`, `private`, `internal`, or `unknown`
+  - `visibility_source`: `repository_api`, `private_flag`, or `unavailable`
+  - `installation_id_present: true`
+  - `app_can_read_metadata: true`
+  - `app_can_read_pull_requests: true`
+  - `license_gate_decision`
+  - `pre_checkout_gate_result`
 
 If a repo is disabled by repo policy, the doctor reports it as
 `skippedByPolicy`; that is useful config evidence, but it is not proof that the
 App can read or review that repo.
+
+Treat `visibility_result: "unknown"` or any `app_can_read_*: false` as a
+pre-checkout blocker. Unknown or unreadable visibility is never public-free
+evidence; confirm the App installation scope, selected repositories, and
+permissions before widening provider/model settings.
 
 ## First Review Path
 
@@ -139,6 +153,13 @@ To remove NeonDiff from a user or organization:
 - A repo read fails with 404 or "Resource not accessible by integration":
   confirm the App is installed on that selected repo and has the permissions
   listed above.
+- `doctor github` reports `github_api_error_class: "suspended_installation"`:
+  unsuspend or reinstall the App before running reviews.
+- `doctor github` reports `github_api_error_class: "renamed_or_transferred"`:
+  update the repo name in the local config and rerun the doctor.
+- `doctor github` reports `github_api_error_class: "rate_limited"`:
+  wait for the GitHub API window to recover, then rerun the doctor before
+  treating the repo as install-proven.
 - `activeRepoChecks` is zero: the config has no enabled repo to prove; add a
   selected installed repo to `pilotRepos`.
 - Private repo review fails before provider calls: check license status before

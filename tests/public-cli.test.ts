@@ -636,6 +636,11 @@ exit 1
         response.end(JSON.stringify({ token: installationToken, expires_at: "2099-01-01T00:00:00Z" }));
         return;
       }
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo") {
+        expect(request.headers.authorization).toBe(`Bearer ${installationToken}`);
+        response.end(JSON.stringify({ full_name: "acme/demo", private: false, visibility: "public" }));
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/repos/acme/demo/pulls") {
         expect(request.headers.authorization).toBe(`Bearer ${installationToken}`);
         response.end(JSON.stringify([]));
@@ -711,6 +716,14 @@ exit 1
             {
               repo: "acme/demo",
               ok: true,
+              repo_full_name: "acme/demo",
+              visibility_result: "public",
+              visibility_source: "repository_api",
+              installation_id_present: true,
+              app_can_read_metadata: true,
+              app_can_read_pull_requests: true,
+              license_gate_decision: "public_free_allowed",
+              pre_checkout_gate_result: "allowed",
               openPullCount: 0
             }
           ]
@@ -732,6 +745,153 @@ exit 1
       expect(stdout).not.toContain(privateKeyPem);
       expect(stdout).not.toContain(privateKeyPath);
       expect(stdout).not.toContain(installationToken);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("doctor github blocks pre-checkout when public repo PR permission is missing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-pr-scope-"));
+    roots.push(root);
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const privateKeyPath = join(root, "neondiff.private-key.pem");
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs8", format: "pem" }).toString());
+
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo/installation") {
+        response.end(JSON.stringify({ id: 42 }));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/app/installations/42/access_tokens") {
+        response.end(JSON.stringify({ token: "installation-token", expires_at: "2099-01-01T00:00:00Z" }));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo") {
+        response.end(JSON.stringify({ full_name: "acme/demo", private: false, visibility: "public" }));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo/pulls") {
+        response.statusCode = 403;
+        response.end(JSON.stringify({ message: "Resource not accessible by integration" }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: `unexpected ${request.method} ${url.pathname}` }));
+    });
+
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        github: {
+          appId: "12345",
+          privateKeyPath,
+          apiBaseUrl: `http://127.0.0.1:${address.port}`
+        },
+        zcode: {
+          cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+          appConfigPath: join(root, "zcode-config.json"),
+          model: "GLM-5.2",
+          timeoutMs: 1000,
+          maxPatchBytes: 1000,
+          retryMaxRetries: 0
+        }
+      })}\n`);
+
+      let stdout = "";
+      try {
+        await runCli(["doctor", "github", "--config", configPath], {
+          env: {
+            EVAOS_REVIEW_BOT_APP_ID: "12345",
+            EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: privateKeyPath
+          }
+        });
+      } catch (error) {
+        stdout = (error as { stdout?: string }).stdout ?? "";
+      }
+      const output = JSON.parse(stdout);
+      expect(output.github.readChecks[0]).toMatchObject({
+        ok: false,
+        visibility_result: "public",
+        app_can_read_metadata: true,
+        app_can_read_pull_requests: false,
+        github_api_error_class: "resource_not_accessible",
+        license_gate_decision: "public_free_allowed",
+        pre_checkout_gate_result: "blocked_before_checkout"
+      });
+      expect(output.github.readChecks[0]).not.toHaveProperty("openPullCount");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("doctor github does not treat fallback-token reads as App installation proof", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-fallback-token-"));
+    roots.push(root);
+    const fallbackToken = "github-token-secret";
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/repos/acme/demo/pulls") {
+        expect(request.headers.authorization).toBe(`Bearer ${fallbackToken}`);
+        response.end(JSON.stringify([]));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: `unexpected ${request.method} ${url.pathname}` }));
+    });
+
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        github: {
+          apiBaseUrl: `http://127.0.0.1:${address.port}`
+        },
+        zcode: {
+          cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+          appConfigPath: join(root, "zcode-config.json"),
+          model: "GLM-5.2",
+          timeoutMs: 1000,
+          maxPatchBytes: 1000,
+          retryMaxRetries: 0
+        }
+      })}\n`);
+
+      let stdout = "";
+      try {
+        await runCli(["doctor", "github", "--config", configPath], {
+          env: { GITHUB_TOKEN: fallbackToken }
+        });
+      } catch (error) {
+        stdout = (error as { stdout?: string }).stdout ?? "";
+      }
+      const output = JSON.parse(stdout);
+      expect(output.ok).toBe(false);
+      expect(output.github.readMode).toBe("fallback_token");
+      expect(output.github.readChecks[0]).toMatchObject({
+        ok: false,
+        readMode: "fallback_token",
+        visibility_result: "unknown",
+        installation_id_present: false,
+        app_can_read_metadata: false,
+        app_can_read_pull_requests: false,
+        github_api_error_class: "missing_app_credentials",
+        pre_checkout_gate_result: "blocked_before_checkout"
+      });
+      expect(stdout).not.toContain(fallbackToken);
     } finally {
       await closeServer(server);
     }
