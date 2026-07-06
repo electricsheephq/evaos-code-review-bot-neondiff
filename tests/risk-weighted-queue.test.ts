@@ -129,6 +129,27 @@ describe("risk-weighted queue config (#301)", () => {
       })
     ).toThrow(/riskWeightedQueue\.elevatedPriority must be <= .*docsOnlyPriority/);
   });
+
+  it("defaults aging unset (byte-identical to today) and accepts the recommended aging config (#346)", () => {
+    expect(loadConfigFromObject({}).riskWeightedQueue?.aging).toBeUndefined();
+    // Recommended #346 config (lower number = leases sooner, so elevated < docsOnly per #301 validator).
+    const config = loadConfigFromObject({
+      riskWeightedQueue: { enabled: true, elevatedPriority: 20, docsOnlyPriority: 50, aging: { enabled: true, maxWaitMinutes: 60 } }
+    });
+    expect(config.riskWeightedQueue?.aging).toEqual({ enabled: true, maxWaitMinutes: 60 });
+  });
+
+  it("fails closed on malformed aging config (#346)", () => {
+    expect(() => loadConfigFromObject({ riskWeightedQueue: { enabled: true, aging: { enabled: "yes", maxWaitMinutes: 60 } } })).toThrow(
+      /riskWeightedQueue\.aging\.enabled must be a boolean/
+    );
+    expect(() => loadConfigFromObject({ riskWeightedQueue: { enabled: true, aging: { enabled: true, maxWaitMinutes: 0 } } })).toThrow(
+      /riskWeightedQueue\.aging\.maxWaitMinutes must be a positive integer/
+    );
+    expect(() => loadConfigFromObject({ riskWeightedQueue: { enabled: true, aging: { enabled: true, maxWaitMinutes: 60, bogus: 1 } } })).toThrow(
+      /riskWeightedQueue\.aging has unknown key "bogus"/
+    );
+  });
 });
 
 describe("resolveRiskWeightedPriorityOverride integration (#301 review follow-up)", () => {
