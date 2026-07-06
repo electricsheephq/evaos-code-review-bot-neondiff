@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import {
@@ -6,8 +8,93 @@ import {
   classifyProviderError,
   doctorProviderRegistry,
   isProviderId,
+  type ProviderSmokeRequestImpl,
+  type ProviderSmokeRequestOptions,
   redactProviderUrl
 } from "../src/providers.js";
+
+class MockProviderClientRequest extends EventEmitter {
+  ended = false;
+  destroyedWith?: Error;
+
+  end(): this {
+    this.ended = true;
+    return this;
+  }
+
+  destroy(error?: Error): this {
+    this.destroyedWith = error;
+    if (error) this.emit("error", error);
+    return this;
+  }
+}
+
+class QuietDestroyProviderClientRequest extends EventEmitter {
+  ended = false;
+  destroyedWith?: Error;
+
+  end(): this {
+    this.ended = true;
+    return this;
+  }
+
+  destroy(error?: Error): this {
+    this.destroyedWith = error;
+    return this;
+  }
+}
+
+class MockProviderIncomingMessage extends EventEmitter {
+  statusCode?: number;
+  statusMessage?: string;
+  headers: Record<string, string | string[] | undefined>;
+  destroyed = false;
+  destroyedWith?: Error;
+
+  constructor(input: {
+    status: number;
+    body: string;
+    headers?: Record<string, string | string[] | undefined>;
+    responseError?: Error;
+  }) {
+    super();
+    this.statusCode = input.status;
+    this.statusMessage = String(input.status);
+    this.headers = input.headers ?? {};
+    queueMicrotask(() => {
+      if (input.responseError) {
+        this.emit("error", input.responseError);
+        return;
+      }
+      this.emit("data", Buffer.from(input.body));
+      this.emit("end");
+    });
+  }
+
+  destroy(error?: Error): this {
+    this.destroyed = true;
+    this.destroyedWith = error;
+    this.removeAllListeners("data");
+    this.removeAllListeners("end");
+    if (error) this.emit("error", error);
+    return this;
+  }
+}
+
+function mockProviderRequest(response: {
+  status: number;
+  body: string;
+  headers?: Record<string, string | string[] | undefined>;
+  responseError?: Error;
+  onOptions?: (options: ProviderSmokeRequestOptions) => void;
+}): ProviderSmokeRequestImpl {
+  return (options, onResponse) => {
+    response.onOptions?.(options);
+    const request = new MockProviderClientRequest();
+    queueMicrotask(() => onResponse(new MockProviderIncomingMessage(response) as IncomingMessage));
+    return request;
+  };
+}
 
 describe("provider registry", () => {
   it("loads safe default providers and doctors only enabled/default entries by default", async () => {
@@ -101,6 +188,7 @@ describe("provider registry", () => {
     });
     const fetchImpl: typeof fetch = async (url, init) => {
       expect(String(url)).toBe("http://127.0.0.1:8080/v1/models");
+      expect(init?.redirect).toBeUndefined();
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer provider-secret");
       return new Response(JSON.stringify({ data: [{ id: "review-model" }] }), {
         status: 200,
@@ -129,6 +217,936 @@ describe("provider registry", () => {
       modelCount: 1
     });
     expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("denies hosted remote OpenAI-compatible smoke by default even with a selected provider", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+    let dnsCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      dnsLookupImpl: async () => {
+        dnsCalls += 1;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      smokeAttempted: true,
+      readMode: "openai_compatible_models",
+      error: "Remote OpenAI-compatible smoke checks require explicit remote opt-in and --provider <id>."
+    });
+    expect(fetchCalls).toBe(0);
+    expect(dnsCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("allows explicitly opted-in hosted BYOK smoke through DNS-pinned transport", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    const dnsCalls: string[] = [];
+    const requestOptions: ProviderSmokeRequestOptions[] = [];
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async (hostname) => {
+        dnsCalls.push(hostname);
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
+      },
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: JSON.stringify({ data: [{ id: "review-model" }] }),
+        headers: { "Content-Type": "application/json" },
+        onOptions: (options) => {
+          requestOptions.push(options);
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks[0]).toMatchObject({
+      providerId: "hosted-byok",
+      ok: true,
+      smokeAttempted: true,
+      readMode: "openai_compatible_models",
+      baseUrl: "https://gateway.example.test/v1",
+      apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+      modelCount: 1
+    });
+    expect(dnsCalls).toEqual(["gateway.example.test"]);
+    expect(requestOptions).toHaveLength(1);
+    expect(requestOptions[0]).toMatchObject({
+      protocol: "https:",
+      hostname: "gateway.example.test",
+      path: "/v1/models",
+      method: "GET",
+      servername: "gateway.example.test"
+    });
+    expect(requestOptions[0].headers).toMatchObject({
+      accept: "application/json",
+      authorization: "Bearer provider-secret"
+    });
+    expect(requestOptions[0].headers).not.toHaveProperty("host");
+    let pinnedLookup: { address?: string; family?: number } = {};
+    requestOptions[0].lookup?.("gateway.example.test", {}, (error, address, family) => {
+      expect(error).toBeNull();
+      pinnedLookup = { address, family };
+    });
+    expect(pinnedLookup).toEqual({ address: "93.184.216.34", family: 4 });
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("subtracts DNS elapsed time from hosted remote pinned request timeout", async () => {
+    const dateNow = vi.spyOn(Date, "now");
+    dateNow.mockReturnValueOnce(1_000).mockReturnValue(1_027);
+    try {
+      const config = loadConfigFromObject({
+        providers: {
+          defaultProviderId: "hosted-byok",
+          providers: {
+            "hosted-byok": {
+              enabled: true,
+              adapter: "openai-compatible",
+              baseUrl: "https://gateway.example.test/v1",
+              model: "review-model",
+              authMode: "api-key-env",
+              apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+              timeoutMs: 30,
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            }
+          }
+        }
+      });
+      const requestOptions: ProviderSmokeRequestOptions[] = [];
+
+      const result = await doctorProviderRegistry({
+        registry: config.providers!,
+        providerId: "hosted-byok",
+        smoke: true,
+        allowRemoteSmoke: true,
+        dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+        fetchImpl: async () => {
+          throw new Error("remote smoke must not use fetch");
+        },
+        requestImpl: mockProviderRequest({
+          status: 200,
+          body: JSON.stringify({ data: [{ id: "review-model" }] }),
+          onOptions: (options) => {
+            requestOptions.push(options);
+          }
+        }),
+        env: {
+          NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+        }
+      });
+
+      expect(result.ok).toBe(true);
+      expect(requestOptions[0]?.timeout).toBe(3);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("uses the production https request path for hosted BYOK remote smoke without test transport injection", async () => {
+    vi.resetModules();
+    const requestOptions: ProviderSmokeRequestOptions[] = [];
+    const requests: MockProviderClientRequest[] = [];
+    vi.doMock("node:https", async () => {
+      const actual = await vi.importActual<typeof import("node:https")>("node:https");
+      return {
+        ...actual,
+        request: (options: ProviderSmokeRequestOptions, onResponse: (response: IncomingMessage) => void) => {
+          requestOptions.push(options);
+          const request = new MockProviderClientRequest();
+          requests.push(request);
+          queueMicrotask(() => onResponse(new MockProviderIncomingMessage({
+            status: 200,
+            body: JSON.stringify({ data: [{ id: "review-model" }] }),
+            headers: { "Content-Type": "application/json" }
+          }) as IncomingMessage));
+          return request;
+        }
+      };
+    });
+    try {
+      const { doctorProviderRegistry: doctorProviderRegistryWithNativeTransport } = await import("../src/providers.js");
+      const config = loadConfigFromObject({
+        providers: {
+          defaultProviderId: "hosted-byok",
+          providers: {
+            "hosted-byok": {
+              enabled: true,
+              adapter: "openai-compatible",
+              baseUrl: "https://gateway.example.test/v1",
+              model: "review-model",
+              authMode: "api-key-env",
+              apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            }
+          }
+        }
+      });
+
+      const result = await doctorProviderRegistryWithNativeTransport({
+        registry: config.providers!,
+        providerId: "hosted-byok",
+        smoke: true,
+        allowRemoteSmoke: true,
+        dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+        fetchImpl: async () => {
+          throw new Error("remote smoke must not use fetch");
+        },
+        env: {
+          NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+        }
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.checks[0]).toMatchObject({
+        ok: true,
+        providerId: "hosted-byok",
+        modelCount: 1
+      });
+      expect(requestOptions).toHaveLength(1);
+      expect(requestOptions[0]).toMatchObject({
+        protocol: "https:",
+        hostname: "gateway.example.test",
+        path: "/v1/models",
+        method: "GET",
+        servername: "gateway.example.test"
+      });
+      expect(requestOptions[0].headers).toMatchObject({
+        accept: "application/json",
+        authorization: "Bearer provider-secret"
+      });
+      expect(requestOptions[0].headers).not.toHaveProperty("host");
+      let pinnedLookup: { address?: string; family?: number } = {};
+      requestOptions[0].lookup?.("gateway.example.test", {}, (error, address, family) => {
+        expect(error).toBeNull();
+        pinnedLookup = { address, family };
+      });
+      expect(pinnedLookup).toEqual({ address: "93.184.216.34", family: 4 });
+      expect(requests[0]?.ended).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("provider-secret");
+    } finally {
+      vi.doUnmock("node:https");
+      vi.resetModules();
+    }
+  });
+
+  it("allows hosted BYOK smoke through an explicit environment opt-in", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
+      },
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: JSON.stringify({ data: [{ id: "review-model" }] }),
+        headers: { "Content-Type": "application/json" }
+      }),
+      env: {
+        NEONDIFF_ALLOW_REMOTE_SMOKE: "true",
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("requires hosted remote smoke to be env-key-backed before DNS or fetch", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+    let dnsCalls = 0;
+
+    const missingEnv = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      dnsLookupImpl: async () => {
+        dnsCalls += 1;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {}
+    });
+
+    expect(missingEnv.checks[0]).toMatchObject({
+      ok: false,
+      error: "Missing API key environment variable NEONDIFF_PROVIDER_API_KEY."
+    });
+
+    const noneAuthProvider = {
+      ...config.providers!.providers["hosted-byok"],
+      authMode: "none" as const
+    };
+    delete noneAuthProvider.apiKeyEnv;
+    const noneAuth = await doctorProviderRegistry({
+      registry: {
+        ...config.providers!,
+        providers: {
+          "hosted-byok": noneAuthProvider
+        }
+      },
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      dnsLookupImpl: async () => {
+        dnsCalls += 1;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {}
+    });
+
+    expect(noneAuth.checks[0]).toMatchObject({
+      ok: false,
+      error: "Hosted remote smoke requires authMode api-key-env and apiKeyEnv."
+    });
+    expect(fetchCalls).toBe(0);
+    expect(dnsCalls).toBe(0);
+  });
+
+  it("rejects hosted remote DNS resolutions to unsafe networks before fetch", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({ data: [] }));
+      },
+      dnsLookupImpl: async () => [{ address: "10.0.0.25", family: 4 }],
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address."
+    });
+    expect(fetchCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("fails hosted remote DNS lookup closed on provider timeout", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            timeoutMs: 1,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let requestCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => new Promise(() => {}),
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: "{}",
+        onOptions: () => {
+          requestCalls += 1;
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "Remote OpenAI-compatible smoke DNS lookup timed out."
+    });
+    expect(requestCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("redacts hosted remote DNS lookup failures before request", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let requestCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => {
+        throw new Error("lookup failed for sk-testsecret12345");
+      },
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: "{}",
+        onOptions: () => {
+          requestCalls += 1;
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "Remote OpenAI-compatible smoke DNS lookup failed: lookup failed for [redacted-secret]"
+    });
+    expect(requestCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("sk-testsecret12345");
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("fails hosted remote DNS edge cases closed before request", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    const scenarios = [
+      {
+        addresses: [],
+        error: "Remote OpenAI-compatible smoke DNS lookup returned no addresses."
+      },
+      {
+        addresses: [{ address: "203.0.113.10", family: 0 }],
+        error: "Remote OpenAI-compatible smoke DNS lookup returned no IPv4 or IPv6 addresses."
+      },
+      {
+        addresses: [
+          { address: "93.184.216.34", family: 4 },
+          { address: "169.254.169.254", family: 4 }
+        ],
+        error: "Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address."
+      }
+    ];
+
+    for (const scenario of scenarios) {
+      let requestCalls = 0;
+      const result = await doctorProviderRegistry({
+        registry: config.providers!,
+        providerId: "hosted-byok",
+        smoke: true,
+        allowRemoteSmoke: true,
+        dnsLookupImpl: async () => scenario.addresses,
+        requestImpl: mockProviderRequest({
+          status: 200,
+          body: "{}",
+          onOptions: () => {
+            requestCalls += 1;
+          }
+        }),
+        env: {
+          NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+        }
+      });
+
+      expect(result.checks[0]).toMatchObject({
+        ok: false,
+        error: scenario.error
+      });
+      expect(requestCalls).toBe(0);
+      expect(JSON.stringify(result)).not.toContain("provider-secret");
+    }
+  });
+
+  it("bounds hosted remote pinned transport response bodies", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let requestCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: "x".repeat(256 * 1024 + 1),
+        onOptions: () => {
+          requestCalls += 1;
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "model_output_schema",
+      error: "Models response exceeded 262144 byte limit."
+    });
+    expect(requestCalls).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("redacts hosted remote response stream errors", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: "{}",
+        responseError: new Error("response reset while using provider-secret")
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "unknown",
+      error: "unknown: response reset while using [redacted-provider-key]"
+    });
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("reports hosted remote response construction failures without waiting for timeout", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            timeoutMs: 1_000,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
+      },
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: JSON.stringify({ data: [{ id: "review-model" }] }),
+        headers: {
+          "bad header": "x-provider-secret"
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "unknown",
+      error: expect.stringContaining("unknown:")
+    });
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+    expect(JSON.stringify(result)).not.toContain("x-provider-secret");
+  });
+
+  it("does not follow hosted remote redirects or read oversized redirect bodies", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+
+    const longLocation = `https://redirect.example.test/${"l".repeat(900)}?api_key=provider-secret`;
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
+      },
+      requestImpl: mockProviderRequest({
+        status: 302,
+        body: "x".repeat(256 * 1024 + 1),
+        headers: {
+          Location: longLocation
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("OpenAI-compatible models endpoint redirected with 302")
+    });
+    expect(result.checks[0]?.error).toContain("remote smoke does not follow redirects");
+    expect(result.checks[0]?.error?.length).toBeLessThan(500);
+    expect(result.checks[0]?.error).not.toContain("exceeded 262144 byte limit");
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+    expect(JSON.stringify(result)).not.toContain("l".repeat(400));
+    expect(JSON.stringify(result)).not.toContain("xxxxx");
+  });
+
+  it("settles hosted remote pinned smoke when abort destroys a quiet request", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            timeoutMs: 1,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    const request = new QuietDestroyProviderClientRequest();
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetchImpl: async () => {
+        throw new Error("remote smoke must not use fetch");
+      },
+      requestImpl: () => request,
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "timeout",
+      error: expect.stringContaining("Provider smoke request aborted")
+    });
+    expect(request.ended).toBe(true);
+    expect(request.destroyedWith?.message).toBe("Provider smoke request aborted.");
+  });
+
+  it("rejects invalid percent-encoded smoke paths without crashing the doctor run", async () => {
+    let dnsCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1%",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      },
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => {
+        dnsCalls += 1;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      error: "OpenAI-compatible smoke target contains an invalid percent-encoded path or fragment."
+    });
+    expect(dnsCalls).toBe(0);
   });
 
   it("classifies provider failures and redacts provider URLs", () => {
@@ -451,7 +1469,7 @@ describe("provider registry", () => {
     });
     expect(remoteResult.checks[0]).toMatchObject({
       ok: false,
-      error: "Remote OpenAI-compatible smoke checks are disabled until the transport can pin the validated DNS result."
+      error: "Remote OpenAI-compatible smoke checks require explicit remote opt-in and --provider <id>."
     });
     expect(fetchCalls).toBe(0);
   });
@@ -682,6 +1700,53 @@ describe("provider registry", () => {
       errorCategory: "model_output_schema",
       error: "Models response was not valid JSON."
     });
+  });
+
+  it("cancels oversized fetch response bodies immediately", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            model: "review-model",
+            authMode: "none",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: true,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let canceled = false;
+    const body = new ReadableStream({
+      cancel() {
+        canceled = true;
+      }
+    });
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai-compatible",
+      smoke: true,
+      fetchImpl: async () => new Response(body, {
+        status: 200,
+        headers: {
+          "content-length": String(256 * 1024 + 1)
+        }
+      })
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "model_output_schema",
+      error: "Models response exceeded 262144 byte limit."
+    });
+    expect(canceled).toBe(true);
   });
 
   it("aborts OpenAI-compatible smoke checks using provider timeoutMs", async () => {

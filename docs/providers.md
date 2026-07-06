@@ -81,8 +81,13 @@ neondiff providers doctor \
 The example `ollama-local` provider is disabled by default. Enable it in
 `config.local.json` or with a dry-run-verified config patch before running the
 smoke command; otherwise the doctor exits before calling `/models`. Smoke checks
-are local-loopback only in this beta and must include `--provider` so a single
-command cannot fan out authenticated requests to every enabled provider.
+must include `--provider` so a single command cannot fan out authenticated
+requests to every enabled provider. Local loopback endpoints can be smoked with
+`--smoke true` alone. Hosted non-loopback endpoints also require
+`NEONDIFF_ALLOW_REMOTE_SMOKE=true`; the doctor then performs one bounded
+`GET /models` request to the selected HTTPS endpoint with the configured
+environment-backed API key and does not send PR diffs, review prompts, fixture
+payloads, or GitHub mutations.
 
 ## GLM/Z.ai Through ZCode
 
@@ -171,7 +176,12 @@ Then export the key in the operator wrapper, not in JSON:
 
 ```bash
 export NEONDIFF_PROVIDER_API_KEY="..."
-neondiff providers doctor --config config.local.json --provider openai-compatible --smoke true --json
+NEONDIFF_ALLOW_REMOTE_SMOKE=true \
+  neondiff providers doctor \
+    --config config.local.json \
+    --provider openai-compatible \
+    --smoke true \
+    --json
 ```
 
 ## Agent Runtime Adapters
