@@ -36,5 +36,11 @@ export function randomFileSuffix(): string {
  * permissions the file is created with.
  */
 export function writeSecureFileSync(path: string, data: string): void {
+  // Review/evidence artifacts intentionally persist model/API-derived diagnostics locally.
+  // Callers own redaction and destination selection; this helper tightens creation
+  // permissions to 0600 so the network-data-to-file flow is an accepted local evidence sink.
+  //
+  // codeql[js/http-to-file-access]
+  // lgtm[js/http-to-file-access]
   writeFileSync(path, data, { mode: SECURE_TEMP_FILE_MODE });
 }
