@@ -16,6 +16,37 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.38-beta.1] - docs/releases/v0.4.38-beta.1.md
+
+### Added
+- Add human-gated calibration promotion proof, setup/vision/operator documentation refreshes, CLI version/help coverage, hermetic QA-lab timing fixtures, and the license-service admin status contract slice
+- Add license entitlement metadata, private-repo gate, cache redaction, and keychain-cache fallback coverage while holding the public npm package at `neondiff@0.4.30-beta.1`
+
+## [0.4.37-beta.1] - docs/releases/v0.4.37-beta.1.md
+
+### Added
+- Add the private-repo entitlement proof matrix and worker-level license-gate coverage so missing or non-active private/commercial entitlements fail closed before checkout, file listing, provider calls, or review posting
+
+## [0.4.36-beta.1] - docs/releases/v0.4.36-beta.1.md
+
+### Fixed
+- Add source-only prerelease publish classification so local-worker beta tags listed in the public manifest skip npm publishing cleanly instead of producing failed publish runs
+
+## [0.4.35-beta.1] - docs/releases/v0.4.35-beta.1.md
+
+### Added
+- Add GitHub App install-scope proof fields and fail-closed `doctor github` readiness checks for repository visibility, metadata access, pull-request access, and App-vs-token read provenance
+
+## [0.4.34-beta.1] - docs/releases/v0.4.34-beta.1.md
+
+### Added
+- Add root changelog and release-governance documentation for the beta/GA versioning line, source-only releases, and npm dist-tag policy
+
+## [0.4.33-beta.1] - docs/releases/v0.4.33-beta.1.md
+
+### Added
+- Add the post-0.4.32 runtime-safety batch: atomic per-head review claims, retry-degraded provenance, self-consistency re-check support, outcome observer storage, calibration aggregation, scoring docs, and hosted BYOK smoke-gate hardening
+
 ## [0.4.32-beta.1] - docs/releases/v0.4.32-beta.1.md
 
 ### Added
