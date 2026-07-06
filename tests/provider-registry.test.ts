@@ -594,6 +594,126 @@ describe("provider registry", () => {
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 
+  it("fails hosted remote DNS edge cases closed before request", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    const scenarios = [
+      {
+        addresses: [],
+        error: "Remote OpenAI-compatible smoke DNS lookup returned no addresses."
+      },
+      {
+        addresses: [{ address: "203.0.113.10", family: 0 }],
+        error: "Remote OpenAI-compatible smoke DNS lookup returned no IPv4 or IPv6 addresses."
+      },
+      {
+        addresses: [
+          { address: "93.184.216.34", family: 4 },
+          { address: "169.254.169.254", family: 4 }
+        ],
+        error: "Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address."
+      }
+    ];
+
+    for (const scenario of scenarios) {
+      let requestCalls = 0;
+      const result = await doctorProviderRegistry({
+        registry: config.providers!,
+        providerId: "hosted-byok",
+        smoke: true,
+        allowRemoteSmoke: true,
+        dnsLookupImpl: async () => scenario.addresses,
+        requestImpl: mockProviderRequest({
+          status: 200,
+          body: "{}",
+          onOptions: () => {
+            requestCalls += 1;
+          }
+        }),
+        env: {
+          NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+        }
+      });
+
+      expect(result.checks[0]).toMatchObject({
+        ok: false,
+        error: scenario.error
+      });
+      expect(requestCalls).toBe(0);
+      expect(JSON.stringify(result)).not.toContain("provider-secret");
+    }
+  });
+
+  it("bounds hosted remote pinned transport response bodies", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "hosted-byok",
+        providers: {
+          "hosted-byok": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let requestCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "hosted-byok",
+      smoke: true,
+      allowRemoteSmoke: true,
+      dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
+      requestImpl: mockProviderRequest({
+        status: 200,
+        body: "x".repeat(256 * 1024 + 1),
+        onOptions: () => {
+          requestCalls += 1;
+        }
+      }),
+      env: {
+        NEONDIFF_PROVIDER_API_KEY: "provider-secret"
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      errorCategory: "model_output_schema",
+      error: "Models response exceeded 262144 byte limit."
+    });
+    expect(requestCalls).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
   it("does not follow hosted remote redirects or leak provider response secrets", async () => {
     const config = loadConfigFromObject({
       providers: {

@@ -286,10 +286,11 @@ async function smokeOpenAICompatibleProvider(input: {
     return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
   }
 
+  const timeoutSignal = signalWithTimeout(input.provider.timeoutMs);
   try {
     const requestInit: RequestInit = {
       method: "GET",
-      signal: signalWithTimeout(input.provider.timeoutMs),
+      signal: timeoutSignal.signal,
       redirect: "manual",
       headers: {
         Accept: "application/json",
@@ -384,6 +385,8 @@ async function smokeOpenAICompatibleProvider(input: {
       errorCategory,
       error: `${errorCategory}: ${redactedMessage}`
     };
+  } finally {
+    timeoutSignal.cleanup();
   }
 }
 
@@ -391,13 +394,16 @@ function isRemoteSmokeEnvOptIn(env: Record<string, string | undefined>): boolean
   return /^(?:1|true|yes)$/i.test(env[REMOTE_SMOKE_ENV_OPT_IN] ?? "");
 }
 
-function signalWithTimeout(timeoutMs: number | undefined): AbortSignal | undefined {
+function signalWithTimeout(timeoutMs: number | undefined): { signal: AbortSignal; cleanup: () => void } {
   const timeout = providerSmokeTimeoutMs(timeoutMs);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const maybeUnref = timer as { unref?: () => void };
   if (typeof maybeUnref.unref === "function") maybeUnref.unref();
-  return controller.signal;
+  return {
+    signal: controller.signal,
+    cleanup: () => clearTimeout(timer)
+  };
 }
 
 function providerSmokeTimeoutMs(timeoutMs: number | undefined): number {
