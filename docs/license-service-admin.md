@@ -114,4 +114,5 @@ Stop and return to the release captain if any of these occur:
 The next slice should connect this source contract to a staging-only admin
 smoke once the endpoint and credentials exist. That follow-up should update
 issue `#327` with a redacted evidence path under
-`/Volumes/LEXAR/Codex/evidence/neondiff/<date>/production-license-service/`.
+the operator-configured `evidenceDir`, for example
+`<evidenceDir>/<date>/production-license-service/`.
