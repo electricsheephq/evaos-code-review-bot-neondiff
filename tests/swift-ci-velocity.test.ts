@@ -16,7 +16,8 @@ describe("Swift CI velocity policy", () => {
       "docs/releases/v0.4.43-beta.1.md",
       "src/release-status.ts",
       "tests/release-status.test.ts",
-      ".github/workflows/ci.yml"
+      ".github/workflows/ci.yml",
+      "apps/neondiff-desktop/docs/mac-release-runbook.md"
     ])).toMatchObject({
       affected: false,
       matched: []
@@ -57,7 +58,9 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/base ref unavailable; fail open/);
 
     expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
-    expect(codeql).toMatch(/apps\/neondiff-desktop\/\*\*/);
+    expect(codeql).toMatch(/apps\/neondiff-desktop\/Sources\/\*\*/);
+    expect(codeql).toMatch(/apps\/neondiff-desktop\/Package\.swift/);
+    expect(codeql).toMatch(/apps\/neondiff-desktop\/Package\.resolved/);
     expect(codeql).not.toMatch(/\.github\/workflows\/swift-desktop-gate\.yml/);
     expect(codeql).not.toMatch(/\.github\/workflows\/codeql-swift-path-aware\.yml/);
     expect(codeql).not.toMatch(/-\s*Package\.swift/);

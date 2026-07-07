@@ -4,12 +4,15 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const SWIFT_PATH_PREFIXES = [
-  "apps/neondiff-desktop/"
+  "apps/neondiff-desktop/Sources/"
 ];
 
 const SWIFT_ROOT_FILES = new Set([
   "Package.swift",
-  "Package.resolved"
+  "Package.resolved",
+  "apps/neondiff-desktop/Package.swift",
+  "apps/neondiff-desktop/Package.resolved",
+  "apps/neondiff-desktop/script/build_and_run.sh"
 ]);
 
 const SWIFT_WORKFLOW_FILES = new Set([

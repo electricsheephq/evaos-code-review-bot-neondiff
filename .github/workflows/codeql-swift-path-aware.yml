@@ -3,12 +3,16 @@ name: Swift CodeQL Path-Aware
 on:
   pull_request:
     paths:
-      - apps/neondiff-desktop/**
+      - apps/neondiff-desktop/Package.swift
+      - apps/neondiff-desktop/Package.resolved
+      - apps/neondiff-desktop/Sources/**
   push:
     branches:
       - main
     paths:
-      - apps/neondiff-desktop/**
+      - apps/neondiff-desktop/Package.swift
+      - apps/neondiff-desktop/Package.resolved
+      - apps/neondiff-desktop/Sources/**
   workflow_dispatch:
   schedule:
     - cron: "37 9 * * 1"
