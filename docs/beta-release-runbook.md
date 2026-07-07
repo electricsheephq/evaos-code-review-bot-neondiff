@@ -222,29 +222,38 @@ human-visible window opened or that the changed control works.
 Run the local smoke once per logical batch, not after every tiny review-fix
 commit:
 
-1. Build and launch the current app bundle with the desktop run script.
-2. Inspect the app with Computer Use or equivalent accessibility/UI evidence.
+1. Build and launch the current app bundle with
+   `apps/neondiff-desktop/script/build_and_run.sh run`.
+2. Inspect the exact `dist/NeonDiffDesktop.app` path with Computer Use or
+   equivalent accessibility/UI evidence.
 3. Record `Welcome visible`: the Welcome screen is present in the launched app.
 4. Navigate to the changed step.
 5. Record `changed button/action clicked`: click the changed button/action and
    capture the observed disabled, error, or success state.
 6. Call out `credential-gated steps` that were not tested because keys,
    licenses, signing credentials, or owner approvals were absent.
-7. Post the visible smoke evidence on the PR or linked issue before merge.
+7. Post the visible smoke evidence on the PR or linked issue before merge,
+   including the source SHA, exact built app path, clicked control labels, and
+   the settled UI state.
 
 Keep the proof boundary explicit: local visible UI smoke is product-behavior
 evidence for the named local build only. It is not signed/notarized release
 proof, TCC proof, appcast proof, customer readiness, or final installed-app
 behavior.
 
+A build-only Swift pass is not visible UI proof. If no Computer Use screenshot,
+accessibility tree, or equivalent opened-app evidence exists for a desktop UI
+change, the product-behavior proof is missing even when `swift build`,
+`bundle-check`, and remote CI all pass.
+
 Remote CI should keep a stable, always-reporting `Swift desktop gate` check.
 That check passes quickly with an explicit `not affected` result on non-desktop
-changes, and runs `swift run NeonDiffDesktopCoreChecks`, `swift build`, app
+changes, and compiles `NeonDiffDesktopCoreChecks`, runs `swift build`, app
 bundle build, and bundle check only when Swift desktop paths changed or when
-manually dispatched. Keep `NeonDiffDesktopCoreSmoke` in the local/release-smoke
-lane because it exercises the Keychain-backed smoke path; hosted macOS runners
-can kill Keychain round-trip smoke executables after a successful build unless
-the runner has a known-good Keychain session.
+manually dispatched. Keep `NeonDiffDesktopCoreChecks` execution,
+`NeonDiffDesktopCoreSmoke`, and visible UI clicks in the local/release-smoke
+lane because hosted macOS runners can kill smoke executables after a successful
+build unless the runner has a known-good interactive session.
 
 Swift CodeQL is a release/security gate. Use the checked-in path-aware Swift
 CodeQL workflow for desktop/signing/appcast/release surfaces, scheduled scans,
