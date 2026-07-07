@@ -5,30 +5,46 @@ validating, and recording evidence for a NeonDiff Desktop macOS artifact. It is
 a release-execution checklist for the owner and a Codex agent once the missing
 Apple/Sparkle inputs are available.
 
-Proof boundary: this document does not prove a signed artifact exists, does not
-submit anything to Apple, does not publish an appcast, and does not make the
-desktop update channel GA-ready. Issue #322 closes the documentation lane only.
+Proof boundary: this document closes the #322 documentation lane only. It does
+not prove a signed artifact exists, does not submit anything to Apple, does not
+publish an appcast, and does not make the desktop update channel GA-ready.
 Parent issue #116 owns the signed auto-update channel, #323 owns appcast
 fixtures/dry-run generation, #324 owns credential naming/custody, #325 owns the
 desktop onboarding wizard, #327 owns production license-service deployment, and
-#374 is the roadmap handoff index.
+the roadmap handoff index is #374.
+
+## Release State Gates
+
+Keep these release states independent. Passing one state never implies the next
+state is complete.
+
+| State | Proof | Stop condition |
+| --- | --- | --- |
+| Dev smoke | Source checkout builds and the local `.app` bundle launches or passes a local smoke/bundle check. | Stop if the app cannot build, launch, or pass `bundle-check`. This is not signing or release proof. |
+| Staging artifact | A candidate `.app` or CI artifact is tied to the exact source SHA, version, build, checksum, and workflow run/artifact ID when CI-built. | Stop if artifact provenance is missing, mutable, or not tied to the intended source. |
+| Signed/notarized proof | Developer ID signing, notarization acceptance, stapling, post-staple `codesign`, and `spctl` all pass on the same artifact. | Stop on any signing, notarization, stapling, or Gatekeeper failure. |
+| Updater/feed proof | The appcast references the exact hosted artifact, includes the EdDSA signature, and has rollback/signature-failure evidence. | Stop if hosting is undecided, feed URL does not match the app, signature is missing, or rollback is unresolved. |
+| TCC proof | A final signed/notarized artifact is used for any Accessibility, Screen Recording, microphone, or other TCC acceptance proof. | Stop if proof comes from an unsigned/ad-hoc app or a different signing identity. |
+| Customer readiness | Owner-approved release notes, license/update policy, hosting, rollback, and support handoff are recorded. | Stop if #327 or any customer-facing entitlement/update policy is unresolved for the chosen channel. |
 
 ## Preconditions
 
 Run every command from a fresh checkout of
-`electricsheephq/evaos-code-review-bot-neondiff` on the intended release source
-SHA. Record the source SHA before any build:
+`electricsheephq/evaos-code-review-bot-neondiff` pinned to the intended release
+source SHA or immutable tag. Capture the release ref first, then detach the
+checkout before any build:
 
 ```sh
+RELEASE_SOURCE_REF="<sha-or-tag>"
 git fetch origin main --tags
-git checkout main
-git pull --ff-only origin main
+git checkout --detach "$RELEASE_SOURCE_REF"
 git status --short
 git rev-parse HEAD
 ```
 
-Stop if the checkout is dirty, behind the intended release SHA, or carrying
-unrelated local changes.
+Stop if the checkout is dirty, cannot resolve `RELEASE_SOURCE_REF`, resolves to
+the wrong source SHA, or carries unrelated local changes. Do not sign whatever
+`main` happens to point at during release execution.
 
 Before building, run the read-only credential doctor:
 
@@ -42,7 +58,7 @@ The doctor reports presence only. It does not sign, notarize, upload, fetch
 artifacts, or print secret values. Canonical credential names and custody rules
 live in `apps/neondiff-desktop/docs/signing-credentials.md`.
 
-Known #322 handoff gap: this machine was reported to have a Developer ID
+Known handoff gap recorded on #322: this machine was reported to have a Developer ID
 Application certificate and Sparkle private key available, but to be missing
 notarization credentials and the Sparkle public key. Treat that state as a
 release blocker until the owner provides the notarization input and
@@ -234,7 +250,8 @@ Create a public-safe packet under:
 Minimum files:
 
 - `source.txt`: repo, branch, source SHA, tag or intended tag, version, build,
-  bundle id, channel, operator, and UTC timestamp.
+  bundle id, channel, operator, UTC timestamp, and, when CI-built, workflow run
+  URL plus artifact ID/name.
 - `credential-preflight.json`: output from `preflight-credentials.sh --json`.
 - `build.txt`: build commands, bundle metadata, and checksums.
 - `codesign.txt`: signing command shapes and verification output.
