@@ -49,6 +49,10 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/script\/build_and_run\.sh build/);
     expect(gate).toMatch(/script\/build_and_run\.sh bundle-check/);
     expect(gate).toMatch(/cancel-in-progress:\s*true/);
+    expect(gate).toMatch(/current PR\/main head/);
+    expect(gate).toMatch(/Superseded runs may be cancelled/);
+    expect(gate).toMatch(/payload && payload\.affected === true/);
+    expect(gate).toMatch(/console\.log\('false'\)/);
 
     expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
     expect(codeql).toMatch(/apps\/neondiff-desktop\/\*\*/);
@@ -65,7 +69,7 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/before ref unavailable; fail open/);
   });
 
-  it("keeps all --files operands as filenames, including option-like paths", () => {
+  it("keeps every operand after --files as a filename, including option-like paths", () => {
     expect(swiftAffected([
       "--base",
       "apps/neondiff-desktop/Package.swift"
@@ -85,6 +89,8 @@ describe("Swift CI velocity policy", () => {
     expect(betaRunbook).toMatch(/preview server\/browser\s+smoke/);
     expect(betaRunbook).toMatch(/Swift desktop gate/);
     expect(betaRunbook).toMatch(/remove Swift from\s+GitHub CodeQL default setup/i);
+    expect(betaRunbook).toMatch(/code-scanning\/default-setup/);
+    expect(betaRunbook).toMatch(/languages must not contain `swift`/);
     expect(betaRunbook).toMatch(/desktop-smoke/);
     expect(betaRunbook).toMatch(/desktop-release/);
 

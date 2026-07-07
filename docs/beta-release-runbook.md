@@ -224,6 +224,17 @@ GitHub CodeQL default setup or disable repo-wide default setup for Swift. If
 default setup keeps `swift` enabled, GitHub will continue running
 `Analyze (swift)` on every PR head regardless of path filters.
 
+Verify the setting after merge with:
+
+```bash
+gh api repos/electricsheephq/evaos-code-review-bot-neondiff/code-scanning/default-setup \
+  --jq '.languages'
+```
+
+The returned languages must not contain `swift`. For this repo, the intended
+default setup languages are `actions` and `javascript-typescript`; Swift is
+owned by `.github/workflows/codeql-swift-path-aware.yml`.
+
 Every public release packet should state which proof loop was used:
 
 - `preview/browser`: URL or local route, command, screenshots or DOM assertion,

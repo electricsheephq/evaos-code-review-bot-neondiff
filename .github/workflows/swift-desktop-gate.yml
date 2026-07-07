@@ -2,7 +2,8 @@ name: Swift Desktop Gate
 
 on:
   # This gate intentionally has no PR/push path filter. It must report on every
-  # PR/main push, then skip Swift work internally when desktop files are clean.
+  # current PR/main head, then skip Swift work internally when desktop files are clean.
+  # Superseded runs may be cancelled when a newer head takes over the same check.
   pull_request:
   push:
     branches:
@@ -62,7 +63,16 @@ jobs:
             fi
           fi
           cat swift-impact.json
-          AFFECTED="$(node -e "console.log(JSON.parse(require('fs').readFileSync('swift-impact.json', 'utf8')).affected ? 'true' : 'false')")"
+          AFFECTED="$(node <<'NODE'
+          const fs = require('fs');
+          try {
+            const payload = JSON.parse(fs.readFileSync('swift-impact.json', 'utf8'));
+            console.log(payload && payload.affected === true ? 'true' : 'false');
+          } catch {
+            console.log('false');
+          }
+          NODE
+          )"
           echo "affected=$AFFECTED" >> "$GITHUB_OUTPUT"
           {
             echo "## Swift desktop impact"
