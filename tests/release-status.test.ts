@@ -27,22 +27,35 @@ describe("beta release status", () => {
   });
 
   function writeLicenseHealthProof(root: string, options: {
+    evidenceKind?: string;
     releaseVersion?: string;
+    observedAt?: string;
+    method?: string;
     url?: string;
+    statusCode?: number;
+    responseBody?: string;
+    responseBodySha256?: string;
+    captureContext?: Record<string, unknown>;
     path?: string;
   } = {}): string {
     const proofPath = options.path ?? "docs/evidence/license-healthz.json";
-    const responseBody = "{\"status\":\"ok\"}";
+    const responseBody = options.responseBody ?? "{\"status\":\"ok\"}";
     mkdirSync(dirname(join(root, proofPath)), { recursive: true });
     writeFileSync(join(root, proofPath), JSON.stringify({
-      evidenceKind: "license_api_healthz",
+      evidenceKind: options.evidenceKind ?? "license_api_healthz",
       releaseVersion: options.releaseVersion ?? "v1.0.0-beta.1",
-      observedAt: "2026-07-07T00:00:00.000Z",
-      method: "GET",
+      observedAt: options.observedAt ?? "2026-07-07T00:00:00.000Z",
+      method: options.method ?? "GET",
       url: options.url ?? "https://license.example/healthz",
-      statusCode: 200,
+      statusCode: options.statusCode ?? 200,
       responseBody,
-      responseBodySha256: createHash("sha256").update(responseBody).digest("hex")
+      responseBodySha256: options.responseBodySha256 ?? createHash("sha256").update(responseBody).digest("hex"),
+      captureContext: options.captureContext ?? {
+        tool: "curl",
+        transport: "https",
+        tlsValidation: "curl default CA validation",
+        capturedFrom: "test runner"
+      }
     }));
     return proofPath;
   }
@@ -888,6 +901,124 @@ describe("beta release status", () => {
       healthProofPath: "docs/releases/v1.0.0-beta.1.md",
       detail: "license API state healthy blocks this release; requiredForThisRelease=true; invalid health proof docs/releases/v1.0.0-beta.1.md: proof JSON is invalid"
     });
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("blocks required healthy license API gates when machine-checkable proof fields do not match", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-mismatched-health-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      evidenceKind: "not_license_api_healthz",
+      releaseVersion: "v1.0.0-beta.0",
+      observedAt: "not-a-date",
+      method: "POST",
+      url: "https://license.example/wrong",
+      statusCode: 503,
+      responseBodySha256: "not-the-body-hash",
+      captureContext: {}
+    });
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.licenseApi.ok).toBe(false);
+    expect(manifest.licenseApi.detail).toContain("evidenceKind must be license_api_healthz");
+    expect(manifest.licenseApi.detail).toContain("releaseVersion must match v1.0.0-beta.1");
+    expect(manifest.licenseApi.detail).toContain("url must match https://license.example/healthz");
+    expect(manifest.licenseApi.detail).toContain("method must be GET");
+    expect(manifest.licenseApi.detail).toContain("statusCode must be 200");
+    expect(manifest.licenseApi.detail).toContain("observedAt must be a valid ISO timestamp");
+    expect(manifest.licenseApi.detail).toContain("responseBodySha256 must match responseBody");
+    expect(manifest.licenseApi.detail).toContain("captureContext.tool must be present");
+    expect(manifest.licenseApi.detail).toContain("captureContext.transport must be present");
+    expect(manifest.licenseApi.detail).toContain("captureContext.tlsValidation must be present");
+    expect(manifest.licenseApi.detail).toContain("captureContext.capturedFrom must be present");
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("blocks stale or future health proofs when release-status supplies a run timestamp", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stale-health-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      observedAt: "2026-06-29T23:59:59.000Z"
+    });
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1",
+      now: new Date("2026-07-07T00:00:00.000Z")
+    });
+
+    expect(manifest.licenseApi.ok).toBe(false);
+    expect(manifest.licenseApi.detail).toContain("observedAt must be no older than 7 days");
     expect(manifest.ok).toBe(false);
   });
 

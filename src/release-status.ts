@@ -186,6 +186,8 @@ export interface ReleaseStatus {
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
 const MAX_PUBLIC_VERSION_TAG_LENGTH = 128;
+const LICENSE_HEALTH_PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
+const LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
 const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
   ...REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES,
@@ -438,7 +440,8 @@ export function collectReleaseStatus(input: {
             cwd: input.cwd,
             manifestPath: input.publicReleaseManifestPath,
             expectedVersion: input.expectedPublicVersion,
-            verifyRollbackRefs: input.verifyPublicRollbackRefs === true
+            verifyRollbackRefs: input.verifyPublicRollbackRefs === true,
+            now
           })
         }
       : {}),
@@ -469,6 +472,7 @@ export function readPublicReleaseManifestStatus(input: {
   manifestPath: string;
   expectedVersion?: string;
   verifyRollbackRefs?: boolean;
+  now?: Date;
 }): PublicReleaseStatus {
   const absolutePath = resolve(input.cwd, input.manifestPath);
   if (!existsSync(absolutePath)) {
@@ -544,7 +548,8 @@ export function readPublicReleaseManifestStatus(input: {
           cwd: input.cwd,
           proofPath: licenseHealthProofPath,
           expectedReleaseVersion: expectedVersion,
-          expectedUrl: readString(licenseApi.healthUrl)
+          expectedUrl: readString(licenseApi.healthUrl),
+          now: input.now
         })
       : { ok: true, detail: "" };
     const licenseHealthProofOk = licenseHealthProof.ok;
@@ -833,6 +838,7 @@ function validateLicenseHealthProof(input: {
   proofPath?: string;
   expectedReleaseVersion?: string;
   expectedUrl?: string;
+  now?: Date;
 }): { ok: boolean; detail: string } {
   if (!input.proofPath) return { ok: false, detail: "missing health proof (missing)" };
   const absolutePath = resolve(input.cwd, input.proofPath);
@@ -853,6 +859,11 @@ function validateLicenseHealthProof(input: {
   const statusCode = typeof proof.statusCode === "number" ? proof.statusCode : undefined;
   const responseBody = typeof proof.responseBody === "string" ? proof.responseBody : undefined;
   const responseBodySha256 = readString(proof.responseBodySha256);
+  const captureContext = asRecord(proof.captureContext);
+  const captureTool = readString(captureContext.tool);
+  const captureTransport = readString(captureContext.transport);
+  const captureTlsValidation = readString(captureContext.tlsValidation);
+  const captureHost = readString(captureContext.capturedFrom);
   const failures: string[] = [];
 
   if (evidenceKind !== "license_api_healthz") failures.push("evidenceKind must be license_api_healthz");
@@ -862,7 +873,18 @@ function validateLicenseHealthProof(input: {
   if (input.expectedUrl && url !== input.expectedUrl) failures.push(`url must match ${input.expectedUrl}`);
   if (method !== "GET") failures.push("method must be GET");
   if (statusCode !== 200) failures.push("statusCode must be 200");
-  if (!observedAt || Number.isNaN(Date.parse(observedAt))) failures.push("observedAt must be a valid ISO timestamp");
+  const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
+  if (!observedAt || Number.isNaN(observedAtMs)) {
+    failures.push("observedAt must be a valid ISO timestamp");
+  } else if (input.now) {
+    const nowMs = input.now.getTime();
+    if (observedAtMs > nowMs + LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS) {
+      failures.push("observedAt must not be more than 5 minutes in the future");
+    }
+    if (nowMs - observedAtMs > LICENSE_HEALTH_PROOF_MAX_AGE_MS) {
+      failures.push("observedAt must be no older than 7 days");
+    }
+  }
   if (responseBody === undefined) {
     failures.push("responseBody must be present");
   }
@@ -871,6 +893,10 @@ function validateLicenseHealthProof(input: {
   } else if (responseBody !== undefined && createHash("sha256").update(responseBody).digest("hex") !== responseBodySha256) {
     failures.push("responseBodySha256 must match responseBody");
   }
+  if (!captureTool) failures.push("captureContext.tool must be present");
+  if (!captureTransport) failures.push("captureContext.transport must be present");
+  if (!captureTlsValidation) failures.push("captureContext.tlsValidation must be present");
+  if (!captureHost) failures.push("captureContext.capturedFrom must be present");
 
   return failures.length
     ? { ok: false, detail: `invalid health proof ${input.proofPath}: ${failures.join("; ")}` }

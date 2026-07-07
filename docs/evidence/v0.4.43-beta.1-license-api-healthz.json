@@ -7,5 +7,13 @@
   "statusCode": 200,
   "responseBody": "{\"status\":\"ok\"}",
   "responseBodySha256": "a29ee2b15c494311c52521766e44af56a3ad2248e7a8ab465e5206463c13d288",
+  "captureContext": {
+    "tool": "curl",
+    "transport": "https",
+    "resolverOverride": "neondiff-license.fly.dev:443:66.241.124.124",
+    "tlsValidation": "curl default CA validation",
+    "capturedFrom": "operator Mac",
+    "note": "Resolver override was used because the local macOS resolver cache lagged while public DNS already resolved neondiff-license.fly.dev to 66.241.124.124."
+  },
   "redaction": "No license key, token, cookie, customer data, or private repo content was present in this health check."
 }
