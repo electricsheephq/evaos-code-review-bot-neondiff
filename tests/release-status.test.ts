@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReleaseStatus,
   collectReleaseStatus,
@@ -23,6 +23,7 @@ describe("beta release status", () => {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -44,7 +45,7 @@ describe("beta release status", () => {
     writeFileSync(join(root, proofPath), JSON.stringify({
       evidenceKind: options.evidenceKind ?? "license_api_healthz",
       releaseVersion: options.releaseVersion ?? "v1.0.0-beta.1",
-      observedAt: options.observedAt ?? "2026-07-07T00:00:00.000Z",
+      observedAt: options.observedAt ?? new Date().toISOString(),
       method: options.method ?? "GET",
       url: options.url ?? "https://license.example/healthz",
       statusCode: options.statusCode ?? 200,
@@ -1084,7 +1085,7 @@ describe("beta release status", () => {
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
     writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
     const healthProofPath = writeLicenseHealthProof(root, {
-      observedAt: "2026-06-29T23:59:59.000Z"
+      observedAt: "2026-06-06T23:59:59.000Z"
     });
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.0-beta.1",
@@ -1124,7 +1125,60 @@ describe("beta release status", () => {
     });
 
     expect(manifest.licenseApi.ok).toBe(false);
-    expect(manifest.licenseApi.detail).toContain("observedAt must be no older than 7 days");
+    expect(manifest.licenseApi.detail).toContain("observedAt must be no older than 30 days");
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("checks health proof freshness when callers omit now", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-07T00:00:00.000Z"));
+
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-default-now-health-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      observedAt: "2026-06-06T23:59:59.000Z"
+    });
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.licenseApi.ok).toBe(false);
+    expect(manifest.licenseApi.detail).toContain("observedAt must be no older than 30 days");
     expect(manifest.ok).toBe(false);
   });
 

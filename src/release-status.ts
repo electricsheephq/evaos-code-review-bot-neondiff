@@ -186,7 +186,8 @@ export interface ReleaseStatus {
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
 const MAX_PUBLIC_VERSION_TAG_LENGTH = 128;
-const LICENSE_HEALTH_PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
+const LICENSE_HEALTH_PROOF_MAX_AGE_DAYS = 30;
+const LICENSE_HEALTH_PROOF_MAX_AGE_MS = LICENSE_HEALTH_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
 const LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
 const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
@@ -878,13 +879,13 @@ function validateLicenseHealthProof(input: {
   const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
   if (!observedAt || Number.isNaN(observedAtMs)) {
     failures.push("observedAt must be a valid ISO timestamp");
-  } else if (input.now) {
-    const nowMs = input.now.getTime();
+  } else {
+    const nowMs = (input.now ?? new Date()).getTime();
     if (observedAtMs > nowMs + LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS) {
       failures.push("observedAt must not be more than 5 minutes in the future");
     }
     if (nowMs - observedAtMs > LICENSE_HEALTH_PROOF_MAX_AGE_MS) {
-      failures.push("observedAt must be no older than 7 days");
+      failures.push(`observedAt must be no older than ${LICENSE_HEALTH_PROOF_MAX_AGE_DAYS} days`);
     }
   }
   if (responseBody === undefined) {
@@ -916,8 +917,14 @@ function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: t
   }
   if (!existsSync(absolutePath)) return { ok: true, absolutePath };
 
-  const realEvidenceRoot = realpathSync.native(evidenceRoot);
-  const realProofPath = realpathSync.native(absolutePath);
+  let realEvidenceRoot: string;
+  let realProofPath: string;
+  try {
+    realEvidenceRoot = realpathSync.native(evidenceRoot);
+    realProofPath = realpathSync.native(absolutePath);
+  } catch {
+    return { ok: false, detail: "healthProofPath could not be resolved within docs/evidence" };
+  }
   if (!isPathInsideOrEqual(realProofPath, realEvidenceRoot)) {
     return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
   }
