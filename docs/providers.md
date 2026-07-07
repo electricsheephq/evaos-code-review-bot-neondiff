@@ -11,6 +11,10 @@ The current live review engine remains ZCode-backed. The provider registry is
 the public setup and operator surface for declaring available providers before
 alternate adapter execution is promoted.
 
+For launch-facing caveats, including tested-vs-interface-compatible status,
+macOS/Linux backend limits, and the owner-pinning note for public visitors, see
+[docs/known-limitations-and-provider-status.md](known-limitations-and-provider-status.md).
+
 ## Resource Links
 
 Official/provider-owned docs:

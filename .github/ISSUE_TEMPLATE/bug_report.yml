@@ -17,6 +17,58 @@ body:
       description: Package version, tag, or commit SHA.
     validations:
       required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider or model path
+      description: Pick the path involved, even if you are not sure yet.
+      options:
+        - GLM/Z.AI through ZCode
+        - Ollama localhost
+        - Local OpenAI-compatible endpoint
+        - Hosted OpenAI-compatible BYOK endpoint
+        - Provider-independent bug
+        - Unknown or not configured
+    validations:
+      required: true
+  - type: checkboxes
+    id: backend_matrix
+    attributes:
+      label: Backend or surface involved
+      description: Check every surface that appears relevant.
+      options:
+        - label: CLI command
+        - label: Daemon or launchd worker
+        - label: GitHub App read/posting path
+        - label: Provider registry, doctor, or smoke check
+        - label: Review output, inline comments, duplicate suppression, or stale-head handling
+        - label: License or entitlement gate
+        - label: Desktop macOS app
+        - label: Install, setup, or docs
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Linux
+        - GitHub Actions or CI
+        - Other or unknown
+    validations:
+      required: true
+  - type: dropdown
+    id: review_mode
+    attributes:
+      label: Mode
+      options:
+        - Dry-run review
+        - Live GitHub posting
+        - Provider/list/doctor/smoke command
+        - Setup or install
+        - Not review-related
+        - Unknown
+    validations:
+      required: true
   - type: textarea
     id: repro
     attributes:

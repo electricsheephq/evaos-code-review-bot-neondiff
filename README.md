@@ -21,6 +21,7 @@ sold. NeonDiff is a source-available beta, not an open-source or GA release.
 [Code of Conduct](CODE_OF_CONDUCT.md) · [License](LICENSE.md) ·
 [License Boundary](docs/license-boundary.md) · [Pricing](docs/pricing.md) ·
 [Providers](docs/providers.md) ·
+[Known Limitations](docs/known-limitations-and-provider-status.md) ·
 [Roadmap](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103) ·
 [Repository](https://github.com/electricsheephq/evaos-code-review-bot-neondiff)
 
@@ -144,6 +145,9 @@ Small NeonDiff compatibility matrix:
 | Hosted OpenAI-compatible BYOK gateways | Compatible by interface; remote smoke and live review proof required | Hosted provider receives prompts and diffs |
 | Free-provider catalogs | Resource only; untested by NeonDiff unless a provider has its own proof issue | Usually hosted; check each provider |
 
+For the blunt launch-facing matrix, including macOS/Linux and backend limits,
+see [docs/known-limitations-and-provider-status.md](docs/known-limitations-and-provider-status.md).
+
 ## First Dry-Run Review
 
 Run a dry-run review before any live posting. Replace `--repo owner/name` and
@@ -174,6 +178,9 @@ If you are contributing as an AI coding agent:
 4. Keep the PR linked to the issue with `Closes #<issue>` or `Related: #<issue>`.
 5. Record validation and evidence without raw secrets, raw customer data, or
    private logs.
+
+For public issue intake and launch-influx handling, use
+[docs/triage-policy.md](docs/triage-policy.md).
 
 Useful public-product issues:
 

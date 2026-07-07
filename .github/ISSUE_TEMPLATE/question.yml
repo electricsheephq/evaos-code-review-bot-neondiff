@@ -1,0 +1,41 @@
+name: Question
+description: Ask a public-safe NeonDiff setup, provider, license, or workflow question.
+title: "[question]: "
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to understand or decide?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Install or setup
+        - GitHub App permissions
+        - Provider or model path
+        - Dry-run or live review workflow
+        - License or pricing boundary
+        - Desktop macOS app
+        - Roadmap or shipped status
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Public-safe context
+      description: Include docs read, commands tried, and the decision you need. Redact secrets, tokens, private repo names, private diffs, and customer data.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Boundary check
+      options:
+        - label: I removed private keys, provider tokens, license keys, credentials, raw private diffs, and customer data.
+          required: true
