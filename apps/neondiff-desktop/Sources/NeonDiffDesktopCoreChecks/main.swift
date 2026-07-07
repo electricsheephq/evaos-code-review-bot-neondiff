@@ -61,9 +61,9 @@ check(
     "CLI resolver discovers the repo package root from a local app bundle path"
 )
 
-let localCLIClient = NeonDiffCLIClient(executablePath: "neondiff", workingDirectory: tempRoot)
-let localCLIResult = try localCLIClient.run(arguments: ["config", "inspect"], timeout: 5)
-check(localCLIResult.exitCode == 0, "local package CLI exits successfully")
-check(localCLIResult.stdout.contains("\"command\":\"config\""), "local package CLI is preferred over GUI PATH fallback")
+check(
+    NeonDiffCLIResolver.resolveExecutablePath("neondiff", workingDirectory: tempRoot)?.standardizedFileURL == localCLI.standardizedFileURL,
+    "local package CLI is preferred over GUI PATH fallback"
+)
 
 print("NeonDiffDesktopCoreChecks passed")

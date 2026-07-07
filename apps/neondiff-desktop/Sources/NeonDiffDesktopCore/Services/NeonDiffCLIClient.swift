@@ -36,7 +36,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
 
     public func run(arguments: [String], timeout: TimeInterval = 15) throws -> CLIRunResult {
         let process = Process()
-        if let resolvedExecutable = resolveExecutablePath(executablePath, workingDirectory: workingDirectory) {
+        if let resolvedExecutable = NeonDiffCLIResolver.resolveExecutablePath(executablePath, workingDirectory: workingDirectory) {
             process.executableURL = resolvedExecutable
             process.arguments = arguments
         } else {
@@ -143,24 +143,27 @@ public enum NeonDiffCLIResolver {
             current = parent
         }
     }
-}
 
-private func resolveExecutablePath(_ executablePath: String, workingDirectory: URL?) -> URL? {
-    let fileManager = FileManager.default
-    if executablePath.contains("/") {
-        return isExecutableFilePath(executablePath, fileManager: fileManager) ? URL(fileURLWithPath: executablePath) : nil
-    }
+    public static func resolveExecutablePath(
+        _ executablePath: String,
+        workingDirectory: URL?,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        if executablePath.contains("/") {
+            return isExecutableFilePath(executablePath, fileManager: fileManager) ? URL(fileURLWithPath: executablePath) : nil
+        }
 
-    var candidates: [String] = []
-    if let localBin = workingDirectory?.appendingPathComponent("node_modules/.bin/\(executablePath)").path {
-        candidates.append(localBin)
-    }
-    if executablePath == "neondiff", let localPackageBin = workingDirectory?.appendingPathComponent("dist/src/cli.js").path {
-        candidates.append(localPackageBin)
-    }
-    candidates.append(contentsOf: guiSafeUserBinDirectories(fileManager: fileManager).map { "\($0)/\(executablePath)" })
+        var candidates: [String] = []
+        if let localBin = workingDirectory?.appendingPathComponent("node_modules/.bin/\(executablePath)").path {
+            candidates.append(localBin)
+        }
+        if executablePath == "neondiff", let localPackageBin = workingDirectory?.appendingPathComponent("dist/src/cli.js").path {
+            candidates.append(localPackageBin)
+        }
+        candidates.append(contentsOf: guiSafeUserBinDirectories(fileManager: fileManager).map { "\($0)/\(executablePath)" })
 
-    return candidates.first { isExecutableFilePath($0, fileManager: fileManager) }.map(URL.init(fileURLWithPath:))
+        return candidates.first { isExecutableFilePath($0, fileManager: fileManager) }.map(URL.init(fileURLWithPath:))
+    }
 }
 
 private func isNeonDiffPackageRoot(_ url: URL, fileManager: FileManager) -> Bool {
