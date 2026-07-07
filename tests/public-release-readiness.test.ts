@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -89,12 +90,50 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.40-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.41-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.42-beta.1");
+    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.43-beta.1");
     expect(manifest.packageArtifact?.note).toMatch(/source\/local-worker/i);
     expect(manifest.source).toMatchObject({
       shaState: "pending_tag_stamp",
-      candidateHeadBeforeReleaseMetadata: "97aa93f4ce1231feb06ca68e6f592f14bf519ffe"
+      candidateHeadBeforeReleaseMetadata: "10d897dc82e23acbe144d70d10cc83fcd3c52f8c"
     });
     expect(manifest.source?.proof).toMatch(/after merge and tag/i);
+  });
+
+  it("requires the live production license API for this beta", () => {
+    const manifest = JSON.parse(read("docs/public-release-manifest.json")) as {
+      licenseApi?: {
+        requiredForThisRelease?: boolean;
+        state?: string;
+        trackingIssue?: string;
+        healthUrl?: string;
+        healthProofPath?: string;
+      };
+    };
+
+    expect(manifest.licenseApi).toMatchObject({
+      requiredForThisRelease: true,
+      state: "healthy"
+    });
+    expect(manifest.licenseApi?.trackingIssue).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/);
+    expect(manifest.licenseApi?.healthUrl).toMatch(/^https:\/\/[^/]+\/healthz$/);
+    expect(manifest.licenseApi?.healthProofPath).toBe("docs/evidence/v0.4.43-beta.1-license-api-healthz.json");
+
+    const proof = JSON.parse(read(manifest.licenseApi?.healthProofPath ?? "")) as {
+      evidenceKind?: string;
+      releaseVersion?: string;
+      url?: string;
+      statusCode?: number;
+      responseBody?: string;
+      responseBodySha256?: string;
+    };
+    expect(proof).toMatchObject({
+      evidenceKind: "license_api_healthz",
+      releaseVersion: "v0.4.43-beta.1",
+      url: manifest.licenseApi?.healthUrl,
+      statusCode: 200,
+      responseBody: "{\"status\":\"ok\"}"
+    });
+    expect(createHash("sha256").update(proof.responseBody ?? "").digest("hex")).toBe(proof.responseBodySha256);
   });
 
   it("ships the canonical install script contract", () => {

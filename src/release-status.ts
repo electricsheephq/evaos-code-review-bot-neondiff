@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
 import { buildReviewBudgetStatus, type ReviewBudgetStatus } from "./review-budget.js";
@@ -119,6 +120,7 @@ export interface PublicReleaseStatus {
     state: string;
     trackingIssue?: string;
     healthUrl?: string;
+    healthProofPath?: string;
   };
   updateChannels: {
     ok: boolean;
@@ -184,6 +186,9 @@ export interface ReleaseStatus {
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
 const MAX_PUBLIC_VERSION_TAG_LENGTH = 128;
+const LICENSE_HEALTH_PROOF_MAX_AGE_DAYS = 30;
+const LICENSE_HEALTH_PROOF_MAX_AGE_MS = LICENSE_HEALTH_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
+const LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
 const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
   ...REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES,
@@ -436,7 +441,8 @@ export function collectReleaseStatus(input: {
             cwd: input.cwd,
             manifestPath: input.publicReleaseManifestPath,
             expectedVersion: input.expectedPublicVersion,
-            verifyRollbackRefs: input.verifyPublicRollbackRefs === true
+            verifyRollbackRefs: input.verifyPublicRollbackRefs === true,
+            now
           })
         }
       : {}),
@@ -467,6 +473,7 @@ export function readPublicReleaseManifestStatus(input: {
   manifestPath: string;
   expectedVersion?: string;
   verifyRollbackRefs?: boolean;
+  now?: Date;
 }): PublicReleaseStatus {
   const absolutePath = resolve(input.cwd, input.manifestPath);
   if (!existsSync(absolutePath)) {
@@ -535,7 +542,31 @@ export function readPublicReleaseManifestStatus(input: {
     const licenseRequired = releaseLevel === "source-beta"
       ? (readBoolean(licenseApi.requiredForThisRelease) ?? true)
       : true;
-    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired);
+    const licenseHealthProofPath = readString(licenseApi.healthProofPath);
+    const licenseHealthUrl = readString(licenseApi.healthUrl);
+    const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
+    const licenseMetadataFailures = validateLicenseHealthMetadata({
+      cwd: input.cwd,
+      healthUrl: licenseHealthUrl,
+      healthProofPath: licenseHealthProofPath,
+      proofRequired: licenseNeedsHealthProof
+    });
+    const licenseHealthProof = licenseNeedsHealthProof
+      ? validateLicenseHealthProof({
+          cwd: input.cwd,
+          proofPath: licenseHealthProofPath,
+          expectedReleaseVersion: expectedVersion,
+          expectedUrl: licenseHealthUrl,
+          now: input.now
+        })
+      : { ok: true, detail: "" };
+    const licenseHealthProofOk = licenseHealthProof.ok;
+    const licenseMetadataOk = licenseMetadataFailures.length === 0;
+    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired) && licenseMetadataOk && licenseHealthProofOk;
+    const licenseDetailParts = [
+      ...(licenseNeedsHealthProof ? [licenseHealthProof.detail] : []),
+      ...licenseMetadataFailures
+    ].filter(Boolean);
     const declaredChannelNames = Object.keys(updateChannels);
     const channelNames = [
       ...REQUIRED_PUBLIC_UPDATE_CHANNELS,
@@ -596,10 +627,17 @@ export function readPublicReleaseManifestStatus(input: {
         requiredForThisRelease: licenseRequired,
         state: licenseState,
         trackingIssue: readString(licenseApi.trackingIssue),
-        healthUrl: readString(licenseApi.healthUrl),
+        healthUrl: licenseHealthUrl,
+        healthProofPath: licenseHealthProofPath,
         detail: licenseOk
-          ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}`
-          : `license API state ${licenseState} blocks this release; requiredForThisRelease=${licenseRequired}`
+          ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}${
+              licenseDetailParts.length ? `; ${licenseDetailParts.join("; ")}` : ""
+            }`
+          : `license API state ${licenseState} blocks this release; requiredForThisRelease=${licenseRequired}${
+              licenseDetailParts.length
+                ? `; ${licenseDetailParts.join("; ")}`
+                : ""
+            }`
       },
       updateChannels: {
         ok: channelsOk,
@@ -806,6 +844,152 @@ function gitCommitishExists(cwd: string, target: string): boolean {
 function isLicenseApiStateAcceptable(state: string, requiredForThisRelease: boolean): boolean {
   if (requiredForThisRelease) return state === "healthy";
   return state === "healthy" || state === "not_applicable" || state === "disabled" || state === "pending";
+}
+
+function validateLicenseHealthProof(input: {
+  cwd: string;
+  proofPath?: string;
+  expectedReleaseVersion?: string;
+  expectedUrl?: string;
+  now?: Date;
+}): { ok: boolean; detail: string } {
+  if (!input.proofPath) return { ok: false, detail: "missing health proof path (no healthProofPath declared)" };
+  const confinedPath = resolveConfinedHealthProofPath(input.cwd, input.proofPath);
+  if (!confinedPath.ok) return { ok: false, detail: `invalid health proof ${input.proofPath}: ${confinedPath.detail}` };
+  const absolutePath = confinedPath.absolutePath;
+  if (!existsSync(absolutePath)) return { ok: false, detail: `missing health proof ${input.proofPath}` };
+
+  let proof: Record<string, unknown>;
+  try {
+    proof = asRecord(JSON.parse(readFileSync(absolutePath, "utf8")));
+  } catch {
+    return { ok: false, detail: `invalid health proof ${input.proofPath}: proof JSON is invalid` };
+  }
+
+  const evidenceKind = readString(proof.evidenceKind);
+  const releaseVersion = readString(proof.releaseVersion);
+  const observedAt = readString(proof.observedAt);
+  const method = readString(proof.method);
+  const url = readString(proof.url);
+  const statusCode = typeof proof.statusCode === "number" ? proof.statusCode : undefined;
+  const responseBody = typeof proof.responseBody === "string" ? proof.responseBody : undefined;
+  const responseBodySha256 = readString(proof.responseBodySha256);
+  const captureContext = asRecord(proof.captureContext);
+  const captureTool = readString(captureContext.tool);
+  const captureTransport = readString(captureContext.transport);
+  const captureTlsValidation = readString(captureContext.tlsValidation);
+  const captureHost = readString(captureContext.capturedFrom);
+  const failures: string[] = [];
+
+  if (evidenceKind !== "license_api_healthz") failures.push("evidenceKind must be license_api_healthz");
+  if (!input.expectedReleaseVersion) {
+    failures.push("expected releaseVersion must be present");
+  } else if (releaseVersion !== input.expectedReleaseVersion) {
+    failures.push(`releaseVersion must match ${input.expectedReleaseVersion}`);
+  }
+  if (!input.expectedUrl) {
+    failures.push("healthUrl must be present when validating health proof");
+  } else if (url !== input.expectedUrl) {
+    failures.push(`url must match ${input.expectedUrl}`);
+  }
+  if (method !== "GET") failures.push("method must be GET");
+  if (statusCode !== 200) failures.push("statusCode must be 200");
+  const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
+  if (!observedAt || Number.isNaN(observedAtMs)) {
+    failures.push("observedAt must be a valid ISO timestamp");
+  } else {
+    const nowMs = (input.now ?? new Date()).getTime();
+    if (observedAtMs > nowMs + LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS) {
+      failures.push("observedAt must not be more than 5 minutes in the future");
+    }
+    if (nowMs - observedAtMs > LICENSE_HEALTH_PROOF_MAX_AGE_MS) {
+      failures.push(`observedAt must be no older than ${LICENSE_HEALTH_PROOF_MAX_AGE_DAYS} days`);
+    }
+  }
+  if (responseBody === undefined) {
+    failures.push("responseBody must be present");
+  }
+  if (!responseBodySha256) {
+    failures.push("responseBodySha256 must be present");
+  } else if (responseBody !== undefined && createHash("sha256").update(responseBody).digest("hex") !== responseBodySha256) {
+    failures.push("responseBodySha256 must match responseBody");
+  }
+  if (!captureTool) failures.push("captureContext.tool must be present");
+  if (!captureTransport) failures.push("captureContext.transport must be present");
+  if (!captureTlsValidation) failures.push("captureContext.tlsValidation must be present");
+  if (!captureHost) failures.push("captureContext.capturedFrom must be present");
+
+  return failures.length
+    ? { ok: false, detail: `invalid health proof ${input.proofPath}: ${failures.join("; ")}` }
+    : { ok: true, detail: `validated health proof ${input.proofPath}` };
+}
+
+function validateLicenseHealthMetadata(input: {
+  cwd: string;
+  healthUrl?: string;
+  healthProofPath?: string;
+  proofRequired: boolean;
+}): string[] {
+  const failures: string[] = [];
+  if (input.healthUrl) {
+    const healthUrlFailure = validateLicenseHealthUrl(input.healthUrl);
+    if (healthUrlFailure) failures.push(healthUrlFailure);
+  }
+  if (input.healthProofPath && !input.proofRequired) {
+    const confinedPath = resolveConfinedHealthProofPath(input.cwd, input.healthProofPath);
+    if (!confinedPath.ok) failures.push(`invalid health proof ${input.healthProofPath}: ${confinedPath.detail}`);
+  }
+  return failures;
+}
+
+function validateLicenseHealthUrl(healthUrl: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(healthUrl);
+  } catch {
+    return "healthUrl must be an https URL ending in /healthz with no credentials, query, or fragment";
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.pathname !== "/healthz" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return "healthUrl must be an https URL ending in /healthz with no credentials, query, or fragment";
+  }
+  return undefined;
+}
+
+function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: true; absolutePath: string } | { ok: false; detail: string } {
+  if (isAbsolute(proofPath)) {
+    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+  }
+  const evidenceRoot = resolve(cwd, "docs", "evidence");
+  const absolutePath = resolve(cwd, proofPath);
+  if (!isPathInsideOrEqual(absolutePath, evidenceRoot)) {
+    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+  }
+  if (!existsSync(absolutePath)) return { ok: true, absolutePath };
+
+  let realEvidenceRoot: string;
+  let realProofPath: string;
+  try {
+    realEvidenceRoot = realpathSync.native(evidenceRoot);
+    realProofPath = realpathSync.native(absolutePath);
+  } catch {
+    return { ok: false, detail: "healthProofPath could not be resolved within docs/evidence" };
+  }
+  if (!isPathInsideOrEqual(realProofPath, realEvidenceRoot)) {
+    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+  }
+  return { ok: true, absolutePath: realProofPath };
+}
+
+function isPathInsideOrEqual(target: string, root: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function isUpdateChannelStateAcceptable(name: string, state: string, requiredForThisRelease: boolean): boolean {
