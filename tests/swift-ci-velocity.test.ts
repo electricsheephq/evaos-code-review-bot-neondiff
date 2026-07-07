@@ -56,6 +56,8 @@ describe("Swift CI velocity policy", () => {
 
     expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
     expect(codeql).toMatch(/apps\/neondiff-desktop\/\*\*/);
+    expect(codeql).not.toMatch(/\.github\/workflows\/swift-desktop-gate\.yml/);
+    expect(codeql).not.toMatch(/\.github\/workflows\/codeql-swift-path-aware\.yml/);
     expect(codeql).not.toMatch(/-\s*Package\.swift/);
     expect(codeql).not.toMatch(/-\s*Package\.resolved/);
     expect(codeql).toMatch(/languages:\s*swift/);
