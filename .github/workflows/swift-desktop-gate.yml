@@ -1,0 +1,120 @@
+name: Swift Desktop Gate
+
+on:
+  # This gate intentionally has no PR/push path filter. It must report on every
+  # current PR/main head, then skip Swift work internally when desktop files are clean.
+  # Superseded runs may be cancelled when a newer head takes over the same check.
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-desktop-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-desktop-gate:
+    name: Swift desktop gate
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+
+      - name: Detect Swift desktop impact
+        id: impact
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          PULL_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo '{"affected":true,"matched":["manual dispatch"],"files":["manual dispatch"]}' > swift-impact.json
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF" || true
+            if [ -n "$BASE_REF" ] && git cat-file -e "origin/$BASE_REF^{commit}" 2>/dev/null; then
+              node scripts/swift-affected.mjs \
+                --base "origin/$BASE_REF" \
+                --head "$PULL_HEAD_SHA" \
+                > swift-impact.json
+            else
+              echo '{"affected":true,"matched":["base ref unavailable; fail open"],"files":["base ref unavailable; fail open"]}' > swift-impact.json
+            fi
+          else
+            BEFORE="$BEFORE_SHA"
+            if [ -z "$BEFORE" ] || printf '%s' "$BEFORE" | grep -Eq '^0+$'; then
+              git diff-tree --no-commit-id --name-only -r "$CURRENT_SHA" \
+                | node scripts/swift-affected.mjs --stdin > swift-impact.json
+            else
+              git fetch --no-tags origin "$BEFORE" || true
+              if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                node scripts/swift-affected.mjs \
+                  --base "$BEFORE" \
+                  --head "$CURRENT_SHA" \
+                  > swift-impact.json
+              else
+                echo '{"affected":true,"matched":["before ref unavailable; fail open"],"files":["before ref unavailable; fail open"]}' > swift-impact.json
+              fi
+            fi
+          fi
+          cat swift-impact.json
+          AFFECTED="$(node <<'NODE'
+          const fs = require('fs');
+          try {
+            const payload = JSON.parse(fs.readFileSync('swift-impact.json', 'utf8'));
+            console.log(payload && payload.affected === true ? 'true' : 'false');
+          } catch {
+            console.log('false');
+          }
+          NODE
+          )"
+          echo "affected=$AFFECTED" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Swift desktop impact"
+            echo
+            echo "\`affected=$AFFECTED\`"
+            echo
+            echo "\`\`\`json"
+            cat swift-impact.json
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Skip Swift smoke for non-desktop changes
+        if: steps.impact.outputs.affected != 'true'
+        run: echo "No Swift desktop files changed; stable gate passes without Swift build."
+
+      - name: Swift core checks
+        if: steps.impact.outputs.affected == 'true'
+        working-directory: apps/neondiff-desktop
+        run: swift run NeonDiffDesktopCoreChecks
+
+      - name: Swift build
+        if: steps.impact.outputs.affected == 'true'
+        working-directory: apps/neondiff-desktop
+        run: swift build
+
+      - name: Build app bundle
+        if: steps.impact.outputs.affected == 'true'
+        working-directory: apps/neondiff-desktop
+        run: script/build_and_run.sh build
+
+      - name: Bundle check
+        if: steps.impact.outputs.affected == 'true'
+        working-directory: apps/neondiff-desktop
+        run: script/build_and_run.sh bundle-check

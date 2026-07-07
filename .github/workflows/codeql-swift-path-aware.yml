@@ -1,0 +1,56 @@
+name: Swift CodeQL Path-Aware
+
+on:
+  pull_request:
+    paths:
+      - apps/neondiff-desktop/Package.swift
+      - apps/neondiff-desktop/Package.resolved
+      - apps/neondiff-desktop/Sources/**
+  push:
+    branches:
+      - main
+    paths:
+      - apps/neondiff-desktop/Package.swift
+      - apps/neondiff-desktop/Package.resolved
+      - apps/neondiff-desktop/Sources/**
+  workflow_dispatch:
+  schedule:
+    - cron: "37 9 * * 1"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: swift-codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-swift:
+    name: Analyze Swift (path-aware)
+    runs-on: macos-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
+        with:
+          languages: swift
+          build-mode: manual
+          queries: security-extended
+
+      - name: Manual SwiftPM build
+        working-directory: apps/neondiff-desktop
+        run: swift build --product NeonDiffDesktop
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
+        with:
+          category: "/language:swift"

@@ -189,6 +189,66 @@ Do not use `--allow-dimension-change true` during routine post-merge refreshes;
 that flag is only for a separate embedding migration issue with its own evidence
 packet.
 
+## Fast Iteration And Batched Release Validation
+
+Do not spend a Swift release-gate cycle on every review-fix commit. Batch as much
+validation as possible before the first push, then let one remote CI cycle prove
+the current head.
+
+Recommended local order:
+
+1. For docs, TypeScript release tooling, manifest, license-service, or review
+   wording changes, run the focused Node tests/build/scans that cover the changed
+   surface once before push.
+2. For browser, website, renderer, or config flows, use a preview server/browser
+   smoke first and record the URL, route, screenshots, and settled behavior in
+   the evidence packet. Browser proof is fast product evidence; it is not a
+   substitute for desktop signing, appcast, or Swift release gates.
+3. For NeonDiff Desktop Swift changes, run
+   `swift run NeonDiffDesktopCoreSmoke`, then `swift build`, then
+   `script/build_and_run.sh build` plus `script/build_and_run.sh bundle-check`
+   from `apps/neondiff-desktop/` before the first PR push.
+4. For signed desktop release candidates, use the Mac release runbook after the
+   desktop smoke passes. Do not use notarization, appcast generation, or Swift
+   CodeQL to debug product behavior.
+
+Remote CI should keep a stable, always-reporting `Swift desktop gate` check.
+That check passes quickly with an explicit `not affected` result on non-desktop
+changes, and runs `swift run NeonDiffDesktopCoreChecks`, `swift build`, app
+bundle build, and bundle check only when Swift desktop paths changed or when
+manually dispatched. Keep `NeonDiffDesktopCoreSmoke` in the local/release-smoke
+lane because it exercises the Keychain-backed smoke path; hosted macOS runners
+can kill Keychain round-trip smoke executables after a successful build unless
+the runner has a known-good Keychain session.
+
+Swift CodeQL is a release/security gate. Use the checked-in path-aware Swift
+CodeQL workflow for desktop/signing/appcast/release surfaces, scheduled scans,
+manual dispatch, and `main`. After that workflow is merged, remove Swift from
+GitHub CodeQL default setup or disable repo-wide default setup for Swift. If
+default setup keeps `swift` enabled, GitHub will continue running
+`Analyze (swift)` on every PR head regardless of path filters.
+
+Verify the setting after merge with:
+
+```bash
+gh api repos/electricsheephq/evaos-code-review-bot-neondiff/code-scanning/default-setup \
+  --jq '.languages'
+```
+
+The returned languages must not contain `swift`. For this repo, the intended
+default setup languages are `actions` and `javascript-typescript`; Swift is
+owned by `.github/workflows/codeql-swift-path-aware.yml`.
+
+Every public release packet should state which proof loop was used:
+
+- `preview/browser`: URL or local route, command, screenshots or DOM assertion,
+  and why it covers the changed behavior.
+- `node/source`: focused tests/build/scans, command log, and source SHA.
+- `desktop-smoke`: Swift core smoke, Swift build, app bundle build, bundle
+  check, source SHA, and app bundle path.
+- `desktop-release`: signed/notarized/stapled artifact, appcast, Gatekeeper, and
+  installed-app visual/UI proof from the exact candidate.
+
 ## Required Gates
 
 - GitHub PR merged to `main` with checks green and no current-head actionable

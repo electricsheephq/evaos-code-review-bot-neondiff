@@ -15,10 +15,14 @@ NeonDiff Desktop is a SwiftPM macOS app scaffold for issue #115. It is a thin lo
 cd apps/neondiff-desktop
 swift run NeonDiffDesktopCoreSmoke
 swift build
-./script/build_and_run.sh --verify
+./script/build_and_run.sh build
+./script/build_and_run.sh bundle-check
 ```
 
 `./script/build_and_run.sh` stages a local unsigned `.app` bundle under `apps/neondiff-desktop/dist/` for development only.
+Use that unsigned bundle for dev smoke and bundle-resource proof only. Signed,
+notarized, appcast, and installed-app visual proof belong to the Mac release
+runbook after source behavior is already proven.
 
 ## CLI Contract
 
