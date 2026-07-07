@@ -55,7 +55,9 @@ describe("Swift CI velocity policy", () => {
     expect(codeql).not.toMatch(/-\s*Package\.swift/);
     expect(codeql).not.toMatch(/-\s*Package\.resolved/);
     expect(codeql).toMatch(/languages:\s*swift/);
-    expect(codeql).toMatch(/github\/codeql-action\/autobuild@v3/);
+    expect(codeql).toMatch(/build-mode:\s*manual/);
+    expect(codeql).toMatch(/swift build --product NeonDiffDesktop --arch arm64/);
+    expect(codeql).not.toMatch(/github\/codeql-action\/autobuild/);
     expect(codeql).toMatch(/schedule:/);
     expect(codeql).toMatch(/workflow_dispatch:/);
     expect(codeql).toMatch(/cancel-in-progress:\s*true/);

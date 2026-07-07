@@ -38,10 +38,12 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: swift
+          build-mode: manual
           queries: security-extended
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+      - name: Manual SwiftPM build
+        working-directory: apps/neondiff-desktop
+        run: swift build --product NeonDiffDesktop --arch arm64
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
