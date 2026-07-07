@@ -7,8 +7,9 @@ machine that produced these assets; every command below is an owner step,
 run interactively after `flyctl auth login`.
 
 See also: [`admin-runbook.md`](admin-runbook.md) (key issuance/lifecycle —
-does not cover deploy) and the service [`README.md`](../README.md) (HTTP
-contract, env vars, local run).
+does not cover deploy), [`disaster-recovery.md`](disaster-recovery.md)
+(Litestream, restore drills, RPO/RTO, alerting), and the service
+[`README.md`](../README.md) (HTTP contract, env vars, local run).
 
 ## Why this endpoint exists (scope reminder)
 
@@ -61,15 +62,25 @@ flyctl volumes create license_data --region iad --size 1 \
 
 ## 3. Secrets
 
-**None required for pass 1.** The service takes no API keys, auth tokens, or
-third-party credentials — it's a self-contained SQLite-backed HTTP service
-(`LICENSE_DB_PATH` / `PORT` / `HOST` are plain config, already set as
-`[env]` in `fly.toml`, not secrets). If a future pass adds e.g. an admin-CLI
-auth token for remote issuance, set it with:
+Production DR now requires an owner-held Litestream replica URL, provider
+credentials, and production `LICENSE_LITESTREAM_REQUIRED=true`. Do not commit
+secret values. Set the replica URL and provider credentials through Fly secrets
+before deploying with the required flag enabled; otherwise the container
+refuses to start. `LICENSE_DB_PATH` / `PORT` / `HOST` /
+`LITESTREAM_CONFIG` / `LITESTREAM_SYNC_INTERVAL` /
+`LICENSE_LITESTREAM_REQUIRED` are plain config in `fly.toml`, not secrets.
 
 ```sh
-flyctl secrets set SOME_KEY=value --app neondiff-license
+flyctl secrets set \
+  LICENSE_REPLICA_URL="<object-store-url-for-license.sqlite>" \
+  AWS_ACCESS_KEY_ID="<provider-access-key-id>" \
+  AWS_SECRET_ACCESS_KEY="<provider-secret-access-key>" \
+  --app neondiff-license
 ```
+
+Use the provider-specific variables for non-S3-compatible storage. See
+[`disaster-recovery.md`](disaster-recovery.md) for the owner-only setup and
+restore drill proof boundary.
 
 ## 4. Deploy
 
@@ -83,8 +94,8 @@ flyctl deploy \
 Watch the health check pass (`GET /healthz` → `{ "status": "ok" }`, wired in
 `fly.toml` under `[[http_service.checks]]`). `flyctl status --app
 neondiff-license` shows machine + volume state; `flyctl logs --app
-neondiff-license` streams the `license-api listening on …` boot line from
-`src/server.ts`.
+neondiff-license` streams the Litestream restore/replication logs plus the
+`license-api listening on …` boot line from `src/server.ts`.
 
 ## 5. Point a client config at the deployed URL
 
@@ -153,11 +164,15 @@ separate, deliberate change — do not fold it into a deploy-assets PR.
   version) to go back to the last good image. The SQLite volume is
   untouched by an image rollback — activations/keys persist.
 - **Service unreachable / stuck:** `flyctl apps restart neondiff-license`.
-  If a bad migration or admin action corrupted data, restore from a Fly
-  volume snapshot (`flyctl volumes snapshots list` /
+  If a bad migration or admin action corrupted data, use the DR runbook before
+  replacing data. Litestream restore to a fresh/missing DB path is the primary
+  offsite recovery path; Fly volume snapshots remain a secondary rollback
+  surface (`flyctl volumes snapshots list` /
   `flyctl volumes create --snapshot-id …` to a fresh volume, then swap the
-  mount) — there is no in-app migration system today, so data-level
-  recovery is volume-snapshot only.
+  mount). Before relying on snapshot rollback in an incident, verify the exact
+  snapshot commands against the `flyctl` version used by production operators
+  and record that version in the evidence packet. There is no in-app migration
+  system today.
 - **Emergency full stop:** `flyctl scale count 0 --app neondiff-license`
   stops serving entirely. Since license checks fail closed only for
   *private* repos with enforcement enabled, this is a safe last resort — it

@@ -5,7 +5,9 @@ Operator procedures for the NeonDiff license service
 This runbook covers key issuance and lifecycle. It does **not** cover payment,
 billing, or deploy — deploy is a separate gated step driven by the orchestrator.
 See [`deploy.md`](deploy.md) for the fly.io deploy sequence (`Dockerfile`,
-`fly.toml`, volume/secrets setup, and rollback).
+`fly.toml`, volume/secrets setup, and rollback). See
+[`disaster-recovery.md`](disaster-recovery.md) for Litestream replication,
+restore drills, RPO/RTO, alerting, and the owner-gated DR proof boundary.
 
 All commands open the SQLite database at `LICENSE_DB_PATH`. In production this is
 the file on the mounted fly volume; run the CLI on the instance (or against a
@@ -63,4 +65,6 @@ supported recovery is to `revoke` and re-`issue`, or raise `--seats` on a new ke
 ## Health
 
 `GET /healthz` → `{ "status": "ok" }`. Use it for the deploy health check and
-uptime monitoring.
+uptime monitoring. Healthz is not DR proof by itself; pair it with the
+replication freshness and timed staging restore checks in
+[`disaster-recovery.md`](disaster-recovery.md).

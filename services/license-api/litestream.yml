@@ -1,0 +1,14 @@
+# Litestream v0.5 config for NeonDiff license-api DR.
+#
+# Litestream expands ${VAR} from the process environment before parsing this
+# file. Keep credentials in Fly secrets / platform env, never in this file.
+logging:
+  type: text
+  level: info
+  stderr: true
+
+dbs:
+  - path: ${LICENSE_DB_PATH}
+    replica:
+      url: ${LICENSE_REPLICA_URL}
+      sync-interval: ${LITESTREAM_SYNC_INTERVAL}
