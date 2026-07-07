@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -130,9 +131,9 @@ describe("NeonDiff public release readiness", () => {
       releaseVersion: "v0.4.43-beta.1",
       url: manifest.licenseApi?.healthUrl,
       statusCode: 200,
-      responseBody: "{\"status\":\"ok\"}",
-      responseBodySha256: "a29ee2b15c494311c52521766e44af56a3ad2248e7a8ab465e5206463c13d288"
+      responseBody: "{\"status\":\"ok\"}"
     });
+    expect(createHash("sha256").update(proof.responseBody ?? "").digest("hex")).toBe(proof.responseBodySha256);
   });
 
   it("ships the canonical install script contract", () => {
