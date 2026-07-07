@@ -89,12 +89,31 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.40-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.41-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.42-beta.1");
+    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.43-beta.1");
     expect(manifest.packageArtifact?.note).toMatch(/source\/local-worker/i);
     expect(manifest.source).toMatchObject({
       shaState: "pending_tag_stamp",
-      candidateHeadBeforeReleaseMetadata: "97aa93f4ce1231feb06ca68e6f592f14bf519ffe"
+      candidateHeadBeforeReleaseMetadata: "10d897dc82e23acbe144d70d10cc83fcd3c52f8c"
     });
     expect(manifest.source?.proof).toMatch(/after merge and tag/i);
+  });
+
+  it("requires the live production license API for this beta", () => {
+    const manifest = JSON.parse(read("docs/public-release-manifest.json")) as {
+      licenseApi?: {
+        requiredForThisRelease?: boolean;
+        state?: string;
+        trackingIssue?: string;
+        healthUrl?: string;
+      };
+    };
+
+    expect(manifest.licenseApi).toMatchObject({
+      requiredForThisRelease: true,
+      state: "healthy",
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327",
+      healthUrl: "https://neondiff-license.fly.dev/healthz"
+    });
   });
 
   it("ships the canonical install script contract", () => {

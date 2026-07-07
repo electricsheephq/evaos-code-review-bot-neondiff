@@ -1,5 +1,5 @@
 {
-  "version": "v0.4.42-beta.1",
+  "version": "v0.4.43-beta.1",
   "releaseLevel": "source-beta",
   "packageArtifact": {
     "name": "neondiff",
@@ -24,38 +24,40 @@
       "v0.4.39-beta.1",
       "v0.4.40-beta.1",
       "v0.4.41-beta.1",
-      "v0.4.42-beta.1"
+      "v0.4.42-beta.1",
+      "v0.4.43-beta.1"
     ],
-    "note": "v0.4.25 through v0.4.29 and v0.4.31 through v0.4.42 were source/local-worker beta releases; v0.4.30-beta.1 remains the current public npm/site beta."
+    "note": "v0.4.25 through v0.4.29 and v0.4.31 through v0.4.43 were source/local-worker beta releases; v0.4.30-beta.1 remains the current public npm/site beta."
   },
   "source": {
     "shaState": "pending_tag_stamp",
-    "candidateHeadBeforeReleaseMetadata": "97aa93f4ce1231feb06ca68e6f592f14bf519ffe",
+    "candidateHeadBeforeReleaseMetadata": "10d897dc82e23acbe144d70d10cc83fcd3c52f8c",
     "proof": "after merge and tag, release:status --expected-head $(git rev-parse HEAD)"
   },
   "docs": {
-    "version": "v0.4.42-beta.1",
+    "version": "v0.4.43-beta.1",
     "setupPath": "docs/SETUP.md",
-    "releaseNotesPath": "docs/releases/v0.4.42-beta.1.md",
+    "releaseNotesPath": "docs/releases/v0.4.43-beta.1.md",
     "websiteRepo": "electricsheephq/neon-diff-agent"
   },
   "licenseApi": {
-    "requiredForThisRelease": false,
-    "state": "pending",
-    "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327"
+    "requiredForThisRelease": true,
+    "state": "healthy",
+    "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327",
+    "healthUrl": "https://neondiff-license.fly.dev/healthz"
   },
   "updateChannels": {
     "cli": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v0.4.42-beta.1",
-      "rollback": "git reset --hard refs/tags/v0.4.41-beta.1"
+      "version": "v0.4.43-beta.1",
+      "rollback": "git reset --hard refs/tags/v0.4.42-beta.1"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "launchd_prerelease",
-      "version": "v0.4.42-beta.1",
-      "rollback": "git reset --hard refs/tags/v0.4.41-beta.1"
+      "version": "v0.4.43-beta.1",
+      "rollback": "git reset --hard refs/tags/v0.4.42-beta.1"
     },
     "website": {
       "requiredForThisRelease": false,
