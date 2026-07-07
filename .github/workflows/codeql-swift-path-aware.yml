@@ -1,18 +1,6 @@
 name: Swift CodeQL Path-Aware
 
 on:
-  pull_request:
-    paths:
-      - apps/neondiff-desktop/Package.swift
-      - apps/neondiff-desktop/Package.resolved
-      - apps/neondiff-desktop/Sources/**
-  push:
-    branches:
-      - main
-    paths:
-      - apps/neondiff-desktop/Package.swift
-      - apps/neondiff-desktop/Package.resolved
-      - apps/neondiff-desktop/Sources/**
   workflow_dispatch:
   schedule:
     - cron: "37 9 * * 1"
@@ -22,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: swift-codeql-${{ github.event.pull_request.number || github.ref }}
+  group: swift-codeql-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

@@ -35,7 +35,7 @@ describe("Swift CI velocity policy", () => {
     });
   });
 
-  it("ships an always-reporting Swift desktop gate and a path-aware Swift CodeQL workflow", () => {
+  it("ships an always-reporting Swift desktop gate and a scheduled/manual Swift CodeQL workflow", () => {
     expect(existsSync(".github/workflows/swift-desktop-gate.yml")).toBe(true);
     expect(existsSync(".github/workflows/codeql-swift-path-aware.yml")).toBe(true);
 
@@ -62,9 +62,11 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/base ref unavailable; fail open/);
 
     expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
-    expect(codeql).toMatch(/apps\/neondiff-desktop\/Sources\/\*\*/);
-    expect(codeql).toMatch(/apps\/neondiff-desktop\/Package\.swift/);
-    expect(codeql).toMatch(/apps\/neondiff-desktop\/Package\.resolved/);
+    expect(codeql).not.toMatch(/pull_request:/);
+    expect(codeql).not.toMatch(/push:/);
+    expect(codeql).not.toMatch(/apps\/neondiff-desktop\/Sources\/\*\*/);
+    expect(codeql).not.toMatch(/apps\/neondiff-desktop\/Package\.swift/);
+    expect(codeql).not.toMatch(/apps\/neondiff-desktop\/Package\.resolved/);
     expect(codeql).not.toMatch(/\.github\/workflows\/swift-desktop-gate\.yml/);
     expect(codeql).not.toMatch(/\.github\/workflows\/codeql-swift-path-aware\.yml/);
     expect(codeql).not.toMatch(/-\s*Package\.swift/);
