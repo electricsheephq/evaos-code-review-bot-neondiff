@@ -2191,7 +2191,7 @@ describe("sticky enrichment comments", () => {
           config: loadConfig(configPath),
           state,
           github: {
-            listIssuesForEnrichment: async () => Object.assign([...issues], { scanComplete: true }),
+            listIssuesForEnrichment: async () => Object.assign([...issues], { scanCompletion: "complete" as const }),
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
               throw new Error("already processed issues should not post again");

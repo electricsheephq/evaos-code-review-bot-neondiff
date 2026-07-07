@@ -136,10 +136,10 @@ export interface IssueEnrichmentReader {
   ): Promise<IssueEnrichmentIssueList>;
 }
 
+export type IssueEnrichmentScanCompletion = "complete" | "page_limit_reached" | "stopped_after_min_issue_results";
+
 export type IssueEnrichmentIssueList = GitHubRelatedIssueOrPull[] & {
-  scanComplete?: boolean;
-  pageLimitReached?: boolean;
-  stoppedAfterMinIssueResults?: boolean;
+  scanCompletion?: IssueEnrichmentScanCompletion;
 };
 
 export interface IssueEnrichmentScanResult {
@@ -1004,8 +1004,13 @@ function issueEnrichmentScanWasTruncated(input: {
   pageLimit: number;
   perPage: number;
 }): boolean {
-  if (input.issues.pageLimitReached === true || input.issues.stoppedAfterMinIssueResults === true) return true;
-  if (input.issues.scanComplete === true) return false;
+  switch (input.issues.scanCompletion) {
+    case "page_limit_reached":
+    case "stopped_after_min_issue_results":
+      return true;
+    case "complete":
+      return false;
+  }
   return input.issues.length >= input.minIssueResults || input.issues.length >= input.pageLimit * input.perPage;
 }
 

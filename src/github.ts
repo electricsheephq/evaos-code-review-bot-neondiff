@@ -296,12 +296,12 @@ export class GitHubApi {
         token: await this.getReadToken(repo)
       });
       issues.push(...(excludePullRequests ? chunk.filter((issue) => !issue.pull_request) : chunk));
-      if (chunk.length < perPage) return Object.assign(issues, { scanComplete: true });
+      if (chunk.length < perPage) return Object.assign(issues, { scanCompletion: "complete" as const });
       if (minIssueResults > 0 && issues.length >= minIssueResults) {
-        return Object.assign(issues, { stoppedAfterMinIssueResults: true });
+        return Object.assign(issues, { scanCompletion: "stopped_after_min_issue_results" as const });
       }
     }
-    return Object.assign(issues, { pageLimitReached: true });
+    return Object.assign(issues, { scanCompletion: "page_limit_reached" as const });
   }
 
   async createReview(input: {
