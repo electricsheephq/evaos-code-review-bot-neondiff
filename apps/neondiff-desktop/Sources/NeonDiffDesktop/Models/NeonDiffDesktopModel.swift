@@ -185,7 +185,10 @@ final class NeonDiffDesktopModel: ObservableObject {
         lastCommandLine = displayCommand.commandLine
         let executablePath = cliPath
         Task.detached { [configPath, launchdLabel] in
-            let client = NeonDiffCLIClient(executablePath: executablePath)
+            let client = NeonDiffCLIClient(
+                executablePath: executablePath,
+                workingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
+            )
             do {
                 let result = try client.run(arguments: arguments, timeout: 15)
                 await MainActor.run {
@@ -251,7 +254,9 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func applyCLIResult(_ result: CLIRunResult, fallbackCommand: String, configPath: String, launchdLabel: String) {
-        lastError = result.exitCode == 0 ? nil : result.redactedStderr
+        let redactedStdout = result.redactedStdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let redactedStderr = result.redactedStderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        lastError = result.exitCode == 0 ? nil : (redactedStderr.isEmpty ? redactedStdout : redactedStderr)
         logText = [result.redactedStdout, result.redactedStderr].filter { !$0.isEmpty }.joined(separator: "\n")
 
         let commandName = parseCommandName(result.stdout)

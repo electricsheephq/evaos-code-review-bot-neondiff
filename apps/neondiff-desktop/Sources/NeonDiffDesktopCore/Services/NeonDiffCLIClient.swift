@@ -103,18 +103,81 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
     }
 }
 
+public enum NeonDiffCLIResolver {
+    public static func defaultWorkingDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundleURL: URL = Bundle.main.bundleURL,
+        currentDirectory: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+        fileManager: FileManager = .default
+    ) -> URL? {
+        if let override = environment["NEONDIFF_DESKTOP_CLI_WORKDIR"], !override.isEmpty {
+            let url = URL(fileURLWithPath: override)
+            if isDirectory(url.path, fileManager: fileManager) {
+                return url
+            }
+        }
+
+        for startingPoint in [currentDirectory, bundleURL] {
+            if let packageRoot = findPackageRoot(startingAt: startingPoint, fileManager: fileManager) {
+                return packageRoot
+            }
+        }
+        return nil
+    }
+
+    public static func findPackageRoot(startingAt startURL: URL, fileManager: FileManager = .default) -> URL? {
+        var current = startURL
+        var isDirectoryValue: ObjCBool = false
+        if fileManager.fileExists(atPath: current.path, isDirectory: &isDirectoryValue), !isDirectoryValue.boolValue {
+            current.deleteLastPathComponent()
+        }
+
+        while true {
+            if isNeonDiffPackageRoot(current, fileManager: fileManager) {
+                return current
+            }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                return nil
+            }
+            current = parent
+        }
+    }
+}
+
 private func resolveExecutablePath(_ executablePath: String, workingDirectory: URL?) -> URL? {
     let fileManager = FileManager.default
     if executablePath.contains("/") {
         return isExecutableFilePath(executablePath, fileManager: fileManager) ? URL(fileURLWithPath: executablePath) : nil
     }
 
-    var candidates = guiSafeUserBinDirectories(fileManager: fileManager).map { "\($0)/\(executablePath)" }
+    var candidates: [String] = []
     if let localBin = workingDirectory?.appendingPathComponent("node_modules/.bin/\(executablePath)").path {
         candidates.append(localBin)
     }
+    if executablePath == "neondiff", let localPackageBin = workingDirectory?.appendingPathComponent("dist/src/cli.js").path {
+        candidates.append(localPackageBin)
+    }
+    candidates.append(contentsOf: guiSafeUserBinDirectories(fileManager: fileManager).map { "\($0)/\(executablePath)" })
 
     return candidates.first { isExecutableFilePath($0, fileManager: fileManager) }.map(URL.init(fileURLWithPath:))
+}
+
+private func isNeonDiffPackageRoot(_ url: URL, fileManager: FileManager) -> Bool {
+    let packageJSON = url.appendingPathComponent("package.json")
+    guard fileManager.fileExists(atPath: packageJSON.path) else {
+        return false
+    }
+    guard let data = try? Data(contentsOf: packageJSON),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let packageName = root["name"] as? String,
+          packageName == "neondiff"
+    else {
+        return false
+    }
+    let localBin = url.appendingPathComponent("node_modules/.bin/neondiff").path
+    let builtCLI = url.appendingPathComponent("dist/src/cli.js").path
+    return isExecutableFilePath(localBin, fileManager: fileManager) || isExecutableFilePath(builtCLI, fileManager: fileManager)
 }
 
 private func isExecutableFilePath(_ path: String, fileManager: FileManager) -> Bool {
@@ -123,6 +186,11 @@ private func isExecutableFilePath(_ path: String, fileManager: FileManager) -> B
         return false
     }
     return fileManager.isExecutableFile(atPath: path)
+}
+
+private func isDirectory(_ path: String, fileManager: FileManager) -> Bool {
+    var isDirectory: ObjCBool = false
+    return fileManager.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
 }
 
 private func guiSafeUserBinDirectories(fileManager: FileManager = .default) -> [String] {
