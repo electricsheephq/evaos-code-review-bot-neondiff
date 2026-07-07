@@ -33,6 +33,11 @@ describe("NeonDiff public release readiness", () => {
         skippedPublicPackageVersions?: string[];
         note?: string;
       };
+      source?: {
+        shaState?: string;
+        candidateHeadBeforeReleaseMetadata?: string;
+        proof?: string;
+      };
     };
 
     expect(pkg.name).toBe("neondiff");
@@ -83,7 +88,13 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.39-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.40-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.41-beta.1");
+    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.42-beta.1");
     expect(manifest.packageArtifact?.note).toMatch(/source\/local-worker/i);
+    expect(manifest.source).toMatchObject({
+      shaState: "pending_tag_stamp",
+      candidateHeadBeforeReleaseMetadata: "97aa93f4ce1231feb06ca68e6f592f14bf519ffe"
+    });
+    expect(manifest.source?.proof).toMatch(/after merge and tag/i);
   });
 
   it("ships the canonical install script contract", () => {
