@@ -23,43 +23,50 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 26
 
       - name: Detect Swift desktop impact
         id: impact
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          PULL_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo '{"affected":true,"matched":["manual dispatch"],"files":["manual dispatch"]}' > swift-impact.json
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --no-tags origin "${{ github.base_ref }}" || true
-            if git cat-file -e "origin/${{ github.base_ref }}^{commit}" 2>/dev/null; then
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF" || true
+            if [ -n "$BASE_REF" ] && git cat-file -e "origin/$BASE_REF^{commit}" 2>/dev/null; then
               node scripts/swift-affected.mjs \
-                --base "origin/${{ github.base_ref }}" \
-                --head "${{ github.event.pull_request.head.sha }}" \
+                --base "origin/$BASE_REF" \
+                --head "$PULL_HEAD_SHA" \
                 > swift-impact.json
             else
               echo '{"affected":true,"matched":["base ref unavailable; fail open"],"files":["base ref unavailable; fail open"]}' > swift-impact.json
             fi
           else
-            BEFORE="${{ github.event.before }}"
+            BEFORE="$BEFORE_SHA"
             if [ -z "$BEFORE" ] || printf '%s' "$BEFORE" | grep -Eq '^0+$'; then
-              git diff-tree --no-commit-id --name-only -r "${{ github.sha }}" \
+              git diff-tree --no-commit-id --name-only -r "$CURRENT_SHA" \
                 | node scripts/swift-affected.mjs --stdin > swift-impact.json
             else
               git fetch --no-tags origin "$BEFORE" || true
               if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
                 node scripts/swift-affected.mjs \
                   --base "$BEFORE" \
-                  --head "${{ github.sha }}" \
+                  --head "$CURRENT_SHA" \
                   > swift-impact.json
               else
                 echo '{"affected":true,"matched":["before ref unavailable; fail open"],"files":["before ref unavailable; fail open"]}' > swift-impact.json

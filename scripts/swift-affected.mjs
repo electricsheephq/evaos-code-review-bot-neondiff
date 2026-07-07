@@ -73,7 +73,11 @@ function readGitDiffFiles(base, head) {
   try {
     return execFileSync("git", ["diff", "--name-only", `${base}...${head}`], { encoding: "utf8" }).split(/\r?\n/);
   } catch {
-    return execFileSync("git", ["diff", "--name-only", base, head], { encoding: "utf8" }).split(/\r?\n/);
+    try {
+      return execFileSync("git", ["diff", "--name-only", base, head], { encoding: "utf8" }).split(/\r?\n/);
+    } catch {
+      return [];
+    }
   }
 }
 

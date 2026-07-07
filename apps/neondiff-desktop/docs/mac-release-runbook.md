@@ -44,7 +44,7 @@ release lane.
   and batch remaining feedback before the next push.
 
 The CI `Swift desktop gate` is intentionally always-reporting. It should say
-`not affected` for non-desktop PRs, and it should run the Swift core smoke,
+`not affected` for non-desktop PRs, and it should run the Swift core checks,
 Swift build, app bundle build, and bundle check for desktop-affecting PRs. The
 path-aware Swift CodeQL workflow is a release/security scan. It should run for
 desktop/signing/appcast/release paths, scheduled scans, manual dispatch, and

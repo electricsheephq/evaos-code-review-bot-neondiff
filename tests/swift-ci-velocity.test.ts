@@ -53,6 +53,10 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/cancel-in-progress:\s*true/);
     expect(gate).toMatch(/current PR\/main head/);
     expect(gate).toMatch(/Superseded runs may be cancelled/);
+    expect(gate).toMatch(/persist-credentials:\s*false/);
+    expect(gate).toMatch(/EVENT_NAME:/);
+    expect(gate).toMatch(/BASE_REF:/);
+    expect(gate).toMatch(/PULL_HEAD_SHA:/);
     expect(gate).toMatch(/payload && payload\.affected === true/);
     expect(gate).toMatch(/console\.log\('false'\)/);
     expect(gate).toMatch(/base ref unavailable; fail open/);
@@ -68,6 +72,11 @@ describe("Swift CI velocity policy", () => {
     expect(codeql).toMatch(/languages:\s*swift/);
     expect(codeql).toMatch(/build-mode:\s*manual/);
     expect(codeql).toMatch(/swift build --product NeonDiffDesktop/);
+    expect(codeql).toMatch(/security-events:\s*write/);
+    expect(codeql).toMatch(/persist-credentials:\s*false/);
+    expect(codeql).not.toMatch(/actions\/checkout@v4/);
+    expect(codeql).not.toMatch(/github\/codeql-action\/init@v3/);
+    expect(codeql).not.toMatch(/github\/codeql-action\/analyze@v3/);
     expect(codeql).not.toMatch(/--arch arm64/);
     expect(codeql).not.toMatch(/github\/codeql-action\/autobuild/);
     expect(codeql).toMatch(/schedule:/);
@@ -94,6 +103,22 @@ describe("Swift CI velocity policy", () => {
     expect(help).toMatch(/--files is terminal/);
   });
 
+  it("degrades safely when git diff refs are unavailable", () => {
+    const output = execFileSync("node", [
+      "scripts/swift-affected.mjs",
+      "--base",
+      "refs/does-not-exist",
+      "--head",
+      "also-missing"
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+
+    expect(JSON.parse(output)).toMatchObject({
+      affected: false,
+      matched: [],
+      files: []
+    });
+  });
+
   it("documents the fast preview/smoke loop and the release proof boundary", () => {
     const betaRunbook = read("docs/beta-release-runbook.md");
     const macRunbook = read("apps/neondiff-desktop/docs/mac-release-runbook.md");
@@ -110,6 +135,7 @@ describe("Swift CI velocity policy", () => {
 
     expect(macRunbook).toMatch(/Fast Desktop Iteration Before Release/);
     expect(macRunbook).toMatch(/swift run NeonDiffDesktopCoreSmoke/);
+    expect(macRunbook).toMatch(/Swift core checks/);
     expect(macRunbook).toMatch(/script\/build_and_run\.sh bundle-check/);
     expect(macRunbook).toMatch(/path-aware Swift CodeQL workflow is a release\/security scan/);
 
