@@ -25,7 +25,10 @@ describe("NeonDiff public community funnel", () => {
       /public open-source repos.*free/i,
       /\$1\/month/i,
       /\$10\/year/i,
-      /\$100 lifetime/i,
+      /\$100\/year/i,
+      /7-day trial/i,
+      /30-day trial/i,
+      /legacy lifetime licenses remain honored/i,
       /private.*commercial.*paid/i,
       /source-available beta/i,
       /GitHub App/i,
@@ -86,7 +89,10 @@ describe("NeonDiff public community funnel", () => {
       expect(text).toMatch(/public open-source/i);
       expect(text).toMatch(/\$1\/mo|\$1\/month/i);
       expect(text).toMatch(/\$10\/yr|\$10\/year/i);
-      expect(text).toMatch(/\$100 lifetime/i);
+      expect(text).toMatch(/\$100\/yr|\$100\/year/i);
+      expect(text).toMatch(/7-day.*trial/i);
+      expect(text).toMatch(/30-day.*trial/i);
+      expect(text).toMatch(/legacy lifetime licenses? remain honored/i);
       expect(text).toMatch(/private repo review|private.*repo/i);
       expect(text).toMatch(/commercial/i);
       expect(text).toMatch(/auto-updates/i);
@@ -100,7 +106,9 @@ describe("NeonDiff public community funnel", () => {
     expect(pricing).toMatch(/neondiff pricing/i);
     expect(pricing).toMatch(/monthly_support/i);
     expect(pricing).toMatch(/yearly_support/i);
+    expect(pricing).toMatch(/org_yearly_support/i);
     expect(pricing).toMatch(/lifetime_support/i);
+    expect(pricing).toMatch(/no longer sold/i);
     expect(issueTemplate).toMatch(/docs\/pricing\.md/i);
   });
 
