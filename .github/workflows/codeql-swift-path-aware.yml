@@ -17,6 +17,7 @@ jobs:
   analyze-swift:
     name: Analyze Swift (path-aware)
     runs-on: macos-latest
+    timeout-minutes: 35
     permissions:
       actions: read
       contents: read
@@ -53,6 +54,7 @@ jobs:
             echo
             echo "This workflow runs Swift CodeQL extraction and queries, but does not upload SARIF."
             echo
+            echo "Policy: Swift CodeQL is scheduled/manual release-security evidence, not a required PR velocity gate."
             echo "Reason: GitHub rejected advanced CodeQL SARIF uploads while repository default setup is enabled."
-            echo "Track the long-term default-vs-advanced CodeQL decision in #393."
+            echo "See docs/swift-codeql-policy.md and #393 for the long-term default-vs-advanced CodeQL decision."
           } >> "$GITHUB_STEP_SUMMARY"

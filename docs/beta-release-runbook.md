@@ -255,12 +255,11 @@ manually dispatched. Keep `NeonDiffDesktopCoreChecks` execution,
 lane because hosted macOS runners can kill smoke executables after a successful
 build unless the runner has a known-good interactive session.
 
-Swift CodeQL is a release/security gate. Use the checked-in path-aware Swift
-CodeQL workflow for desktop/signing/appcast/release surfaces, scheduled scans,
-manual dispatch, and `main`. After that workflow is merged, remove Swift from
-GitHub CodeQL default setup or disable repo-wide default setup for Swift. If
-default setup keeps `swift` enabled, GitHub will continue running
-`Analyze (swift)` on every PR head regardless of path filters.
+Swift CodeQL is a release/security gate, not the PR iteration loop. The durable
+policy lives in `docs/swift-codeql-policy.md`: the checked-in path-aware Swift
+CodeQL workflow runs only by `workflow_dispatch` and weekly schedule, keeps SARIF
+upload disabled while default setup is enabled, and must be recorded in the
+release packet before signed desktop release or GA.
 
 Verify the setting after merge with:
 
@@ -270,8 +269,11 @@ gh api repos/electricsheephq/evaos-code-review-bot-neondiff/code-scanning/defaul
 ```
 
 The returned languages must not contain `swift`. For this repo, the intended
-default setup languages are `actions` and `javascript-typescript`; Swift is
-owned by `.github/workflows/codeql-swift-path-aware.yml`.
+read-only verification output currently includes `actions`, `javascript`,
+`javascript-typescript`, and `typescript`; Swift is owned by
+`.github/workflows/codeql-swift-path-aware.yml` as scheduled/manual advisory
+release-security evidence. This is a GET verification check, not a PATCH payload
+for changing GitHub default setup.
 
 Every public release packet should state which proof loop was used:
 
