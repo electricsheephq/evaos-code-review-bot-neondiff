@@ -36,14 +36,13 @@ primary_region = "iad"  # placeholder — set to wherever the fleet/owner is clo
   auto_start_machines = true
   min_machines_running = 1
 
-  [http_service.checks]
-    [http_service.checks.healthz]
-      grace_period = "10s"
-      interval = "15s"
-      method = "GET"
-      path = "/healthz"
-      protocol = "http"
-      timeout = "5s"
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    path = "/healthz"
+    protocol = "http"
+    timeout = "5s"
 
 [[vm]]
   size = "shared-cpu-1x"
