@@ -70,6 +70,8 @@ import {
   buildRuntimeInventory,
   buildOperatorQueue,
   buildOperatorStatus,
+  buildReleaseMonitoringCoverage,
+  buildReleaseStatusCommandOutput,
   collectBotProcessInventory,
   collectOperatorIssueEnrichmentRuntime,
   collectOperatorLeases,
@@ -86,7 +88,7 @@ import {
 } from "./operator-cli.js";
 import { buildPricingOutput } from "./pricing.js";
 import { buildProviderRegistrySummary, doctorProviderRegistry, isProviderId } from "./providers.js";
-import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
+import { collectReleaseStatus, collectReleaseStatusWithConfig, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
@@ -315,13 +317,22 @@ async function main(): Promise<void> {
   }
 
   if (command === "release-status") {
+    if (args.repo !== undefined || args.pr !== undefined) {
+      throw new Error("release-status does not support --repo/--pr; use coverage-audit for scoped coverage checks");
+    }
     const budgetDetailLimit = args["budget-detail-limit"]
       ? parsePositiveInteger(args["budget-detail-limit"], "--budget-detail-limit")
       : undefined;
     const budgetJobLimit = args["budget-job-limit"]
       ? parsePositiveInteger(args["budget-job-limit"], "--budget-job-limit")
       : undefined;
-    const status = collectReleaseStatus({
+    const requireCoverage = args["require-coverage"] === undefined
+      ? false
+      : parseBooleanArg(args["require-coverage"], "--require-coverage");
+    const collectCoverage = requireCoverage ||
+      (args.coverage === undefined ? false : parseBooleanArg(args.coverage, "--coverage"));
+    const config = loadConfig(args.config);
+    const status = collectReleaseStatusWithConfig({
       cwd: process.cwd(),
       configPath: args.config,
       expectedHead: args["expected-head"],
@@ -335,14 +346,22 @@ async function main(): Promise<void> {
       budgetDetails: args["budget-details"] === "true",
       ...(budgetDetailLimit !== undefined ? { budgetDetailLimit } : {}),
       ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {})
+    }, config);
+    const coverageReport = collectCoverage
+      ? await collectCoverageReport(args, config)
+      : undefined;
+    const monitoringCoverage = buildReleaseMonitoringCoverage({
+      report: coverageReport,
+      required: requireCoverage,
+      recommendedCommand: buildReleaseCoverageCommand(args)
     });
-    console.log(stringifyRedactedJson({
-      ...status,
-      healthState: status.ok ? "runtime_ok" : "runtime_blocked",
-      runtimeOk: status.ok,
-      failedGates: failedGates(status.gates)
-    }));
-    if (!status.ok) process.exitCode = 1;
+    const output = buildReleaseStatusCommandOutput({
+      status,
+      monitoringCoverage,
+      requireCoverage
+    });
+    console.log(stringifyRedactedJson(output));
+    if (!output.ok) process.exitCode = 1;
     return;
   }
 
@@ -2502,6 +2521,30 @@ function collectBudgetJobsForSelection(
   return [...jobsById.values()];
 }
 
+function buildReleaseCoverageCommand(args: ParsedArgs): string {
+  const parts = ["npx", "tsx", "src/cli.ts", "release-status"];
+  appendCommandArg(parts, "--config", args.config);
+  appendCommandArg(parts, "--expected-head", args["expected-head"]);
+  appendCommandArg(parts, "--public-release-manifest", args["public-release-manifest"]);
+  appendCommandArg(parts, "--expected-public-version", args["expected-public-version"]);
+  appendCommandArg(parts, "--verify-public-rollback-refs", args["verify-public-rollback-refs"]);
+  appendCommandArg(parts, "--launchd-label", args["launchd-label"]);
+  appendCommandArg(parts, "--state-path", args["state-path"]);
+  parts.push("--require-coverage", "true");
+  return parts.map(shellQuoteCommandArg).join(" ");
+}
+
+function appendCommandArg(parts: string[], name: string, value: string | string[] | undefined): void {
+  if (value === undefined) return;
+  parts.push(name, parseSingleArg(value, name));
+}
+
+function shellQuoteCommandArg(value: string): string {
+  return /^[A-Za-z0-9_./:=@%+-]+$/.test(value)
+    ? value
+    : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function failedGates(gates: Array<{ name: string; ok: boolean; detail: string }>): Array<{ name: string; ok: boolean; detail: string }> {
   return gates.filter((gate) => !gate.ok);
 }
@@ -2896,6 +2939,19 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--expected-head", description: "Expected release head SHA to verify against." },
       { name: "--launchd-label", description: "launchd label to inspect for daemon liveness." },
       { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." }
+    ]
+  },
+  "release-status": {
+    description: "Report release/runtime health; add --require-coverage true to also gate active repo App-read coverage.",
+    flags: [
+      { name: "--config", description: "Path to the config file." },
+      { name: "--expected-head", description: "Expected release head SHA to verify against." },
+      { name: "--launchd-label", description: "launchd label to inspect for daemon liveness." },
+      { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." },
+      { name: "--coverage", description: "true to attach active repo coverage as advisory output; top-level gates remain runtime-only unless --require-coverage true is set." },
+      { name: "--require-coverage", description: "true to fail release-status when active repo coverage has unreadable, unprocessed, or stale heads." },
+      { name: "--public-release-manifest", description: "Public release manifest to validate for source-beta releases." },
+      { name: "--expected-public-version", description: "Expected public release version/tag when validating a public manifest." }
     ]
   },
   "review-pr": {

@@ -416,8 +416,25 @@ export function collectReleaseStatus(input: {
   budgetJobLimit?: number;
   now?: Date;
 }): ReleaseStatus {
-  validatePublicReleaseManifestInputs(input);
   const config = loadConfig(input.configPath);
+  return collectReleaseStatusWithConfig(input, config);
+}
+
+export function collectReleaseStatusWithConfig(input: {
+  cwd: string;
+  configPath?: string;
+  expectedHead?: string;
+  publicReleaseManifestPath?: string;
+  expectedPublicVersion?: string;
+  verifyPublicRollbackRefs?: boolean;
+  launchdLabel?: string;
+  statePath?: string;
+  budgetDetails?: boolean;
+  budgetDetailLimit?: number;
+  budgetJobLimit?: number;
+  now?: Date;
+}, config: BotConfig): ReleaseStatus {
+  validatePublicReleaseManifestInputs(input);
   const configPath = input.configPath ?? "(default config)";
   const now = input.now ?? new Date();
   const statePath = input.statePath ?? config.statePath;

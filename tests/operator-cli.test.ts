@@ -9,6 +9,8 @@ import {
   buildRuntimeInventory,
   buildOperatorQueue,
   buildOperatorStatus,
+  buildReleaseMonitoringCoverage,
+  buildReleaseStatusCommandOutput,
   collectOperatorIssueEnrichmentRuntime,
   collectOperatorLeases,
   collectOperatorRepoProviderCooldowns,
@@ -96,6 +98,227 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: false,
+      recommendedCommand: "npx tsx src/cli.ts release-status --require-coverage true"
+    });
+
+    expect(coverage).toMatchObject({
+      collected: false,
+      required: false,
+      ok: null,
+      healthState: "not_collected",
+      failedGates: []
+    });
+    expect(coverage.recommendedActions).toContain(
+      "run release-status with --require-coverage true before claiming full active-repo monitoring coverage"
+    );
+
+    const requiredWithoutReport = buildReleaseMonitoringCoverage({ required: true });
+    expect(requiredWithoutReport.failedGates).toContainEqual({
+      name: "active_repo_coverage_collected",
+      ok: false,
+      detail: "coverage was required but no coverage report was supplied"
+    });
+  });
+
+  it("passes required release monitoring coverage when all coverage gates are green", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: true,
+      report: coverageReport({
+        processed: [processedEntry(101, "head-ok", "posted")]
+      })
+    });
+
+    expect(coverage).toMatchObject({
+      collected: true,
+      required: true,
+      ok: true,
+      healthState: "coverage_ok",
+      failedGates: [],
+      recommendedActions: [],
+      summary: {
+        processed: 1,
+        unprocessed: 0,
+        staleHeads: 0,
+        readFailures: 0
+      }
+    });
+  });
+
+  it("fails required release monitoring coverage on unprocessed heads", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: true,
+      report: coverageReport({
+        unprocessed: [pullEntry(102, "head-pending")]
+      })
+    });
+
+    expect(coverage).toMatchObject({
+      collected: true,
+      required: true,
+      ok: false,
+      healthState: "coverage_blocked"
+    });
+    expect(coverage.failedGates).toContainEqual({
+      name: "active_repo_coverage_no_unprocessed_heads",
+      ok: false,
+      detail: "1 unprocessed eligible head(s)"
+    });
+    expect(coverage.recommendedActions).toContain("wait for daemon cycle or run scoped run-once for unprocessed heads");
+  });
+
+  it("fails required release monitoring coverage on stale heads", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: true,
+      report: coverageReport({
+        staleHeads: [{
+          repo: "owner/repo",
+          pullNumber: 103,
+          expectedHeadSha: "old-head",
+          liveHeadSha: "new-head",
+          title: "stale",
+          url: "https://github.com/owner/repo/pull/103"
+        }]
+      })
+    });
+
+    expect(coverage).toMatchObject({
+      collected: true,
+      required: true,
+      ok: false,
+      healthState: "coverage_blocked"
+    });
+    expect(coverage.failedGates).toContainEqual({
+      name: "active_repo_coverage_no_stale_heads",
+      ok: false,
+      detail: "1 stale head(s)"
+    });
+    expect(coverage.recommendedActions).toContain("wait for next daemon cycle or run scoped coverage audit");
+  });
+
+  it("fails required release monitoring coverage on active repo read failures", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: true,
+      recommendedCommand: "npx tsx src/cli.ts release-status --require-coverage true",
+      report: coverageReport({
+        processed: [processedEntry(101, "head-ok", "posted")],
+        readFailures: [{ repo: "owner/unreadable", error: "GitHub API 404" }]
+      })
+    });
+
+    expect(coverage).toMatchObject({
+      collected: true,
+      required: true,
+      ok: false,
+      healthState: "coverage_blocked",
+      summary: {
+        processed: 1,
+        readFailures: 1
+      }
+    });
+    expect(coverage.failedGates).toContainEqual({
+      name: "active_repo_coverage_no_read_failures",
+      ok: false,
+      detail: "1 read failure(s)"
+    });
+    expect(coverage.readFailures).toEqual([
+      {
+        repo: "owner/unreadable",
+        error: "GitHub API 404",
+        nextAction: "inspect GitHub App installation/read permissions or network failure"
+      }
+    ]);
+    expect(coverage.recommendedActions).toContain("run doctor and inspect GitHub App installation/read permissions");
+  });
+
+  it("merges release-status coverage output only when required by the command", () => {
+    const runtime = releaseStatus({ ok: true });
+    const blockedCoverage = buildReleaseMonitoringCoverage({
+      required: false,
+      report: coverageReport({
+        readFailures: [{ repo: "owner/unreadable", error: "GitHub API 404" }]
+      })
+    });
+    const requiredBlockedCoverage = buildReleaseMonitoringCoverage({
+      required: true,
+      report: coverageReport({
+        readFailures: [{ repo: "owner/unreadable", error: "GitHub API 404" }]
+      })
+    });
+
+    const defaultOutput = buildReleaseStatusCommandOutput({
+      status: runtime,
+      monitoringCoverage: buildReleaseMonitoringCoverage({ required: false }),
+      requireCoverage: false
+    });
+    expect(defaultOutput).toMatchObject({
+      ok: true,
+      runtimeOk: true,
+      healthState: "runtime_ok",
+      failedGates: []
+    });
+    expect(defaultOutput.gates).toEqual(runtime.gates);
+
+    const advisoryOutput = buildReleaseStatusCommandOutput({
+      status: runtime,
+      monitoringCoverage: blockedCoverage,
+      requireCoverage: false
+    });
+    expect(advisoryOutput).toMatchObject({
+      ok: true,
+      runtimeOk: true,
+      healthState: "runtime_ok",
+      monitoringCoverage: {
+        ok: false,
+        healthState: "coverage_blocked"
+      },
+      failedGates: []
+    });
+    expect(advisoryOutput.gates).toEqual(runtime.gates);
+
+    const requiredBlockedOutput = buildReleaseStatusCommandOutput({
+      status: runtime,
+      monitoringCoverage: requiredBlockedCoverage,
+      requireCoverage: true
+    });
+    expect(requiredBlockedOutput).toMatchObject({
+      ok: false,
+      runtimeOk: true,
+      healthState: "coverage_blocked"
+    });
+    expect(requiredBlockedOutput.failedGates).toContainEqual({
+      name: "active_repo_coverage_no_read_failures",
+      ok: false,
+      detail: "1 read failure(s)"
+    });
+    expect(requiredBlockedOutput.recommendedActions).toContain(
+      "run doctor and inspect GitHub App installation/read permissions"
+    );
+
+    const requiredCleanOutput = buildReleaseStatusCommandOutput({
+      status: runtime,
+      monitoringCoverage: buildReleaseMonitoringCoverage({
+        required: true,
+        report: coverageReport({ processed: [processedEntry(101, "head-ok", "posted")] })
+      }),
+      requireCoverage: true
+    });
+    expect(requiredCleanOutput).toMatchObject({
+      ok: true,
+      runtimeOk: true,
+      healthState: "runtime_ok",
+      failedGates: []
+    });
+    expect(requiredCleanOutput.gates.map((gate) => gate.name)).toEqual([
+      "provider_cooldown_backlog",
+      "active_repo_coverage_no_unprocessed_heads",
+      "active_repo_coverage_no_read_failures",
+      "active_repo_coverage_no_stale_heads"
+    ]);
   });
 
   it("uses review budget readiness instead of raw provider-deferred retry counts for gates", () => {
