@@ -114,6 +114,9 @@ export interface PublicReleaseStatus {
     setupPath?: string;
     releaseNotesPath?: string;
     websiteRepo?: string;
+    changelogPath?: string;
+    changelogHeadVersion?: string;
+    changelogReleaseNotesPath?: string;
   };
   licenseApi: PublicReleaseGateStatus & {
     requiredForThisRelease: boolean;
@@ -519,6 +522,7 @@ export function readPublicReleaseManifestStatus(input: {
     const docsVersion = readString(docs.version) ?? "(missing)";
     const setupPath = readString(docs.setupPath);
     const releaseNotesPath = readString(docs.releaseNotesPath);
+    const changelog = readChangelogHead(input.cwd);
     const docsPathChecks = [
       setupPath
         ? { label: "setup", path: setupPath, exists: existsSync(resolve(input.cwd, setupPath)) }
@@ -532,11 +536,20 @@ export function readPublicReleaseManifestStatus(input: {
     const docsVersionOk = expectedVersionOk && docsVersion === expectedVersion;
     const expectedReleaseNotesPath = expectedVersionOk ? `docs/releases/${expectedVersion}.md` : undefined;
     const releaseNotesPathOk = expectedReleaseNotesPath !== undefined && releaseNotesPath === expectedReleaseNotesPath;
+    const expectedChangelogVersion = expectedVersionOk ? stripLeadingV(expectedVersion) : undefined;
+    const changelogVersionOk =
+      expectedChangelogVersion !== undefined &&
+      changelog.version === expectedChangelogVersion;
+    const changelogReleaseNotesPathOk =
+      expectedReleaseNotesPath !== undefined &&
+      changelog.releaseNotesPath === expectedReleaseNotesPath;
     const docsOk =
       expectedVersionOk &&
       manifestVersionOk &&
       docsVersionOk &&
       releaseNotesPathOk &&
+      changelogVersionOk &&
+      changelogReleaseNotesPathOk &&
       missingDocsPaths.length === 0;
     const licenseState = readString(licenseApi.state) ?? "missing";
     const licenseRequired = releaseLevel === "source-beta"
@@ -598,9 +611,12 @@ export function readPublicReleaseManifestStatus(input: {
         actualVersion: docsVersion,
         setupPath,
         releaseNotesPath,
+        changelogPath: changelog.path,
+        changelogHeadVersion: changelog.version,
+        changelogReleaseNotesPath: changelog.releaseNotesPath,
         websiteRepo: readString(docs.websiteRepo),
         detail: docsOk
-          ? `manifest version ${version} and docs version ${docsVersion} match ${expectedVersion}; checked setup and release notes paths`
+          ? `manifest version ${version}, docs version ${docsVersion}, and CHANGELOG head ${changelog.version} match ${expectedVersion}; checked setup, release notes, and changelog paths`
           : [
               expectedVersion
                 ? manifestVersionOk
@@ -619,6 +635,17 @@ export function readPublicReleaseManifestStatus(input: {
               ...(releaseNotesPath && expectedReleaseNotesPath && !releaseNotesPathOk
                 ? [`release notes path ${releaseNotesPath} does not match ${expectedReleaseNotesPath}`]
                 : []),
+              ...(expectedVersion
+                ? [
+                    changelogVersionOk
+                      ? `CHANGELOG head ${changelog.version} matches ${expectedChangelogVersion}`
+                      : `CHANGELOG head ${changelog.version ?? "(missing)"} does not match ${expectedChangelogVersion}`
+                  ]
+                : []),
+              ...(changelog.releaseNotesPath && expectedReleaseNotesPath && !changelogReleaseNotesPathOk
+                ? [`CHANGELOG release notes path ${changelog.releaseNotesPath} does not match ${expectedReleaseNotesPath}`]
+                : []),
+              ...(!changelog.exists ? [`CHANGELOG missing at ${changelog.path}`] : []),
               ...missingDocsPaths.map((pathCheck) => `${pathCheck.label} missing at ${pathCheck.path}`)
             ].join("; ")
       },
@@ -1765,6 +1792,37 @@ function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
     ? ""
     : `; active age ${heartbeat.activeAgeMs}ms; active max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; active cycle ${heartbeat.activeCycle ?? "unknown"}`;
   return `${heartbeat.status}; age ${age}; max ${heartbeat.maxAgeMs}ms; event ${heartbeat.event ?? "unknown"}; cycle ${heartbeat.cycle ?? "unknown"}${activeSuffix}`;
+}
+
+interface ChangelogHeadStatus {
+  path: string;
+  exists: boolean;
+  version?: string;
+  releaseNotesPath?: string;
+}
+
+function readChangelogHead(cwd: string): ChangelogHeadStatus {
+  const path = "CHANGELOG.md";
+  const absolutePath = resolve(cwd, path);
+  if (!existsSync(absolutePath)) return { path, exists: false };
+
+  const lines = readFileSync(absolutePath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const match = /^## \[([^\]]+)\](?:\s*-\s*(\S+))?/.exec(line.trim());
+    if (!match || match[1] === "Unreleased") continue;
+    return {
+      path,
+      exists: true,
+      version: match[1],
+      ...(match[2] ? { releaseNotesPath: match[2] } : {})
+    };
+  }
+
+  return { path, exists: true };
+}
+
+function stripLeadingV(version: string): string {
+  return version.startsWith("v") ? version.slice(1) : version;
 }
 
 function git(cwd: string, args: string[]): string {

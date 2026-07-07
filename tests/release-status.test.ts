@@ -62,6 +62,22 @@ describe("beta release status", () => {
     return proofPath;
   }
 
+  function writeChangelogHead(root: string, version = "1.0.0-beta.1", releaseNotesPath = `docs/releases/v${version}.md`): void {
+    writeFileSync(join(root, "CHANGELOG.md"), [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      "No unreleased changes tracked yet.",
+      "",
+      `## [${version}] - ${releaseNotesPath}`,
+      "",
+      "### Added",
+      "- Fixture release entry.",
+      ""
+    ].join("\n"));
+  }
+
   it("fails closed when the live checkout is dirty or not at the expected head", () => {
     const status = buildReleaseStatus({
       repo: {
@@ -136,6 +152,7 @@ describe("beta release status", () => {
     mkdirSync(join(root, "docs", "releases"), { recursive: true });
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
     writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeChangelogHead(root);
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.0-beta.1",
       releaseLevel: "source-beta",
@@ -211,7 +228,7 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({
       name: "public_docs_version",
       ok: true,
-      detail: "manifest version v1.0.0-beta.1 and docs version v1.0.0-beta.1 match v1.0.0-beta.1; checked setup and release notes paths"
+      detail: "manifest version v1.0.0-beta.1, docs version v1.0.0-beta.1, and CHANGELOG head 1.0.0-beta.1 match v1.0.0-beta.1; checked setup, release notes, and changelog paths"
     });
     expect(status.gates).toContainEqual({
       name: "public_license_api_state",
@@ -240,7 +257,10 @@ describe("beta release status", () => {
       docs: {
         ok: true,
         setupPath: "docs/SETUP.md",
-        releaseNotesPath: "docs/releases/v0.4.43-beta.1.md"
+        releaseNotesPath: "docs/releases/v0.4.43-beta.1.md",
+        changelogPath: "CHANGELOG.md",
+        changelogHeadVersion: "0.4.43-beta.1",
+        changelogReleaseNotesPath: "docs/releases/v0.4.43-beta.1.md"
       },
       licenseApi: {
         ok: true,
@@ -285,6 +305,55 @@ describe("beta release status", () => {
     });
     expect(manifest.licenseApi.detail).toContain("observedAt must be no older than 30 days");
     expect(manifest.ok).toBe(false);
+  });
+
+  it("fails the public docs gate when CHANGELOG head lags the manifest version", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-changelog-drift-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v0.4.43-beta.1.md"), "# v0.4.43-beta.1\n");
+    writeChangelogHead(root, "0.4.42-beta.1", "docs/releases/v0.4.42-beta.1.md");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v0.4.43-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v0.4.43-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v0.4.43-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          rollback: "git reset --hard refs/tags/v0.4.42-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          rollback: "git reset --hard refs/tags/v0.4.42-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v0.4.43-beta.1"
+    });
+
+    expect(manifest.ok).toBe(false);
+    expect(manifest.docs).toMatchObject({
+      ok: false,
+      changelogHeadVersion: "0.4.42-beta.1",
+      changelogReleaseNotesPath: "docs/releases/v0.4.42-beta.1.md"
+    });
+    expect(manifest.docs.detail).toContain("CHANGELOG head 0.4.42-beta.1 does not match 0.4.43-beta.1");
+    expect(manifest.docs.detail).toContain("CHANGELOG release notes path docs/releases/v0.4.42-beta.1.md does not match docs/releases/v0.4.43-beta.1.md");
   });
 
   it("fails closed when public release manifest flags are not paired", () => {
@@ -435,6 +504,7 @@ describe("beta release status", () => {
     mkdirSync(join(root, "docs", "releases"), { recursive: true });
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
     writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeChangelogHead(root);
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.0-beta.1",
       releaseLevel: "source-beta",
@@ -485,6 +555,7 @@ describe("beta release status", () => {
     mkdirSync(join(root, "docs", "releases"), { recursive: true });
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
     writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeChangelogHead(root);
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.0-beta.1",
       releaseLevel: "source-beta",
@@ -549,6 +620,7 @@ describe("beta release status", () => {
     mkdirSync(join(root, "docs", "releases"), { recursive: true });
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
     writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeChangelogHead(root);
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.0-beta.1",
       releaseLevel: "source-beta",
@@ -584,6 +656,7 @@ describe("beta release status", () => {
   it("fails public docs gate when required docs paths are omitted", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-no-doc-paths-"));
     roots.push(root);
+    writeChangelogHead(root);
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.0-beta.1",
       releaseLevel: "source-beta",
@@ -610,7 +683,7 @@ describe("beta release status", () => {
 
     expect(manifest.ok).toBe(false);
     expect(manifest.docs.detail).toBe(
-      "manifest version v1.0.0-beta.1 matches v1.0.0-beta.1; docs version v1.0.0-beta.1 matches v1.0.0-beta.1; setupPath missing at (missing); releaseNotesPath missing at (missing)"
+      "manifest version v1.0.0-beta.1 matches v1.0.0-beta.1; docs version v1.0.0-beta.1 matches v1.0.0-beta.1; CHANGELOG head 1.0.0-beta.1 matches 1.0.0-beta.1; setupPath missing at (missing); releaseNotesPath missing at (missing)"
     );
   });
 
@@ -1079,6 +1152,7 @@ describe("beta release status", () => {
     mkdirSync(join(root, "docs", "releases"), { recursive: true });
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
     writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeChangelogHead(root);
     writeLicenseHealthProof(root, { path: "docs/evidence/license-healthz-target.json" });
     symlinkSync("license-healthz-target.json", join(root, "docs", "evidence", "license-healthz-link.json"));
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
@@ -2212,6 +2286,7 @@ describe("beta release status", () => {
     roots.push(root);
     mkdirSync(join(root, "docs"), { recursive: true });
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeChangelogHead(root);
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.0-beta.1",
       releaseLevel: "public-beta",
@@ -2271,7 +2346,7 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({
       name: "public_docs_version",
       ok: false,
-      detail: "manifest version v1.0.0-beta.1 matches v1.0.0-beta.1; docs version v0.9.0-beta.1 does not match v1.0.0-beta.1; release notes missing at docs/releases/v1.0.0-beta.1.md"
+      detail: "manifest version v1.0.0-beta.1 matches v1.0.0-beta.1; docs version v0.9.0-beta.1 does not match v1.0.0-beta.1; CHANGELOG head 1.0.0-beta.1 matches 1.0.0-beta.1; release notes missing at docs/releases/v1.0.0-beta.1.md"
     });
     expect(status.gates).toContainEqual({
       name: "public_license_api_state",

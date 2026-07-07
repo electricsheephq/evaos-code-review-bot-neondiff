@@ -16,6 +16,12 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.43-beta.1] - docs/releases/v0.4.43-beta.1.md
+
+### Added
+- Promote the production license API to a required healthy source-beta gate with committed `/healthz` proof, live Fly deployment evidence, and release-status validation for the license API health artifact
+- Keep the public npm package held at `neondiff@0.4.30-beta.1` while advancing the source-beta release surface to `v0.4.43-beta.1`
+
 ## [0.4.42-beta.1] - docs/releases/v0.4.42-beta.1.md
 
 ### Added
