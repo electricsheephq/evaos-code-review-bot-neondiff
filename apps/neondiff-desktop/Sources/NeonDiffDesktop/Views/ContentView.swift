@@ -34,6 +34,14 @@ struct ContentView: View {
         .tint(NeonDiffTheme.accent)
         .buttonStyle(OperatorButtonStyle())
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $model.isOnboardingPresented) {
+            OnboardingWizardView(model: model)
+                .frame(minWidth: 760, minHeight: 560)
+                .buttonStyle(OperatorButtonStyle())
+                .tint(NeonDiffTheme.accent)
+                .preferredColorScheme(.dark)
+                .interactiveDismissDisabled(model.onboardingFlow.currentStep != .done)
+        }
     }
 }
 

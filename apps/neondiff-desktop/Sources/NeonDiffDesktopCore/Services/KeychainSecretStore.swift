@@ -1,6 +1,13 @@
 import Foundation
 import Security
 
+public protocol DesktopSecretStoring {
+    func setSecret(_ secret: String, account: String) throws
+    func readSecret(account: String) throws -> String?
+    func containsSecret(account: String) -> Bool
+    func deleteSecret(account: String) throws
+}
+
 public enum KeychainSecretError: Error, LocalizedError {
     case unexpectedStatus(OSStatus)
     case invalidData
@@ -13,7 +20,7 @@ public enum KeychainSecretError: Error, LocalizedError {
     }
 }
 
-public final class KeychainSecretStore {
+public final class KeychainSecretStore: DesktopSecretStoring {
     public let service: String
 
     public init(service: String = "com.electricsheephq.NeonDiffDesktop.secrets") {

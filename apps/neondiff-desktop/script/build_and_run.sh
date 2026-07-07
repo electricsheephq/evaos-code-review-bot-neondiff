@@ -108,6 +108,8 @@ open_app() {
 }
 
 case "$MODE" in
+  build)
+    ;;
   run)
     open_app
     ;;
@@ -136,7 +138,7 @@ case "$MODE" in
     fi
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--bundle-check|preflight]" >&2
+    echo "usage: $0 [build|run|--debug|--logs|--telemetry|--verify|--bundle-check|preflight]" >&2
     exit 2
     ;;
 esac
