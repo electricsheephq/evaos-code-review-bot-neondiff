@@ -1023,6 +1023,57 @@ describe("beta release status", () => {
     expect(manifest.ok).toBe(false);
   });
 
+  it("blocks health proofs observed too far in the future", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-future-health-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      observedAt: "2026-07-07T00:06:00.000Z"
+    });
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1",
+      now: new Date("2026-07-07T00:00:00.000Z")
+    });
+
+    expect(manifest.licenseApi.ok).toBe(false);
+    expect(manifest.licenseApi.detail).toContain("observedAt must not be more than 5 minutes in the future");
+    expect(manifest.ok).toBe(false);
+  });
+
   it("blocks optional channel deferrals outside source-beta releases", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stable-channel-deferral-"));
     roots.push(root);
