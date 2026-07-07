@@ -1,5 +1,5 @@
 {
-  "version": "v0.4.40-beta.1",
+  "version": "v0.4.41-beta.1",
   "releaseLevel": "source-beta",
   "packageArtifact": {
     "name": "neondiff",
@@ -22,18 +22,19 @@
       "v0.4.37-beta.1",
       "v0.4.38-beta.1",
       "v0.4.39-beta.1",
-      "v0.4.40-beta.1"
+      "v0.4.40-beta.1",
+      "v0.4.41-beta.1"
     ],
-    "note": "v0.4.25 through v0.4.29 and v0.4.31 through v0.4.40 were source/local-worker beta releases; v0.4.30-beta.1 remains the current public npm/site beta."
+    "note": "v0.4.25 through v0.4.29 and v0.4.31 through v0.4.41 were source/local-worker beta releases; v0.4.30-beta.1 remains the current public npm/site beta."
   },
   "source": {
-    "shaState": "b7c4fc762851f79530794780996fd4b74c73dfab",
+    "shaState": "66ef93ca4e8a37511df95fb75164db254d6d7e42",
     "proof": "release:status --expected-head $(git rev-parse HEAD)"
   },
   "docs": {
-    "version": "v0.4.40-beta.1",
+    "version": "v0.4.41-beta.1",
     "setupPath": "docs/SETUP.md",
-    "releaseNotesPath": "docs/releases/v0.4.40-beta.1.md",
+    "releaseNotesPath": "docs/releases/v0.4.41-beta.1.md",
     "websiteRepo": "electricsheephq/neon-diff-agent"
   },
   "licenseApi": {
@@ -45,14 +46,14 @@
     "cli": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v0.4.40-beta.1",
-      "rollback": "git reset --hard refs/tags/v0.4.39-beta.1"
+      "version": "v0.4.41-beta.1",
+      "rollback": "git reset --hard refs/tags/v0.4.40-beta.1"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "launchd_prerelease",
-      "version": "v0.4.40-beta.1",
-      "rollback": "git reset --hard refs/tags/v0.4.39-beta.1"
+      "version": "v0.4.41-beta.1",
+      "rollback": "git reset --hard refs/tags/v0.4.40-beta.1"
     },
     "website": {
       "requiredForThisRelease": false,

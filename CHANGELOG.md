@@ -16,6 +16,12 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.41-beta.1] - docs/releases/v0.4.41-beta.1.md
+
+### Added
+- Deepen scheduled outcome observation with revert, hotfix, merged-fix, and human-thread signals for daemon-side outcome collection
+- Keep the public npm package held at `neondiff@0.4.30-beta.1` while advancing the local-worker source checkout to the current merged head
+
 ## [0.4.40-beta.1] - docs/releases/v0.4.40-beta.1.md
 
 ### Added
