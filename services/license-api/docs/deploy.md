@@ -63,10 +63,11 @@ flyctl volumes create license_data --region iad --size 1 \
 ## 3. Secrets
 
 Production DR now requires an owner-held Litestream replica URL, provider
-credentials, and production `LICENSE_LITESTREAM_REQUIRED=true`. Do not commit
-secret values. Set the replica URL and provider credentials through Fly secrets
+credentials, production `LICENSE_LITESTREAM_REQUIRED=true`, and checkout
+issuance requires `LICENSE_ISSUANCE_SECRET`. Do not commit secret values. Set
+the replica URL, provider credentials, and issuance secret through Fly secrets
 before deploying with the required flag enabled; otherwise the container
-refuses to start. `LICENSE_DB_PATH` / `PORT` / `HOST` /
+refuses to start or checkout issuance stays disabled. `LICENSE_DB_PATH` / `PORT` / `HOST` /
 `LITESTREAM_CONFIG` / `LITESTREAM_SYNC_INTERVAL` /
 `LICENSE_LITESTREAM_REQUIRED` are plain config in `fly.toml`, not secrets.
 
@@ -75,12 +76,18 @@ flyctl secrets set \
   LICENSE_REPLICA_URL="<object-store-url-for-license.sqlite>" \
   AWS_ACCESS_KEY_ID="<provider-access-key-id>" \
   AWS_SECRET_ACCESS_KEY="<provider-secret-access-key>" \
+  LICENSE_ISSUANCE_SECRET="<shared-secret-used-by-website-webhook>" \
   --app neondiff-license
 ```
 
 Use the provider-specific variables for non-S3-compatible storage. See
 [`disaster-recovery.md`](disaster-recovery.md) for the owner-only setup and
 restore drill proof boundary.
+
+`LICENSE_ISSUANCE_SECRET` enables `POST /v1/admin/licenses/issue` for the
+website payment webhook. Keep the same value configured only on the license API
+and the server-side checkout webhook; never expose it to browser code, public
+docs, logs, or generated release packets.
 
 ## 4. Deploy
 

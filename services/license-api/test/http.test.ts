@@ -7,10 +7,15 @@ import { RateLimiter } from "../src/service.ts";
 
 const fakeKey = (tag: string): string => ["nd", "live", `${tag}${"x".repeat(24 - tag.length)}`].join("_");
 
-async function post(url: string, path: string, body: unknown): Promise<{ status: number; json: any }> {
+async function post(
+  url: string,
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {}
+): Promise<{ status: number; json: any }> {
   const res = await fetch(`${url}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: typeof body === "string" ? body : JSON.stringify(body)
   });
   const text = await res.text();
@@ -72,5 +77,126 @@ describe("license http transport", () => {
     const throttled = await post(url, "/v1/license/validate", { licenseKey: key, machineId: "m" });
     assert.equal(throttled.status, 429);
     assert.equal(throttled.json.status, "rate_limited");
+  });
+});
+
+describe("license issuance transport", () => {
+  let store: LicenseStore;
+  let server: Server;
+  let url: string;
+  const issuanceSecret = ["test", "issuance", "secret", "0123456789"].join("_");
+  const auth = { Authorization: `Bearer ${issuanceSecret}` };
+
+  before(async () => {
+    store = new LicenseStore(":memory:");
+    const started = await startLicenseServer({
+      store,
+      issuanceSecret,
+      rateLimiter: new RateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
+    server = started.server;
+    url = started.url;
+  });
+
+  after(() => {
+    server.close();
+    store.close();
+  });
+
+  it("rejects issuance without the shared secret", async () => {
+    const res = await post(url, "/v1/admin/licenses/issue", {
+      idempotencyKey: "checkout-session-unauthorized",
+      checkoutLookupKey: "neondiff_monthly"
+    });
+    assert.equal(res.status, 401);
+    assert.equal(store.listLicenses().length, 0);
+  });
+
+  it("issues a product-native license key for checkout fulfillment", async () => {
+    const issued = await post(
+      url,
+      "/v1/admin/licenses/issue",
+      {
+        idempotencyKey: "checkout-session-123",
+        checkoutLookupKey: "neondiff_org_yearly",
+        customerEmail: "buyer@example.com",
+        externalCustomerId: "cus_123",
+        externalCheckoutId: "cs_123",
+        seats: 3,
+        expiresAt: "2027-07-08T00:00:00.000Z"
+      },
+      auth
+    );
+    assert.equal(issued.status, 200);
+    assert.equal(issued.json.status, "issued");
+    assert.equal(issued.json.replayed, false);
+    assert.match(issued.json.licenseKey, /^nd_live_[A-Za-z0-9_-]+$/);
+    assert.equal(issued.json.entitlement.plan, "org_yearly_support");
+    assert.equal(issued.json.entitlement.repoVisibilityScope, "private");
+    assert.equal(issued.json.entitlement.updateEntitlement, true);
+    assert.equal(issued.json.entitlement.seats, 3);
+
+    const record = store.getLicenseByKey(issued.json.licenseKey);
+    assert.ok(record);
+    assert.equal(record.plan, "org_yearly_support");
+    assert.equal(record.repoVisibilityScope, "private");
+    assert.equal(record.updateEntitlement, true);
+    assert.equal(record.seats, 3);
+
+    const activated = await post(url, "/v1/license/activate", {
+      licenseKey: issued.json.licenseKey,
+      machineId: "machine-a"
+    });
+    assert.equal(activated.status, 200);
+    assert.equal(activated.json.entitlement.status, "active");
+    assert.ok(!JSON.stringify(activated.json).includes(issued.json.licenseKey));
+  });
+
+  it("replays the same idempotency key without minting a duplicate license", async () => {
+    const body = {
+      idempotencyKey: "checkout-session-repeat",
+      checkoutLookupKey: "neondiff_yearly",
+      externalCheckoutId: "cs_repeat"
+    };
+    const first = await post(url, "/v1/admin/licenses/issue", body, auth);
+    const second = await post(url, "/v1/admin/licenses/issue", body, auth);
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(second.json.replayed, true);
+    assert.equal(second.json.licenseKey, first.json.licenseKey);
+    assert.equal(
+      store.listLicenses().filter((record) => record.plan === "yearly_support").length,
+      1
+    );
+  });
+
+  it("fails closed when an idempotency key is reused with different checkout data", async () => {
+    const first = await post(
+      url,
+      "/v1/admin/licenses/issue",
+      { idempotencyKey: "checkout-session-conflict", checkoutLookupKey: "neondiff_monthly" },
+      auth
+    );
+    assert.equal(first.status, 200);
+    const conflict = await post(
+      url,
+      "/v1/admin/licenses/issue",
+      { idempotencyKey: "checkout-session-conflict", checkoutLookupKey: "neondiff_org_yearly" },
+      auth
+    );
+    assert.equal(conflict.status, 409);
+    assert.equal(conflict.json.status, "conflict");
+  });
+
+  it("rejects unsupported checkout lookup keys before issuing", async () => {
+    const res = await post(
+      url,
+      "/v1/admin/licenses/issue",
+      { idempotencyKey: "checkout-session-bad-plan", checkoutLookupKey: "neondiff_lifetime" },
+      auth
+    );
+    assert.equal(res.status, 400);
+    assert.equal(res.json.status, "invalid");
   });
 });

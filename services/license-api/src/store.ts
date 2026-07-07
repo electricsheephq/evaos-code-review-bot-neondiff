@@ -48,6 +48,15 @@ interface ActivationRow {
   last_seen_at: string;
 }
 
+interface LicenseIssuanceRow {
+  idempotency_key: string;
+  license_key_hash: string;
+  request_hash: string;
+  source: string | null;
+  external_ref: string | null;
+  created_at: string;
+}
+
 /**
  * Deterministic at-rest identifier for a license key. Only the hash is ever
  * stored or logged; the raw key is printed once by the admin CLI at issuance
@@ -74,6 +83,13 @@ export interface IssueLicenseInput {
   updateEntitlement?: boolean;
   seats?: number;
   expiresAt?: string;
+}
+
+export interface IssueIdempotentLicenseInput extends IssueLicenseInput {
+  idempotencyKey: string;
+  requestHash: string;
+  source?: string;
+  externalRef?: string;
 }
 
 export class LicenseStore {
@@ -109,6 +125,16 @@ export class LicenseStore {
         last_seen_at text not null default (datetime('now')),
         primary key (license_key_hash, machine_id)
       );
+
+      create table if not exists license_issuance_events (
+        idempotency_key text primary key,
+        license_key_hash text not null,
+        request_hash text not null,
+        source text,
+        external_ref text,
+        created_at text not null default (datetime('now')),
+        foreign key (license_key_hash) references licenses(license_key_hash)
+      );
     `);
   }
 
@@ -119,6 +145,57 @@ export class LicenseStore {
   /** Issue a new license: generates a raw key, stores only its hash. */
   issueLicense(input: IssueLicenseInput): { rawKey: string; record: LicenseRecord } {
     const rawKey = generateLicenseKey();
+    return this.insertLicense(rawKey, input);
+  }
+
+  /**
+   * Issue a checkout-backed license idempotently. The caller supplies a raw key
+   * derived from its idempotency secret, so retries can return the same key
+   * without storing raw license material in SQLite.
+   */
+  issueIdempotentLicense(
+    rawKey: string,
+    input: IssueIdempotentLicenseInput
+  ): { rawKey: string; record: LicenseRecord; replayed: boolean } {
+    const existing = this.getIssuanceEvent(input.idempotencyKey);
+    if (existing) {
+      if (existing.request_hash !== input.requestHash) {
+        throw new Error("idempotency key was already used with different request data");
+      }
+      const licenseKeyHash = hashLicenseKey(rawKey);
+      if (licenseKeyHash !== existing.license_key_hash) {
+        throw new Error("idempotency key was issued with a different key derivation secret");
+      }
+      const record = this.getLicenseByHash(existing.license_key_hash);
+      if (!record) throw new Error("idempotency key points to a missing license record");
+      return { rawKey, record, replayed: true };
+    }
+
+    this.db.exec("begin immediate");
+    try {
+      const { record } = this.insertLicense(rawKey, input);
+      this.db
+        .prepare(
+          `insert into license_issuance_events (
+            idempotency_key, license_key_hash, request_hash, source, external_ref
+          ) values (?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.idempotencyKey,
+          record.licenseKeyHash,
+          input.requestHash,
+          input.source ?? null,
+          input.externalRef ?? null
+        );
+      this.db.exec("commit");
+      return { rawKey, record, replayed: false };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  private insertLicense(rawKey: string, input: IssueLicenseInput): { rawKey: string; record: LicenseRecord } {
     const licenseKeyHash = hashLicenseKey(rawKey);
     const seats = input.seats ?? 1;
     if (!Number.isInteger(seats) || seats < 1) throw new Error("seats must be a positive integer");
@@ -143,6 +220,12 @@ export class LicenseStore {
     const record = this.getLicenseByHash(licenseKeyHash);
     if (!record) throw new Error("license insert did not persist");
     return { rawKey, record };
+  }
+
+  private getIssuanceEvent(idempotencyKey: string): LicenseIssuanceRow | undefined {
+    return this.db
+      .prepare("select * from license_issuance_events where idempotency_key = ?")
+      .get(idempotencyKey) as LicenseIssuanceRow | undefined;
   }
 
   getLicenseByHash(licenseKeyHash: string): LicenseRecord | undefined {
