@@ -1,0 +1,83 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+function read(path: string): string {
+  return readFileSync(path, "utf8");
+}
+
+function swiftAffected(files: string[]): { affected: boolean; matched: string[]; files: string[] } {
+  return JSON.parse(execFileSync("node", ["scripts/swift-affected.mjs", "--files", ...files], { encoding: "utf8" }));
+}
+
+describe("Swift CI velocity policy", () => {
+  it("classifies desktop and Swift workflow paths without flagging docs or TypeScript release tooling", () => {
+    expect(swiftAffected([
+      "docs/releases/v0.4.43-beta.1.md",
+      "src/release-status.ts",
+      "tests/release-status.test.ts"
+    ])).toMatchObject({
+      affected: false,
+      matched: []
+    });
+
+    expect(swiftAffected([
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ContentView.swift",
+      ".github/workflows/swift-desktop-gate.yml"
+    ])).toMatchObject({
+      affected: true,
+      matched: [
+        "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ContentView.swift",
+        ".github/workflows/swift-desktop-gate.yml"
+      ]
+    });
+  });
+
+  it("ships an always-reporting Swift desktop gate and a path-aware Swift CodeQL workflow", () => {
+    expect(existsSync(".github/workflows/swift-desktop-gate.yml")).toBe(true);
+    expect(existsSync(".github/workflows/codeql-swift-path-aware.yml")).toBe(true);
+
+    const gate = read(".github/workflows/swift-desktop-gate.yml");
+    const codeql = read(".github/workflows/codeql-swift-path-aware.yml");
+
+    expect(gate).toMatch(/name:\s*Swift Desktop Gate/);
+    expect(gate).toMatch(/Swift desktop gate/);
+    expect(gate).toMatch(/scripts\/swift-affected\.mjs/);
+    expect(gate).toMatch(/No Swift desktop files changed/);
+    expect(gate).toMatch(/swift run NeonDiffDesktopCoreSmoke/);
+    expect(gate).toMatch(/swift build/);
+    expect(gate).toMatch(/script\/build_and_run\.sh build/);
+    expect(gate).toMatch(/script\/build_and_run\.sh bundle-check/);
+    expect(gate).toMatch(/cancel-in-progress:\s*true/);
+
+    expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
+    expect(codeql).toMatch(/apps\/neondiff-desktop\/\*\*/);
+    expect(codeql).toMatch(/languages:\s*swift/);
+    expect(codeql).toMatch(/github\/codeql-action\/autobuild@v3/);
+    expect(codeql).toMatch(/schedule:/);
+    expect(codeql).toMatch(/workflow_dispatch:/);
+    expect(codeql).toMatch(/cancel-in-progress:\s*true/);
+  });
+
+  it("documents the fast preview/smoke loop and the release proof boundary", () => {
+    const betaRunbook = read("docs/beta-release-runbook.md");
+    const macRunbook = read("apps/neondiff-desktop/docs/mac-release-runbook.md");
+    const desktopDocs = read("docs/neondiff-desktop.md");
+
+    expect(betaRunbook).toMatch(/Fast Iteration And Batched Release Validation/);
+    expect(betaRunbook).toMatch(/preview server\/browser\s+smoke/);
+    expect(betaRunbook).toMatch(/Swift desktop gate/);
+    expect(betaRunbook).toMatch(/remove Swift from\s+GitHub CodeQL default setup/i);
+    expect(betaRunbook).toMatch(/desktop-smoke/);
+    expect(betaRunbook).toMatch(/desktop-release/);
+
+    expect(macRunbook).toMatch(/Fast Desktop Iteration Before Release/);
+    expect(macRunbook).toMatch(/swift run NeonDiffDesktopCoreSmoke/);
+    expect(macRunbook).toMatch(/script\/build_and_run\.sh bundle-check/);
+    expect(macRunbook).toMatch(/path-aware Swift CodeQL workflow is a release\/security scan/);
+
+    expect(desktopDocs).toMatch(/script\/build_and_run\.sh build/);
+    expect(desktopDocs).toMatch(/script\/build_and_run\.sh bundle-check/);
+    expect(desktopDocs).toMatch(/Signed,\s*notarized,\s*appcast,\s*and installed-app visual proof belong to the Mac release\s+runbook/);
+  });
+});

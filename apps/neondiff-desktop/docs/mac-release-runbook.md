@@ -27,6 +27,29 @@ state is complete.
 | TCC proof | A final signed/notarized artifact is used for any Accessibility, Screen Recording, microphone, or other TCC acceptance proof. | Stop if proof comes from an unsigned/ad-hoc app or a different signing identity. |
 | Customer readiness | Owner-approved release notes, license/update policy, hosting, rollback, and support handoff are recorded. | Stop if #327 or any customer-facing entitlement/update policy is unresolved for the chosen channel. |
 
+## Fast Desktop Iteration Before Release
+
+Use the fastest proof loop that covers the changed behavior before entering the
+release lane.
+
+- Swift model, parser, command-builder, daemon-status, onboarding, or license
+  setup changes: run `swift run NeonDiffDesktopCoreSmoke`.
+- SwiftUI or app wiring changes: run the core smoke, `swift build`,
+  `script/build_and_run.sh build`, and `script/build_and_run.sh bundle-check`.
+- Browser, website, renderer, public docs, or config-only changes: use a
+  preview server/browser smoke or focused Node tests first; do not run Swift
+  locally unless the changed contract crosses into `apps/neondiff-desktop/`.
+- Review-response commits that only change docs, release notes, or GitHub
+  metadata should not restart local Swift work. Preserve the running remote gate
+  and batch remaining feedback before the next push.
+
+The CI `Swift desktop gate` is intentionally always-reporting. It should say
+`not affected` for non-desktop PRs, and it should run the Swift core smoke,
+Swift build, app bundle build, and bundle check for desktop-affecting PRs. The
+path-aware Swift CodeQL workflow is a release/security scan. It should run for
+desktop/signing/appcast/release paths, scheduled scans, manual dispatch, and
+`main`; it should not be the inner product iteration loop.
+
 ## Preconditions
 
 Run every command from a fresh checkout of

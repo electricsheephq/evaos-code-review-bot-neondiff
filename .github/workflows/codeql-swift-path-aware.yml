@@ -1,0 +1,53 @@
+name: Swift CodeQL Path-Aware
+
+on:
+  pull_request:
+    paths:
+      - apps/neondiff-desktop/**
+      - Package.swift
+      - Package.resolved
+      - .github/workflows/codeql-swift-path-aware.yml
+      - .github/workflows/swift-desktop-gate.yml
+  push:
+    branches:
+      - main
+    paths:
+      - apps/neondiff-desktop/**
+      - Package.swift
+      - Package.resolved
+      - .github/workflows/codeql-swift-path-aware.yml
+      - .github/workflows/swift-desktop-gate.yml
+  workflow_dispatch:
+  schedule:
+    - cron: "37 9 * * 1"
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: swift-codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-swift:
+    name: Analyze Swift (path-aware)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: swift
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:swift"
