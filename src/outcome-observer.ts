@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isBotCommandComment } from "./commands.js";
+import { DEFAULT_BOT_LOGIN } from "./github.js";
 import { redactSecrets } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import type { ObserveScheduleConfig } from "./config.js";
@@ -74,6 +76,175 @@ function diffTouchesFinding(lines: Map<string, Set<number>>, finding: ObservedFi
   if (!touched) return false;
   for (const line of touched) {
     if (Math.abs(line - finding.line) <= OUTCOME_LINE_WINDOW) return true;
+  }
+  return false;
+}
+
+/**
+ * A minimal, read-only PR review comment shape (#371) — the deeper-observation enrichment consumes
+ * only what it needs to detect a human dismissal thread on a finding, decoupling outcome-observer
+ * from the full GitHub type.
+ */
+export interface ObservedReviewComment {
+  path?: string | null;
+  line?: number | null;
+  original_line?: number | null;
+  in_reply_to_id?: number | null;
+  user?: { login: string; type?: string } | null;
+}
+
+/**
+ * A recently-merged PR the scheduled observer scans for deeper post-merge signals (#371). `title`/
+ * `body` carry the revert convention; `changedLines` is collectRightSideLines over the PR's files so
+ * the hotfix/merged-fix "touches flagged lines" match reuses the exact review-gate primitive.
+ * `mergedAt` gates the temporal guard: only a PR merged STRICTLY AFTER the target can be its revert
+ * or follow-up fix (a candidate merged before/at the target is not a post-merge signal for it).
+ */
+export interface ObservedSubsequentPull {
+  pullNumber: number;
+  title?: string | null;
+  body?: string | null;
+  mergedAt?: string | null;
+  changedLines: Map<string, Set<number>>;
+}
+
+/**
+ * Pure enrichment builder (#371). Turns the read-only GitHub reads for ONE merged reviewed PR into the
+ * fuller ObservedPullOutcome that deriveOutcomeLabel already understands — WITHOUT changing the labeler.
+ *
+ * Parity contract: fed the same revert/hotfix/human-thread facts the CLI observer's dry-run input
+ * carries, the scheduled reader produces the same deriveOutcomeLabel VERDICT (true_positive /
+ * false_positive / unvalidated). The `labelSource` may differ for a subsequent-fix signal: the bounded
+ * scheduled reader cannot distinguish a dedicated hotfix PR from a general merged-fix diff, so it feeds
+ * all subsequent-fix line touches into `hotfixLines` (labelSource `hotfix`), whereas a CLI input can
+ * split hotfix vs merged_fix explicitly. Both derive `true_positive`, so the VERDICT parity holds —
+ * that is the claim the acceptance test asserts.
+ *
+ * Temporal guard: a candidate is only a revert/fix of THIS PR if it merged STRICTLY AFTER the target;
+ * a PR merged before/at the target's merge is skipped (it cannot be a post-merge signal for it).
+ *
+ * - revert: a subsequent merged PR whose message reverts THIS PR's merge (GitHub's `Revert "<title>"`
+ *   PR title, `Reverts #<n>`, or `This reverts commit <merge_commit_sha>`).
+ * - hotfixLines: right-side changed lines of subsequent merged PRs (a revert is not double-counted).
+ * - humanThreadResolved: a HUMAN (non-bot) reply thread on the finding's path/line.
+ */
+export function buildObservedPullOutcome(input: {
+  merged: boolean;
+  mergedAt?: string | null;
+  mergeCommitSha?: string | null;
+  pullNumber: number;
+  pullTitle?: string | null;
+  findings: ObservedFinding[];
+  subsequentPulls: ObservedSubsequentPull[];
+  reviewComments: ObservedReviewComment[];
+  botLogin?: string;
+  evidenceRef?: string;
+}): ObservedPullOutcome {
+  if (!input.merged) {
+    return { merged: false, revertedFlaggedChange: false, hotfixLines: new Map(), mergedFixLines: new Map(), humanThreadResolved: false };
+  }
+
+  const targetMergedMs = input.mergedAt ? Date.parse(input.mergedAt) : NaN;
+  let revertedFlaggedChange = false;
+  const hotfixLines = new Map<string, Set<number>>();
+  for (const pull of input.subsequentPulls) {
+    if (pull.pullNumber === input.pullNumber) continue; // never treat the PR as its own revert/hotfix.
+    // Temporal guard: only a PR merged STRICTLY AFTER the target is a post-merge signal FOR it. When
+    // either merge time is unknown we keep the candidate (fail-open toward observing, never inventing
+    // a signal the guard could suppress) — the revert/line-touch matchers still gate what counts.
+    if (Number.isFinite(targetMergedMs) && pull.mergedAt) {
+      const candidateMs = Date.parse(pull.mergedAt);
+      if (Number.isFinite(candidateMs) && candidateMs <= targetMergedMs) continue;
+    }
+    if (pullRevertsMerge(pull, input)) {
+      revertedFlaggedChange = true;
+      continue; // a revert is not also counted as a hotfix touching flagged lines.
+    }
+    mergeLineMap(hotfixLines, pull.changedLines);
+  }
+
+  return {
+    merged: true,
+    revertedFlaggedChange,
+    hotfixLines,
+    // The scheduled reader collapses subsequent-fix line touches into hotfixLines (see doc above);
+    // mergedFixLines stays empty. Both hotfix and merged_fix derive true_positive, so VERDICT parity
+    // with the CLI observer holds — a merged PR whose later fix touches a flagged line is validated.
+    mergedFixLines: new Map(),
+    humanThreadResolved: humanThreadTouchesFinding(input.reviewComments, input.findings, input.botLogin),
+    ...(input.evidenceRef ? { evidenceRef: input.evidenceRef } : {})
+  };
+}
+
+function pullRevertsMerge(
+  pull: ObservedSubsequentPull,
+  target: { pullNumber: number; pullTitle?: string | null; mergeCommitSha?: string | null }
+): boolean {
+  const title = pull.title ?? "";
+  const body = pull.body ?? "";
+  // GitHub's default revert PR title: `Revert "<original title>"`. Match the revert prefix AND a
+  // back-reference that specifically identifies THIS PR — never an incidental `#n` mention.
+  const isRevertShaped = /^revert\b/i.test(title.trim()) || /this reverts commit/i.test(body);
+  if (!isRevertShaped) return false;
+  const referencesTitle = revertTitleMatchesTarget(title, target.pullTitle);
+  const referencesNumber = revertReferencesPull(`${title}\n${body}`, target.pullNumber);
+  const referencesMergeSha = Boolean(target.mergeCommitSha) && body.includes(target.mergeCommitSha as string);
+  return referencesTitle || referencesNumber || referencesMergeSha;
+}
+
+/**
+ * True only when the candidate title is GitHub's exact default revert construction for the target:
+ * `Revert "<exact target title>"` (optionally with a ` (#n)` tail) (#371). A loose substring match is
+ * rejected — a revert of a differently-titled PR whose title merely CONTAINS the target's would
+ * otherwise false-match. The `#n` / commit-sha back-references remain the other accepted signals.
+ */
+function revertTitleMatchesTarget(candidateTitle: string, targetTitle: string | null | undefined): boolean {
+  const target = (targetTitle ?? "").trim();
+  if (target.length === 0) return false;
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^revert\\s+"${escaped}"(?:\\s*\\(#\\d+\\))?\\s*$`, "i").test(candidateTitle.trim());
+}
+
+/**
+ * True only when `#<n>` appears in a construction that identifies it as a revert OF that PR (#371) —
+ * not merely anywhere in a revert-shaped PR. Accepted forms:
+ *   - `Reverts #n` / `Reverts owner/repo#n`  (GitHub's default revert-PR body line)
+ *   - `Revert "<title>" (#n)`                (GitHub's default revert-PR title tail)
+ * An incidental `#n` (e.g. "see #n for context") in a revert PR does NOT count.
+ */
+function revertReferencesPull(text: string, pullNumber: number): boolean {
+  const n = String(pullNumber);
+  const revertsBody = new RegExp(`\\breverts?\\b[^\\n#]*(?:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#${n}\\b`, "i");
+  const revertTitleTail = new RegExp(`\\brevert\\b[^\\n]*\\(#${n}\\)`, "i");
+  return revertsBody.test(text) || revertTitleTail.test(text);
+}
+
+function mergeLineMap(into: Map<string, Set<number>>, from: Map<string, Set<number>>): void {
+  for (const [path, lines] of from) {
+    let set = into.get(path);
+    if (!set) {
+      set = new Set<number>();
+      into.set(path, set);
+    }
+    for (const line of lines) set.add(line);
+  }
+}
+
+function humanThreadTouchesFinding(comments: ObservedReviewComment[], findings: ObservedFinding[], botLogin?: string): boolean {
+  const effectiveBotLogin = botLogin ?? DEFAULT_BOT_LOGIN;
+  for (const comment of comments) {
+    // A human REPLY thread (in_reply_to_id set) is the dismissal signal; a bot author never counts.
+    if (comment.in_reply_to_id === undefined || comment.in_reply_to_id === null) continue;
+    // Reuse the shared bot-identity check (#149): excludes user.type === "Bot" OR the app bot login,
+    // so a bot reply with a MISSING/variant type (only its login matches) is still not counted human.
+    if (comment.user && isBotCommandComment(comment.user, effectiveBotLogin)) continue;
+    const path = comment.path;
+    if (!path) continue;
+    const line = typeof comment.line === "number" ? comment.line : comment.original_line;
+    if (typeof line !== "number") continue;
+    for (const finding of findings) {
+      if (finding.path === path && Math.abs(line - finding.line) <= OUTCOME_LINE_WINDOW) return true;
+    }
   }
   return false;
 }

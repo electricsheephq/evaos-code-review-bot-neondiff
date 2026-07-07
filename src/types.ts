@@ -44,6 +44,24 @@ export interface PullFilePatch {
   previous_filename?: string;
 }
 
+/**
+ * A single PR review (inline-diff) comment (#371). Read-only shape for outcome observation: the
+ * observer looks for a HUMAN reply thread on a finding's path/line as a false-positive dismissal
+ * signal. `in_reply_to_id` marks a reply within a thread; `user.type` lets us exclude bot authors.
+ */
+export interface PullReviewComment {
+  id: number;
+  path?: string | null;
+  line?: number | null;
+  original_line?: number | null;
+  in_reply_to_id?: number | null;
+  body?: string | null;
+  user?: {
+    login: string;
+    type?: string;
+  } | null;
+}
+
 export interface PullRequestSummary {
   number: number;
   title: string;
@@ -51,6 +69,7 @@ export interface PullRequestSummary {
   state?: string;
   created_at?: string | null;
   merged_at?: string | null;
+  merge_commit_sha?: string | null;
   body?: string | null;
   head: {
     sha: string;
