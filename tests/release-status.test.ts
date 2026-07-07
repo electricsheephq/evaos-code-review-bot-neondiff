@@ -208,7 +208,8 @@ describe("beta release status", () => {
         ok: true,
         requiredForThisRelease: true,
         state: "healthy",
-        healthUrl: "https://neondiff-license.fly.dev/healthz"
+        healthUrl: "https://neondiff-license.fly.dev/healthz",
+        healthProofPath: "docs/evidence/v0.4.43-beta.1-license-api-healthz.json"
       },
       updateChannels: {
         ok: true
@@ -729,7 +730,8 @@ describe("beta release status", () => {
       },
       licenseApi: {
         requiredForThisRelease: true,
-        state: "healthy"
+        state: "healthy",
+        healthProofPath: "docs/releases/v1.0.0-beta.1.md"
       },
       updateChannels: {
         cli: {

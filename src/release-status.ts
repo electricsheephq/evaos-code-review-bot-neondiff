@@ -119,6 +119,7 @@ export interface PublicReleaseStatus {
     state: string;
     trackingIssue?: string;
     healthUrl?: string;
+    healthProofPath?: string;
   };
   updateChannels: {
     ok: boolean;
@@ -535,7 +536,11 @@ export function readPublicReleaseManifestStatus(input: {
     const licenseRequired = releaseLevel === "source-beta"
       ? (readBoolean(licenseApi.requiredForThisRelease) ?? true)
       : true;
-    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired);
+    const licenseHealthProofPath = readString(licenseApi.healthProofPath);
+    const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
+    const licenseHealthProofOk =
+      !licenseNeedsHealthProof || Boolean(licenseHealthProofPath && existsSync(resolve(input.cwd, licenseHealthProofPath)));
+    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired) && licenseHealthProofOk;
     const declaredChannelNames = Object.keys(updateChannels);
     const channelNames = [
       ...REQUIRED_PUBLIC_UPDATE_CHANNELS,
@@ -597,9 +602,16 @@ export function readPublicReleaseManifestStatus(input: {
         state: licenseState,
         trackingIssue: readString(licenseApi.trackingIssue),
         healthUrl: readString(licenseApi.healthUrl),
+        healthProofPath: licenseHealthProofPath,
         detail: licenseOk
-          ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}`
-          : `license API state ${licenseState} blocks this release; requiredForThisRelease=${licenseRequired}`
+          ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}${
+              licenseHealthProofPath ? `; health proof ${licenseHealthProofPath}` : ""
+            }`
+          : `license API state ${licenseState} blocks this release; requiredForThisRelease=${licenseRequired}${
+              licenseNeedsHealthProof && !licenseHealthProofOk
+                ? `; missing health proof ${licenseHealthProofPath ?? "(missing)"}`
+                : ""
+            }`
       },
       updateChannels: {
         ok: channelsOk,

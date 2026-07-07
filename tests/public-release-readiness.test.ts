@@ -105,14 +105,33 @@ describe("NeonDiff public release readiness", () => {
         state?: string;
         trackingIssue?: string;
         healthUrl?: string;
+        healthProofPath?: string;
       };
     };
 
     expect(manifest.licenseApi).toMatchObject({
       requiredForThisRelease: true,
       state: "healthy",
-      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327",
-      healthUrl: "https://neondiff-license.fly.dev/healthz"
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327"
+    });
+    expect(manifest.licenseApi?.healthUrl).toMatch(/^https:\/\/[^/]+\/healthz$/);
+    expect(manifest.licenseApi?.healthProofPath).toBe("docs/evidence/v0.4.43-beta.1-license-api-healthz.json");
+
+    const proof = JSON.parse(read(manifest.licenseApi?.healthProofPath ?? "")) as {
+      evidenceKind?: string;
+      releaseVersion?: string;
+      url?: string;
+      statusCode?: number;
+      responseBody?: string;
+      responseBodySha256?: string;
+    };
+    expect(proof).toMatchObject({
+      evidenceKind: "license_api_healthz",
+      releaseVersion: "v0.4.43-beta.1",
+      url: manifest.licenseApi?.healthUrl,
+      statusCode: 200,
+      responseBody: "{\"status\":\"ok\"}",
+      responseBodySha256: "a29ee2b15c494311c52521766e44af56a3ad2248e7a8ab465e5206463c13d288"
     });
   });
 

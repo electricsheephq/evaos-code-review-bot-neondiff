@@ -44,7 +44,8 @@
     "requiredForThisRelease": true,
     "state": "healthy",
     "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327",
-    "healthUrl": "https://neondiff-license.fly.dev/healthz"
+    "healthUrl": "https://neondiff-license.fly.dev/healthz",
+    "healthProofPath": "docs/evidence/v0.4.43-beta.1-license-api-healthz.json"
   },
   "updateChannels": {
     "cli": {
