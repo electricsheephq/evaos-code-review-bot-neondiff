@@ -50,8 +50,10 @@ desktop-affecting PRs. Execute `NeonDiffDesktopCoreChecks`, run
 `NeonDiffDesktopCoreSmoke`, and click through the visible UI in the local or
 release-smoke lane where an interactive session exists. The path-aware Swift
 CodeQL workflow is a release/security scan. It should run for
-desktop/signing/appcast/release paths, scheduled scans, manual dispatch, and
-`main`; it should not be the inner product iteration loop.
+desktop/signing/appcast/release paths through weekly schedule or manual dispatch
+against the intended release ref; it should not be the inner product iteration
+loop. The durable trigger, upload, timeout, and release-ref policy is
+`docs/swift-codeql-policy.md`.
 
 ### Visible Desktop UI Smoke
 

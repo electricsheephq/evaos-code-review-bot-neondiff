@@ -38,9 +38,11 @@ describe("Swift CI velocity policy", () => {
   it("ships an always-reporting Swift desktop gate and a scheduled/manual Swift CodeQL workflow", () => {
     expect(existsSync(".github/workflows/swift-desktop-gate.yml")).toBe(true);
     expect(existsSync(".github/workflows/codeql-swift-path-aware.yml")).toBe(true);
+    expect(existsSync("docs/swift-codeql-policy.md")).toBe(true);
 
     const gate = read(".github/workflows/swift-desktop-gate.yml");
     const codeql = read(".github/workflows/codeql-swift-path-aware.yml");
+    const swiftCodeQLPolicy = read("docs/swift-codeql-policy.md");
 
     expect(gate).toMatch(/name:\s*Swift Desktop Gate/);
     expect(gate).toMatch(/swift-desktop-impact:/);
@@ -91,8 +93,10 @@ describe("Swift CI velocity policy", () => {
     expect(codeql).toMatch(/upload:\s*false/);
     expect(codeql).toMatch(/upload-database:\s*false/);
     expect(codeql).toMatch(/wait-for-processing:\s*false/);
+    expect(codeql).toMatch(/timeout-minutes:\s*35/);
     expect(codeql).toMatch(/default setup is enabled/);
     expect(codeql).toMatch(/#393/);
+    expect(codeql).toMatch(/docs\/swift-codeql-policy\.md/);
     expect(codeql).not.toMatch(/security-events:\s*write/);
     expect(codeql).toMatch(/persist-credentials:\s*false/);
     expect(codeql).not.toMatch(/actions\/checkout@v4/);
@@ -103,6 +107,19 @@ describe("Swift CI velocity policy", () => {
     expect(codeql).toMatch(/schedule:/);
     expect(codeql).toMatch(/workflow_dispatch:/);
     expect(codeql).toMatch(/cancel-in-progress:\s*true/);
+    expect(swiftCodeQLPolicy).toMatch(/not the\s+inner PR iteration loop/);
+    expect(swiftCodeQLPolicy).toMatch(/no `pull_request` or `push` trigger/);
+    expect(swiftCodeQLPolicy).toMatch(/upload: false/);
+    expect(swiftCodeQLPolicy).toMatch(/default setup may remain configured/);
+    expect(swiftCodeQLPolicy).toMatch(/must not list Swift/);
+    expect(swiftCodeQLPolicy).toMatch(/35-minute job timeout/);
+    expect(swiftCodeQLPolicy).toMatch(/--ref <immutable-release-tag>/);
+    expect(swiftCodeQLPolicy).toMatch(/headSha.*equals the exact source SHA/);
+    expect(swiftCodeQLPolicy).toMatch(/provisional evidence/);
+    expect(swiftCodeQLPolicy).toMatch(/28882286388/);
+    expect(swiftCodeQLPolicy).toMatch(/28886926047/);
+    expect(swiftCodeQLPolicy).toMatch(/about 25m48s/);
+    expect(swiftCodeQLPolicy).toMatch(/about 22m30s/);
     expect(gate).toMatch(/no PR\/push path filter/);
     expect(gate).toMatch(/before ref unavailable; fail open/);
   });
@@ -149,9 +166,11 @@ describe("Swift CI velocity policy", () => {
     expect(betaRunbook).toMatch(/preview server\/browser\s+smoke/);
     expect(betaRunbook).toMatch(/Swift desktop gate/);
     expect(betaRunbook).toMatch(/compiles `NeonDiffDesktopCoreChecks`/);
-    expect(betaRunbook).toMatch(/remove Swift from\s+GitHub CodeQL default setup/i);
+    expect(betaRunbook).toMatch(/docs\/swift-codeql-policy\.md/);
+    expect(betaRunbook).toMatch(/must not contain `swift`/);
     expect(betaRunbook).toMatch(/code-scanning\/default-setup/);
-    expect(betaRunbook).toMatch(/languages must not contain `swift`/);
+    expect(betaRunbook).toMatch(/read-only verification output currently includes `actions`, `javascript`,\s+`javascript-typescript`, and `typescript`/);
+    expect(betaRunbook).toMatch(/not a PATCH payload/);
     expect(betaRunbook).toMatch(/desktop-smoke/);
     expect(betaRunbook).toMatch(/desktop-release/);
     expect(betaRunbook).toMatch(/Visible Desktop UI Smoke/);
@@ -168,6 +187,8 @@ describe("Swift CI velocity policy", () => {
     expect(macRunbook).toMatch(/Execute `NeonDiffDesktopCoreChecks`/);
     expect(macRunbook).toMatch(/script\/build_and_run\.sh bundle-check/);
     expect(macRunbook).toMatch(/path-aware Swift\s+CodeQL workflow is a release\/security scan/);
+    expect(macRunbook).toMatch(/weekly schedule or manual dispatch\s+against the intended release ref/);
+    expect(macRunbook).toMatch(/docs\/swift-codeql-policy\.md/);
     expect(macRunbook).toMatch(/Visible Desktop UI Smoke/);
     expect(macRunbook).toMatch(/Computer Use/);
     expect(macRunbook).toMatch(/CI artifact smoke/);
