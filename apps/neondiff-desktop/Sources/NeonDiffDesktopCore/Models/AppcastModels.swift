@@ -112,8 +112,7 @@ public struct AppcastManifest: Codable, Equatable {
 
     public func latestRelease() -> AppcastRelease? {
         let channelReleases = releases.filter { $0.channel == channel }
-        if let rollbackTarget = channelReleases.compactMap(\.rollbackTo).last,
-           let pinned = channelReleases.first(where: { $0.version == rollbackTarget }) {
+        if let pinned = rollbackPinnedRelease(in: channelReleases) {
             return pinned
         }
         return channelReleases.sorted(by: compareVersionsDescending).first
@@ -121,8 +120,7 @@ public struct AppcastManifest: Codable, Equatable {
 
     public func releasesForAppcast() -> [AppcastRelease] {
         let channelReleases = releases.filter { $0.channel == channel }
-        if let rollbackTarget = channelReleases.compactMap(\.rollbackTo).last,
-           let pinned = channelReleases.first(where: { $0.version == rollbackTarget }) {
+        if let pinned = rollbackPinnedRelease(in: channelReleases) {
             return channelReleases
                 .filter { release in
                     release.rollbackTo == nil && !compareVersionsDescending(release, pinned)
@@ -130,7 +128,7 @@ public struct AppcastManifest: Codable, Equatable {
                 .sorted(by: compareVersionsDescending)
         }
         guard let latest = latestRelease() else { return [] }
-        let remaining = releases.filter { $0 != latest }.sorted(by: compareVersionsDescending)
+        let remaining = channelReleases.filter { $0 != latest }.sorted(by: compareVersionsDescending)
         return [latest] + remaining
     }
 
@@ -154,21 +152,81 @@ public struct AppcastManifest: Codable, Equatable {
     }
 }
 
+private struct ParsedAppcastVersion {
+    var core: [Int]
+    var prerelease: [String]?
+}
+
+private func rollbackPinnedRelease(in releases: [AppcastRelease]) -> AppcastRelease? {
+    let rollbackSources = releases
+        .filter { $0.rollbackTo != nil }
+        .sorted(by: compareVersionsDescending)
+    guard let rollbackTarget = rollbackSources.first?.rollbackTo else { return nil }
+    return releases.first(where: { $0.version == rollbackTarget })
+}
+
 private func compareVersionsDescending(_ lhs: AppcastRelease, _ rhs: AppcastRelease) -> Bool {
-    let lhsParts = versionParts(lhs.version)
-    let rhsParts = versionParts(rhs.version)
-    for index in 0..<max(lhsParts.count, rhsParts.count) {
-        let left = index < lhsParts.count ? lhsParts[index] : 0
-        let right = index < rhsParts.count ? rhsParts[index] : 0
-        if left != right { return left > right }
+    let versionComparison = compareVersions(lhs.version, rhs.version)
+    if versionComparison != .orderedSame {
+        return versionComparison == .orderedDescending
     }
     return compareBuilds(lhs.build, rhs.build) == .orderedDescending
 }
 
-private func versionParts(_ value: String) -> [Int] {
-    value
-        .split { !$0.isNumber }
-        .map { Int($0) ?? 0 }
+private func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+    let left = parseVersion(lhs)
+    let right = parseVersion(rhs)
+    for index in 0..<max(left.core.count, right.core.count) {
+        let leftPart = index < left.core.count ? left.core[index] : 0
+        let rightPart = index < right.core.count ? right.core[index] : 0
+        if leftPart == rightPart { continue }
+        return leftPart > rightPart ? .orderedDescending : .orderedAscending
+    }
+    switch (left.prerelease, right.prerelease) {
+    case (nil, nil):
+        return .orderedSame
+    case (nil, _?):
+        return .orderedDescending
+    case (_?, nil):
+        return .orderedAscending
+    case let (leftIdentifiers?, rightIdentifiers?):
+        return comparePrerelease(leftIdentifiers, rightIdentifiers)
+    }
+}
+
+private func parseVersion(_ value: String) -> ParsedAppcastVersion {
+    let version = value.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+    let parts = version.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+    let core = parts.first?
+        .split(separator: ".")
+        .map { Int($0) ?? 0 } ?? []
+    let prerelease = parts.count > 1
+        ? parts[1].split(separator: ".").map(String.init)
+        : nil
+    return ParsedAppcastVersion(core: core, prerelease: prerelease)
+}
+
+private func comparePrerelease(_ lhs: [String], _ rhs: [String]) -> ComparisonResult {
+    for index in 0..<max(lhs.count, rhs.count) {
+        guard index < lhs.count else { return .orderedAscending }
+        guard index < rhs.count else { return .orderedDescending }
+        let leftIdentifier = lhs[index]
+        let rightIdentifier = rhs[index]
+        if leftIdentifier == rightIdentifier { continue }
+        let leftNumeric = Int(leftIdentifier)
+        let rightNumeric = Int(rightIdentifier)
+        switch (leftNumeric, rightNumeric) {
+        case let (left?, right?):
+            return left > right ? .orderedDescending : .orderedAscending
+        case (_?, nil):
+            return .orderedAscending
+        case (nil, _?):
+            return .orderedDescending
+        case (nil, nil):
+            return leftIdentifier > rightIdentifier ? .orderedDescending : .orderedAscending
+        }
+    }
+    return .orderedSame
 }
 
 private func compareBuilds(_ lhs: String, _ rhs: String) -> ComparisonResult {
