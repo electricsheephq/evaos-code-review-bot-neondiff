@@ -26,7 +26,7 @@ struct LicenseView: View {
                 }
 
                 OperatorSection("Boundary") {
-                    Text("This MVP stores a fake/local license key only. Activation, signed updater behavior, and downloadable app readiness remain separate release work.")
+                    Text("This MVP can store a local license key while hosted activation remains pending #327. Signed updater behavior and downloadable app readiness remain separate release work.")
                         .operatorBodyText()
                 }
             }

@@ -18,8 +18,13 @@ struct SettingsPane: View {
 
                 OperatorSection("Commands") {
                     OperatorCommandText(text: model.statusCommand.commandLine, lineLimit: 5)
-                    Button { model.copyCommand(model.statusCommand) } label: {
-                        Label("Copy Status Command", systemImage: "doc.on.doc")
+                    HStack(spacing: 10) {
+                        Button { model.copyCommand(model.statusCommand) } label: {
+                            Label("Copy Status Command", systemImage: "doc.on.doc")
+                        }
+                        Button { model.reopenOnboarding() } label: {
+                            Label("Open Onboarding", systemImage: "sparkles")
+                        }
                     }
                 }
 

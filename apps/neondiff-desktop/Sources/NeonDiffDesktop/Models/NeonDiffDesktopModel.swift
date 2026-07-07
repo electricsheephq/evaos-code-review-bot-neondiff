@@ -17,21 +17,26 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var lastCommandLine = ""
     @Published var pendingProviderKey = ""
     @Published var pendingLicenseKey = ""
+    @Published var onboardingFlow = OnboardingFlow()
+    @Published var isOnboardingPresented = false
 
     private let userDefaults: UserDefaults
-    private let keychain: KeychainSecretStore
+    private let keychain: DesktopSecretStoring
 
     init(
         userDefaults: UserDefaults = .standard,
-        keychain: KeychainSecretStore = KeychainSecretStore()
+        keychain: DesktopSecretStoring = KeychainSecretStore()
     ) {
         self.userDefaults = userDefaults
         self.keychain = keychain
         self.configPath = userDefaults.string(forKey: "neondiff.configPath") ?? "config.local.json"
         self.cliPath = userDefaults.string(forKey: "neondiff.cliPath") ?? "neondiff"
         self.launchdLabel = userDefaults.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
-        self.providers.providerKeyStored = keychain.containsSecret(account: providerKeyAccount)
+        let providerKeyStored = keychain.containsSecret(account: providerKeyAccount)
+        self.providers.providerKeyStored = providerKeyStored
         self.license.keyStored = keychain.containsSecret(account: licenseKeyAccount)
+        self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
+        self.isOnboardingPresented = !userDefaults.bool(forKey: onboardingCompletedKey)
         self.lastCommandLine = statusCommand.commandLine
     }
 
@@ -45,6 +50,14 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     var stopDaemonDryRunCommand: DesktopCommand {
         NeonDiffCommandBuilder.daemonControl(action: "stop", cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel)
+    }
+
+    var startDaemonCommand: DesktopCommand {
+        NeonDiffCommandBuilder.daemonControl(action: "start", cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel, dryRun: false)
+    }
+
+    var stopDaemonCommand: DesktopCommand {
+        NeonDiffCommandBuilder.daemonControl(action: "stop", cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel, dryRun: false)
     }
 
     var configInspectCommand: DesktopCommand {
@@ -78,6 +91,22 @@ final class NeonDiffDesktopModel: ObservableObject {
         runCLI(arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: stopDaemonDryRunCommand)
     }
 
+    func startDaemon() {
+        persistLocalSettings()
+        runCLI(
+            arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
+            displayCommand: startDaemonCommand
+        )
+    }
+
+    func stopDaemon() {
+        persistLocalSettings()
+        runCLI(
+            arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
+            displayCommand: stopDaemonCommand
+        )
+    }
+
     func inspectConfig() {
         runCLI(arguments: ["config", "inspect", "--config", configPath], displayCommand: configInspectCommand)
     }
@@ -95,6 +124,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             try keychain.setSecret(pendingProviderKey, account: providerKeyAccount)
             pendingProviderKey = ""
             providers.providerKeyStored = true
+            onboardingFlow.providerKeyStored = true
             lastError = nil
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
@@ -110,6 +140,39 @@ final class NeonDiffDesktopModel: ObservableObject {
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
         }
+    }
+
+    func activateLicenseForOnboarding() {
+        if !pendingLicenseKey.isEmpty {
+            storeLicenseKey()
+        }
+        onboardingFlow.licenseActivation = .servicePending
+        license.entitlement = "service pending"
+        lastError = nil
+        logText = "License activation is pending the hosted license service deployment."
+    }
+
+    func advanceOnboarding() {
+        onboardingFlow.providerKeyStored = providers.providerKeyStored
+        if onboardingFlow.currentStep == .done {
+            completeOnboarding()
+            return
+        }
+        onboardingFlow.advance()
+    }
+
+    func goBackOnboarding() {
+        onboardingFlow.goBack()
+    }
+
+    func completeOnboarding() {
+        userDefaults.set(true, forKey: onboardingCompletedKey)
+        isOnboardingPresented = false
+    }
+
+    func reopenOnboarding() {
+        onboardingFlow.providerKeyStored = providers.providerKeyStored
+        isOnboardingPresented = true
     }
 
     func copyCommand(_ command: DesktopCommand) {
@@ -207,6 +270,7 @@ final class NeonDiffDesktopModel: ObservableObject {
 
         if let parsed = DaemonStatusParser.parse(result.stdout, launchdLabel: launchdLabel, fallbackCommand: fallbackCommand) {
             status = parsed.0
+            onboardingFlow.daemonBootstrapChecked = true
             if !parsed.1.isEmpty {
                 repos = parsed.1
             }
@@ -226,3 +290,4 @@ final class NeonDiffDesktopModel: ObservableObject {
 
 private let providerKeyAccount = "provider/glm/api-key"
 private let licenseKeyAccount = "license/default"
+private let onboardingCompletedKey = "neondiff.hasCompletedOnboarding"

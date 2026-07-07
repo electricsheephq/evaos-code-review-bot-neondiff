@@ -32,6 +32,10 @@ let package = Package(
         .executableTarget(
             name: "NeonDiffDesktopCoreSmoke",
             dependencies: ["NeonDiffDesktopCore"]
+        ),
+        .executableTarget(
+            name: "NeonDiffDesktopCoreChecks",
+            dependencies: ["NeonDiffDesktopCore"]
         )
     ]
 )
