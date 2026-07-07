@@ -11,7 +11,12 @@ async function main(): Promise<void> {
   const port = Number(process.env.PORT ?? 8080);
   const host = process.env.HOST ?? "0.0.0.0";
   const store = new LicenseStore(dbPath);
-  const { url } = await startLicenseServer({ store, port, host });
+  const { url } = await startLicenseServer({
+    store,
+    port,
+    host,
+    issuanceSecret: process.env.LICENSE_ISSUANCE_SECRET
+  });
   // eslint-disable-next-line no-console
   console.log(`license-api listening on ${url} (db=${dbPath})`);
 }

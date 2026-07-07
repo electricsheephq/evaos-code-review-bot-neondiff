@@ -1,6 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { LicenseStore } from "./store.js";
 import {
+  issueCheckoutLicense,
+  malformedIssuanceResult,
+  parseIssuanceRequest,
+  validateBearerSecret
+} from "./issuance.js";
+import {
   activate,
   deactivate,
   malformedResult,
@@ -16,6 +22,7 @@ const MAX_BODY_BYTES = 16 * 1024;
 export interface LicenseHttpOptions {
   store: LicenseStore;
   rateLimiter?: RateLimiter;
+  issuanceSecret?: string;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;
 }
@@ -42,7 +49,12 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
     if (req.method === "GET" && req.url === "/healthz") {
       return writeJson(res, 200, { status: "ok" });
     }
-    const route = req.url ? ROUTES[req.url.split("?")[0]] : undefined;
+    const path = req.url?.split("?")[0];
+    if (req.method === "POST" && path === "/v1/admin/licenses/issue") {
+      return handleIssuanceRequest(options, req, res);
+    }
+
+    const route = path ? ROUTES[path] : undefined;
     if (req.method !== "POST" || !route) {
       return writeResult(res, malformedResult("unknown route"), 404);
     }
@@ -66,6 +78,29 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       return writeJson(res, 500, { status: "server", detail: "internal error" });
     }
   };
+}
+
+async function handleIssuanceRequest(
+  options: LicenseHttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!options.issuanceSecret) {
+    return writeJson(res, 503, { status: "server", detail: "license issuance is not configured" });
+  }
+  if (!validateBearerSecret(req.headers.authorization, options.issuanceSecret)) {
+    return writeJson(res, 401, { status: "unauthorized", detail: "license issuance authorization failed" });
+  }
+
+  try {
+    const parsed = parseIssuanceRequest(await readBody(req));
+    return writeResult(res, issueCheckoutLicense(options.store, parsed, options.issuanceSecret));
+  } catch (error) {
+    return writeResult(
+      res,
+      malformedIssuanceResult(error instanceof Error ? error.message : "malformed request body")
+    );
+  }
 }
 
 export function startLicenseServer(options: LicenseHttpOptions & { port?: number; host?: string }): Promise<{ server: Server; url: string }> {

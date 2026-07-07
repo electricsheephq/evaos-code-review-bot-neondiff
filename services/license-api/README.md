@@ -4,8 +4,10 @@ Self-contained license service for NeonDiff private-repo entitlements
 ([#327](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327)).
 It implements the exact HTTP contract the shipped client (`src/license.ts`)
 already calls — activate / validate / deactivate — backed by SQLite, with an
-admin CLI that mints keys. **Payment rails are out of scope**: keys are issued by
-an operator via the CLI.
+admin CLI that mints keys. Checkout fulfillment may also use the guarded
+server-to-server issuance endpoint below; Stripe/Lovable publish wiring remains
+outside this package and must call the endpoint with an owner-held shared
+secret.
 
 The service is a separate package boundary; it does **not** import the review
 worker and can be deployed on its own (SQLite on a mounted volume).
@@ -19,6 +21,7 @@ Three `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
 | `/v1/license/activate` | `{ licenseKey, repo?, machineId }` | `{ entitlement: { status:"active", repoVisibilityScope, … } }` | 404 invalid · 403 revoked · 402 expired · **409 scope_mismatch** (seat exhausted) |
 | `/v1/license/validate` | `{ licenseKey, repo?, machineId }` | active entitlement | 404 invalid · 403 revoked · 402 expired · 409 scope_mismatch (never activated on this machine) |
 | `/v1/license/deactivate` | `{ licenseKey, repo?, machineId }` | `{ status:"active", … }` (idempotent) | 404 invalid |
+| `/v1/admin/licenses/issue` | `{ idempotencyKey, checkoutLookupKey, ... }` + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | `{ status:"issued", licenseKey:"nd_live_...", entitlement, replayed }` | 401 unauthorized · 400 malformed/unsupported plan · 409 idempotency conflict |
 
 Cross-cutting: 429 rate_limited (per-key throttle) · 400 malformed · 5xx server.
 `machineId` is the single-activation binding — one machine per seat (default
@@ -29,6 +32,36 @@ The HTTP-code → client-classification map is fixed by the client
 (`402→expired · 429→rate_limited · 426→unsupported_client · 409→scope_mismatch ·
 403/410→revoked · 401/404→invalid · 5xx→server`); the service returns codes that
 match it.
+
+### Checkout issuance
+
+`POST /v1/admin/licenses/issue` is for the website/payment webhook only. It is
+disabled unless `LICENSE_ISSUANCE_SECRET` is configured, and it requires:
+
+```json
+{
+  "idempotencyKey": "stripe-checkout-session-or-event-id",
+  "checkoutLookupKey": "neondiff_monthly",
+  "customerEmail": "buyer@example.com",
+  "externalCustomerId": "cus_...",
+  "externalCheckoutId": "cs_...",
+  "seats": 1,
+  "expiresAt": "2027-07-08T00:00:00.000Z"
+}
+```
+
+Supported active checkout lookup keys are `neondiff_monthly`,
+`neondiff_yearly`, and `neondiff_org_yearly`; they map to
+`monthly_support`, `yearly_support`, and `org_yearly_support`. The endpoint
+issues private-repo entitlements with `updateEntitlement=true` and returns the
+raw `nd_live_...` license key to the caller for one-shot customer fulfillment.
+
+Idempotency is keyed by `idempotencyKey`. Retries with identical request data
+return the same `licenseKey` and `replayed=true` without minting a duplicate
+license. Reusing an idempotency key with different checkout data returns `409
+conflict`. SQLite stores only the license hash plus issuance metadata; the raw
+key is deterministically derived from `LICENSE_ISSUANCE_SECRET` and the
+idempotency key so webhook retries can be safe without storing raw key material.
 
 ## Run
 
@@ -45,6 +78,9 @@ Environment:
   at a mounted volume in deploy).
 - `PORT` / `HOST` — listen address (default `8080` / `0.0.0.0`). TLS is
   terminated upstream (fly), so the process serves plain HTTP internally.
+- `LICENSE_ISSUANCE_SECRET` — optional server-to-server bearer secret that
+  enables `POST /v1/admin/licenses/issue`. Keep it shared only with the
+  checkout webhook server; do not expose it to browsers or clients.
 
 ## Admin issuance CLI
 
