@@ -18,9 +18,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  swift-desktop-gate:
-    name: Swift desktop gate
-    runs-on: macos-latest
+  swift-desktop-impact:
+    name: Swift desktop impact
+    runs-on: ubuntu-latest
+    outputs:
+      affected: ${{ steps.impact.outputs.affected }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -95,26 +97,74 @@ jobs:
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Skip Swift smoke for non-desktop changes
-        if: steps.impact.outputs.affected != 'true'
-        run: echo "No Swift desktop files changed; stable gate passes without Swift build."
+  swift-desktop-smoke:
+    name: Swift desktop smoke
+    needs: swift-desktop-impact
+    if: needs.swift-desktop-impact.outputs.affected == 'true'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
-      - name: Swift core checks
-        if: steps.impact.outputs.affected == 'true'
+      - name: Build Swift core checks target
         working-directory: apps/neondiff-desktop
-        run: swift run NeonDiffDesktopCoreChecks
+        run: swift build --target NeonDiffDesktopCoreChecks
 
       - name: Swift build
-        if: steps.impact.outputs.affected == 'true'
         working-directory: apps/neondiff-desktop
         run: swift build
 
       - name: Build app bundle
-        if: steps.impact.outputs.affected == 'true'
         working-directory: apps/neondiff-desktop
         run: script/build_and_run.sh build
 
       - name: Bundle check
-        if: steps.impact.outputs.affected == 'true'
         working-directory: apps/neondiff-desktop
         run: script/build_and_run.sh bundle-check
+
+  swift-desktop-gate:
+    name: Swift desktop gate
+    needs:
+      - swift-desktop-impact
+      - swift-desktop-smoke
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report Swift desktop gate status
+        shell: bash
+        env:
+          IMPACT_RESULT: ${{ needs.swift-desktop-impact.result }}
+          SMOKE_RESULT: ${{ needs.swift-desktop-smoke.result }}
+          AFFECTED: ${{ needs.swift-desktop-impact.outputs.affected }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Swift desktop gate"
+            echo
+            echo "- impact job: \`$IMPACT_RESULT\`"
+            echo "- affected: \`${AFFECTED:-unknown}\`"
+            echo "- macOS smoke job: \`$SMOKE_RESULT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$IMPACT_RESULT" != "success" ]; then
+            echo "Swift desktop impact detection failed."
+            exit 1
+          fi
+
+          if [ "${AFFECTED:-false}" = "true" ]; then
+            if [ "$SMOKE_RESULT" != "success" ]; then
+              echo "Swift desktop files changed, but macOS smoke did not pass."
+              exit 1
+            fi
+            echo "Swift desktop files changed; macOS smoke passed."
+            exit 0
+          fi
+
+          if [ "$SMOKE_RESULT" != "skipped" ]; then
+            echo "No Swift desktop files changed, but macOS smoke was not skipped."
+            exit 1
+          fi
+
+          echo "No Swift desktop files changed; macOS smoke correctly skipped."

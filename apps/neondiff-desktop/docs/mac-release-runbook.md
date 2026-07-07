@@ -44,9 +44,12 @@ release lane.
   and batch remaining feedback before the next push.
 
 The CI `Swift desktop gate` is intentionally always-reporting. It should say
-`not affected` for non-desktop PRs, and it should run the Swift core checks,
-Swift build, app bundle build, and bundle check for desktop-affecting PRs. The
-path-aware Swift CodeQL workflow is a release/security scan. It should run for
+`not affected` for non-desktop PRs, and it should compile the Swift core checks
+target, run Swift build, app bundle build, and bundle check for
+desktop-affecting PRs. Execute `NeonDiffDesktopCoreChecks`, run
+`NeonDiffDesktopCoreSmoke`, and click through the visible UI in the local or
+release-smoke lane where an interactive session exists. The path-aware Swift
+CodeQL workflow is a release/security scan. It should run for
 desktop/signing/appcast/release paths, scheduled scans, manual dispatch, and
 `main`; it should not be the inner product iteration loop.
 
@@ -67,18 +70,28 @@ other SwiftUI/AppKit wiring. This is a separate proof lane:
 
 Minimum local visible-smoke checklist:
 
-1. Record the source SHA and built app path.
-2. Record `Welcome visible`: the Welcome screen is present in the launched app.
-3. Navigate to the changed step.
-4. Record `changed button/action clicked`: click the changed button/action.
-5. Capture the expected disabled, error, or success state.
-6. Name `credential-gated steps` that were not exercised because a provider
+1. Run `script/build_and_run.sh run` from `apps/neondiff-desktop/`.
+2. Record the source SHA and built app path, including the exact
+   `dist/NeonDiffDesktop.app` path passed to Computer Use.
+3. Record `Welcome visible`: the Welcome screen is present in the launched app.
+4. Navigate to the changed step.
+5. Record `changed button/action clicked`: click the changed button/action.
+6. Capture the expected disabled, error, or success state.
+7. For the onboarding baseline, confirm `Continue advanced from Welcome` and
+   the Provider step blocks continuation with `Provider key missing` until a
+   key is stored.
+8. Name `credential-gated steps` that were not exercised because a provider
    key, license key, signing credential, or owner approval was absent.
-7. Link the evidence from the PR or issue before merge.
+9. Link the evidence from the PR or issue before merge.
 
 Prefer one local build/run per logical batch. Do not spend a Swift build cycle
 after every small review-response edit when the current built app already covers
 the changed behavior.
+
+A build-only Swift pass is not visible UI proof. If the PR changes SwiftUI or
+desktop onboarding behavior and the evidence packet has no opened-window
+screenshot, accessibility tree, or equivalent Computer Use state, the desktop
+product proof is incomplete.
 
 ## Preconditions
 
