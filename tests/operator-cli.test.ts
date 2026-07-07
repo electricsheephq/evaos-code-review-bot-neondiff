@@ -115,6 +115,88 @@ describe("operator CLI summaries", () => {
     expect(coverage.recommendedActions).toContain(
       "run release-status with --require-coverage true before claiming full active-repo monitoring coverage"
     );
+
+    const requiredWithoutReport = buildReleaseMonitoringCoverage({ required: true });
+    expect(requiredWithoutReport.failedGates).toContainEqual({
+      name: "active_repo_coverage_collected",
+      ok: false,
+      detail: "coverage was required but no coverage report was supplied"
+    });
+  });
+
+  it("passes required release monitoring coverage when all coverage gates are green", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: true,
+      report: coverageReport({
+        processed: [processedEntry(101, "head-ok", "posted")]
+      })
+    });
+
+    expect(coverage).toMatchObject({
+      collected: true,
+      required: true,
+      ok: true,
+      healthState: "coverage_ok",
+      failedGates: [],
+      recommendedActions: [],
+      summary: {
+        processed: 1,
+        unprocessed: 0,
+        staleHeads: 0,
+        readFailures: 0
+      }
+    });
+  });
+
+  it("fails required release monitoring coverage on unprocessed heads", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: true,
+      report: coverageReport({
+        unprocessed: [pullEntry(102, "head-pending")]
+      })
+    });
+
+    expect(coverage).toMatchObject({
+      collected: true,
+      required: true,
+      ok: false,
+      healthState: "coverage_blocked"
+    });
+    expect(coverage.failedGates).toContainEqual({
+      name: "active_repo_coverage_no_unprocessed_heads",
+      ok: false,
+      detail: "1 unprocessed eligible head(s)"
+    });
+    expect(coverage.recommendedActions).toContain("wait for daemon cycle or run scoped run-once for unprocessed heads");
+  });
+
+  it("fails required release monitoring coverage on stale heads", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: true,
+      report: coverageReport({
+        staleHeads: [{
+          repo: "owner/repo",
+          pullNumber: 103,
+          expectedHeadSha: "old-head",
+          liveHeadSha: "new-head",
+          title: "stale",
+          url: "https://github.com/owner/repo/pull/103"
+        }]
+      })
+    });
+
+    expect(coverage).toMatchObject({
+      collected: true,
+      required: true,
+      ok: false,
+      healthState: "coverage_blocked"
+    });
+    expect(coverage.failedGates).toContainEqual({
+      name: "active_repo_coverage_no_stale_heads",
+      ok: false,
+      detail: "1 stale head(s)"
+    });
+    expect(coverage.recommendedActions).toContain("wait for next daemon cycle or run scoped coverage audit");
   });
 
   it("fails required release monitoring coverage on active repo read failures", () => {

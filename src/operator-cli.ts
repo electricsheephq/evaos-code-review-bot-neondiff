@@ -1170,14 +1170,14 @@ export function buildReleaseMonitoringCoverage(input: {
         ? [{
             name: "active_repo_coverage_collected",
             ok: false,
-            detail: "coverage not collected"
+            detail: "coverage was required but no coverage report was supplied"
           }]
         : [],
       failedGates: input.required
         ? [{
             name: "active_repo_coverage_collected",
             ok: false,
-            detail: "coverage not collected"
+            detail: "coverage was required but no coverage report was supplied"
           }]
         : [],
       recommendedActions: [

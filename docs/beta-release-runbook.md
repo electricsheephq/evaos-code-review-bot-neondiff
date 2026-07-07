@@ -323,6 +323,8 @@ npx tsx src/cli.ts review-head-gate \
 - Release promotions run `release:status --require-coverage true` so the same
   packet fails when an active PR-review repo is configured but unreadable by
   the GitHub App, or when eligible heads are unprocessed/stale.
+  `release:status --coverage true` is advisory-only and keeps top-level gates
+  runtime-scoped; do not use it as the promotion gate.
 - Public source-beta promotions pass `release:status` with
   `--public-release-manifest docs/public-release-manifest.json` and the release
   tag as `--expected-public-version`.

@@ -87,7 +87,7 @@ import {
 } from "./operator-cli.js";
 import { buildPricingOutput } from "./pricing.js";
 import { buildProviderRegistrySummary, doctorProviderRegistry, isProviderId } from "./providers.js";
-import { collectReleaseStatus, type ReleaseStatus } from "./release-status.js";
+import { collectReleaseStatus, collectReleaseStatusWithConfig, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
@@ -327,7 +327,8 @@ async function main(): Promise<void> {
       : parseBooleanArg(args["require-coverage"], "--require-coverage");
     const collectCoverage = requireCoverage ||
       (args.coverage === undefined ? false : parseBooleanArg(args.coverage, "--coverage"));
-    const status = collectReleaseStatus({
+    const config = loadConfig(args.config);
+    const status = collectReleaseStatusWithConfig({
       cwd: process.cwd(),
       configPath: args.config,
       expectedHead: args["expected-head"],
@@ -341,9 +342,9 @@ async function main(): Promise<void> {
       budgetDetails: args["budget-details"] === "true",
       ...(budgetDetailLimit !== undefined ? { budgetDetailLimit } : {}),
       ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {})
-    });
+    }, config);
     const coverageReport = collectCoverage
-      ? await collectCoverageReport(args, loadConfig(args.config))
+      ? await collectCoverageReport(args, config)
       : undefined;
     const monitoringCoverage = buildReleaseMonitoringCoverage({
       report: coverageReport,
@@ -2959,7 +2960,7 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--expected-head", description: "Expected release head SHA to verify against." },
       { name: "--launchd-label", description: "launchd label to inspect for daemon liveness." },
       { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." },
-      { name: "--coverage", description: "true to attach active repo coverage as advisory output." },
+      { name: "--coverage", description: "true to attach active repo coverage as advisory output; top-level gates remain runtime-only unless --require-coverage true is set." },
       { name: "--require-coverage", description: "true to fail release-status when active repo coverage has unreadable, unprocessed, or stale heads." },
       { name: "--public-release-manifest", description: "Public release manifest to validate for source-beta releases." },
       { name: "--expected-public-version", description: "Expected public release version/tag when validating a public manifest." }
