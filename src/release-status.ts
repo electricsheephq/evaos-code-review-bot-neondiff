@@ -870,10 +870,16 @@ function validateLicenseHealthProof(input: {
   const failures: string[] = [];
 
   if (evidenceKind !== "license_api_healthz") failures.push("evidenceKind must be license_api_healthz");
-  if (input.expectedReleaseVersion && releaseVersion !== input.expectedReleaseVersion) {
+  if (!input.expectedReleaseVersion) {
+    failures.push("expected releaseVersion must be present");
+  } else if (releaseVersion !== input.expectedReleaseVersion) {
     failures.push(`releaseVersion must match ${input.expectedReleaseVersion}`);
   }
-  if (input.expectedUrl && url !== input.expectedUrl) failures.push(`url must match ${input.expectedUrl}`);
+  if (!input.expectedUrl) {
+    failures.push("healthUrl must be present when validating health proof");
+  } else if (url !== input.expectedUrl) {
+    failures.push(`url must match ${input.expectedUrl}`);
+  }
   if (method !== "GET") failures.push("method must be GET");
   if (statusCode !== 200) failures.push("statusCode must be 200");
   const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
