@@ -228,7 +228,8 @@ describe("beta release status", () => {
     const manifest = readPublicReleaseManifestStatus({
       cwd: repoRoot,
       manifestPath: "docs/public-release-manifest.json",
-      expectedVersion: "v0.4.43-beta.1"
+      expectedVersion: "v0.4.43-beta.1",
+      now: new Date("2026-07-07T09:10:00.000Z")
     });
 
     expect(manifest).toMatchObject({
