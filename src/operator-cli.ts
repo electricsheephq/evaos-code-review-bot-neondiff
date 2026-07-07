@@ -248,6 +248,32 @@ export interface OperatorQueueSnapshot {
   readFailures: Array<{ repo: string; error: string; nextAction: string }>;
 }
 
+export type ReleaseMonitoringCoverageState = "not_collected" | "coverage_ok" | "coverage_blocked";
+
+export interface ReleaseMonitoringCoverageStatus {
+  collected: boolean;
+  required: boolean;
+  ok: boolean | null;
+  healthState: ReleaseMonitoringCoverageState;
+  proofBoundary: string;
+  summary?: {
+    reposScanned: number;
+    pullsSeen: number;
+    processed: number;
+    queued: number;
+    unprocessed: number;
+    staleHeads: number;
+    readFailures: number;
+  };
+  gates: OperatorGate[];
+  failedGates: OperatorGate[];
+  recommendedActions: string[];
+  recommendedCommand?: string;
+  readFailures?: Array<{ repo: string; error: string; nextAction: string }>;
+  unprocessed?: OperatorQueueEntry[];
+  staleHeads?: OperatorQueueEntry[];
+}
+
 export interface OperatorDashboardFilters {
   repo?: string;
   status?: string;
@@ -1125,6 +1151,88 @@ export function buildOperatorQueue(report: CoverageAuditReport): OperatorQueueSn
       ...failure,
       nextAction: "inspect GitHub App installation/read permissions or network failure"
     }))
+  };
+}
+
+export function buildReleaseMonitoringCoverage(input: {
+  report?: CoverageAuditReport;
+  required: boolean;
+  recommendedCommand?: string;
+}): ReleaseMonitoringCoverageStatus {
+  if (!input.report) {
+    return {
+      collected: false,
+      required: input.required,
+      ok: input.required ? false : null,
+      healthState: "not_collected",
+      proofBoundary: "release-status runtime health only; active repo GitHub App readability was not collected",
+      gates: input.required
+        ? [{
+            name: "active_repo_coverage_collected",
+            ok: false,
+            detail: "coverage not collected"
+          }]
+        : [],
+      failedGates: input.required
+        ? [{
+            name: "active_repo_coverage_collected",
+            ok: false,
+            detail: "coverage not collected"
+          }]
+        : [],
+      recommendedActions: [
+        "run release-status with --require-coverage true before claiming full active-repo monitoring coverage"
+      ],
+      ...(input.recommendedCommand ? { recommendedCommand: input.recommendedCommand } : {})
+    };
+  }
+
+  const queue = buildOperatorQueue(input.report);
+  const gates: OperatorGate[] = [
+    {
+      name: "active_repo_coverage_no_unprocessed_heads",
+      ok: input.report.summary.unprocessed === 0,
+      detail: `${input.report.summary.unprocessed} unprocessed eligible head(s)`
+    },
+    {
+      name: "active_repo_coverage_no_read_failures",
+      ok: input.report.summary.readFailures === 0,
+      detail: `${input.report.summary.readFailures} read failure(s)`
+    },
+    {
+      name: "active_repo_coverage_no_stale_heads",
+      ok: input.report.summary.staleHeads === 0,
+      detail: `${input.report.summary.staleHeads} stale head(s)`
+    }
+  ];
+  const failed = gates.filter((gate) => !gate.ok);
+  const ok = failed.length === 0;
+  return {
+    collected: true,
+    required: input.required,
+    ok,
+    healthState: ok ? "coverage_ok" : "coverage_blocked",
+    proofBoundary: "active repo coverage checks currently open eligible PR heads and GitHub App read access; it does not replace exact-head review proof",
+    summary: {
+      reposScanned: input.report.summary.reposScanned,
+      pullsSeen: input.report.summary.pullsSeen,
+      processed: input.report.summary.processed,
+      queued: input.report.summary.queued,
+      unprocessed: input.report.summary.unprocessed,
+      staleHeads: input.report.summary.staleHeads,
+      readFailures: input.report.summary.readFailures
+    },
+    gates,
+    failedGates: failed,
+    recommendedActions: [
+      ...(input.report.summary.unprocessed > 0 ? ["wait for daemon cycle or run scoped run-once for unprocessed heads"] : []),
+      ...(input.report.summary.readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
+      ...(input.report.summary.staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : [])
+    ],
+    readFailures: queue.readFailures,
+    unprocessed: queue.pending,
+    staleHeads: queue.staleHeads,
+    ...(input.recommendedCommand ? { recommendedCommand: input.recommendedCommand } : {})
   };
 }
 

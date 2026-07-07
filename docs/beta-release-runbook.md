@@ -91,7 +91,8 @@ sleep 5
 npm run release:status -- \
   --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
   --expected-head "$(git rev-parse HEAD)" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot
+  --launchd-label com.electricsheephq.evaos-code-review-bot \
+  --require-coverage true
 ```
 
 For public source-beta releases, run the same gate with manifest checks:
@@ -103,7 +104,8 @@ npx tsx src/cli.ts release-status \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot
+  --launchd-label com.electricsheephq.evaos-code-review-bot \
+  --require-coverage true
 ```
 
 Set `PUBLIC_BETA_TAG` to the actual public beta tag before running the command.
@@ -318,6 +320,9 @@ npx tsx src/cli.ts review-head-gate \
 - `release:status` verifies the loaded LaunchAgent includes
   `NODE_OPTIONS=--use-system-ca` so Node uses the macOS system trust store for
   GitHub App installation fetches.
+- Release promotions run `release:status --require-coverage true` so the same
+  packet fails when an active PR-review repo is configured but unreadable by
+  the GitHub App, or when eligible heads are unprocessed/stale.
 - Public source-beta promotions pass `release:status` with
   `--public-release-manifest docs/public-release-manifest.json` and the release
   tag as `--expected-public-version`.

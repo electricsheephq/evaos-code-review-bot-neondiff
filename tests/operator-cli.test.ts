@@ -9,6 +9,7 @@ import {
   buildRuntimeInventory,
   buildOperatorQueue,
   buildOperatorStatus,
+  buildReleaseMonitoringCoverage,
   collectOperatorIssueEnrichmentRuntime,
   collectOperatorLeases,
   collectOperatorRepoProviderCooldowns,
@@ -96,6 +97,59 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: false,
+      recommendedCommand: "npx tsx src/cli.ts release-status --require-coverage true"
+    });
+
+    expect(coverage).toMatchObject({
+      collected: false,
+      required: false,
+      ok: null,
+      healthState: "not_collected",
+      failedGates: []
+    });
+    expect(coverage.recommendedActions).toContain(
+      "run release-status with --require-coverage true before claiming full active-repo monitoring coverage"
+    );
+  });
+
+  it("fails required release monitoring coverage on active repo read failures", () => {
+    const coverage = buildReleaseMonitoringCoverage({
+      required: true,
+      recommendedCommand: "npx tsx src/cli.ts release-status --require-coverage true",
+      report: coverageReport({
+        processed: [processedEntry(101, "head-ok", "posted")],
+        readFailures: [{ repo: "owner/unreadable", error: "GitHub API 404" }]
+      })
+    });
+
+    expect(coverage).toMatchObject({
+      collected: true,
+      required: true,
+      ok: false,
+      healthState: "coverage_blocked",
+      summary: {
+        processed: 1,
+        readFailures: 1
+      }
+    });
+    expect(coverage.failedGates).toContainEqual({
+      name: "active_repo_coverage_no_read_failures",
+      ok: false,
+      detail: "1 read failure(s)"
+    });
+    expect(coverage.readFailures).toEqual([
+      {
+        repo: "owner/unreadable",
+        error: "GitHub API 404",
+        nextAction: "inspect GitHub App installation/read permissions or network failure"
+      }
+    ]);
+    expect(coverage.recommendedActions).toContain("run doctor and inspect GitHub App installation/read permissions");
   });
 
   it("uses review budget readiness instead of raw provider-deferred retry counts for gates", () => {
