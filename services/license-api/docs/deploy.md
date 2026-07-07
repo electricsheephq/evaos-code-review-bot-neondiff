@@ -81,7 +81,7 @@ flyctl deploy \
 ```
 
 Watch the health check pass (`GET /healthz` → `{ "status": "ok" }`, wired in
-`fly.toml` under `[http_service.checks.healthz]`). `flyctl status --app
+`fly.toml` under `[[http_service.checks]]`). `flyctl status --app
 neondiff-license` shows machine + volume state; `flyctl logs --app
 neondiff-license` streams the `license-api listening on …` boot line from
 `src/server.ts`.
