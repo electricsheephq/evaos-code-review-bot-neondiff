@@ -7,6 +7,8 @@ contributions are focused, test-backed, and careful about public claims.
 ## Quick Links
 
 - [Setup guide](docs/SETUP.md)
+- [Known limitations and provider status](docs/known-limitations-and-provider-status.md)
+- [Triage policy](docs/triage-policy.md)
 - [Repository agent instructions](AGENTS.md)
 - [Operator CLI](docs/operator-cli.md)
 - [GitHub App setup](docs/github-app-setup.md)
@@ -25,6 +27,7 @@ Use the GitHub issue forms and keep one problem per issue.
 | Missing, stale, or contradictory docs | Docs bug report | Affected path, current wording, expected wording, setup impact |
 | New capability or product improvement | Feature request | User story, proposed behavior, alternatives, safety boundary |
 | Provider, model, or runtime adapter | Provider request | Provider/runtime, auth shape, data sent, failure modes, proof available |
+| Setup, provider, license, roadmap, or workflow question | Question | Public-safe context, docs read, commands tried, decision needed |
 | License, public/private repo, or setup confusion | License/setup confusion | Question, current doc path, expected answer, no secrets |
 | Unsafe review behavior | Unsafe review report | Repo/PR/head SHA, whether dry-run happened, posted/suppressed behavior, redacted evidence |
 

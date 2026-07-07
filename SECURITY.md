@@ -15,6 +15,15 @@ GitHub issues.
 Do not open a public issue for vulnerabilities, secrets, credential exposure,
 private PR content, or customer data.
 
+Use the GitHub private vulnerability reporting flow for this repository:
+https://github.com/electricsheephq/evaos-code-review-bot-neondiff/security/policy.
+
+For non-security support, `support@electricsheephq.com` is listed as the launch
+support alias, but this repository currently has no explicit evidence that the
+alias is monitored. The owner must verify that alias before treating it as a
+public launch support channel. Do not use the support alias as the only security
+route while that verification is pending.
+
 Report privately to the maintainers with:
 
 - affected commit, tag, or branch

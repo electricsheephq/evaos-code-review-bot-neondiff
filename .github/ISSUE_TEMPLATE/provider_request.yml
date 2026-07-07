@@ -10,11 +10,60 @@ body:
       placeholder: Ollama, OpenAI-compatible endpoint, Anthropic, Gemini...
     validations:
       required: true
+  - type: dropdown
+    id: provider_class
+    attributes:
+      label: Provider class
+      description: Pick the closest fit. Provider catalogs alone are not NeonDiff compatibility proof.
+      options:
+        - Local model runtime on localhost
+        - Self-hosted OpenAI-compatible endpoint
+        - Hosted OpenAI-compatible BYOK endpoint
+        - Hosted provider with custom API
+        - Agent runtime adapter
+        - Free/trial provider catalog entry
+        - Other or unknown
+    validations:
+      required: true
+  - type: checkboxes
+    id: backend_matrix
+    attributes:
+      label: Backend matrix
+      description: Which NeonDiff surfaces would this need before live review promotion?
+      options:
+        - label: Provider registry metadata
+        - label: "`providers doctor` without network smoke"
+        - label: "Single-provider smoke such as `/models`"
+        - label: Mocked adapter fixture tests
+        - label: Dry-run PR review proof
+        - label: Live GitHub posting proof
+        - label: macOS operator path
+        - label: Linux operator path
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: API shape and model behavior
+      description: Describe API compatibility, model id, JSON output behavior, timeout/rate limits, and any known output-schema risks.
+    validations:
+      required: true
   - type: textarea
     id: auth
     attributes:
       label: Auth and data boundary
       description: Explain key handling, local/cloud behavior, and what code or diff data would leave the machine.
+    validations:
+      required: true
+  - type: dropdown
+    id: requested_status
+    attributes:
+      label: Requested status
+      description: Be honest about the proof you are asking for.
+      options:
+        - Resource only / discovery
+        - Compatible by interface
+        - Provider doctor or smoke support
+        - Dry-run review support
+        - Live review promotion
     validations:
       required: true
   - type: textarea

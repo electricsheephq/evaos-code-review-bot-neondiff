@@ -22,6 +22,7 @@ describe("NeonDiff public community funnel", () => {
       /docs\/license-boundary\.md/i,
       /docs\/pricing\.md/i,
       /docs\/providers\.md/i,
+      /docs\/known-limitations-and-provider-status\.md/i,
       /public open-source repos.*free/i,
       /\$1\/month/i,
       /\$10\/year/i,
@@ -190,6 +191,8 @@ describe("NeonDiff public community funnel", () => {
       /Issue Routing/i,
       /Before You Open A PR/i,
       /Agent-Authored Contributions/i,
+      /docs\/known-limitations-and-provider-status\.md/i,
+      /docs\/triage-policy\.md/i,
       /Validation/i,
       /Evidence/i,
       /Review Threads/i,
@@ -234,6 +237,7 @@ describe("NeonDiff public community funnel", () => {
       ".github/ISSUE_TEMPLATE/bug_report.yml",
       ".github/ISSUE_TEMPLATE/docs_bug_report.yml",
       ".github/ISSUE_TEMPLATE/feature_request.yml",
+      ".github/ISSUE_TEMPLATE/question.yml",
       ".github/ISSUE_TEMPLATE/provider_request.yml",
       ".github/ISSUE_TEMPLATE/license_setup_confusion.yml",
       ".github/ISSUE_TEMPLATE/unsafe_review_report.yml"
@@ -245,6 +249,7 @@ describe("NeonDiff public community funnel", () => {
       read(".github/ISSUE_TEMPLATE/bug_report.yml"),
       read(".github/ISSUE_TEMPLATE/docs_bug_report.yml"),
       read(".github/ISSUE_TEMPLATE/feature_request.yml"),
+      read(".github/ISSUE_TEMPLATE/question.yml"),
       read(".github/ISSUE_TEMPLATE/provider_request.yml"),
       read(".github/ISSUE_TEMPLATE/license_setup_confusion.yml"),
       read(".github/ISSUE_TEMPLATE/unsafe_review_report.yml")
@@ -261,6 +266,7 @@ describe("NeonDiff public community funnel", () => {
       /What Problem This Solves/i,
       /User Impact/i,
       /Validation/i,
+      /Proof Boundary/i,
       /Safety Boundary/i,
       /Evidence/i,
       /Closes #<issue>/i,
@@ -288,5 +294,37 @@ describe("NeonDiff public community funnel", () => {
     expect(JSON.stringify(scorecard.pass_criteria)).toMatch(/AGENTS/i);
     expect(JSON.stringify(scorecard.pass_criteria)).toMatch(/issue templates/i);
     expect(String(scorecard.proof_boundary)).toMatch(/does not prove public launch/i);
+  });
+
+  it("launch-influx docs separate provider proof, triage, security, and support boundaries", () => {
+    const limitations = read("docs/known-limitations-and-provider-status.md");
+    const triage = read("docs/triage-policy.md");
+    const providers = read("docs/providers.md");
+    const security = read("SECURITY.md");
+
+    for (const text of [limitations, providers]) {
+      expect(text).toMatch(/tested by NeonDiff/i);
+      expect(text).toMatch(/compatible by interface/i);
+      expect(text).toMatch(/resource only/i);
+      expect(text).toMatch(/GLM\/Z\.AI|GLM\/Z\.ai/i);
+      expect(text).toMatch(/Ollama/i);
+      expect(text).toMatch(/Hosted OpenAI-compatible BYOK/i);
+    }
+
+    for (const text of [limitations, triage, security]) {
+      expect(text).toMatch(/support@electricsheephq\.com/i);
+      expect(text).toMatch(/owner.*verify|requires owner verification|owner must verify/i);
+      expect(text).toMatch(/private.*security|security.*private/i);
+      expect(text).not.toMatch(/support@electricsheephq\.com.*verified/i);
+    }
+
+    expect(limitations).toMatch(/Pinned discussion title/i);
+    expect(limitations).toMatch(/does not pin GitHub UI state/i);
+    expect(limitations).toMatch(/macOS/i);
+    expect(limitations).toMatch(/Linux/i);
+    expect(triage).toMatch(/Agent-Driven Triage Behavior/i);
+    expect(triage).toMatch(/Response-Time Intent/i);
+    expect(triage).toMatch(/ga-blocker/i);
+    expect(triage).toMatch(/owner-gated/i);
   });
 });

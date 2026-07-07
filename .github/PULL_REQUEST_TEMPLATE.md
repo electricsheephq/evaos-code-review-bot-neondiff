@@ -18,6 +18,16 @@ Describe the user, maintainer, or agent workflow this improves.
 - [ ] `npm run build`:
 - [ ] GitHub CI/review-bot follow-up:
 
+## Proof Boundary
+
+This PR proves:
+
+- Describe the narrow behavior, document, or policy surface proven by this PR.
+
+This PR does not prove:
+
+- List launch, provider, runtime, customer, or release claims intentionally not proven here.
+
 ## Safety Boundary
 
 - [ ] No GitHub App permission expansion.
@@ -25,6 +35,11 @@ Describe the user, maintainer, or agent workflow this improves.
 - [ ] No package publish, GitHub Release, or repo visibility change.
 - [ ] No secrets, tokens, credentials, raw private diffs, or customer data in the PR.
 - [ ] Claims stay within the source-available beta boundary.
+- [ ] Provider status claims distinguish tested, compatible-by-interface, planned, and untested/resource-only states.
+
+## Restricted Actions Not Performed
+
+- List any merge, tag, publish, release, live-config, launchd, credential, or owner-only actions intentionally not performed.
 
 ## Evidence
 
