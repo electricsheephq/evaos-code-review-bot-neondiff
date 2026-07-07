@@ -946,6 +946,31 @@ exit 1
     });
   });
 
+  it("rejects scoped release-status coverage gates", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-release-status-scope-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: [],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      pollIntervalMs: 60_000
+    })}\n`);
+
+    await expect(runCli([
+      "release-status",
+      "--config",
+      configPath,
+      "--require-coverage",
+      "true",
+      "--repo",
+      "owner/repo"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("release-status does not support --repo/--pr")
+    });
+  });
+
   it("prints command help without executing run-once, review-pr, or daemon paths", async () => {
     for (const args of [["run-once", "--help"], ["review-pr", "help"], ["daemon", "start", "-h"]]) {
       const { stdout } = await runCli(args);

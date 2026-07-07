@@ -317,6 +317,9 @@ async function main(): Promise<void> {
   }
 
   if (command === "release-status") {
+    if (args.repo !== undefined || args.pr !== undefined) {
+      throw new Error("release-status does not support --repo/--pr; use coverage-audit for scoped coverage checks");
+    }
     const budgetDetailLimit = args["budget-detail-limit"]
       ? parsePositiveInteger(args["budget-detail-limit"], "--budget-detail-limit")
       : undefined;
@@ -2527,8 +2530,6 @@ function buildReleaseCoverageCommand(args: ParsedArgs): string {
   appendCommandArg(parts, "--verify-public-rollback-refs", args["verify-public-rollback-refs"]);
   appendCommandArg(parts, "--launchd-label", args["launchd-label"]);
   appendCommandArg(parts, "--state-path", args["state-path"]);
-  appendCommandArg(parts, "--repo", args.repo);
-  appendCommandArg(parts, "--pr", args.pr);
   parts.push("--require-coverage", "true");
   return parts.map(shellQuoteCommandArg).join(" ");
 }
