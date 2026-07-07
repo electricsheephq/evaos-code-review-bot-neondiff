@@ -52,11 +52,26 @@ describe("Swift CI velocity policy", () => {
 
     expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
     expect(codeql).toMatch(/apps\/neondiff-desktop\/\*\*/);
+    expect(codeql).not.toMatch(/-\s*Package\.swift/);
+    expect(codeql).not.toMatch(/-\s*Package\.resolved/);
     expect(codeql).toMatch(/languages:\s*swift/);
     expect(codeql).toMatch(/github\/codeql-action\/autobuild@v3/);
     expect(codeql).toMatch(/schedule:/);
     expect(codeql).toMatch(/workflow_dispatch:/);
     expect(codeql).toMatch(/cancel-in-progress:\s*true/);
+    expect(gate).toMatch(/no PR\/push path filter/);
+    expect(gate).toMatch(/before ref unavailable; fail open/);
+  });
+
+  it("keeps all --files operands as filenames, including option-like paths", () => {
+    expect(swiftAffected([
+      "--base",
+      "apps/neondiff-desktop/Package.swift"
+    ])).toMatchObject({
+      affected: true,
+      matched: ["apps/neondiff-desktop/Package.swift"],
+      files: ["--base", "apps/neondiff-desktop/Package.swift"]
+    });
   });
 
   it("documents the fast preview/smoke loop and the release proof boundary", () => {

@@ -4,8 +4,6 @@ on:
   pull_request:
     paths:
       - apps/neondiff-desktop/**
-      - Package.swift
-      - Package.resolved
       - .github/workflows/codeql-swift-path-aware.yml
       - .github/workflows/swift-desktop-gate.yml
   push:
@@ -13,8 +11,6 @@ on:
       - main
     paths:
       - apps/neondiff-desktop/**
-      - Package.swift
-      - Package.resolved
       - .github/workflows/codeql-swift-path-aware.yml
       - .github/workflows/swift-desktop-gate.yml
   workflow_dispatch:

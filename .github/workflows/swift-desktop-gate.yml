@@ -1,6 +1,8 @@
 name: Swift Desktop Gate
 
 on:
+  # This gate intentionally has no PR/push path filter. It must report on every
+  # PR/main push, then skip Swift work internally when desktop files are clean.
   pull_request:
   push:
     branches:
@@ -49,10 +51,14 @@ jobs:
                 | node scripts/swift-affected.mjs --stdin > swift-impact.json
             else
               git fetch --no-tags origin "$BEFORE" || true
-              node scripts/swift-affected.mjs \
-                --base "$BEFORE" \
-                --head "${{ github.sha }}" \
-                > swift-impact.json
+              if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                node scripts/swift-affected.mjs \
+                  --base "$BEFORE" \
+                  --head "${{ github.sha }}" \
+                  > swift-impact.json
+              else
+                echo '{"affected":true,"matched":["before ref unavailable; fail open"],"files":["before ref unavailable; fail open"]}' > swift-impact.json
+              fi
             fi
           fi
           cat swift-impact.json

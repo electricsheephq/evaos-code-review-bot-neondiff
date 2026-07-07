@@ -45,7 +45,7 @@ function parseArgs(argv) {
     if (arg === "--stdin") {
       parsed.stdin = true;
     } else if (arg === "--files") {
-      while (args.length && !args[0].startsWith("--")) parsed.files.push(args.shift());
+      parsed.files.push(...args.splice(0));
     } else if (arg === "--base") {
       parsed.base = args.shift();
     } else if (arg === "--head") {
