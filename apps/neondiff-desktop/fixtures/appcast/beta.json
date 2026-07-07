@@ -1,0 +1,18 @@
+{
+  "channel": "beta",
+  "title": "NeonDiff Desktop Beta",
+  "feed_url": "https://updates.neondiff.com/beta/appcast.xml",
+  "releases": [
+    {
+      "version": "1.1.0-beta.1",
+      "build": "1101",
+      "title": "NeonDiff Desktop 1.1.0 Beta 1",
+      "pub_date": "Tue, 07 Jul 2026 00:00:00 +0000",
+      "artifact_url": "https://updates.neondiff.com/beta/NeonDiffDesktop-1.1.0-beta.1.zip",
+      "artifact_length": 13345678,
+      "minimum_system_version": "14.0",
+      "channel": "beta",
+      "signature_state": "absent"
+    }
+  ]
+}

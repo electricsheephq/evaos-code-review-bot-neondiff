@@ -91,6 +91,9 @@ against the `SUPublicEDKey` baked into the app.
   `SUPublicEDKey` / `SUFeedURL` into `Info.plist`. Absent → the app ships with
   Sparkle **off** (a valid dev-build state; the private-key check remains the hard
   gate, the public-key check is advisory/non-required).
+- **Appcast generation:** channel fixtures, rollback behavior, and dry-run XML
+  generation are documented in `appcast-channels.md`. Real signing and hosting
+  remain a separate owner/Codex release step.
 
 ---
 

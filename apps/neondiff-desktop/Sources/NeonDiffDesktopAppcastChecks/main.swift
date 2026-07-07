@@ -1,0 +1,56 @@
+import Foundation
+import NeonDiffDesktopCore
+
+@discardableResult
+func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
+    if condition() {
+        return true
+    }
+    fputs("check failed: \(message)\n", stderr)
+    exit(1)
+}
+
+let fixtures = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    .appendingPathComponent("fixtures/appcast")
+
+let stable = try AppcastManifest.load(from: fixtures.appendingPathComponent("stable.json"))
+check(stable.channel == .stable, "stable fixture channel")
+check(stable.latestRelease()?.version == "1.0.0", "stable latest release")
+let stableXML = try AppcastSerializer.serialize(stable)
+check(stableXML.contains("xmlns:sparkle=\"http://www.andymatuschak.org/xml-namespaces/sparkle\""), "sparkle namespace")
+check(stableXML.contains("sparkle:shortVersionString=\"1.0.0\""), "stable short version")
+
+let beta = try AppcastManifest.load(from: fixtures.appendingPathComponent("beta.json"))
+check(beta.channel == .beta, "beta fixture channel")
+let betaXML = try AppcastSerializer.serialize(beta)
+check(betaXML.contains("<sparkle:channel>beta</sparkle:channel>"), "beta channel tag")
+check(!betaXML.contains("sparkle:edSignature=\"\""), "dry-run does not emit empty signatures")
+
+let rollback = try AppcastManifest.load(from: fixtures.appendingPathComponent("rollback.json"))
+check(rollback.latestRelease()?.version == "1.0.0", "rollback pins prior stable")
+
+let signatureFailure = try AppcastManifest.load(from: fixtures.appendingPathComponent("signature-failure.json"))
+check(signatureFailure.releases.contains { $0.signatureState == .invalidFixture }, "signature failure fixture is marked invalid")
+
+for fixtureName in ["beta", "stable", "rollback", "signature-failure", "stale-version", "license-blocked"] {
+    let manifest = try AppcastManifest.load(from: fixtures.appendingPathComponent("\(fixtureName).json"))
+    let xml = try AppcastSerializer.serialize(manifest)
+    check(xml.contains("<rss"), "\(fixtureName) serializes to rss")
+    check(xml.contains("<enclosure"), "\(fixtureName) serializes enclosure")
+}
+
+for fixtureName in ["beta", "stable", "rollback", "signature-failure"] {
+    let manifest = try AppcastManifest.load(from: fixtures.appendingPathComponent("\(fixtureName).json"))
+    let actualXML = try AppcastSerializer.serialize(manifest).trimmingCharacters(in: .whitespacesAndNewlines)
+    let expectedURL = fixtures.appendingPathComponent("expected/\(fixtureName).xml")
+    let expectedXML = try String(contentsOf: expectedURL, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    check(actualXML == expectedXML, "\(fixtureName) matches committed appcast XML fixture")
+}
+
+let dryRun = AppcastDryRun(fixture: fixtures.appendingPathComponent("beta.json"), output: nil)
+let output = try dryRun.run()
+check(output.contains("<rss"), "dry-run emits rss")
+check(!output.contains("NEONDIFF_SPARKLE_PRIVATE_KEY"), "dry-run does not mention private key material")
+
+print("NeonDiffDesktopAppcastChecks passed")
