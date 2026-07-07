@@ -158,7 +158,15 @@ matrix.
 The near-term direction is deepening the loop, not widening the surface:
 per-category rolling precision consulted by ranking and the request-changes
 gate, relevance-scored related context, and outcome-weighted review routing
-once — and only once — a calibrated signal exists to route on. The public
+once — and only once — a calibrated signal exists to route on.
+
+The proof goes public: per-repo precision badges and a reproducible
+local-model review leaderboard turn the calibration loop into NeonDiff's
+distribution engine, and a propose-only fixer (`neondiff fix`) closes the
+loop from calibrated finding to auditable draft PR — never past the human
+merge gate. Both surfaces obey the same evidence discipline as everything
+else here: no number renders below the calibration gate, and no fix ships
+without a human merge. The public
 roadmap is tracked in
 [#103](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103);
 the ranking/scoring and calibration program that produced this document is
