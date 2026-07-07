@@ -9,6 +9,14 @@ import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 /** The bot's own GitHub App login — single source of truth for "who am I" (#345 reuse). */
 export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
 
+/**
+ * Hard page cap for the bounded outcome-observation review-comment read (#371). At 100/page this bounds
+ * a single PR's comment scan to 500, so a pathological thread count can't drive unbounded GitHub reads
+ * (the deeper-observation reader is contractually bounded). A human dismissal thread on a flagged line
+ * is found well within this window; exceeding it truncates rather than paging forever.
+ */
+const MAX_REVIEW_COMMENT_PAGES = 5;
+
 export interface GitHubApiOptions {
   appId?: string;
   privateKeyPath?: string;
@@ -201,14 +209,17 @@ export class GitHubApi {
    */
   async listPullReviewComments(repo: string, pullNumber: number): Promise<PullReviewComment[]> {
     const comments: PullReviewComment[] = [];
-    for (let page = 1; ; page += 1) {
+    // Hard-capped at MAX_REVIEW_COMMENT_PAGES: the bounded-read guarantee forbids paging forever on a
+    // PR with a pathological comment count; we stop after the cap even if a full page came back.
+    for (let page = 1; page <= MAX_REVIEW_COMMENT_PAGES; page += 1) {
       const chunk = await this.request<PullReviewComment[]>(
         `/repos/${repo}/pulls/${pullNumber}/comments?per_page=100&page=${page}`,
         { token: await this.getReadToken(repo) }
       );
       comments.push(...chunk);
-      if (chunk.length < 100) return comments;
+      if (chunk.length < 100) break;
     }
+    return comments;
   }
 
   /**

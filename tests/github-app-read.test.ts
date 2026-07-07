@@ -592,6 +592,27 @@ describe("GitHub App read authentication", () => {
     expect(postCall?.body).toEqual({ body: `${marker}\nnew` });
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
   });
+
+  it("listPullReviewComments is hard-capped: it stops paging after the cap even if pages stay full (#371 bounded read)", async () => {
+    // Every page returns a FULL page (100) so the `chunk.length < 100` terminator never fires; only the
+    // hard page cap can stop the loop. Assert it does — an unbounded loop would page forever here.
+    const pagesRequested: number[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      const match = /\/repos\/owner\/repo\/pulls\/7\/comments\?per_page=100&page=(\d+)$/.exec(String(url));
+      if (match) {
+        pagesRequested.push(Number(match[1]));
+        return jsonResponse(Array.from({ length: 100 }, (_unused, index) => ({ id: Number(match[1]) * 1000 + index })));
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ token: "fallback-token" });
+    const comments = await github.listPullReviewComments("owner/repo", 7);
+
+    // The reader stopped at the hard cap (5 pages), never paging unboundedly.
+    expect(pagesRequested).toEqual([1, 2, 3, 4, 5]);
+    expect(comments).toHaveLength(500);
+  });
 });
 
 function jsonResponse(body: unknown, status = 200, statusText = ""): Response {

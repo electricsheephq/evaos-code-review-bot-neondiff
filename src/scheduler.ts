@@ -322,12 +322,14 @@ export async function observeScheduledOutcomes(input: {
         : [];
       return buildObservedPullOutcome({
         merged,
+        mergedAt: pull.merged_at,
         mergeCommitSha: pull.merge_commit_sha,
         pullNumber: target.pullNumber,
         pullTitle: pull.title,
         findings: target.findings,
         subsequentPulls,
-        reviewComments
+        reviewComments,
+        ...(input.config.github.botLogin ? { botLogin: input.config.github.botLogin } : {})
       });
     } catch (error) {
       // Fail-open per target: a deeper-read error degrades to the merge-state cut, never throwing into
@@ -395,6 +397,7 @@ async function collectSubsequentMergedPulls(input: {
       pullNumber: pull.number,
       title: pull.title,
       body: pull.body,
+      mergedAt: pull.merged_at,
       changedLines: collectRightSideLines(files)
     });
   }

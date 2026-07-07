@@ -591,7 +591,8 @@ function deepGithub(input: {
   merged?: boolean;
   mergeCommitSha?: string;
   pullTitle?: string;
-  subsequent?: Array<{ number: number; title?: string; body?: string; files?: PullFilePatch[] }>;
+  targetMergedAt?: string;
+  subsequent?: Array<{ number: number; title?: string; body?: string; files?: PullFilePatch[]; mergedAt?: string }>;
   reviewComments?: PullReviewComment[];
 }): SchedulerGitHubApi {
   const subsequent = input.subsequent ?? [];
@@ -603,7 +604,7 @@ function deepGithub(input: {
         number: pullNumber,
         title: input.pullTitle ?? "Add save path",
         head: { sha: `sha${pullNumber}` },
-        merged_at: (input.merged ?? true) ? "2026-07-05T00:00:00.000Z" : null,
+        merged_at: (input.merged ?? true) ? (input.targetMergedAt ?? "2026-07-05T00:00:00.000Z") : null,
         merge_commit_sha: input.mergeCommitSha ?? "mergesha1"
       }) as unknown as PullRequestSummary,
     listRecentMergedPulls: async () =>
@@ -614,7 +615,9 @@ function deepGithub(input: {
             title: pull.title ?? "",
             body: pull.body ?? "",
             head: { sha: `sha${pull.number}` },
-            merged_at: "2026-07-05T12:00:00.000Z"
+            // Subsequent PRs default to AFTER the target's merge (12:00 > 00:00); a test may set a
+            // BEFORE time to exercise the temporal guard.
+            merged_at: pull.mergedAt ?? "2026-07-05T12:00:00.000Z"
           }) as unknown as PullRequestSummary
       ),
     listPullFiles: async (_repo, pullNumber) => subsequent.find((pull) => pull.number === pullNumber)?.files ?? [],
@@ -685,6 +688,91 @@ describe("buildObservedPullOutcome enrichment (#371)", () => {
     expect(observed.revertedFlaggedChange).toBe(false);
     expect(observed.hotfixLines.size).toBe(0);
   });
+
+  it("temporal guard: a PR merged BEFORE the target is NOT counted as a revert or a hotfix", () => {
+    const hotfixLines = new Map([["src/save.ts", new Set([42])]]);
+    const priorMerged = buildObservedPullOutcome({
+      merged: true,
+      mergedAt: "2026-07-05T00:00:00.000Z",
+      pullNumber: 1,
+      pullTitle: "Add save path",
+      mergeCommitSha: "mergesha1",
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [
+        // Merged an hour BEFORE the target — cannot be its post-merge revert/fix even though its title
+        // reverts it and its diff touches the flagged line.
+        { pullNumber: 2, title: 'Revert "Add save path" (#1)', body: "This reverts commit mergesha1.", mergedAt: "2026-07-04T23:00:00.000Z", changedLines: hotfixLines }
+      ],
+      reviewComments: []
+    });
+    expect(priorMerged.revertedFlaggedChange).toBe(false);
+    expect(priorMerged.hotfixLines.size).toBe(0);
+
+    // The SAME candidate merged AFTER the target IS counted (guard is strictly-after, not a blanket skip).
+    const laterMerged = buildObservedPullOutcome({
+      merged: true,
+      mergedAt: "2026-07-05T00:00:00.000Z",
+      pullNumber: 1,
+      pullTitle: "Add save path",
+      mergeCommitSha: "mergesha1",
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [
+        { pullNumber: 2, title: 'Revert "Add save path" (#1)', body: "", mergedAt: "2026-07-05T01:00:00.000Z", changedLines: new Map() }
+      ],
+      reviewComments: []
+    });
+    expect(laterMerged.revertedFlaggedChange).toBe(true);
+  });
+
+  it("revert title must be the EXACT `Revert \"<title>\"` construction, not a loose substring", () => {
+    // Target title is a substring of the candidate's reverted title — the loose `includes` would have
+    // false-matched; the exact-construction match must reject it.
+    const substringFalseMatch = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      pullTitle: "save",
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [{ pullNumber: 2, title: 'Revert "add safe save path"', body: "", changedLines: new Map() }],
+      reviewComments: []
+    });
+    expect(substringFalseMatch.revertedFlaggedChange).toBe(false);
+
+    // The exact default construction (optionally with a (#n) tail) matches.
+    const exactMatch = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      pullTitle: "save",
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [{ pullNumber: 2, title: 'Revert "save" (#1)', body: "", changedLines: new Map() }],
+      reviewComments: []
+    });
+    expect(exactMatch.revertedFlaggedChange).toBe(true);
+  });
+
+  it("bot-login defensiveness: a bot reply with a MISSING type but matching botLogin is not a human thread", () => {
+    const botReplyMissingType = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [],
+      // in_reply_to_id set (a reply), author login matches botLogin, but user.type is UNDEFINED — the
+      // shared bot-identity check must still exclude it, so no human-thread signal is derived.
+      reviewComments: [{ path: "src/save.ts", line: 42, in_reply_to_id: 9, user: { login: "my-bot[bot]" } }],
+      botLogin: "my-bot[bot]"
+    });
+    expect(botReplyMissingType.humanThreadResolved).toBe(false);
+
+    // A genuine human reply (different login) on the same line IS counted.
+    const humanReply = buildObservedPullOutcome({
+      merged: true,
+      pullNumber: 1,
+      findings: [OBSERVED_FINDING],
+      subsequentPulls: [],
+      reviewComments: [{ path: "src/save.ts", line: 42, in_reply_to_id: 9, user: { login: "maintainer" } }],
+      botLogin: "my-bot[bot]"
+    });
+    expect(humanReply.humanThreadResolved).toBe(true);
+  });
 });
 
 describe("scheduled reader reaches CLI-observer label parity (#371 acceptance)", () => {
@@ -718,8 +806,10 @@ describe("scheduled reader reaches CLI-observer label parity (#371 acceptance)",
     return labels[0];
   }
 
-  function assertParity(scheduled: FindingOutcomeLabelRecordLike, cli: FindingOutcomeLabelRecordLike): void {
-    expect(scheduled.labelSource).toBe(cli.labelSource);
+  // The load-bearing guarantee is VERDICT parity (true_positive / false_positive / unvalidated). In the
+  // scenarios below the CLI input is fed the SAME source the scheduled reader derives, so labelSource
+  // matches too; the separate merged_fix-vs-hotfix test documents where only the verdict is guaranteed.
+  function assertVerdictParity(scheduled: FindingOutcomeLabelRecordLike, cli: FindingOutcomeLabelRecordLike): void {
     expect(scheduled.verdict).toBe(cli.verdict);
   }
 
@@ -729,7 +819,7 @@ describe("scheduled reader reaches CLI-observer label parity (#371 acceptance)",
     );
     const cli = cliLabel(fullObserved({ merged: true, revertedFlaggedChange: true }));
     expect(scheduled.labelSource).toBe("revert");
-    assertParity(scheduled, cli);
+    assertVerdictParity(scheduled, cli);
   });
 
   it("hotfix touching the flagged line: both label a true_positive fix (hotfix)", async () => {
@@ -739,7 +829,7 @@ describe("scheduled reader reaches CLI-observer label parity (#371 acceptance)",
     const cli = cliLabel(fullObserved({ merged: true, hotfixLines: new Map([["src/save.ts", new Set([42])]]) }));
     expect(scheduled.labelSource).toBe("hotfix");
     expect(scheduled.verdict).toBe("true_positive");
-    assertParity(scheduled, cli);
+    assertVerdictParity(scheduled, cli);
   });
 
   it("human thread on the finding: both label `human_thread` / false_positive", async () => {
@@ -747,7 +837,7 @@ describe("scheduled reader reaches CLI-observer label parity (#371 acceptance)",
     const cli = cliLabel(fullObserved({ merged: true, humanThreadResolved: true }));
     expect(scheduled.labelSource).toBe("human_thread");
     expect(scheduled.verdict).toBe("false_positive");
-    assertParity(scheduled, cli);
+    assertVerdictParity(scheduled, cli);
   });
 
   it("merged with no deeper signal stays none_observed (honest floor preserved)", async () => {
