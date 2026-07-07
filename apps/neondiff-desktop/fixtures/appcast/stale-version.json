@@ -1,0 +1,19 @@
+{
+  "channel": "stable",
+  "title": "NeonDiff Desktop Stale Version Fixture",
+  "feed_url": "https://updates.neondiff.com/stable/appcast.xml",
+  "expected_status": "no_update",
+  "releases": [
+    {
+      "version": "0.8.0",
+      "build": "80",
+      "title": "NeonDiff Desktop stale version",
+      "pub_date": "Sun, 05 Jul 2026 00:00:00 +0000",
+      "artifact_url": "https://updates.neondiff.com/stable/NeonDiffDesktop-0.8.0.zip",
+      "artifact_length": 10345678,
+      "minimum_system_version": "14.0",
+      "channel": "stable",
+      "signature_state": "absent"
+    }
+  ]
+}

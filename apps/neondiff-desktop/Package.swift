@@ -36,6 +36,14 @@ let package = Package(
         .executableTarget(
             name: "NeonDiffDesktopCoreChecks",
             dependencies: ["NeonDiffDesktopCore"]
+        ),
+        .executableTarget(
+            name: "NeonDiffDesktopAppcastChecks",
+            dependencies: ["NeonDiffDesktopCore"]
+        ),
+        .executableTarget(
+            name: "NeonDiffDesktopAppcastDryRun",
+            dependencies: ["NeonDiffDesktopCore"]
         )
     ]
 )

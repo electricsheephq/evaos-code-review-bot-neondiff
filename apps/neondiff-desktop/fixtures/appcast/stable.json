@@ -1,0 +1,30 @@
+{
+  "channel": "stable",
+  "title": "NeonDiff Desktop Stable",
+  "feed_url": "https://updates.neondiff.com/stable/appcast.xml",
+  "expected_status": "update_available",
+  "releases": [
+    {
+      "version": "1.0.0",
+      "build": "100",
+      "title": "NeonDiff Desktop 1.0.0",
+      "pub_date": "Tue, 07 Jul 2026 00:00:00 +0000",
+      "artifact_url": "https://updates.neondiff.com/stable/NeonDiffDesktop-1.0.0.zip",
+      "artifact_length": 12345678,
+      "minimum_system_version": "14.0",
+      "channel": "stable",
+      "signature_state": "absent"
+    },
+    {
+      "version": "0.9.0",
+      "build": "90",
+      "title": "NeonDiff Desktop 0.9.0",
+      "pub_date": "Mon, 06 Jul 2026 00:00:00 +0000",
+      "artifact_url": "https://updates.neondiff.com/stable/NeonDiffDesktop-0.9.0.zip",
+      "artifact_length": 11345678,
+      "minimum_system_version": "14.0",
+      "channel": "stable",
+      "signature_state": "absent"
+    }
+  ]
+}

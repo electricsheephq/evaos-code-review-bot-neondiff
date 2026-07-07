@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>NeonDiff Desktop Beta</title>
+    <link>https://updates.neondiff.com/beta/appcast.xml</link>
+    <description>NeonDiff Desktop beta appcast</description>
+    <item>
+      <title>NeonDiff Desktop 1.1.0 Beta 1</title>
+      <pubDate>Tue, 07 Jul 2026 00:00:00 +0000</pubDate>
+      <sparkle:channel>beta</sparkle:channel>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://updates.neondiff.com/beta/NeonDiffDesktop-1.1.0-beta.1.zip" length="13345678" type="application/octet-stream" sparkle:version="1101" sparkle:shortVersionString="1.1.0-beta.1" sparkle:minimumSystemVersion="14.0" />
+    </item>
+  </channel>
+</rss>
