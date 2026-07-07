@@ -21,6 +21,7 @@ import { ReviewStateStore } from "../src/state.js";
 describe("beta release status", () => {
   const roots: string[] = [];
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const shippedReleaseValidationNow = new Date("2026-07-07T12:31:00Z");
 
   afterEach(() => {
     vi.useRealTimers();
@@ -229,7 +230,8 @@ describe("beta release status", () => {
     const manifest = readPublicReleaseManifestStatus({
       cwd: repoRoot,
       manifestPath: "docs/public-release-manifest.json",
-      expectedVersion: "v0.4.43-beta.1"
+      expectedVersion: "v0.4.43-beta.1",
+      now: shippedReleaseValidationNow
     });
 
     expect(manifest).toMatchObject({
@@ -265,6 +267,24 @@ describe("beta release status", () => {
         })
       ])
     );
+  });
+
+  it("documents the shipped public release health proof expiry mode", () => {
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: repoRoot,
+      manifestPath: "docs/public-release-manifest.json",
+      expectedVersion: "v0.4.43-beta.1",
+      now: new Date("2026-08-07T00:00:00Z")
+    });
+
+    expect(manifest.licenseApi).toMatchObject({
+      ok: false,
+      requiredForThisRelease: true,
+      state: "healthy",
+      healthProofPath: "docs/evidence/v0.4.43-beta.1-license-api-healthz.json"
+    });
+    expect(manifest.licenseApi.detail).toContain("observedAt must be no older than 30 days");
+    expect(manifest.ok).toBe(false);
   });
 
   it("fails closed when public release manifest flags are not paired", () => {
@@ -329,7 +349,8 @@ describe("beta release status", () => {
       configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
       publicReleaseManifestPath: "docs/public-release-manifest.json",
       expectedPublicVersion: "v0.4.43-beta.1",
-      launchdLabel: "com.electricsheephq.evaos-code-review-bot"
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: shippedReleaseValidationNow
     });
 
     expect(status.publicRelease).toMatchObject({
@@ -1000,6 +1021,54 @@ describe("beta release status", () => {
 
     expect(manifest.licenseApi.ok).toBe(false);
     expect(manifest.licenseApi.detail).toContain("healthUrl must be present when validating health proof");
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("validates optional license health metadata when fields are present", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-optional-invalid-health-metadata-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending",
+        healthUrl: "http://license.example/status?access_token=abcdefghijklmnopqrstuvwxyz",
+        healthProofPath: "../operator-local-proof.json"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.licenseApi.ok).toBe(false);
+    expect(manifest.licenseApi.detail).toContain("healthUrl must be an https URL ending in /healthz");
+    expect(manifest.licenseApi.detail).toContain("healthProofPath must be relative and stay within docs/evidence");
     expect(manifest.ok).toBe(false);
   });
 

@@ -543,18 +543,30 @@ export function readPublicReleaseManifestStatus(input: {
       ? (readBoolean(licenseApi.requiredForThisRelease) ?? true)
       : true;
     const licenseHealthProofPath = readString(licenseApi.healthProofPath);
+    const licenseHealthUrl = readString(licenseApi.healthUrl);
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
+    const licenseMetadataFailures = validateLicenseHealthMetadata({
+      cwd: input.cwd,
+      healthUrl: licenseHealthUrl,
+      healthProofPath: licenseHealthProofPath,
+      proofRequired: licenseNeedsHealthProof
+    });
     const licenseHealthProof = licenseNeedsHealthProof
       ? validateLicenseHealthProof({
           cwd: input.cwd,
           proofPath: licenseHealthProofPath,
           expectedReleaseVersion: expectedVersion,
-          expectedUrl: readString(licenseApi.healthUrl),
+          expectedUrl: licenseHealthUrl,
           now: input.now
         })
       : { ok: true, detail: "" };
     const licenseHealthProofOk = licenseHealthProof.ok;
-    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired) && licenseHealthProofOk;
+    const licenseMetadataOk = licenseMetadataFailures.length === 0;
+    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired) && licenseMetadataOk && licenseHealthProofOk;
+    const licenseDetailParts = [
+      ...(licenseNeedsHealthProof ? [licenseHealthProof.detail] : []),
+      ...licenseMetadataFailures
+    ].filter(Boolean);
     const declaredChannelNames = Object.keys(updateChannels);
     const channelNames = [
       ...REQUIRED_PUBLIC_UPDATE_CHANNELS,
@@ -615,15 +627,15 @@ export function readPublicReleaseManifestStatus(input: {
         requiredForThisRelease: licenseRequired,
         state: licenseState,
         trackingIssue: readString(licenseApi.trackingIssue),
-        healthUrl: readString(licenseApi.healthUrl),
+        healthUrl: licenseHealthUrl,
         healthProofPath: licenseHealthProofPath,
         detail: licenseOk
           ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}${
-              licenseNeedsHealthProof ? `; ${licenseHealthProof.detail}` : ""
+              licenseDetailParts.length ? `; ${licenseDetailParts.join("; ")}` : ""
             }`
           : `license API state ${licenseState} blocks this release; requiredForThisRelease=${licenseRequired}${
-              licenseNeedsHealthProof && !licenseHealthProofOk
-                ? `; ${licenseHealthProof.detail}`
+              licenseDetailParts.length
+                ? `; ${licenseDetailParts.join("; ")}`
                 : ""
             }`
       },
@@ -841,7 +853,7 @@ function validateLicenseHealthProof(input: {
   expectedUrl?: string;
   now?: Date;
 }): { ok: boolean; detail: string } {
-  if (!input.proofPath) return { ok: false, detail: "missing health proof (missing)" };
+  if (!input.proofPath) return { ok: false, detail: "missing health proof path (no healthProofPath declared)" };
   const confinedPath = resolveConfinedHealthProofPath(input.cwd, input.proofPath);
   if (!confinedPath.ok) return { ok: false, detail: `invalid health proof ${input.proofPath}: ${confinedPath.detail}` };
   const absolutePath = confinedPath.absolutePath;
@@ -910,6 +922,44 @@ function validateLicenseHealthProof(input: {
   return failures.length
     ? { ok: false, detail: `invalid health proof ${input.proofPath}: ${failures.join("; ")}` }
     : { ok: true, detail: `validated health proof ${input.proofPath}` };
+}
+
+function validateLicenseHealthMetadata(input: {
+  cwd: string;
+  healthUrl?: string;
+  healthProofPath?: string;
+  proofRequired: boolean;
+}): string[] {
+  const failures: string[] = [];
+  if (input.healthUrl) {
+    const healthUrlFailure = validateLicenseHealthUrl(input.healthUrl);
+    if (healthUrlFailure) failures.push(healthUrlFailure);
+  }
+  if (input.healthProofPath && !input.proofRequired) {
+    const confinedPath = resolveConfinedHealthProofPath(input.cwd, input.healthProofPath);
+    if (!confinedPath.ok) failures.push(`invalid health proof ${input.healthProofPath}: ${confinedPath.detail}`);
+  }
+  return failures;
+}
+
+function validateLicenseHealthUrl(healthUrl: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(healthUrl);
+  } catch {
+    return "healthUrl must be an https URL ending in /healthz with no credentials, query, or fragment";
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.pathname !== "/healthz" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return "healthUrl must be an https URL ending in /healthz with no credentials, query, or fragment";
+  }
+  return undefined;
 }
 
 function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: true; absolutePath: string } | { ok: false; detail: string } {
