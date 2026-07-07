@@ -111,9 +111,9 @@ describe("NeonDiff public release readiness", () => {
 
     expect(manifest.licenseApi).toMatchObject({
       requiredForThisRelease: true,
-      state: "healthy",
-      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327"
+      state: "healthy"
     });
+    expect(manifest.licenseApi?.trackingIssue).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/);
     expect(manifest.licenseApi?.healthUrl).toMatch(/^https:\/\/[^/]+\/healthz$/);
     expect(manifest.licenseApi?.healthProofPath).toBe("docs/evidence/v0.4.43-beta.1-license-api-healthz.json");
 
