@@ -310,7 +310,8 @@ npx tsx src/cli.ts review-head-gate \
 - Release checkout is clean and exactly at the intended source SHA.
 - Root `CHANGELOG.md` has a dated section for this version (moved out of
   `[Unreleased]` if it was tracked there) linking to
-  `docs/releases/<version>.md`.
+  `docs/releases/<version>.md`. Public source-beta `release:status` checks this
+  head changelog entry against the manifest version and release notes path.
 - `npm test` and `npm run build` pass from the release checkout.
 - `release:status` records exact source SHA, branch, config path, launchd job,
   launchd dry-run mode, state DB row count, and error count.
