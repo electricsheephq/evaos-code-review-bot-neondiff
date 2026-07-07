@@ -88,10 +88,10 @@ jobs:
         if: steps.impact.outputs.affected != 'true'
         run: echo "No Swift desktop files changed; stable gate passes without Swift build."
 
-      - name: Swift core smoke
+      - name: Swift core checks
         if: steps.impact.outputs.affected == 'true'
         working-directory: apps/neondiff-desktop
-        run: swift run NeonDiffDesktopCoreSmoke
+        run: swift run NeonDiffDesktopCoreChecks
 
       - name: Swift build
         if: steps.impact.outputs.affected == 'true'

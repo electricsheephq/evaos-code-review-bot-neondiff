@@ -44,7 +44,7 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/Swift desktop gate/);
     expect(gate).toMatch(/scripts\/swift-affected\.mjs/);
     expect(gate).toMatch(/No Swift desktop files changed/);
-    expect(gate).toMatch(/swift run NeonDiffDesktopCoreSmoke/);
+    expect(gate).toMatch(/swift run NeonDiffDesktopCoreChecks/);
     expect(gate).toMatch(/swift build/);
     expect(gate).toMatch(/script\/build_and_run\.sh build/);
     expect(gate).toMatch(/script\/build_and_run\.sh bundle-check/);

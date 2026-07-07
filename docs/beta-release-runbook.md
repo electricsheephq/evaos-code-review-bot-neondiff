@@ -214,8 +214,11 @@ Recommended local order:
 
 Remote CI should keep a stable, always-reporting `Swift desktop gate` check.
 That check passes quickly with an explicit `not affected` result on non-desktop
-changes, and runs the Swift core smoke/build/bundle check only when Swift desktop
-paths changed or when manually dispatched.
+changes, and runs the non-Keychain Swift core checks/build/bundle check only
+when Swift desktop paths changed or when manually dispatched. Keep
+`NeonDiffDesktopCoreSmoke` in the local/release-smoke lane unless a runner has a
+known-good Keychain session; hosted macOS runners can kill Keychain round-trip
+smoke executables after a successful build.
 
 Swift CodeQL is a release/security gate. Use the checked-in path-aware Swift
 CodeQL workflow for desktop/signing/appcast/release surfaces, scheduled scans,
