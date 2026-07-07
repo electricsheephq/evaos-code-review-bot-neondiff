@@ -444,6 +444,57 @@ describe("beta release status", () => {
     expect(redactedOutput).toContain("[redacted-secret]");
   });
 
+  it("does not append empty health-proof detail when proof is not required", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-optional-proof-detail-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath: "docs/evidence/retained-health-proof.json"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.licenseApi).toMatchObject({
+      ok: true,
+      requiredForThisRelease: false,
+      state: "pending",
+      healthProofPath: "docs/evidence/retained-health-proof.json",
+      detail: "license API state pending; requiredForThisRelease=false"
+    });
+  });
+
   it("preserves Date values when redacting JSON output", () => {
     const redactedOutput = stringifyRedactedJson({
       checkedAt: new Date("2026-07-04T00:00:00.000Z"),

@@ -613,7 +613,7 @@ export function readPublicReleaseManifestStatus(input: {
         healthProofPath: licenseHealthProofPath,
         detail: licenseOk
           ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}${
-              licenseHealthProofPath ? `; ${licenseHealthProof.detail}` : ""
+              licenseNeedsHealthProof ? `; ${licenseHealthProof.detail}` : ""
             }`
           : `license API state ${licenseState} blocks this release; requiredForThisRelease=${licenseRequired}${
               licenseNeedsHealthProof && !licenseHealthProofOk
