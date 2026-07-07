@@ -50,6 +50,36 @@ path-aware Swift CodeQL workflow is a release/security scan. It should run for
 desktop/signing/appcast/release paths, scheduled scans, manual dispatch, and
 `main`; it should not be the inner product iteration loop.
 
+### Visible Desktop UI Smoke
+
+Use a visible local smoke whenever the changed behavior is in onboarding,
+provider setup, daemon controls, license entry, update-channel selection, or
+other SwiftUI/AppKit wiring. This is a separate proof lane:
+
+- CI artifact smoke: hosted runner builds an unsigned app bundle and metadata;
+  it does not open the UI.
+- Local visible smoke: launch the built `.app`, inspect the window with
+  Computer Use or equivalent UI evidence, click the changed flow, and record the
+  observed state.
+- Signed/notarized release proof: owner-gated release credentials, signing,
+  notarization, stapling, Gatekeeper, updater, and installed-app checks on the
+  exact candidate artifact.
+
+Minimum local visible-smoke checklist:
+
+1. Record the source SHA and built app path.
+2. Record `Welcome visible`: the Welcome screen is present in the launched app.
+3. Navigate to the changed step.
+4. Record `changed button/action clicked`: click the changed button/action.
+5. Capture the expected disabled, error, or success state.
+6. Name `credential-gated steps` that were not exercised because a provider
+   key, license key, signing credential, or owner approval was absent.
+7. Link the evidence from the PR or issue before merge.
+
+Prefer one local build/run per logical batch. Do not spend a Swift build cycle
+after every small review-response edit when the current built app already covers
+the changed behavior.
+
 ## Preconditions
 
 Run every command from a fresh checkout of

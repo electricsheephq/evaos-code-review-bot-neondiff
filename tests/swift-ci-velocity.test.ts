@@ -139,12 +139,20 @@ describe("Swift CI velocity policy", () => {
     expect(betaRunbook).toMatch(/languages must not contain `swift`/);
     expect(betaRunbook).toMatch(/desktop-smoke/);
     expect(betaRunbook).toMatch(/desktop-release/);
+    expect(betaRunbook).toMatch(/Visible Desktop UI Smoke/);
+    expect(betaRunbook).toMatch(/Welcome visible/);
+    expect(betaRunbook).toMatch(/changed button\/action clicked/);
+    expect(betaRunbook).toMatch(/credential-gated steps/);
 
     expect(macRunbook).toMatch(/Fast Desktop Iteration Before Release/);
     expect(macRunbook).toMatch(/swift run NeonDiffDesktopCoreSmoke/);
     expect(macRunbook).toMatch(/Swift core checks/);
     expect(macRunbook).toMatch(/script\/build_and_run\.sh bundle-check/);
     expect(macRunbook).toMatch(/path-aware Swift CodeQL workflow is a release\/security scan/);
+    expect(macRunbook).toMatch(/Visible Desktop UI Smoke/);
+    expect(macRunbook).toMatch(/Computer Use/);
+    expect(macRunbook).toMatch(/CI artifact smoke/);
+    expect(macRunbook).toMatch(/Signed\/notarized release proof/);
 
     expect(desktopDocs).toMatch(/script\/build_and_run\.sh build/);
     expect(desktopDocs).toMatch(/script\/build_and_run\.sh bundle-check/);
