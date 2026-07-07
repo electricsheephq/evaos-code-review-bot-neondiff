@@ -39,7 +39,7 @@ jobs:
 
       - name: Manual SwiftPM build
         working-directory: apps/neondiff-desktop
-        run: swift build --product NeonDiffDesktop --arch arm64
+        run: swift build --product NeonDiffDesktop
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

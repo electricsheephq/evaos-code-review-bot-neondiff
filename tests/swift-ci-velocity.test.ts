@@ -15,7 +15,8 @@ describe("Swift CI velocity policy", () => {
     expect(swiftAffected([
       "docs/releases/v0.4.43-beta.1.md",
       "src/release-status.ts",
-      "tests/release-status.test.ts"
+      "tests/release-status.test.ts",
+      ".github/workflows/ci.yml"
     ])).toMatchObject({
       affected: false,
       matched: []
@@ -53,6 +54,7 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/Superseded runs may be cancelled/);
     expect(gate).toMatch(/payload && payload\.affected === true/);
     expect(gate).toMatch(/console\.log\('false'\)/);
+    expect(gate).toMatch(/base ref unavailable; fail open/);
 
     expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
     expect(codeql).toMatch(/apps\/neondiff-desktop\/\*\*/);
@@ -62,7 +64,8 @@ describe("Swift CI velocity policy", () => {
     expect(codeql).not.toMatch(/-\s*Package\.resolved/);
     expect(codeql).toMatch(/languages:\s*swift/);
     expect(codeql).toMatch(/build-mode:\s*manual/);
-    expect(codeql).toMatch(/swift build --product NeonDiffDesktop --arch arm64/);
+    expect(codeql).toMatch(/swift build --product NeonDiffDesktop/);
+    expect(codeql).not.toMatch(/--arch arm64/);
     expect(codeql).not.toMatch(/github\/codeql-action\/autobuild/);
     expect(codeql).toMatch(/schedule:/);
     expect(codeql).toMatch(/workflow_dispatch:/);
@@ -80,6 +83,12 @@ describe("Swift CI velocity policy", () => {
       matched: ["apps/neondiff-desktop/Package.swift"],
       files: ["--base", "apps/neondiff-desktop/Package.swift"]
     });
+  });
+
+  it("documents that --files is terminal", () => {
+    const help = execFileSync("node", ["scripts/swift-affected.mjs", "--help"], { encoding: "utf8" });
+
+    expect(help).toMatch(/--files is terminal/);
   });
 
   it("documents the fast preview/smoke loop and the release proof boundary", () => {

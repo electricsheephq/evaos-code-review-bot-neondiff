@@ -40,11 +40,15 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo '{"affected":true,"matched":["manual dispatch"],"files":["manual dispatch"]}' > swift-impact.json
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --no-tags origin "${{ github.base_ref }}"
-            node scripts/swift-affected.mjs \
-              --base "origin/${{ github.base_ref }}" \
-              --head "${{ github.event.pull_request.head.sha }}" \
-              > swift-impact.json
+            git fetch --no-tags origin "${{ github.base_ref }}" || true
+            if git cat-file -e "origin/${{ github.base_ref }}^{commit}" 2>/dev/null; then
+              node scripts/swift-affected.mjs \
+                --base "origin/${{ github.base_ref }}" \
+                --head "${{ github.event.pull_request.head.sha }}" \
+                > swift-impact.json
+            else
+              echo '{"affected":true,"matched":["base ref unavailable; fail open"],"files":["base ref unavailable; fail open"]}' > swift-impact.json
+            fi
           else
             BEFORE="${{ github.event.before }}"
             if [ -z "$BEFORE" ] || printf '%s' "$BEFORE" | grep -Eq '^0+$'; then

@@ -4,8 +4,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const SWIFT_PATH_PREFIXES = [
-  "apps/neondiff-desktop/",
-  ".github/workflows/"
+  "apps/neondiff-desktop/"
 ];
 
 const SWIFT_ROOT_FILES = new Set([
@@ -13,10 +12,16 @@ const SWIFT_ROOT_FILES = new Set([
   "Package.resolved"
 ]);
 
+const SWIFT_WORKFLOW_FILES = new Set([
+  ".github/workflows/codeql-swift-path-aware.yml",
+  ".github/workflows/swift-desktop-gate.yml"
+]);
+
 export function isSwiftRelevantPath(file) {
   const normalized = file.replaceAll("\\", "/").replace(/^\.\/+/, "").trim();
   if (!normalized) return false;
   if (SWIFT_ROOT_FILES.has(normalized)) return true;
+  if (SWIFT_WORKFLOW_FILES.has(normalized)) return true;
   return SWIFT_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
@@ -71,7 +76,7 @@ function readGitDiffFiles(base, head) {
 
 function printUsage() {
   console.log(`usage:
-  node scripts/swift-affected.mjs --files <path...>
+  node scripts/swift-affected.mjs --files <path...>  # --files is terminal and consumes the remaining argv
   node scripts/swift-affected.mjs --stdin < changed-files.txt
   node scripts/swift-affected.mjs --base <git-ref> --head <git-ref>`);
 }
