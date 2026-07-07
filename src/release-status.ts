@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -538,8 +539,15 @@ export function readPublicReleaseManifestStatus(input: {
       : true;
     const licenseHealthProofPath = readString(licenseApi.healthProofPath);
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
-    const licenseHealthProofOk =
-      !licenseNeedsHealthProof || Boolean(licenseHealthProofPath && existsSync(resolve(input.cwd, licenseHealthProofPath)));
+    const licenseHealthProof = licenseNeedsHealthProof
+      ? validateLicenseHealthProof({
+          cwd: input.cwd,
+          proofPath: licenseHealthProofPath,
+          expectedReleaseVersion: expectedVersion,
+          expectedUrl: readString(licenseApi.healthUrl)
+        })
+      : { ok: true, detail: "" };
+    const licenseHealthProofOk = licenseHealthProof.ok;
     const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired) && licenseHealthProofOk;
     const declaredChannelNames = Object.keys(updateChannels);
     const channelNames = [
@@ -605,11 +613,11 @@ export function readPublicReleaseManifestStatus(input: {
         healthProofPath: licenseHealthProofPath,
         detail: licenseOk
           ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}${
-              licenseHealthProofPath ? `; health proof ${licenseHealthProofPath}` : ""
+              licenseHealthProofPath ? `; ${licenseHealthProof.detail}` : ""
             }`
           : `license API state ${licenseState} blocks this release; requiredForThisRelease=${licenseRequired}${
               licenseNeedsHealthProof && !licenseHealthProofOk
-                ? `; missing health proof ${licenseHealthProofPath ?? "(missing)"}`
+                ? `; ${licenseHealthProof.detail}`
                 : ""
             }`
       },
@@ -818,6 +826,55 @@ function gitCommitishExists(cwd: string, target: string): boolean {
 function isLicenseApiStateAcceptable(state: string, requiredForThisRelease: boolean): boolean {
   if (requiredForThisRelease) return state === "healthy";
   return state === "healthy" || state === "not_applicable" || state === "disabled" || state === "pending";
+}
+
+function validateLicenseHealthProof(input: {
+  cwd: string;
+  proofPath?: string;
+  expectedReleaseVersion?: string;
+  expectedUrl?: string;
+}): { ok: boolean; detail: string } {
+  if (!input.proofPath) return { ok: false, detail: "missing health proof (missing)" };
+  const absolutePath = resolve(input.cwd, input.proofPath);
+  if (!existsSync(absolutePath)) return { ok: false, detail: `missing health proof ${input.proofPath}` };
+
+  let proof: Record<string, unknown>;
+  try {
+    proof = asRecord(JSON.parse(readFileSync(absolutePath, "utf8")));
+  } catch {
+    return { ok: false, detail: `invalid health proof ${input.proofPath}: proof JSON is invalid` };
+  }
+
+  const evidenceKind = readString(proof.evidenceKind);
+  const releaseVersion = readString(proof.releaseVersion);
+  const observedAt = readString(proof.observedAt);
+  const method = readString(proof.method);
+  const url = readString(proof.url);
+  const statusCode = typeof proof.statusCode === "number" ? proof.statusCode : undefined;
+  const responseBody = typeof proof.responseBody === "string" ? proof.responseBody : undefined;
+  const responseBodySha256 = readString(proof.responseBodySha256);
+  const failures: string[] = [];
+
+  if (evidenceKind !== "license_api_healthz") failures.push("evidenceKind must be license_api_healthz");
+  if (input.expectedReleaseVersion && releaseVersion !== input.expectedReleaseVersion) {
+    failures.push(`releaseVersion must match ${input.expectedReleaseVersion}`);
+  }
+  if (input.expectedUrl && url !== input.expectedUrl) failures.push(`url must match ${input.expectedUrl}`);
+  if (method !== "GET") failures.push("method must be GET");
+  if (statusCode !== 200) failures.push("statusCode must be 200");
+  if (!observedAt || Number.isNaN(Date.parse(observedAt))) failures.push("observedAt must be a valid ISO timestamp");
+  if (responseBody === undefined) {
+    failures.push("responseBody must be present");
+  }
+  if (!responseBodySha256) {
+    failures.push("responseBodySha256 must be present");
+  } else if (responseBody !== undefined && createHash("sha256").update(responseBody).digest("hex") !== responseBodySha256) {
+    failures.push("responseBodySha256 must match responseBody");
+  }
+
+  return failures.length
+    ? { ok: false, detail: `invalid health proof ${input.proofPath}: ${failures.join("; ")}` }
+    : { ok: true, detail: `validated health proof ${input.proofPath}` };
 }
 
 function isUpdateChannelStateAcceptable(name: string, state: string, requiredForThisRelease: boolean): boolean {

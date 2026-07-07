@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +25,27 @@ describe("beta release status", () => {
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
+
+  function writeLicenseHealthProof(root: string, options: {
+    releaseVersion?: string;
+    url?: string;
+    path?: string;
+  } = {}): string {
+    const proofPath = options.path ?? "docs/evidence/license-healthz.json";
+    const responseBody = "{\"status\":\"ok\"}";
+    mkdirSync(dirname(join(root, proofPath)), { recursive: true });
+    writeFileSync(join(root, proofPath), JSON.stringify({
+      evidenceKind: "license_api_healthz",
+      releaseVersion: options.releaseVersion ?? "v1.0.0-beta.1",
+      observedAt: "2026-07-07T00:00:00.000Z",
+      method: "GET",
+      url: options.url ?? "https://license.example/healthz",
+      statusCode: 200,
+      responseBody,
+      responseBodySha256: createHash("sha256").update(responseBody).digest("hex")
+    }));
+    return proofPath;
+  }
 
   it("fails closed when the live checkout is dirty or not at the expected head", () => {
     const status = buildReleaseStatus({
@@ -766,12 +788,65 @@ describe("beta release status", () => {
     expect(manifest.ok).toBe(false);
   });
 
+  it("blocks required healthy license API gates when the proof file is not machine-checkable JSON", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-invalid-health-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.licenseApi).toMatchObject({
+      ok: false,
+      requiredForThisRelease: true,
+      state: "healthy",
+      healthProofPath: "docs/releases/v1.0.0-beta.1.md",
+      detail: "license API state healthy blocks this release; requiredForThisRelease=true; invalid health proof docs/releases/v1.0.0-beta.1.md: proof JSON is invalid"
+    });
+    expect(manifest.ok).toBe(false);
+  });
+
   it("blocks optional channel deferrals outside source-beta releases", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stable-channel-deferral-"));
     roots.push(root);
     mkdirSync(join(root, "docs", "releases"), { recursive: true });
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
     writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    const healthProofPath = writeLicenseHealthProof(root);
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.0-beta.1",
       releaseLevel: "stable",
@@ -783,7 +858,8 @@ describe("beta release status", () => {
       licenseApi: {
         requiredForThisRelease: true,
         state: "healthy",
-        healthProofPath: "docs/releases/v1.0.0-beta.1.md"
+        healthUrl: "https://license.example/healthz",
+        healthProofPath
       },
       updateChannels: {
         cli: {
