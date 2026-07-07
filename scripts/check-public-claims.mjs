@@ -13,13 +13,22 @@ const paths = [
 const required = [
   /source-available beta/i,
   /public open-source repositor(?:y|ies).*free/i,
-  /private.*commercial.*paid|paid.*private.*commercial/i
+  /private.*commercial.*paid|paid.*private.*commercial/i,
+  /\$100\/(?:year|yr)/i,
+  /7-day trial/i,
+  /30-day trial/i,
+  /legacy lifetime licenses? remain honored/i,
+  /org_yearly_support/i,
+  /NEONDIFF_LICENSE_KEY/,
+  /nd_live_/
 ];
 
 const forbiddenClaims = [
   /\bMIT licensed\b/i,
   /\bApache licensed\b/i,
   /\bopen-source software\b/i,
+  /\$100\s+lifetime/i,
+  /NEONDIFF_API_KEY/,
   /\bproduction-ready\b/i,
   /\benterprise-ready\b/i,
   /\bCodeRabbit parity\b/i,

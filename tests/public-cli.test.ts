@@ -420,7 +420,14 @@ exit 1
           requiresPaidLicense: true,
           commercialUse: true,
           autoUpdates: true,
-          acceptedPlanIds: ["monthly_support", "yearly_support", "lifetime_support"]
+          activeCheckoutPlanIds: ["monthly_support", "yearly_support", "org_yearly_support"],
+          legacyAcceptedPlanIds: ["lifetime_support"],
+          acceptedPlanIds: ["monthly_support", "yearly_support", "org_yearly_support", "lifetime_support"],
+          checkoutLookupKeys: ["neondiff_monthly", "neondiff_yearly", "neondiff_org_yearly"],
+          trialDays: {
+            individual: 7,
+            organization: 30
+          }
         }
       }
     });
@@ -434,6 +441,9 @@ exit 1
       expect.objectContaining({
         id: "monthly_support",
         displayPrice: "$1/mo",
+        availableForNewPurchase: true,
+        trialDays: 7,
+        checkoutLookupKey: "neondiff_monthly",
         requiresPaidLicense: true,
         commercialUse: true,
         autoUpdates: true,
@@ -442,6 +452,20 @@ exit 1
       expect.objectContaining({
         id: "yearly_support",
         displayPrice: "$10/yr",
+        availableForNewPurchase: true,
+        trialDays: 7,
+        checkoutLookupKey: "neondiff_yearly",
+        requiresPaidLicense: true,
+        commercialUse: true,
+        autoUpdates: true,
+        providerCreditsIncluded: false
+      }),
+      expect.objectContaining({
+        id: "org_yearly_support",
+        displayPrice: "$100/yr",
+        availableForNewPurchase: true,
+        trialDays: 30,
+        checkoutLookupKey: "neondiff_org_yearly",
         requiresPaidLicense: true,
         commercialUse: true,
         autoUpdates: true,
@@ -449,7 +473,9 @@ exit 1
       }),
       expect.objectContaining({
         id: "lifetime_support",
-        displayPrice: "$100 lifetime",
+        displayPrice: "legacy; no longer sold",
+        availableForNewPurchase: false,
+        legacyNote: expect.stringMatching(/existing lifetime/i),
         requiresPaidLicense: true,
         commercialUse: true,
         autoUpdates: true,

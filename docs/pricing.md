@@ -13,9 +13,10 @@ credits, unlimited SaaS inference, or bundled provider tokens.
 | Tier | Price | Best For | Private Repos | Commercial Use | Auto-Updates | Provider Credits |
 | --- | ---: | --- | --- | --- | --- | --- |
 | Free OSS | $0 | Public open-source projects | No | No | No | Not included |
-| Monthly Support | $1/mo | Low-friction private or commercial use | Yes | Yes | Yes | Not included |
-| Yearly Support | $10/yr | Annual support license | Yes | Yes | Yes | Not included |
-| Lifetime Support | $100 lifetime | One-time support license | Yes | Yes | Yes | Not included |
+| Individual Monthly | $1/mo | Single-user private or commercial use; 7-day free trial | Yes | Yes | Yes | Not included |
+| Individual Yearly | $10/yr | Single-user yearly license; 7-day free trial | Yes | Yes | Yes | Not included |
+| Organization Yearly | $100/yr | Flat organization license; 30-day free trial | Yes | Yes | Yes | Not included |
+| Legacy Lifetime Support | no longer sold | Existing lifetime license holders only | Yes | Yes | Yes | Not included |
 
 ## CLI Contract
 
@@ -29,7 +30,11 @@ neondiff pricing
 The pricing command emits JSON by default and does not call the network. It reports:
 
 - public open-source repositories are free
-- paid support tiers are `$1/mo`, `$10/yr`, and `$100 lifetime`
+- active paid support tiers are `$1/mo`, `$10/yr`, and `$100/yr`
+- individual paid plans include a 7-day trial; organization plans include a
+  30-day trial
+- legacy lifetime licenses remain honored for existing holders but are no
+  longer sold
 - paid support includes private repo review, commercial usage, and auto-updates
 - provider/model costs stay external through BYOK or local providers
 - hosted model credits and unlimited SaaS inference are not included
@@ -42,7 +47,13 @@ usage, and auto-updates:
 
 - `monthly_support`
 - `yearly_support`
+- `org_yearly_support`
 - `lifetime_support`
+
+`monthly_support`, `yearly_support`, and `org_yearly_support` are active
+checkout plans. `lifetime_support` is a legacy entitlement id kept for existing
+lifetime holders only; it is read-only for compatibility and not offered for new
+checkout.
 
 Runtime license enforcement is outside this pricing command. This document only
 defines the pricing and entitlement vocabulary that enforcement code and setup

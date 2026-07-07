@@ -16,11 +16,13 @@ for the support-tier pricing contract.
 - optional NeonDiff license key for private or commercial repo use
 
 Public open-source repos are free. Private and commercial repos require a paid
-support license: $1/month, $10/year, or $100 lifetime. Paid support includes
-private repo review, commercial usage, and auto-updates. Provider/model costs
-remain external through your own provider key or local model; NeonDiff does not
-include hosted model credits, unlimited SaaS inference, or bundled provider
-tokens.
+support license: $1/month or $10/year for individuals, or $100/year for
+organizations. Individual plans include a 7-day trial, organization plans include
+a 30-day trial, and legacy lifetime licenses remain honored for existing holders
+but are no longer sold. Paid support includes private repo review, commercial
+usage, and auto-updates. Provider/model costs remain external through your own
+provider key or local model; NeonDiff does not include hosted model credits,
+unlimited SaaS inference, or bundled provider tokens.
 
 ## 1. Install NeonDiff
 
@@ -111,9 +113,10 @@ OpenAI-compatible endpoint examples. The provider registry stores metadata such
 as provider id, base URL, model id, timeout, retry policy, and an API-key
 environment variable name; it must not store the API key itself.
 
-If you are reviewing private or commercial repos, set your license key through
-the configured local secret path or environment used by your operator wrapper.
-Do not paste license keys into tracked config.
+If you are reviewing private or commercial repos, set the `NEONDIFF_LICENSE_KEY`
+environment variable to your `nd_live_...` license key value, or store that same
+value in the configured local secret path used by your operator wrapper. Do not
+paste license keys into tracked config.
 
 The public license path is explicit and local-first. By default, license
 enforcement is disabled in the example config so internal beta workers do not

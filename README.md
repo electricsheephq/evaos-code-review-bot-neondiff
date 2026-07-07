@@ -10,8 +10,10 @@ with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
 Public open-source repos are free. Private and commercial repos require a paid
-NeonDiff support license: $1/month, $10/year, or $100 lifetime. NeonDiff is a
-source-available beta, not an open-source or GA release.
+NeonDiff support license: $1/month or $10/year for individuals, or $100/year for
+organizations. Individual plans include a 7-day trial, organization plans include
+a 30-day trial, and legacy lifetime licenses remain honored but are no longer
+sold. NeonDiff is a source-available beta, not an open-source or GA release.
 
 [Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
 [GitHub App Install](docs/github-app-setup.md) · [Contributing](CONTRIBUTING.md) ·
