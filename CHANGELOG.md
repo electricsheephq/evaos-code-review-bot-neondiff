@@ -16,6 +16,12 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.40-beta.1] - docs/releases/v0.4.40-beta.1.md
+
+### Added
+- Add the current-main source beta batch: risk-weighted queue aging proof, review mode routing, public command policy cooldowns, weighted related-context scoring, lifecycle/fixer markers, scheduled outcome observation, desktop credential preflight docs, and license-service API/deploy scaffolding
+- Keep the public npm package held at `neondiff@0.4.30-beta.1` while promoting the local-worker source checkout to a named rollback point
+
 ## [0.4.39-beta.1] - docs/releases/v0.4.39-beta.1.md
 
 ### Fixed
