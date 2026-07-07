@@ -934,7 +934,7 @@ function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: t
   if (!isPathInsideOrEqual(realProofPath, realEvidenceRoot)) {
     return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
   }
-  return { ok: true, absolutePath };
+  return { ok: true, absolutePath: realProofPath };
 }
 
 function isPathInsideOrEqual(target: string, root: string): boolean {

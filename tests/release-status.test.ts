@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -1006,6 +1006,61 @@ describe("beta release status", () => {
     expect(manifest.licenseApi.ok).toBe(false);
     expect(manifest.licenseApi.detail).toContain("healthUrl must be present when validating health proof");
     expect(manifest.ok).toBe(false);
+  });
+
+  it("accepts a symlinked health proof only after realpath confinement", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-symlink-health-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "evidence"), { recursive: true });
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeLicenseHealthProof(root, { path: "docs/evidence/license-healthz-target.json" });
+    symlinkSync("license-healthz-target.json", join(root, "docs", "evidence", "license-healthz-link.json"));
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath: "docs/evidence/license-healthz-link.json"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.licenseApi).toMatchObject({
+      ok: true,
+      requiredForThisRelease: true,
+      state: "healthy",
+      healthProofPath: "docs/evidence/license-healthz-link.json",
+      detail: "license API state healthy; requiredForThisRelease=true; validated health proof docs/evidence/license-healthz-link.json"
+    });
+    expect(manifest.ok).toBe(true);
   });
 
   it("blocks required healthy license API gates when the proof file is not machine-checkable JSON", () => {
