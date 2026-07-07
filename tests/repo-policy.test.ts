@@ -807,7 +807,7 @@ const pull: PullRequestSummary = {
 
 const activeMonitorRepos = [
   "electricsheephq/WorldOS",
-  "electricsheephq/evaos-code-review-bot",
+  "electricsheephq/evaos-code-review-bot-neondiff",
   "electricsheephq/electric-sheep-website-dashboard-6158a244",
   "electricsheephq/evaos-support-control",
   "electricsheephq/evaos-ws-proxy",
@@ -824,5 +824,21 @@ const activeMonitorRepos = [
   "100yenadmin/evaOS-GUI",
   "100yenadmin/Lossless-Codex-Orchestrator-LCO",
   "100yenadmin/worldos-unity",
-  "100yenadmin/ai-agent-resource-hog-watcher"
+  "100yenadmin/ai-agent-resource-hog-watcher",
+  "100yenadmin/agent-skill-debloater",
+  "100yenadmin/bailey-bear-cleaning-site",
+  "100yenadmin/bailey-bear-construction-site",
+  "100yenadmin/bailey-bear-hub-site",
+  "100yenadmin/codex-operating-kit",
+  "100yenadmin/openclaw",
+  "100yenadmin/unity-mcp",
+  "100yenadmin/fable-token-saving-skills-orchestrator",
+  "100yenadmin/worldos-unity-2026-06-30_07-21-47",
+  "electricsheephq/travel-agent-skills",
+  "electricsheephq/neon-diff-agent-website",
+  "electricsheephq/eva-brain",
+  "electricsheephq/openclaw-support-kb",
+  "electricsheephq/holly-holmberg",
+  "electricsheephq/Retro-RPG-AI-Voice-Generator",
+  "electricsheephq/Smarter-Claw"
 ];

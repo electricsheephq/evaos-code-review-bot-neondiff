@@ -1,7 +1,7 @@
 {
   "pilotRepos": [
     "electricsheephq/WorldOS",
-    "electricsheephq/evaos-code-review-bot",
+    "electricsheephq/evaos-code-review-bot-neondiff",
     "electricsheephq/electric-sheep-website-dashboard-6158a244",
     "electricsheephq/evaos-support-control",
     "electricsheephq/evaos-ws-proxy",
@@ -18,7 +18,23 @@
     "100yenadmin/evaOS-GUI",
     "100yenadmin/Lossless-Codex-Orchestrator-LCO",
     "100yenadmin/worldos-unity",
-    "100yenadmin/ai-agent-resource-hog-watcher"
+    "100yenadmin/ai-agent-resource-hog-watcher",
+    "100yenadmin/agent-skill-debloater",
+    "100yenadmin/bailey-bear-cleaning-site",
+    "100yenadmin/bailey-bear-construction-site",
+    "100yenadmin/bailey-bear-hub-site",
+    "100yenadmin/codex-operating-kit",
+    "100yenadmin/openclaw",
+    "100yenadmin/unity-mcp",
+    "100yenadmin/fable-token-saving-skills-orchestrator",
+    "100yenadmin/worldos-unity-2026-06-30_07-21-47",
+    "electricsheephq/travel-agent-skills",
+    "electricsheephq/neon-diff-agent-website",
+    "electricsheephq/eva-brain",
+    "electricsheephq/openclaw-support-kb",
+    "electricsheephq/holly-holmberg",
+    "electricsheephq/Retro-RPG-AI-Voice-Generator",
+    "electricsheephq/Smarter-Claw"
   ],
   "skipDrafts": true,
   "activation": {
@@ -28,7 +44,10 @@
     "maxInlineComments": 25,
     "selfConsistency": {
       "enabled": false,
-      "severities": ["P0", "P1"],
+      "severities": [
+        "P0",
+        "P1"
+      ],
       "maxFindingsPerReview": 5
     }
   },
@@ -44,22 +63,384 @@
   },
   "commands": {
     "enabled": false,
-    "botMentions": ["@evaos-code-review-bot"],
-    "trustedAuthors": ["100yenadmin"],
+    "botMentions": [
+      "@evaos-code-review-bot"
+    ],
+    "trustedAuthors": [
+      "100yenadmin"
+    ],
     "acknowledge": false
   },
   "issueEnrichment": {
     "enabled": false,
     "postIssueComment": false,
-    "allowlist": [],
-    "maxIssuesPerCycle": 5,
-    "maxCommentsPerCycle": 0,
+    "allowlist": [
+      "electricsheephq/WorldOS",
+      "electricsheephq/evaos-code-review-bot-neondiff",
+      "electricsheephq/electric-sheep-website-dashboard-6158a244",
+      "electricsheephq/evaos-support-control",
+      "electricsheephq/evaos-ws-proxy",
+      "electricsheephq/evaos-cortex-plugin",
+      "electricsheephq/evaOS-gitnexus",
+      "electricsheephq/electric-sheep-eva-marketing-site",
+      "electricsheephq/evaos-cortex",
+      "electricsheephq/worldOS-marketing-site",
+      "electricsheephq/ai-chief-of-staff",
+      "electricsheephq/vantage-portfolio-hub",
+      "electricsheephq/mission-control-paperclip",
+      "electricsheephq/evaos-golden",
+      "electricsheephq/eric-wilder",
+      "100yenadmin/evaOS-GUI",
+      "100yenadmin/Lossless-Codex-Orchestrator-LCO",
+      "100yenadmin/worldos-unity",
+      "100yenadmin/ai-agent-resource-hog-watcher",
+      "100yenadmin/agent-skill-debloater",
+      "100yenadmin/bailey-bear-cleaning-site",
+      "100yenadmin/bailey-bear-construction-site",
+      "100yenadmin/bailey-bear-hub-site",
+      "100yenadmin/codex-operating-kit",
+      "100yenadmin/openclaw",
+      "100yenadmin/unity-mcp",
+      "100yenadmin/fable-token-saving-skills-orchestrator",
+      "100yenadmin/worldos-unity-2026-06-30_07-21-47",
+      "electricsheephq/travel-agent-skills",
+      "electricsheephq/neon-diff-agent-website",
+      "electricsheephq/eva-brain",
+      "electricsheephq/openclaw-support-kb",
+      "electricsheephq/holly-holmberg",
+      "electricsheephq/Retro-RPG-AI-Voice-Generator",
+      "electricsheephq/Smarter-Claw"
+    ],
+    "maxIssuesPerCycle": 3,
+    "maxCommentsPerCycle": 1,
     "cooldownMs": 3600000,
     "burstWindowMs": 3600000,
-    "maxIssuesPerBurst": 10,
+    "maxIssuesPerBurst": 6,
     "lookbackMs": 600000,
     "processExistingOpenIssuesOnActivation": false,
-    "repos": {}
+    "repos": {
+      "electricsheephq/WorldOS": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/evaos-code-review-bot-neondiff": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/electric-sheep-website-dashboard-6158a244": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/evaos-support-control": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/evaos-ws-proxy": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/evaos-cortex-plugin": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/evaOS-gitnexus": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/electric-sheep-eva-marketing-site": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/evaos-cortex": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/worldOS-marketing-site": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/ai-chief-of-staff": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/vantage-portfolio-hub": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/mission-control-paperclip": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/evaos-golden": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/eric-wilder": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/evaOS-GUI": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/Lossless-Codex-Orchestrator-LCO": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/worldos-unity": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/ai-agent-resource-hog-watcher": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/agent-skill-debloater": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/bailey-bear-cleaning-site": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/bailey-bear-construction-site": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/bailey-bear-hub-site": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/codex-operating-kit": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/openclaw": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/unity-mcp": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/fable-token-saving-skills-orchestrator": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "100yenadmin/worldos-unity-2026-06-30_07-21-47": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/travel-agent-skills": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/neon-diff-agent-website": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/eva-brain": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/openclaw-support-kb": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/holly-holmberg": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/Retro-RPG-AI-Voice-Generator": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      },
+      "electricsheephq/Smarter-Claw": {
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false
+      }
+    },
+    "allowedLabels": [],
+    "allowedReviewers": [],
+    "globalMaxIssuesPerCycle": 4,
+    "globalMaxCommentsPerCycle": 2,
+    "maxActiveRuns": 1,
+    "leaseTtlMs": 1200000
   },
   "gitnexusContext": {
     "enabled": false,
@@ -72,11 +453,20 @@
     "includeStaleContext": false,
     "repoAliases": {
       "electricsheephq/WorldOS": "worldos",
-      "electricsheephq/evaos-code-review-bot": "evaos-code-review-bot",
       "100yenadmin/evaOS-GUI": "evaos-gui",
-      "100yenadmin/Lossless-Codex-Orchestrator-LCO": "lossless-codex-orchestrator-lco"
+      "100yenadmin/Lossless-Codex-Orchestrator-LCO": "lossless-codex-orchestrator-lco",
+      "electricsheephq/evaos-code-review-bot-neondiff": "evaos-code-review-bot"
     },
-    "generatedPathPatterns": ["dist/**", "build/**", "coverage/**", "Library/**", "Temp/**", "**/*.min.js", "**/*.bundle.js", "**/*.lock"]
+    "generatedPathPatterns": [
+      "dist/**",
+      "build/**",
+      "coverage/**",
+      "Library/**",
+      "Temp/**",
+      "**/*.min.js",
+      "**/*.bundle.js",
+      "**/*.lock"
+    ]
   },
   "repoProfiles": {
     "enableOrgFallbacks": false,
@@ -87,18 +477,48 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize Unity scene, save-state, gameplay, release-regression, and data-loss risks.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "extensions/**", "qa/**", "servers/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
+        "pathFilters": [
+          "Assets/**",
+          "Packages/**",
+          "ProjectSettings/**",
+          "extensions/**",
+          "qa/**",
+          "servers/**",
+          "src/**",
+          "tests/**",
+          "!Library/**",
+          "!Temp/**"
+        ],
         "pathInstructions": {
-          "Assets/**": ["Prioritize scene, prefab, save-state, asset-reference, and gameplay regressions."],
-          "ProjectSettings/**": ["Treat build, platform, input, graphics, and release behavior changes as high risk."]
+          "Assets/**": [
+            "Prioritize scene, prefab, save-state, asset-reference, and gameplay regressions."
+          ],
+          "ProjectSettings/**": [
+            "Treat build, platform, input, graphics, and release behavior changes as high risk."
+          ]
         },
-        "riskyPaths": ["Assets/**", "ProjectSettings/**", "Packages/manifest.json"],
-        "proofExpectations": ["Look for Unity editor, play-mode, fixture, or focused smoke evidence when runtime behavior changes."],
-        "validationHints": ["Prefer correctness, persistence, CI, release, and regression findings over style-only feedback."],
-        "readinessHints": ["Scene, save, build, input, or package changes need explicit rollback and smoke notes."],
+        "riskyPaths": [
+          "Assets/**",
+          "ProjectSettings/**",
+          "Packages/manifest.json"
+        ],
+        "proofExpectations": [
+          "Look for Unity editor, play-mode, fixture, or focused smoke evidence when runtime behavior changes."
+        ],
+        "validationHints": [
+          "Prefer correctness, persistence, CI, release, and regression findings over style-only feedback."
+        ],
+        "readinessHints": [
+          "Scene, save, build, input, or package changes need explicit rollback and smoke notes."
+        ],
         "preMergeChecks": {
           "title": {
             "mode": "warning",
@@ -115,28 +535,65 @@
             "instructions": "Declaration only until opt-in finishing-touch commands are enabled."
           }
         },
-        "suggestedLabels": ["unity", "gameplay", "regression-hardening"]
+        "suggestedLabels": [
+          "unity",
+          "gameplay",
+          "regression-hardening"
+        ]
       },
-      "electricsheephq/evaos-code-review-bot": {
+      "electricsheephq/evaos-code-review-bot-neondiff": {
         "displayName": "evaOS Code Review Bot",
         "defaultBranch": "main",
         "reviewProfile": "assertive",
         "promptNote": "Prioritize App-authored identity, duplicate suppression, stale-head safety, secret redaction, and beta release cadence.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "tests/**", "docs/**", "config*.json", "package.json", "package-lock.json", "!runtime/**"],
+        "pathFilters": [
+          "src/**",
+          "tests/**",
+          "docs/**",
+          "config*.json",
+          "package.json",
+          "package-lock.json",
+          "!runtime/**"
+        ],
         "pathInstructions": {
-          "src/github.ts": ["Treat GitHub App identity or token-mode regressions as high risk."],
-          "src/state.ts": ["Check duplicate suppression, leases, processed heads, and migration safety."],
-          "src/worker.ts": ["Check stale-head guards, repo mutation protection, and review posting policy."],
-          "src/zcode.ts": ["Check read-only ZCode policy, prompt constraints, and output parsing."]
+          "src/github.ts": [
+            "Treat GitHub App identity or token-mode regressions as high risk."
+          ],
+          "src/state.ts": [
+            "Check duplicate suppression, leases, processed heads, and migration safety."
+          ],
+          "src/worker.ts": [
+            "Check stale-head guards, repo mutation protection, and review posting policy."
+          ],
+          "src/zcode.ts": [
+            "Check read-only ZCode policy, prompt constraints, and output parsing."
+          ]
         },
-        "riskyPaths": ["src/github.ts", "src/state.ts", "src/worker.ts", "src/zcode.ts", "src/config.ts"],
-        "proofExpectations": ["Require focused tests, TypeScript build, App-backed doctor, release-status proof, and launchd heartbeat before live promotion."],
-        "validationHints": ["Current-head, App-authored, no-secret, no-duplicate, and no-repo-mutation invariants outrank style feedback."],
-        "readinessHints": ["Live config or launchd changes need rollback command and post-restart cycle proof."],
+        "riskyPaths": [
+          "src/github.ts",
+          "src/state.ts",
+          "src/worker.ts",
+          "src/zcode.ts",
+          "src/config.ts"
+        ],
+        "proofExpectations": [
+          "Require focused tests, TypeScript build, App-backed doctor, release-status proof, and launchd heartbeat before live promotion."
+        ],
+        "validationHints": [
+          "Current-head, App-authored, no-secret, no-duplicate, and no-repo-mutation invariants outrank style feedback."
+        ],
+        "readinessHints": [
+          "Live config or launchd changes need rollback command and post-restart cycle proof."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "error",
@@ -153,7 +610,11 @@
             "instructions": "Do not auto-generate tests during live review until opt-in command gates ship."
           }
         },
-        "suggestedLabels": ["bot", "regression-hardening", "release"]
+        "suggestedLabels": [
+          "bot",
+          "regression-hardening",
+          "release"
+        ]
       },
       "electricsheephq/electric-sheep-website-dashboard-6158a244": {
         "displayName": "Electric Sheep Dashboard",
@@ -161,13 +622,38 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize authenticated dashboard behavior, Lovable publish safety, routing, data visibility, and deployment regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "app/**", "components/**", "pages/**", "lib/**", "public/**", "package.json", "package-lock.json", "!dist/**", "!build/**"],
-        "riskyPaths": ["src/**", "app/**", "lib/**", "package.json"],
-        "proofExpectations": ["Look for focused UI, auth, route, data, or deploy smoke evidence."],
-        "validationHints": ["Call out customer-visible dashboard, auth, billing, and public deploy regressions."],
+        "pathFilters": [
+          "src/**",
+          "app/**",
+          "components/**",
+          "pages/**",
+          "lib/**",
+          "public/**",
+          "package.json",
+          "package-lock.json",
+          "!dist/**",
+          "!build/**"
+        ],
+        "riskyPaths": [
+          "src/**",
+          "app/**",
+          "lib/**",
+          "package.json"
+        ],
+        "proofExpectations": [
+          "Look for focused UI, auth, route, data, or deploy smoke evidence."
+        ],
+        "validationHints": [
+          "Call out customer-visible dashboard, auth, billing, and public deploy regressions."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -179,7 +665,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["dashboard", "frontend", "regression-hardening"]
+        "suggestedLabels": [
+          "dashboard",
+          "frontend",
+          "regression-hardening"
+        ]
       },
       "electricsheephq/evaos-support-control": {
         "displayName": "evaOS Support Control",
@@ -187,18 +677,44 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize VM/customer safety, release gates, backup/restore, provider snapshots, and support-control operator regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "scripts/**", "docs/**", "tests/**", "package.json", "package-lock.json"],
+        "pathFilters": [
+          "src/**",
+          "scripts/**",
+          "docs/**",
+          "tests/**",
+          "package.json",
+          "package-lock.json"
+        ],
         "pathInstructions": {
-          "docs/runbooks/**": ["Check that release, rollback, and operator evidence remains concrete."],
-          "scripts/**": ["Treat customer/runtime mutation and credential handling changes as high risk."]
+          "docs/runbooks/**": [
+            "Check that release, rollback, and operator evidence remains concrete."
+          ],
+          "scripts/**": [
+            "Treat customer/runtime mutation and credential handling changes as high risk."
+          ]
         },
-        "riskyPaths": ["scripts/**", "src/**", "docs/runbooks/**"],
-        "proofExpectations": ["Look for focused CLI/status proof, rollback notes, and no-secret evidence."],
-        "validationHints": ["Do not suggest broad local suites when remote CI or release-status proof is the right gate."],
-        "readinessHints": ["Runtime/customer-affecting changes need exact target, rollback, and evidence path."],
+        "riskyPaths": [
+          "scripts/**",
+          "src/**",
+          "docs/runbooks/**"
+        ],
+        "proofExpectations": [
+          "Look for focused CLI/status proof, rollback notes, and no-secret evidence."
+        ],
+        "validationHints": [
+          "Do not suggest broad local suites when remote CI or release-status proof is the right gate."
+        ],
+        "readinessHints": [
+          "Runtime/customer-affecting changes need exact target, rollback, and evidence path."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "error",
@@ -210,7 +726,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["support-control", "runtime-safe", "release"]
+        "suggestedLabels": [
+          "support-control",
+          "runtime-safe",
+          "release"
+        ]
       },
       "electricsheephq/evaos-ws-proxy": {
         "displayName": "evaOS WS Proxy",
@@ -218,13 +738,34 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize websocket auth, connection lifecycle, backpressure, retry, and proxy routing regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "server/**", "tests/**", "package.json", "package-lock.json", "Dockerfile", "docker/**"],
-        "riskyPaths": ["src/**", "server/**", "Dockerfile"],
-        "proofExpectations": ["Look for focused connection, auth, retry, or CI evidence."],
-        "validationHints": ["Call out dropped messages, auth bypass, runaway reconnects, and secret logging risks."],
+        "pathFilters": [
+          "src/**",
+          "server/**",
+          "tests/**",
+          "package.json",
+          "package-lock.json",
+          "Dockerfile",
+          "docker/**"
+        ],
+        "riskyPaths": [
+          "src/**",
+          "server/**",
+          "Dockerfile"
+        ],
+        "proofExpectations": [
+          "Look for focused connection, auth, retry, or CI evidence."
+        ],
+        "validationHints": [
+          "Call out dropped messages, auth bypass, runaway reconnects, and secret logging risks."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -236,7 +777,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["backend", "proxy", "runtime-safe"]
+        "suggestedLabels": [
+          "backend",
+          "proxy",
+          "runtime-safe"
+        ]
       },
       "electricsheephq/evaos-cortex-plugin": {
         "displayName": "evaOS Cortex Plugin",
@@ -244,13 +789,34 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize plugin contract, tool boundary, prompt/context safety, and host integration regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "plugin/**", "tools/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["src/**", "plugin/**", "tools/**"],
-        "proofExpectations": ["Look for focused plugin contract or tool-call evidence."],
-        "validationHints": ["Call out tool permission widening, prompt injection, and stale context risks."],
+        "pathFilters": [
+          "src/**",
+          "plugin/**",
+          "tools/**",
+          "tests/**",
+          "docs/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "src/**",
+          "plugin/**",
+          "tools/**"
+        ],
+        "proofExpectations": [
+          "Look for focused plugin contract or tool-call evidence."
+        ],
+        "validationHints": [
+          "Call out tool permission widening, prompt injection, and stale context risks."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -262,7 +828,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["plugin", "agent-safety", "backend"]
+        "suggestedLabels": [
+          "plugin",
+          "agent-safety",
+          "backend"
+        ]
       },
       "electricsheephq/evaOS-gitnexus": {
         "displayName": "evaOS GitNexus",
@@ -270,13 +840,36 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize index freshness, query correctness, embeddings/storage safety, CLI reliability, and repo identity regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "packages/**", "bin/**", "cli/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["src/**", "packages/**", "bin/**", "cli/**"],
-        "proofExpectations": ["Look for focused CLI, index, query, or migration proof."],
-        "validationHints": ["Call out stale index, wrong repo identity, memory growth, and destructive analyze behavior."],
+        "pathFilters": [
+          "src/**",
+          "packages/**",
+          "bin/**",
+          "cli/**",
+          "tests/**",
+          "docs/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "src/**",
+          "packages/**",
+          "bin/**",
+          "cli/**"
+        ],
+        "proofExpectations": [
+          "Look for focused CLI, index, query, or migration proof."
+        ],
+        "validationHints": [
+          "Call out stale index, wrong repo identity, memory growth, and destructive analyze behavior."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -288,7 +881,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["gitnexus", "code-intelligence", "backend"]
+        "suggestedLabels": [
+          "gitnexus",
+          "code-intelligence",
+          "backend"
+        ]
       },
       "electricsheephq/electric-sheep-eva-marketing-site": {
         "displayName": "Electric Sheep EVA Marketing Site",
@@ -296,13 +893,37 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize public-site correctness, forms, analytics, SEO/GEO, accessibility, and deploy regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "app/**", "pages/**", "components/**", "content/**", "public/**", "supabase/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["app/**", "pages/**", "content/**", "public/**"],
-        "proofExpectations": ["Look for focused route, form, SEO, accessibility, or deploy smoke evidence."],
-        "validationHints": ["Call out broken CTAs, forms, metadata, tracking, or public content regressions."],
+        "pathFilters": [
+          "src/**",
+          "app/**",
+          "pages/**",
+          "components/**",
+          "content/**",
+          "public/**",
+          "supabase/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "app/**",
+          "pages/**",
+          "content/**",
+          "public/**"
+        ],
+        "proofExpectations": [
+          "Look for focused route, form, SEO, accessibility, or deploy smoke evidence."
+        ],
+        "validationHints": [
+          "Call out broken CTAs, forms, metadata, tracking, or public content regressions."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -314,7 +935,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["marketing-site", "frontend", "seo"]
+        "suggestedLabels": [
+          "marketing-site",
+          "frontend",
+          "seo"
+        ]
       },
       "electricsheephq/evaos-cortex": {
         "displayName": "evaOS Cortex",
@@ -322,13 +947,37 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize agent runtime, tool execution, memory/context, auth, and customer-impacting service regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "server/**", "agents/**", "tools/**", "tests/**", "docs/**", "supabase/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["agents/**", "tools/**", "server/**", "src/**"],
-        "proofExpectations": ["Look for focused agent/tool/runtime proof and no-secret evidence."],
-        "validationHints": ["Call out permission widening, unsafe tool execution, stale memory, and customer-data leakage."],
+        "pathFilters": [
+          "src/**",
+          "server/**",
+          "agents/**",
+          "tools/**",
+          "tests/**",
+          "docs/**",
+          "supabase/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "agents/**",
+          "tools/**",
+          "server/**",
+          "src/**"
+        ],
+        "proofExpectations": [
+          "Look for focused agent/tool/runtime proof and no-secret evidence."
+        ],
+        "validationHints": [
+          "Call out permission widening, unsafe tool execution, stale memory, and customer-data leakage."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -340,7 +989,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["agent-runtime", "backend", "safety"]
+        "suggestedLabels": [
+          "agent-runtime",
+          "backend",
+          "safety"
+        ]
       },
       "electricsheephq/worldOS-marketing-site": {
         "displayName": "WorldOS Marketing Site",
@@ -348,13 +1001,35 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize public WorldOS positioning, forms, SEO/GEO, routing, accessibility, and deploy regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "app/**", "pages/**", "components/**", "content/**", "public/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["app/**", "pages/**", "content/**"],
-        "proofExpectations": ["Look for focused route, form, SEO, accessibility, or deploy smoke evidence."],
-        "validationHints": ["Call out broken CTAs, metadata, forms, and public content regressions."],
+        "pathFilters": [
+          "src/**",
+          "app/**",
+          "pages/**",
+          "components/**",
+          "content/**",
+          "public/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "app/**",
+          "pages/**",
+          "content/**"
+        ],
+        "proofExpectations": [
+          "Look for focused route, form, SEO, accessibility, or deploy smoke evidence."
+        ],
+        "validationHints": [
+          "Call out broken CTAs, metadata, forms, and public content regressions."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -366,7 +1041,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["marketing-site", "frontend", "seo"]
+        "suggestedLabels": [
+          "marketing-site",
+          "frontend",
+          "seo"
+        ]
       },
       "electricsheephq/ai-chief-of-staff": {
         "displayName": "AI Chief of Staff",
@@ -374,13 +1053,36 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize workflow automation, private-data boundaries, scheduling, notification, and integration regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "app/**", "server/**", "agents/**", "integrations/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["agents/**", "integrations/**", "server/**"],
-        "proofExpectations": ["Look for focused integration, workflow, auth, or notification proof."],
-        "validationHints": ["Call out private-data leakage, duplicate automation, stale state, and unsafe side effects."],
+        "pathFilters": [
+          "src/**",
+          "app/**",
+          "server/**",
+          "agents/**",
+          "integrations/**",
+          "tests/**",
+          "docs/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "agents/**",
+          "integrations/**",
+          "server/**"
+        ],
+        "proofExpectations": [
+          "Look for focused integration, workflow, auth, or notification proof."
+        ],
+        "validationHints": [
+          "Call out private-data leakage, duplicate automation, stale state, and unsafe side effects."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -392,7 +1094,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["automation", "agent-safety", "backend"]
+        "suggestedLabels": [
+          "automation",
+          "agent-safety",
+          "backend"
+        ]
       },
       "electricsheephq/vantage-portfolio-hub": {
         "displayName": "Vantage Portfolio Hub",
@@ -400,13 +1106,35 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize portfolio data correctness, dashboard UI, auth, and customer-visible reporting regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "app/**", "components/**", "lib/**", "tests/**", "public/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["src/**", "app/**", "lib/**"],
-        "proofExpectations": ["Look for focused data, dashboard, auth, or route proof."],
-        "validationHints": ["Call out reporting accuracy, auth, and customer-visible dashboard regressions."],
+        "pathFilters": [
+          "src/**",
+          "app/**",
+          "components/**",
+          "lib/**",
+          "tests/**",
+          "public/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "src/**",
+          "app/**",
+          "lib/**"
+        ],
+        "proofExpectations": [
+          "Look for focused data, dashboard, auth, or route proof."
+        ],
+        "validationHints": [
+          "Call out reporting accuracy, auth, and customer-visible dashboard regressions."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -418,7 +1146,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["dashboard", "frontend", "data"]
+        "suggestedLabels": [
+          "dashboard",
+          "frontend",
+          "data"
+        ]
       },
       "electricsheephq/mission-control-paperclip": {
         "displayName": "Mission Control Paperclip",
@@ -426,13 +1158,35 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize orchestration, queue safety, idempotency, tool execution, and runtime visibility regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "server/**", "orchestration/**", "workers/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["orchestration/**", "workers/**", "server/**"],
-        "proofExpectations": ["Look for focused queue, worker, idempotency, or orchestration proof."],
-        "validationHints": ["Call out duplicate execution, stale locks, unsafe retries, and missing rollback evidence."],
+        "pathFilters": [
+          "src/**",
+          "server/**",
+          "orchestration/**",
+          "workers/**",
+          "tests/**",
+          "docs/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "orchestration/**",
+          "workers/**",
+          "server/**"
+        ],
+        "proofExpectations": [
+          "Look for focused queue, worker, idempotency, or orchestration proof."
+        ],
+        "validationHints": [
+          "Call out duplicate execution, stale locks, unsafe retries, and missing rollback evidence."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -444,7 +1198,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["orchestration", "backend", "runtime-safe"]
+        "suggestedLabels": [
+          "orchestration",
+          "backend",
+          "runtime-safe"
+        ]
       },
       "electricsheephq/evaos-golden": {
         "displayName": "evaOS Golden",
@@ -452,13 +1210,34 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize golden-path fixtures, baseline drift, release evidence, and regression-proof correctness.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "fixtures/**", "golden/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["fixtures/**", "golden/**", "src/**"],
-        "proofExpectations": ["Look for fixture update rationale, regression proof, and baseline drift notes."],
-        "validationHints": ["Call out silent fixture drift and missing expected-output explanation."],
+        "pathFilters": [
+          "src/**",
+          "fixtures/**",
+          "golden/**",
+          "tests/**",
+          "docs/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "fixtures/**",
+          "golden/**",
+          "src/**"
+        ],
+        "proofExpectations": [
+          "Look for fixture update rationale, regression proof, and baseline drift notes."
+        ],
+        "validationHints": [
+          "Call out silent fixture drift and missing expected-output explanation."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -470,7 +1249,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["fixtures", "regression-hardening", "release"]
+        "suggestedLabels": [
+          "fixtures",
+          "regression-hardening",
+          "release"
+        ]
       },
       "electricsheephq/eric-wilder": {
         "displayName": "Eric Wilder Customer Lane",
@@ -478,13 +1261,35 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize customer-lane correctness, evidence boundaries, reporting accuracy, and no-secret/no-raw-customer-data handling.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "app/**", "components/**", "reports/**", "docs/**", "tests/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["reports/**", "src/**", "app/**"],
-        "proofExpectations": ["Look for focused reporting, data-shape, or customer-lane evidence without raw private data."],
-        "validationHints": ["Call out privacy, data accuracy, and customer-visible reporting regressions."],
+        "pathFilters": [
+          "src/**",
+          "app/**",
+          "components/**",
+          "reports/**",
+          "docs/**",
+          "tests/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "reports/**",
+          "src/**",
+          "app/**"
+        ],
+        "proofExpectations": [
+          "Look for focused reporting, data-shape, or customer-lane evidence without raw private data."
+        ],
+        "validationHints": [
+          "Call out privacy, data accuracy, and customer-visible reporting regressions."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -496,7 +1301,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["customer-lane", "data", "privacy"]
+        "suggestedLabels": [
+          "customer-lane",
+          "data",
+          "privacy"
+        ]
       },
       "100yenadmin/evaOS-GUI": {
         "displayName": "evaOS Workbench",
@@ -504,18 +1313,47 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize Electron/Workbench runtime regressions, packaged-app resource shape, bridge control, and macOS permission identity risk.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "apps/**", "mobile/**", "scripts/**", "tests/**", "package.json", "package-lock.json", "!dist/**", "!release/**"],
+        "pathFilters": [
+          "src/**",
+          "apps/**",
+          "mobile/**",
+          "scripts/**",
+          "tests/**",
+          "package.json",
+          "package-lock.json",
+          "!dist/**",
+          "!release/**"
+        ],
         "pathInstructions": {
-          "apps/eva-desktop-mac/**": ["Check macOS identity, helper path, TCC identity, and packaged resource shape risk."],
-          "scripts/**": ["Treat release, packaging, and artifact-shape changes as high risk."]
+          "apps/eva-desktop-mac/**": [
+            "Check macOS identity, helper path, TCC identity, and packaged resource shape risk."
+          ],
+          "scripts/**": [
+            "Treat release, packaging, and artifact-shape changes as high risk."
+          ]
         },
-        "riskyPaths": ["scripts/**", "apps/eva-desktop-mac/**", "package.json"],
-        "proofExpectations": ["Look for focused app smoke, packaged resource checks, or CI artifact proof when relevant."],
-        "validationHints": ["Do not ask for broad local suites when remote CI or fast-smoke proof is the right gate."],
-        "readinessHints": ["Signed/notarized release proof is separate from dev/staging smoke proof."],
+        "riskyPaths": [
+          "scripts/**",
+          "apps/eva-desktop-mac/**",
+          "package.json"
+        ],
+        "proofExpectations": [
+          "Look for focused app smoke, packaged resource checks, or CI artifact proof when relevant."
+        ],
+        "validationHints": [
+          "Do not ask for broad local suites when remote CI or fast-smoke proof is the right gate."
+        ],
+        "readinessHints": [
+          "Signed/notarized release proof is separate from dev/staging smoke proof."
+        ],
         "preMergeChecks": {
           "description": {
             "mode": "warning",
@@ -535,7 +1373,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["workbench", "macos", "regression-hardening"]
+        "suggestedLabels": [
+          "workbench",
+          "macos",
+          "regression-hardening"
+        ]
       },
       "100yenadmin/Lossless-Codex-Orchestrator-LCO": {
         "displayName": "Lossless Codex Orchestrator",
@@ -543,13 +1385,36 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize session safety, lossless evidence handling, sanitizer correctness, HMAC/signature integrity, and orchestration regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["openclaw.plugin.json", "skills/**", "evals/**", "packages/**", "src/**", "scripts/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["src/**", "scripts/**"],
-        "proofExpectations": ["Look for focused sanitizer, signature, orchestration, or fixture proof."],
-        "validationHints": ["Call out evidence leakage, replay/collision risks, duplicate side effects, and brittle sanitizer logic."],
+        "pathFilters": [
+          "openclaw.plugin.json",
+          "skills/**",
+          "evals/**",
+          "packages/**",
+          "src/**",
+          "scripts/**",
+          "tests/**",
+          "docs/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "src/**",
+          "scripts/**"
+        ],
+        "proofExpectations": [
+          "Look for focused sanitizer, signature, orchestration, or fixture proof."
+        ],
+        "validationHints": [
+          "Call out evidence leakage, replay/collision risks, duplicate side effects, and brittle sanitizer logic."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -561,7 +1426,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["orchestration", "security", "regression-hardening"]
+        "suggestedLabels": [
+          "orchestration",
+          "security",
+          "regression-hardening"
+        ]
       },
       "100yenadmin/worldos-unity": {
         "displayName": "WorldOS Unity Sandbox",
@@ -569,17 +1438,44 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize Unity project integrity, gameplay state, scene/prefab references, packages, and build regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["Assets/**", "Packages/**", "ProjectSettings/**", "extensions/**", "qa/**", "src/**", "tests/**", "!Library/**", "!Temp/**"],
+        "pathFilters": [
+          "Assets/**",
+          "Packages/**",
+          "ProjectSettings/**",
+          "extensions/**",
+          "qa/**",
+          "src/**",
+          "tests/**",
+          "!Library/**",
+          "!Temp/**"
+        ],
         "pathInstructions": {
-          "Assets/**": ["Prioritize scene, prefab, asset-reference, and gameplay regressions."],
-          "ProjectSettings/**": ["Treat build, input, graphics, and package settings as high risk."]
+          "Assets/**": [
+            "Prioritize scene, prefab, asset-reference, and gameplay regressions."
+          ],
+          "ProjectSettings/**": [
+            "Treat build, input, graphics, and package settings as high risk."
+          ]
         },
-        "riskyPaths": ["Assets/**", "ProjectSettings/**", "Packages/manifest.json"],
-        "proofExpectations": ["Look for Unity editor, play-mode, fixture, or focused smoke evidence when runtime behavior changes."],
-        "validationHints": ["Prefer correctness, persistence, CI, release, and regression findings over style-only feedback."],
+        "riskyPaths": [
+          "Assets/**",
+          "ProjectSettings/**",
+          "Packages/manifest.json"
+        ],
+        "proofExpectations": [
+          "Look for Unity editor, play-mode, fixture, or focused smoke evidence when runtime behavior changes."
+        ],
+        "validationHints": [
+          "Prefer correctness, persistence, CI, release, and regression findings over style-only feedback."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -591,7 +1487,11 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["unity", "gameplay", "regression-hardening"]
+        "suggestedLabels": [
+          "unity",
+          "gameplay",
+          "regression-hardening"
+        ]
       },
       "100yenadmin/ai-agent-resource-hog-watcher": {
         "displayName": "AI Agent Resource Hog Watcher",
@@ -599,13 +1499,32 @@
         "reviewProfile": "assertive",
         "promptNote": "Prioritize process monitoring correctness, resource accounting, kill-switch safety, and no-unintended-termination regressions.",
         "autoReview": {
-          "baseBranches": ["main"],
-          "labels": ["!wip", "!do-not-review"]
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
         },
-        "pathFilters": ["src/**", "scripts/**", "tests/**", "docs/**", "package.json", "package-lock.json"],
-        "riskyPaths": ["src/**", "scripts/**"],
-        "proofExpectations": ["Look for focused monitor, threshold, process-selection, or CI proof."],
-        "validationHints": ["Call out false positives, runaway monitoring, unsafe process kills, and missing dry-run defaults."],
+        "pathFilters": [
+          "src/**",
+          "scripts/**",
+          "tests/**",
+          "docs/**",
+          "package.json",
+          "package-lock.json"
+        ],
+        "riskyPaths": [
+          "src/**",
+          "scripts/**"
+        ],
+        "proofExpectations": [
+          "Look for focused monitor, threshold, process-selection, or CI proof."
+        ],
+        "validationHints": [
+          "Call out false positives, runaway monitoring, unsafe process kills, and missing dry-run defaults."
+        ],
         "preMergeChecks": {
           "testEvidence": {
             "mode": "warning",
@@ -617,7 +1536,859 @@
             "enabled": false
           }
         },
-        "suggestedLabels": ["monitoring", "runtime-safe", "agent-safety"]
+        "suggestedLabels": [
+          "monitoring",
+          "runtime-safe",
+          "agent-safety"
+        ]
+      },
+      "100yenadmin/agent-skill-debloater": {
+        "displayName": "Agent Skill Debloater",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "100yenadmin/bailey-bear-cleaning-site": {
+        "displayName": "Bailey Bear Cleaning Site",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "100yenadmin/bailey-bear-construction-site": {
+        "displayName": "Bailey Bear Construction Site",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "100yenadmin/bailey-bear-hub-site": {
+        "displayName": "Bailey Bear Hub Site",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "100yenadmin/codex-operating-kit": {
+        "displayName": "Codex Operating Kit",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "100yenadmin/openclaw": {
+        "displayName": "Openclaw",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "100yenadmin/unity-mcp": {
+        "displayName": "Unity Mcp",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "100yenadmin/fable-token-saving-skills-orchestrator": {
+        "displayName": "Fable Token Saving Skills Orchestrator",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "100yenadmin/worldos-unity-2026-06-30_07-21-47": {
+        "displayName": "Worldos Unity 2026 06 30 07 21 47",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "electricsheephq/travel-agent-skills": {
+        "displayName": "Travel Agent Skills",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "electricsheephq/neon-diff-agent-website": {
+        "displayName": "Neon Diff Agent Website",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "electricsheephq/eva-brain": {
+        "displayName": "Eva Brain",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "electricsheephq/openclaw-support-kb": {
+        "displayName": "Openclaw Support Kb",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "electricsheephq/holly-holmberg": {
+        "displayName": "Holly Holmberg",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "electricsheephq/Retro-RPG-AI-Voice-Generator": {
+        "displayName": "Retro RPG AI Voice Generator",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
+      },
+      "electricsheephq/Smarter-Claw": {
+        "displayName": "Smarter Claw",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "Standard active-monitor profile. Prioritize correctness, security, regression risk, validation evidence, and release-impact gaps.",
+        "autoReview": {
+          "baseBranches": [
+            "main"
+          ],
+          "labels": [
+            "!wip",
+            "!do-not-review"
+          ]
+        },
+        "proofExpectations": [
+          "Look for focused validation, rollback notes, and evidence appropriate to the changed surface."
+        ],
+        "validationHints": [
+          "Prefer correctness, security, data-loss, release, and regression findings over style-only feedback."
+        ],
+        "preMergeChecks": {
+          "testEvidence": {
+            "mode": "warning",
+            "instructions": "Look for focused validation evidence when behavior, runtime, build, or release surfaces change."
+          }
+        },
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
       }
     }
   }

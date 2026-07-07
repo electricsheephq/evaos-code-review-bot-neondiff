@@ -133,8 +133,14 @@ export interface IssueEnrichmentReader {
       excludePullRequests?: boolean;
       minIssueResults?: number;
     }
-  ): Promise<GitHubRelatedIssueOrPull[]>;
+  ): Promise<IssueEnrichmentIssueList>;
 }
+
+export type IssueEnrichmentIssueList = GitHubRelatedIssueOrPull[] & {
+  scanComplete?: boolean;
+  pageLimitReached?: boolean;
+  stoppedAfterMinIssueResults?: boolean;
+};
 
 export interface IssueEnrichmentScanResult {
   ok: boolean;
@@ -382,7 +388,7 @@ export async function collectIssueEnrichmentScan(input: {
     const pageLimit = buildIssueScanPageLimit(policy.throttle);
     const perPage = DEFAULT_REPO_SCAN_OPTIONS.perPage;
     const minIssueResults = buildIssueScanMinIssueResults(policy.throttle);
-    let issues: GitHubRelatedIssueOrPull[] = [];
+    let issues: IssueEnrichmentIssueList = [];
     try {
       issues = await input.reader.listIssuesForEnrichment(repo, {
         ...DEFAULT_REPO_SCAN_OPTIONS,
@@ -421,6 +427,12 @@ export async function collectIssueEnrichmentScan(input: {
       shouldCountItem: input.shouldCountItem
     });
     items.push(...issueItems);
+    const truncated = issueEnrichmentScanWasTruncated({
+      issues,
+      minIssueResults,
+      pageLimit,
+      perPage
+    });
     repoScans.push({
       repo,
       ok: true,
@@ -435,7 +447,7 @@ export async function collectIssueEnrichmentScan(input: {
       wouldEnrich: issueItems.filter((item) => item.action === "would_enrich" || item.action === "would_comment").length,
       wouldComment: issueItems.filter((item) => item.action === "would_comment").length,
       deferred: issueItems.filter((item) => item.action === "deferred").length,
-      truncated: issues.length >= minIssueResults || issues.length >= pageLimit * perPage
+      truncated
     });
   }
 
@@ -984,6 +996,17 @@ function buildIssueScanPageLimit(throttle: IssueEnrichmentThrottlePolicy): numbe
 
 function buildIssueScanMinIssueResults(throttle: IssueEnrichmentThrottlePolicy): number {
   return Math.max(throttle.maxIssuesPerCycle, throttle.maxIssuesPerBurst) + 1;
+}
+
+function issueEnrichmentScanWasTruncated(input: {
+  issues: IssueEnrichmentIssueList;
+  minIssueResults: number;
+  pageLimit: number;
+  perPage: number;
+}): boolean {
+  if (input.issues.pageLimitReached === true || input.issues.stoppedAfterMinIssueResults === true) return true;
+  if (input.issues.scanComplete === true) return false;
+  return input.issues.length >= input.minIssueResults || input.issues.length >= input.pageLimit * input.perPage;
 }
 
 function nextEligibleAt(input: { checkedAt: string; throttle: IssueEnrichmentThrottlePolicy }): string {
