@@ -1,18 +1,6 @@
 name: Swift CodeQL Path-Aware
 
 on:
-  pull_request:
-    paths:
-      - apps/neondiff-desktop/Package.swift
-      - apps/neondiff-desktop/Package.resolved
-      - apps/neondiff-desktop/Sources/**
-  push:
-    branches:
-      - main
-    paths:
-      - apps/neondiff-desktop/Package.swift
-      - apps/neondiff-desktop/Package.resolved
-      - apps/neondiff-desktop/Sources/**
   workflow_dispatch:
   schedule:
     - cron: "37 9 * * 1"
@@ -22,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: swift-codeql-${{ github.event.pull_request.number || github.ref }}
+  group: swift-codeql-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -32,7 +20,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -54,3 +41,18 @@ jobs:
         uses: github/codeql-action/analyze@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         with:
           category: "/language:swift"
+          upload: false
+          upload-database: false
+          wait-for-processing: false
+
+      - name: Summarize advisory Swift CodeQL boundary
+        if: always()
+        run: |
+          {
+            echo "## Swift CodeQL advisory run"
+            echo
+            echo "This workflow runs Swift CodeQL extraction and queries, but does not upload SARIF."
+            echo
+            echo "Reason: GitHub rejected advanced CodeQL SARIF uploads while repository default setup is enabled."
+            echo "Track the long-term default-vs-advanced CodeQL decision in #393."
+          } >> "$GITHUB_STEP_SUMMARY"

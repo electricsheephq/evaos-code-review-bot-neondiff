@@ -35,7 +35,7 @@ describe("Swift CI velocity policy", () => {
     });
   });
 
-  it("ships an always-reporting Swift desktop gate and a path-aware Swift CodeQL workflow", () => {
+  it("ships an always-reporting Swift desktop gate and a scheduled/manual Swift CodeQL workflow", () => {
     expect(existsSync(".github/workflows/swift-desktop-gate.yml")).toBe(true);
     expect(existsSync(".github/workflows/codeql-swift-path-aware.yml")).toBe(true);
 
@@ -62,9 +62,11 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/base ref unavailable; fail open/);
 
     expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
-    expect(codeql).toMatch(/apps\/neondiff-desktop\/Sources\/\*\*/);
-    expect(codeql).toMatch(/apps\/neondiff-desktop\/Package\.swift/);
-    expect(codeql).toMatch(/apps\/neondiff-desktop\/Package\.resolved/);
+    expect(codeql).not.toMatch(/pull_request:/);
+    expect(codeql).not.toMatch(/push:/);
+    expect(codeql).not.toMatch(/apps\/neondiff-desktop\/Sources\/\*\*/);
+    expect(codeql).not.toMatch(/apps\/neondiff-desktop\/Package\.swift/);
+    expect(codeql).not.toMatch(/apps\/neondiff-desktop\/Package\.resolved/);
     expect(codeql).not.toMatch(/\.github\/workflows\/swift-desktop-gate\.yml/);
     expect(codeql).not.toMatch(/\.github\/workflows\/codeql-swift-path-aware\.yml/);
     expect(codeql).not.toMatch(/-\s*Package\.swift/);
@@ -72,7 +74,12 @@ describe("Swift CI velocity policy", () => {
     expect(codeql).toMatch(/languages:\s*swift/);
     expect(codeql).toMatch(/build-mode:\s*manual/);
     expect(codeql).toMatch(/swift build --product NeonDiffDesktop/);
-    expect(codeql).toMatch(/security-events:\s*write/);
+    expect(codeql).toMatch(/upload:\s*false/);
+    expect(codeql).toMatch(/upload-database:\s*false/);
+    expect(codeql).toMatch(/wait-for-processing:\s*false/);
+    expect(codeql).toMatch(/default setup is enabled/);
+    expect(codeql).toMatch(/#393/);
+    expect(codeql).not.toMatch(/security-events:\s*write/);
     expect(codeql).toMatch(/persist-credentials:\s*false/);
     expect(codeql).not.toMatch(/actions\/checkout@v4/);
     expect(codeql).not.toMatch(/github\/codeql-action\/init@v3/);

@@ -39,4 +39,31 @@ check(!daemonFlow.canAdvance, "daemon step requires bootstrap/status check")
 daemonFlow.daemonBootstrapChecked = true
 check(daemonFlow.canAdvance, "daemon step advances after bootstrap/status check")
 
+let tempRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("neondiff-desktop-core-checks-\(UUID().uuidString)", isDirectory: true)
+let packageBin = tempRoot.appendingPathComponent("node_modules/.bin", isDirectory: true)
+try FileManager.default.createDirectory(at: packageBin, withIntermediateDirectories: true)
+try """
+{"name":"neondiff","bin":{"neondiff":"dist/src/cli.js"}}
+""".write(to: tempRoot.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+let localCLI = packageBin.appendingPathComponent("neondiff")
+try """
+#!/usr/bin/env bash
+printf '{"command":"%s","args":%d}\\n' "$1" "$#"
+""".write(to: localCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: localCLI.path)
+defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+let nestedBundleURL = tempRoot
+    .appendingPathComponent("apps/neondiff-desktop/dist/NeonDiffDesktop.app", isDirectory: true)
+check(
+    NeonDiffCLIResolver.findPackageRoot(startingAt: nestedBundleURL)?.standardizedFileURL == tempRoot.standardizedFileURL,
+    "CLI resolver discovers the repo package root from a local app bundle path"
+)
+
+check(
+    NeonDiffCLIResolver.resolveExecutablePath("neondiff", workingDirectory: tempRoot)?.standardizedFileURL == localCLI.standardizedFileURL,
+    "local package CLI is preferred over GUI PATH fallback"
+)
+
 print("NeonDiffDesktopCoreChecks passed")

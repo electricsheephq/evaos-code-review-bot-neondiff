@@ -155,6 +155,16 @@ struct OnboardingWizardView: View {
                         }
                     }
                 }
+
+                if let lastError = model.lastError, !lastError.isEmpty {
+                    OperatorSection("Latest CLI Result") {
+                        Text(lastError)
+                            .font(NeonDiffTheme.commandFont)
+                            .foregroundStyle(NeonDiffTheme.warning)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
         }
         .scrollContentBackground(.hidden)
