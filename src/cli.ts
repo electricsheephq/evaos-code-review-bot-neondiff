@@ -71,6 +71,7 @@ import {
   buildOperatorQueue,
   buildOperatorStatus,
   buildReleaseMonitoringCoverage,
+  buildReleaseStatusCommandOutput,
   collectBotProcessInventory,
   collectOperatorIssueEnrichmentRuntime,
   collectOperatorLeases,
@@ -351,27 +352,13 @@ async function main(): Promise<void> {
       required: requireCoverage,
       recommendedCommand: buildReleaseCoverageCommand(args)
     });
-    const gates = requireCoverage ? [...status.gates, ...monitoringCoverage.gates] : status.gates;
-    const ok = status.ok && (!requireCoverage || monitoringCoverage.ok === true);
-    const recommendedActions = [
-      ...status.recommendedActions,
-      ...(requireCoverage && monitoringCoverage.ok === false ? monitoringCoverage.recommendedActions : [])
-    ];
-    console.log(stringifyRedactedJson({
-      ...status,
-      ok,
-      recommendedActions,
-      gates,
-      healthState: ok
-        ? "runtime_ok"
-        : status.ok
-          ? "coverage_blocked"
-          : "runtime_blocked",
-      runtimeOk: status.ok,
+    const output = buildReleaseStatusCommandOutput({
+      status,
       monitoringCoverage,
-      failedGates: failedGates(gates)
-    }));
-    if (!ok) process.exitCode = 1;
+      requireCoverage
+    });
+    console.log(stringifyRedactedJson(output));
+    if (!output.ok) process.exitCode = 1;
     return;
   }
 

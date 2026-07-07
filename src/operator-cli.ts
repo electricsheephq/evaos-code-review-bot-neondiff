@@ -274,6 +274,13 @@ export interface ReleaseMonitoringCoverageStatus {
   staleHeads?: OperatorQueueEntry[];
 }
 
+export interface ReleaseStatusCommandOutput extends ReleaseStatus {
+  healthState: "runtime_ok" | "runtime_blocked" | "coverage_blocked";
+  runtimeOk: boolean;
+  monitoringCoverage: ReleaseMonitoringCoverageStatus;
+  failedGates: OperatorGate[];
+}
+
 export interface OperatorDashboardFilters {
   repo?: string;
   status?: string;
@@ -1233,6 +1240,37 @@ export function buildReleaseMonitoringCoverage(input: {
     unprocessed: queue.pending,
     staleHeads: queue.staleHeads,
     ...(input.recommendedCommand ? { recommendedCommand: input.recommendedCommand } : {})
+  };
+}
+
+export function buildReleaseStatusCommandOutput(input: {
+  status: ReleaseStatus;
+  monitoringCoverage: ReleaseMonitoringCoverageStatus;
+  requireCoverage: boolean;
+}): ReleaseStatusCommandOutput {
+  const gates = input.requireCoverage
+    ? [...input.status.gates, ...input.monitoringCoverage.gates]
+    : input.status.gates;
+  const ok = input.status.ok && (!input.requireCoverage || input.monitoringCoverage.ok === true);
+  const recommendedActions = [
+    ...input.status.recommendedActions,
+    ...(input.requireCoverage && input.monitoringCoverage.ok === false
+      ? input.monitoringCoverage.recommendedActions
+      : [])
+  ];
+  return {
+    ...input.status,
+    ok,
+    recommendedActions,
+    gates,
+    healthState: ok
+      ? "runtime_ok"
+      : input.status.ok
+        ? "coverage_blocked"
+        : "runtime_blocked",
+    runtimeOk: input.status.ok,
+    monitoringCoverage: input.monitoringCoverage,
+    failedGates: gates.filter((gate) => !gate.ok)
   };
 }
 

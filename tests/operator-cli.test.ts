@@ -10,6 +10,7 @@ import {
   buildOperatorQueue,
   buildOperatorStatus,
   buildReleaseMonitoringCoverage,
+  buildReleaseStatusCommandOutput,
   collectOperatorIssueEnrichmentRuntime,
   collectOperatorLeases,
   collectOperatorRepoProviderCooldowns,
@@ -232,6 +233,92 @@ describe("operator CLI summaries", () => {
       }
     ]);
     expect(coverage.recommendedActions).toContain("run doctor and inspect GitHub App installation/read permissions");
+  });
+
+  it("merges release-status coverage output only when required by the command", () => {
+    const runtime = releaseStatus({ ok: true });
+    const blockedCoverage = buildReleaseMonitoringCoverage({
+      required: false,
+      report: coverageReport({
+        readFailures: [{ repo: "owner/unreadable", error: "GitHub API 404" }]
+      })
+    });
+    const requiredBlockedCoverage = buildReleaseMonitoringCoverage({
+      required: true,
+      report: coverageReport({
+        readFailures: [{ repo: "owner/unreadable", error: "GitHub API 404" }]
+      })
+    });
+
+    const defaultOutput = buildReleaseStatusCommandOutput({
+      status: runtime,
+      monitoringCoverage: buildReleaseMonitoringCoverage({ required: false }),
+      requireCoverage: false
+    });
+    expect(defaultOutput).toMatchObject({
+      ok: true,
+      runtimeOk: true,
+      healthState: "runtime_ok",
+      failedGates: []
+    });
+    expect(defaultOutput.gates).toEqual(runtime.gates);
+
+    const advisoryOutput = buildReleaseStatusCommandOutput({
+      status: runtime,
+      monitoringCoverage: blockedCoverage,
+      requireCoverage: false
+    });
+    expect(advisoryOutput).toMatchObject({
+      ok: true,
+      runtimeOk: true,
+      healthState: "runtime_ok",
+      monitoringCoverage: {
+        ok: false,
+        healthState: "coverage_blocked"
+      },
+      failedGates: []
+    });
+    expect(advisoryOutput.gates).toEqual(runtime.gates);
+
+    const requiredBlockedOutput = buildReleaseStatusCommandOutput({
+      status: runtime,
+      monitoringCoverage: requiredBlockedCoverage,
+      requireCoverage: true
+    });
+    expect(requiredBlockedOutput).toMatchObject({
+      ok: false,
+      runtimeOk: true,
+      healthState: "coverage_blocked"
+    });
+    expect(requiredBlockedOutput.failedGates).toContainEqual({
+      name: "active_repo_coverage_no_read_failures",
+      ok: false,
+      detail: "1 read failure(s)"
+    });
+    expect(requiredBlockedOutput.recommendedActions).toContain(
+      "run doctor and inspect GitHub App installation/read permissions"
+    );
+
+    const requiredCleanOutput = buildReleaseStatusCommandOutput({
+      status: runtime,
+      monitoringCoverage: buildReleaseMonitoringCoverage({
+        required: true,
+        report: coverageReport({ processed: [processedEntry(101, "head-ok", "posted")] })
+      }),
+      requireCoverage: true
+    });
+    expect(requiredCleanOutput).toMatchObject({
+      ok: true,
+      runtimeOk: true,
+      healthState: "runtime_ok",
+      failedGates: []
+    });
+    expect(requiredCleanOutput.gates.map((gate) => gate.name)).toEqual([
+      "provider_cooldown_backlog",
+      "active_repo_coverage_no_unprocessed_heads",
+      "active_repo_coverage_no_read_failures",
+      "active_repo_coverage_no_stale_heads"
+    ]);
   });
 
   it("uses review budget readiness instead of raw provider-deferred retry counts for gates", () => {
