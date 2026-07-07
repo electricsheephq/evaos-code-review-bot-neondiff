@@ -1,0 +1,76 @@
+name: Desktop release smoke
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned-desktop-release-smoke:
+    name: Unsigned desktop release smoke
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/neondiff-desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run desktop core checks
+        run: swift run NeonDiffDesktopCoreChecks
+
+      - name: Run desktop appcast checks
+        run: swift run NeonDiffDesktopAppcastChecks
+
+      - name: Build unsigned app bundle
+        run: script/build_and_run.sh build
+
+      - name: Check unsigned app bundle
+        run: script/build_and_run.sh bundle-check
+
+      - name: Package unsigned app bundle and metadata
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          mkdir -p dist/release-smoke
+          ditto -c -k --keepParent dist/NeonDiffDesktop.app dist/release-smoke/NeonDiffDesktop.app.zip
+          cat > dist/release-smoke/desktop-release-smoke-metadata.json <<JSON
+          {
+            "workflow": "desktop-release-smoke",
+            "artifact": "NeonDiffDesktop.app.zip",
+            "artifact_classification": "unsigned-desktop-release-smoke",
+            "source_sha": "$SOURCE_SHA",
+            "source_ref": "$SOURCE_REF",
+            "release_ready": false,
+            "customer_ready": false,
+            "ui_launch": false,
+            "proof_boundary": "non-release app bundle build, hosted-runner-safe core checks, appcast checks, and bundle structure check only"
+          }
+          JSON
+
+      - name: Upload unsigned app bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: neondiff-desktop-unsigned-app
+          path: apps/neondiff-desktop/dist/release-smoke/NeonDiffDesktop.app.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload release-smoke metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: neondiff-desktop-release-smoke-metadata
+          path: apps/neondiff-desktop/dist/release-smoke/desktop-release-smoke-metadata.json
+          if-no-files-found: error
+          retention-days: 14
