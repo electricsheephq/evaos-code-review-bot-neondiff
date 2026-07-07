@@ -72,7 +72,12 @@ describe("Swift CI velocity policy", () => {
     expect(codeql).toMatch(/languages:\s*swift/);
     expect(codeql).toMatch(/build-mode:\s*manual/);
     expect(codeql).toMatch(/swift build --product NeonDiffDesktop/);
-    expect(codeql).toMatch(/security-events:\s*write/);
+    expect(codeql).toMatch(/upload:\s*false/);
+    expect(codeql).toMatch(/upload-database:\s*false/);
+    expect(codeql).toMatch(/wait-for-processing:\s*false/);
+    expect(codeql).toMatch(/default setup is enabled/);
+    expect(codeql).toMatch(/#393/);
+    expect(codeql).not.toMatch(/security-events:\s*write/);
     expect(codeql).toMatch(/persist-credentials:\s*false/);
     expect(codeql).not.toMatch(/actions\/checkout@v4/);
     expect(codeql).not.toMatch(/github\/codeql-action\/init@v3/);
