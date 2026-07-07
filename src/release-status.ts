@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
 import { buildReviewBudgetStatus, type ReviewBudgetStatus } from "./review-budget.js";
@@ -841,7 +841,9 @@ function validateLicenseHealthProof(input: {
   now?: Date;
 }): { ok: boolean; detail: string } {
   if (!input.proofPath) return { ok: false, detail: "missing health proof (missing)" };
-  const absolutePath = resolve(input.cwd, input.proofPath);
+  const confinedPath = resolveConfinedHealthProofPath(input.cwd, input.proofPath);
+  if (!confinedPath.ok) return { ok: false, detail: `invalid health proof ${input.proofPath}: ${confinedPath.detail}` };
+  const absolutePath = confinedPath.absolutePath;
   if (!existsSync(absolutePath)) return { ok: false, detail: `missing health proof ${input.proofPath}` };
 
   let proof: Record<string, unknown>;
@@ -901,6 +903,30 @@ function validateLicenseHealthProof(input: {
   return failures.length
     ? { ok: false, detail: `invalid health proof ${input.proofPath}: ${failures.join("; ")}` }
     : { ok: true, detail: `validated health proof ${input.proofPath}` };
+}
+
+function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: true; absolutePath: string } | { ok: false; detail: string } {
+  if (isAbsolute(proofPath)) {
+    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+  }
+  const evidenceRoot = resolve(cwd, "docs", "evidence");
+  const absolutePath = resolve(cwd, proofPath);
+  if (!isPathInsideOrEqual(absolutePath, evidenceRoot)) {
+    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+  }
+  if (!existsSync(absolutePath)) return { ok: true, absolutePath };
+
+  const realEvidenceRoot = realpathSync.native(evidenceRoot);
+  const realProofPath = realpathSync.native(absolutePath);
+  if (!isPathInsideOrEqual(realProofPath, realEvidenceRoot)) {
+    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+  }
+  return { ok: true, absolutePath };
+}
+
+function isPathInsideOrEqual(target: string, root: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function isUpdateChannelStateAcceptable(name: string, state: string, requiredForThisRelease: boolean): boolean {
