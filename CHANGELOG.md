@@ -16,6 +16,12 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.42-beta.1] - docs/releases/v0.4.42-beta.1.md
+
+### Added
+- Add the completed buildable NeonDiff roadmap batch: desktop onboarding wizard, Sparkle appcast channel model/dry-run generator, and signed Mac release runbook documentation
+- Keep the public npm package held at `neondiff@0.4.30-beta.1` while promoting the source-only beta release surface to the current merged head
+
 ## [0.4.41-beta.1] - docs/releases/v0.4.41-beta.1.md
 
 ### Added
