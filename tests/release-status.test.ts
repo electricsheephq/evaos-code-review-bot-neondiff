@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -226,11 +226,15 @@ describe("beta release status", () => {
 
   it("validates the shipped public release manifest against the shipped release notes", () => {
     // Intentional shipped-manifest smoke: keep assertions scoped to publicRelease fields.
+    const shippedProof = JSON.parse(
+      readFileSync(join(repoRoot, "docs/evidence/v0.4.43-beta.1-license-api-healthz.json"), "utf8")
+    ) as { observedAt: string };
+    const proofObservedAt = Date.parse(shippedProof.observedAt);
     const manifest = readPublicReleaseManifestStatus({
       cwd: repoRoot,
       manifestPath: "docs/public-release-manifest.json",
       expectedVersion: "v0.4.43-beta.1",
-      now: new Date("2026-07-07T12:31:00.000Z")
+      now: new Date(proofObservedAt + 15_000)
     });
 
     expect(manifest).toMatchObject({
