@@ -10,11 +10,5 @@
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure url="https://updates.neondiff.com/stable/NeonDiffDesktop-1.0.0.zip" length="12345678" type="application/octet-stream" sparkle:version="100" sparkle:shortVersionString="1.0.0" sparkle:minimumSystemVersion="14.0" />
     </item>
-    <item>
-      <title>NeonDiff Desktop 1.1.0 rollback marker</title>
-      <pubDate>Tue, 07 Jul 2026 01:00:00 +0000</pubDate>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://updates.neondiff.com/stable/NeonDiffDesktop-1.1.0.zip" length="14345678" type="application/octet-stream" sparkle:version="110" sparkle:shortVersionString="1.1.0" sparkle:minimumSystemVersion="14.0" />
-    </item>
   </channel>
 </rss>

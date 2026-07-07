@@ -11,6 +11,16 @@ public enum AppcastSignatureState: String, Codable, Hashable {
     case invalidFixture
 }
 
+public enum AppcastUpdateStatus: String, Codable, CaseIterable, Hashable {
+    case noUpdate = "no_update"
+    case updateAvailable = "update_available"
+    case blockedByLicense = "blocked_by_license"
+    case networkError = "network_error"
+    case signatureError = "signature_error"
+    case feedInvalid = "feed_invalid"
+    case unsupportedChannel = "unsupported_channel"
+}
+
 public struct AppcastRelease: Codable, Equatable, Hashable {
     public var version: String
     public var build: String
@@ -69,19 +79,28 @@ public struct AppcastManifest: Codable, Equatable {
     public var channel: AppcastChannel
     public var title: String
     public var feedURL: String
+    public var expectedStatus: AppcastUpdateStatus?
     public var releases: [AppcastRelease]
 
     private enum CodingKeys: String, CodingKey {
         case channel
         case title
         case feedURL = "feed_url"
+        case expectedStatus = "expected_status"
         case releases
     }
 
-    public init(channel: AppcastChannel, title: String, feedURL: String, releases: [AppcastRelease]) {
+    public init(
+        channel: AppcastChannel,
+        title: String,
+        feedURL: String,
+        expectedStatus: AppcastUpdateStatus? = nil,
+        releases: [AppcastRelease]
+    ) {
         self.channel = channel
         self.title = title
         self.feedURL = feedURL
+        self.expectedStatus = expectedStatus
         self.releases = releases
     }
 
@@ -101,9 +120,37 @@ public struct AppcastManifest: Codable, Equatable {
     }
 
     public func releasesForAppcast() -> [AppcastRelease] {
+        let channelReleases = releases.filter { $0.channel == channel }
+        if let rollbackTarget = channelReleases.compactMap(\.rollbackTo).last,
+           let pinned = channelReleases.first(where: { $0.version == rollbackTarget }) {
+            return channelReleases
+                .filter { release in
+                    release.rollbackTo == nil && !compareVersionsDescending(release, pinned)
+                }
+                .sorted(by: compareVersionsDescending)
+        }
         guard let latest = latestRelease() else { return [] }
         let remaining = releases.filter { $0 != latest }.sorted(by: compareVersionsDescending)
         return [latest] + remaining
+    }
+
+    public func dryRunStatus(
+        currentBuild: String,
+        allowedChannels: Set<AppcastChannel> = Set(AppcastChannel.allCases),
+        licenseAllowsPrivateArtifacts: Bool = true,
+        networkAvailable: Bool = true
+    ) -> AppcastUpdateStatus {
+        guard networkAvailable else { return .networkError }
+        guard !releases.isEmpty else { return .feedInvalid }
+        guard allowedChannels.contains(channel) else { return .unsupportedChannel }
+        guard let latest = latestRelease() else { return .feedInvalid }
+        if !licenseAllowsPrivateArtifacts && latest.artifactURL.contains("/private/") {
+            return .blockedByLicense
+        }
+        if latest.signatureState == .invalidFixture {
+            return .signatureError
+        }
+        return compareBuilds(latest.build, currentBuild) == .orderedDescending ? .updateAvailable : .noUpdate
     }
 }
 
@@ -115,11 +162,19 @@ private func compareVersionsDescending(_ lhs: AppcastRelease, _ rhs: AppcastRele
         let right = index < rhsParts.count ? rhsParts[index] : 0
         if left != right { return left > right }
     }
-    return lhs.build > rhs.build
+    return compareBuilds(lhs.build, rhs.build) == .orderedDescending
 }
 
 private func versionParts(_ value: String) -> [Int] {
     value
         .split { !$0.isNumber }
         .map { Int($0) ?? 0 }
+}
+
+private func compareBuilds(_ lhs: String, _ rhs: String) -> ComparisonResult {
+    if let left = Int(lhs), let right = Int(rhs) {
+        if left == right { return .orderedSame }
+        return left > right ? .orderedDescending : .orderedAscending
+    }
+    return lhs.compare(rhs, options: [.numeric])
 }

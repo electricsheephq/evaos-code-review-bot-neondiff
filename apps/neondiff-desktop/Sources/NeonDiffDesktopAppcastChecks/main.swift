@@ -28,6 +28,8 @@ check(!betaXML.contains("sparkle:edSignature=\"\""), "dry-run does not emit empt
 
 let rollback = try AppcastManifest.load(from: fixtures.appendingPathComponent("rollback.json"))
 check(rollback.latestRelease()?.version == "1.0.0", "rollback pins prior stable")
+let rollbackXML = try AppcastSerializer.serialize(rollback)
+check(!rollbackXML.contains("NeonDiffDesktop-1.1.0.zip"), "rollback appcast excludes superseded build")
 
 let signatureFailure = try AppcastManifest.load(from: fixtures.appendingPathComponent("signature-failure.json"))
 check(signatureFailure.releases.contains { $0.signatureState == .invalidFixture }, "signature failure fixture is marked invalid")
@@ -47,6 +49,25 @@ for fixtureName in ["beta", "stable", "rollback", "signature-failure"] {
         .trimmingCharacters(in: .whitespacesAndNewlines)
     check(actualXML == expectedXML, "\(fixtureName) matches committed appcast XML fixture")
 }
+
+let stale = try AppcastManifest.load(from: fixtures.appendingPathComponent("stale-version.json"))
+let licenseBlocked = try AppcastManifest.load(from: fixtures.appendingPathComponent("license-blocked.json"))
+let emptyFeed = AppcastManifest(
+    channel: .stable,
+    title: "Empty feed fixture",
+    feedURL: "https://updates.neondiff.com/stable/appcast.xml",
+    releases: []
+)
+check(AppcastUpdateStatus.allCases.map(\.rawValue).contains("signature_error"), "status taxonomy includes signature_error")
+check(beta.dryRunStatus(currentBuild: "100") == .updateAvailable, "beta fixture status is update_available")
+check(stable.dryRunStatus(currentBuild: "90") == .updateAvailable, "stable fixture status is update_available")
+check(rollback.dryRunStatus(currentBuild: "90") == .updateAvailable, "rollback fixture status is update_available")
+check(signatureFailure.dryRunStatus(currentBuild: "90") == .signatureError, "signature fixture status is signature_error")
+check(stale.dryRunStatus(currentBuild: "100") == .noUpdate, "stale fixture status is no_update")
+check(licenseBlocked.dryRunStatus(currentBuild: "90", licenseAllowsPrivateArtifacts: false) == .blockedByLicense, "license fixture status is blocked_by_license")
+check(stable.dryRunStatus(currentBuild: "90", networkAvailable: false) == .networkError, "network outage status is network_error")
+check(stable.dryRunStatus(currentBuild: "90", allowedChannels: [.beta]) == .unsupportedChannel, "channel filter status is unsupported_channel")
+check(emptyFeed.dryRunStatus(currentBuild: "90") == .feedInvalid, "empty feed status is feed_invalid")
 
 let dryRun = AppcastDryRun(fixture: fixtures.appendingPathComponent("beta.json"), output: nil)
 let output = try dryRun.run()

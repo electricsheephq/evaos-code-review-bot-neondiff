@@ -2,6 +2,7 @@
   "channel": "stable",
   "title": "NeonDiff Desktop License Blocked Fixture",
   "feed_url": "https://updates.neondiff.com/stable/appcast.xml",
+  "expected_status": "blocked_by_license",
   "releases": [
     {
       "version": "1.0.0",

@@ -8,7 +8,8 @@ It does not prove hosted feeds, notarized artifacts, or real EdDSA signing.
 - `beta`: early desktop builds for opted-in testers.
 - `stable`: signed release builds after the Mac release runbook has passed.
 - Rollback is represented by a stable feed whose newest marker pins the channel
-  latest to an earlier stable version via `rollback_to`.
+  latest to an earlier stable version via `rollback_to`; the generated appcast
+  excludes the superseded newer build so Sparkle cannot select it.
 
 ## Dry-Run Generator
 
@@ -17,7 +18,7 @@ Generate a local appcast from a committed fixture:
 ```sh
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture fixtures/appcast/beta.json \
-  --output /tmp/neondiff-beta-appcast.xml \
+  --output /Volumes/LEXAR/Codex/evidence/neondiff-desktop/neondiff-beta-appcast.xml \
   --dry-run
 ```
 
@@ -28,6 +29,23 @@ contains an `ed_signature`, such as the signature-failure fixture.
 The generated XML follows Sparkle 2's appcast publishing model: beta releases
 use the item-level `sparkle:channel` element, and EdDSA signatures live on the
 download enclosure as `sparkle:edSignature`.
+
+## Dry-Run Status Taxonomy
+
+The appcast core models these update outcomes for fixtures and release evidence:
+
+- `no_update`
+- `update_available`
+- `blocked_by_license`
+- `network_error`
+- `signature_error`
+- `feed_invalid`
+- `unsupported_channel`
+
+These statuses are evidence taxonomy for dry-run planning and tests. Mapping
+real Sparkle delegate errors into the desktop UI requires signed/notarized
+artifacts and hosted appcasts, so that runtime proof remains in the owner/Codex
+release lane.
 
 ## Fixtures
 

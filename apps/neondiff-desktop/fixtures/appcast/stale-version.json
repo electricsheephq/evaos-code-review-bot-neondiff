@@ -2,6 +2,7 @@
   "channel": "stable",
   "title": "NeonDiff Desktop Stale Version Fixture",
   "feed_url": "https://updates.neondiff.com/stable/appcast.xml",
+  "expected_status": "no_update",
   "releases": [
     {
       "version": "0.8.0",
