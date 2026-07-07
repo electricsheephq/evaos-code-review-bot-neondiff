@@ -2130,6 +2130,97 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("advances issue enrichment watermarks after complete scans with only already-processed issues", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-complete-processed-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 3,
+          maxCommentsPerCycle: 1,
+          cooldownMs: 3_600_000,
+          burstWindowMs: 3_600_000,
+          maxIssuesPerBurst: 6,
+          lookbackMs: 600_000,
+          processExistingOpenIssuesOnActivation: false,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 3,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 6,
+              lookbackMs: 600_000,
+              processExistingOpenIssuesOnActivation: false
+            }
+          }
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      const issues = Array.from({ length: 7 }, (_, index) => ({
+        number: 300 + index,
+        title: `Already enriched issue ${index}`,
+        state: "open",
+        updated_at: "2026-07-03T04:01:00.000Z",
+        body: "Acceptance criteria and owner present."
+      }));
+      state.recordIssueEnrichmentRepoWatermark({
+        repo: "owner/issue-repo",
+        activatedAt: "2026-07-03T04:00:00.000Z",
+        lastCheckedAt: "2026-07-03T04:00:00.000Z",
+        now: new Date("2026-07-03T04:00:00.000Z")
+      });
+      for (const issue of issues) {
+        state.recordIssueEnrichment({
+          repo: "owner/issue-repo",
+          issueNumber: issue.number,
+          issueUpdatedAt: "2026-07-03T04:01:00.000Z",
+          status: "posted",
+          commentUrl: `https://github.test/comment/${issue.number}`,
+          now: new Date("2026-07-03T04:01:00.000Z")
+        });
+      }
+
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => Object.assign([...issues], { scanCompletion: "complete" as const }),
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              throw new Error("already processed issues should not post again");
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T04:05:00.000Z"
+        });
+
+        expect(result.summary).toMatchObject({
+          reposScanned: 1,
+          issuesSeen: 7,
+          alreadyProcessed: 7,
+          posted: 0,
+          failed: 0,
+          truncatedRepos: 0
+        });
+        expect(result.repos[0]).toMatchObject({ truncated: false });
+        expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toMatchObject({
+          lastCheckedAt: "2026-07-03T04:05:00.000Z"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not mutate issue enrichment watermarks during dry-run cycles", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-baseline-dry-run-"));
     try {

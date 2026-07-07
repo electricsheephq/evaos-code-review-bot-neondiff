@@ -2,6 +2,7 @@ import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import type { IssueEnrichmentIssueList } from "./issue-enrichment.js";
 import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
@@ -275,8 +276,8 @@ export class GitHubApi {
       excludePullRequests?: boolean;
       minIssueResults?: number;
     } = {}
-  ): Promise<GitHubRelatedIssueOrPull[]> {
-    const issues: GitHubRelatedIssueOrPull[] = [];
+  ): Promise<IssueEnrichmentIssueList> {
+    const issues: IssueEnrichmentIssueList = [];
     const state = options.state ?? "all";
     const perPage = options.perPage ?? 100;
     const pageLimit = options.pageLimit ?? 1;
@@ -295,10 +296,12 @@ export class GitHubApi {
         token: await this.getReadToken(repo)
       });
       issues.push(...(excludePullRequests ? chunk.filter((issue) => !issue.pull_request) : chunk));
-      if (chunk.length < perPage) return issues;
-      if (minIssueResults > 0 && issues.length >= minIssueResults) return issues;
+      if (chunk.length < perPage) return Object.assign(issues, { scanCompletion: "complete" as const });
+      if (minIssueResults > 0 && issues.length >= minIssueResults) {
+        return Object.assign(issues, { scanCompletion: "stopped_after_min_issue_results" as const });
+      }
     }
-    return issues;
+    return Object.assign(issues, { scanCompletion: "page_limit_reached" as const });
   }
 
   async createReview(input: {
