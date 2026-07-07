@@ -12,6 +12,27 @@
 # no npm dependencies are installed in the final image.
 
 ARG NODE_VERSION=26-slim
+ARG LITESTREAM_VERSION=0.5.14
+
+# ---- litestream binary stage ------------------------------------------------
+FROM debian:bookworm-slim AS litestream
+ARG LITESTREAM_VERSION
+ARG TARGETARCH=amd64
+
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends ca-certificates curl tar; \
+  case "${TARGETARCH}" in \
+    amd64) litestream_arch="x86_64"; litestream_sha="32083dd2af13840b273c538360b828368d7b82bbaa2c641106052dc7814ed956" ;; \
+    arm64) litestream_arch="arm64"; litestream_sha="b49b3d01fb0a8b4d426ee613c080fba44acae0551587dc43525dcd93eee64b4f" ;; \
+    *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-${LITESTREAM_VERSION}-linux-${litestream_arch}.tar.gz" -o /tmp/litestream.tar.gz; \
+  echo "${litestream_sha}  /tmp/litestream.tar.gz" | sha256sum -c -; \
+  tar -xzf /tmp/litestream.tar.gz -C /usr/local/bin litestream; \
+  chmod +x /usr/local/bin/litestream; \
+  litestream version; \
+  rm -rf /var/lib/apt/lists/* /tmp/litestream.tar.gz
 
 # ---- build stage -----------------------------------------------------------
 FROM node:${NODE_VERSION} AS build
@@ -36,15 +57,21 @@ WORKDIR /app
 
 # Compiled output only — no node_modules, no source, no devDependencies.
 COPY --from=build /repo/services/license-api/dist ./dist
+COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
 COPY services/license-api/package.json ./package.json
+COPY services/license-api/litestream.yml /etc/litestream.yml
+COPY services/license-api/docker-entrypoint.sh /usr/local/bin/license-api-entrypoint
 
-# SQLite lives on a mounted volume; the app creates the file (and any missing
-# parent directories) itself on startup via mkdirSync — see src/store.ts.
-# The mount point just needs to exist so the volume can attach to it.
-RUN mkdir -p /data
+# SQLite lives on a mounted volume; the app creates the file itself on startup.
+# Keep the image mount point writable for local/dev runs without an attached
+# Fly volume, and verify the mounted-volume ownership during staging DR drills.
+RUN mkdir -p /data && chown node:node /data && chmod +x /usr/local/bin/license-api-entrypoint
 VOLUME ["/data"]
 
 ENV LICENSE_DB_PATH=/data/license.sqlite
+ENV LITESTREAM_CONFIG=/etc/litestream.yml
+ENV LITESTREAM_SYNC_INTERVAL=1s
+ENV LICENSE_LITESTREAM_REQUIRED=true
 ENV PORT=8080
 ENV HOST=0.0.0.0
 EXPOSE 8080
@@ -52,5 +79,7 @@ EXPOSE 8080
 # Runs unprivileged: node:*-slim images ship a non-root "node" user.
 USER node
 
-# Matches the service's own `"start": "node dist/server.js"` exactly.
+# The entrypoint performs the missing-file restore, then either fails closed
+# without a replica URL or starts Litestream supervising this command.
+ENTRYPOINT ["license-api-entrypoint"]
 CMD ["node", "dist/server.js"]

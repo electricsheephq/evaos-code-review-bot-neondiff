@@ -17,13 +17,20 @@ primary_region = "iad"  # placeholder — set to wherever the fleet/owner is clo
   PORT = "8080"
   HOST = "0.0.0.0"
   LICENSE_DB_PATH = "/data/license.sqlite"
+  LITESTREAM_CONFIG = "/etc/litestream.yml"
+  LITESTREAM_SYNC_INTERVAL = "1s"
+  LICENSE_LITESTREAM_REQUIRED = "true"
+  # LICENSE_REPLICA_URL is intentionally not committed here. The owner sets
+  # the object-store replica URL and provider credentials via `flyctl secrets`
+  # before production deploy; see docs/disaster-recovery.md.
 
 # --- Storage -----------------------------------------------------------------
-# SQLite (node:sqlite, see src/store.ts) is a single-writer embedded file DB —
-# it lives on ONE machine's local volume, not shared/replicated storage. A Fly
-# Volume is machine-pinned, so this app must run as a single machine bound to
-# that volume (no horizontal scaling across machines without moving the DB to
-# a real network-attached store first).
+# SQLite (node:sqlite, see src/store.ts) is a single-writer embedded file DB.
+# The live file stays on ONE machine's local Fly Volume at /data, while
+# Litestream streams recovery data to the owner-configured offsite object-store
+# replica. The app must still run as a single writer bound to this volume (no
+# horizontal scaling across machines without moving the DB to a real
+# network-attached store first).
 [mounts]
   source = "license_data"
   destination = "/data"
