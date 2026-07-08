@@ -80,7 +80,7 @@ import { buildReviewPrompt, extractJsonObject, extractZCodeResponse, isZCodeSche
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
-import type { Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
@@ -2895,15 +2895,17 @@ async function runChunkedZCodeReview(input: {
 
     const allowedFilenames = new Set(chunk.filenames);
     const chunkFindings = result.findings.filter((finding) => allowedFilenames.has(finding.path));
-    const droppedCrossChunkFindings = result.findings.length - chunkFindings.length;
+    const droppedCrossChunkFindings: DroppedFinding[] = result.findings
+      .filter((finding) => !allowedFilenames.has(finding.path))
+      .map((finding) => ({ ...finding, reason: "chunk_path_mismatch" }));
     findings.push(...chunkFindings);
-    droppedFromSchema.push(...result.droppedFromSchema);
+    droppedFromSchema.push(...result.droppedFromSchema, ...droppedCrossChunkFindings);
     rawResponses.push({ index: chunk.index, rawResponse: result.rawResponse });
     attempts += result.attempts;
     degradedRecovery = degradedRecovery || result.degradedRecovery;
     providerAttempts += result.runtime.providerAttempts ?? 0;
-    if (droppedCrossChunkFindings > 0) {
-      runtimeNotes.push(`chunk ${chunk.index}: dropped ${droppedCrossChunkFindings} finding(s) outside this chunk's file set.`);
+    if (droppedCrossChunkFindings.length > 0) {
+      runtimeNotes.push(`chunk ${chunk.index}: dropped ${droppedCrossChunkFindings.length} finding(s) outside this chunk's file set.`);
     }
     if (result.runtime.notes) {
       runtimeNotes.push(...result.runtime.notes.map((note) => `chunk ${chunk.index}: ${note}`));

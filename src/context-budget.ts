@@ -195,8 +195,10 @@ function buildFileBoundaryChunks(input: {
   buildPrompt: (files: PullFilePatch[]) => string;
 }): { chunks: ContextBudgetChunk[]; reason?: undefined } | {
   chunks?: undefined;
-  reason: "context_budget_single_file_overflow" | "context_budget_chunk_count_exceeded";
+  reason: "context_budget_overflow" | "context_budget_single_file_overflow" | "context_budget_chunk_count_exceeded";
 } {
+  if (input.files.length === 0) return { reason: "context_budget_overflow" };
+
   const chunks: ContextBudgetChunk[] = [];
   let current: PullFilePatch[] = [];
 
@@ -207,9 +209,12 @@ function buildFileBoundaryChunks(input: {
     }
 
     const candidate = [...current, file];
-    const candidateEstimate = estimateContextTokens(input.buildPrompt(candidate), input.config);
+    const candidateEstimate = current.length === 0
+      ? singleEstimate
+      : estimateContextTokens(input.buildPrompt(candidate), input.config);
     if (current.length > 0 && candidateEstimate > input.budgetTokens) {
       chunks.push(toChunk(chunks.length + 1, current, input));
+      if (chunks.length >= input.config.maxChunks) return { reason: "context_budget_chunk_count_exceeded" };
       current = [file];
       continue;
     }

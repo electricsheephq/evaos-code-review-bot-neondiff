@@ -290,7 +290,13 @@ describe("worker context budget preflight", () => {
       { path: "src/a.ts", line: 1, title: "Chunk A finding" },
       { path: "src/b.ts", line: 1, title: "Chunk B finding" }
     ]);
-    expect(reviewPlan.dropped).toEqual([]);
+    expect(reviewPlan.dropped).toEqual([
+      expect.objectContaining({
+        reason: "chunk_path_mismatch",
+        path: "src/a.ts",
+        title: "Cross-chunk misplaced finding"
+      })
+    ]);
     expect(createdReviews).toHaveLength(1);
     expect(createdReviews[0]).toMatchObject({
       repo: "electricsheephq/WorldOS",

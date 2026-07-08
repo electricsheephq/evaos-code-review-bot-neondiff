@@ -90,6 +90,36 @@ describe("context budget preflight", () => {
     expect(plan.chunks).toBeUndefined();
   });
 
+  it("fails closed when an over-budget chunk plan has no changed files", () => {
+    const files: PullFilePatch[] = [];
+    const buildPrompt = (chunkFiles: PullFilePatch[]) => buildReviewPrompt({
+      repo: "owner/repo",
+      pull: pullSummary(),
+      files: chunkFiles,
+      repoMemoryPacket: advisoryPacket("repo-memory", 1_000)
+    });
+
+    const plan = planContextBudget({
+      prompt: buildPrompt(files),
+      files,
+      contextWindowTokens: 600,
+      config: {
+        ...DEFAULT_CONTEXT_BUDGET_CONFIG,
+        overflow: "chunk",
+        reservedOutputTokens: 100,
+        charsPerToken: 1,
+        providerFudgeFactor: 1
+      },
+      buildPrompt
+    });
+
+    expect(plan).toMatchObject({
+      mode: "skip",
+      reason: "context_budget_overflow"
+    });
+    expect(plan.chunks).toBeUndefined();
+  });
+
   it("keeps the default ZCode budget above the existing max patch prompt ceiling", () => {
     const config = loadConfigFromObject({});
     const files = [file("src/max-patch.ts", config.zcode.maxPatchBytes)];
