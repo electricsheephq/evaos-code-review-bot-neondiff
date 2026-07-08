@@ -112,6 +112,21 @@ mode evidence is stamped as `constrained:<mode>`; `none` and plain
 `json-object` remain the recovery path because they do not enforce the findings
 schema.
 
+OpenAI-compatible provider entries may also set `retrySchemaFeedbackMax`
+(`integer`, `0..3`, default `2`). When a provider returns malformed review JSON
+or JSON that fails the canonical findings schema, NeonDiff can reprompt the same
+chat-completions conversation with only the exact schema error and the canonical
+findings schema. The retry loop uses the same provider timeout as the original
+review call as one total wall-clock budget across all attempts, records
+`schemaRetries` and redacted `schemaRetryErrors` in adapter evidence, and falls
+back to the existing model-output/provider-deferred path after the bounded
+attempts are exhausted. Set the value to `0` to disable this adapter-level
+recovery behavior. Truncated review output, including `finish_reason: "length"`
+or JSON-looking findings output with unclosed delimiters, is excluded from
+schema-feedback retries and fails immediately as a truncation model-output error;
+that failure usually needs a smaller prompt, larger output budget, or stronger
+provider-side structured output rather than another identical reprompt.
+
 ## Safety Defaults
 
 Mutation, finishing touches, issue enrichment, and public confidence percentages are default-off in this draft. A future runtime loader should fail before review starts when a repo config tries to enable unsupported unsafe behavior.

@@ -6,7 +6,7 @@ import {
   REVIEW_FINDINGS_JSON_SCHEMA_STRICT
 } from "./findings-schema.js";
 import { parseFindings } from "./findings.js";
-import { openAICompatibleProviderTargetError, type ProviderRegistryEntry, type ProviderStructuredOutputMode } from "./providers.js";
+import { openAICompatibleProviderTargetError, SCHEMA_FEEDBACK_RETRY_MAX, type ProviderRegistryEntry, type ProviderStructuredOutputMode } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const EVIDENCE_PREVIEW_LIMIT = 500;
@@ -14,6 +14,9 @@ const REVIEW_JSON_EXTRACTION_CHAR_LIMIT = 200_000;
 const REVIEW_JSON_NESTED_OBJECT_MAX_DEPTH = 32;
 const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
 const DEFAULT_OPENAI_COMPATIBLE_REVIEW_TIMEOUT_MS = 180_000;
+const DEFAULT_SCHEMA_FEEDBACK_RETRY_MAX = 2;
+const TRUNCATED_REVIEW_JSON_ERROR = "OpenAI-compatible review output was truncated before a parseable JSON review object.";
+const FINISH_REASON_LENGTH_TRUNCATED_REVIEW_JSON_ERROR = `${TRUNCATED_REVIEW_JSON_ERROR} (finish_reason=length)`;
 const REDACTION_TOKENS = [
   "[redacted-private-evidence]",
   "[redacted-private-field]",
@@ -86,6 +89,16 @@ export interface ProviderAdapterFixtureError {
   message: string;
 }
 
+class ProviderAdapterEvidenceError extends Error {
+  readonly rawEvidence: unknown;
+
+  constructor(message: string, rawEvidence: unknown) {
+    super(message);
+    this.name = "ProviderAdapterEvidenceError";
+    this.rawEvidence = rawEvidence;
+  }
+}
+
 export interface ProviderAdapterFixtureResultBase {
   fixtureId: string;
   providerId: string;
@@ -153,9 +166,16 @@ export async function runProviderAdapterFixture(input: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const rawEvidence = error instanceof ProviderAdapterEvidenceError ? error.rawEvidence : undefined;
     return {
       ok: false,
       ...baseResult,
+      evidence: rawEvidence === undefined
+        ? baseResult.evidence
+        : {
+          ...baseResult.evidence,
+          rawEvidencePreview: previewEvidenceText(stableStringify(redactPrivateEvidenceValue(rawEvidence, fixture.prompt)))
+        },
       error: {
         class: classifyProviderAdapterError(message),
         message: redactPrivateEvidenceText(message, fixture.prompt)
@@ -194,70 +214,223 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
       const apiKey = resolveOpenAICompatibleApiKey(provider, env);
       const timeout = createAbortSignal(provider.timeoutMs);
       const structuredOutput = buildStructuredOutputRequestFields(provider);
-      const requestBody = {
-        model: input.model,
-        stream: false,
-        ...(provider.temperature === undefined ? {} : { temperature: provider.temperature }),
-        ...structuredOutput.requestFields,
-        messages: [
-          {
-            role: "system",
-            content: "Return only the NeonDiff review JSON object. Do not include markdown, prose, tool calls, or raw diff excerpts."
-          },
-          {
-            role: "user",
-            content: input.prompt
-          }
-        ]
-      };
+      const schemaFeedbackMax = resolveSchemaFeedbackRetryMax(provider);
+      const schemaFeedbackErrors: string[] = [];
+      const schemaEvidenceErrors: string[] = [];
       try {
-        const response = await fetchImpl(buildOpenAIChatCompletionsUrl(baseUrl), {
-          method: "POST",
-          signal: timeout.signal,
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-          },
-          body: JSON.stringify(requestBody)
-        });
+        for (let attempt = 0; ; attempt += 1) {
+          const response = await fetchImpl(buildOpenAIChatCompletionsUrl(baseUrl), {
+            method: "POST",
+            signal: timeout.signal,
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+            },
+            body: JSON.stringify(buildOpenAICompatibleReviewRequestBody({
+              provider,
+              model: input.model,
+              prompt: input.prompt,
+              structuredOutput,
+              schemaFeedbackErrors,
+              schemaFeedbackErrorLimit: schemaFeedbackMax
+            }))
+          });
 
-        if (!response.ok) {
-          const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
-          throw new Error(openAICompatibleStatusErrorMessage(response.status, responseErrorText));
-        }
-
-        const responseText = await readResponseTextWithAbort(response, timeout.signal);
-        const parsed = parseOpenAICompatibleResponse(responseText);
-        const content = extractOpenAICompatibleMessageContent(parsed);
-        const reviewOutput = normalizeReviewJsonOutput(content);
-        if (!reviewOutput.ok) {
-          const finishReason = extractOpenAICompatibleFinishReason(parsed);
-          if (finishReason === "length") {
-            throw new Error("OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length).");
+          if (!response.ok) {
+            const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
+            throw new Error(openAICompatibleStatusErrorMessage(response.status, responseErrorText));
           }
-          throw new Error(reviewOutput.error);
-        }
 
-        return {
-          text: reviewOutput.text,
-          reviewJsonValidated: true,
-          rawEvidence: {
-            providerId: options.providerId,
-            adapterId: input.adapterId,
-            model: input.model,
-            baseUrl,
-            structuredOutputMode: structuredOutput.evidenceMode,
-            status: response.status,
-            ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
-            ...extractOpenAICompatibleChoiceEvidence(parsed),
-            ...extractOpenAICompatibleUsageEvidence(parsed)
+          const responseText = await readResponseTextWithAbort(response, timeout.signal);
+          const parsed = parseOpenAICompatibleResponse(responseText);
+          const content = extractOpenAICompatibleMessageContent(parsed);
+          const reviewOutput = normalizeReviewJsonOutput(content);
+          if (!reviewOutput.ok) {
+            const schemaError = openAICompatibleReviewSchemaError(reviewOutput.error, parsed, content);
+            const schemaFeedbackError = buildSchemaFeedbackErrorForPrompt(schemaError, input.prompt);
+            const schemaEvidenceError = redactPrivateEvidenceText(schemaError, input.prompt);
+            if (isTruncatedReviewJsonSchemaError(schemaError) || attempt >= schemaFeedbackMax) {
+              throw new ProviderAdapterEvidenceError(schemaError, buildOpenAICompatibleSchemaRetryEvidence({
+                providerId: options.providerId,
+                adapterId: input.adapterId,
+                model: input.model,
+                baseUrl,
+                structuredOutputMode: structuredOutput.evidenceMode,
+                status: response.status,
+                parsed,
+                schemaRetries: schemaFeedbackErrors.length,
+                schemaRetryErrors: [...schemaEvidenceErrors, schemaEvidenceError]
+              }));
+            }
+            schemaFeedbackErrors.push(schemaFeedbackError);
+            schemaEvidenceErrors.push(schemaEvidenceError);
+            continue;
           }
-        };
+
+          return {
+            text: reviewOutput.text,
+            reviewJsonValidated: true,
+            rawEvidence: {
+              providerId: options.providerId,
+              adapterId: input.adapterId,
+              model: input.model,
+              baseUrl,
+              structuredOutputMode: structuredOutput.evidenceMode,
+              schemaRetries: schemaFeedbackErrors.length,
+              ...(schemaEvidenceErrors.length > 0 ? { schemaRetryErrors: schemaEvidenceErrors } : {}),
+              ...buildOpenAICompatibleResponseEvidence(response.status, parsed)
+            }
+          };
+        }
       } finally {
         timeout.dispose();
       }
     }
+  };
+}
+
+function buildOpenAICompatibleReviewRequestBody(input: {
+  provider: ProviderRegistryEntry;
+  model: string;
+  prompt: string;
+  structuredOutput: { requestFields: Record<string, unknown> };
+  schemaFeedbackErrors: readonly string[];
+  schemaFeedbackErrorLimit: number;
+}): Record<string, unknown> {
+  return {
+    model: input.model,
+    stream: false,
+    ...(input.provider.temperature === undefined ? {} : { temperature: input.provider.temperature }),
+    ...input.structuredOutput.requestFields,
+    messages: [
+      {
+        role: "system",
+        content: "Return only the NeonDiff review JSON object. Do not include markdown, prose, tool calls, or raw diff excerpts."
+      },
+      {
+        role: "user",
+        content: input.prompt
+      },
+      ...(input.schemaFeedbackErrors.length === 0 ? [] : [{
+        role: "user",
+        content: buildSchemaFeedbackRetryPrompt(input.schemaFeedbackErrors, input.schemaFeedbackErrorLimit)
+      }])
+    ]
+  };
+}
+
+function buildSchemaFeedbackRetryPrompt(schemaErrors: readonly string[], maxSchemaErrors: number): string {
+  const schemaErrorLimit = Math.max(1, Math.min(maxSchemaErrors, SCHEMA_FEEDBACK_RETRY_MAX));
+  const recentDistinctErrors = [...new Set(schemaErrors)].slice(-schemaErrorLimit);
+  return [
+    "The previous response could not be accepted as NeonDiff review JSON.",
+    "Recent schema errors:",
+    ...recentDistinctErrors.map((schemaError) => `- ${schemaError}`),
+    `Return only a JSON object matching ${REVIEW_FINDINGS_JSON_SCHEMA_NAME}.`,
+    "Canonical schema:",
+    JSON.stringify(REVIEW_FINDINGS_JSON_SCHEMA)
+  ].join("\n");
+}
+
+function buildSchemaFeedbackErrorForPrompt(schemaError: string, prompt: string): string {
+  const redactedError = redactPrivateEvidenceText(schemaError, prompt);
+  if (redactedError === schemaError) return schemaError;
+  return "Adapter output failed NeonDiff review JSON schema validation.";
+}
+
+function openAICompatibleReviewSchemaError(error: string, parsed: Record<string, unknown>, content: string): string {
+  if (extractOpenAICompatibleFinishReason(parsed) === "length") return FINISH_REASON_LENGTH_TRUNCATED_REVIEW_JSON_ERROR;
+  if (isLikelyTruncatedReviewJsonContent(content)) return TRUNCATED_REVIEW_JSON_ERROR;
+  return error;
+}
+
+function isTruncatedReviewJsonSchemaError(schemaError: string): boolean {
+  return schemaError === TRUNCATED_REVIEW_JSON_ERROR || schemaError === FINISH_REASON_LENGTH_TRUNCATED_REVIEW_JSON_ERROR;
+}
+
+function isLikelyTruncatedReviewJsonContent(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  const boundedText = trimmed.slice(0, REVIEW_JSON_EXTRACTION_CHAR_LIMIT);
+  if (!/"findings"\s*:/.test(boundedText)) return false;
+  try {
+    JSON.parse(boundedText);
+    return false;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return /\b(unexpected end|unterminated)\b/i.test(message) || hasUnclosedJsonDelimiters(boundedText);
+  }
+}
+
+function hasUnclosedJsonDelimiters(value: string): boolean {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const character of value) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = inString;
+      continue;
+    }
+    if (character === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (character === "{" || character === "[") {
+      stack.push(character);
+      continue;
+    }
+    if (character === "}") {
+      if (stack.pop() !== "{") return false;
+      continue;
+    }
+    if (character === "]" && stack.pop() !== "[") return false;
+  }
+  return inString || stack.length > 0;
+}
+
+function resolveSchemaFeedbackRetryMax(provider: ProviderRegistryEntry): number {
+  if (provider.retrySchemaFeedbackMax === undefined) return DEFAULT_SCHEMA_FEEDBACK_RETRY_MAX;
+  if (!Number.isInteger(provider.retrySchemaFeedbackMax) || provider.retrySchemaFeedbackMax < 0 || provider.retrySchemaFeedbackMax > SCHEMA_FEEDBACK_RETRY_MAX) {
+    throw new Error(`retrySchemaFeedbackMax must be an integer from 0 to ${SCHEMA_FEEDBACK_RETRY_MAX}.`);
+  }
+  return provider.retrySchemaFeedbackMax;
+}
+
+function buildOpenAICompatibleSchemaRetryEvidence(input: {
+  providerId: string;
+  adapterId: string;
+  model: string;
+  baseUrl: string;
+  structuredOutputMode: string;
+  status: number;
+  parsed: Record<string, unknown>;
+  schemaRetries: number;
+  schemaRetryErrors: readonly string[];
+}): Record<string, unknown> {
+  return {
+    providerId: input.providerId,
+    adapterId: input.adapterId,
+    model: input.model,
+    baseUrl: input.baseUrl,
+    structuredOutputMode: input.structuredOutputMode,
+    schemaRetries: input.schemaRetries,
+    ...(input.schemaRetryErrors.length > 0 ? { schemaRetryErrors: [...input.schemaRetryErrors] } : {}),
+    ...buildOpenAICompatibleResponseEvidence(input.status, input.parsed)
+  };
+}
+
+function buildOpenAICompatibleResponseEvidence(status: number, parsed: Record<string, unknown>): Record<string, unknown> {
+  return {
+    status,
+    ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
+    ...extractOpenAICompatibleChoiceEvidence(parsed),
+    ...extractOpenAICompatibleUsageEvidence(parsed)
   };
 }
 

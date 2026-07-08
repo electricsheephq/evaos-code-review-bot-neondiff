@@ -174,6 +174,17 @@ default-compatible: unsupported providers can keep the recovery path, while
 schema-capable providers record `structuredOutputMode: "constrained:<mode>"` in
 adapter evidence.
 
+For OpenAI-compatible review adapters, `retrySchemaFeedbackMax` controls bounded
+schema-feedback recovery after malformed or schema-invalid findings JSON. The
+default is `2`; valid values are `0..3`. Each retry appends a compact corrective
+user message containing the schema validation error and canonical findings JSON
+Schema, never the raw rejected model output. Retries share the original provider
+timeout as one total wall-clock budget across all attempts, and record
+`schemaRetries` plus redacted `schemaRetryErrors` in evidence. Truncated output
+is not retried: `finish_reason: "length"` and JSON-looking findings output with
+unclosed delimiters fail immediately as truncation model-output errors because
+an identical schema reprompt does not add output budget or shrink context.
+
 | Mode | Request shape | Intended backend |
 | --- | --- | --- |
 | `none` | no provider-side JSON/structured-output field | recovery-only providers |

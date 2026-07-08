@@ -45,6 +45,7 @@ export type ProviderSmokeRequestImpl = (
 
 export type ProviderAdapter = "zcode" | "openai-compatible" | "anthropic" | "openai" | "gemini";
 export type ProviderAuthMode = "zcode-app-config" | "api-key-env" | "none";
+export const SCHEMA_FEEDBACK_RETRY_MAX = 3;
 export const PROVIDER_STRUCTURED_OUTPUT_MODES = [
   "none",
   "json-object",
@@ -76,6 +77,7 @@ export interface ProviderRegistryEntry {
   contextWindowTokens?: number;
   timeoutMs?: number;
   retryMaxRetries?: number;
+  retrySchemaFeedbackMax?: number;
   temperature?: number;
   jsonObjectResponseFormat?: boolean;
   structuredOutputMode?: ProviderStructuredOutputMode;
@@ -109,6 +111,7 @@ export interface ProviderRegistrySummaryEntry {
   contextWindowTokens?: number;
   timeoutMs?: number;
   retryMaxRetries?: number;
+  retrySchemaFeedbackMax?: number;
   structuredOutputMode?: ProviderStructuredOutputMode;
   capabilities: ProviderCapabilityFlags;
   currentRuntime?: boolean;
@@ -160,6 +163,7 @@ export function buildProviderRegistrySummary(input: {
       ...(provider.contextWindowTokens ? { contextWindowTokens: provider.contextWindowTokens } : {}),
       ...(provider.timeoutMs ? { timeoutMs: provider.timeoutMs } : {}),
       ...(provider.retryMaxRetries !== undefined ? { retryMaxRetries: provider.retryMaxRetries } : {}),
+      ...(provider.retrySchemaFeedbackMax !== undefined ? { retrySchemaFeedbackMax: provider.retrySchemaFeedbackMax } : {}),
       ...(provider.structuredOutputMode ? { structuredOutputMode: provider.structuredOutputMode } : {}),
       capabilities: provider.capabilities,
       currentRuntime: provider.adapter === "zcode" && (

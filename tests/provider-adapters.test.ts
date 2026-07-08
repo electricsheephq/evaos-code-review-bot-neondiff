@@ -527,6 +527,340 @@ describe("provider adapter fixtures", () => {
     expect(result.evidence.rawEvidencePreview).toContain('"structuredOutputMode":"recovery"');
   });
 
+  it("retries malformed OpenAI-compatible review JSON with schema feedback and records retry evidence", async () => {
+    const calls: unknown[] = [];
+    const signals: AbortSignal[] = [];
+    const fakeSecret = ["ghp", "schemaFeedbackFixtureToken1234567890"].join("_");
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 2,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          signals.push(init?.signal as AbortSignal);
+          const body = JSON.parse(String(init?.body)) as {
+            messages?: Array<{ role?: string; content?: string }>;
+          };
+          calls.push(body);
+          if (calls.length === 1) {
+            return jsonResponse({
+              id: "malformed-first",
+              choices: [
+                {
+                  message: {
+                    content: `not json ${fakeSecret}`
+                  }
+                }
+              ]
+            });
+          }
+          expect(body.messages).toHaveLength(3);
+          expect(body.messages?.at(-1)?.role).toBe("user");
+          expect(body.messages?.at(-1)?.content).toContain("Adapter output was not a parseable JSON review object.");
+          expect(body.messages?.at(-1)?.content).toContain(REVIEW_FINDINGS_JSON_SCHEMA_NAME);
+          expect(body.messages?.at(-1)?.content).toContain('"findings"');
+          expect(body.messages?.at(-1)?.content).not.toContain(fakeSecret);
+          return jsonResponse({
+            id: "valid-second",
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[],"summary":"Recovered after schema feedback."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-fixture",
+        providerId: "schema-feedback-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]).toBe(signals[0]);
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":1');
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output was not a parseable JSON review object."]');
+    expect(result.evidence.rawEvidencePreview).not.toContain(fakeSecret);
+  });
+
+  it("includes recent distinct schema errors in one bounded schema-feedback prompt", async () => {
+    let calls = 0;
+    const requestBodies: Array<{ messages?: Array<{ role?: string; content?: string }> }> = [];
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-multi-error-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 2,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          calls += 1;
+          const body = JSON.parse(String(init?.body)) as { messages?: Array<{ role?: string; content?: string }> };
+          requestBodies.push(body);
+          return jsonResponse({
+            id: `schema-feedback-multi-error-${calls}`,
+            choices: [
+              {
+                message: {
+                  content: calls === 1
+                    ? "not json"
+                    : calls === 2
+                      ? "{\"notFindings\":[]}"
+                      : '{"findings":[],"summary":"Recovered after two schema errors."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-multi-error-fixture",
+        providerId: "schema-feedback-multi-error-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(3);
+    expect(requestBodies[2]?.messages).toHaveLength(3);
+    const feedbackPrompt = requestBodies[2]?.messages?.at(-1)?.content ?? "";
+    expect(feedbackPrompt).toContain("Recent schema errors:");
+    expect(feedbackPrompt).toContain("- Adapter output was not a parseable JSON review object.");
+    expect(feedbackPrompt).toContain("- Adapter output did not contain a review findings array.");
+    expect(feedbackPrompt.match(/Canonical schema:/g)).toHaveLength(1);
+    expect(feedbackPrompt).toContain(REVIEW_FINDINGS_JSON_SCHEMA_NAME);
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":2');
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output was not a parseable JSON review object.","Adapter output did not contain a review findings array."]');
+  });
+
+  it("retries parseable findings JSON that fails canonical schema validation", async () => {
+    const requestBodies: Array<{ messages?: Array<{ role?: string; content?: string }> }> = [];
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-invalid-finding-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 1,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as { messages?: Array<{ role?: string; content?: string }> };
+          requestBodies.push(body);
+          return jsonResponse({
+            id: `schema-feedback-invalid-finding-${requestBodies.length}`,
+            choices: [
+              {
+                message: {
+                  content: requestBodies.length === 1
+                    ? '{"findings":[{"severity":"P1","path":"src/app.ts","line":12,"title":"Bug","body":"Fix it.","confidence":1.0000001}]}'
+                    : '{"findings":[],"summary":"Recovered after invalid finding schema."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-invalid-finding-fixture",
+        providerId: "schema-feedback-invalid-finding-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies[1]?.messages?.at(-1)?.content).toContain("Adapter output contained invalid review findings.");
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":1');
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output contained invalid review findings."]');
+  });
+
+  it("does not retry malformed review JSON when schema feedback is disabled", async () => {
+    const calls: unknown[] = [];
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-disabled-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 0,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as {
+            messages?: Array<{ role?: string; content?: string }>;
+          };
+          calls.push(body);
+          expect(body.messages).toHaveLength(2);
+          return jsonResponse({
+            id: "malformed-disabled",
+            choices: [
+              {
+                message: {
+                  content: "not json"
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-disabled-fixture",
+        providerId: "schema-feedback-disabled-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "Adapter output was not a parseable JSON review object."
+      }
+    });
+  });
+
+  it("exhausts bounded schema-feedback retries without changing the model-output error class", async () => {
+    let calls = 0;
+    const requestBodies: Array<{ messages?: Array<{ role?: string; content?: string }> }> = [];
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-exhausted-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 1,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          calls += 1;
+          requestBodies.push(JSON.parse(String(init?.body)) as { messages?: Array<{ role?: string; content?: string }> });
+          return jsonResponse({
+            id: `malformed-${calls}`,
+            choices: [
+              {
+                message: {
+                  content: calls === 1 ? "not json" : "{\"notFindings\":[]}"
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-exhausted-fixture",
+        providerId: "schema-feedback-exhausted-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(calls).toBe(2);
+    expect(requestBodies[1]?.messages).toHaveLength(3);
+    expect(requestBodies[1]?.messages?.filter((message) => message.content?.includes(REVIEW_FINDINGS_JSON_SCHEMA_NAME))).toHaveLength(1);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "Adapter output did not contain a review findings array."
+      }
+    });
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":1');
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output was not a parseable JSON review object.","Adapter output did not contain a review findings array."]');
+  });
+
+  it.each([
+    ["out-of-range", 5],
+    ["non-integer", 1.5]
+  ])("rejects %s adapter-level schema-feedback retry limits before fetching", async (_label, retrySchemaFeedbackMax) => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "invalid-schema-feedback-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[]}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: `invalid-schema-feedback-${_label}-fixture`,
+        providerId: "invalid-schema-feedback-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(calls).toBe(0);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "retrySchemaFeedbackMax must be an integer from 0 to 3."
+      }
+    });
+  });
+
+  it("classifies a shared schema-feedback retry deadline as timeout", async () => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-timeout-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 1,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          if (calls === 1) {
+            return jsonResponse({
+              id: "malformed-before-timeout",
+              choices: [
+                {
+                  message: {
+                    content: "not json"
+                  }
+                }
+              ]
+            });
+          }
+          throw new Error("deadline exceeded");
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-timeout-fixture",
+        providerId: "schema-feedback-timeout-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "timeout",
+        message: "deadline exceeded"
+      }
+    });
+  });
+
   it("times out OpenAI-compatible responses that stall after headers", async () => {
     let bodyCancelled = false;
     const result = await runProviderAdapterFixture({
@@ -715,22 +1049,26 @@ describe("provider adapter fixtures", () => {
   });
 
   it("preserves finish_reason length when OpenAI-compatible review JSON is truncated", async () => {
+    let calls = 0;
     const result = await runProviderAdapterFixture({
       adapter: createOpenAICompatibleReviewAdapter({
         providerId: "truncated-local-model",
         provider: makeOpenAICompatibleProvider({
           baseUrl: "http://localhost:8080/v1"
         }),
-        fetchImpl: async () => jsonResponse({
-          choices: [
-            {
-              finish_reason: "length",
-              message: {
-                content: '{"findings":[{"severity":"P1"'
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                finish_reason: "length",
+                message: {
+                  content: '{"findings":[{"severity":"P1"'
+                }
               }
-            }
-          ]
-        })
+            ]
+          });
+        }
       }),
       fixture: makeFixture({
         id: "truncated-local-model-fixture",
@@ -744,9 +1082,129 @@ describe("provider adapter fixtures", () => {
       ok: false,
       error: {
         class: "model-output",
-        message: "OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length)."
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object. (finish_reason=length)"
       }
     });
+    expect(calls).toBe(1);
+  });
+
+  it("treats finish_reason length as truncation even when the body is not JSON-looking", async () => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "length-finish-reason-non-json-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1",
+          retrySchemaFeedbackMax: 2
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                finish_reason: "length",
+                message: {
+                  content: "partial prose response"
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "length-finish-reason-non-json-local-model-fixture",
+        providerId: "length-finish-reason-non-json-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object. (finish_reason=length)"
+      }
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("does not schema-retry JSON-looking truncated review output without finish_reason length", async () => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "truncated-without-finish-reason-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[{"severity":"P1"'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "truncated-without-finish-reason-local-model-fixture",
+        providerId: "truncated-without-finish-reason-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object."
+      }
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("detects truncated review JSON when findings appears after the old short scan window", async () => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "delayed-findings-truncated-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: `{"preamble":"${"x".repeat(3_000)}","findings":[{"severity":"P1"`
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "delayed-findings-truncated-local-model-fixture",
+        providerId: "delayed-findings-truncated-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object."
+      }
+    });
+    expect(calls).toBe(1);
   });
 
   it("extracts trailing review JSON after deeply nested non-review braces", async () => {
