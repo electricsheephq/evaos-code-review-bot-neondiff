@@ -74,6 +74,12 @@ Recommended package install for the current beta:
 npm install -g neondiff@0.4.30-beta.1
 ```
 
+GA/latest package install path after the `v1.0.0` dist-tag cutover:
+
+```bash
+npm install -g neondiff
+```
+
 Installer script path:
 
 ```bash
@@ -114,6 +120,10 @@ neondiff providers list --config config.local.json --json
 neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
+
+The local HTML dashboard is the first-run setup surface. It shows license status,
+GitHub App status, daemon status, and provider readiness, and its provider card
+includes a `Verify API Key` control that reports redacted pass/fail output.
 
 Create or install the GitHub App before expecting PR reviews to run. The App
 must be installed on the same selected repositories listed in `pilotRepos`; see
