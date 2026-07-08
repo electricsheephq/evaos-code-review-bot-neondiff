@@ -580,9 +580,10 @@ export function readPublicReleaseManifestStatus(input: {
     const licenseHealthProofPath = readString(licenseApi.healthProofPath);
     const licenseHealthUrl = readString(licenseApi.healthUrl);
     const explicitLicenseIssuanceRequired = readBoolean(licenseApi.checkoutIssuanceRequiredForThisRelease);
+    const releaseRequiresCheckoutIssuance =
+      (releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta") && licenseRequired;
     const licenseIssuanceRequired =
-      explicitLicenseIssuanceRequired ??
-      ((releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta") && licenseRequired);
+      releaseRequiresCheckoutIssuance && !(explicitLicenseIssuanceRequired === false && releaseLevel === "source-beta");
     const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
     const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
     const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
@@ -613,7 +614,9 @@ export function readPublicReleaseManifestStatus(input: {
       issuanceTrackingIssue: licenseIssuanceTrackingIssue,
       proofRequired: licenseNeedsIssuanceProof,
       healthProofRequired: licenseNeedsHealthProof && licenseHealthGateOk,
-      issuanceRequiredExplicit: explicitLicenseIssuanceRequired
+      issuanceRequiredExplicit: explicitLicenseIssuanceRequired,
+      releaseLevel,
+      expectedHost: extractUrlHost(licenseHealthUrl)
     });
     const licenseIssuanceProof = licenseNeedsIssuanceProof
       ? validateLicenseIssuanceProof({
@@ -1125,13 +1128,19 @@ function validateLicenseIssuanceMetadata(input: {
   proofRequired: boolean;
   healthProofRequired: boolean;
   issuanceRequiredExplicit?: boolean;
+  releaseLevel: string;
+  expectedHost?: string;
 }): string[] {
   const failures: string[] = [];
   if (input.proofRequired && !input.issuanceUrl) {
     failures.push("checkoutIssuanceUrl must be present when validating checkout issuance proof");
   }
-  if (input.healthProofRequired && input.issuanceRequiredExplicit === false && !input.issuanceTrackingIssue) {
-    failures.push("checkoutIssuanceTrackingIssue must be present when checkout issuance proof is deferred");
+  if (input.healthProofRequired && input.issuanceRequiredExplicit === false) {
+    if (input.releaseLevel !== "source-beta") {
+      failures.push("checkoutIssuanceRequiredForThisRelease:false is only allowed for source-beta releases");
+    } else if (!input.issuanceTrackingIssue) {
+      failures.push("checkoutIssuanceTrackingIssue must be present when checkout issuance proof is deferred");
+    }
   }
   if (input.issuanceTrackingIssue) {
     const trackingIssueFailure = validateGithubIssueUrl(
@@ -1141,7 +1150,7 @@ function validateLicenseIssuanceMetadata(input: {
     if (trackingIssueFailure) failures.push(trackingIssueFailure);
   }
   if (input.issuanceUrl) {
-    const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl);
+    const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl, input.expectedHost);
     if (issuanceUrlFailure) failures.push(issuanceUrlFailure);
   }
   if (input.issuanceProofPath && !input.proofRequired) {
@@ -1192,7 +1201,16 @@ function validateLicenseHealthUrl(healthUrl: string): string | undefined {
   return undefined;
 }
 
-function validateLicenseIssuanceUrl(issuanceUrl: string): string | undefined {
+function extractUrlHost(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function validateLicenseIssuanceUrl(issuanceUrl: string, expectedHost?: string): string | undefined {
   let parsed: URL;
   try {
     parsed = new URL(issuanceUrl);
@@ -1208,6 +1226,9 @@ function validateLicenseIssuanceUrl(issuanceUrl: string): string | undefined {
     parsed.hash
   ) {
     return "checkoutIssuanceUrl must be an https URL ending in /v1/admin/licenses/issue with no credentials, query, or fragment";
+  }
+  if (expectedHost && parsed.hostname !== expectedHost) {
+    return `checkoutIssuanceUrl host must match healthUrl host ${expectedHost}`;
   }
   return undefined;
 }
