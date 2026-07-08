@@ -2249,6 +2249,149 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("repairs an already-settled direct-review status comment without an active queue row", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-direct-review-settled-status-repair-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewStatusComment: { enabled: true }
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const headSha = "abababababababababababababababababababab";
+    const pull = pullSummary(1242, headSha);
+    const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1242#pullrequestreview-10";
+    const statusCalls: Array<{ marker: string; body: string }> = [];
+    const github = {
+      canPostAsApp: () => true,
+      upsertIssueComment: async (input: { marker: string; body: string }) => {
+        statusCalls.push(input);
+        return { action: "updated" as const, id: 12348, html_url: "https://github.test/status-comment" };
+      }
+    } as unknown as GitHubApi;
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl
+    });
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "posted",
+      reviewUrl,
+      lastError: "reviewed"
+    });
+    state.recordReviewReadiness({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl,
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+
+    const result = await reconcileProcessedHeadAfterDirectReview({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      now: new Date("2026-07-05T00:03:00.000Z")
+    });
+
+    expect(result).toEqual({ activeQueueJobs: 0, settledQueueJobs: 0, statusCommentPosted: true });
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl,
+      lastError: "reviewed"
+    });
+    expect(statusCalls).toHaveLength(1);
+    expect(statusCalls[0]?.marker).toBe(
+      `<!-- evaos-code-review-bot:review-status repo=electricsheephq/WorldOS pr=1242 sha=${headSha} -->`
+    );
+    expect(statusCalls[0]?.body).toContain("review-status-state status=completed");
+    expect(statusCalls[0]?.body).toContain(reviewUrl);
+    state.close();
+  });
+
+  it("repairs missing direct-review readiness from processed truth without an active queue row", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-direct-review-settled-readiness-repair-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewStatusComment: { enabled: true }
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const headSha = "babababababababababababababababababababa";
+    const pull = pullSummary(1243, headSha);
+    const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1243#pullrequestreview-11";
+    const statusCalls: Array<{ marker: string; body: string }> = [];
+    const github = {
+      canPostAsApp: () => true,
+      upsertIssueComment: async (input: { marker: string; body: string }) => {
+        statusCalls.push(input);
+        return { action: "updated" as const, id: 12349, html_url: "https://github.test/status-comment" };
+      }
+    } as unknown as GitHubApi;
+    const queueJob = state.enqueueReviewQueueJob({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      baseSha: pull.base.sha
+    }).job;
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl
+    });
+    state.updateReviewQueueJobState({
+      jobId: queueJob.jobId,
+      state: "posted",
+      reviewUrl,
+      lastError: "reviewed"
+    });
+
+    const result = await reconcileProcessedHeadAfterDirectReview({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      now: new Date("2026-07-05T00:04:00.000Z")
+    });
+
+    expect(result).toEqual({ activeQueueJobs: 0, settledQueueJobs: 0, statusCommentPosted: true });
+    expect(state.getReviewReadiness("electricsheephq/WorldOS", pull.number, headSha)).toMatchObject({
+      state: "needs_fix",
+      reason: "direct_review_reconciled_processed_head",
+      event: "REQUEST_CHANGES",
+      reviewUrl
+    });
+    expect(state.getReviewQueueJob(queueJob.jobId)).toMatchObject({
+      state: "posted",
+      reviewUrl,
+      lastError: "reviewed"
+    });
+    expect(statusCalls).toHaveLength(1);
+    expect(statusCalls[0]?.body).toContain("review-status-state status=completed");
+    expect(statusCalls[0]?.body).toContain(reviewUrl);
+    state.close();
+  });
+
   it("does not settle direct-review queue rows for dry-runs or non-posted processed heads", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-direct-review-no-settle-"));
     roots.push(root);

@@ -305,6 +305,93 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("repairs stale duplicate processed-head scheduler status comments without updating settled markers", async () => {
+    const scenarios = [
+      { existingStatus: "in_progress", expectedStatusCalls: ["completed"] },
+      { existingStatus: "completed", expectedStatusCalls: [] }
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-status-repair-${scenario.existingStatus}-`));
+      roots.push(root);
+      const config = schedulerConfig(root, ["org/repo-a"]);
+      config.reviewStatusComment!.enabled = true;
+      const state = new ReviewStateStore(config.statePath);
+      const reviewUrl = `https://github.com/org/repo-a/pull/1#pullrequestreview-${scenario.existingStatus}`;
+      const statusCalls: StatusCommentCall[] = [];
+      const comments = new Map([
+        [`org/repo-a#1`, [
+          {
+            id: 9001,
+            body: reviewStatusBody("org/repo-a", 1, HEAD_A, scenario.existingStatus),
+            html_url: "https://github.test/comment/9001",
+            user: {
+              login: "evaos-code-review-bot[bot]",
+              type: "Bot"
+            }
+          }
+        ]]
+      ]);
+      state.recordProcessed({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: HEAD_A,
+        status: "posted",
+        event: "COMMENT",
+        reviewUrl
+      });
+      const job = state.enqueueReviewQueueJob({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: HEAD_A,
+        baseSha: "base"
+      }).job;
+      state.updateReviewQueueJobState({
+        jobId: job.jobId,
+        state: "posted",
+        reviewUrl,
+        lastError: "reviewed"
+      });
+      state.recordReviewReadiness({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: HEAD_A,
+        state: "reviewing",
+        reason: "queue_job_running",
+        now: new Date("2026-07-02T00:00:00.000Z")
+      });
+
+      const result = await runScheduledCycleWithDeps({
+        config,
+        github: githubFromMap(new Map([
+          ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
+        ]), comments, statusCalls),
+        state,
+        options: { dryRun: false, useZCode: false },
+        reviewPullImpl: async () => {
+          throw new Error("duplicate processed heads must not run review work");
+        },
+        now: new Date("2026-07-02T00:05:00.000Z")
+      });
+
+      expect(result.skippedProcessed).toBe(1);
+      expect(statusCalls.map(statusFromBody)).toEqual(scenario.expectedStatusCalls);
+      expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+        state: "ready_for_human",
+        reason: "processed_head_already_posted",
+        event: "COMMENT",
+        reviewUrl
+      });
+      expect(state.getReviewQueueJob(job.jobId)).toMatchObject({
+        state: "posted",
+        reviewUrl,
+        lastError: "reviewed"
+      });
+      if (statusCalls.length > 0) expect(statusCalls[0]?.body).toContain(reviewUrl);
+      state.close();
+    }
+  });
+
   it("marks older readiness rows stale when a newer PR head is scanned", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-superseded-"));
     roots.push(root);
@@ -3838,6 +3925,13 @@ function statusFromBody(call: StatusCommentCall): string {
   const match = call.body.match(/review-status-state status=([^ ]+)/);
   if (!match?.[1]) throw new Error(`missing status marker in ${call.body}`);
   return match[1];
+}
+
+function reviewStatusBody(repo: string, pullNumber: number, headSha: string, status: string): string {
+  return [
+    `<!-- evaos-code-review-bot:review-status repo=${repo} pr=${pullNumber} sha=${headSha} -->`,
+    `<!-- evaos-code-review-bot:review-status-state status=${status} updated_at=2026-07-02T00:00:00.000Z -->`
+  ].join("\n");
 }
 
 function pull(
