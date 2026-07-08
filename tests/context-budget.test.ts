@@ -112,7 +112,38 @@ describe("context budget preflight", () => {
     expect(plan).toMatchObject({
       mode: "within_budget",
       contextWindowTokens: 128_000,
-      budgetTokens: 123_904
+      budgetTokens: 123_904,
+      reason: "context_budget_within_budget"
+    });
+  });
+
+  it("uses literal reasons for non-skip plan outcomes", () => {
+    const files = [file("src/a.ts", 10)];
+    const buildPrompt = (chunkFiles: PullFilePatch[]) =>
+      chunkFiles.map((entry) => `${entry.filename}\n${entry.patch ?? ""}`).join("\n");
+
+    expect(planContextBudget({
+      prompt: buildPrompt(files),
+      files,
+      contextWindowTokens: 100,
+      config: {
+        ...DEFAULT_CONTEXT_BUDGET_CONFIG,
+        enabled: false
+      },
+      buildPrompt
+    })).toMatchObject({
+      mode: "disabled",
+      reason: "context_budget_disabled"
+    });
+
+    expect(planContextBudget({
+      prompt: buildPrompt(files),
+      files,
+      config: DEFAULT_CONTEXT_BUDGET_CONFIG,
+      buildPrompt
+    })).toMatchObject({
+      mode: "unknown_window",
+      reason: "context_window_tokens_not_configured"
     });
   });
 });

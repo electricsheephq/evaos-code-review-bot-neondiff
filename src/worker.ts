@@ -119,7 +119,7 @@ function contextBudgetEvidence(plan: ContextBudgetPlan): Record<string, unknown>
     reservedOutputTokens: plan.reservedOutputTokens,
     overflow: plan.overflow,
     ...(plan.contextWindowTokens !== undefined ? { contextWindowTokens: plan.contextWindowTokens } : {}),
-    ...(plan.budgetTokens !== undefined ? { budgetTokens: Math.max(0, plan.budgetTokens) } : {}),
+    ...(plan.budgetTokens !== undefined ? { budgetTokens: plan.budgetTokens } : {}),
     ...(plan.reason ? { reason: plan.reason } : {}),
     ...(plan.chunks
       ? {
@@ -1535,6 +1535,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       evidenceDir
     });
     if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
+    if (zcodeExecution.status === "skipped_context_budget") return "skipped_context_budget";
     const zcodeResult = zcodeExecution.result;
 
     assertGitClean(worktree.path);
@@ -2792,6 +2793,7 @@ function parseSelfConsistencyVerdict(rawResponse: string): SelfConsistencySecond
 
 type ContextBudgetReviewExecution =
   | { status: "reviewed"; result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } }
+  | { status: "skipped_context_budget" }
   | { status: "skipped_stale_head" };
 
 async function runReviewWithContextBudget(input: {
@@ -2860,14 +2862,36 @@ async function runChunkedZCodeReview(input: {
     const prompt = input.promptForFiles(chunk.files);
     writeSecureFileSync(join(chunkDir, "review-prompt.txt"), redactSecrets(prompt));
 
-    const result = input.useZCode
-      ? await runZCodeReviewWithProviderRetry({
-          config: input.config,
-          worktreePath: input.worktreePath,
-          prompt,
-          evidenceDir: chunkDir
-        })
-      : disabledZCodeReviewResult(input.config);
+    let result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput };
+    try {
+      result = input.useZCode
+        ? await runZCodeReviewWithProviderRetry({
+            config: input.config,
+            worktreePath: input.worktreePath,
+            prompt,
+            evidenceDir: chunkDir
+          })
+        : disabledZCodeReviewResult(input.config);
+    } catch (error) {
+      const message = redactSecrets(error instanceof Error ? error.message : String(error));
+      const failure = new Error(`context_budget_chunk_provider_failure chunk=${chunk.index}: ${message}`);
+      writeRedactedJson(join(chunkDir, "review-error.json"), {
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        chunk: chunk.index,
+        error: failure.message,
+        recordedAt: new Date().toISOString()
+      });
+      recordFailedReview({
+        config: input.config,
+        state: input.state,
+        repo: input.repo,
+        pull: input.pull,
+        error: failure
+      });
+      return { status: "skipped_context_budget" };
+    }
 
     const allowedFilenames = new Set(chunk.filenames);
     const chunkFindings = result.findings.filter((finding) => allowedFilenames.has(finding.path));

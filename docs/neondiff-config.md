@@ -162,7 +162,7 @@ cross-chunk coordinates are discarded before the deterministic review gate.
 Context-budget skip reasons are operator-facing:
 
 - `context_budget_overflow`: the full prompt is too large and `overflow` is `skip`.
-- `context_budget_no_available_input_tokens`: `reservedOutputTokens` leaves no input budget.
+- `context_budget_no_available_input_tokens`: `reservedOutputTokens` leaves no input budget; evidence preserves the raw `budgetTokens` value, which can be zero or negative when the reserve is too large for the provider window.
 - `context_budget_single_file_overflow`: chunk mode cannot fit one changed file in the available budget.
 - `context_budget_chunk_count_exceeded`: chunk mode would exceed `maxChunks`.
 

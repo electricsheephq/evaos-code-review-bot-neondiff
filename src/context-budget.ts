@@ -29,14 +29,34 @@ export interface ContextBudgetChunk {
 
 export type ContextBudgetPlan =
   | {
-      mode: "disabled" | "unknown_window" | "within_budget";
+      mode: "disabled";
       estimatedTokens: number;
       reservedOutputTokens: number;
       overflow: ContextBudgetOverflowPolicy;
-      contextWindowTokens?: number;
-      budgetTokens?: number;
+      contextWindowTokens?: undefined;
+      budgetTokens?: undefined;
       chunks?: undefined;
-      reason?: string;
+      reason: "context_budget_disabled";
+    }
+  | {
+      mode: "unknown_window";
+      estimatedTokens: number;
+      reservedOutputTokens: number;
+      overflow: ContextBudgetOverflowPolicy;
+      contextWindowTokens?: undefined;
+      budgetTokens?: undefined;
+      chunks?: undefined;
+      reason: "context_window_tokens_not_configured";
+    }
+  | {
+      mode: "within_budget";
+      estimatedTokens: number;
+      reservedOutputTokens: number;
+      overflow: ContextBudgetOverflowPolicy;
+      contextWindowTokens: number;
+      budgetTokens: number;
+      chunks?: undefined;
+      reason: "context_budget_within_budget";
     }
   | {
       mode: "skip";
@@ -126,7 +146,8 @@ export function planContextBudget(input: {
       ...base,
       mode: "within_budget",
       contextWindowTokens: input.contextWindowTokens,
-      budgetTokens
+      budgetTokens,
+      reason: "context_budget_within_budget"
     };
   }
 

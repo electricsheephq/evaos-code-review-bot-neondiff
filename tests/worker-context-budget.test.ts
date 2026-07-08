@@ -9,6 +9,7 @@ import type { Finding, PullRequestSummary } from "../src/types.js";
 
 const zcodePrompts = vi.hoisted((): string[] => []);
 const zcodeFindingsByPath = vi.hoisted(() => new Map<string, Finding[]>());
+const zcodeFailuresByPath = vi.hoisted(() => new Map<string, string>());
 const createdReviews = vi.hoisted((): Array<{
   repo: string;
   pullNumber: number;
@@ -36,6 +37,8 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
     ...actual,
     runZCodeReview: vi.fn((input: { prompt: string }) => {
       zcodePrompts.push(input.prompt);
+      const failure = [...zcodeFailuresByPath.entries()].find(([path]) => input.prompt.includes(path));
+      if (failure) throw new Error(failure[1]);
       const findings = [...zcodeFindingsByPath.entries()]
         .filter(([path]) => input.prompt.includes(path))
         .flatMap(([, entries]) => entries);
@@ -85,6 +88,7 @@ describe("worker context budget preflight", () => {
   afterEach(() => {
     zcodePrompts.length = 0;
     zcodeFindingsByPath.clear();
+    zcodeFailuresByPath.clear();
     createdReviews.length = 0;
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
@@ -160,6 +164,57 @@ describe("worker context budget preflight", () => {
       reason: "context_budget_overflow",
       contextWindowTokens: 500,
       budgetTokens: 400
+    });
+    state.close();
+  });
+
+  it("preserves over-reserved input budget evidence when no provider input tokens are available", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-no-input-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.contextBudget = {
+      enabled: true,
+      overflow: "skip",
+      reservedOutputTokens: 600,
+      charsPerToken: 4,
+      providerFudgeFactor: 1,
+      maxChunks: 4
+    };
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = 500;
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(404, "g".repeat(40));
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/tiny.ts", 10)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("skipped_context_budget");
+    expect(zcodePrompts).toEqual([]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: "context_budget_no_available_input_tokens"
+    });
+    const evidenceDir = join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha
+    );
+    const budgetEvidence = JSON.parse(readFileSync(join(evidenceDir, "context-budget.json"), "utf8"));
+    expect(budgetEvidence).toMatchObject({
+      mode: "skip",
+      reason: "context_budget_no_available_input_tokens",
+      contextWindowTokens: 500,
+      reservedOutputTokens: 600,
+      budgetTokens: -100
     });
     state.close();
   });
@@ -298,6 +353,72 @@ describe("worker context budget preflight", () => {
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
       status: "skipped"
     });
+    state.close();
+  });
+
+  it("records a retryable failed row when a later context chunk provider call fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-chunk-failure-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(405, "i".repeat(40));
+    const files = [
+      pullFile("src/a.ts", 5_000),
+      pullFile("src/b.ts", 5_000),
+      pullFile("src/c.ts", 5_000)
+    ];
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+    const fakeSecret = ["sk-live", "secret-secret"].join("-");
+    zcodeFailuresByPath.set("src/b.ts", `provider chunk failure for ${fakeSecret}`);
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("skipped_context_budget");
+    expect(zcodePrompts).toHaveLength(2);
+    expect(createdReviews).toEqual([]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("context_budget_chunk_provider_failure chunk=2")
+    });
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)?.error).not.toContain(fakeSecret);
+    expect(prepareFailedHeadRetry({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      livePull: pull
+    })).toMatchObject({
+      previousStatus: "failed",
+      previousError: expect.stringContaining("context_budget_chunk_provider_failure chunk=2")
+    });
+    const evidenceDir = join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha
+    );
+    const chunkError = JSON.parse(readFileSync(join(evidenceDir, "context-chunks", "chunk-002", "review-error.json"), "utf8"));
+    expect(chunkError.error).toContain("context_budget_chunk_provider_failure chunk=2");
+    expect(chunkError.error).not.toContain(fakeSecret);
     state.close();
   });
 });
