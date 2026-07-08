@@ -2525,6 +2525,7 @@ export function recordFailedReview(input: {
   repo: string;
   pull: PullRequestSummary;
   error: unknown;
+  writeErrorEvidence?: boolean;
 }): string {
   const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
   const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
@@ -2534,14 +2535,16 @@ export function recordFailedReview(input: {
     previousError: previous?.error,
     timeoutMs: input.config.zcode.timeoutMs ?? 180_000
   }) ?? rawErrorMessage;
-  mkdirSync(evidenceDir, { recursive: true });
-  writeRedactedJson(join(evidenceDir, "review-error.json"), {
-    repo: input.repo,
-    pullNumber: input.pull.number,
-    headSha: input.pull.head.sha,
-    error: errorMessage,
-    recordedAt: new Date().toISOString()
-  });
+  if (input.writeErrorEvidence !== false) {
+    mkdirSync(evidenceDir, { recursive: true });
+    writeRedactedJson(join(evidenceDir, "review-error.json"), {
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      error: errorMessage,
+      recordedAt: new Date().toISOString()
+    });
+  }
   input.state.recordProcessed({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -2849,13 +2852,11 @@ async function runChunkedZCodeReview(input: {
   let providerAttempts = 0;
 
   for (const chunk of input.contextBudget.chunks) {
-    if (chunk.index > 1) {
-      const livePull = await input.github.getPull(input.repo, input.pull.number);
-      const stale = detectStalePullHead({ expected: input.pull, live: livePull, phase: "before_chunk" });
-      if (stale) {
-        recordStaleHeadSkip({ state: input.state, repo: input.repo, pull: input.pull, stale, evidenceDir: input.evidenceDir });
-        return { status: "skipped_stale_head" };
-      }
+    const livePull = await input.github.getPull(input.repo, input.pull.number);
+    const stale = detectStalePullHead({ expected: input.pull, live: livePull, phase: "before_chunk" });
+    if (stale) {
+      recordStaleHeadSkip({ state: input.state, repo: input.repo, pull: input.pull, stale, evidenceDir: input.evidenceDir });
+      return { status: "skipped_stale_head" };
     }
     const chunkDir = join(input.evidenceDir, "context-chunks", `chunk-${String(chunk.index).padStart(3, "0")}`);
     mkdirSync(chunkDir, { recursive: true });
@@ -2888,7 +2889,8 @@ async function runChunkedZCodeReview(input: {
         state: input.state,
         repo: input.repo,
         pull: input.pull,
-        error: failure
+        error: failure,
+        writeErrorEvidence: false
       });
       return { status: "skipped_context_budget" };
     }

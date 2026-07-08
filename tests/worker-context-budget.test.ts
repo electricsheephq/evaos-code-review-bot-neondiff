@@ -318,6 +318,142 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("records dry-run evidence after successful chunked execution without posting", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-chunk-dry-run-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(406, "j".repeat(40));
+    const files = [
+      pullFile("src/a.ts", 5_000),
+      pullFile("src/b.ts", 5_000)
+    ];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Dry-run chunk A finding")]);
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toHaveLength(2);
+    expect(createdReviews).toEqual([]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "dry_run"
+    });
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
+    const reviewPlan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
+    expect(reviewPlan.comments).toHaveLength(1);
+    state.close();
+  });
+
+  it("uses the single-prompt path when overflow chunk is configured but the prompt fits", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-within-chunk-config-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(407, "k".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Within-budget finding")]);
+    const fullPromptLength = reviewPromptLength(config, pull, files);
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = fullPromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toHaveLength(1);
+    expect(zcodePrompts[0]).toContain("src/a.ts");
+    expect(createdReviews).toEqual([]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "dry_run"
+    });
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
+    const budgetEvidence = JSON.parse(readFileSync(join(evidenceDir, "context-budget.json"), "utf8"));
+    expect(budgetEvidence).toMatchObject({
+      mode: "within_budget",
+      reason: "context_budget_within_budget"
+    });
+    expect(existsSync(join(evidenceDir, "context-chunks"))).toBe(false);
+    state.close();
+  });
+
+  it("records failed processed evidence when chunk mode exceeds maxChunks", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-max-chunks-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 1
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(408, "l".repeat(40));
+    const files = [
+      pullFile("src/a.ts", 5_000),
+      pullFile("src/b.ts", 5_000)
+    ];
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("skipped_context_budget");
+    expect(zcodePrompts).toEqual([]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: "context_budget_chunk_count_exceeded"
+    });
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
+    const budgetEvidence = JSON.parse(readFileSync(join(evidenceDir, "context-budget.json"), "utf8"));
+    expect(budgetEvidence).toMatchObject({
+      mode: "skip",
+      reason: "context_budget_chunk_count_exceeded"
+    });
+    state.close();
+  });
+
   it("stops chunk execution if the PR head advances between chunks", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-stale-chunk-"));
     roots.push(root);
@@ -355,7 +491,7 @@ describe("worker context budget preflight", () => {
     });
 
     expect(result).toBe("skipped_stale_head");
-    expect(zcodePrompts).toHaveLength(1);
+    expect(zcodePrompts).toHaveLength(0);
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
       status: "skipped"
     });
@@ -425,6 +561,7 @@ describe("worker context budget preflight", () => {
     const chunkError = JSON.parse(readFileSync(join(evidenceDir, "context-chunks", "chunk-002", "review-error.json"), "utf8"));
     expect(chunkError.error).toContain("context_budget_chunk_provider_failure chunk=2");
     expect(chunkError.error).not.toContain(fakeSecret);
+    expect(existsSync(join(evidenceDir, "review-error.json"))).toBe(false);
     state.close();
   });
 });
