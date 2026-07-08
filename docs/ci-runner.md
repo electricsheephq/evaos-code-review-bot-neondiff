@@ -47,6 +47,12 @@ For CI-hosted dry-run review, write the App private key to
 above, run `neondiff review-pr --dry-run true`, and upload only redacted
 evidence.
 
+`--dry-run true` never posts GitHub comments. Live CI posting still inherits the
+normal NeonDiff gates: the target head must be current, duplicate suppression
+must allow the head, and the public alias must be invoked with
+`--dry-run false --confirm true` after the repo, PR, head SHA, and config path
+are approved.
+
 ## Generic CI
 
 The generic shape is:
