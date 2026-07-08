@@ -92,10 +92,11 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.42-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.43-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.44-beta.1");
+    expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.45-beta.1");
     expect(manifest.packageArtifact?.note).toMatch(/source\/local-worker/i);
     expect(manifest.source).toMatchObject({
       shaState: "pending_tag_stamp",
-      candidateHeadBeforeReleaseMetadata: "cfce597b9bdb0211f313f1b1879341c47736ac14"
+      candidateHeadBeforeReleaseMetadata: "4cd081ca581c24f2f054106b4c4cc8e6453c9dce"
     });
     expect(manifest.source?.proof).toMatch(/after merge and tag/i);
   });
@@ -117,7 +118,7 @@ describe("NeonDiff public release readiness", () => {
     });
     expect(manifest.licenseApi?.trackingIssue).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/);
     expect(manifest.licenseApi?.healthUrl).toMatch(/^https:\/\/[^/]+\/healthz$/);
-    expect(manifest.licenseApi?.healthProofPath).toBe("docs/evidence/v0.4.44-beta.1-license-api-healthz.json");
+    expect(manifest.licenseApi?.healthProofPath).toBe("docs/evidence/v0.4.45-beta.1-license-api-healthz.json");
 
     const proof = JSON.parse(read(manifest.licenseApi?.healthProofPath ?? "")) as {
       evidenceKind?: string;
@@ -129,7 +130,7 @@ describe("NeonDiff public release readiness", () => {
     };
     expect(proof).toMatchObject({
       evidenceKind: "license_api_healthz",
-      releaseVersion: "v0.4.44-beta.1",
+      releaseVersion: "v0.4.45-beta.1",
       url: manifest.licenseApi?.healthUrl,
       statusCode: 200,
       responseBody: "{\"status\":\"ok\"}"

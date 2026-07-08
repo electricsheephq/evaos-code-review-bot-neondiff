@@ -16,6 +16,12 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.45-beta.1] - docs/releases/v0.4.45-beta.1.md
+
+### Added
+
+- Add the public precision badge endpoint and `neondiff badge` command with an honest gray calibrating default, human-gated calibrated percentage path, README/docs wiring, and focused badge/CLI coverage while keeping the public npm package held at `neondiff@0.4.30-beta.1`
+
 ## [0.4.44-beta.1] - docs/releases/v0.4.44-beta.1.md
 
 ### Fixed
