@@ -36,8 +36,11 @@ reviews from Docker, change the compose command to:
 command: ["daemon", "--config", "/config/config.local.json", "--dry-run", "false"]
 ```
 
-Only make that change after `doctor`, provider readiness, repo allowlist,
-current-head proof, duplicate suppression, and issue/PR approval are recorded.
+The long-running daemon worker uses `--dry-run` as its posting boundary; it does
+not implement the `--confirm true` gate used by one-shot `review-pr` live posting
+and launchd mutation commands. Only switch Docker to `--dry-run false` after
+`doctor`, provider readiness, repo allowlist, current-head proof, duplicate
+suppression, and issue/PR approval are recorded.
 
 ## Healthcheck And Readiness
 

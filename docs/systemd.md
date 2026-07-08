@@ -12,7 +12,7 @@ Use the user unit for a single operator account that owns the config, state, and
 repo work directories.
 
 ```bash
-mkdir -p ~/.config/neondiff ~/.config/systemd/user ~/.local/share/neondiff
+mkdir -p ~/.config/neondiff ~/.config/systemd/user ~/.local/share/neondiff/state
 cp systemd/neondiff.user.service.example ~/.config/systemd/user/neondiff.service
 ```
 
@@ -25,6 +25,16 @@ NEONDIFF_GITHUB_APP_ID=123456
 NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH=/home/neondiff/.config/neondiff/neondiff.private-key.pem
 EOF
 chmod 600 ~/.config/neondiff/neondiff.env
+```
+
+Set `statePath` in `~/.config/neondiff/config.local.json` so SQLite state,
+leases, duplicate suppression, and license cache defaults stay under the
+operator-owned writable state directory:
+
+```json
+{
+  "statePath": "/home/neondiff/.local/share/neondiff/state/reviews.sqlite"
+}
 ```
 
 Then enable the service:
@@ -49,9 +59,10 @@ Use the system unit when NeonDiff should run as a dedicated service account.
 
 ```bash
 sudo useradd --system --home-dir /var/lib/neondiff --create-home --shell /usr/sbin/nologin neondiff
-sudo mkdir -p /etc/neondiff
+sudo mkdir -p /etc/neondiff /var/lib/neondiff/state
 sudo cp systemd/neondiff.service.example /etc/systemd/system/neondiff.service
 sudo install -m 600 -o root -g neondiff /dev/null /etc/neondiff/neondiff.env
+sudo chown -R neondiff:neondiff /var/lib/neondiff
 ```
 
 Populate `/etc/neondiff/neondiff.env` with redacted-safe variable names, not raw
@@ -61,6 +72,16 @@ secrets in tracked files:
 NEONDIFF_CONFIG=/etc/neondiff/config.local.json
 NEONDIFF_GITHUB_APP_ID=123456
 NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH=/etc/neondiff/neondiff.private-key.pem
+```
+
+Set `statePath` in `/etc/neondiff/config.local.json` so the hardened system
+unit writes all SQLite state and leases under the service account's writable
+state directory:
+
+```json
+{
+  "statePath": "/var/lib/neondiff/state/reviews.sqlite"
+}
 ```
 
 Then start the daemon:
