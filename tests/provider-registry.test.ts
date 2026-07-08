@@ -149,6 +149,21 @@ describe("provider registry", () => {
     });
     expect(zcodeRuntimeWithAlternateDefault.providers.find((provider) => provider.id === "zcode-glm")).toMatchObject({ currentRuntime: true });
     expect(zcodeRuntimeWithAlternateDefault.providers.find((provider) => provider.id === "ollama-local")).toMatchObject({ currentRuntime: false });
+    const explicitStructuredMode = buildProviderRegistrySummary({
+      registry: {
+        ...config.providers!,
+        providers: {
+          ...config.providers!.providers,
+          "openai-compatible": {
+            ...config.providers!.providers["openai-compatible"],
+            structuredOutputMode: "openai-json-schema"
+          }
+        }
+      }
+    });
+    expect(explicitStructuredMode.providers.find((provider) => provider.id === "openai-compatible")).toMatchObject({
+      structuredOutputMode: "openai-json-schema"
+    });
 
     const doctor = await doctorProviderRegistry({ registry: config.providers! });
     expect(doctor).toMatchObject({
@@ -2211,5 +2226,27 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/authMode none is not supported for zcode provider/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "bad-structured-mode",
+        providers: {
+          "bad-structured-mode": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "http://localhost:11434/v1",
+            model: "review-model",
+            authMode: "none",
+            structuredOutputMode: "typo-json-schema",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: true,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/structuredOutputMode must be/);
   });
 });

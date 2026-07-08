@@ -1,4 +1,5 @@
 import { redactSecrets } from "./secrets.js";
+import type { ProviderStructuredOutputMode } from "./providers.js";
 
 export type ProviderFamilyId =
   | "glm"
@@ -33,6 +34,7 @@ export interface ProviderFamily {
   authHints: readonly ProviderAuthHint[];
   locality: ProviderLocality;
   supportsJsonMode: ProviderSupport;
+  structuredOutputModes: readonly ProviderStructuredOutputMode[];
   supportsToolUse: ProviderSupport;
   riskNotes: readonly string[];
   byok: {
@@ -79,6 +81,7 @@ export const PROVIDER_FAMILY_CATALOG = [
     ],
     locality: "remote",
     supportsJsonMode: true,
+    structuredOutputModes: ["json-object"],
     supportsToolUse: "unknown",
     riskNotes: [
       "Hosted provider; review prompts and repository excerpts can leave the local machine.",
@@ -92,7 +95,19 @@ export const PROVIDER_FAMILY_CATALOG = [
   {
     id: "openai-compatible",
     displayName: "OpenAI-Compatible API",
-    aliases: ["openai-compatible-api", "openai-compatible-endpoint", "openrouter", "vllm", "lm-studio", "internal-gateway"],
+    aliases: [
+      "openai-compatible-api",
+      "openai-compatible-endpoint",
+      "openrouter",
+      "vllm",
+      "lm-studio",
+      "lms",
+      "llama.cpp",
+      "llama-cpp",
+      "llama-server",
+      "sglang",
+      "internal-gateway"
+    ],
     transport: "openai-compatible-chat-completions",
     apiShape: "OpenAI-style /v1/chat/completions and /v1/models endpoints.",
     authHints: [
@@ -103,6 +118,14 @@ export const PROVIDER_FAMILY_CATALOG = [
     ],
     locality: "local-or-remote",
     supportsJsonMode: "unknown",
+    structuredOutputModes: [
+      "json-object",
+      "openai-json-schema",
+      "llama-cpp-json-schema",
+      "vllm-structured-outputs",
+      "vllm-guided-json",
+      "sglang-json-schema"
+    ],
     supportsToolUse: "unknown",
     riskNotes: [
       "Compatibility varies by gateway and model; validate JSON output and context behavior before promotion.",
@@ -126,6 +149,7 @@ export const PROVIDER_FAMILY_CATALOG = [
     ],
     locality: "local",
     supportsJsonMode: "unknown",
+    structuredOutputModes: ["json-object", "ollama-format-json-schema"],
     supportsToolUse: "unknown",
     riskNotes: [
       "No-egress posture depends on using a loopback endpoint and a local model.",
@@ -150,6 +174,7 @@ export const PROVIDER_FAMILY_CATALOG = [
     ],
     locality: "remote",
     supportsJsonMode: false,
+    structuredOutputModes: [],
     supportsToolUse: true,
     riskNotes: [
       "Hosted provider; review prompts and repository excerpts can leave the local machine.",
@@ -174,6 +199,7 @@ export const PROVIDER_FAMILY_CATALOG = [
     ],
     locality: "remote",
     supportsJsonMode: true,
+    structuredOutputModes: ["json-object", "openai-json-schema"],
     supportsToolUse: true,
     riskNotes: [
       "Hosted provider; review prompts and repository excerpts can leave the local machine.",
@@ -202,6 +228,7 @@ export const PROVIDER_FAMILY_CATALOG = [
     ],
     locality: "remote",
     supportsJsonMode: true,
+    structuredOutputModes: ["json-object"],
     supportsToolUse: true,
     riskNotes: [
       "Hosted provider; review prompts and repository excerpts can leave the local machine.",
@@ -274,6 +301,7 @@ export function toPublicProviderFamily(provider: ProviderFamily): PublicProvider
     })),
     locality: provider.locality,
     supportsJsonMode: provider.supportsJsonMode,
+    structuredOutputModes: [...provider.structuredOutputModes],
     supportsToolUse: provider.supportsToolUse,
     riskNotes: provider.riskNotes.map((note) => redactProviderPublicText(note)),
     byok: {
@@ -301,6 +329,7 @@ function cloneProviderFamily(provider: ProviderFamily): ProviderFamily {
   return {
     ...provider,
     aliases: [...provider.aliases],
+    structuredOutputModes: [...provider.structuredOutputModes],
     authHints: provider.authHints.map((hint) => ({ ...hint })),
     riskNotes: [...provider.riskNotes],
     byok: { ...provider.byok }

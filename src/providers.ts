@@ -45,6 +45,18 @@ export type ProviderSmokeRequestImpl = (
 
 export type ProviderAdapter = "zcode" | "openai-compatible" | "anthropic" | "openai" | "gemini";
 export type ProviderAuthMode = "zcode-app-config" | "api-key-env" | "none";
+export const PROVIDER_STRUCTURED_OUTPUT_MODES = [
+  "none",
+  "json-object",
+  "openai-json-schema",
+  "llama-cpp-json-schema",
+  "vllm-structured-outputs",
+  "vllm-guided-json",
+  "ollama-format-json-schema",
+  "sglang-json-schema"
+] as const;
+
+export type ProviderStructuredOutputMode = typeof PROVIDER_STRUCTURED_OUTPUT_MODES[number];
 
 export interface ProviderCapabilityFlags {
   review: boolean;
@@ -66,6 +78,7 @@ export interface ProviderRegistryEntry {
   retryMaxRetries?: number;
   temperature?: number;
   jsonObjectResponseFormat?: boolean;
+  structuredOutputMode?: ProviderStructuredOutputMode;
   capabilities: ProviderCapabilityFlags;
 }
 
@@ -96,6 +109,7 @@ export interface ProviderRegistrySummaryEntry {
   contextWindowTokens?: number;
   timeoutMs?: number;
   retryMaxRetries?: number;
+  structuredOutputMode?: ProviderStructuredOutputMode;
   capabilities: ProviderCapabilityFlags;
   currentRuntime?: boolean;
 }
@@ -146,6 +160,7 @@ export function buildProviderRegistrySummary(input: {
       ...(provider.contextWindowTokens ? { contextWindowTokens: provider.contextWindowTokens } : {}),
       ...(provider.timeoutMs ? { timeoutMs: provider.timeoutMs } : {}),
       ...(provider.retryMaxRetries !== undefined ? { retryMaxRetries: provider.retryMaxRetries } : {}),
+      ...(provider.structuredOutputMode ? { structuredOutputMode: provider.structuredOutputMode } : {}),
       capabilities: provider.capabilities,
       currentRuntime: provider.adapter === "zcode" && (
         currentZCodeProviderId
@@ -154,6 +169,10 @@ export function buildProviderRegistrySummary(input: {
       )
     }))
   };
+}
+
+export function isProviderStructuredOutputMode(value: unknown): value is ProviderStructuredOutputMode {
+  return typeof value === "string" && (PROVIDER_STRUCTURED_OUTPUT_MODES as readonly string[]).includes(value);
 }
 
 export async function doctorProviderRegistry(input: {
