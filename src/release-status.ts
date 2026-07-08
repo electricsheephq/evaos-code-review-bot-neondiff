@@ -590,8 +590,12 @@ export function readPublicReleaseManifestStatus(input: {
     const releaseLevelSupportsCheckoutIssuance =
       releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta";
     const releaseRequiresCheckoutIssuance = releaseLevelSupportsCheckoutIssuance;
+    // Only source-beta can explicitly defer checkout issuance. Stable and beta
+    // releases force this gate on regardless of a false manifest declaration.
+    const sourceBetaExplicitlyDefersCheckoutIssuance =
+      explicitLicenseIssuanceRequired === false && releaseLevel === "source-beta";
     const licenseIssuanceRequired =
-      releaseRequiresCheckoutIssuance && !(explicitLicenseIssuanceRequired === false && releaseLevel === "source-beta");
+      releaseRequiresCheckoutIssuance && !sourceBetaExplicitlyDefersCheckoutIssuance;
     const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
     const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
     const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
@@ -1173,9 +1177,6 @@ function validateLicenseIssuanceMetadata(input: {
     const expectedHost = extractValidHealthUrlHost(input.healthUrl);
     const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl, expectedHost);
     if (issuanceUrlFailure) failures.push(issuanceUrlFailure);
-    if (!expectedHost) {
-      failures.push("checkoutIssuanceUrl host cannot be validated because healthUrl is missing or invalid");
-    }
   }
   if (input.issuanceProofPath && !input.proofRequired) {
     const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.issuanceProofPath, "checkoutIssuanceProofPath");
