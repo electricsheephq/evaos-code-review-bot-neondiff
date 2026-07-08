@@ -106,6 +106,7 @@ version is:
 
 ```bash
 neondiff init --config config.local.json
+neondiff dashboard --config config.local.json
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 neondiff doctor github --config config.local.json --json

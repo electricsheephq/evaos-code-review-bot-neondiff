@@ -215,6 +215,7 @@ Check:
 Then run full doctor with the config you intend to use:
 
 ```bash
+neondiff dashboard --config config.local.json
 neondiff providers list --config config.local.json --json
 neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
@@ -257,7 +258,7 @@ Before touching launchd, use JSON status commands:
 ```bash
 neondiff status --json --config config.local.json
 neondiff queue --config config.local.json
-neondiff dashboard --config config.local.json --limit 10
+neondiff dashboard --operator true --config config.local.json --limit 10
 ```
 
 Launchd controls are explicit and JSON-first. Dry-run them before changing a
