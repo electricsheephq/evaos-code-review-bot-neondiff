@@ -1728,6 +1728,7 @@ export async function reconcileProcessedHeadAfterDirectReview(input: {
   now?: Date;
 }): Promise<{ activeQueueJobs: number; settledQueueJobs: number; statusCommentPosted: boolean }> {
   if (input.dryRun) return { activeQueueJobs: 0, settledQueueJobs: 0, statusCommentPosted: false };
+  const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
   const activeJobs = input.state
     .listReviewQueueJobsForPull({
       repo: input.repo,
@@ -1735,16 +1736,19 @@ export async function reconcileProcessedHeadAfterDirectReview(input: {
       states: DIRECT_REVIEW_RECONCILE_QUEUE_STATES
     })
     .filter((job) => job.headSha === input.pull.head.sha);
-  if (activeJobs.length === 0) {
-    return { activeQueueJobs: 0, settledQueueJobs: 0, statusCommentPosted: false };
-  }
-
-  const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
   if (processed?.status !== "posted") {
     return { activeQueueJobs: activeJobs.length, settledQueueJobs: 0, statusCommentPosted: false };
   }
 
   const now = input.now ?? new Date();
+  if (activeJobs.length === 0) {
+    return {
+      activeQueueJobs: 0,
+      settledQueueJobs: 0,
+      statusCommentPosted: await postDirectReviewCompletedStatusComment({ ...input, processed, now })
+    };
+  }
+
   const manualCommandJob =
     activeJobs.find((job) => job.source === "manual_command" && job.commentId) ??
     activeJobs.find((job) => job.source === "manual_command");
@@ -1782,30 +1786,38 @@ export async function reconcileProcessedHeadAfterDirectReview(input: {
     now
   });
 
-  let statusCommentPosted = false;
-  if (isReviewStatusCommentGithub(input.github)) {
-    const result = await postReviewStatusComment({
-      enabled: input.config.reviewStatusComment?.enabled ?? false,
-      dryRun: input.dryRun,
-      github: input.github,
-      repo: input.repo,
-      pullNumber: input.pull.number,
-      headSha: input.pull.head.sha,
-      state: "completed",
-      pullTitle: input.pull.title,
-      pullUrl: input.pull.html_url,
-      ...(processed.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-      now,
-      publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
-    });
-    statusCommentPosted = result.posted;
-  }
-
   return {
     activeQueueJobs: activeJobs.length,
     settledQueueJobs: activeJobs.length,
-    statusCommentPosted
+    statusCommentPosted: await postDirectReviewCompletedStatusComment({ ...input, processed, now })
   };
+}
+
+async function postDirectReviewCompletedStatusComment(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+  processed: { reviewUrl?: string };
+  now: Date;
+}): Promise<boolean> {
+  if (!isReviewStatusCommentGithub(input.github)) return false;
+  const result = await postReviewStatusComment({
+    enabled: input.config.reviewStatusComment?.enabled ?? false,
+    dryRun: input.dryRun,
+    github: input.github,
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: "completed",
+    pullTitle: input.pull.title,
+    pullUrl: input.pull.html_url,
+    ...(input.processed.reviewUrl ? { reviewUrl: input.processed.reviewUrl } : {}),
+    now: input.now,
+    publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
+  });
+  return result.posted;
 }
 
 const DIRECT_REVIEW_RECONCILED_ERROR = "direct_review_reconciled_processed_head=posted";
