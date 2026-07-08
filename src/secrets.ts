@@ -22,19 +22,30 @@ const SECRET_PATTERNS: RegExp[] = [
 const COOKIE_HEADER_PREFIX = "cookie:";
 const SENSITIVE_COOKIE_NAME_PATTERN = /(?:session|token|auth|secret|cookie)/i;
 const MAX_COOKIE_ATTRIBUTE_SCAN = 1_000;
+const SAFE_ENV_VAR_NAMES = [
+  "NEONDIFF_GITHUB_APP_ID",
+  "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
+  "NEONDIFF_PROTECTED_CHECKOUT_ROOT",
+  "NEONDIFF_LICENSE_KEY",
+  "NEONDIFF_PROVIDER_API_KEY",
+  "NEONDIFF_ALLOW_REMOTE_SMOKE"
+];
 
 export function containsSecretLikeText(input: string): boolean {
-  return containsSensitiveCookieHeader(input) || SECRET_PATTERNS.some((pattern) => {
+  const safeInput = protectSafeEnvVarNames(input);
+  return containsSensitiveCookieHeader(safeInput) || SECRET_PATTERNS.some((pattern) => {
     pattern.lastIndex = 0;
-    return pattern.test(input);
+    return pattern.test(safeInput);
   });
 }
 
 export function redactSecrets(input: string): string {
-  return SECRET_PATTERNS.reduce(
+  const protectedInput = protectSafeEnvVarNames(input);
+  const redacted = SECRET_PATTERNS.reduce(
     (text, pattern) => text.replace(pattern, "[redacted-secret]"),
-    redactSensitiveCookieHeaders(input)
+    redactSensitiveCookieHeaders(protectedInput)
   );
+  return restoreSafeEnvVarNames(redacted);
 }
 
 export function stringifyRedactedJson(input: unknown): string {
@@ -81,4 +92,22 @@ function readSensitiveCookieHeader(line: string): string | undefined {
     if (value.length > 0 && SENSITIVE_COOKIE_NAME_PATTERN.test(name)) return line;
   }
   return undefined;
+}
+
+function protectSafeEnvVarNames(input: string): string {
+  return SAFE_ENV_VAR_NAMES.reduce((text, name, index) => {
+    const pattern = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`, "g");
+    return text.replace(pattern, `__NEONDIFF_SAFE_ENV_${index}__`);
+  }, input);
+}
+
+function restoreSafeEnvVarNames(input: string): string {
+  return SAFE_ENV_VAR_NAMES.reduce(
+    (text, name, index) => text.replaceAll(`__NEONDIFF_SAFE_ENV_${index}__`, name),
+    input
+  );
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

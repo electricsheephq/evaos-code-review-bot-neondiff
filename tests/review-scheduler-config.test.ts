@@ -124,6 +124,73 @@ describe("review scheduler config", () => {
     expect(() => loadConfig(writeConfig({ github: { requestTimeoutMs: 0 } }))).toThrow(/config\.github\.requestTimeoutMs/);
   });
 
+  it("prefers NeonDiff GitHub App environment aliases over config-file values", () => {
+    const oldPrimaryAppId = process.env.NEONDIFF_GITHUB_APP_ID;
+    const oldPrimaryPrivateKeyPath = process.env.NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH;
+    const oldLegacyAppId = process.env.EVAOS_REVIEW_BOT_APP_ID;
+    const oldLegacyPrivateKeyPath = process.env.EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH;
+    process.env.NEONDIFF_GITHUB_APP_ID = "primary-app-id";
+    process.env.NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH = "/safe/neondiff.private-key.pem";
+    delete process.env.EVAOS_REVIEW_BOT_APP_ID;
+    delete process.env.EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH;
+
+    try {
+      const config = loadConfig(writeConfig({
+        github: {
+          appId: "from-config",
+          privateKeyPath: "/safe/from-config.pem"
+        }
+      }));
+
+      expect(config.github.appId).toBe("primary-app-id");
+      expect(config.github.privateKeyPath).toBe("/safe/neondiff.private-key.pem");
+    } finally {
+      restoreEnv("NEONDIFF_GITHUB_APP_ID", oldPrimaryAppId);
+      restoreEnv("NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH", oldPrimaryPrivateKeyPath);
+      restoreEnv("EVAOS_REVIEW_BOT_APP_ID", oldLegacyAppId);
+      restoreEnv("EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH", oldLegacyPrivateKeyPath);
+    }
+  });
+
+  it("keeps legacy evaOS GitHub App environment aliases as fallback", () => {
+    const oldPrimaryAppId = process.env.NEONDIFF_GITHUB_APP_ID;
+    const oldPrimaryPrivateKeyPath = process.env.NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH;
+    const oldLegacyAppId = process.env.EVAOS_REVIEW_BOT_APP_ID;
+    const oldLegacyPrivateKeyPath = process.env.EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH;
+    delete process.env.NEONDIFF_GITHUB_APP_ID;
+    delete process.env.NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH;
+    process.env.EVAOS_REVIEW_BOT_APP_ID = "legacy-app-id";
+    process.env.EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH = "/safe/legacy.private-key.pem";
+
+    try {
+      const config = loadConfig(writeConfig({}));
+
+      expect(config.github.appId).toBe("legacy-app-id");
+      expect(config.github.privateKeyPath).toBe("/safe/legacy.private-key.pem");
+    } finally {
+      restoreEnv("NEONDIFF_GITHUB_APP_ID", oldPrimaryAppId);
+      restoreEnv("NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH", oldPrimaryPrivateKeyPath);
+      restoreEnv("EVAOS_REVIEW_BOT_APP_ID", oldLegacyAppId);
+      restoreEnv("EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH", oldLegacyPrivateKeyPath);
+    }
+  });
+
+  it("rejects conflicting NeonDiff and legacy GitHub App environment aliases", () => {
+    const oldPrimaryAppId = process.env.NEONDIFF_GITHUB_APP_ID;
+    const oldLegacyAppId = process.env.EVAOS_REVIEW_BOT_APP_ID;
+    process.env.NEONDIFF_GITHUB_APP_ID = "primary-app-id";
+    process.env.EVAOS_REVIEW_BOT_APP_ID = "legacy-app-id";
+
+    try {
+      expect(() => loadConfig(writeConfig({}))).toThrow(
+        /NEONDIFF_GITHUB_APP_ID and EVAOS_REVIEW_BOT_APP_ID are both set with different values/
+      );
+    } finally {
+      restoreEnv("NEONDIFF_GITHUB_APP_ID", oldPrimaryAppId);
+      restoreEnv("EVAOS_REVIEW_BOT_APP_ID", oldLegacyAppId);
+    }
+  });
+
   it("rejects a review workRoot inside the live repository checkout", () => {
     expect(() => loadConfig(writeConfig({
       workRoot: join(process.cwd(), "runtime")
@@ -161,6 +228,25 @@ describe("review scheduler config", () => {
     }
   });
 
+  it("supports NeonDiff protected checkout root environment alias", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-scheduler-protected-"));
+    roots.push(root);
+    const protectedRoot = join(root, "operator-checkout");
+    const oldPrimaryProtectedRoot = process.env.NEONDIFF_PROTECTED_CHECKOUT_ROOT;
+    const oldLegacyProtectedRoot = process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT;
+    process.env.NEONDIFF_PROTECTED_CHECKOUT_ROOT = protectedRoot;
+    delete process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT;
+
+    try {
+      expect(() => loadConfig(writeConfig({
+        workRoot: join(protectedRoot, "runtime")
+      }))).toThrow(/config\.workRoot must be outside the current repository checkout/);
+    } finally {
+      restoreEnv("NEONDIFF_PROTECTED_CHECKOUT_ROOT", oldPrimaryProtectedRoot);
+      restoreEnv("EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT", oldLegacyProtectedRoot);
+    }
+  });
+
   it("allows reviews when workRoot is outside the live repository checkout", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-scheduler-runtime-"));
     roots.push(root);
@@ -178,5 +264,13 @@ describe("review scheduler config", () => {
     const path = join(root, "config.json");
     writeFileSync(path, `${JSON.stringify(overlay)}\n`);
     return path;
+  }
+
+  function restoreEnv(name: string, value: string | undefined): void {
+    if (value === undefined) {
+      delete process.env[name];
+      return;
+    }
+    process.env[name] = value;
   }
 });

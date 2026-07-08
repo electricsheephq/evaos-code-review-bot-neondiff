@@ -5,6 +5,7 @@ import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
+import { resolveEnvAlias } from "./env-alias.js";
 import type { LicenseConfig } from "./license.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import {
@@ -519,7 +520,7 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   commands: {
     enabled: false,
-    botMentions: ["@evaos-code-review-bot"],
+    botMentions: ["@neondiff"],
     trustedAuthors: [],
     acknowledge: false
   },
@@ -542,8 +543,16 @@ export function loadConfig(configPath?: string): BotConfig {
 export function loadConfigFromObject(fromFile: unknown): BotConfig {
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
 
-  merged.github.appId = process.env.EVAOS_REVIEW_BOT_APP_ID ?? merged.github.appId;
-  merged.github.privateKeyPath = process.env.EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH ?? merged.github.privateKeyPath;
+  merged.github.appId = resolveEnvAlias({
+    primaryName: "NEONDIFF_GITHUB_APP_ID",
+    legacyName: "EVAOS_REVIEW_BOT_APP_ID",
+    valueLabel: "github.appId"
+  }) ?? merged.github.appId;
+  merged.github.privateKeyPath = resolveEnvAlias({
+    primaryName: "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
+    legacyName: "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH",
+    valueLabel: "github.privateKeyPath"
+  }) ?? merged.github.privateKeyPath;
   merged.github.token = process.env.GITHUB_TOKEN ?? merged.github.token;
   validateConfig(merged);
 

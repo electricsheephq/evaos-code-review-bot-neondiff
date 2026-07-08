@@ -57,8 +57,8 @@ because milestone or planning days can create large issue bursts.
 Keep the private key and local config out of git. A typical shell setup is:
 
 ```bash
-export EVAOS_REVIEW_BOT_APP_ID="<github-app-id>"
-export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 ```
 
 ## Verify Installation
@@ -155,8 +155,10 @@ To remove NeonDiff from a user or organization:
 ## Troubleshooting
 
 - `doctor github` reports `readMode: "unconfigured"`: set
-  `EVAOS_REVIEW_BOT_APP_ID` and `EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH`, or set
+  `NEONDIFF_GITHUB_APP_ID` and `NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH`, or set
   `github.appId` and `github.privateKeyPath` in an untracked local config.
+  Legacy `EVAOS_REVIEW_BOT_*` aliases remain supported for existing internal
+  deployments, but new public setup should use the NeonDiff names.
 - `doctor github` reports `fallback_token`: the worker can use a token for
   local reads, but it cannot prove App-authored review posting.
 - A repo read fails with 404 or "Resource not accessible by integration":

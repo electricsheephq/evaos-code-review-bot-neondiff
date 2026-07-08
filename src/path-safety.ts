@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveEnvAlias } from "./env-alias.js";
 
 export interface PathBoundary {
   path: string;
@@ -19,7 +20,11 @@ interface SinglePathBoundary {
 
 export function getProtectedCheckoutRoots(): string[] {
   return uniqueDefinedPaths([
-    process.env.EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT,
+    resolveEnvAlias({
+      primaryName: "NEONDIFF_PROTECTED_CHECKOUT_ROOT",
+      legacyName: "EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT",
+      valueLabel: "protected checkout root"
+    }),
     findPackageRoot(process.cwd()),
     getInstalledPackageRoot()
   ]);

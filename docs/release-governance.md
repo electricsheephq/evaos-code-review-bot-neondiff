@@ -198,8 +198,8 @@ launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 Run the status gate with App credentials set in the shell:
 
 ```bash
-export EVAOS_REVIEW_BOT_APP_ID=4184532
-export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH=/Volumes/LEXAR/Codex/evaos-code-review-bot/secrets/evaos-code-review-bot.private-key.pem
+export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 npm run release:status -- \
   --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
   --expected-head <source-sha> \

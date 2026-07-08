@@ -24,6 +24,13 @@ describe("secret redaction", () => {
     expect(redactSecrets(`license=${license}`)).toBe("license=[redacted-secret]");
   });
 
+  it("does not redact documented NeonDiff environment variable names", () => {
+    const text = "Set NEONDIFF_GITHUB_APP_ID and NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH before doctor github.";
+
+    expect(containsSecretLikeText(text)).toBe(false);
+    expect(redactSecrets(text)).toBe(text);
+  });
+
   it("redacts hyphenated license-shaped values case-insensitively", () => {
     const license = "neondiff-revocation-reason-test-123456";
     const digitPoorLicense = "NDL-XQKM-RPYB-SUTE";

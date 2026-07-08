@@ -165,7 +165,7 @@
   },
   "commands": {
     "enabled": false,
-    "botMentions": ["@evaos-code-review-bot"],
+    "botMentions": ["@neondiff"],
     "trustedAuthors": ["100yenadmin"],
     "acknowledge": false
   },
@@ -305,8 +305,8 @@
     "retryMaxRetries": 0
   },
   "github": {
-    "appId": "set via EVAOS_REVIEW_BOT_APP_ID",
-    "privateKeyPath": "set via EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH",
+    "appId": "set via NEONDIFF_GITHUB_APP_ID",
+    "privateKeyPath": "set via NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
     "token": "optional fallback token for local development only"
   }
 }

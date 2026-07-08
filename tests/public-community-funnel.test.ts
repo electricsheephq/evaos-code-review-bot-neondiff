@@ -123,6 +123,8 @@ describe("NeonDiff public community funnel", () => {
       /Requirements/i,
       /GitHub App/i,
       /github-app-setup\.md/i,
+      /NEONDIFF_GITHUB_APP_ID/i,
+      /NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH/i,
       /Contents: read/i,
       /Pull requests: read\/write/i,
       /doctor github/i,
@@ -161,6 +163,8 @@ describe("NeonDiff public community funnel", () => {
       /Pull requests: read\/write/i,
       /Checks: read/i,
       /Actions: read/i,
+      /NEONDIFF_GITHUB_APP_ID/i,
+      /NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH/i,
       /issue-enrichment permissions are separate from PR review/i,
       /issueEnrichment\.allowlist/i,
       /neondiff doctor github --config config\.local\.json --json/i,
@@ -178,6 +182,8 @@ describe("NeonDiff public community funnel", () => {
     ]) {
       expect(githubApp).toMatch(required);
     }
+    expect(setup).not.toMatch(/export EVAOS_REVIEW_BOT_APP_ID/);
+    expect(githubApp).not.toMatch(/export EVAOS_REVIEW_BOT_APP_ID/);
     expect(githubApp).not.toMatch(/BEGIN (RSA|OPENSSH|PRIVATE) KEY|ghp_|github_pat_|sk-[A-Za-z0-9]/);
   });
 
@@ -219,6 +225,8 @@ describe("NeonDiff public community funnel", () => {
       /Write or update a failing test/i,
       /Do not commit.*tokens/i,
       /Do not restart launchd/i,
+      /GitHub App setup/i,
+      /website onboarding/i,
       /source-available/i,
       /Update the issue before handoff/i
     ]) {

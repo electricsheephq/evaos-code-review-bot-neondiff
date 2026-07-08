@@ -64,7 +64,7 @@
   "commands": {
     "enabled": false,
     "botMentions": [
-      "@evaos-code-review-bot"
+      "@neondiff"
     ],
     "trustedAuthors": [
       "100yenadmin"

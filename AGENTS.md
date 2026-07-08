@@ -20,7 +20,10 @@ If you are a coding agent working in this repository:
 8. Do not restart launchd, promote a live beta, expand GitHub App permissions,
    flip repo visibility, publish packages, or create GitHub Releases unless the
    issue explicitly scopes that action.
-9. Update the issue before handoff, merge, pause, or external-review wait.
+9. For setup or GitHub App setup changes, update README.md,
+   docs/SETUP.md, docs/github-app-setup.md, and the website onboarding copy in
+   the current website repo before claiming the first-run path is fixed.
+10. Update the issue before handoff, merge, pause, or external-review wait.
 
 ## Source-Available Product Boundary
 
@@ -41,7 +44,9 @@ CodeRabbit parity, enterprise readiness, or legal adequacy from this file.
 - The NeonDiff public product roadmap is #103.
 - Public CLI/package setup is #107 and release-readiness packaging is #232.
 - Agent-first docs are #113.
-- Website changes live in `electricsheephq/neon-diff-agent`, not this repo.
+- Website changes currently live in `electricsheephq/neon-diff-agent-website`,
+  not this repo. Verify the active website repo before editing because older
+  marketing clones may still exist locally.
 - Before merge, release, or readiness claims, query current-head review threads
   and separate resolvable review threads from top-level bot comments and check
   annotations.

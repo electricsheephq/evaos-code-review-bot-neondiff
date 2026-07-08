@@ -33,8 +33,8 @@ exception in the tracker issue and open a backfill issue before ending.
 ## Required Commands
 
 ```bash
-export EVAOS_REVIEW_BOT_APP_ID=4184532
-export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH=/Volumes/LEXAR/Codex/evaos-code-review-bot/secrets/evaos-code-review-bot.private-key.pem
+export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 
 git fetch origin main --tags
 git checkout main
