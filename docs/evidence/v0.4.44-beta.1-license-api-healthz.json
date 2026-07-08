@@ -1,0 +1,19 @@
+{
+  "evidenceKind": "license_api_healthz",
+  "releaseVersion": "v0.4.44-beta.1",
+  "observedAt": "2026-07-08T04:58:42Z",
+  "method": "GET",
+  "url": "https://neondiff-license.fly.dev/healthz",
+  "statusCode": 200,
+  "responseBody": "{\"status\":\"ok\"}",
+  "responseBodySha256": "a29ee2b15c494311c52521766e44af56a3ad2248e7a8ab465e5206463c13d288",
+  "captureContext": {
+    "tool": "curl",
+    "transport": "https",
+    "tlsValidation": "curl default CA validation",
+    "capturedFrom": "Codex Desktop macOS operator shell",
+    "dnsResolution": "neondiff-license.fly.dev -> 66.241.124.124 via system resolver",
+    "note": "Captured with normal system DNS resolution and curl default TLS validation."
+  },
+  "redaction": "No license key, token, cookie, customer data, or private repo content was present in this health check."
+}
