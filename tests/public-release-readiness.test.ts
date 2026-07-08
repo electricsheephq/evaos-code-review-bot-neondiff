@@ -109,12 +109,20 @@ describe("NeonDiff public release readiness", () => {
         trackingIssue?: string;
         healthUrl?: string;
         healthProofPath?: string;
+        checkoutIssuanceRequiredForThisRelease?: boolean;
+        checkoutIssuanceUrl?: string;
+        checkoutIssuanceState?: string;
+        checkoutIssuanceTrackingIssue?: string;
       };
     };
 
     expect(manifest.licenseApi).toMatchObject({
       requiredForThisRelease: true,
-      state: "healthy"
+      state: "healthy",
+      checkoutIssuanceRequiredForThisRelease: false,
+      checkoutIssuanceUrl: "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
+      checkoutIssuanceState: "pending_secret_and_website_publish",
+      checkoutIssuanceTrackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
     });
     expect(manifest.licenseApi?.trackingIssue).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/);
     expect(manifest.licenseApi?.healthUrl).toMatch(/^https:\/\/[^/]+\/healthz$/);

@@ -137,6 +137,8 @@ Before tagging:
    `docs/public-release-manifest.json` exists and declares:
    - docs version and release-notes path
    - license API state and whether it is required for this release
+   - license API health proof, plus checkout issuance proof when checkout or GA
+     activation is in scope
    - CLI, daemon, website, and desktop update-channel state
    - rollback command or tracking issue for each required channel
    - required-channel rollback fields with one source revert command such as
@@ -243,8 +245,8 @@ The release is green only when:
 - launchd is running with the active live config
 - daemon heartbeat is fresh
 - no blocking DB error rows exist
-- public docs, license API state, and update channels are either healthy or
-  explicitly deferred as non-required for the release in
+- public docs, license API state, checkout issuance state, and update channels
+  are either healthy/proven or explicitly deferred as non-required for the release in
   `docs/public-release-manifest.json`
 - coverage audit has zero unprocessed eligible heads
 - provider cooldowns are either absent or active and named in release notes

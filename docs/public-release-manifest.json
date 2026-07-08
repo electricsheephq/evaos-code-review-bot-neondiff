@@ -47,7 +47,11 @@
     "state": "healthy",
     "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327",
     "healthUrl": "https://neondiff-license.fly.dev/healthz",
-    "healthProofPath": "docs/evidence/v0.4.45-beta.1-license-api-healthz.json"
+    "healthProofPath": "docs/evidence/v0.4.45-beta.1-license-api-healthz.json",
+    "checkoutIssuanceRequiredForThisRelease": false,
+    "checkoutIssuanceUrl": "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
+    "checkoutIssuanceState": "pending_secret_and_website_publish",
+    "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
   },
   "updateChannels": {
     "cli": {

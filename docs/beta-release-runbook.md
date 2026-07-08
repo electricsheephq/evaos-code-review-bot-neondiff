@@ -333,6 +333,13 @@ npx tsx src/cli.ts review-head-gate \
 - Public release manifests may mark license API, website, or desktop channels
   as pending only when `requiredForThisRelease` is `false`; required channels
   must not be pending.
+- The license API health gate proves only `GET /healthz`. When checkout
+  issuance is part of the release, the manifest must also require
+  `checkoutIssuanceRequiredForThisRelease` and point at an evidence file showing
+  an unauthenticated `POST /v1/admin/licenses/issue` returned `401` with
+  `{"status":"unauthorized"}`. Stable/GA releases require this checkout
+  issuance proof by default; source-beta releases may defer it explicitly only
+  with a tracking issue and `checkoutIssuanceRequiredForThisRelease: false`.
 - launchd emits a fresh heartbeat after restart.
 - live DB has no unexpected error rows.
 - active provider cooldown rows are allowed only when they are explicit
@@ -466,6 +473,8 @@ For each beta promotion, record:
   expiry, active/expired count, retry command, and retry result.
 - public release manifest state for docs, license API, CLI update channel,
   daemon update channel, website/download channel, and desktop update channel.
+- checkout issuance evidence or the explicit deferred state and tracking issue
+  when the paid/trial purchase path is not in scope for the beta.
 - rollback SHA and command.
 - rollback note for provider config, GitHub App settings, website deploy, and
   desktop update channel when those surfaces are in scope; otherwise record the

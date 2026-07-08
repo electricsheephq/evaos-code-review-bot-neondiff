@@ -124,6 +124,11 @@ export interface PublicReleaseStatus {
     trackingIssue?: string;
     healthUrl?: string;
     healthProofPath?: string;
+    checkoutIssuanceRequiredForThisRelease?: boolean;
+    checkoutIssuanceUrl?: string;
+    checkoutIssuanceProofPath?: string;
+    checkoutIssuanceState?: string;
+    checkoutIssuanceTrackingIssue?: string;
   };
   updateChannels: {
     ok: boolean;
@@ -574,13 +579,25 @@ export function readPublicReleaseManifestStatus(input: {
       : true;
     const licenseHealthProofPath = readString(licenseApi.healthProofPath);
     const licenseHealthUrl = readString(licenseApi.healthUrl);
+    const licenseIssuanceRequired =
+      readBoolean(licenseApi.checkoutIssuanceRequiredForThisRelease) ?? (releaseLevel === "stable" && licenseRequired);
+    const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
+    const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
+    const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
+    const licenseIssuanceTrackingIssue = readString(licenseApi.checkoutIssuanceTrackingIssue);
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
+    const licenseNeedsIssuanceProof = licenseNeedsHealthProof && licenseIssuanceRequired;
     const licenseMetadataFailures = validateLicenseHealthMetadata({
       cwd: input.cwd,
       healthUrl: licenseHealthUrl,
       healthProofPath: licenseHealthProofPath,
       proofRequired: licenseNeedsHealthProof
-    });
+    }).concat(validateLicenseIssuanceMetadata({
+      cwd: input.cwd,
+      issuanceUrl: licenseIssuanceUrl,
+      issuanceProofPath: licenseIssuanceProofPath,
+      proofRequired: licenseNeedsIssuanceProof
+    }));
     const licenseHealthProof = licenseNeedsHealthProof
       ? validateLicenseHealthProof({
           cwd: input.cwd,
@@ -590,11 +607,26 @@ export function readPublicReleaseManifestStatus(input: {
           now: input.now
         })
       : { ok: true, detail: "" };
+    const licenseIssuanceProof = licenseNeedsIssuanceProof
+      ? validateLicenseIssuanceProof({
+          cwd: input.cwd,
+          proofPath: licenseIssuanceProofPath,
+          expectedReleaseVersion: expectedVersion,
+          expectedUrl: licenseIssuanceUrl,
+          now: input.now
+        })
+      : { ok: true, detail: "" };
     const licenseHealthProofOk = licenseHealthProof.ok;
+    const licenseIssuanceProofOk = licenseIssuanceProof.ok;
     const licenseMetadataOk = licenseMetadataFailures.length === 0;
-    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired) && licenseMetadataOk && licenseHealthProofOk;
+    const licenseOk =
+      isLicenseApiStateAcceptable(licenseState, licenseRequired) &&
+      licenseMetadataOk &&
+      licenseHealthProofOk &&
+      licenseIssuanceProofOk;
     const licenseDetailParts = [
       ...(licenseNeedsHealthProof ? [licenseHealthProof.detail] : []),
+      ...(licenseNeedsIssuanceProof ? [licenseIssuanceProof.detail] : []),
       ...licenseMetadataFailures
     ].filter(Boolean);
     const declaredChannelNames = Object.keys(updateChannels);
@@ -673,6 +705,11 @@ export function readPublicReleaseManifestStatus(input: {
         trackingIssue: readString(licenseApi.trackingIssue),
         healthUrl: licenseHealthUrl,
         healthProofPath: licenseHealthProofPath,
+        checkoutIssuanceRequiredForThisRelease: licenseIssuanceRequired,
+        checkoutIssuanceUrl: licenseIssuanceUrl,
+        checkoutIssuanceProofPath: licenseIssuanceProofPath,
+        checkoutIssuanceState: licenseIssuanceState,
+        checkoutIssuanceTrackingIssue: licenseIssuanceTrackingIssue,
         detail: licenseOk
           ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}${
               licenseDetailParts.length ? `; ${licenseDetailParts.join("; ")}` : ""
@@ -968,6 +1005,92 @@ function validateLicenseHealthProof(input: {
     : { ok: true, detail: `validated health proof ${input.proofPath}` };
 }
 
+function validateLicenseIssuanceProof(input: {
+  cwd: string;
+  proofPath?: string;
+  expectedReleaseVersion?: string;
+  expectedUrl?: string;
+  now?: Date;
+}): { ok: boolean; detail: string } {
+  if (!input.proofPath) return { ok: false, detail: "missing checkout issuance proof path (no checkoutIssuanceProofPath declared)" };
+  const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.proofPath, "checkoutIssuanceProofPath");
+  if (!confinedPath.ok) return { ok: false, detail: `invalid checkout issuance proof ${input.proofPath}: ${confinedPath.detail}` };
+  const absolutePath = confinedPath.absolutePath;
+  if (!existsSync(absolutePath)) return { ok: false, detail: `missing checkout issuance proof ${input.proofPath}` };
+
+  let proof: Record<string, unknown>;
+  try {
+    proof = asRecord(JSON.parse(readFileSync(absolutePath, "utf8")));
+  } catch {
+    return { ok: false, detail: `invalid checkout issuance proof ${input.proofPath}: proof JSON is invalid` };
+  }
+
+  const evidenceKind = readString(proof.evidenceKind);
+  const releaseVersion = readString(proof.releaseVersion);
+  const observedAt = readString(proof.observedAt);
+  const method = readString(proof.method);
+  const url = readString(proof.url);
+  const statusCode = typeof proof.statusCode === "number" ? proof.statusCode : undefined;
+  const responseBody = typeof proof.responseBody === "string" ? proof.responseBody : undefined;
+  const responseBodySha256 = readString(proof.responseBodySha256);
+  const captureContext = asRecord(proof.captureContext);
+  const captureTool = readString(captureContext.tool);
+  const captureTransport = readString(captureContext.transport);
+  const captureTlsValidation = readString(captureContext.tlsValidation);
+  const captureHost = readString(captureContext.capturedFrom);
+  const failures: string[] = [];
+
+  if (evidenceKind !== "license_api_checkout_issuance") failures.push("evidenceKind must be license_api_checkout_issuance");
+  if (!input.expectedReleaseVersion) {
+    failures.push("expected releaseVersion must be present");
+  } else if (releaseVersion !== input.expectedReleaseVersion) {
+    failures.push(`releaseVersion must match ${input.expectedReleaseVersion}`);
+  }
+  if (!input.expectedUrl) {
+    failures.push("checkoutIssuanceUrl must be present when validating checkout issuance proof");
+  } else if (url !== input.expectedUrl) {
+    failures.push(`url must match ${input.expectedUrl}`);
+  }
+  if (method !== "POST") failures.push("method must be POST");
+  if (statusCode !== 401) failures.push("statusCode must be 401");
+  const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
+  if (!observedAt || Number.isNaN(observedAtMs)) {
+    failures.push("observedAt must be a valid ISO timestamp");
+  } else {
+    const nowMs = (input.now ?? new Date()).getTime();
+    if (observedAtMs > nowMs + LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS) {
+      failures.push("observedAt must not be more than 5 minutes in the future");
+    }
+    if (nowMs - observedAtMs > LICENSE_HEALTH_PROOF_MAX_AGE_MS) {
+      failures.push(`observedAt must be no older than ${LICENSE_HEALTH_PROOF_MAX_AGE_DAYS} days`);
+    }
+  }
+  if (responseBody === undefined) {
+    failures.push("responseBody must be present");
+  }
+  if (!responseBodySha256) {
+    failures.push("responseBodySha256 must be present");
+  } else if (responseBody !== undefined && createHash("sha256").update(responseBody).digest("hex") !== responseBodySha256) {
+    failures.push("responseBodySha256 must match responseBody");
+  }
+  if (responseBody !== undefined) {
+    try {
+      const body = asRecord(JSON.parse(responseBody));
+      if (readString(body.status) !== "unauthorized") failures.push("responseBody.status must be unauthorized");
+    } catch {
+      failures.push("responseBody must be JSON");
+    }
+  }
+  if (!captureTool) failures.push("captureContext.tool must be present");
+  if (!captureTransport) failures.push("captureContext.transport must be present");
+  if (!captureTlsValidation) failures.push("captureContext.tlsValidation must be present");
+  if (!captureHost) failures.push("captureContext.capturedFrom must be present");
+
+  return failures.length
+    ? { ok: false, detail: `invalid checkout issuance proof ${input.proofPath}: ${failures.join("; ")}` }
+    : { ok: true, detail: `validated checkout issuance proof ${input.proofPath}` };
+}
+
 function validateLicenseHealthMetadata(input: {
   cwd: string;
   healthUrl?: string;
@@ -982,6 +1105,27 @@ function validateLicenseHealthMetadata(input: {
   if (input.healthProofPath && !input.proofRequired) {
     const confinedPath = resolveConfinedHealthProofPath(input.cwd, input.healthProofPath);
     if (!confinedPath.ok) failures.push(`invalid health proof ${input.healthProofPath}: ${confinedPath.detail}`);
+  }
+  return failures;
+}
+
+function validateLicenseIssuanceMetadata(input: {
+  cwd: string;
+  issuanceUrl?: string;
+  issuanceProofPath?: string;
+  proofRequired: boolean;
+}): string[] {
+  const failures: string[] = [];
+  if (input.proofRequired && !input.issuanceUrl) {
+    failures.push("checkoutIssuanceUrl must be present when validating checkout issuance proof");
+  }
+  if (input.issuanceUrl) {
+    const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl);
+    if (issuanceUrlFailure) failures.push(issuanceUrlFailure);
+  }
+  if (input.issuanceProofPath && !input.proofRequired) {
+    const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.issuanceProofPath, "checkoutIssuanceProofPath");
+    if (!confinedPath.ok) failures.push(`invalid checkout issuance proof ${input.issuanceProofPath}: ${confinedPath.detail}`);
   }
   return failures;
 }
@@ -1006,14 +1150,42 @@ function validateLicenseHealthUrl(healthUrl: string): string | undefined {
   return undefined;
 }
 
+function validateLicenseIssuanceUrl(issuanceUrl: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(issuanceUrl);
+  } catch {
+    return "checkoutIssuanceUrl must be an https URL ending in /v1/admin/licenses/issue with no credentials, query, or fragment";
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.pathname !== "/v1/admin/licenses/issue" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return "checkoutIssuanceUrl must be an https URL ending in /v1/admin/licenses/issue with no credentials, query, or fragment";
+  }
+  return undefined;
+}
+
 function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: true; absolutePath: string } | { ok: false; detail: string } {
+  return resolveConfinedEvidenceProofPath(cwd, proofPath, "healthProofPath");
+}
+
+function resolveConfinedEvidenceProofPath(
+  cwd: string,
+  proofPath: string,
+  fieldName: "healthProofPath" | "checkoutIssuanceProofPath"
+): { ok: true; absolutePath: string } | { ok: false; detail: string } {
   if (isAbsolute(proofPath)) {
-    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+    return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };
   }
   const evidenceRoot = resolve(cwd, "docs", "evidence");
   const absolutePath = resolve(cwd, proofPath);
   if (!isPathInsideOrEqual(absolutePath, evidenceRoot)) {
-    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+    return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };
   }
   if (!existsSync(absolutePath)) return { ok: true, absolutePath };
 
@@ -1023,10 +1195,10 @@ function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: t
     realEvidenceRoot = realpathSync.native(evidenceRoot);
     realProofPath = realpathSync.native(absolutePath);
   } catch {
-    return { ok: false, detail: "healthProofPath could not be resolved within docs/evidence" };
+    return { ok: false, detail: `${fieldName} could not be resolved within docs/evidence` };
   }
   if (!isPathInsideOrEqual(realProofPath, realEvidenceRoot)) {
-    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+    return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };
   }
   return { ok: true, absolutePath: realProofPath };
 }
