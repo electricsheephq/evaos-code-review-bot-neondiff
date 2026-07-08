@@ -95,9 +95,15 @@ sudo journalctl -u neondiff -f
 
 ## Status And Doctor
 
-Run setup checks before enabling the service:
+Run setup checks before enabling the service. Load the same env file into the
+current shell first so `NEONDIFF_CONFIG` and credential paths are exported for
+the `neondiff` commands:
 
 ```bash
+set -a
+source ~/.config/neondiff/neondiff.env # or /etc/neondiff/neondiff.env for the system unit
+set +a
+
 neondiff doctor github --config "$NEONDIFF_CONFIG" --json
 neondiff providers list --config "$NEONDIFF_CONFIG" --json
 neondiff providers doctor --config "$NEONDIFF_CONFIG" --json

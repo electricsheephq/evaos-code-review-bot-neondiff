@@ -2879,6 +2879,23 @@ exit 1
     });
   });
 
+  it("degrades launchd daemon controls on non-Linux platforms with Docker guidance", async () => {
+    const statusError = await runCli([
+      "daemon",
+      "status"
+    ], { env: { NEONDIFF_TEST_PLATFORM: "win32" } }).catch((error: { stdout: string }) => error);
+
+    const output = JSON.parse(statusError.stdout);
+    expect(output).toMatchObject({
+      ok: false,
+      command: "daemon status",
+      platform: "win32",
+      docs: "docs/docker.md",
+      error: expect.stringContaining("Use Docker")
+    });
+    expect(output.serviceManager).toBeUndefined();
+  });
+
   it("validates launchd labels and plist labels before planning daemon commands", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-plist-"));
     roots.push(root);

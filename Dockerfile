@@ -1,3 +1,4 @@
+# Node 26 is intentional: package.json requires node >=26 for this beta CLI.
 FROM node:26-bookworm-slim AS build
 
 WORKDIR /app
@@ -9,6 +10,7 @@ COPY config.example.json LICENSE.md README.md SECURITY.md CODE_OF_CONDUCT.md ./
 RUN npm run build
 RUN npm prune --omit=dev
 
+# Keep runtime on Node 26 so Docker matches the published package engine.
 FROM node:26-bookworm-slim
 
 ENV NODE_ENV=production

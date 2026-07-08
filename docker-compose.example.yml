@@ -16,7 +16,8 @@ services:
       - neondiff-evidence:/evidence
       - neondiff-work:/work
     depends_on:
-      - ollama
+      ollama:
+        condition: service_healthy
     restart: unless-stopped
 
   ollama:
@@ -26,6 +27,11 @@ services:
     volumes:
       - ollama:/root/.ollama
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   neondiff-state:

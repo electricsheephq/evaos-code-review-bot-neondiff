@@ -30,13 +30,15 @@ jobs:
           node-version: 26
           cache: npm
       - run: npm install -g neondiff
+      - name: Prepare dry-run config
+        run: cp config.example.json "$RUNNER_TEMP/config.local.json"
       - name: Write GitHub App key
         run: |
           install -m 600 /dev/null "$RUNNER_TEMP/neondiff.private-key.pem"
           printf '%s' "${NEONDIFF_GITHUB_APP_PRIVATE_KEY}" > "$RUNNER_TEMP/neondiff.private-key.pem"
         env:
           NEONDIFF_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NEONDIFF_GITHUB_APP_PRIVATE_KEY }}
-      - run: neondiff doctor github --config config.local.json --json
+      - run: neondiff doctor github --config "$RUNNER_TEMP/config.local.json" --json
         env:
           NEONDIFF_GITHUB_APP_ID: ${{ secrets.NEONDIFF_GITHUB_APP_ID }}
           NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: ${{ runner.temp }}/neondiff.private-key.pem
@@ -60,9 +62,10 @@ The generic shape is:
 ```bash
 node --version
 npm install -g neondiff
-neondiff doctor github --config config.local.json --json
-neondiff providers list --config config.local.json --json
-neondiff review-pr --config config.local.json --repo owner/name --pr "$PR_NUMBER" --dry-run true
+cp config.example.json "$RUNNER_TEMP/config.local.json"
+neondiff doctor github --config "$RUNNER_TEMP/config.local.json" --json
+neondiff providers list --config "$RUNNER_TEMP/config.local.json" --json
+neondiff review-pr --config "$RUNNER_TEMP/config.local.json" --repo owner/name --pr "$PR_NUMBER" --dry-run true
 ```
 
 Use CI for one-shot checks. Use [docs/systemd.md](systemd.md) or

@@ -19,7 +19,7 @@ RestartSec=10
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/neondiff /var/cache/neondiff /var/log/neondiff /etc/neondiff
+ReadWritePaths=/var/lib/neondiff /var/cache/neondiff /var/log/neondiff
 
 [Install]
 WantedBy=multi-user.target

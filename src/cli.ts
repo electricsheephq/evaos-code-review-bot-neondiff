@@ -2500,15 +2500,17 @@ function unsupportedNonDarwinDaemonControl(
   action: "start" | "stop" | "status",
   platform: string
 ): DaemonControlResult {
+  const isLinux = platform === "linux";
   return {
     ok: false,
     command: `daemon ${action}`,
     platform,
-    serviceManager: "systemd",
-    docs: "docs/systemd.md",
+    ...(isLinux ? { serviceManager: "systemd" as const, docs: "docs/systemd.md" } : { docs: "docs/docker.md" }),
     error:
       `launchd daemon controls are only supported on macOS; detected ${platform}. ` +
-      "On Linux, use systemd with docs/systemd.md or Docker with docs/docker.md."
+      (isLinux
+        ? "On Linux, use systemd with docs/systemd.md or Docker with docs/docker.md."
+        : "Use Docker with docs/docker.md, or run this on Linux with docs/systemd.md.")
   };
 }
 
