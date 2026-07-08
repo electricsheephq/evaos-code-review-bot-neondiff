@@ -66,4 +66,23 @@ check(
     "local package CLI is preferred over GUI PATH fallback"
 )
 
+let launchMarker = tempRoot.appendingPathComponent("dashboard-launch-marker.txt")
+let launchScript = tempRoot.appendingPathComponent("dashboard-launcher")
+try """
+#!/usr/bin/env bash
+printf '%s\\n' "$*" > \(launchMarker.path)
+""".write(to: launchScript, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchScript.path)
+
+let launchClient = NeonDiffCLIClient(executablePath: launchScript.path, workingDirectory: tempRoot)
+let launchResult = try launchClient.launchDetached(arguments: ["dashboard", "--config", "config.local.json", "--open", "true"])
+check(launchResult.processIdentifier > 0, "dashboard launcher returns a child process identifier")
+let markerDeadline = Date().addingTimeInterval(3)
+while !FileManager.default.fileExists(atPath: launchMarker.path), Date() < markerDeadline {
+    Thread.sleep(forTimeInterval: 0.05)
+}
+check(FileManager.default.fileExists(atPath: launchMarker.path), "dashboard launcher writes its marker file")
+let markerContents = try String(contentsOf: launchMarker, encoding: .utf8)
+check(markerContents.contains("dashboard --config config.local.json --open true"), "dashboard launcher passes expected CLI arguments")
+
 print("NeonDiffDesktopCoreChecks passed")

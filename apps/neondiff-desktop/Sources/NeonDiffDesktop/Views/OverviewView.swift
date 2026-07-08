@@ -12,9 +12,30 @@ struct OverviewView: View {
                     StatusTile(title: "Runtime", value: model.status.healthState, systemImage: "bolt.horizontal.circle")
                     StatusTile(title: "Repos", value: "\(model.status.monitoredRepos.count)", systemImage: "folder")
                     StatusTile(title: "Keys", value: model.providers.providerKeyStored ? "stored" : "missing", systemImage: "key")
+                    StatusTile(title: "Dashboard", value: model.dashboardProcessIdentifier == nil ? model.dashboardLaunchStatus : "launched", systemImage: "macwindow")
+                }
+
+                OperatorSection("Local Dashboard Launcher") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("The Mac launcher opens the same local HTML dashboard as the CLI. Provider, license, GitHub App, and daemon readiness remain redacted in the browser dashboard.")
+                            .operatorBodyText()
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(spacing: 10) {
+                            Button { model.openDashboard() } label: {
+                                Label("Open Dashboard", systemImage: "safari")
+                            }
+                            Button { model.copyCommand(model.dashboardCommand) } label: {
+                                Label("Copy Dashboard Command", systemImage: "doc.on.doc")
+                            }
+                        }
+
+                        OperatorCommandText(text: model.dashboardCommand.commandLine, lineLimit: 3)
+                    }
                 }
 
                 CommandPanel(commands: [
+                    model.dashboardCommand,
                     model.statusCommand,
                     model.startDaemonDryRunCommand,
                     model.stopDaemonDryRunCommand,
@@ -22,6 +43,9 @@ struct OverviewView: View {
                 ], copy: model.copyCommand)
 
                 HStack(spacing: 10) {
+                    Button { model.openDashboard() } label: {
+                        Label("Dashboard", systemImage: "macwindow")
+                    }
                     Button { model.refreshStatus() } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }

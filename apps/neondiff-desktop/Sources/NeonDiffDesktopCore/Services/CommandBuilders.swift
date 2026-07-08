@@ -23,6 +23,18 @@ public enum NeonDiffCommandBuilder {
         )
     }
 
+    public static func dashboard(
+        cliPath: String,
+        configPath: String,
+        launchdLabel: String,
+        openBrowser: Bool = true
+    ) -> DesktopCommand {
+        DesktopCommand(
+            title: "Open local dashboard",
+            commandLine: "\(shellQuote(cliPath)) dashboard --config \(shellQuote(configPath)) --launchd-label \(shellQuote(launchdLabel)) --open \(openBrowser ? "true" : "false")"
+        )
+    }
+
     public static func daemonControl(
         action: String,
         cliPath: String,
