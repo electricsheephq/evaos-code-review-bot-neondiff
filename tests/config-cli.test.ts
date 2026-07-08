@@ -162,6 +162,7 @@ describe("desktop config CLI", () => {
             baseUrl: "http://localhost:11434/v1",
             model: "qwen2.5-coder:14b",
             authMode: "none",
+            structuredOutputMode: "ollama-format-json-schema",
             capabilities: {
               review: true,
               jsonOutput: true
@@ -204,6 +205,7 @@ describe("desktop config CLI", () => {
         "providers.providers.ollama-local.baseUrl",
         "providers.providers.ollama-local.model",
         "providers.providers.ollama-local.authMode",
+        "providers.providers.ollama-local.structuredOutputMode",
         "providers.providers.ollama-local.capabilities.review",
         "providers.providers.ollama-local.capabilities.jsonOutput",
         "providers.providers.openai-compatible.apiKeyEnv"

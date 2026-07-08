@@ -24,6 +24,11 @@ Official/provider-owned docs:
 - [Z.AI OpenAI SDK compatibility](https://docs.z.ai/guides/develop/openai/python)
 - [Z.AI current GLM coding model guidance](https://docs.z.ai/devpack/latest-model)
 - [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)
+- [Ollama structured outputs](https://docs.ollama.com/capabilities/structured-outputs)
+- [LM Studio structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output)
+- [vLLM structured outputs](https://docs.vllm.ai/en/latest/features/structured_outputs/)
+- [llama.cpp server OpenAI-compatible endpoint](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+- [SGLang structured outputs](https://docs.sglang.io/docs/advanced_features/structured_outputs)
 
 Discovery/resource catalogs:
 
@@ -52,8 +57,8 @@ Status definitions:
 | Provider, runtime, or resource | Status | How to verify | Egress posture | Tracking |
 | --- | --- | --- | --- | --- |
 | GLM/Z.AI through ZCode (`zcode-glm`) | `default beta path`; `tested by NeonDiff` as the current live review route | `neondiff providers doctor --config config.local.json --json`, then a dry-run review before live posting | Hosted Z.AI/GLM path through ZCode can receive prompts and diffs | Provider sprint [#238](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/238) |
-| Ollama on `http://localhost:11434/v1` | `compatible by interface`; provider doctor/smoke only until adapter proof promotes live review | Enable the local provider and run `neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json` | No-egress only when endpoint is loopback or self-hosted and the model runs locally | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240) |
-| LM Studio, vLLM, or local OpenAI-compatible gateway | `compatible by interface`; `tracked/planned` for live adapter proof | Use an explicit provider id and local `/v1` base URL; promote only after fixture and dry-run review proof | No-egress only for local/self-hosted endpoints; hosted gateways are remote egress | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240) |
+| Ollama on `http://localhost:11434/v1` | `compatible by interface`; `ollama-format-json-schema` request construction shipped behind explicit config | Enable the local provider and run `neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json`, then a review fixture/dry-run | No-egress only when endpoint is loopback or self-hosted and the model runs locally | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240), schema mode [#399](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/399) |
+| LM Studio, vLLM, llama.cpp, SGLang, or local OpenAI-compatible gateway | `compatible by interface`; schema-constrained request construction shipped behind explicit config | Use an explicit provider id and local `/v1` base URL; promote only after fixture and dry-run review proof | No-egress only for local/self-hosted endpoints; hosted gateways are remote egress | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240), schema mode [#399](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/399) |
 | Hosted OpenAI-compatible BYOK gateway | `compatible by interface`; remote smoke and live review proof required | Store only `apiKeyEnv`, run a single-provider smoke, then record redacted evidence before live review | Hosted provider receives prompts and diffs | Hosted BYOK coverage [#241](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/241) |
 | Free/trial provider catalogs such as `cheahjs/free-llm-api-resources` | `resource only / untested` unless a provider has a NeonDiff proof issue | Verify provider terms, model availability, OpenAI compatibility, quota, and NeonDiff proof separately | Usually hosted egress; read each provider's terms and privacy posture | This resource issue [#242](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/242) |
 | Agent runtimes such as Codex CLI, Claude Code, and OpenCode | `tracked/planned`; discovery only | Do not configure as a live review provider until the runtime contract is documented and proven | Depends on each runtime/provider chain; no general no-egress claim | Agent runtime discovery [#243](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/243) |
@@ -147,6 +152,52 @@ does not need an API key:
         "baseUrl": "http://localhost:11434/v1",
         "model": "qwen2.5-coder:7b",
         "authMode": "none",
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": true,
+          "streaming": false
+        }
+      }
+    }
+  }
+}
+```
+
+## Structured Findings JSON Modes
+
+NeonDiff always validates model output with the canonical findings parser before
+posting comments. `structuredOutputMode` is an optional provider request hint
+that asks compatible local backends to constrain decoding to the same findings
+JSON Schema before the response reaches NeonDiff. It is additive and
+default-compatible: unsupported providers can keep the recovery path, while
+schema-capable providers record `structuredOutputMode: "constrained:<mode>"` in
+adapter evidence.
+
+| Mode | Request shape | Intended backend |
+| --- | --- | --- |
+| `none` | no provider-side JSON/structured-output field | recovery-only providers |
+| `json-object` | `response_format: { "type": "json_object" }` | legacy OpenAI-compatible JSON mode |
+| `openai-json-schema` | `response_format: { "type": "json_schema", "json_schema": { "name", "strict", "schema" } }` | LM Studio and OpenAI-style structured-output gateways |
+| `llama-cpp-json-schema` | `response_format: { "type": "json_schema", "schema": <findings schema> }` | llama.cpp server variants |
+| `vllm-structured-outputs` | `structured_outputs: { "json": <findings schema> }` | current vLLM OpenAI-compatible serving |
+| `vllm-guided-json` | `guided_json: <findings schema>` | older vLLM deployments that still accept the legacy field |
+| `ollama-format-json-schema` | `format: <findings schema>` | Ollama structured-output compatible endpoints |
+| `sglang-json-schema` | OpenAI-style `response_format: { "type": "json_schema", ... }` | SGLang OpenAI-compatible serving |
+
+Example local Ollama-style schema mode:
+
+```json
+{
+  "providers": {
+    "providers": {
+      "ollama-local": {
+        "enabled": true,
+        "adapter": "openai-compatible",
+        "baseUrl": "http://localhost:11434/v1",
+        "model": "qwen2.5-coder:7b",
+        "authMode": "none",
+        "structuredOutputMode": "ollama-format-json-schema",
         "capabilities": {
           "review": true,
           "jsonOutput": true,

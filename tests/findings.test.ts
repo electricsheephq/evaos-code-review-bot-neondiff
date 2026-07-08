@@ -1,9 +1,56 @@
 import { describe, expect, it } from "vitest";
+import { REVIEW_FINDINGS_JSON_SCHEMA } from "../src/findings-schema.js";
 import { decideReviewEvent, formatReviewComment, normalizeFindingsForReview, parseFindings, suppressSameRunNearDuplicates } from "../src/findings.js";
 import type { PublicConfidenceDisplayPolicy } from "../src/public-confidence.js";
 import type { Finding } from "../src/types.js";
 
 describe("finding normalization and review policy", () => {
+  it("exports a canonical JSON schema matching the parseFindings envelope", () => {
+    expect(REVIEW_FINDINGS_JSON_SCHEMA).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["findings"],
+      properties: {
+        findings: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["severity", "path", "line", "title", "body", "confidence"],
+            properties: {
+              severity: { type: "string", enum: ["P0", "P1", "P2", "P3"] },
+              path: { type: "string", minLength: 1 },
+              line: { type: "integer", minimum: 1 },
+              title: { type: "string", minLength: 1 },
+              body: { type: "string", minLength: 1 },
+              confidence: { type: "number", minimum: 0, maximum: 1 },
+              category: {
+                type: "string",
+                enum: [
+                  "data_loss",
+                  "auth",
+                  "ci_build",
+                  "unity_scene_prefab",
+                  "security_boundary",
+                  "migration",
+                  "api_compatibility",
+                  "release_regression",
+                  "flaky_test_risk",
+                  "proof_gap",
+                  "runtime_correctness",
+                  "dependency",
+                  "docs_only",
+                  "unknown"
+                ]
+              },
+              why_this_matters: { type: "string", minLength: 1 }
+            }
+          }
+        }
+      }
+    });
+  });
+
   it("orders same-severity findings by confidence and caps the lowest-confidence first", () => {
     const findings: Finding[] = [
       {

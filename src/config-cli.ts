@@ -59,7 +59,7 @@ const REPO_PROFILE_NESTED_PATTERN =
   new RegExp(`^repoProfiles\\.repos\\.(${CONFIG_NAME_SEGMENT_PATTERN}\\/${CONFIG_NAME_SEGMENT_PATTERN})\\.(?:autoReview\\.(?:baseBranches|labels)|preMergeChecks\\.(?:title|description|linkedIssue|testEvidence|docs|docstrings)\\.(?:mode|instructions|threshold)|finishingTouches\\.(?:docs|docstrings|unitTests|simplifySuggestion|changelogDraft|riskExplanation|reviewReady|stackedPr)\\.(?:enabled|instructions))$`);
 
 const PROVIDER_SAFE_FIELD_PATTERN =
-  new RegExp(`^providers\\.providers\\.(${CONFIG_NAME_SEGMENT_PATTERN})\\.(?:enabled|adapter|displayName|baseUrl|model|authMode|apiKeyEnv|contextWindowTokens|timeoutMs|retryMaxRetries)$`);
+  new RegExp(`^providers\\.providers\\.(${CONFIG_NAME_SEGMENT_PATTERN})\\.(?:enabled|adapter|displayName|baseUrl|model|authMode|apiKeyEnv|contextWindowTokens|timeoutMs|retryMaxRetries|structuredOutputMode)$`);
 
 const PROVIDER_CAPABILITY_PATTERN =
   new RegExp(`^providers\\.providers\\.(${CONFIG_NAME_SEGMENT_PATTERN})\\.capabilities\\.(?:review|jsonOutput|local|streaming)$`);

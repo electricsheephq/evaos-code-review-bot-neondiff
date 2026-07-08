@@ -91,6 +91,27 @@ repo:
 
 `providers.byok.apiKeyEnv` names an environment variable; it is not a value slot for a raw key. Local provider hints are limited to HTTP loopback version roots such as `http://localhost:11434/v1`; HTTPS loopback and arbitrary path suffixes are intentionally rejected in this draft. Committed config should still avoid machine-specific secrets and credentials. Machine-specific provider settings belong in local overrides once runtime support exists.
 
+The live `BotConfig.providers.providers.<provider-id>.structuredOutputMode`
+field is separate from the public `.neondiff.yml` draft above. It is a
+machine/operator config knob for provider adapters, not a repo-owned policy
+field. Supported values are:
+
+| Value | Behavior |
+| --- | --- |
+| `none` | No provider-side JSON/structured-output field; NeonDiff uses its recovery parser only. |
+| `json-object` | Legacy `response_format: { "type": "json_object" }`; valid JSON object hint, not schema-constrained findings. |
+| `openai-json-schema` | OpenAI/LM Studio style `response_format` with the canonical findings JSON Schema. |
+| `llama-cpp-json-schema` | llama.cpp-compatible `response_format` with a direct `schema` field. |
+| `vllm-structured-outputs` | Current vLLM `structured_outputs: { "json": ... }` shape. |
+| `vllm-guided-json` | Legacy vLLM `guided_json` shape for older deployments. |
+| `ollama-format-json-schema` | Ollama-style `format` field with the findings schema. |
+| `sglang-json-schema` | SGLang OpenAI-compatible `response_format: { "type": "json_schema", ... }` shape. |
+
+Unknown values fail config validation rather than silently downgrading. Schema
+mode evidence is stamped as `constrained:<mode>`; `none` and plain
+`json-object` remain the recovery path because they do not enforce the findings
+schema.
+
 ## Safety Defaults
 
 Mutation, finishing touches, issue enrichment, and public confidence percentages are default-off in this draft. A future runtime loader should fail before review starts when a repo config tries to enable unsupported unsafe behavior.

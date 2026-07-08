@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  REVIEW_FINDINGS_JSON_SCHEMA,
+  REVIEW_FINDINGS_JSON_SCHEMA_NAME,
+  REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
+  type ReviewFindingsJsonSchema
+} from "../src/findings-schema.js";
+import {
   buildOpenAIChatCompletionsUrl,
   classifyProviderAdapterError,
   createOpenAICompatibleReviewAdapter,
@@ -351,6 +357,174 @@ describe("provider adapter fixtures", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("sends the canonical findings schema for OpenAI-style structured output providers", async () => {
+    const seenBodies: unknown[] = [];
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "lm-studio-local",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://127.0.0.1:1234/v1",
+          structuredOutputMode: "openai-json-schema"
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as {
+            response_format?: {
+              type?: string;
+              json_schema?: {
+                name?: string;
+                strict?: boolean;
+                schema?: ReviewFindingsJsonSchema;
+              };
+            };
+          };
+          seenBodies.push(body);
+          expect(body.response_format).toEqual({
+            type: "json_schema",
+            json_schema: {
+              name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
+              strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
+              schema: REVIEW_FINDINGS_JSON_SCHEMA
+            }
+          });
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[],"summary":"Structured JSON schema request parsed."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "openai-json-schema-fixture",
+        providerId: "lm-studio-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(seenBodies).toHaveLength(1);
+    expect(result.evidence.rawEvidencePreview).toContain('"structuredOutputMode":"constrained:openai-json-schema"');
+  });
+
+  it("maps backend-specific structured output modes to their provider request fields", async () => {
+    const cases = [
+      {
+        mode: "llama-cpp-json-schema",
+        expected: {
+          response_format: {
+            type: "json_schema",
+            schema: REVIEW_FINDINGS_JSON_SCHEMA
+          }
+        }
+      },
+      {
+        mode: "vllm-structured-outputs",
+        expected: {
+          structured_outputs: {
+            json: REVIEW_FINDINGS_JSON_SCHEMA
+          }
+        }
+      },
+      {
+        mode: "vllm-guided-json",
+        expected: {
+          guided_json: REVIEW_FINDINGS_JSON_SCHEMA
+        }
+      },
+      {
+        mode: "ollama-format-json-schema",
+        expected: {
+          format: REVIEW_FINDINGS_JSON_SCHEMA
+        }
+      },
+      {
+        mode: "sglang-json-schema",
+        expected: {
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
+              strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
+              schema: REVIEW_FINDINGS_JSON_SCHEMA
+            }
+          }
+        }
+      }
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = await runProviderAdapterFixture({
+        adapter: createOpenAICompatibleReviewAdapter({
+          providerId: `provider-${testCase.mode}`,
+          provider: makeOpenAICompatibleProvider({
+            structuredOutputMode: testCase.mode
+          }),
+          fetchImpl: async (_url, init) => {
+            const body = JSON.parse(String(init?.body)) as unknown;
+            expect(body).toMatchObject(testCase.expected);
+            return jsonResponse({
+              choices: [
+                {
+                  message: {
+                    content: '{"findings":[],"summary":"Backend structured mode parsed."}'
+                  }
+                }
+              ]
+            });
+          }
+        }),
+        fixture: makeFixture({
+          id: `${testCase.mode}-fixture`,
+          providerId: `provider-${testCase.mode}`,
+          adapterId: "openai-compatible",
+          expectReviewJson: true
+        })
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.evidence.rawEvidencePreview).toContain(`"structuredOutputMode":"constrained:${testCase.mode}"`);
+    }
+  });
+
+  it("keeps unsupported providers on the recovery path when structured output is explicitly disabled", async () => {
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-disabled-local",
+        provider: makeOpenAICompatibleProvider({
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as { response_format?: unknown; guided_json?: unknown; format?: unknown };
+          expect(body).not.toHaveProperty("response_format");
+          expect(body).not.toHaveProperty("guided_json");
+          expect(body).not.toHaveProperty("format");
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[],"summary":"Recovery-only path parsed."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-disabled-fixture",
+        providerId: "schema-disabled-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.rawEvidencePreview).toContain('"structuredOutputMode":"recovery"');
   });
 
   it("times out OpenAI-compatible responses that stall after headers", async () => {

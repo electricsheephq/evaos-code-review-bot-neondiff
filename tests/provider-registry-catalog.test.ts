@@ -26,6 +26,8 @@ describe("provider family catalog", () => {
     expect(findProviderFamily("z.ai")?.id).toBe("glm");
     expect(findProviderFamily("ZCODE")?.id).toBe("glm");
     expect(findProviderFamily("openai-compatible-api")?.id).toBe("openai-compatible");
+    expect(findProviderFamily("llama.cpp")?.id).toBe("openai-compatible");
+    expect(findProviderFamily("sglang")?.id).toBe("openai-compatible");
     expect(findProviderFamily("ollama-local")?.id).toBe("ollama");
     expect(findProviderFamily("claude")?.id).toBe("anthropic");
     expect(findProviderFamily("google-ai")?.id).toBe("gemini");
@@ -65,6 +67,16 @@ describe("provider family catalog", () => {
       firstProviderId: "glm",
       duplicateProviderId: "glm"
     });
+  });
+
+  it("publishes structured-output capability modes for grammar-capable local backends", () => {
+    expect(findProviderFamily("lm-studio")?.structuredOutputModes).toEqual(
+      expect.arrayContaining(["openai-json-schema", "llama-cpp-json-schema", "vllm-structured-outputs", "sglang-json-schema"])
+    );
+    expect(findProviderFamily("ollama-local")?.structuredOutputModes).toEqual(
+      expect.arrayContaining(["json-object", "ollama-format-json-schema"])
+    );
+    expect(findProviderFamily("zcode-glm")?.structuredOutputModes).toEqual(["json-object"]);
   });
 
   it("keeps public metadata free of secret-looking auth values", () => {

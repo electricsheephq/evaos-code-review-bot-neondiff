@@ -18,7 +18,7 @@ import {
   PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND,
   type PublicConfidenceDisplayPolicy
 } from "./public-confidence.js";
-import { isApiKeyEnvName, isProviderId, type ProviderRegistryConfig } from "./providers.js";
+import { isApiKeyEnvName, isProviderId, isProviderStructuredOutputMode, PROVIDER_STRUCTURED_OUTPUT_MODES, type ProviderRegistryConfig } from "./providers.js";
 import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
 import { containsSecretLikeText } from "./secrets.js";
@@ -1331,6 +1331,9 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
   if (value.contextWindowTokens !== undefined) validatePositiveInteger(value.contextWindowTokens, `${label}.contextWindowTokens`);
   if (value.timeoutMs !== undefined) validatePositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
   if (value.retryMaxRetries !== undefined) validateNonNegativeInteger(value.retryMaxRetries, `${label}.retryMaxRetries`);
+  if (value.structuredOutputMode !== undefined && !isProviderStructuredOutputMode(value.structuredOutputMode)) {
+    throw new Error(`${label}.structuredOutputMode must be one of ${PROVIDER_STRUCTURED_OUTPUT_MODES.join(", ")}`);
+  }
   if (!isRecord(value.capabilities)) throw new Error(`${label}.capabilities must be an object`);
   for (const capability of ["review", "jsonOutput", "local", "streaming"] as const) {
     validateBoolean(value.capabilities[capability], `${label}.capabilities.${capability}`);

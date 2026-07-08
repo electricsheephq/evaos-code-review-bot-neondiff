@@ -1,7 +1,12 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import {
+  REVIEW_FINDINGS_JSON_SCHEMA,
+  REVIEW_FINDINGS_JSON_SCHEMA_NAME,
+  REVIEW_FINDINGS_JSON_SCHEMA_STRICT
+} from "./findings-schema.js";
 import { parseFindings } from "./findings.js";
-import { openAICompatibleProviderTargetError, type ProviderRegistryEntry } from "./providers.js";
+import { openAICompatibleProviderTargetError, type ProviderRegistryEntry, type ProviderStructuredOutputMode } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const EVIDENCE_PREVIEW_LIMIT = 500;
@@ -16,6 +21,14 @@ const REDACTION_TOKENS = [
   "[redacted-sensitive-field]",
   "[redacted-unserializable-evidence]"
 ] as const;
+const SCHEMA_CONSTRAINED_OUTPUT_MODES = new Set<ProviderStructuredOutputMode>([
+  "openai-json-schema",
+  "llama-cpp-json-schema",
+  "vllm-structured-outputs",
+  "vllm-guided-json",
+  "ollama-format-json-schema",
+  "sglang-json-schema"
+]);
 
 export type ProviderAdapterErrorClass =
   | "auth"
@@ -180,11 +193,12 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
 
       const apiKey = resolveOpenAICompatibleApiKey(provider, env);
       const timeout = createAbortSignal(provider.timeoutMs);
+      const structuredOutput = buildStructuredOutputRequestFields(provider);
       const requestBody = {
         model: input.model,
         stream: false,
         ...(provider.temperature === undefined ? {} : { temperature: provider.temperature }),
-        ...(provider.capabilities.jsonOutput && provider.jsonObjectResponseFormat !== false ? { response_format: { type: "json_object" } } : {}),
+        ...structuredOutput.requestFields,
         messages: [
           {
             role: "system",
@@ -233,6 +247,7 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
             adapterId: input.adapterId,
             model: input.model,
             baseUrl,
+            structuredOutputMode: structuredOutput.evidenceMode,
             status: response.status,
             ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
             ...extractOpenAICompatibleChoiceEvidence(parsed),
@@ -244,6 +259,77 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
       }
     }
   };
+}
+
+function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
+  requestFields: Record<string, unknown>;
+  evidenceMode: string;
+} {
+  const mode = resolveStructuredOutputMode(provider);
+  const evidenceMode = SCHEMA_CONSTRAINED_OUTPUT_MODES.has(mode)
+    ? `constrained:${mode}`
+    : "recovery";
+
+  switch (mode) {
+    case "none":
+      return { requestFields: {}, evidenceMode };
+    case "json-object":
+      return { requestFields: { response_format: { type: "json_object" } }, evidenceMode };
+    case "openai-json-schema":
+    case "sglang-json-schema":
+      return {
+        requestFields: {
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
+              strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
+              schema: REVIEW_FINDINGS_JSON_SCHEMA
+            }
+          }
+        },
+        evidenceMode
+      };
+    case "llama-cpp-json-schema":
+      return {
+        requestFields: {
+          response_format: {
+            type: "json_schema",
+            schema: REVIEW_FINDINGS_JSON_SCHEMA
+          }
+        },
+        evidenceMode
+      };
+    case "vllm-structured-outputs":
+      return {
+        requestFields: {
+          structured_outputs: {
+            json: REVIEW_FINDINGS_JSON_SCHEMA
+          }
+        },
+        evidenceMode
+      };
+    case "vllm-guided-json":
+      return {
+        requestFields: {
+          guided_json: REVIEW_FINDINGS_JSON_SCHEMA
+        },
+        evidenceMode
+      };
+    case "ollama-format-json-schema":
+      return {
+        requestFields: {
+          format: REVIEW_FINDINGS_JSON_SCHEMA
+        },
+        evidenceMode
+      };
+  }
+}
+
+function resolveStructuredOutputMode(provider: ProviderRegistryEntry): ProviderStructuredOutputMode {
+  if (provider.structuredOutputMode) return provider.structuredOutputMode;
+  if (provider.capabilities.jsonOutput && provider.jsonObjectResponseFormat !== false) return "json-object";
+  return "none";
 }
 
 export function buildOpenAIChatCompletionsUrl(baseUrl: string): string {
