@@ -198,6 +198,9 @@ const MAX_PUBLIC_VERSION_TAG_LENGTH = 128;
 const LICENSE_HEALTH_PROOF_MAX_AGE_DAYS = 30;
 const LICENSE_HEALTH_PROOF_MAX_AGE_MS = LICENSE_HEALTH_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
 const LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
+const LICENSE_ISSUANCE_PROOF_MAX_AGE_DAYS = 30;
+const LICENSE_ISSUANCE_PROOF_MAX_AGE_MS = LICENSE_ISSUANCE_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
+const LICENSE_ISSUANCE_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
 const CHECKOUT_ISSUANCE_READY_STATE = "ready";
 const CHECKOUT_ISSUANCE_DEFERRED_STATES = new Set(["deferred", "pending_secret_and_website_publish"]);
@@ -589,8 +592,7 @@ export function readPublicReleaseManifestStatus(input: {
     const explicitLicenseIssuanceRequired = readBoolean(licenseApi.checkoutIssuanceRequiredForThisRelease);
     const releaseLevelSupportsCheckoutIssuance =
       releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta";
-    const releaseRequiresCheckoutIssuance =
-      releaseLevelSupportsCheckoutIssuance && (licenseRequired || explicitLicenseIssuanceRequired === true);
+    const releaseRequiresCheckoutIssuance = releaseLevelSupportsCheckoutIssuance;
     const licenseIssuanceRequired =
       releaseRequiresCheckoutIssuance && !(explicitLicenseIssuanceRequired === false && releaseLevel === "source-beta");
     const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
@@ -1079,11 +1081,11 @@ function validateLicenseIssuanceProof(input: {
     failures.push("observedAt must be a valid ISO timestamp");
   } else {
     const nowMs = (input.now ?? new Date()).getTime();
-    if (observedAtMs > nowMs + LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS) {
+    if (observedAtMs > nowMs + LICENSE_ISSUANCE_PROOF_MAX_FUTURE_SKEW_MS) {
       failures.push("observedAt must not be more than 5 minutes in the future");
     }
-    if (nowMs - observedAtMs > LICENSE_HEALTH_PROOF_MAX_AGE_MS) {
-      failures.push(`observedAt must be no older than ${LICENSE_HEALTH_PROOF_MAX_AGE_DAYS} days`);
+    if (nowMs - observedAtMs > LICENSE_ISSUANCE_PROOF_MAX_AGE_MS) {
+      failures.push(`observedAt must be no older than ${LICENSE_ISSUANCE_PROOF_MAX_AGE_DAYS} days`);
     }
   }
   if (responseBody === undefined) {
