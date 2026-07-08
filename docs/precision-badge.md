@@ -20,9 +20,10 @@ The `n` denominator counts validated findings only. It excludes explicit-control
 and unvalidated outcome labels so the public badge denominator matches the
 calibration aggregate used for the precision gate.
 
-When calibrated display is enabled, the percentage is the aggregate-wide Wilson
-lower bound over the same validated findings counted by `n`, floored to a whole
-percent for display.
+When calibrated display is enabled, the percentage is the strongest calibrated
+confidence-bin Wilson lower bound used by the public-confidence gate, floored to
+a whole percent for display. It is not an all-findings precision claim. The `n`
+value remains the total validated finding count behind the aggregate packet.
 
 ## Public Percentage Gate
 
@@ -32,8 +33,8 @@ these are true:
 - `neondiff calibration-aggregate` produced a current aggregate.
 - The aggregate passes the public-confidence floors in
   [calibration-loop.md](calibration-loop.md): at least 100 labeled findings, 30
-  P0/P1 labels, 10 explicit negative-control scenarios, and a Wilson lower bound
-  of at least 0.95.
+  P0/P1 labels, 10 explicit negative-control scenarios, and the strongest
+  calibrated confidence-bin Wilson lower bound of at least 0.95.
 - A human reviewed the evidence and set
   `confidenceCalibration.publicDisplay.mode` to `"calibrated"`.
 - Config validation accepts the same evidence at load time.

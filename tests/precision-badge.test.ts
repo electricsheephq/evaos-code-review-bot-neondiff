@@ -51,6 +51,23 @@ const PASSING_AGGREGATE = {
   reason: "eligible"
 };
 
+const PASSING_MULTI_BIN_AGGREGATE = {
+  ...PASSING_AGGREGATE,
+  labeledFindings: 160,
+  bins: [
+    ...PASSING_AGGREGATE.bins,
+    {
+      minConfidence: 0.5,
+      maxConfidence: 0.8,
+      findings: 40,
+      matched: 20,
+      empiricalPrecision: 0.5,
+      rawWilsonLowerBound: 0.35198494879084225
+    }
+  ],
+  categoryPrecision: []
+};
+
 const CALIBRATED_POLICY = {
   mode: "calibrated" as const,
   evidenceUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/123",
@@ -111,6 +128,20 @@ describe("precision badge endpoint (#425)", () => {
     });
   });
 
+  it("renders the same Wilson metric used by the public gate even when bins diverge", () => {
+    const badge = buildPrecisionBadgeEndpoint({
+      aggregate: PASSING_MULTI_BIN_AGGREGATE,
+      publicDisplay: CALIBRATED_POLICY
+    });
+
+    expect(badge).toMatchObject({
+      schemaVersion: 1,
+      label: "NeonDiff precision",
+      message: "95% (n=160)",
+      color: "green"
+    });
+  });
+
   it("writes a Shields endpoint JSON file without leaking non-schema metadata", () => {
     const dir = mkdtempSync(join(tmpdir(), "neondiff-badge-write-"));
     roots.push(dir);
@@ -146,7 +177,7 @@ describe("precision badge endpoint (#425)", () => {
 
     expect(result.ok).toBe(true);
     expect(result.wilsonLowerBound).toBe(0.9543025846256779);
-    expect(result.displayWilsonLowerBound).toBe(0.9543025846256779);
+    expect(result.displayWilsonLowerBound).toBe(result.wilsonLowerBound);
     expect(existsSync(output)).toBe(true);
     const parsed = JSON.parse(readFileSync(output, "utf8"));
     expect(parsed).toEqual({
