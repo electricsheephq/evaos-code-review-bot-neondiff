@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -86,6 +86,46 @@ describe("beta release status", () => {
       statusCode: options.statusCode ?? 401,
       responseBody,
       responseBodySha256: options.responseBodySha256 ?? createHash("sha256").update(responseBody).digest("hex"),
+      captureContext: options.captureContext ?? {
+        tool: "curl",
+        transport: "https",
+        tlsValidation: "curl default CA validation",
+        capturedFrom: "test runner"
+      }
+    }));
+    return proofPath;
+  }
+
+  function writeAuthenticatedLicenseIssuanceProof(root: string, options: {
+    evidenceKind?: string;
+    releaseVersion?: string;
+    observedAt?: string;
+    method?: string;
+    url?: string;
+    statusCode?: number;
+    checkoutLookupKey?: string;
+    redactedResponse?: Record<string, unknown>;
+    responseBody?: string;
+    captureContext?: Record<string, unknown>;
+    path?: string;
+  } = {}): string {
+    const proofPath = options.path ?? "docs/evidence/license-checkout-issuance-authenticated.json";
+    mkdirSync(dirname(join(root, proofPath)), { recursive: true });
+    writeFileSync(join(root, proofPath), JSON.stringify({
+      evidenceKind: options.evidenceKind ?? "license_api_checkout_issuance_authenticated",
+      releaseVersion: options.releaseVersion ?? "v1.0.0",
+      observedAt: options.observedAt ?? new Date().toISOString(),
+      method: options.method ?? "POST",
+      url: options.url ?? "https://license.example/v1/admin/licenses/issue",
+      statusCode: options.statusCode ?? 200,
+      redactedResponse: options.redactedResponse ?? {
+        status: "issued",
+        replayed: false,
+        checkoutLookupKey: options.checkoutLookupKey ?? "neondiff_monthly",
+        issuedLicensePrefix: "nd_live_",
+        issuedLicenseFingerprint: `sha256:${"a".repeat(64)}`
+      },
+      ...(options.responseBody !== undefined ? { responseBody: options.responseBody } : {}),
       captureContext: options.captureContext ?? {
         tool: "curl",
         transport: "https",
@@ -1755,6 +1795,12 @@ describe("beta release status", () => {
         releaseVersion,
         url: "https://license.example/v1/admin/licenses/issue"
       });
+      const checkoutIssuanceAuthenticatedProofPath = releaseLevel === "stable"
+        ? writeAuthenticatedLicenseIssuanceProof(root, {
+            releaseVersion,
+            url: "https://license.example/v1/admin/licenses/issue"
+          })
+        : undefined;
       writeFileSync(join(root, "public-release.json"), JSON.stringify({
         version: releaseVersion,
         releaseLevel,
@@ -1771,7 +1817,8 @@ describe("beta release status", () => {
           checkoutIssuanceRequiredForThisRelease: true,
           checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue",
           checkoutIssuanceState: "ready",
-          checkoutIssuanceProofPath
+          checkoutIssuanceProofPath,
+          ...(checkoutIssuanceAuthenticatedProofPath ? { checkoutIssuanceAuthenticatedProofPath } : {})
         },
         updateChannels: {
           cli: {
@@ -1799,6 +1846,278 @@ describe("beta release status", () => {
       expect(manifest.licenseApi.detail).toContain(`validated checkout issuance proof ${checkoutIssuanceProofPath}`);
       expect(manifest.ok).toBe(true);
     }
+  });
+
+  it("blocks stable checkout issuance without redacted authenticated success proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stable-missing-auth-issuance-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0.md"), "# v1.0.0\n");
+    writeChangelogHead(root, "1.0.0", "docs/releases/v1.0.0.md");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      releaseVersion: "v1.0.0",
+      url: "https://license.example/healthz"
+    });
+    const checkoutIssuanceProofPath = writeLicenseIssuanceProof(root, {
+      releaseVersion: "v1.0.0",
+      url: "https://license.example/v1/admin/licenses/issue"
+    });
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.0",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath,
+        checkoutIssuanceRequiredForThisRelease: true,
+        checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue",
+        checkoutIssuanceState: "ready",
+        checkoutIssuanceProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "published",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0"
+    });
+
+    expect(manifest.licenseApi.detail).toContain(
+      "missing authenticated checkout issuance proof path (no checkoutIssuanceAuthenticatedProofPath declared)"
+    );
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("accepts stable checkout issuance with redacted authenticated success proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stable-auth-issuance-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0.md"), "# v1.0.0\n");
+    writeChangelogHead(root, "1.0.0", "docs/releases/v1.0.0.md");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      releaseVersion: "v1.0.0",
+      url: "https://license.example/healthz"
+    });
+    const checkoutIssuanceProofPath = writeLicenseIssuanceProof(root, {
+      releaseVersion: "v1.0.0",
+      url: "https://license.example/v1/admin/licenses/issue"
+    });
+    const checkoutIssuanceAuthenticatedProofPath = writeAuthenticatedLicenseIssuanceProof(root);
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.0",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath,
+        checkoutIssuanceRequiredForThisRelease: true,
+        checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue",
+        checkoutIssuanceState: "ready",
+        checkoutIssuanceProofPath,
+        checkoutIssuanceAuthenticatedProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "published",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0"
+    });
+
+    expect(manifest.licenseApi).toMatchObject({
+      ok: true,
+      checkoutIssuanceAuthenticatedProofPath
+    });
+    expect(manifest.licenseApi.detail).toContain(
+      `validated authenticated checkout issuance proof ${checkoutIssuanceAuthenticatedProofPath}`
+    );
+    expect(JSON.stringify(manifest)).not.toMatch(/nd_live_[A-Za-z0-9_-]{8,}|LICENSE_ISSUANCE_SECRET|Bearer /);
+    expect(manifest.ok).toBe(true);
+  });
+
+  it("blocks authenticated checkout issuance proofs that include raw response material", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stable-raw-auth-issuance-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0.md"), "# v1.0.0\n");
+    writeChangelogHead(root, "1.0.0", "docs/releases/v1.0.0.md");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      releaseVersion: "v1.0.0",
+      url: "https://license.example/healthz"
+    });
+    const checkoutIssuanceProofPath = writeLicenseIssuanceProof(root, {
+      releaseVersion: "v1.0.0",
+      url: "https://license.example/v1/admin/licenses/issue"
+    });
+    const checkoutIssuanceAuthenticatedProofPath = writeAuthenticatedLicenseIssuanceProof(root, {
+      responseBody: "{\"status\":\"issued\",\"licenseKey\":\"nd_live_rawleaksecret\"}"
+    });
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.0",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath,
+        checkoutIssuanceRequiredForThisRelease: true,
+        checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue",
+        checkoutIssuanceState: "ready",
+        checkoutIssuanceProofPath,
+        checkoutIssuanceAuthenticatedProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "published",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0"
+    });
+
+    expect(manifest.licenseApi.detail).toContain(
+      `invalid authenticated checkout issuance proof ${checkoutIssuanceAuthenticatedProofPath}`
+    );
+    expect(manifest.licenseApi.detail).toContain("responseBody must be omitted from authenticated proof");
+    expect(JSON.stringify(manifest)).not.toMatch(/nd_live_[A-Za-z0-9_-]{8,}|LICENSE_ISSUANCE_SECRET|Bearer /);
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("blocks authenticated checkout issuance proofs that carry extra payload fields", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-stable-extra-auth-issuance-fields-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0.md"), "# v1.0.0\n");
+    writeChangelogHead(root, "1.0.0", "docs/releases/v1.0.0.md");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      releaseVersion: "v1.0.0",
+      url: "https://license.example/healthz"
+    });
+    const checkoutIssuanceProofPath = writeLicenseIssuanceProof(root, {
+      releaseVersion: "v1.0.0",
+      url: "https://license.example/v1/admin/licenses/issue"
+    });
+    const checkoutIssuanceAuthenticatedProofPath = writeAuthenticatedLicenseIssuanceProof(root, {
+      redactedResponse: {
+        status: "issued",
+        replayed: false,
+        checkoutLookupKey: "neondiff_monthly",
+        issuedLicensePrefix: "nd_live_",
+        issuedLicenseFingerprint: `sha256:${"a".repeat(64)}`,
+        body: "{\"status\":\"issued\"}",
+        checkoutPayload: { lookupKey: "neondiff_monthly" }
+      }
+    });
+    const proof = JSON.parse(readFileSync(join(root, checkoutIssuanceAuthenticatedProofPath), "utf8")) as Record<string, unknown>;
+    proof.response = { status: "issued" };
+    proof.customerData = { fixture: "synthetic customer context" };
+    writeFileSync(join(root, checkoutIssuanceAuthenticatedProofPath), JSON.stringify(proof));
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.0",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath,
+        checkoutIssuanceRequiredForThisRelease: true,
+        checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue",
+        checkoutIssuanceState: "ready",
+        checkoutIssuanceProofPath,
+        checkoutIssuanceAuthenticatedProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "published",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0"
+    });
+
+    expect(manifest.licenseApi.detail).toContain("proof must contain only allowed top-level fields");
+    expect(manifest.licenseApi.detail).toContain("redactedResponse must contain only allowed fields");
+    expect(manifest.ok).toBe(false);
   });
 
   it("blocks deferred checkout issuance state when proof is required", () => {

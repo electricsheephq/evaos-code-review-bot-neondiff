@@ -12,6 +12,7 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b(?:customer|client)[_-]?phone\b\s*[:=]\s*["']?\+?\d[\d ().-]{7,}\d\b/gi,
   /\b(?:api[_-]?key|token|secret|password|cookie|session)\b\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{16,}/gi,
   /\b(?:NEONDIFF|NDL|LIC)_[A-Za-z0-9][A-Za-z0-9_-]{11,}\b/gi,
+  /\bnd_live_[A-Za-z0-9_-]{8,}\b/gi,
   /(?<![A-Za-z0-9_./-])(?:[Nn][Ee][Oo][Nn][Dd][Ii][Ff][Ff]|[Nn][Dd][Ll]|[Ll][Ii][Cc])-(?=[A-Za-z0-9_-]*[A-Z0-9])[A-Za-z0-9][A-Za-z0-9_-]{11,}\b/g,
   /\b[A-Za-z0-9]{3,}[-_](?:secret|token|password|cookie)[-_][A-Za-z0-9_-]{3,}\b/gi,
   /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,

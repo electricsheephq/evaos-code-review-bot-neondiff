@@ -96,10 +96,14 @@ return `401` with `{"status":"unauthorized"}`. A `503` response with
 `LICENSE_ISSUANCE_SECRET` and is not ready for paid/trial checkout activation.
 This release-status proof intentionally verifies only the fail-closed public
 boundary. It does not prove that a valid server-side checkout webhook can issue
-a license or write the DB. Capture positive authenticated issuance smoke in an
-owner-held, redacted evidence packet outside tracked manifest JSON; the
-first-class release-status gate for that path is tracked in
-`https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/456`.
+a license or write the DB. Stable/GA manifests must also point
+`checkoutIssuanceAuthenticatedProofPath` at an owner-held redacted success proof
+under `docs/evidence/`. That proof may record `statusCode: 200`,
+`status: "issued"`, `replayed`, the checkout lookup key,
+`issuedLicensePrefix: "nd_live_"`, and a `sha256:<64-hex>` fingerprint of the
+issued license key. It must not store raw bearer headers,
+`LICENSE_ISSUANCE_SECRET`, raw `licenseKey`, cookies, customer data, checkout
+payload secrets, or raw response bodies.
 
 ## 4. Deploy
 

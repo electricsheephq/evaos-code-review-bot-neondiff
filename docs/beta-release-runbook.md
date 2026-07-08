@@ -375,13 +375,17 @@ npx tsx src/cli.ts review-head-gate \
   `checkoutIssuanceRequiredForThisRelease: false`. When checkout issuance proof
   is required and a state is declared, `checkoutIssuanceState` must be `ready`.
   This manifest proof is a negative fail-closed boundary only; it proves the
-  public endpoint rejects unauthenticated callers. It does not prove a valid
-  owner-held checkout secret can issue a license, write the DB, or complete the
-  paid/trial fulfillment path. Authenticated issuance success must be captured
-  in the deploy runbook's redacted owner-held evidence lane before claiming
-  checkout issuance works end to end; the first-class release-status smoke gate
-  for that positive path is tracked in
-  `https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/456`.
+  public endpoint rejects unauthenticated callers. Stable/GA releases must also
+  declare `checkoutIssuanceAuthenticatedProofPath`, pointing to a redacted
+  owner-held success proof with
+  `evidenceKind: "license_api_checkout_issuance_authenticated"`,
+  `statusCode: 200`, and a `redactedResponse` containing only issuance status,
+  replay flag, checkout lookup key, `issuedLicensePrefix: "nd_live_"`, and a
+  `sha256:<64-hex>` license fingerprint. Do not commit raw bearer headers,
+  `LICENSE_ISSUANCE_SECRET`, raw `licenseKey`, cookies, customer data, checkout
+  payload secrets, or raw response bodies. Public beta and source-beta releases
+  may continue to use only the no-secret 401 gate unless authenticated checkout
+  issuance is part of that release's scope.
   In `release:status` output, `checkoutIssuanceRequiredForThisRelease` is the
   computed effective gate; `checkoutIssuanceRequiredDeclaredForThisRelease`
   preserves the raw manifest declaration when present.
@@ -519,7 +523,9 @@ For each beta promotion, record:
 - public release manifest state for docs, license API, CLI update channel,
   daemon update channel, website/download channel, and desktop update channel.
 - checkout issuance evidence or the explicit deferred state and tracking issue
-  when the paid/trial purchase path is not in scope for the beta.
+  when the paid/trial purchase path is not in scope for the beta; stable/GA
+  release packets must include both the unauthenticated rejection proof and the
+  redacted authenticated issuance success proof.
 - rollback SHA and command.
 - rollback note for provider config, GitHub App settings, website deploy, and
   desktop update channel when those surfaces are in scope; otherwise record the
