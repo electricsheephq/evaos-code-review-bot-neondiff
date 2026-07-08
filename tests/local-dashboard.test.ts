@@ -88,7 +88,7 @@ describe("local HTML dashboard", () => {
       state: "configured_unverified",
       mode: "metadata_only",
       redacted: true,
-      keyFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{12}$/)
+      keySource: "submitted"
     });
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(fakeKey);

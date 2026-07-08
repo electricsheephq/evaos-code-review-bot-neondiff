@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { BotConfig } from "./config.js";
 import { getLicenseStatus, type LicenseStatusResult } from "./license.js";
@@ -92,7 +91,7 @@ export interface ProviderApiKeyVerificationResult {
   mode: "metadata_only" | "openai_compatible_models";
   detail: string;
   redacted: true;
-  keyFingerprint?: string;
+  keySource?: "submitted" | "env";
   check?: Omit<ProviderDoctorCheck, "error"> & { error?: string };
   troubleshooting: string[];
 }
@@ -188,7 +187,7 @@ export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInpu
   const apiKey = input.apiKey?.trim();
   const env = { ...(input.env ?? process.env) };
   if (apiKey && provider.apiKeyEnv) env[provider.apiKeyEnv] = apiKey;
-  const keyFingerprint = apiKey ? fingerprintSecret(apiKey) : provider.apiKeyEnv && env[provider.apiKeyEnv] ? "env-present" : undefined;
+  const keySource = apiKey ? "submitted" : provider.apiKeyEnv && env[provider.apiKeyEnv] ? "env" : undefined;
   if (provider.apiKeyEnv && !env[provider.apiKeyEnv]) {
     return redactedVerification({
       ok: false,
@@ -224,7 +223,7 @@ export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInpu
         ? "API key source is present, but hosted provider smoke was not run. Start dashboard with --allow-remote-smoke true to perform a live /models check."
         : check?.error ?? "Provider metadata check failed.",
       redacted: true,
-      ...(keyFingerprint ? { keyFingerprint } : {}),
+      ...(keySource ? { keySource } : {}),
       ...(check ? { check: redactProviderCheck(check) } : {}),
       troubleshooting: [
         ...result.troubleshooting,
@@ -252,7 +251,7 @@ export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInpu
       ? `Verified ${displayProviderName(providerId, registry)} with a redacted /models check.`
       : check?.error ?? "Provider verification failed.",
     redacted: true,
-    ...(keyFingerprint ? { keyFingerprint } : {}),
+    ...(keySource ? { keySource } : {}),
     ...(check ? { check: redactProviderCheck(check) } : {}),
     troubleshooting: result.troubleshooting
   });
@@ -574,7 +573,7 @@ export async function startLocalDashboardServer(input: {
     } catch (error) {
       writeResponse(response, 500, "application/json; charset=utf-8", stringifyRedactedJson({
         ok: false,
-        error: error instanceof Error ? error.message : String(error)
+        error: "dashboard request failed"
       }));
     }
   });
@@ -769,7 +768,7 @@ function providerStatusItemFromVerification(result: ProviderApiKeyVerificationRe
     metadata: {
       providerId: result.providerId,
       mode: result.mode,
-      keyFingerprint: result.keyFingerprint ?? null
+      keySource: result.keySource ?? null
     }
   };
 }
@@ -798,11 +797,6 @@ function redactedStatus(status: LocalDashboardStatusContract): LocalDashboardSta
 
 function redactedVerification(result: ProviderApiKeyVerificationResult): ProviderApiKeyVerificationResult {
   return JSON.parse(stringifyRedactedJson(result)) as ProviderApiKeyVerificationResult;
-}
-
-function fingerprintSecret(secret: string): string {
-  const hash = createHash("sha256").update(secret).digest("hex").slice(0, 12);
-  return `sha256:${hash}`;
 }
 
 function renderStatusItem(item: LocalDashboardStatusItem): string {
