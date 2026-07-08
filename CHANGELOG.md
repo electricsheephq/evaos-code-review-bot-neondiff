@@ -16,6 +16,15 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.46-beta.1] - docs/releases/v0.4.46-beta.1.md
+
+### Changed
+
+- Add NeonDiff-branded GitHub App credential env aliases and fail-closed alias conflict handling while preserving the legacy internal `EVAOS_REVIEW_BOT_*` aliases
+- Refresh first-run GitHub App setup docs, agent guidance, launchd examples, and doctor troubleshooting so public setup requires App creation/installation before daemon reviews
+- Update public website onboarding to add the GitHub App setup step and fix website source metadata to `electricsheephq/neon-diff-agent-website`
+- Keep the public npm package held at `neondiff@0.4.30-beta.1` while advancing the source-beta release surface to the current merged setup fix
+
 ## [0.4.45-beta.1] - docs/releases/v0.4.45-beta.1.md
 
 ### Added
