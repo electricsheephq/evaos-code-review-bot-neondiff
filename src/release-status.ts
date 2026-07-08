@@ -124,6 +124,12 @@ export interface PublicReleaseStatus {
     trackingIssue?: string;
     healthUrl?: string;
     healthProofPath?: string;
+    checkoutIssuanceRequiredForThisRelease?: boolean;
+    checkoutIssuanceRequiredDeclaredForThisRelease?: boolean;
+    checkoutIssuanceUrl?: string;
+    checkoutIssuanceProofPath?: string;
+    checkoutIssuanceState?: string;
+    checkoutIssuanceTrackingIssue?: string;
   };
   updateChannels: {
     ok: boolean;
@@ -189,10 +195,16 @@ export interface ReleaseStatus {
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
 const MAX_PUBLIC_VERSION_TAG_LENGTH = 128;
-const LICENSE_HEALTH_PROOF_MAX_AGE_DAYS = 30;
-const LICENSE_HEALTH_PROOF_MAX_AGE_MS = LICENSE_HEALTH_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
-const LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
+const LICENSE_PROOF_MAX_AGE_DAYS = 30;
+const LICENSE_PROOF_MAX_AGE_MS = LICENSE_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
+const LICENSE_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
+const CHECKOUT_ISSUANCE_READY_STATE = "ready";
+const CHECKOUT_ISSUANCE_DEFERRED_STATES = new Set(["deferred", "pending_secret_and_website_publish"]);
+const CHECKOUT_ISSUANCE_STATES = new Set([
+  CHECKOUT_ISSUANCE_READY_STATE,
+  ...CHECKOUT_ISSUANCE_DEFERRED_STATES
+]);
 const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
   ...REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES,
   "deferred",
@@ -574,8 +586,22 @@ export function readPublicReleaseManifestStatus(input: {
       : true;
     const licenseHealthProofPath = readString(licenseApi.healthProofPath);
     const licenseHealthUrl = readString(licenseApi.healthUrl);
+    const explicitLicenseIssuanceRequired = readBoolean(licenseApi.checkoutIssuanceRequiredForThisRelease);
+    const releaseLevelSupportsCheckoutIssuance =
+      releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta";
+    const releaseRequiresCheckoutIssuance = releaseLevelSupportsCheckoutIssuance;
+    // Only source-beta can explicitly defer checkout issuance. Stable and beta
+    // releases force this gate on regardless of a false manifest declaration.
+    const sourceBetaExplicitlyDefersCheckoutIssuance =
+      explicitLicenseIssuanceRequired === false && releaseLevel === "source-beta";
+    const licenseIssuanceRequired =
+      releaseRequiresCheckoutIssuance && !sourceBetaExplicitlyDefersCheckoutIssuance;
+    const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
+    const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
+    const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
+    const licenseIssuanceTrackingIssue = readString(licenseApi.checkoutIssuanceTrackingIssue);
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
-    const licenseMetadataFailures = validateLicenseHealthMetadata({
+    const licenseHealthMetadataFailures = validateLicenseHealthMetadata({
       cwd: input.cwd,
       healthUrl: licenseHealthUrl,
       healthProofPath: licenseHealthProofPath,
@@ -591,10 +617,39 @@ export function readPublicReleaseManifestStatus(input: {
         })
       : { ok: true, detail: "" };
     const licenseHealthProofOk = licenseHealthProof.ok;
+    const licenseNeedsIssuanceProof = licenseIssuanceRequired;
+    const licenseIssuanceMetadataFailures = validateLicenseIssuanceMetadata({
+      cwd: input.cwd,
+      issuanceUrl: licenseIssuanceUrl,
+      issuanceProofPath: licenseIssuanceProofPath,
+      issuanceState: licenseIssuanceState,
+      issuanceTrackingIssue: licenseIssuanceTrackingIssue,
+      proofRequired: licenseNeedsIssuanceProof,
+      deferralPolicyApplies: releaseLevelSupportsCheckoutIssuance,
+      issuanceRequiredExplicit: explicitLicenseIssuanceRequired,
+      releaseLevel,
+      healthUrl: licenseHealthUrl
+    });
+    const licenseIssuanceProof = licenseNeedsIssuanceProof
+      ? validateLicenseIssuanceProof({
+          cwd: input.cwd,
+          proofPath: licenseIssuanceProofPath,
+          expectedReleaseVersion: expectedVersion,
+          expectedUrl: licenseIssuanceUrl,
+          now: input.now
+        })
+      : { ok: true, detail: "" };
+    const licenseIssuanceProofOk = licenseIssuanceProof.ok;
+    const licenseMetadataFailures = licenseHealthMetadataFailures.concat(licenseIssuanceMetadataFailures);
     const licenseMetadataOk = licenseMetadataFailures.length === 0;
-    const licenseOk = isLicenseApiStateAcceptable(licenseState, licenseRequired) && licenseMetadataOk && licenseHealthProofOk;
+    const licenseOk =
+      isLicenseApiStateAcceptable(licenseState, licenseRequired) &&
+      licenseMetadataOk &&
+      licenseHealthProofOk &&
+      licenseIssuanceProofOk;
     const licenseDetailParts = [
       ...(licenseNeedsHealthProof ? [licenseHealthProof.detail] : []),
+      ...(licenseNeedsIssuanceProof ? [licenseIssuanceProof.detail] : []),
       ...licenseMetadataFailures
     ].filter(Boolean);
     const declaredChannelNames = Object.keys(updateChannels);
@@ -673,6 +728,12 @@ export function readPublicReleaseManifestStatus(input: {
         trackingIssue: readString(licenseApi.trackingIssue),
         healthUrl: licenseHealthUrl,
         healthProofPath: licenseHealthProofPath,
+        checkoutIssuanceRequiredForThisRelease: licenseIssuanceRequired,
+        checkoutIssuanceRequiredDeclaredForThisRelease: explicitLicenseIssuanceRequired,
+        checkoutIssuanceUrl: licenseIssuanceUrl,
+        checkoutIssuanceProofPath: licenseIssuanceProofPath,
+        checkoutIssuanceState: licenseIssuanceState,
+        checkoutIssuanceTrackingIssue: licenseIssuanceTrackingIssue,
         detail: licenseOk
           ? `license API state ${licenseState}; requiredForThisRelease=${licenseRequired}${
               licenseDetailParts.length ? `; ${licenseDetailParts.join("; ")}` : ""
@@ -890,6 +951,22 @@ function isLicenseApiStateAcceptable(state: string, requiredForThisRelease: bool
   return state === "healthy" || state === "not_applicable" || state === "disabled" || state === "pending";
 }
 
+function validateLicenseProofObservedAt(observedAt: string | undefined, now?: Date): string[] {
+  if (!observedAt) return ["observedAt must be a valid ISO timestamp"];
+  const observedAtMs = Date.parse(observedAt);
+  if (Number.isNaN(observedAtMs)) return ["observedAt must be a valid ISO timestamp"];
+
+  const failures: string[] = [];
+  const nowMs = (now ?? new Date()).getTime();
+  if (observedAtMs > nowMs + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
+    failures.push("observedAt must not be more than 5 minutes in the future");
+  }
+  if (nowMs - observedAtMs > LICENSE_PROOF_MAX_AGE_MS) {
+    failures.push(`observedAt must be no older than ${LICENSE_PROOF_MAX_AGE_DAYS} days`);
+  }
+  return failures;
+}
+
 function validateLicenseHealthProof(input: {
   cwd: string;
   proofPath?: string;
@@ -938,18 +1015,7 @@ function validateLicenseHealthProof(input: {
   }
   if (method !== "GET") failures.push("method must be GET");
   if (statusCode !== 200) failures.push("statusCode must be 200");
-  const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
-  if (!observedAt || Number.isNaN(observedAtMs)) {
-    failures.push("observedAt must be a valid ISO timestamp");
-  } else {
-    const nowMs = (input.now ?? new Date()).getTime();
-    if (observedAtMs > nowMs + LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS) {
-      failures.push("observedAt must not be more than 5 minutes in the future");
-    }
-    if (nowMs - observedAtMs > LICENSE_HEALTH_PROOF_MAX_AGE_MS) {
-      failures.push(`observedAt must be no older than ${LICENSE_HEALTH_PROOF_MAX_AGE_DAYS} days`);
-    }
-  }
+  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
   if (responseBody === undefined) {
     failures.push("responseBody must be present");
   }
@@ -968,6 +1034,84 @@ function validateLicenseHealthProof(input: {
     : { ok: true, detail: `validated health proof ${input.proofPath}` };
 }
 
+function validateLicenseIssuanceProof(input: {
+  cwd: string;
+  proofPath?: string;
+  expectedReleaseVersion?: string;
+  expectedUrl?: string;
+  now?: Date;
+}): { ok: boolean; detail: string } {
+  if (!input.proofPath) return { ok: false, detail: "missing checkout issuance proof path (no checkoutIssuanceProofPath declared)" };
+  const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.proofPath, "checkoutIssuanceProofPath");
+  if (!confinedPath.ok) return { ok: false, detail: `invalid checkout issuance proof ${input.proofPath}: ${confinedPath.detail}` };
+  const absolutePath = confinedPath.absolutePath;
+  if (!existsSync(absolutePath)) return { ok: false, detail: `missing checkout issuance proof ${input.proofPath}` };
+
+  let proof: Record<string, unknown>;
+  try {
+    proof = asRecord(JSON.parse(readFileSync(absolutePath, "utf8")));
+  } catch {
+    return { ok: false, detail: `invalid checkout issuance proof ${input.proofPath}: proof JSON is invalid` };
+  }
+
+  const evidenceKind = readString(proof.evidenceKind);
+  const releaseVersion = readString(proof.releaseVersion);
+  const observedAt = readString(proof.observedAt);
+  const method = readString(proof.method);
+  const url = readString(proof.url);
+  const statusCode = typeof proof.statusCode === "number" ? proof.statusCode : undefined;
+  const responseBody = typeof proof.responseBody === "string" ? proof.responseBody : undefined;
+  const responseBodySha256 = readString(proof.responseBodySha256);
+  const captureContext = asRecord(proof.captureContext);
+  const captureTool = readString(captureContext.tool);
+  const captureTransport = readString(captureContext.transport);
+  const captureTlsValidation = readString(captureContext.tlsValidation);
+  const captureHost = readString(captureContext.capturedFrom);
+  const failures: string[] = [];
+
+  if (evidenceKind !== "license_api_checkout_issuance") failures.push("evidenceKind must be license_api_checkout_issuance");
+  if (!input.expectedReleaseVersion) {
+    failures.push("expected releaseVersion must be present");
+  } else if (releaseVersion !== input.expectedReleaseVersion) {
+    failures.push(`releaseVersion must match ${input.expectedReleaseVersion}`);
+  }
+  if (!input.expectedUrl) {
+    failures.push("checkoutIssuanceUrl must be present when validating checkout issuance proof");
+  } else if (url !== input.expectedUrl) {
+    failures.push(`url must match ${input.expectedUrl}`);
+  }
+  if (method !== "POST") failures.push("method must be POST");
+  // This manifest proof is the no-secret release gate: unauthenticated issuance
+  // must fail closed. Authenticated issuance smoke uses owner-held secrets and
+  // belongs in the deploy runbook/evidence lane, not committed manifest JSON.
+  if (statusCode !== 401) failures.push("statusCode must be 401");
+  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
+  if (responseBody === undefined) {
+    failures.push("responseBody must be present");
+  }
+  if (!responseBodySha256) {
+    failures.push("responseBodySha256 must be present");
+  } else if (responseBody !== undefined && createHash("sha256").update(responseBody).digest("hex") !== responseBodySha256) {
+    failures.push("responseBodySha256 must match responseBody");
+  }
+  if (responseBody !== undefined) {
+    try {
+      const body = asRecord(JSON.parse(responseBody));
+      if (readString(body.status) !== "unauthorized") failures.push("responseBody.status must be unauthorized");
+    } catch {
+      failures.push("responseBody must be JSON");
+    }
+  }
+  if (!captureTool) failures.push("captureContext.tool must be present");
+  if (!captureTransport) failures.push("captureContext.transport must be present");
+  if (!captureTlsValidation) failures.push("captureContext.tlsValidation must be present");
+  if (!captureHost) failures.push("captureContext.capturedFrom must be present");
+
+  return failures.length
+    ? { ok: false, detail: `invalid checkout issuance proof ${input.proofPath}: ${failures.join("; ")}` }
+    : { ok: true, detail: `validated checkout issuance proof ${input.proofPath}` };
+}
+
 function validateLicenseHealthMetadata(input: {
   cwd: string;
   healthUrl?: string;
@@ -984,6 +1128,88 @@ function validateLicenseHealthMetadata(input: {
     if (!confinedPath.ok) failures.push(`invalid health proof ${input.healthProofPath}: ${confinedPath.detail}`);
   }
   return failures;
+}
+
+function validateLicenseIssuanceMetadata(input: {
+  cwd: string;
+  issuanceUrl?: string;
+  issuanceProofPath?: string;
+  issuanceState?: string;
+  issuanceTrackingIssue?: string;
+  proofRequired: boolean;
+  deferralPolicyApplies: boolean;
+  issuanceRequiredExplicit?: boolean;
+  releaseLevel: string;
+  healthUrl?: string;
+}): string[] {
+  const failures: string[] = [];
+  if (input.proofRequired && !input.issuanceUrl) {
+    failures.push("checkoutIssuanceUrl must be present when validating checkout issuance proof");
+  }
+  if (input.issuanceState && !CHECKOUT_ISSUANCE_STATES.has(input.issuanceState)) {
+    failures.push(
+      `checkoutIssuanceState must be one of ${Array.from(CHECKOUT_ISSUANCE_STATES).sort().join(", ")}`
+    );
+  }
+  if (input.deferralPolicyApplies && input.issuanceRequiredExplicit === false) {
+    if (input.releaseLevel !== "source-beta") {
+      failures.push("checkoutIssuanceRequiredForThisRelease:false is only allowed for source-beta releases");
+    } else {
+      if (!input.issuanceTrackingIssue) {
+        failures.push("checkoutIssuanceTrackingIssue must be present when checkout issuance proof is deferred");
+      }
+      if (!input.issuanceState || !CHECKOUT_ISSUANCE_DEFERRED_STATES.has(input.issuanceState)) {
+        failures.push("checkoutIssuanceState must be a deferred state when checkout issuance proof is deferred");
+      }
+    }
+  }
+  if (input.proofRequired && input.issuanceState && CHECKOUT_ISSUANCE_DEFERRED_STATES.has(input.issuanceState)) {
+    failures.push("checkoutIssuanceState must be ready when checkout issuance proof is required");
+  }
+  if (input.issuanceTrackingIssue) {
+    const trackingIssueFailure = validateGithubIssueUrl(
+      input.issuanceTrackingIssue,
+      "checkoutIssuanceTrackingIssue"
+    );
+    if (trackingIssueFailure) failures.push(trackingIssueFailure);
+  }
+  if (input.issuanceUrl) {
+    // Pin checkout issuance to the health host when a valid health URL exists.
+    // Source-beta can still prove the fail-closed issuance endpoint while
+    // health is deferred; that posture relies on URL shape plus proof content,
+    // and must not be described as end-to-end checkout fulfillment.
+    const expectedHost = extractValidHealthUrlHost(input.healthUrl);
+    const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl, expectedHost);
+    if (issuanceUrlFailure) failures.push(issuanceUrlFailure);
+  }
+  if (input.issuanceProofPath && !input.proofRequired) {
+    // Required-proof path confinement is enforced inside
+    // validateLicenseIssuanceProof before the proof file is read.
+    const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.issuanceProofPath, "checkoutIssuanceProofPath");
+    if (!confinedPath.ok) failures.push(`invalid checkout issuance proof ${input.issuanceProofPath}: ${confinedPath.detail}`);
+  }
+  return failures;
+}
+
+function validateGithubIssueUrl(issueUrl: string, fieldName: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(issueUrl);
+  } catch {
+    return `${fieldName} must be an https GitHub issue URL with no credentials, query, or fragment`;
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname !== "github.com" ||
+    !/^\/[^/]+\/[^/]+\/issues\/\d+$/.test(parsed.pathname) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return `${fieldName} must be an https GitHub issue URL with no credentials, query, or fragment`;
+  }
+  return undefined;
 }
 
 function validateLicenseHealthUrl(healthUrl: string): string | undefined {
@@ -1006,14 +1232,59 @@ function validateLicenseHealthUrl(healthUrl: string): string | undefined {
   return undefined;
 }
 
+function extractUrlHost(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractValidHealthUrlHost(healthUrl?: string): string | undefined {
+  if (!healthUrl || validateLicenseHealthUrl(healthUrl)) return undefined;
+  return extractUrlHost(healthUrl);
+}
+
+function validateLicenseIssuanceUrl(issuanceUrl: string, expectedHost?: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(issuanceUrl);
+  } catch {
+    return "checkoutIssuanceUrl must be an https URL ending in /v1/admin/licenses/issue with no credentials, query, or fragment";
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.pathname !== "/v1/admin/licenses/issue" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return "checkoutIssuanceUrl must be an https URL ending in /v1/admin/licenses/issue with no credentials, query, or fragment";
+  }
+  if (expectedHost && parsed.hostname !== expectedHost) {
+    return `checkoutIssuanceUrl host must match healthUrl host ${expectedHost}`;
+  }
+  return undefined;
+}
+
 function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: true; absolutePath: string } | { ok: false; detail: string } {
+  return resolveConfinedEvidenceProofPath(cwd, proofPath, "healthProofPath");
+}
+
+function resolveConfinedEvidenceProofPath(
+  cwd: string,
+  proofPath: string,
+  fieldName: "healthProofPath" | "checkoutIssuanceProofPath"
+): { ok: true; absolutePath: string } | { ok: false; detail: string } {
   if (isAbsolute(proofPath)) {
-    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+    return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };
   }
   const evidenceRoot = resolve(cwd, "docs", "evidence");
   const absolutePath = resolve(cwd, proofPath);
   if (!isPathInsideOrEqual(absolutePath, evidenceRoot)) {
-    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+    return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };
   }
   if (!existsSync(absolutePath)) return { ok: true, absolutePath };
 
@@ -1023,10 +1294,10 @@ function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: t
     realEvidenceRoot = realpathSync.native(evidenceRoot);
     realProofPath = realpathSync.native(absolutePath);
   } catch {
-    return { ok: false, detail: "healthProofPath could not be resolved within docs/evidence" };
+    return { ok: false, detail: `${fieldName} could not be resolved within docs/evidence` };
   }
   if (!isPathInsideOrEqual(realProofPath, realEvidenceRoot)) {
-    return { ok: false, detail: "healthProofPath must be relative and stay within docs/evidence" };
+    return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };
   }
   return { ok: true, absolutePath: realProofPath };
 }

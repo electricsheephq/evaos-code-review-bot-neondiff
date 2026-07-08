@@ -137,6 +137,11 @@ Before tagging:
    `docs/public-release-manifest.json` exists and declares:
    - docs version and release-notes path
    - license API state and whether it is required for this release
+   - license API health proof, plus unauthenticated checkout issuance rejection
+     proof unless a source-beta release explicitly defers it with a tracking
+     issue
+   - computed checkout issuance status and, when present, the raw manifest
+     declaration that produced it
    - CLI, daemon, website, and desktop update-channel state
    - rollback command or tracking issue for each required channel
    - required-channel rollback fields with one source revert command such as
@@ -243,9 +248,13 @@ The release is green only when:
 - launchd is running with the active live config
 - daemon heartbeat is fresh
 - no blocking DB error rows exist
-- public docs, license API state, and update channels are either healthy or
-  explicitly deferred as non-required for the release in
-  `docs/public-release-manifest.json`
+- public docs, license API state, unauthenticated checkout issuance rejection
+  state, and update channels are either healthy/proven or explicitly deferred
+  as non-required for the release in `docs/public-release-manifest.json`
+- authenticated checkout issuance success, DB writes, and paid/trial
+  fulfillment are proven only by owner-held deploy-runbook evidence or a future
+  release-status smoke gate; a green manifest gate alone must not be described
+  as end-to-end checkout issuance proof
 - coverage audit has zero unprocessed eligible heads
 - provider cooldowns are either absent or active and named in release notes
 - durable queue jobs have zero failed rows and zero retryable provider-deferred

@@ -89,6 +89,18 @@ website payment webhook. Keep the same value configured only on the license API
 and the server-side checkout webhook; never expose it to browser code, public
 docs, logs, or generated release packets.
 
+After setting the secret and deploying, capture a non-secret readiness proof for
+release-status: an unauthenticated request to the checkout issuance endpoint must
+return `401` with `{"status":"unauthorized"}`. A `503` response with
+`license issuance is not configured` means the Fly app is still missing
+`LICENSE_ISSUANCE_SECRET` and is not ready for paid/trial checkout activation.
+This release-status proof intentionally verifies only the fail-closed public
+boundary. It does not prove that a valid server-side checkout webhook can issue
+a license or write the DB. Capture positive authenticated issuance smoke in an
+owner-held, redacted evidence packet outside tracked manifest JSON; the
+first-class release-status gate for that path is tracked in
+`https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/456`.
+
 ## 4. Deploy
 
 ```sh
@@ -103,6 +115,12 @@ Watch the health check pass (`GET /healthz` → `{ "status": "ok" }`, wired in
 neondiff-license` shows machine + volume state; `flyctl logs --app
 neondiff-license` streams the Litestream restore/replication logs plus the
 `license-api listening on …` boot line from `src/server.ts`.
+
+```sh
+curl -s -i -X POST https://neondiff-license.fly.dev/v1/admin/licenses/issue \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
 
 ## 5. Point a client config at the deployed URL
 
