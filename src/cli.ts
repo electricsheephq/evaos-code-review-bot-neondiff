@@ -2330,6 +2330,9 @@ function writeFileAtomic(path: string, contents: string): void {
 type DaemonControlResult = {
   ok: boolean;
   command: "daemon start" | "daemon stop" | "daemon status";
+  platform?: string;
+  serviceManager?: "launchd" | "systemd";
+  docs?: string;
   dryRun?: boolean;
   launchdLabel?: string;
   launchdTarget?: string;
@@ -2361,6 +2364,9 @@ function runDaemonControlCommand(
   action: "start" | "stop" | "status",
   args: ParsedArgs
 ): DaemonControlResult {
+  const platform = currentDaemonPlatform();
+  if (platform !== "darwin") return unsupportedNonDarwinDaemonControl(action, platform);
+
   if (action === "status") {
     if (!args["launchd-label"]) {
       return {
@@ -2483,6 +2489,28 @@ function runDaemonControlCommand(
     ...(plistPath ? { plistPath } : {}),
     ...(warning ? { warning } : {}),
     results
+  };
+}
+
+function currentDaemonPlatform(): string {
+  return process.env.NEONDIFF_TEST_PLATFORM || process.platform;
+}
+
+function unsupportedNonDarwinDaemonControl(
+  action: "start" | "stop" | "status",
+  platform: string
+): DaemonControlResult {
+  const isLinux = platform === "linux";
+  return {
+    ok: false,
+    command: `daemon ${action}`,
+    platform,
+    ...(isLinux ? { serviceManager: "systemd" as const, docs: "docs/systemd.md" } : { docs: "docs/docker.md" }),
+    error:
+      `launchd daemon controls are only supported on macOS; detected ${platform}. ` +
+      (isLinux
+        ? "On Linux, use systemd with docs/systemd.md or Docker with docs/docker.md."
+        : "Use Docker with docs/docker.md, or run this on Linux with docs/systemd.md.")
   };
 }
 

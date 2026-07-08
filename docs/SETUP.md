@@ -307,6 +307,21 @@ Launchd and live beta promotion are advanced operator tasks. Use
 [docs/beta-release-runbook.md](beta-release-runbook.md) only after dry-run proof
 passes.
 
+On Linux, `neondiff daemon start|stop|status` intentionally does not call
+`launchctl`. It returns JSON with `serviceManager: "systemd"` and points to the
+Linux service guide. Use [docs/systemd.md](systemd.md) for user/system services,
+[docs/docker.md](docker.md) for the Compose recipe, and
+[docs/ci-runner.md](ci-runner.md) for one-shot Ubuntu runner checks.
+
+Platform support at this beta stage:
+
+| Platform | Supervision path | Launch-readiness truth |
+| --- | --- | --- |
+| macOS | launchd | Tested live beta operator path |
+| Linux | systemd or Docker | Packaged and guarded by Ubuntu smoke tests; provider setup still varies by host |
+| CI runners | One-shot dry-run/review commands | Documented for Ubuntu-style runners |
+| Windows | CLI-only | Untested; no supervised daemon claim |
+
 Public source-beta promotion additionally uses
 [docs/public-release-manifest.json](public-release-manifest.json). The manifest
 declares the current public beta version, setup/release-notes alignment, license

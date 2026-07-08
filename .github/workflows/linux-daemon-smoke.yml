@@ -1,0 +1,59 @@
+name: Linux Daemon Smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/linux-daemon-smoke.yml"
+      - "Dockerfile"
+      - "docker-compose.example.yml"
+      - "docs/systemd.md"
+      - "docs/docker.md"
+      - "docs/ci-runner.md"
+      - "systemd/**"
+      - "src/cli.ts"
+      - "tests/linux-packaging.test.ts"
+      - "tests/public-cli.test.ts"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/linux-daemon-smoke.yml"
+      - "Dockerfile"
+      - "docker-compose.example.yml"
+      - "docs/systemd.md"
+      - "docs/docker.md"
+      - "docs/ci-runner.md"
+      - "systemd/**"
+      - "src/cli.ts"
+      - "tests/linux-packaging.test.ts"
+      - "tests/public-cli.test.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-daemon-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      NEONDIFF_TEST_PLATFORM: linux
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx vitest run tests/linux-packaging.test.ts --pool=forks --maxWorkers=1
+      - name: Verify Linux daemon command guidance
+        run: |
+          set -euo pipefail
+          node dist/src/cli.js daemon status > linux-daemon-status.json || true
+          node -e 'const fs=require("fs"); const out=JSON.parse(fs.readFileSync("linux-daemon-status.json","utf8")); if (out.ok !== false || out.command !== "daemon status" || out.platform !== "linux" || out.serviceManager !== "systemd" || out.docs !== "docs/systemd.md" || typeof out.error !== "string") process.exit(1);'
