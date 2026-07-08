@@ -39,6 +39,20 @@ describe("NeonDiff public release readiness", () => {
         candidateHeadBeforeReleaseMetadata?: string;
         proof?: string;
       };
+      releaseStages?: {
+        launchCutLine?: string;
+        stages?: Array<{
+          id?: string;
+          requiredForV1?: boolean;
+          allowedClaims?: string[];
+          forbiddenClaims?: string[];
+        }>;
+      };
+      updateChannels?: Record<string, {
+        requiredForThisRelease?: boolean;
+        state?: string;
+        trackingIssue?: string;
+      }>;
     };
 
     expect(pkg.name).toBe("neondiff");
@@ -100,6 +114,39 @@ describe("NeonDiff public release readiness", () => {
       candidateHeadBeforeReleaseMetadata: "78b51fdac2d8ce699dc9f38f87db0b62c19dafef"
     });
     expect(manifest.source?.proof).toMatch(/after merge and tag/i);
+    expect(manifest.releaseStages?.launchCutLine).toBe(
+      "1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not full signed desktop maturity."
+    );
+    expect(manifest.releaseStages?.stages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "cli-dashboard-ga",
+          requiredForV1: true,
+          allowedClaims: expect.arrayContaining(["npm install -g neondiff", "neondiff dashboard opens a local HTML dashboard"]),
+          forbiddenClaims: expect.arrayContaining(["signed desktop artifact", "Sparkle appcast or auto-update readiness"])
+        }),
+        expect.objectContaining({
+          id: "minimal-mac-launcher-ga",
+          requiredForV1: true,
+          allowedClaims: expect.arrayContaining(["minimal Mac icon/app launcher opens the same local dashboard"]),
+          forbiddenClaims: expect.arrayContaining(["full native Swift desktop maturity"])
+        }),
+        expect.objectContaining({
+          id: "signed-appcast-desktop-post-launch",
+          requiredForV1: false,
+          allowedClaims: expect.arrayContaining(["signed/notarized desktop and appcast only after #449/#116 proof"])
+        })
+      ])
+    );
+    expect(manifest.updateChannels?.browserDashboard).toMatchObject({
+      requiredForThisRelease: false,
+      state: "pending",
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
+    });
+    expect(manifest.updateChannels?.desktop).toMatchObject({
+      state: "post_1_0",
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/116"
+    });
   });
 
   it("requires the live production license API for this beta", () => {

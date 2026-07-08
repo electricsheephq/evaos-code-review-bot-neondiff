@@ -470,7 +470,7 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({
       name: "public_update_channels",
       ok: true,
-      detail: "cli=published; daemon=launchd_prerelease; website=published (not required); desktop=post_1_0 (not required)"
+      detail: "cli=published; daemon=launchd_prerelease; browserDashboard=pending (not required); website=published (not required); desktop=post_1_0 (not required)"
     });
     const redactedOutput = stringifyRedactedJson({
       ...status,
