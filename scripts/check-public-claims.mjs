@@ -7,6 +7,7 @@ const paths = [
   "docs/providers.md",
   "docs/license-boundary.md",
   "docs/pricing.md",
+  "docs/github-marketplace-free-listing.md",
   "docs/releases/v0.4.30-beta.1.md"
 ];
 

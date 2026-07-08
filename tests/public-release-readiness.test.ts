@@ -241,6 +241,34 @@ describe("NeonDiff public release readiness", () => {
     expect(docs).not.toMatch(/npm link installs the local source-checkout shim/i);
   });
 
+  it("keeps the GitHub Marketplace free-listing packet bounded to discoverability", () => {
+    expect(existsSync("docs/github-marketplace-free-listing.md")).toBe(true);
+
+    const listing = read("docs/github-marketplace-free-listing.md");
+    const publicClaims = read("scripts/check-public-claims.mjs");
+    const pkg = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
+
+    expect(publicClaims).toContain("\"docs/github-marketplace-free-listing.md\"");
+    expect(pkg.scripts?.["check:public-claims"]).toBe("node scripts/check-public-claims.mjs");
+
+    expect(listing).toContain("Issue: #428");
+    expect(listing).toContain("free discoverability listing");
+    expect(listing).toContain("No Marketplace billing is shipped by this packet");
+    expect(listing).toContain("owner clicks the final Marketplace publish button");
+    expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/creating-apps-for-github-marketplace/requirements-for-listing-an-app");
+    expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/selling-your-app-on-github-marketplace/pricing-plans-for-github-marketplace-apps");
+    expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/listing-an-app-on-github-marketplace");
+    expect(listing).toMatch(/Public open-source repositories are free/i);
+    expect(listing).toMatch(/Private and commercial repository\s+review requires a paid NeonDiff support license/i);
+    expect(listing).toMatch(/provider\/model costs stay external/i);
+    expect(listing).toMatch(/support@electricsheephq\.com/);
+    expect(listing).toMatch(/Security\.md/);
+    expect(listing).toMatch(/Publish blocker: provide a valid privacy-policy URL/i);
+    expect(listing).toMatch(/Publish blocker: implement or explicitly defer Marketplace purchase-event\s+webhooks/i);
+    expect(listing).toMatch(/Publish blocker: create Marketplace logo and feature-card assets/i);
+    expect(listing).toMatch(/Do not paste beta or public-preview wording into the Marketplace listing/i);
+  });
+
   it("CI workflows gate build, tests, package, docs claims, and npm provenance publish", () => {
     for (const path of [".github/workflows/ci.yml", ".github/workflows/publish-npm.yml"]) {
       expect(existsSync(path)).toBe(true);
