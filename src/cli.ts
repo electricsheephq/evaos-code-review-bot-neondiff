@@ -52,6 +52,7 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
+import { startLocalDashboardServer } from "./local-dashboard.js";
 import {
   assertOutcomeLedgerOutputDirEmpty,
   readOutcomeLedgerInput,
@@ -653,31 +654,56 @@ async function main(): Promise<void> {
   }
 
   if (command === "dashboard") {
-    const config = loadConfig(args.config);
-    const report = await collectCoverageReport(args, config);
-    const statePath = args["state-path"] ?? config.statePath;
-    const dashboard = buildOperatorDashboard({
-      coverage: report,
-      durableQueue: collectOperatorReviewQueue(statePath, {
-        repo: args.repo,
-        limit: args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : undefined
-      }),
-      readiness: collectOperatorReviewReadiness(statePath, {
-        repo: args.repo,
-        limit: args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : undefined
-      }),
-      evidenceDir: config.evidenceDir,
-      filters: {
-        ...(args.repo ? { repo: args.repo } : {}),
-        ...(args.status ?? args.state ? { status: args.status ?? args.state } : {}),
-        ...(args.priority ? { priority: parseNonNegativeInteger(args.priority, "--priority") } : {}),
-        ...(args["stale-head-reason"] ? { staleHeadReason: args["stale-head-reason"] } : {}),
-        ...(args["include-history"] === "true" ? { includeHistory: true } : {}),
-        ...(args.limit ? { limit: parsePositiveInteger(args.limit, "--limit") } : {})
-      }
+    if (shouldUseOperatorDashboard(args)) {
+      const config = loadConfig(args.config);
+      const report = await collectCoverageReport(args, config);
+      const statePath = args["state-path"] ?? config.statePath;
+      const dashboard = buildOperatorDashboard({
+        coverage: report,
+        durableQueue: collectOperatorReviewQueue(statePath, {
+          repo: args.repo,
+          limit: args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : undefined
+        }),
+        readiness: collectOperatorReviewReadiness(statePath, {
+          repo: args.repo,
+          limit: args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : undefined
+        }),
+        evidenceDir: config.evidenceDir,
+        filters: {
+          ...(args.repo ? { repo: args.repo } : {}),
+          ...(args.status ?? args.state ? { status: args.status ?? args.state } : {}),
+          ...(args.priority ? { priority: parseNonNegativeInteger(args.priority, "--priority") } : {}),
+          ...(args["stale-head-reason"] ? { staleHeadReason: args["stale-head-reason"] } : {}),
+          ...(args["include-history"] === "true" ? { includeHistory: true } : {}),
+          ...(args.limit ? { limit: parsePositiveInteger(args.limit, "--limit") } : {})
+        }
+      });
+      console.log(args.human === "true" ? formatOperatorDashboardHuman(dashboard) : stringifyRedactedJson(dashboard));
+      if (!dashboard.ok) process.exitCode = 1;
+      return;
+    }
+    const configPath = resolve(parseSingleArg(args.config ?? "config.local.json", "--config"));
+    const config = loadConfig(configPath);
+    const handle = await startLocalDashboardServer({
+      config,
+      configPath,
+      configExists: existsSync(configPath),
+      host: args.host ? parseSingleArg(args.host, "--host") : "127.0.0.1",
+      port: args.port ? parseNonNegativeInteger(parseSingleArg(args.port, "--port"), "--port") : 0,
+      launchdLabel: args["launchd-label"] ? parseSingleArg(args["launchd-label"], "--launchd-label") : undefined,
+      openBrowser: args.open === undefined ? true : parseBooleanArg(args.open, "--open"),
+      allowRemoteSmoke: args["allow-remote-smoke"] === undefined ? false : parseBooleanArg(args["allow-remote-smoke"], "--allow-remote-smoke")
     });
-    console.log(args.human === "true" ? formatOperatorDashboardHuman(dashboard) : stringifyRedactedJson(dashboard));
-    if (!dashboard.ok) process.exitCode = 1;
+    console.log(stringifyRedactedJson({
+      ok: true,
+      command: "dashboard",
+      mode: "local_html",
+      url: handle.url,
+      openAttempted: handle.openAttempted,
+      openOk: handle.openOk,
+      status: handle.status,
+      proofBoundary: "Starts a local HTML dashboard only; it does not prove signed desktop release, appcast, notarization, or live review quality."
+    }));
     return;
   }
 
@@ -3037,6 +3063,17 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--smoke", description: "true to run a live smoke check in providers doctor." }
     ]
   },
+  dashboard: {
+    description: "Start and open the local first-run HTML dashboard; use --operator true for the JSON operator dashboard.",
+    flags: [
+      { name: "--config", description: "Path to the config file (default config.local.json)." },
+      { name: "--host", description: "Dashboard bind host (default 127.0.0.1)." },
+      { name: "--port", description: "Dashboard port (default 0, choose an available port)." },
+      { name: "--open", description: "true (default) to open the dashboard in the browser." },
+      { name: "--allow-remote-smoke", description: "true to allow hosted provider API-key verification." },
+      { name: "--operator", description: "true to use the legacy operator JSON/human dashboard." }
+    ]
+  },
   license: {
     description: "Manage the license: `license activate|status|deactivate`.",
     flags: [
@@ -3061,6 +3098,7 @@ function buildHelp(command?: string) {
         "config patch",
         "pricing",
         "badge",
+        "dashboard",
         "providers list",
         "providers doctor",
         "doctor",
@@ -3128,6 +3166,7 @@ function buildHelp(command?: string) {
       "desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}",
       "neondiff pricing",
       "neondiff badge --config config.local.json --output docs/badges/precision.json",
+      "neondiff dashboard --config config.local.json",
       "neondiff providers list --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
@@ -3149,8 +3188,8 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts agents --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json",
       "npx tsx src/cli.ts queue --config /path/to/live.json --state provider_deferred",
-      "npx tsx src/cli.ts dashboard --config /path/to/live.json --status blocked_on_proof",
-      "npx tsx src/cli.ts dashboard --config /path/to/live.json --human",
+      "npx tsx src/cli.ts dashboard --operator true --config /path/to/live.json --status blocked_on_proof",
+      "npx tsx src/cli.ts dashboard --operator true --config /path/to/live.json --human",
       "npx tsx src/cli.ts budget-status --config /path/to/live.json",
       "npx tsx src/cli.ts provider-throttle-report --config /path/to/live.json --since 7d --timezone Asia/Singapore",
       "provider-throttle-report peak-window flags use inclusive local-hour buckets, e.g. --peak-start-hour 14 --peak-end-hour 18 includes 14:00 through 18:00",
@@ -3258,6 +3297,23 @@ function redactProviderOutput(input: unknown, key?: string): unknown {
 function isHelpRequested(args: ParsedArgs): boolean {
   if (args.help === "true") return true;
   return args._.slice(1).some((arg) => arg === "help" || arg === "-h" || arg === "--help");
+}
+
+function shouldUseOperatorDashboard(args: ParsedArgs): boolean {
+  if (args.operator !== undefined && parseBooleanArg(args.operator, "--operator")) return true;
+  return [
+    "human",
+    "json",
+    "repo",
+    "status",
+    "state",
+    "state-path",
+    "job-limit",
+    "priority",
+    "stale-head-reason",
+    "include-history",
+    "limit"
+  ].some((key) => args[key] !== undefined);
 }
 
 function parseArgs(argv: string[]): ParsedArgs {

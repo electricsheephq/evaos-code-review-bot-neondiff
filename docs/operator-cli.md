@@ -40,7 +40,7 @@ evaos-review-bot status --config config.local.json
   every PR head is covered but a durable queue row is failed or ready to retry.
   Durable queue summaries include the oldest waiting repo/head age so burst
   backlogs can be diagnosed without hand-querying SQLite.
-- `dashboard`: read-only PR review dashboard over coverage, durable queue,
+- `dashboard --operator true`: read-only PR review dashboard over coverage, durable queue,
   readiness lifecycle rows, GitHub PR links, and local evidence-path hints.
   Filter with `--repo`, `--status`, `--priority`, `--stale-head-reason`, and
   `--limit`. By default the dashboard hides stale-only historical rows so the
@@ -48,8 +48,10 @@ evaos-review-bot status --config config.local.json
   explicit stale status filter when investigating historical rows. Use
   `--job-limit` to cap durable-queue/readiness rows read from SQLite before
   merging; `--limit` caps the final merged item list. JSON is the default; use
-  `--human` for a compact operator view. The command exits nonzero when visible
-  rows are blocked; healthy active rows are counted but do not fail the gate by
+  `--human` for a compact operator view. Bare `dashboard` now starts the
+  user-facing local HTML first-run dashboard; include `--operator true` for this
+  JSON-first operator surface. The command exits nonzero when visible rows are
+  blocked; healthy active rows are counted but do not fail the gate by
   themselves.
 - `budget-status`: read-only scheduler budget projection. Shows active counts,
   queued counts, would-lease jobs, delayed jobs, and deterministic delay reasons
