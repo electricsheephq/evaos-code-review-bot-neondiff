@@ -9,12 +9,16 @@ public-confidence gate passes and a human flips public display mode.
 
 | State | Badge message | Public meaning |
 | --- | --- | --- |
-| Calibrating | `calibrating (n=<labeled findings>)` | NeonDiff is collecting and aggregating outcome labels. No public precision percentage has been earned yet. |
-| Calibrated | `<precision>% (n=<labeled findings>)` | The aggregate passed the public-confidence gate and a human set `confidenceCalibration.publicDisplay.mode` to `"calibrated"`. |
+| Calibrating | `calibrating (n=<validated findings>)` | NeonDiff is collecting and aggregating outcome labels. No public precision percentage has been earned yet. |
+| Calibrated | `<precision>% (n=<validated findings>)` | The aggregate passed the public-confidence gate and a human set `confidenceCalibration.publicDisplay.mode` to `"calibrated"`. |
 
 The calibrating state is the default, public-safe state. It is intentionally a
 gray badge: useful enough to show that NeonDiff measures itself, but conservative
 enough not to imply calibrated accuracy.
+
+The `n` denominator counts validated findings only. It excludes explicit-control
+and unvalidated outcome labels so the public badge denominator matches the
+calibration aggregate used for the precision gate.
 
 ## Public Percentage Gate
 

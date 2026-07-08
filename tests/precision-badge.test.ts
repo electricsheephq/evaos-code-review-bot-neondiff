@@ -124,6 +124,31 @@ describe("precision badge endpoint (#425)", () => {
     });
   });
 
+  it("writes the calibrated Shields endpoint JSON file without leaking result metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "neondiff-badge-write-calibrated-"));
+    roots.push(dir);
+    const output = join(dir, "precision.json");
+
+    const result = writePrecisionBadgeEndpoint({
+      aggregate: PASSING_AGGREGATE,
+      publicDisplay: CALIBRATED_POLICY,
+      outputPath: output
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.wilsonLowerBound).toBe(0.956);
+    expect(existsSync(output)).toBe(true);
+    const parsed = JSON.parse(readFileSync(output, "utf8"));
+    expect(parsed).toEqual({
+      schemaVersion: 1,
+      label: "NeonDiff precision",
+      message: "95% (n=120)",
+      color: "green"
+    });
+    expect(parsed).not.toHaveProperty("wilsonLowerBound");
+    expect(parsed).not.toHaveProperty("missingThresholds");
+  });
+
   it("exposes a CLI that reads the real outcome-label store and writes the badge endpoint", () => {
     const dir = mkdtempSync(join(tmpdir(), "neondiff-badge-cli-"));
     roots.push(dir);

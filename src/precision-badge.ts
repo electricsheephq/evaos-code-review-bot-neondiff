@@ -32,7 +32,14 @@ export function buildPrecisionBadgeEndpoint(input: {
   publicDisplay?: PublicConfidenceDisplayPolicy;
 }): ShieldsEndpointBadge {
   const evaluation = evaluatePrecisionBadgePolicy(input);
-  const n = input.aggregate.labeledFindings;
+  return badgeForEvaluation(input.aggregate, evaluation);
+}
+
+function badgeForEvaluation(
+  aggregate: CalibrationAggregate,
+  evaluation: PublicConfidencePolicyEvaluation
+): ShieldsEndpointBadge {
+  const n = aggregate.labeledFindings;
   if (!evaluation.allowed) {
     return {
       schemaVersion: 1,
@@ -45,7 +52,7 @@ export function buildPrecisionBadgeEndpoint(input: {
   return {
     schemaVersion: 1,
     label: "NeonDiff precision",
-    message: `${formatConservativePercent(input.aggregate.bestWilsonLowerBound)}% (n=${n})`,
+    message: `${formatConservativePercent(aggregate.bestWilsonLowerBound)}% (n=${n})`,
     color: "green"
   };
 }
@@ -56,7 +63,7 @@ export function writePrecisionBadgeEndpoint(input: {
   outputPath: string;
 }): PrecisionBadgeResult {
   const evaluation = evaluatePrecisionBadgePolicy(input);
-  const badge = buildPrecisionBadgeEndpoint(input);
+  const badge = badgeForEvaluation(input.aggregate, evaluation);
   mkdirSync(dirname(input.outputPath), { recursive: true });
   writeFileSync(input.outputPath, `${JSON.stringify(badge, null, 2)}\n`);
   return {
