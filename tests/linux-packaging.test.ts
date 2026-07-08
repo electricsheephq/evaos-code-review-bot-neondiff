@@ -37,6 +37,7 @@ describe("Linux daemon packaging", () => {
     expect(linuxSmokeWorkflow).toContain("ubuntu-latest");
     expect(linuxSmokeWorkflow).toContain("NEONDIFF_TEST_PLATFORM: linux");
     expect(linuxSmokeWorkflow).toContain("tests/linux-packaging.test.ts");
+    expect(linuxSmokeWorkflow).toContain("node dist/src/cli.js daemon status");
   });
 
   it("includes Linux operator assets in the npm package allowlist", () => {

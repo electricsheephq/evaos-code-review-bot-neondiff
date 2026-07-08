@@ -45,7 +45,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx vitest run tests/linux-packaging.test.ts tests/public-cli.test.ts --pool=forks --maxWorkers=1
+      - run: npx vitest run tests/linux-packaging.test.ts --pool=forks --maxWorkers=1
       - name: Verify Linux daemon command guidance
         run: |
           set -euo pipefail

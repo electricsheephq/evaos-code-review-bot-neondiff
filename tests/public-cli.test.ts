@@ -15,6 +15,7 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 const repoRoot = process.cwd();
+const darwinDaemonEnv = { NEONDIFF_TEST_PLATFORM: "darwin" };
 
 describe("public NeonDiff CLI surface", () => {
   const roots: string[] = [];
@@ -109,7 +110,7 @@ describe("public NeonDiff CLI surface", () => {
         statePath,
         "--launchd-label",
         "com.example.neondiff"
-      ]);
+      ], { env: darwinDaemonEnv });
     } catch (error) {
       failure = error;
     }
@@ -2809,13 +2810,13 @@ exit 1
       "start",
       "--launchd-label",
       "com.example.neondiff"
-    ]);
+    ], { env: darwinDaemonEnv });
     const { stdout: stopStdout } = await runCli([
       "daemon",
       "stop",
       "--launchd-label",
       "com.example.neondiff"
-    ]);
+    ], { env: darwinDaemonEnv });
 
     expect(JSON.parse(startStdout)).toMatchObject({
       ok: true,
@@ -2841,7 +2842,7 @@ exit 1
       "status",
       "--launchd-label",
       "com.example.neondiff"
-    ])).rejects.toMatchObject({
+    ], { env: darwinDaemonEnv })).rejects.toMatchObject({
       stdout: expect.stringContaining("--config is required for daemon status")
     });
   });
@@ -2891,7 +2892,7 @@ exit 1
       "com.example.neondiff",
       "--plist",
       plistPath
-    ]);
+    ], { env: darwinDaemonEnv });
 
     expect(JSON.parse(stdout)).toMatchObject({
       ok: true,
@@ -2912,7 +2913,7 @@ exit 1
       "bad label",
       "--plist",
       plistPath
-    ])).rejects.toMatchObject({
+    ], { env: darwinDaemonEnv })).rejects.toMatchObject({
       stdout: expect.stringContaining("must be a launchd label")
     });
   });
@@ -2930,7 +2931,7 @@ exit 1
       "com.example.neondiff",
       "--plist",
       plistPath
-    ])).rejects.toMatchObject({
+    ], { env: darwinDaemonEnv })).rejects.toMatchObject({
       stdout: expect.stringContaining("must match --launchd-label")
     });
   });
@@ -2943,7 +2944,7 @@ exit 1
       "com.example.neondiff",
       "--dry-run",
       "false"
-    ])).rejects.toMatchObject({
+    ], { env: darwinDaemonEnv })).rejects.toMatchObject({
       stdout: expect.stringContaining("requires --confirm true")
     });
   });
@@ -2965,7 +2966,7 @@ exit 1
       "false",
       "--confirm",
       "true"
-    ])).rejects.toMatchObject({
+    ], { env: darwinDaemonEnv })).rejects.toMatchObject({
       stdout: expect.stringContaining("requires --allow-external-plist true")
     });
   });
