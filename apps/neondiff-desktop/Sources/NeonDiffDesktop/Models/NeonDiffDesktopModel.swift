@@ -15,6 +15,8 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var logText = "No logs loaded."
     @Published var lastError: String?
     @Published var lastCommandLine = ""
+    @Published var dashboardLaunchStatus = "not opened"
+    @Published var dashboardProcessIdentifier: Int32?
     @Published var pendingProviderKey = ""
     @Published var pendingLicenseKey = ""
     @Published var onboardingFlow = OnboardingFlow()
@@ -22,6 +24,7 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     private let userDefaults: UserDefaults
     private let keychain: DesktopSecretStoring
+    private var didAutoOpenDashboard = false
 
     init(
         userDefaults: UserDefaults = .standard,
@@ -42,6 +45,10 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     var statusCommand: DesktopCommand {
         NeonDiffCommandBuilder.daemonStatus(cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel)
+    }
+
+    var dashboardCommand: DesktopCommand {
+        NeonDiffCommandBuilder.dashboard(cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel)
     }
 
     var startDaemonDryRunCommand: DesktopCommand {
@@ -81,6 +88,43 @@ final class NeonDiffDesktopModel: ObservableObject {
     func refreshStatus() {
         persistLocalSettings()
         runCLI(arguments: ["daemon", "status", "--config", configPath, "--launchd-label", launchdLabel], displayCommand: statusCommand)
+    }
+
+    func openDashboardOnLaunch() {
+        guard !didAutoOpenDashboard else { return }
+        didAutoOpenDashboard = true
+        openDashboard()
+    }
+
+    func openDashboard() {
+        persistLocalSettings()
+        lastCommandLine = dashboardCommand.commandLine
+        dashboardLaunchStatus = "starting"
+        let executablePath = cliPath
+        let arguments = ["dashboard", "--config", configPath, "--launchd-label", launchdLabel, "--open", "true"]
+
+        Task.detached {
+            let client = NeonDiffCLIClient(
+                executablePath: executablePath,
+                workingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
+            )
+            do {
+                let result = try client.launchDetached(arguments: arguments)
+                await MainActor.run {
+                    self.dashboardProcessIdentifier = result.processIdentifier
+                    self.dashboardLaunchStatus = "launched pid \(result.processIdentifier); browser opens the local HTML dashboard"
+                    self.lastError = nil
+                    self.logText = "Started NeonDiff local dashboard from the desktop launcher. The dashboard process opens the browser and serves the same HTML experience as `neondiff dashboard`."
+                }
+            } catch {
+                await MainActor.run {
+                    self.dashboardProcessIdentifier = nil
+                    self.dashboardLaunchStatus = "failed"
+                    self.lastError = NeonDiffRedactor.redact(error.localizedDescription)
+                    self.logText = self.lastError ?? "Unknown dashboard launch error"
+                }
+            }
+        }
     }
 
     func previewStartDaemon() {

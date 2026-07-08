@@ -17,8 +17,12 @@ struct SettingsPane: View {
                 }
 
                 OperatorSection("Commands") {
+                    OperatorCommandText(text: model.dashboardCommand.commandLine, lineLimit: 5)
                     OperatorCommandText(text: model.statusCommand.commandLine, lineLimit: 5)
                     HStack(spacing: 10) {
+                        Button { model.openDashboard() } label: {
+                            Label("Open Dashboard", systemImage: "safari")
+                        }
                         Button { model.copyCommand(model.statusCommand) } label: {
                             Label("Copy Status Command", systemImage: "doc.on.doc")
                         }

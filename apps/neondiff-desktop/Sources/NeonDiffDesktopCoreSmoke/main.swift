@@ -29,6 +29,19 @@ do {
         throw NSError(domain: "NeonDiffDesktopSmoke", code: 3, userInfo: [NSLocalizedDescriptionKey: "daemon command is not dry-run safe"])
     }
 
+    let dashboardCommand = NeonDiffCommandBuilder.dashboard(
+        cliPath: "neondiff",
+        configPath: "/tmp/config.local.json",
+        launchdLabel: "com.example.neondiff"
+    )
+    guard dashboardCommand.commandLine.contains("dashboard"),
+          dashboardCommand.commandLine.contains("--open true"),
+          dashboardCommand.commandLine.contains("--launchd-label"),
+          !dashboardCommand.commandLine.contains("--operator true")
+    else {
+        throw NSError(domain: "NeonDiffDesktopSmoke", code: 10, userInfo: [NSLocalizedDescriptionKey: "dashboard command does not launch the local HTML dashboard"])
+    }
+
     let fakeStatusJSON = """
     {
       "ok": false,
@@ -117,7 +130,7 @@ do {
 
     try store.deleteSecret(account: providerAccount)
     try store.deleteSecret(account: licenseAccount)
-    print(#"{"ok":true,"keychainRoundTrip":true,"daemonDryRun":true,"fakeStatusParse":true,"fakeConfigParse":true,"repoProfilesFallback":true,"redaction":true}"#)
+    print(#"{"ok":true,"keychainRoundTrip":true,"daemonDryRun":true,"dashboardCommand":true,"fakeStatusParse":true,"fakeConfigParse":true,"repoProfilesFallback":true,"redaction":true}"#)
 } catch {
     try? store.deleteSecret(account: providerAccount)
     try? store.deleteSecret(account: licenseAccount)

@@ -16,6 +16,11 @@ struct NeonDiffDesktopApp: App {
         }
         .commands {
             CommandMenu("NeonDiff") {
+                Button("Open Local Dashboard") {
+                    model.openDashboard()
+                }
+                .keyboardShortcut("d", modifiers: [.command])
+
                 Button("Refresh Status") {
                     model.refreshStatus()
                 }

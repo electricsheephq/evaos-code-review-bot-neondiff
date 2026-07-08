@@ -9,6 +9,18 @@ public struct CLIRunResult: Equatable {
     public var redactedStderr: String { NeonDiffRedactor.redact(stderr) }
 }
 
+public struct CLILaunchResult: Equatable {
+    public var processIdentifier: Int32
+    public var executablePath: String
+    public var arguments: [String]
+
+    public init(processIdentifier: Int32, executablePath: String, arguments: [String]) {
+        self.processIdentifier = processIdentifier
+        self.executablePath = executablePath
+        self.arguments = arguments
+    }
+}
+
 public enum NeonDiffCLIError: Error, LocalizedError {
     case timedOut
     case launchFailed(String)
@@ -23,6 +35,7 @@ public enum NeonDiffCLIError: Error, LocalizedError {
 
 public protocol NeonDiffCLIClienting {
     func run(arguments: [String], timeout: TimeInterval) throws -> CLIRunResult
+    func launchDetached(arguments: [String]) throws -> CLILaunchResult
 }
 
 public final class NeonDiffCLIClient: NeonDiffCLIClienting {
@@ -100,6 +113,37 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         let stdoutText = String(data: stdoutSnapshot, encoding: .utf8) ?? ""
         let stderrText = String(data: stderrSnapshot, encoding: .utf8) ?? ""
         return CLIRunResult(exitCode: process.terminationStatus, stdout: stdoutText, stderr: stderrText)
+    }
+
+    public func launchDetached(arguments: [String]) throws -> CLILaunchResult {
+        let process = Process()
+        guard let resolvedExecutable = NeonDiffCLIResolver.resolveExecutablePath(executablePath, workingDirectory: workingDirectory) else {
+            throw NeonDiffCLIError.launchFailed("Could not find executable NeonDiff CLI at \(executablePath). Set an absolute CLI path or install the `neondiff` command in a GUI-visible bin directory.")
+        }
+        process.executableURL = resolvedExecutable
+        process.arguments = arguments
+        process.environment = guiSafeEnvironment()
+        if let workingDirectory {
+            process.currentDirectoryURL = workingDirectory
+        }
+
+        let nullOutput = FileHandle(forWritingAtPath: "/dev/null")
+        process.standardOutput = nullOutput
+        process.standardError = nullOutput
+
+        do {
+            try process.run()
+        } catch {
+            nullOutput?.closeFile()
+            throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(error.localizedDescription)")
+        }
+        nullOutput?.closeFile()
+
+        return CLILaunchResult(
+            processIdentifier: process.processIdentifier,
+            executablePath: process.executableURL?.path ?? executablePath,
+            arguments: process.arguments ?? arguments
+        )
     }
 }
 
