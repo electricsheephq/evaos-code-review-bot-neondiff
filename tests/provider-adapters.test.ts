@@ -1047,6 +1047,47 @@ describe("provider adapter fixtures", () => {
     expect(calls).toBe(1);
   });
 
+  it("treats finish_reason length as truncation even when the body is not JSON-looking", async () => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "length-finish-reason-non-json-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1",
+          retrySchemaFeedbackMax: 2
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                finish_reason: "length",
+                message: {
+                  content: "partial prose response"
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "length-finish-reason-non-json-local-model-fixture",
+        providerId: "length-finish-reason-non-json-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object."
+      }
+    });
+    expect(calls).toBe(1);
+  });
+
   it("does not schema-retry JSON-looking truncated review output without finish_reason length", async () => {
     let calls = 0;
     const result = await runProviderAdapterFixture({

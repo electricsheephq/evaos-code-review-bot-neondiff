@@ -231,7 +231,8 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
               model: input.model,
               prompt: input.prompt,
               structuredOutput,
-              schemaFeedbackErrors
+              schemaFeedbackErrors,
+              schemaFeedbackErrorLimit: schemaFeedbackMax
             }))
           });
 
@@ -294,6 +295,7 @@ function buildOpenAICompatibleReviewRequestBody(input: {
   prompt: string;
   structuredOutput: { requestFields: Record<string, unknown> };
   schemaFeedbackErrors: readonly string[];
+  schemaFeedbackErrorLimit: number;
 }): Record<string, unknown> {
   return {
     model: input.model,
@@ -311,14 +313,15 @@ function buildOpenAICompatibleReviewRequestBody(input: {
       },
       ...(input.schemaFeedbackErrors.length === 0 ? [] : [{
         role: "user",
-        content: buildSchemaFeedbackRetryPrompt(input.schemaFeedbackErrors)
+        content: buildSchemaFeedbackRetryPrompt(input.schemaFeedbackErrors, input.schemaFeedbackErrorLimit)
       }])
     ]
   };
 }
 
-function buildSchemaFeedbackRetryPrompt(schemaErrors: readonly string[]): string {
-  const recentDistinctErrors = [...new Set(schemaErrors)].slice(-SCHEMA_FEEDBACK_RETRY_MAX);
+function buildSchemaFeedbackRetryPrompt(schemaErrors: readonly string[], maxSchemaErrors: number): string {
+  const schemaErrorLimit = Math.max(1, Math.min(maxSchemaErrors, SCHEMA_FEEDBACK_RETRY_MAX));
+  const recentDistinctErrors = [...new Set(schemaErrors)].slice(-schemaErrorLimit);
   return [
     "The previous response could not be accepted as NeonDiff review JSON.",
     "Recent schema errors:",
@@ -344,13 +347,14 @@ function openAICompatibleReviewSchemaError(error: string, parsed: Record<string,
 function isLikelyTruncatedReviewJsonContent(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
-  if (!/"findings"\s*:/.test(trimmed.slice(0, REVIEW_JSON_EXTRACTION_CHAR_LIMIT))) return false;
+  const boundedText = trimmed.slice(0, REVIEW_JSON_EXTRACTION_CHAR_LIMIT);
+  if (!/"findings"\s*:/.test(boundedText)) return false;
   try {
-    JSON.parse(trimmed);
+    JSON.parse(boundedText);
     return false;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return /\b(unexpected end|unterminated)\b/i.test(message) || hasUnclosedJsonDelimiters(trimmed);
+    return /\b(unexpected end|unterminated)\b/i.test(message) || hasUnclosedJsonDelimiters(boundedText);
   }
 }
 

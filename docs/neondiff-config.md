@@ -121,7 +121,11 @@ review call as one total wall-clock budget across all attempts, records
 `schemaRetries` and redacted `schemaRetryErrors` in adapter evidence, and falls
 back to the existing model-output/provider-deferred path after the bounded
 attempts are exhausted. Set the value to `0` to disable this adapter-level
-recovery behavior.
+recovery behavior. Truncated review output, including `finish_reason: "length"`
+or JSON-looking findings output with unclosed delimiters, is excluded from
+schema-feedback retries and fails immediately as a truncation model-output error;
+that failure usually needs a smaller prompt, larger output budget, or stronger
+provider-side structured output rather than another identical reprompt.
 
 ## Safety Defaults
 
