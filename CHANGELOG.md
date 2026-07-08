@@ -16,6 +16,12 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [0.4.44-beta.1] - docs/releases/v0.4.44-beta.1.md
+
+### Fixed
+- Repair settled-head review-status comments so already-posted PR heads can move a stranded sticky marker from `queued`, `in_progress`, or `provider_deferred` to `completed` without reposting already-terminal markers
+- Restore missing or non-terminal readiness from processed review truth during direct settled-head repair, while keeping the public npm package held at `neondiff@0.4.30-beta.1`
+
 ## [0.4.43-beta.1] - docs/releases/v0.4.43-beta.1.md
 
 ### Added
