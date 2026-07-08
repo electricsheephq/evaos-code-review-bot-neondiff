@@ -614,7 +614,7 @@ export function readPublicReleaseManifestStatus(input: {
       issuanceProofPath: licenseIssuanceProofPath,
       issuanceTrackingIssue: licenseIssuanceTrackingIssue,
       proofRequired: licenseNeedsIssuanceProof,
-      deferralPolicyApplies: licenseNeedsHealthProof,
+      deferralPolicyApplies: releaseRequiresCheckoutIssuance,
       issuanceRequiredExplicit: explicitLicenseIssuanceRequired,
       releaseLevel,
       healthUrl: licenseHealthUrl
