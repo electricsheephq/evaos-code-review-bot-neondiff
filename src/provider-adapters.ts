@@ -16,6 +16,7 @@ const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
 const DEFAULT_OPENAI_COMPATIBLE_REVIEW_TIMEOUT_MS = 180_000;
 const DEFAULT_SCHEMA_FEEDBACK_RETRY_MAX = 2;
 const TRUNCATED_REVIEW_JSON_ERROR = "OpenAI-compatible review output was truncated before a parseable JSON review object.";
+const FINISH_REASON_LENGTH_TRUNCATED_REVIEW_JSON_ERROR = `${TRUNCATED_REVIEW_JSON_ERROR} (finish_reason=length)`;
 const REDACTION_TOKENS = [
   "[redacted-private-evidence]",
   "[redacted-private-field]",
@@ -249,7 +250,7 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
             const schemaError = openAICompatibleReviewSchemaError(reviewOutput.error, parsed, content);
             const schemaFeedbackError = buildSchemaFeedbackErrorForPrompt(schemaError, input.prompt);
             const schemaEvidenceError = redactPrivateEvidenceText(schemaError, input.prompt);
-            if (schemaError === TRUNCATED_REVIEW_JSON_ERROR || attempt >= schemaFeedbackMax) {
+            if (isTruncatedReviewJsonSchemaError(schemaError) || attempt >= schemaFeedbackMax) {
               throw new ProviderAdapterEvidenceError(schemaError, buildOpenAICompatibleSchemaRetryEvidence({
                 providerId: options.providerId,
                 adapterId: input.adapterId,
@@ -339,9 +340,13 @@ function buildSchemaFeedbackErrorForPrompt(schemaError: string, prompt: string):
 }
 
 function openAICompatibleReviewSchemaError(error: string, parsed: Record<string, unknown>, content: string): string {
-  return extractOpenAICompatibleFinishReason(parsed) === "length" || isLikelyTruncatedReviewJsonContent(content)
-    ? TRUNCATED_REVIEW_JSON_ERROR
-    : error;
+  if (extractOpenAICompatibleFinishReason(parsed) === "length") return FINISH_REASON_LENGTH_TRUNCATED_REVIEW_JSON_ERROR;
+  if (isLikelyTruncatedReviewJsonContent(content)) return TRUNCATED_REVIEW_JSON_ERROR;
+  return error;
+}
+
+function isTruncatedReviewJsonSchemaError(schemaError: string): boolean {
+  return schemaError === TRUNCATED_REVIEW_JSON_ERROR || schemaError === FINISH_REASON_LENGTH_TRUNCATED_REVIEW_JSON_ERROR;
 }
 
 function isLikelyTruncatedReviewJsonContent(content: string): boolean {

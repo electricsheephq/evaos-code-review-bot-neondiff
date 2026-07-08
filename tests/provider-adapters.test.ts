@@ -1041,7 +1041,7 @@ describe("provider adapter fixtures", () => {
       ok: false,
       error: {
         class: "model-output",
-        message: "OpenAI-compatible review output was truncated before a parseable JSON review object."
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object. (finish_reason=length)"
       }
     });
     expect(calls).toBe(1);
@@ -1082,7 +1082,7 @@ describe("provider adapter fixtures", () => {
       ok: false,
       error: {
         class: "model-output",
-        message: "OpenAI-compatible review output was truncated before a parseable JSON review object."
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object. (finish_reason=length)"
       }
     });
     expect(calls).toBe(1);
