@@ -214,7 +214,8 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
       const timeout = createAbortSignal(provider.timeoutMs);
       const structuredOutput = buildStructuredOutputRequestFields(provider);
       const schemaFeedbackMax = resolveSchemaFeedbackRetryMax(provider);
-      const schemaRetryErrors: string[] = [];
+      const schemaFeedbackErrors: string[] = [];
+      const schemaEvidenceErrors: string[] = [];
       try {
         for (let attempt = 0; ; attempt += 1) {
           const response = await fetchImpl(buildOpenAIChatCompletionsUrl(baseUrl), {
@@ -230,7 +231,7 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
               model: input.model,
               prompt: input.prompt,
               structuredOutput,
-              schemaRetryErrors
+              schemaFeedbackErrors
             }))
           });
 
@@ -244,7 +245,9 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
           const content = extractOpenAICompatibleMessageContent(parsed);
           const reviewOutput = normalizeReviewJsonOutput(content);
           if (!reviewOutput.ok) {
-            const schemaError = redactPrivateEvidenceText(openAICompatibleReviewSchemaError(reviewOutput.error, parsed, content), input.prompt);
+            const schemaError = openAICompatibleReviewSchemaError(reviewOutput.error, parsed, content);
+            const schemaFeedbackError = buildSchemaFeedbackErrorForPrompt(schemaError, input.prompt);
+            const schemaEvidenceError = redactPrivateEvidenceText(schemaError, input.prompt);
             if (schemaError === TRUNCATED_REVIEW_JSON_ERROR || attempt >= schemaFeedbackMax) {
               throw new ProviderAdapterEvidenceError(schemaError, buildOpenAICompatibleSchemaRetryEvidence({
                 providerId: options.providerId,
@@ -254,11 +257,12 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
                 structuredOutputMode: structuredOutput.evidenceMode,
                 status: response.status,
                 parsed,
-                schemaRetries: schemaRetryErrors.length,
-                schemaRetryErrors: [...schemaRetryErrors, schemaError]
+                schemaRetries: schemaFeedbackErrors.length,
+                schemaRetryErrors: [...schemaEvidenceErrors, schemaEvidenceError]
               }));
             }
-            schemaRetryErrors.push(schemaError);
+            schemaFeedbackErrors.push(schemaFeedbackError);
+            schemaEvidenceErrors.push(schemaEvidenceError);
             continue;
           }
 
@@ -271,8 +275,8 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
               model: input.model,
               baseUrl,
               structuredOutputMode: structuredOutput.evidenceMode,
-              schemaRetries: schemaRetryErrors.length,
-              ...(schemaRetryErrors.length > 0 ? { schemaRetryErrors } : {}),
+              schemaRetries: schemaFeedbackErrors.length,
+              ...(schemaEvidenceErrors.length > 0 ? { schemaRetryErrors: schemaEvidenceErrors } : {}),
               ...buildOpenAICompatibleResponseEvidence(response.status, parsed)
             }
           };
@@ -289,7 +293,7 @@ function buildOpenAICompatibleReviewRequestBody(input: {
   model: string;
   prompt: string;
   structuredOutput: { requestFields: Record<string, unknown> };
-  schemaRetryErrors: readonly string[];
+  schemaFeedbackErrors: readonly string[];
 }): Record<string, unknown> {
   return {
     model: input.model,
@@ -305,22 +309,30 @@ function buildOpenAICompatibleReviewRequestBody(input: {
         role: "user",
         content: input.prompt
       },
-      ...(input.schemaRetryErrors.length === 0 ? [] : [{
+      ...(input.schemaFeedbackErrors.length === 0 ? [] : [{
         role: "user",
-        content: buildSchemaFeedbackRetryPrompt(input.schemaRetryErrors[input.schemaRetryErrors.length - 1])
+        content: buildSchemaFeedbackRetryPrompt(input.schemaFeedbackErrors)
       }])
     ]
   };
 }
 
-function buildSchemaFeedbackRetryPrompt(schemaError: string): string {
+function buildSchemaFeedbackRetryPrompt(schemaErrors: readonly string[]): string {
+  const recentDistinctErrors = [...new Set(schemaErrors)].slice(-SCHEMA_FEEDBACK_RETRY_MAX);
   return [
     "The previous response could not be accepted as NeonDiff review JSON.",
-    `Schema error: ${schemaError}`,
+    "Recent schema errors:",
+    ...recentDistinctErrors.map((schemaError) => `- ${schemaError}`),
     `Return only a JSON object matching ${REVIEW_FINDINGS_JSON_SCHEMA_NAME}.`,
     "Canonical schema:",
     JSON.stringify(REVIEW_FINDINGS_JSON_SCHEMA)
   ].join("\n");
+}
+
+function buildSchemaFeedbackErrorForPrompt(schemaError: string, prompt: string): string {
+  const redactedError = redactPrivateEvidenceText(schemaError, prompt);
+  if (redactedError === schemaError) return schemaError;
+  return "Adapter output failed NeonDiff review JSON schema validation.";
 }
 
 function openAICompatibleReviewSchemaError(error: string, parsed: Record<string, unknown>, content: string): string {
@@ -332,7 +344,7 @@ function openAICompatibleReviewSchemaError(error: string, parsed: Record<string,
 function isLikelyTruncatedReviewJsonContent(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
-  if (!/"findings"\s*:/.test(trimmed.slice(0, 2_048))) return false;
+  if (!/"findings"\s*:/.test(trimmed.slice(0, REVIEW_JSON_EXTRACTION_CHAR_LIMIT))) return false;
   try {
     JSON.parse(trimmed);
     return false;

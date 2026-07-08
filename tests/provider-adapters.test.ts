@@ -591,6 +591,57 @@ describe("provider adapter fixtures", () => {
     expect(result.evidence.rawEvidencePreview).not.toContain(fakeSecret);
   });
 
+  it("includes recent distinct schema errors in one bounded schema-feedback prompt", async () => {
+    let calls = 0;
+    const requestBodies: Array<{ messages?: Array<{ role?: string; content?: string }> }> = [];
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-multi-error-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 2,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          calls += 1;
+          const body = JSON.parse(String(init?.body)) as { messages?: Array<{ role?: string; content?: string }> };
+          requestBodies.push(body);
+          return jsonResponse({
+            id: `schema-feedback-multi-error-${calls}`,
+            choices: [
+              {
+                message: {
+                  content: calls === 1
+                    ? "not json"
+                    : calls === 2
+                      ? "{\"notFindings\":[]}"
+                      : '{"findings":[],"summary":"Recovered after two schema errors."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-multi-error-fixture",
+        providerId: "schema-feedback-multi-error-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(3);
+    expect(requestBodies[2]?.messages).toHaveLength(3);
+    const feedbackPrompt = requestBodies[2]?.messages?.at(-1)?.content ?? "";
+    expect(feedbackPrompt).toContain("Recent schema errors:");
+    expect(feedbackPrompt).toContain("- Adapter output was not a parseable JSON review object.");
+    expect(feedbackPrompt).toContain("- Adapter output did not contain a review findings array.");
+    expect(feedbackPrompt.match(/Canonical schema:/g)).toHaveLength(1);
+    expect(feedbackPrompt).toContain(REVIEW_FINDINGS_JSON_SCHEMA_NAME);
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":2');
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output was not a parseable JSON review object.","Adapter output did not contain a review findings array."]');
+  });
+
   it("does not retry malformed review JSON when schema feedback is disabled", async () => {
     const calls: unknown[] = [];
     const result = await runProviderAdapterFixture({
@@ -1020,6 +1071,45 @@ describe("provider adapter fixtures", () => {
       fixture: makeFixture({
         id: "truncated-without-finish-reason-local-model-fixture",
         providerId: "truncated-without-finish-reason-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object."
+      }
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("detects truncated review JSON when findings appears after the old short scan window", async () => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "delayed-findings-truncated-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: `{"preamble":"${"x".repeat(3_000)}","findings":[{"severity":"P1"`
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "delayed-findings-truncated-local-model-fixture",
+        providerId: "delayed-findings-truncated-local-model",
         adapterId: "openai-compatible",
         expectReviewJson: true
       })
