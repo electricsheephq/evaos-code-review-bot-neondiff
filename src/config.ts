@@ -440,6 +440,7 @@ const DEFAULT_CONFIG: BotConfig = {
         contextWindowTokens: 32_000,
         timeoutMs: 180_000,
         retryMaxRetries: 1,
+        retrySchemaFeedbackMax: 2,
         capabilities: {
           review: true,
           jsonOutput: true,
@@ -458,6 +459,7 @@ const DEFAULT_CONFIG: BotConfig = {
         contextWindowTokens: 128_000,
         timeoutMs: 180_000,
         retryMaxRetries: 1,
+        retrySchemaFeedbackMax: 2,
         capabilities: {
           review: true,
           jsonOutput: true,
@@ -1331,6 +1333,7 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
   if (value.contextWindowTokens !== undefined) validatePositiveInteger(value.contextWindowTokens, `${label}.contextWindowTokens`);
   if (value.timeoutMs !== undefined) validatePositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
   if (value.retryMaxRetries !== undefined) validateNonNegativeInteger(value.retryMaxRetries, `${label}.retryMaxRetries`);
+  if (value.retrySchemaFeedbackMax !== undefined) validateIntegerRange(value.retrySchemaFeedbackMax, `${label}.retrySchemaFeedbackMax`, 0, 3);
   if (value.structuredOutputMode !== undefined && !isProviderStructuredOutputMode(value.structuredOutputMode)) {
     throw new Error(`${label}.structuredOutputMode must be one of ${PROVIDER_STRUCTURED_OUTPUT_MODES.join(", ")}`);
   }
@@ -1556,6 +1559,12 @@ function validatePositiveInteger(value: unknown, label: string): void {
 
 function validateNonNegativeInteger(value: unknown, label: string): void {
   if (!Number.isInteger(value) || Number(value) < 0) throw new Error(`${label} must be a non-negative integer`);
+}
+
+function validateIntegerRange(value: unknown, label: string, min: number, max: number): void {
+  if (!Number.isInteger(value) || Number(value) < min || Number(value) > max) {
+    throw new Error(`${label} must be an integer from ${min} to ${max}`);
+  }
 }
 
 function validateProbability(value: unknown, label: string): void {

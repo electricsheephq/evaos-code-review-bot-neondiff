@@ -119,7 +119,8 @@ describe("provider registry", () => {
     });
     expect(summary.providers.find((provider) => provider.id === "openai-compatible")).toMatchObject({
       authMode: "api-key-env",
-      apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
+      apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+      retrySchemaFeedbackMax: 2
     });
     const secondZCode = buildProviderRegistrySummary({
       registry: {
@@ -2248,5 +2249,27 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/structuredOutputMode must be/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "bad-schema-feedback-retry",
+        providers: {
+          "bad-schema-feedback-retry": {
+            enabled: true,
+            adapter: "openai-compatible",
+            baseUrl: "http://localhost:11434/v1",
+            model: "review-model",
+            authMode: "none",
+            retrySchemaFeedbackMax: 4,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: true,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/retrySchemaFeedbackMax must be an integer from 0 to 3/);
   });
 });

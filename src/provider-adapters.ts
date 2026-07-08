@@ -14,6 +14,8 @@ const REVIEW_JSON_EXTRACTION_CHAR_LIMIT = 200_000;
 const REVIEW_JSON_NESTED_OBJECT_MAX_DEPTH = 32;
 const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
 const DEFAULT_OPENAI_COMPATIBLE_REVIEW_TIMEOUT_MS = 180_000;
+const DEFAULT_SCHEMA_FEEDBACK_RETRY_MAX = 2;
+const MAX_SCHEMA_FEEDBACK_RETRY_MAX = 3;
 const REDACTION_TOKENS = [
   "[redacted-private-evidence]",
   "[redacted-private-field]",
@@ -194,71 +196,121 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
       const apiKey = resolveOpenAICompatibleApiKey(provider, env);
       const timeout = createAbortSignal(provider.timeoutMs);
       const structuredOutput = buildStructuredOutputRequestFields(provider);
-      const requestBody = {
-        model: input.model,
-        stream: false,
-        ...(provider.temperature === undefined ? {} : { temperature: provider.temperature }),
-        ...structuredOutput.requestFields,
-        messages: [
-          {
-            role: "system",
-            content: "Return only the NeonDiff review JSON object. Do not include markdown, prose, tool calls, or raw diff excerpts."
-          },
-          {
-            role: "user",
-            content: input.prompt
-          }
-        ]
-      };
+      const schemaFeedbackMax = resolveSchemaFeedbackRetryMax(provider);
+      const schemaRetryErrors: string[] = [];
       try {
-        const response = await fetchImpl(buildOpenAIChatCompletionsUrl(baseUrl), {
-          method: "POST",
-          signal: timeout.signal,
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-          },
-          body: JSON.stringify(requestBody)
-        });
+        for (let attempt = 0; attempt <= schemaFeedbackMax; attempt += 1) {
+          const response = await fetchImpl(buildOpenAIChatCompletionsUrl(baseUrl), {
+            method: "POST",
+            signal: timeout.signal,
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+            },
+            body: JSON.stringify(buildOpenAICompatibleReviewRequestBody({
+              provider,
+              model: input.model,
+              prompt: input.prompt,
+              structuredOutput,
+              schemaRetryErrors
+            }))
+          });
 
-        if (!response.ok) {
-          const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
-          throw new Error(openAICompatibleStatusErrorMessage(response.status, responseErrorText));
+          if (!response.ok) {
+            const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
+            throw new Error(openAICompatibleStatusErrorMessage(response.status, responseErrorText));
+          }
+
+          const responseText = await readResponseTextWithAbort(response, timeout.signal);
+          const parsed = parseOpenAICompatibleResponse(responseText);
+          const content = extractOpenAICompatibleMessageContent(parsed);
+          const reviewOutput = normalizeReviewJsonOutput(content);
+          if (!reviewOutput.ok) {
+            const schemaError = openAICompatibleReviewSchemaError(reviewOutput.error, parsed);
+            if (schemaRetryErrors.length >= schemaFeedbackMax) throw new Error(schemaError);
+            schemaRetryErrors.push(schemaError);
+            continue;
+          }
+
+          return {
+            text: reviewOutput.text,
+            reviewJsonValidated: true,
+            rawEvidence: {
+              providerId: options.providerId,
+              adapterId: input.adapterId,
+              model: input.model,
+              baseUrl,
+              structuredOutputMode: structuredOutput.evidenceMode,
+              schemaRetries: schemaRetryErrors.length,
+              ...(schemaRetryErrors.length > 0 ? { schemaRetryErrors } : {}),
+              status: response.status,
+              ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
+              ...extractOpenAICompatibleChoiceEvidence(parsed),
+              ...extractOpenAICompatibleUsageEvidence(parsed)
+            }
+          };
         }
 
-        const responseText = await readResponseTextWithAbort(response, timeout.signal);
-        const parsed = parseOpenAICompatibleResponse(responseText);
-        const content = extractOpenAICompatibleMessageContent(parsed);
-        const reviewOutput = normalizeReviewJsonOutput(content);
-        if (!reviewOutput.ok) {
-          const finishReason = extractOpenAICompatibleFinishReason(parsed);
-          if (finishReason === "length") {
-            throw new Error("OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length).");
-          }
-          throw new Error(reviewOutput.error);
-        }
-
-        return {
-          text: reviewOutput.text,
-          reviewJsonValidated: true,
-          rawEvidence: {
-            providerId: options.providerId,
-            adapterId: input.adapterId,
-            model: input.model,
-            baseUrl,
-            structuredOutputMode: structuredOutput.evidenceMode,
-            status: response.status,
-            ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
-            ...extractOpenAICompatibleChoiceEvidence(parsed),
-            ...extractOpenAICompatibleUsageEvidence(parsed)
-          }
-        };
+        throw new Error("OpenAI-compatible review output did not produce valid review JSON after schema feedback retries.");
       } finally {
         timeout.dispose();
       }
     }
   };
+}
+
+function buildOpenAICompatibleReviewRequestBody(input: {
+  provider: ProviderRegistryEntry;
+  model: string;
+  prompt: string;
+  structuredOutput: { requestFields: Record<string, unknown> };
+  schemaRetryErrors: readonly string[];
+}): Record<string, unknown> {
+  return {
+    model: input.model,
+    stream: false,
+    ...(input.provider.temperature === undefined ? {} : { temperature: input.provider.temperature }),
+    ...input.structuredOutput.requestFields,
+    messages: [
+      {
+        role: "system",
+        content: "Return only the NeonDiff review JSON object. Do not include markdown, prose, tool calls, or raw diff excerpts."
+      },
+      {
+        role: "user",
+        content: input.prompt
+      },
+      ...input.schemaRetryErrors.map((schemaError) => ({
+        role: "user",
+        content: buildSchemaFeedbackRetryPrompt(schemaError)
+      }))
+    ]
+  };
+}
+
+function buildSchemaFeedbackRetryPrompt(schemaError: string): string {
+  return [
+    "The previous response could not be accepted as NeonDiff review JSON.",
+    `Schema error: ${schemaError}`,
+    `Return only a JSON object matching ${REVIEW_FINDINGS_JSON_SCHEMA_NAME}.`,
+    "Canonical schema:",
+    JSON.stringify(REVIEW_FINDINGS_JSON_SCHEMA)
+  ].join("\n");
+}
+
+function openAICompatibleReviewSchemaError(error: string, parsed: Record<string, unknown>): string {
+  return extractOpenAICompatibleFinishReason(parsed) === "length"
+    ? "OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length)."
+    : error;
+}
+
+function resolveSchemaFeedbackRetryMax(provider: ProviderRegistryEntry): number {
+  if (provider.retrySchemaFeedbackMax === undefined) return DEFAULT_SCHEMA_FEEDBACK_RETRY_MAX;
+  if (!Number.isInteger(provider.retrySchemaFeedbackMax) || provider.retrySchemaFeedbackMax < 0 || provider.retrySchemaFeedbackMax > MAX_SCHEMA_FEEDBACK_RETRY_MAX) {
+    throw new Error(`retrySchemaFeedbackMax must be an integer from 0 to ${MAX_SCHEMA_FEEDBACK_RETRY_MAX}.`);
+  }
+  return provider.retrySchemaFeedbackMax;
 }
 
 function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
