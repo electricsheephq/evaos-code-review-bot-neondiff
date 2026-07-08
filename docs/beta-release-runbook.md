@@ -26,6 +26,21 @@ Public source-beta releases also include a compact manifest at
 for docs version alignment, license API readiness or explicit deferral, and
 update-channel readiness for CLI, daemon, website, and desktop surfaces.
 
+The 1.0 cut line is intentionally narrower than full desktop maturity:
+`1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not
+full signed desktop maturity.` Keep release notes aligned to these public
+surface stages:
+
+| Stage | Required For 1.0 | Allowed Claims | Forbidden Claims |
+| --- | --- | --- | --- |
+| CLI/dashboard GA | Yes | `npm install -g neondiff`; `neondiff dashboard` starts and opens a local HTML dashboard; dashboard supports first-run setup/status and redacted provider API-key verification. | Signed desktop artifacts, Sparkle appcast/auto-update readiness, native Swift desktop maturity. |
+| Minimal Mac launcher GA | Yes | A minimal Mac icon/app launcher opens the same local HTML dashboard. | Full native app maturity, signing/notarization, appcast, auto-update, or TCC readiness. |
+| Signed/appcast desktop | Post-launch unless owner-promoted | Signed/notarized desktop, Sparkle/appcast, updater, and native Swift polish only after #449/#116 proof. | Treating browser preview or unsigned launcher smoke as signed desktop release proof. |
+
+Represent browser dashboard readiness separately from desktop readiness in
+`docs/public-release-manifest.json` when the distinction matters. The dashboard
+may be ready while signed desktop/appcast remains explicitly post-launch.
+
 ## Cadence
 
 - Cut at most one normal beta promotion per focused sprint lane unless a safety
