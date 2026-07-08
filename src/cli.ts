@@ -1679,7 +1679,6 @@ async function main(): Promise<void> {
         color: result.badge.color,
         ...(repo ? { repo } : {})
       }));
-      if (!result.ok) process.exitCode = 1;
     } finally {
       store.close();
     }
