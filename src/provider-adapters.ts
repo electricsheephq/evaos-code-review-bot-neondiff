@@ -6,7 +6,7 @@ import {
   REVIEW_FINDINGS_JSON_SCHEMA_STRICT
 } from "./findings-schema.js";
 import { parseFindings } from "./findings.js";
-import { openAICompatibleProviderTargetError, type ProviderRegistryEntry, type ProviderStructuredOutputMode } from "./providers.js";
+import { openAICompatibleProviderTargetError, SCHEMA_FEEDBACK_RETRY_MAX, type ProviderRegistryEntry, type ProviderStructuredOutputMode } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const EVIDENCE_PREVIEW_LIMIT = 500;
@@ -15,7 +15,6 @@ const REVIEW_JSON_NESTED_OBJECT_MAX_DEPTH = 32;
 const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
 const DEFAULT_OPENAI_COMPATIBLE_REVIEW_TIMEOUT_MS = 180_000;
 const DEFAULT_SCHEMA_FEEDBACK_RETRY_MAX = 2;
-const MAX_SCHEMA_FEEDBACK_RETRY_MAX = 3;
 const TRUNCATED_REVIEW_JSON_ERROR = "OpenAI-compatible review output was truncated before a parseable JSON review object.";
 const REDACTION_TOKENS = [
   "[redacted-private-evidence]",
@@ -89,6 +88,16 @@ export interface ProviderAdapterFixtureError {
   message: string;
 }
 
+class ProviderAdapterEvidenceError extends Error {
+  readonly rawEvidence: unknown;
+
+  constructor(message: string, rawEvidence: unknown) {
+    super(message);
+    this.name = "ProviderAdapterEvidenceError";
+    this.rawEvidence = rawEvidence;
+  }
+}
+
 export interface ProviderAdapterFixtureResultBase {
   fixtureId: string;
   providerId: string;
@@ -156,9 +165,16 @@ export async function runProviderAdapterFixture(input: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const rawEvidence = error instanceof ProviderAdapterEvidenceError ? error.rawEvidence : undefined;
     return {
       ok: false,
       ...baseResult,
+      evidence: rawEvidence === undefined
+        ? baseResult.evidence
+        : {
+          ...baseResult.evidence,
+          rawEvidencePreview: previewEvidenceText(stableStringify(redactPrivateEvidenceValue(rawEvidence, fixture.prompt)))
+        },
       error: {
         class: classifyProviderAdapterError(message),
         message: redactPrivateEvidenceText(message, fixture.prompt)
@@ -228,9 +244,19 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
           const content = extractOpenAICompatibleMessageContent(parsed);
           const reviewOutput = normalizeReviewJsonOutput(content);
           if (!reviewOutput.ok) {
-            const schemaError = openAICompatibleReviewSchemaError(reviewOutput.error, parsed, content);
+            const schemaError = redactPrivateEvidenceText(openAICompatibleReviewSchemaError(reviewOutput.error, parsed, content), input.prompt);
             if (schemaError === TRUNCATED_REVIEW_JSON_ERROR || attempt >= schemaFeedbackMax) {
-              throw new Error(schemaError);
+              throw new ProviderAdapterEvidenceError(schemaError, buildOpenAICompatibleSchemaRetryEvidence({
+                providerId: options.providerId,
+                adapterId: input.adapterId,
+                model: input.model,
+                baseUrl,
+                structuredOutputMode: structuredOutput.evidenceMode,
+                status: response.status,
+                parsed,
+                schemaRetries: schemaRetryErrors.length,
+                schemaRetryErrors: [...schemaRetryErrors, schemaError]
+              }));
             }
             schemaRetryErrors.push(schemaError);
             continue;
@@ -247,10 +273,7 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
               structuredOutputMode: structuredOutput.evidenceMode,
               schemaRetries: schemaRetryErrors.length,
               ...(schemaRetryErrors.length > 0 ? { schemaRetryErrors } : {}),
-              status: response.status,
-              ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
-              ...extractOpenAICompatibleChoiceEvidence(parsed),
-              ...extractOpenAICompatibleUsageEvidence(parsed)
+              ...buildOpenAICompatibleResponseEvidence(response.status, parsed)
             }
           };
         }
@@ -282,10 +305,10 @@ function buildOpenAICompatibleReviewRequestBody(input: {
         role: "user",
         content: input.prompt
       },
-      ...input.schemaRetryErrors.map((schemaError) => ({
+      ...(input.schemaRetryErrors.length === 0 ? [] : [{
         role: "user",
-        content: buildSchemaFeedbackRetryPrompt(schemaError)
-      }))
+        content: buildSchemaFeedbackRetryPrompt(input.schemaRetryErrors[input.schemaRetryErrors.length - 1])
+      }])
     ]
   };
 }
@@ -352,10 +375,42 @@ function hasUnclosedJsonDelimiters(value: string): boolean {
 
 function resolveSchemaFeedbackRetryMax(provider: ProviderRegistryEntry): number {
   if (provider.retrySchemaFeedbackMax === undefined) return DEFAULT_SCHEMA_FEEDBACK_RETRY_MAX;
-  if (!Number.isInteger(provider.retrySchemaFeedbackMax) || provider.retrySchemaFeedbackMax < 0 || provider.retrySchemaFeedbackMax > MAX_SCHEMA_FEEDBACK_RETRY_MAX) {
-    throw new Error(`retrySchemaFeedbackMax must be an integer from 0 to ${MAX_SCHEMA_FEEDBACK_RETRY_MAX}.`);
+  if (!Number.isInteger(provider.retrySchemaFeedbackMax) || provider.retrySchemaFeedbackMax < 0 || provider.retrySchemaFeedbackMax > SCHEMA_FEEDBACK_RETRY_MAX) {
+    throw new Error(`retrySchemaFeedbackMax must be an integer from 0 to ${SCHEMA_FEEDBACK_RETRY_MAX}.`);
   }
   return provider.retrySchemaFeedbackMax;
+}
+
+function buildOpenAICompatibleSchemaRetryEvidence(input: {
+  providerId: string;
+  adapterId: string;
+  model: string;
+  baseUrl: string;
+  structuredOutputMode: string;
+  status: number;
+  parsed: Record<string, unknown>;
+  schemaRetries: number;
+  schemaRetryErrors: readonly string[];
+}): Record<string, unknown> {
+  return {
+    providerId: input.providerId,
+    adapterId: input.adapterId,
+    model: input.model,
+    baseUrl: input.baseUrl,
+    structuredOutputMode: input.structuredOutputMode,
+    schemaRetries: input.schemaRetries,
+    ...(input.schemaRetryErrors.length > 0 ? { schemaRetryErrors: [...input.schemaRetryErrors] } : {}),
+    ...buildOpenAICompatibleResponseEvidence(input.status, input.parsed)
+  };
+}
+
+function buildOpenAICompatibleResponseEvidence(status: number, parsed: Record<string, unknown>): Record<string, unknown> {
+  return {
+    status,
+    ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
+    ...extractOpenAICompatibleChoiceEvidence(parsed),
+    ...extractOpenAICompatibleUsageEvidence(parsed)
+  };
 }
 
 function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {

@@ -45,6 +45,7 @@ export type ProviderSmokeRequestImpl = (
 
 export type ProviderAdapter = "zcode" | "openai-compatible" | "anthropic" | "openai" | "gemini";
 export type ProviderAuthMode = "zcode-app-config" | "api-key-env" | "none";
+export const SCHEMA_FEEDBACK_RETRY_MAX = 3;
 export const PROVIDER_STRUCTURED_OUTPUT_MODES = [
   "none",
   "json-object",

@@ -530,6 +530,7 @@ describe("provider adapter fixtures", () => {
   it("retries malformed OpenAI-compatible review JSON with schema feedback and records retry evidence", async () => {
     const calls: unknown[] = [];
     const signals: AbortSignal[] = [];
+    const fakeSecret = ["ghp", "schemaFeedbackFixtureToken1234567890"].join("_");
     const result = await runProviderAdapterFixture({
       adapter: createOpenAICompatibleReviewAdapter({
         providerId: "schema-feedback-local",
@@ -549,7 +550,7 @@ describe("provider adapter fixtures", () => {
               choices: [
                 {
                   message: {
-                    content: "not json"
+                    content: `not json ${fakeSecret}`
                   }
                 }
               ]
@@ -560,6 +561,7 @@ describe("provider adapter fixtures", () => {
           expect(body.messages?.at(-1)?.content).toContain("Adapter output was not a parseable JSON review object.");
           expect(body.messages?.at(-1)?.content).toContain(REVIEW_FINDINGS_JSON_SCHEMA_NAME);
           expect(body.messages?.at(-1)?.content).toContain('"findings"');
+          expect(body.messages?.at(-1)?.content).not.toContain(fakeSecret);
           return jsonResponse({
             id: "valid-second",
             choices: [
@@ -586,6 +588,7 @@ describe("provider adapter fixtures", () => {
     expect(signals[1]).toBe(signals[0]);
     expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":1');
     expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output was not a parseable JSON review object."]');
+    expect(result.evidence.rawEvidencePreview).not.toContain(fakeSecret);
   });
 
   it("does not retry malformed review JSON when schema feedback is disabled", async () => {
@@ -635,6 +638,7 @@ describe("provider adapter fixtures", () => {
 
   it("exhausts bounded schema-feedback retries without changing the model-output error class", async () => {
     let calls = 0;
+    const requestBodies: Array<{ messages?: Array<{ role?: string; content?: string }> }> = [];
     const result = await runProviderAdapterFixture({
       adapter: createOpenAICompatibleReviewAdapter({
         providerId: "schema-feedback-exhausted-local",
@@ -642,8 +646,9 @@ describe("provider adapter fixtures", () => {
           retrySchemaFeedbackMax: 1,
           structuredOutputMode: "none"
         }),
-        fetchImpl: async () => {
+        fetchImpl: async (_url, init) => {
           calls += 1;
+          requestBodies.push(JSON.parse(String(init?.body)) as { messages?: Array<{ role?: string; content?: string }> });
           return jsonResponse({
             id: `malformed-${calls}`,
             choices: [
@@ -665,11 +670,57 @@ describe("provider adapter fixtures", () => {
     });
 
     expect(calls).toBe(2);
+    expect(requestBodies[1]?.messages).toHaveLength(3);
+    expect(requestBodies[1]?.messages?.filter((message) => message.content?.includes(REVIEW_FINDINGS_JSON_SCHEMA_NAME))).toHaveLength(1);
     expect(result).toMatchObject({
       ok: false,
       error: {
         class: "model-output",
         message: "Adapter output did not contain a review findings array."
+      }
+    });
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":1');
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output was not a parseable JSON review object.","Adapter output did not contain a review findings array."]');
+  });
+
+  it.each([
+    ["out-of-range", 5],
+    ["non-integer", 1.5]
+  ])("rejects %s adapter-level schema-feedback retry limits before fetching", async (_label, retrySchemaFeedbackMax) => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "invalid-schema-feedback-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[]}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: `invalid-schema-feedback-${_label}-fixture`,
+        providerId: "invalid-schema-feedback-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(calls).toBe(0);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        message: "retrySchemaFeedbackMax must be an integer from 0 to 3."
       }
     });
   });

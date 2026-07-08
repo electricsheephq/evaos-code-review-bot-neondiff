@@ -18,7 +18,7 @@ import {
   PUBLIC_CONFIDENCE_MIN_WILSON_LOWER_BOUND,
   type PublicConfidenceDisplayPolicy
 } from "./public-confidence.js";
-import { isApiKeyEnvName, isProviderId, isProviderStructuredOutputMode, PROVIDER_STRUCTURED_OUTPUT_MODES, type ProviderRegistryConfig } from "./providers.js";
+import { isApiKeyEnvName, isProviderId, isProviderStructuredOutputMode, PROVIDER_STRUCTURED_OUTPUT_MODES, SCHEMA_FEEDBACK_RETRY_MAX, type ProviderRegistryConfig } from "./providers.js";
 import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
 import { containsSecretLikeText } from "./secrets.js";
@@ -1337,7 +1337,7 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
     if (adapter !== "openai-compatible") {
       throw new Error(`${label}.retrySchemaFeedbackMax is only supported for openai-compatible providers`);
     }
-    validateIntegerRange(value.retrySchemaFeedbackMax, `${label}.retrySchemaFeedbackMax`, 0, 3);
+    validateIntegerRange(value.retrySchemaFeedbackMax, `${label}.retrySchemaFeedbackMax`, 0, SCHEMA_FEEDBACK_RETRY_MAX);
   }
   if (value.structuredOutputMode !== undefined && !isProviderStructuredOutputMode(value.structuredOutputMode)) {
     throw new Error(`${label}.structuredOutputMode must be one of ${PROVIDER_STRUCTURED_OUTPUT_MODES.join(", ")}`);
