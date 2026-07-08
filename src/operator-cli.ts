@@ -101,6 +101,7 @@ export interface RuntimeInventory {
     providerDeferredHeads: number;
     staleHeads: number;
     readFailures: number;
+    retryCoveredReviewerSessions: number;
     expiredProviderCooldowns: number;
     retryableExpiredProviderCooldowns: number;
     coveredExpiredProviderCooldowns: number;
@@ -592,6 +593,7 @@ export function buildRuntimeInventory(input: {
   const retryableExpiredProviderCooldowns =
     input.release.database.retryableExpiredProviderCooldownCount ??
     Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
+  const retryCoveredReviewerSessions = input.release.database.retryCoveredReviewerSessionCount ?? 0;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
@@ -662,6 +664,13 @@ export function buildRuntimeInventory(input: {
         (coveredExpiredProviderCooldowns > 0
           ? `; ${coveredExpiredProviderCooldowns} covered by active provider/repo cooldown`
           : "")
+    },
+    {
+      name: "runtime_reviewer_sessions_retry_covered",
+      ok: true,
+      detail:
+        `${retryCoveredReviewerSessions} reviewer session(s) with terminal/stale row state ` +
+        "covered by active queue retry"
     },
     {
       name: "runtime_process_inventory_available",
@@ -749,6 +758,7 @@ export function buildRuntimeInventory(input: {
       providerDeferredHeads,
       staleHeads,
       readFailures,
+      retryCoveredReviewerSessions,
       expiredProviderCooldowns,
       retryableExpiredProviderCooldowns,
       coveredExpiredProviderCooldowns,
@@ -858,7 +868,8 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
       ` failed=${inventory.issueEnrichmentRuntime?.summary.failed ?? 0}` +
       ` deferred=${inventory.issueEnrichmentRuntime?.summary.deferred ?? 0}`,
     `processes: botOwned=${inventory.summary.botProcesses}`,
-    `leases: active=${inventory.summary.activeLeases} stale=${inventory.summary.staleLeases}`
+    `leases: active=${inventory.summary.activeLeases} stale=${inventory.summary.staleLeases}`,
+    `reviewerSessions: retryCovered=${inventory.summary.retryCoveredReviewerSessions}`
   ];
 
   const failingGates = inventory.gates.filter((gate) => !gate.ok);
