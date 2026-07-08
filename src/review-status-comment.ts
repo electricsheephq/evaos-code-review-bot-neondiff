@@ -57,6 +57,7 @@ const REVIEW_STATUS_STATE_MARKER_PREFIX = "<!-- evaos-code-review-bot:review-sta
 const REPO_SLUG_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const HEAD_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
+const REVIEW_STATUS_STATE_PATTERN = /<!--\s*evaos-code-review-bot:review-status-state\b[^>]*\bstatus=([A-Za-z_]+)\b[^>]*-->/;
 
 export function buildReviewStatusMarker(input: {
   repo: string;
@@ -104,6 +105,16 @@ export function buildReviewStatusComment(input: BuildReviewStatusCommentInput): 
     marker,
     body: lines.join("\n")
   };
+}
+
+export function parseReviewStatusCommentState(body: string | null | undefined): ReviewStatusCommentState | undefined {
+  const match = body?.match(REVIEW_STATUS_STATE_PATTERN);
+  if (!match?.[1]) return undefined;
+  return isReviewStatusCommentState(match[1]) ? match[1] : undefined;
+}
+
+export function isRepairableReviewStatusCommentState(state: ReviewStatusCommentState | undefined): boolean {
+  return state === "queued" || state === "in_progress" || state === "provider_deferred";
 }
 
 export async function postReviewStatusComment(input: {
@@ -155,6 +166,19 @@ export async function postReviewStatusComment(input: {
       error: redactSecrets(error instanceof Error ? error.message : String(error))
     };
   }
+}
+
+function isReviewStatusCommentState(value: string): value is ReviewStatusCommentState {
+  return (
+    value === "queued" ||
+    value === "in_progress" ||
+    value === "completed" ||
+    value === "provider_deferred" ||
+    value === "stale_head" ||
+    value === "closed_or_merged_before_review" ||
+    value === "skipped" ||
+    value === "failed"
+  );
 }
 
 function hasReviewLifecycleOptIn(input: BuildReviewStatusCommentInput): boolean {

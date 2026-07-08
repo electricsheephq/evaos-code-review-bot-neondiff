@@ -14,6 +14,9 @@ import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
 import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
 import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import {
+  buildReviewStatusMarker,
+  isRepairableReviewStatusCommentState,
+  parseReviewStatusCommentState,
   postReviewStatusComment,
   type ReviewStatusCommentGithub,
   type ReviewStatusCommentPostResult,
@@ -536,6 +539,7 @@ async function enqueuePullIfEligible(input: {
   await retireSupersededQueueJobsForPull(input);
   if (processed || input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) {
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
+    await repairProcessedHeadStatusCommentIfNeeded({ ...input, processed });
     return "skipped_processed";
   }
   const activeQueueJob = getActiveQueueJobForHead(input.state, input.repo, input.pull.number, input.pull.head.sha);
@@ -1438,6 +1442,60 @@ function isStatusCommentFailure(result: ReviewStatusCommentPostResult): boolean 
     result.reason === "build_failed" ||
     result.reason === "upsert_failed"
   );
+}
+
+async function repairProcessedHeadStatusCommentIfNeeded(input: {
+  config: BotConfig;
+  github: SchedulerGitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+  processed?: { status: ProcessedStatus; reviewUrl?: string };
+  onStatusCommentFailure?: () => void;
+  now?: Date;
+}): Promise<void> {
+  if (!input.config.reviewStatusComment?.enabled || input.dryRun || !isReviewStatusCommentGithub(input.github)) return;
+  const processed = input.processed ?? input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  if (processed?.status !== "posted") return;
+  const postedJob = input.state
+    .listReviewQueueJobsForPull({ repo: input.repo, pullNumber: input.pull.number, state: "posted" })
+    .find((job) => job.headSha === input.pull.head.sha);
+  const reviewUrl = processed.reviewUrl ?? postedJob?.reviewUrl;
+  if (!reviewUrl) return;
+
+  let comments: IssueCommentCommandSource[];
+  try {
+    comments = await input.github.listIssueComments(input.repo, input.pull.number);
+  } catch {
+    input.onStatusCommentFailure?.();
+    return;
+  }
+
+  const marker = buildReviewStatusMarker({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha
+  });
+  const botLogin = input.config.github.botLogin ?? DEFAULT_BOT_LOGIN;
+  const existing = comments.find((comment) =>
+    comment.body?.includes(marker) &&
+    comment.user?.type === "Bot" &&
+    comment.user.login === botLogin
+  );
+  if (!isRepairableReviewStatusCommentState(parseReviewStatusCommentState(existing?.body))) return;
+
+  await syncReviewStatusComment({
+    config: input.config,
+    github: input.github,
+    dryRun: input.dryRun,
+    repo: input.repo,
+    pull: input.pull,
+    state: "completed",
+    reviewUrl,
+    onStatusCommentFailure: input.onStatusCommentFailure,
+    now: input.now
+  });
 }
 
 async function syncReviewStatusCommentForReviewResult(input: {
