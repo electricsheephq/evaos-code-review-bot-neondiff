@@ -52,7 +52,7 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
-import { startLocalDashboardServer } from "./local-dashboard.js";
+import { runLocalDashboardPreviewSmoke, startLocalDashboardServer } from "./local-dashboard.js";
 import {
   assertOutcomeLedgerOutputDirEmpty,
   readOutcomeLedgerInput,
@@ -684,6 +684,25 @@ async function main(): Promise<void> {
     }
     const configPath = resolve(parseSingleArg(args.config ?? "config.local.json", "--config"));
     const config = loadConfig(configPath);
+    if (args["preview-smoke"] !== undefined && parseBooleanArg(args["preview-smoke"], "--preview-smoke")) {
+      const outputDir = resolve(parseSingleArg(args["output-dir"] ?? "runtime/dashboard-preview-smoke", "--output-dir"));
+      const smoke = await runLocalDashboardPreviewSmoke({
+        config,
+        configPath,
+        configExists: existsSync(configPath),
+        outputDir,
+        host: args.host ? parseSingleArg(args.host, "--host") : "127.0.0.1",
+        port: args.port ? parseNonNegativeInteger(parseSingleArg(args.port, "--port"), "--port") : 0,
+        launchdLabel: args["launchd-label"] ? parseSingleArg(args["launchd-label"], "--launchd-label") : undefined,
+        providerId: args.provider ? parseSingleArg(args.provider, "--provider") : undefined,
+        allowRemoteSmoke: args["allow-remote-smoke"] === undefined ? false : parseBooleanArg(args["allow-remote-smoke"], "--allow-remote-smoke"),
+        screenshotPath: args["screenshot-path"] ? resolve(parseSingleArg(args["screenshot-path"], "--screenshot-path")) : undefined,
+        sourceSha: args["source-sha"] ? parseSingleArg(args["source-sha"], "--source-sha") : readCurrentGitHead(process.cwd())
+      });
+      console.log(stringifyRedactedJson(smoke));
+      if (!smoke.ok) process.exitCode = 1;
+      return;
+    }
     const handle = await startLocalDashboardServer({
       config,
       configPath,
@@ -3070,6 +3089,10 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--host", description: "Dashboard bind host (default 127.0.0.1)." },
       { name: "--port", description: "Dashboard port (default 0, choose an available port)." },
       { name: "--open", description: "true (default) to open the dashboard in the browser." },
+      { name: "--preview-smoke", description: "true to run a one-shot local HTML dashboard route smoke and write an evidence packet." },
+      { name: "--output-dir", description: "Evidence directory for --preview-smoke (default runtime/dashboard-preview-smoke)." },
+      { name: "--screenshot-path", description: "Optional browser/Playwright screenshot path to record in preview-smoke evidence." },
+      { name: "--source-sha", description: "Source SHA to record in preview-smoke evidence (defaults to git rev-parse HEAD)." },
       { name: "--allow-remote-smoke", description: "true to allow hosted provider API-key verification." },
       { name: "--operator", description: "true to use the legacy operator JSON/human dashboard." }
     ]
@@ -3167,6 +3190,7 @@ function buildHelp(command?: string) {
       "neondiff pricing",
       "neondiff badge --config config.local.json --output docs/badges/precision.json",
       "neondiff dashboard --config config.local.json",
+      "neondiff dashboard --preview-smoke true --config config.local.json --output-dir runtime/dashboard-preview-smoke",
       "neondiff providers list --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
@@ -3456,6 +3480,17 @@ function issueEnrichmentRunLiveExitReason(
 function parseSingleArg(value: string | string[], label: string): string {
   if (Array.isArray(value)) throw new Error(`${label} must be provided once`);
   return value;
+}
+
+function readCurrentGitHead(cwd: string): string | undefined {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"]
+  });
+  if (result.status !== 0) return undefined;
+  const head = result.stdout.trim();
+  return /^[0-9a-f]{40}$/i.test(head) ? head : undefined;
 }
 
 function parseCanonicalIsoTimestamp(value: string, label: string): Date {

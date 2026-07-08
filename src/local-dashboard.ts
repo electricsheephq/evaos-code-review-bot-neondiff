@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { join, resolve } from "node:path";
 import type { BotConfig } from "./config.js";
 import { getLicenseStatus, type LicenseStatusResult } from "./license.js";
+import { writeSecureFileSync } from "./temp-files.js";
 import {
   doctorProviderRegistry,
   type ProviderDoctorCheck,
@@ -94,6 +96,30 @@ export interface ProviderApiKeyVerificationResult {
   keySource?: "submitted" | "env";
   check?: Omit<ProviderDoctorCheck, "error"> & { error?: string };
   troubleshooting: string[];
+}
+
+export interface LocalDashboardPreviewSmokeResult {
+  ok: boolean;
+  command: "dashboard preview-smoke";
+  route: "/";
+  url: string;
+  sourceSha?: string;
+  outputDir: string;
+  htmlPath: string;
+  statusPath: string;
+  providerVerifyPath: string;
+  packetPath: string;
+  screenshotPath?: string;
+  screenshotCaptured: boolean;
+  settledUiState: {
+    htmlLoaded: boolean;
+    statusApiLoaded: boolean;
+    providerVerifyRouteLoaded: boolean;
+    controlsRendered: boolean;
+    statusScriptRendered: boolean;
+    providerVerifyStatus: number;
+  };
+  proofBoundary: string;
 }
 
 export async function buildLocalDashboardStatus(input: {
@@ -515,6 +541,97 @@ export function renderLocalDashboardHtml(status: LocalDashboardStatusContract): 
 </html>`;
 }
 
+export async function runLocalDashboardPreviewSmoke(input: {
+  config: BotConfig;
+  configPath: string;
+  configExists: boolean;
+  outputDir: string;
+  host?: string;
+  port?: number;
+  launchdLabel?: string;
+  providerId?: string;
+  apiKey?: string;
+  allowRemoteSmoke?: boolean;
+  screenshotPath?: string;
+  sourceSha?: string;
+}): Promise<LocalDashboardPreviewSmokeResult> {
+  const outputDir = resolve(input.outputDir);
+  mkdirSync(outputDir, { recursive: true });
+  const handle = await startLocalDashboardServer({
+    config: input.config,
+    configPath: input.configPath,
+    configExists: input.configExists,
+    host: input.host,
+    port: input.port,
+    launchdLabel: input.launchdLabel,
+    openBrowser: false,
+    allowRemoteSmoke: input.allowRemoteSmoke
+  });
+
+  try {
+    const htmlResponse = await fetch(handle.url);
+    const html = await htmlResponse.text();
+    const statusResponse = await fetch(new URL("/api/status", handle.url));
+    const statusText = await statusResponse.text();
+    const providerVerifyResponse = await fetch(new URL("/api/provider/verify", handle.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(input.providerId ? { providerId: input.providerId } : {}),
+        ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+        allowRemoteSmoke: input.allowRemoteSmoke === true
+      })
+    });
+    const providerVerifyText = await providerVerifyResponse.text();
+
+    const htmlPath = join(outputDir, "dashboard.html");
+    const statusPath = join(outputDir, "dashboard-status.json");
+    const providerVerifyPath = join(outputDir, "provider-verify.json");
+    const packetPath = join(outputDir, "preview-smoke.json");
+    writeSecureFileSync(htmlPath, redactSecrets(html));
+    writeSecureFileSync(statusPath, stringifyRedactedJson(JSON.parse(statusText)));
+    writeSecureFileSync(providerVerifyPath, stringifyRedactedJson(JSON.parse(providerVerifyText)));
+
+    const statusScriptRendered = html.includes('id="dashboard-status"');
+    const controlsRendered =
+      html.includes('id="provider-id"') &&
+      html.includes('id="api-key"') &&
+      html.includes('id="verify-api-key"') &&
+      html.includes("Verify API Key");
+    const settledUiState = {
+      htmlLoaded: htmlResponse.ok && html.includes("NeonDiff Dashboard"),
+      statusApiLoaded: statusResponse.ok,
+      providerVerifyRouteLoaded: providerVerifyResponse.status === 200 || providerVerifyResponse.status === 422,
+      controlsRendered,
+      statusScriptRendered,
+      providerVerifyStatus: providerVerifyResponse.status
+    };
+    const ok = Object.values(settledUiState)
+      .filter((value): value is boolean => typeof value === "boolean")
+      .every(Boolean);
+    const result: LocalDashboardPreviewSmokeResult = {
+      ok,
+      command: "dashboard preview-smoke",
+      route: "/",
+      url: handle.url,
+      ...(input.sourceSha ? { sourceSha: input.sourceSha } : {}),
+      outputDir,
+      htmlPath,
+      statusPath,
+      providerVerifyPath,
+      packetPath,
+      ...(input.screenshotPath ? { screenshotPath: input.screenshotPath } : {}),
+      screenshotCaptured: Boolean(input.screenshotPath && existsSync(input.screenshotPath)),
+      settledUiState,
+      proofBoundary: "Preview/browser smoke proves the local HTML dashboard routes and controls only; it does not prove signed Mac app behavior, updater, TCC, customer readiness, or GA."
+    };
+    writeSecureFileSync(packetPath, stringifyRedactedJson(result));
+    return JSON.parse(stringifyRedactedJson(result)) as LocalDashboardPreviewSmokeResult;
+  } finally {
+    await closeServer(handle.server);
+  }
+}
+
 export async function startLocalDashboardServer(input: {
   config: BotConfig;
   configPath: string;
@@ -590,6 +707,16 @@ export async function startLocalDashboardServer(input: {
   const openAttempted = input.openBrowser !== false;
   const openOk = openAttempted ? openLocalUrl(url) : false;
   return { server, url, status, openAttempted, openOk };
+}
+
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolveClose, rejectClose) => {
+    server.close((error) => {
+      if (error) rejectClose(error);
+      else resolveClose();
+    });
+  });
 }
 
 async function buildLicenseStatusItem(config: BotConfig, checkedAt: string): Promise<LocalDashboardStatusItem> {

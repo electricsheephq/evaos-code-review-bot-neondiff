@@ -206,6 +206,21 @@ Recommended local order:
    smoke first and record the URL, route, screenshots, and settled behavior in
    the evidence packet. Browser proof is fast product evidence; it is not a
    substitute for desktop signing, appcast, or Swift release gates.
+   For the built-in local dashboard, use the one-shot smoke command before the
+   first push:
+
+   ```bash
+   npx tsx src/cli.ts dashboard \
+     --config config.local.json \
+     --preview-smoke true \
+     --output-dir runtime/dashboard-preview-smoke
+   ```
+
+   The packet writes `dashboard.html`, `dashboard-status.json`,
+   `provider-verify.json`, and `preview-smoke.json` with the route, source SHA,
+   settled UI-state booleans, redacted provider output, and optional
+   `--screenshot-path` when a Browser/Playwright screenshot is captured in the
+   same loop.
 3. For NeonDiff Desktop Swift changes, run
    `swift run NeonDiffDesktopCoreSmoke`, then `swift build`, then
    `script/build_and_run.sh build` plus `script/build_and_run.sh bundle-check`

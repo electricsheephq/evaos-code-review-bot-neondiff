@@ -1,10 +1,14 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import {
   buildLocalDashboardStatus,
   renderLocalDashboardHtml,
+  runLocalDashboardPreviewSmoke,
   startLocalDashboardServer,
   verifyProviderApiKey
 } from "../src/local-dashboard.js";
@@ -188,6 +192,58 @@ describe("local HTML dashboard", () => {
     expect(resultText).toContain("configured_unverified");
     expect(resultText).not.toContain(fakeKey);
     expect(resultText).not.toContain("dashboard-route");
+  });
+
+  it("writes a preview-smoke evidence packet for browser-first dashboard validation", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-dashboard-preview-smoke-"));
+    const fakeKey = ["sk", "preview-smoke-route-1234567890"].join("-");
+    const screenshotPath = join(outputDir, "dashboard.png");
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model"
+          }
+        }
+      }
+    });
+
+    const smoke = await runLocalDashboardPreviewSmoke({
+      config,
+      configPath: "/Volumes/LEXAR/Codex/neondiff/config.local.json",
+      configExists: true,
+      outputDir,
+      providerId: "openai-compatible",
+      apiKey: fakeKey,
+      allowRemoteSmoke: false,
+      screenshotPath,
+      sourceSha: "0123456789abcdef0123456789abcdef01234567"
+    });
+
+    expect(smoke).toMatchObject({
+      ok: true,
+      command: "dashboard preview-smoke",
+      route: "/",
+      sourceSha: "0123456789abcdef0123456789abcdef01234567",
+      screenshotPath,
+      settledUiState: {
+        htmlLoaded: true,
+        statusApiLoaded: true,
+        providerVerifyRouteLoaded: true,
+        controlsRendered: true
+      }
+    });
+    expect(existsSync(smoke.htmlPath)).toBe(true);
+    expect(existsSync(smoke.statusPath)).toBe(true);
+    expect(existsSync(smoke.providerVerifyPath)).toBe(true);
+    expect(existsSync(smoke.packetPath)).toBe(true);
+    expect(readFileSync(smoke.htmlPath, "utf8")).toContain("Verify API Key");
+    const serialized = JSON.stringify(smoke) + readFileSync(smoke.packetPath, "utf8");
+    expect(serialized).not.toContain(fakeKey);
+    expect(serialized).not.toContain("preview-smoke-route");
   });
 });
 
