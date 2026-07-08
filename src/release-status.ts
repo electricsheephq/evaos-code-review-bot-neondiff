@@ -579,25 +579,21 @@ export function readPublicReleaseManifestStatus(input: {
       : true;
     const licenseHealthProofPath = readString(licenseApi.healthProofPath);
     const licenseHealthUrl = readString(licenseApi.healthUrl);
+    const explicitLicenseIssuanceRequired = readBoolean(licenseApi.checkoutIssuanceRequiredForThisRelease);
     const licenseIssuanceRequired =
-      readBoolean(licenseApi.checkoutIssuanceRequiredForThisRelease) ?? (releaseLevel === "stable" && licenseRequired);
+      explicitLicenseIssuanceRequired ??
+      ((releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta") && licenseRequired);
     const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
     const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
     const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
     const licenseIssuanceTrackingIssue = readString(licenseApi.checkoutIssuanceTrackingIssue);
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
-    const licenseNeedsIssuanceProof = licenseNeedsHealthProof && licenseIssuanceRequired;
-    const licenseMetadataFailures = validateLicenseHealthMetadata({
+    const licenseHealthMetadataFailures = validateLicenseHealthMetadata({
       cwd: input.cwd,
       healthUrl: licenseHealthUrl,
       healthProofPath: licenseHealthProofPath,
       proofRequired: licenseNeedsHealthProof
-    }).concat(validateLicenseIssuanceMetadata({
-      cwd: input.cwd,
-      issuanceUrl: licenseIssuanceUrl,
-      issuanceProofPath: licenseIssuanceProofPath,
-      proofRequired: licenseNeedsIssuanceProof
-    }));
+    });
     const licenseHealthProof = licenseNeedsHealthProof
       ? validateLicenseHealthProof({
           cwd: input.cwd,
@@ -607,6 +603,18 @@ export function readPublicReleaseManifestStatus(input: {
           now: input.now
         })
       : { ok: true, detail: "" };
+    const licenseHealthProofOk = licenseHealthProof.ok;
+    const licenseHealthGateOk = licenseHealthMetadataFailures.length === 0 && licenseHealthProofOk;
+    const licenseNeedsIssuanceProof = licenseNeedsHealthProof && licenseHealthGateOk && licenseIssuanceRequired;
+    const licenseIssuanceMetadataFailures = validateLicenseIssuanceMetadata({
+      cwd: input.cwd,
+      issuanceUrl: licenseIssuanceUrl,
+      issuanceProofPath: licenseIssuanceProofPath,
+      issuanceTrackingIssue: licenseIssuanceTrackingIssue,
+      proofRequired: licenseNeedsIssuanceProof,
+      healthProofRequired: licenseNeedsHealthProof && licenseHealthGateOk,
+      issuanceRequiredExplicit: explicitLicenseIssuanceRequired
+    });
     const licenseIssuanceProof = licenseNeedsIssuanceProof
       ? validateLicenseIssuanceProof({
           cwd: input.cwd,
@@ -616,8 +624,8 @@ export function readPublicReleaseManifestStatus(input: {
           now: input.now
         })
       : { ok: true, detail: "" };
-    const licenseHealthProofOk = licenseHealthProof.ok;
     const licenseIssuanceProofOk = licenseIssuanceProof.ok;
+    const licenseMetadataFailures = licenseHealthMetadataFailures.concat(licenseIssuanceMetadataFailures);
     const licenseMetadataOk = licenseMetadataFailures.length === 0;
     const licenseOk =
       isLicenseApiStateAcceptable(licenseState, licenseRequired) &&
@@ -1113,11 +1121,24 @@ function validateLicenseIssuanceMetadata(input: {
   cwd: string;
   issuanceUrl?: string;
   issuanceProofPath?: string;
+  issuanceTrackingIssue?: string;
   proofRequired: boolean;
+  healthProofRequired: boolean;
+  issuanceRequiredExplicit?: boolean;
 }): string[] {
   const failures: string[] = [];
   if (input.proofRequired && !input.issuanceUrl) {
     failures.push("checkoutIssuanceUrl must be present when validating checkout issuance proof");
+  }
+  if (input.healthProofRequired && input.issuanceRequiredExplicit === false && !input.issuanceTrackingIssue) {
+    failures.push("checkoutIssuanceTrackingIssue must be present when checkout issuance proof is deferred");
+  }
+  if (input.issuanceTrackingIssue) {
+    const trackingIssueFailure = validateGithubIssueUrl(
+      input.issuanceTrackingIssue,
+      "checkoutIssuanceTrackingIssue"
+    );
+    if (trackingIssueFailure) failures.push(trackingIssueFailure);
   }
   if (input.issuanceUrl) {
     const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl);
@@ -1128,6 +1149,27 @@ function validateLicenseIssuanceMetadata(input: {
     if (!confinedPath.ok) failures.push(`invalid checkout issuance proof ${input.issuanceProofPath}: ${confinedPath.detail}`);
   }
   return failures;
+}
+
+function validateGithubIssueUrl(issueUrl: string, fieldName: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(issueUrl);
+  } catch {
+    return `${fieldName} must be an https GitHub issue URL with no credentials, query, or fragment`;
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname !== "github.com" ||
+    !/^\/[^/]+\/[^/]+\/issues\/\d+$/.test(parsed.pathname) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return `${fieldName} must be an https GitHub issue URL with no credentials, query, or fragment`;
+  }
+  return undefined;
 }
 
 function validateLicenseHealthUrl(healthUrl: string): string | undefined {

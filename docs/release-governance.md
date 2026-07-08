@@ -137,8 +137,8 @@ Before tagging:
    `docs/public-release-manifest.json` exists and declares:
    - docs version and release-notes path
    - license API state and whether it is required for this release
-   - license API health proof, plus checkout issuance proof when checkout or GA
-     activation is in scope
+   - license API health proof, plus checkout issuance proof unless a source-beta
+     release explicitly defers it with a tracking issue
    - CLI, daemon, website, and desktop update-channel state
    - rollback command or tracking issue for each required channel
    - required-channel rollback fields with one source revert command such as
