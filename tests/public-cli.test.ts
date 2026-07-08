@@ -59,6 +59,7 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("neondiff pricing");
     expect(output.examples).toContain("neondiff badge --config config.local.json --output docs/badges/precision.json");
     expect(output.examples).toContain("neondiff dashboard --config config.local.json");
+    expect(output.examples).toContain("neondiff dashboard --preview-smoke true --config config.local.json --output-dir runtime/dashboard-preview-smoke");
     expect(output.examples).toContain("neondiff providers list --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json");

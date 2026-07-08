@@ -53,6 +53,12 @@ evaos-review-bot status --config config.local.json
   JSON-first operator surface. The command exits nonzero when visible rows are
   blocked; healthy active rows are counted but do not fail the gate by
   themselves.
+- `dashboard --preview-smoke true`: one-shot local HTML dashboard route smoke.
+  Starts the same local dashboard without opening a browser, requests `/`,
+  `/api/status`, and `/api/provider/verify`, then writes a public-safe evidence
+  packet with `dashboard.html`, `dashboard-status.json`, `provider-verify.json`,
+  and `preview-smoke.json`. Add `--screenshot-path` to attach a Browser,
+  Playwright, or Computer Use screenshot captured during the same smoke loop.
 - `budget-status`: read-only scheduler budget projection. Shows active counts,
   queued counts, would-lease jobs, delayed jobs, and deterministic delay reasons
   such as `provider_cooldown`, `provider_capacity`, `org_capacity`,
@@ -246,6 +252,15 @@ Show the review dashboard:
 
 ```bash
 npx tsx src/cli.ts dashboard --config config.local.json
+```
+
+Run a fast local HTML dashboard preview smoke before browser/dashboard PRs:
+
+```bash
+npx tsx src/cli.ts dashboard \
+  --config config.local.json \
+  --preview-smoke true \
+  --output-dir runtime/dashboard-preview-smoke
 ```
 
 Show dashboard rows blocked on proof:
