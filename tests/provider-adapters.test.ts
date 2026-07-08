@@ -674,6 +674,50 @@ describe("provider adapter fixtures", () => {
     });
   });
 
+  it("preserves schema-output classification when the shared retry timeout expires", async () => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-timeout-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 1,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          if (calls === 1) {
+            return jsonResponse({
+              id: "malformed-before-timeout",
+              choices: [
+                {
+                  message: {
+                    content: "not json"
+                  }
+                }
+              ]
+            });
+          }
+          throw new Error("deadline exceeded");
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-timeout-fixture",
+        providerId: "schema-feedback-timeout-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "Adapter output was not a parseable JSON review object."
+      }
+    });
+  });
+
   it("times out OpenAI-compatible responses that stall after headers", async () => {
     let bodyCancelled = false;
     const result = await runProviderAdapterFixture({
@@ -862,22 +906,26 @@ describe("provider adapter fixtures", () => {
   });
 
   it("preserves finish_reason length when OpenAI-compatible review JSON is truncated", async () => {
+    let calls = 0;
     const result = await runProviderAdapterFixture({
       adapter: createOpenAICompatibleReviewAdapter({
         providerId: "truncated-local-model",
         provider: makeOpenAICompatibleProvider({
           baseUrl: "http://localhost:8080/v1"
         }),
-        fetchImpl: async () => jsonResponse({
-          choices: [
-            {
-              finish_reason: "length",
-              message: {
-                content: '{"findings":[{"severity":"P1"'
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                finish_reason: "length",
+                message: {
+                  content: '{"findings":[{"severity":"P1"'
+                }
               }
-            }
-          ]
-        })
+            ]
+          });
+        }
       }),
       fixture: makeFixture({
         id: "truncated-local-model-fixture",
@@ -894,6 +942,7 @@ describe("provider adapter fixtures", () => {
         message: "OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length)."
       }
     });
+    expect(calls).toBe(1);
   });
 
   it("extracts trailing review JSON after deeply nested non-review braces", async () => {

@@ -16,6 +16,7 @@ const EVIDENCE_PREVIEW_TRUNCATED_SENTINEL = "...[truncated]";
 const DEFAULT_OPENAI_COMPATIBLE_REVIEW_TIMEOUT_MS = 180_000;
 const DEFAULT_SCHEMA_FEEDBACK_RETRY_MAX = 2;
 const MAX_SCHEMA_FEEDBACK_RETRY_MAX = 3;
+const TRUNCATED_REVIEW_JSON_ERROR = "OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length).";
 const REDACTION_TOKENS = [
   "[redacted-private-evidence]",
   "[redacted-private-field]",
@@ -200,56 +201,65 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
       const schemaRetryErrors: string[] = [];
       try {
         for (let attempt = 0; attempt <= schemaFeedbackMax; attempt += 1) {
-          const response = await fetchImpl(buildOpenAIChatCompletionsUrl(baseUrl), {
-            method: "POST",
-            signal: timeout.signal,
-            headers: {
-              Accept: "application/json",
-              "Content-Type": "application/json",
-              ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-            },
-            body: JSON.stringify(buildOpenAICompatibleReviewRequestBody({
-              provider,
-              model: input.model,
-              prompt: input.prompt,
-              structuredOutput,
-              schemaRetryErrors
-            }))
-          });
+          try {
+            const response = await fetchImpl(buildOpenAIChatCompletionsUrl(baseUrl), {
+              method: "POST",
+              signal: timeout.signal,
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+                ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+              },
+              body: JSON.stringify(buildOpenAICompatibleReviewRequestBody({
+                provider,
+                model: input.model,
+                prompt: input.prompt,
+                structuredOutput,
+                schemaRetryErrors
+              }))
+            });
 
-          if (!response.ok) {
-            const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
-            throw new Error(openAICompatibleStatusErrorMessage(response.status, responseErrorText));
-          }
-
-          const responseText = await readResponseTextWithAbort(response, timeout.signal);
-          const parsed = parseOpenAICompatibleResponse(responseText);
-          const content = extractOpenAICompatibleMessageContent(parsed);
-          const reviewOutput = normalizeReviewJsonOutput(content);
-          if (!reviewOutput.ok) {
-            const schemaError = openAICompatibleReviewSchemaError(reviewOutput.error, parsed);
-            if (schemaRetryErrors.length >= schemaFeedbackMax) throw new Error(schemaError);
-            schemaRetryErrors.push(schemaError);
-            continue;
-          }
-
-          return {
-            text: reviewOutput.text,
-            reviewJsonValidated: true,
-            rawEvidence: {
-              providerId: options.providerId,
-              adapterId: input.adapterId,
-              model: input.model,
-              baseUrl,
-              structuredOutputMode: structuredOutput.evidenceMode,
-              schemaRetries: schemaRetryErrors.length,
-              ...(schemaRetryErrors.length > 0 ? { schemaRetryErrors } : {}),
-              status: response.status,
-              ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
-              ...extractOpenAICompatibleChoiceEvidence(parsed),
-              ...extractOpenAICompatibleUsageEvidence(parsed)
+            if (!response.ok) {
+              const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
+              throw new Error(openAICompatibleStatusErrorMessage(response.status, responseErrorText));
             }
-          };
+
+            const responseText = await readResponseTextWithAbort(response, timeout.signal);
+            const parsed = parseOpenAICompatibleResponse(responseText);
+            const content = extractOpenAICompatibleMessageContent(parsed);
+            const reviewOutput = normalizeReviewJsonOutput(content);
+            if (!reviewOutput.ok) {
+              const schemaError = openAICompatibleReviewSchemaError(reviewOutput.error, parsed);
+              if (schemaError === TRUNCATED_REVIEW_JSON_ERROR || schemaRetryErrors.length >= schemaFeedbackMax) {
+                throw new Error(schemaError);
+              }
+              schemaRetryErrors.push(schemaError);
+              continue;
+            }
+
+            return {
+              text: reviewOutput.text,
+              reviewJsonValidated: true,
+              rawEvidence: {
+                providerId: options.providerId,
+                adapterId: input.adapterId,
+                model: input.model,
+                baseUrl,
+                structuredOutputMode: structuredOutput.evidenceMode,
+                schemaRetries: schemaRetryErrors.length,
+                ...(schemaRetryErrors.length > 0 ? { schemaRetryErrors } : {}),
+                status: response.status,
+                ...(typeof parsed.id === "string" ? { responseId: parsed.id } : {}),
+                ...extractOpenAICompatibleChoiceEvidence(parsed),
+                ...extractOpenAICompatibleUsageEvidence(parsed)
+              }
+            };
+          } catch (error) {
+            if (schemaRetryErrors.length > 0 && isSharedRetryTimeoutError(error)) {
+              throw new Error(schemaRetryErrors[schemaRetryErrors.length - 1]);
+            }
+            throw error;
+          }
         }
 
         throw new Error("OpenAI-compatible review output did not produce valid review JSON after schema feedback retries.");
@@ -301,8 +311,13 @@ function buildSchemaFeedbackRetryPrompt(schemaError: string): string {
 
 function openAICompatibleReviewSchemaError(error: string, parsed: Record<string, unknown>): string {
   return extractOpenAICompatibleFinishReason(parsed) === "length"
-    ? "OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length)."
+    ? TRUNCATED_REVIEW_JSON_ERROR
     : error;
+}
+
+function isSharedRetryTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || /\b(deadline exceeded|aborted|timed?[ _-]?out|timeout)\b/i.test(error.message);
 }
 
 function resolveSchemaFeedbackRetryMax(provider: ProviderRegistryEntry): number {
