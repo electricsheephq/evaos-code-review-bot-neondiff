@@ -127,6 +127,31 @@ schema-feedback retries and fails immediately as a truncation model-output error
 that failure usually needs a smaller prompt, larger output budget, or stronger
 provider-side structured output rather than another identical reprompt.
 
+The live `BotConfig.contextBudget` field is a machine/operator preflight guard
+for provider context windows (#401). It is not part of the public repo-owned
+`.neondiff.yml` draft. Before a review calls the provider, NeonDiff estimates the
+full review prompt using `charsPerToken` and `providerFudgeFactor`, compares it
+with `providers.providers.<provider-id>.contextWindowTokens` minus
+`reservedOutputTokens`, and writes `context-budget.json` into the evidence
+packet.
+
+| Key | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `true` | Enables pre-send context-window checks when the selected provider declares `contextWindowTokens`. Providers without a configured window write `mode: "unknown_window"` evidence and continue with the legacy single-prompt path. |
+| `overflow` | `"skip" \| "chunk"` | `"skip"` | `skip` records the head as `skipped` with reason `context_budget_overflow` before any provider call. `chunk` deterministically groups changed files into budget-sized prompts along file boundaries and runs each chunk through the same review/gate path. |
+| `reservedOutputTokens` | `integer` (`>= 1`) | `4096` | Output-token reserve subtracted from the provider context window before input budgeting. |
+| `charsPerToken` | `integer` (`>= 1`) | `4` | Conservative tokenizer-free estimator denominator. |
+| `providerFudgeFactor` | `number` (`> 0`) | `1.15` | Multiplier applied after character/token estimation to leave provider-specific slack. |
+| `maxChunks` | `integer` (`>= 1`) | `8` | Fail-closed cap for chunk mode. If deterministic file-boundary chunking would exceed this count, the head is skipped instead of silently issuing unbounded provider calls. |
+
+Chunk mode preserves the posting invariants: ZCode still runs read-only, findings
+from all chunks are merged only before the existing deterministic gate, duplicate
+suppression remains per `{repo, pull, head_sha}`, and inline comments still post
+only on current RIGHT-side diff lines. A single changed file that cannot fit in
+the configured budget is skipped with reason
+`context_budget_single_file_overflow`; NeonDiff never splits a hunk or sends a
+known-over-budget chunk.
+
 ## Safety Defaults
 
 Mutation, finishing touches, issue enrichment, and public confidence percentages are default-off in this draft. A future runtime loader should fail before review starts when a repo config tries to enable unsupported unsafe behavior.

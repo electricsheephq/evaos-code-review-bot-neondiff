@@ -10,6 +10,7 @@ import {
   type CommandDecision
 } from "./commands.js";
 import { loadConfig, type BotConfig } from "./config.js";
+import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
 import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
   buildGitNexusContextPacket,
@@ -106,6 +107,32 @@ export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMe
   };
 }
 
+function resolveReviewContextWindowTokens(config: BotConfig): number | undefined {
+  const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
+  return config.providers?.providers[providerId]?.contextWindowTokens;
+}
+
+function contextBudgetEvidence(plan: ContextBudgetPlan): Record<string, unknown> {
+  return {
+    mode: plan.mode,
+    estimatedTokens: plan.estimatedTokens,
+    reservedOutputTokens: plan.reservedOutputTokens,
+    overflow: plan.overflow,
+    ...(plan.contextWindowTokens !== undefined ? { contextWindowTokens: plan.contextWindowTokens } : {}),
+    ...(plan.budgetTokens !== undefined ? { budgetTokens: plan.budgetTokens } : {}),
+    ...(plan.reason ? { reason: plan.reason } : {}),
+    ...(plan.chunks
+      ? {
+          chunks: plan.chunks.map((chunk) => ({
+            index: chunk.index,
+            filenames: chunk.filenames,
+            estimatedTokens: chunk.estimatedTokens
+          }))
+        }
+      : {})
+  };
+}
+
 export interface RunOnceOptions {
   configPath?: string;
   dryRun: boolean;
@@ -130,6 +157,7 @@ export interface RunOnceResult {
   commandReviewRequested: number;
   skippedProcessed: number;
   skippedCapacity: number;
+  skippedContextBudget: number;
   skippedProviderCooldown: number;
   skippedStaleHead: number;
   baselinedExisting: number;
@@ -205,6 +233,7 @@ export type ReviewPullResult =
   | "skipped_finishing_touch_draft"
   | "skipped_processed"
   | "skipped_capacity"
+  | "skipped_context_budget"
   | "skipped_provider_cooldown"
   | "skipped_stale_head";
 
@@ -225,6 +254,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
     case "skipped_capacity":
+    case "skipped_context_budget":
     case "skipped_provider_cooldown":
     case "skipped_stale_head":
       return false;
@@ -266,6 +296,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,
+    skippedContextBudget: 0,
     skippedProviderCooldown: 0,
     skippedStaleHead: 0,
     baselinedExisting: 0,
@@ -344,6 +375,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         if (status === "reviewed_command") result.commandReviewRequested += 1;
         if (status === "skipped_processed") result.skippedProcessed += 1;
         if (status === "skipped_capacity") result.skippedCapacity += 1;
+        if (status === "skipped_context_budget") result.skippedContextBudget += 1;
         if (status === "skipped_provider_cooldown") result.skippedProviderCooldown += 1;
         if (status === "skipped_stale_head") result.skippedStaleHead += 1;
       }
@@ -769,6 +801,8 @@ function retryStatusCommentState(
       return undefined;
     case "skipped_provider_cooldown":
       return "provider_deferred";
+    case "skipped_context_budget":
+      return "skipped";
     case "skipped_stale_head":
       return "stale_head";
     case "skipped_closed":
@@ -934,6 +968,13 @@ function retryQueuePatchForStatus(input: {
         state: "queued",
         lastError: "retry_did_not_review=skipped_capacity",
         sessionJobState: "assigned"
+      };
+    case "skipped_context_budget":
+      return {
+        state: "failed",
+        lastError: input.processedError ?? "retry_did_not_review=skipped_context_budget",
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
       };
     case "skipped_processed":
       return input.processedError && parseProviderCooldownError(input.processedError)
@@ -1439,10 +1480,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       evidenceDir
     });
 
-    const prompt = buildReviewPrompt({
+    const promptForFiles = (filesForPrompt: PullFilePatch[]) => buildReviewPrompt({
       repo,
       pull,
-      files: reviewFiles,
+      files: filesForPrompt,
       repoProfile: repoPolicy.profile,
       ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
       ...(repoMemory.packet ? { repoMemoryPacket: repoMemory.packet } : {}),
@@ -1450,6 +1491,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(githubRelatedContext.packet ? { githubRelatedContextPacket: githubRelatedContext.packet } : {}),
       maxPatchBytes: config.zcode.maxPatchBytes
     });
+    const prompt = promptForFiles(reviewFiles);
     writeRedactedJson(join(evidenceDir, "repo-profile.json"), repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "filter-impact.json"), filterImpact);
     const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
@@ -1460,27 +1502,34 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeSecureFileSync(join(evidenceDir, "review-prompt.txt"), redactSecrets(prompt));
     writeRedactedJson(join(evidenceDir, "validation-selector.json"), validation);
     writeRedactedJson(join(evidenceDir, "proof-requirements.json"), proof);
+    const contextBudget = planContextBudget({
+      prompt,
+      files: reviewFiles,
+      contextWindowTokens: resolveReviewContextWindowTokens(config),
+      config: config.contextBudget,
+      buildPrompt: promptForFiles
+    });
+    writeRedactedJson(join(evidenceDir, "context-budget.json"), contextBudgetEvidence(contextBudget));
+    if (contextBudget.mode === "skip") {
+      state.recordProcessed({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        status: "skipped",
+        error: contextBudget.reason
+      });
+      return "skipped_context_budget";
+    }
 
-    const zcodeResult = input.useZCode
-      ? await runZCodeReviewWithProviderRetry({
-          config,
-          worktreePath: worktree.path,
-          prompt,
-          evidenceDir
-        })
-      : {
-          findings: [],
-          droppedFromSchema: [],
-          rawResponse: "{\"findings\":[]}",
-          attempts: 0,
-          degradedRecovery: false,
-          runtime: {
-            provider: config.zcode.providerId,
-            model: config.zcode.model,
-            providerAttempts: 0,
-            notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
-          }
-        };
+    const zcodeResult = await runReviewWithContextBudget({
+      config,
+      worktreePath: worktree.path,
+      prompt,
+      contextBudget,
+      promptForFiles,
+      useZCode: input.useZCode,
+      evidenceDir
+    });
 
     assertGitClean(worktree.path);
 
@@ -2733,6 +2782,109 @@ function parseSelfConsistencyVerdict(rawResponse: string): SelfConsistencySecond
       ? Math.min(1, Math.max(0, parsed.confidence))
       : verified ? 1 : 0;
   return { verified, confidence };
+}
+
+async function runReviewWithContextBudget(input: {
+  config: BotConfig;
+  worktreePath: string;
+  prompt: string;
+  contextBudget: ContextBudgetPlan;
+  promptForFiles: (files: PullFilePatch[]) => string;
+  useZCode: boolean;
+  evidenceDir: string;
+}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+  if (input.contextBudget.mode === "chunk") {
+    return runChunkedZCodeReview({
+      ...input,
+      contextBudget: input.contextBudget
+    });
+  }
+
+  if (!input.useZCode) return disabledZCodeReviewResult(input.config);
+  return runZCodeReviewWithProviderRetry({
+    config: input.config,
+    worktreePath: input.worktreePath,
+    prompt: input.prompt,
+    evidenceDir: input.evidenceDir
+  });
+}
+
+async function runChunkedZCodeReview(input: {
+  config: BotConfig;
+  worktreePath: string;
+  contextBudget: Extract<ContextBudgetPlan, { mode: "chunk" }>;
+  promptForFiles: (files: PullFilePatch[]) => string;
+  useZCode: boolean;
+  evidenceDir: string;
+}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+  const startedAt = new Date();
+  const findings: ZCodeReviewResult["findings"] = [];
+  const droppedFromSchema: ZCodeReviewResult["droppedFromSchema"] = [];
+  const rawResponses: Array<{ index: number; rawResponse: string }> = [];
+  const runtimeNotes: string[] = [`Context budget chunked review executed in ${input.contextBudget.chunks.length} chunks.`];
+  let attempts = 0;
+  let degradedRecovery = false;
+  let providerAttempts = 0;
+
+  for (const chunk of input.contextBudget.chunks) {
+    const chunkDir = join(input.evidenceDir, "context-chunks", `chunk-${String(chunk.index).padStart(3, "0")}`);
+    mkdirSync(chunkDir, { recursive: true });
+    const prompt = input.promptForFiles(chunk.files);
+    writeSecureFileSync(join(chunkDir, "review-prompt.txt"), redactSecrets(prompt));
+
+    const result = input.useZCode
+      ? await runZCodeReviewWithProviderRetry({
+          config: input.config,
+          worktreePath: input.worktreePath,
+          prompt,
+          evidenceDir: chunkDir
+        })
+      : disabledZCodeReviewResult(input.config);
+
+    findings.push(...result.findings);
+    droppedFromSchema.push(...result.droppedFromSchema);
+    rawResponses.push({ index: chunk.index, rawResponse: result.rawResponse });
+    attempts += result.attempts;
+    degradedRecovery = degradedRecovery || result.degradedRecovery;
+    providerAttempts += result.runtime.providerAttempts ?? 0;
+    if (result.runtime.notes) {
+      runtimeNotes.push(...result.runtime.notes.map((note) => `chunk ${chunk.index}: ${note}`));
+    }
+  }
+
+  const completedAt = new Date();
+  return {
+    findings,
+    droppedFromSchema,
+    rawResponse: JSON.stringify({ chunks: rawResponses }),
+    attempts,
+    degradedRecovery,
+    runtime: {
+      provider: input.config.zcode.providerId,
+      model: input.config.zcode.model,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      latencyMs: completedAt.getTime() - startedAt.getTime(),
+      providerAttempts,
+      notes: runtimeNotes
+    }
+  };
+}
+
+function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } {
+  return {
+    findings: [],
+    droppedFromSchema: [],
+    rawResponse: "{\"findings\":[]}",
+    attempts: 0,
+    degradedRecovery: false,
+    runtime: {
+      provider: config.zcode.providerId,
+      model: config.zcode.model,
+      providerAttempts: 0,
+      notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+    }
+  };
 }
 
 async function runZCodeReviewWithProviderRetry(input: {

@@ -464,6 +464,7 @@ function runOnceResult(overrides: Partial<RunOnceResult> = {}): RunOnceResult {
     commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,
+    skippedContextBudget: 0,
     skippedProviderCooldown: 0,
     skippedStaleHead: 0,
     baselinedExisting: 0,
