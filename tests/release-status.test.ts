@@ -1462,6 +1462,9 @@ describe("beta release status", () => {
       expect(manifest.licenseApi.detail).toContain(
         "checkoutIssuanceRequiredForThisRelease:false is only allowed for source-beta releases"
       );
+      expect(manifest.licenseApi.detail).not.toContain(
+        "checkoutIssuanceState must be a deferred state when checkout issuance proof is deferred"
+      );
       expect(manifest.ok).toBe(false);
     }
   });

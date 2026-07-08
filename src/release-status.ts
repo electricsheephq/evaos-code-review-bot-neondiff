@@ -1075,6 +1075,9 @@ function validateLicenseIssuanceProof(input: {
     failures.push(`url must match ${input.expectedUrl}`);
   }
   if (method !== "POST") failures.push("method must be POST");
+  // This manifest proof is the no-secret release gate: unauthenticated issuance
+  // must fail closed. Authenticated issuance smoke uses owner-held secrets and
+  // belongs in the deploy runbook/evidence lane, not committed manifest JSON.
   if (statusCode !== 401) failures.push("statusCode must be 401");
   const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
   if (!observedAt || Number.isNaN(observedAtMs)) {
@@ -1156,11 +1159,13 @@ function validateLicenseIssuanceMetadata(input: {
   if (input.deferralPolicyApplies && input.issuanceRequiredExplicit === false) {
     if (input.releaseLevel !== "source-beta") {
       failures.push("checkoutIssuanceRequiredForThisRelease:false is only allowed for source-beta releases");
-    } else if (!input.issuanceTrackingIssue) {
-      failures.push("checkoutIssuanceTrackingIssue must be present when checkout issuance proof is deferred");
-    }
-    if (!input.issuanceState || !CHECKOUT_ISSUANCE_DEFERRED_STATES.has(input.issuanceState)) {
-      failures.push("checkoutIssuanceState must be a deferred state when checkout issuance proof is deferred");
+    } else {
+      if (!input.issuanceTrackingIssue) {
+        failures.push("checkoutIssuanceTrackingIssue must be present when checkout issuance proof is deferred");
+      }
+      if (!input.issuanceState || !CHECKOUT_ISSUANCE_DEFERRED_STATES.has(input.issuanceState)) {
+        failures.push("checkoutIssuanceState must be a deferred state when checkout issuance proof is deferred");
+      }
     }
   }
   if (input.proofRequired && input.issuanceState && CHECKOUT_ISSUANCE_DEFERRED_STATES.has(input.issuanceState)) {
