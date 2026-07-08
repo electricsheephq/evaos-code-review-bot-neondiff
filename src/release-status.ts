@@ -1174,11 +1174,17 @@ function validateLicenseIssuanceMetadata(input: {
     if (trackingIssueFailure) failures.push(trackingIssueFailure);
   }
   if (input.issuanceUrl) {
+    // Pin checkout issuance to the health host when a valid health URL exists.
+    // Source-beta can still prove the fail-closed issuance endpoint while
+    // health is deferred; that posture relies on URL shape plus proof content,
+    // and must not be described as end-to-end checkout fulfillment.
     const expectedHost = extractValidHealthUrlHost(input.healthUrl);
     const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl, expectedHost);
     if (issuanceUrlFailure) failures.push(issuanceUrlFailure);
   }
   if (input.issuanceProofPath && !input.proofRequired) {
+    // Required-proof path confinement is enforced inside
+    // validateLicenseIssuanceProof before the proof file is read.
     const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.issuanceProofPath, "checkoutIssuanceProofPath");
     if (!confinedPath.ok) failures.push(`invalid checkout issuance proof ${input.issuanceProofPath}: ${confinedPath.detail}`);
   }
