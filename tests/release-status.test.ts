@@ -1472,6 +1472,57 @@ describe("beta release status", () => {
     expect(manifest.ok).toBe(false);
   });
 
+  it("blocks checkout issuance host validation when healthUrl is invalid", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-issuance-invalid-health-url-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeChangelogHead(root);
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "pending",
+        healthUrl: "not-a-healthz-url",
+        checkoutIssuanceRequiredForThisRelease: true,
+        checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1"
+    });
+
+    expect(manifest.licenseApi.detail).toContain("healthUrl must be an https URL ending in /healthz");
+    expect(manifest.licenseApi.detail).toContain(
+      "checkoutIssuanceUrl host cannot be validated because healthUrl is missing or invalid"
+    );
+    expect(manifest.ok).toBe(false);
+  });
+
   it("blocks required healthy license API gates when healthProofPath leaves docs/evidence", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-outside-health-proof-"));
     roots.push(root);

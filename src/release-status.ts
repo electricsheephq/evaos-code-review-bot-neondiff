@@ -617,7 +617,7 @@ export function readPublicReleaseManifestStatus(input: {
       deferralPolicyApplies: licenseNeedsHealthProof,
       issuanceRequiredExplicit: explicitLicenseIssuanceRequired,
       releaseLevel,
-      expectedHost: extractUrlHost(licenseHealthUrl)
+      healthUrl: licenseHealthUrl
     });
     const licenseIssuanceProof = licenseNeedsIssuanceProof
       ? validateLicenseIssuanceProof({
@@ -1131,7 +1131,7 @@ function validateLicenseIssuanceMetadata(input: {
   deferralPolicyApplies: boolean;
   issuanceRequiredExplicit?: boolean;
   releaseLevel: string;
-  expectedHost?: string;
+  healthUrl?: string;
 }): string[] {
   const failures: string[] = [];
   if (input.proofRequired && !input.issuanceUrl) {
@@ -1152,8 +1152,12 @@ function validateLicenseIssuanceMetadata(input: {
     if (trackingIssueFailure) failures.push(trackingIssueFailure);
   }
   if (input.issuanceUrl) {
-    const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl, input.expectedHost);
+    const expectedHost = extractValidHealthUrlHost(input.healthUrl);
+    const issuanceUrlFailure = validateLicenseIssuanceUrl(input.issuanceUrl, expectedHost);
     if (issuanceUrlFailure) failures.push(issuanceUrlFailure);
+    if (!expectedHost) {
+      failures.push("checkoutIssuanceUrl host cannot be validated because healthUrl is missing or invalid");
+    }
   }
   if (input.issuanceProofPath && !input.proofRequired) {
     const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.issuanceProofPath, "checkoutIssuanceProofPath");
@@ -1210,6 +1214,11 @@ function extractUrlHost(url?: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function extractValidHealthUrlHost(healthUrl?: string): string | undefined {
+  if (!healthUrl || validateLicenseHealthUrl(healthUrl)) return undefined;
+  return extractUrlHost(healthUrl);
 }
 
 function validateLicenseIssuanceUrl(issuanceUrl: string, expectedHost?: string): string | undefined {
