@@ -104,8 +104,9 @@ import {
   type ReviewQueueJobState
 } from "./state.js";
 import { readOutcomeObserverInput, recordNegativeControlLabels, runOutcomeObserverFromInput } from "./outcome-observer.js";
-import { writeCalibrationAggregatePacket } from "./calibration-aggregate.js";
+import { aggregateCalibrationLabels, writeCalibrationAggregatePacket } from "./calibration-aggregate.js";
 import { runCalibrationPromotion } from "./calibration-promote.js";
+import { writePrecisionBadgeEndpoint } from "./precision-badge.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
@@ -1656,6 +1657,35 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "badge") {
+    if (args.output === undefined || (Array.isArray(args.output) && args.output.length === 0)) {
+      throw new Error("--output is required for badge");
+    }
+    const config = loadConfig(args.config ? parseSingleArg(args.config, "--config") : undefined);
+    const repo = args.repo ? parseSingleArg(args.repo, "--repo") : undefined;
+    const store = new ReviewStateStore(config.statePath);
+    try {
+      const labels = store.listFindingOutcomeLabels(repo ? { repo } : {});
+      const aggregate = aggregateCalibrationLabels(labels);
+      const result = writePrecisionBadgeEndpoint({
+        aggregate,
+        publicDisplay: config.confidenceCalibration?.publicDisplay,
+        outputPath: parseSingleArg(args.output, "--output")
+      });
+      console.log(stringifyRedactedJson({
+        command: "badge",
+        ...result,
+        message: result.badge.message,
+        color: result.badge.color,
+        ...(repo ? { repo } : {})
+      }));
+      if (!result.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+    return;
+  }
+
   if (command === "run-once" || command === "review-pr") {
     if (command === "review-pr" && (!args.repo || !args.pr)) {
       console.log(JSON.stringify({
@@ -2924,6 +2954,14 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     description: "Print the redacted local pricing/cost model output.",
     flags: []
   },
+  badge: {
+    description: "Write a Shields endpoint JSON precision badge from the calibration aggregate gate.",
+    flags: [
+      { name: "--config", description: "Path to the config file (default config.local.json)." },
+      { name: "--repo", description: "Optional repo scope for outcome labels, owner/name." },
+      { name: "--output", description: "Path to write the Shields endpoint JSON (required)." }
+    ]
+  },
   doctor: {
     description: "Check repo read access, provider env, and issue-enrichment readiness (add `github` for GitHub-only checks).",
     flags: [
@@ -3013,6 +3051,7 @@ function buildHelp(command?: string) {
         "config inspect",
         "config patch",
         "pricing",
+        "badge",
         "providers list",
         "providers doctor",
         "doctor",
@@ -3069,7 +3108,8 @@ function buildHelp(command?: string) {
         "review-mode",
         "outcome-observe",
         "calibration-aggregate",
-        "calibration-promote"
+        "calibration-promote",
+        "badge"
       ]
     },
     examples: [
@@ -3078,6 +3118,7 @@ function buildHelp(command?: string) {
       "neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true",
       "desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}",
       "neondiff pricing",
+      "neondiff badge --config config.local.json --output docs/badges/precision.json",
       "neondiff providers list --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
@@ -3123,6 +3164,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts outcome-observe --config /path/to/live.json --input /path/to/outcome-observer-input.json --dry-run true --output-dir /path/to/evidence/outcome-observe-run",
       "npx tsx src/cli.ts calibration-aggregate --config /path/to/live.json --output-dir /path/to/evidence/calibration-aggregate-run",
       "npx tsx src/cli.ts calibration-promote --input /path/to/evidence/calibration-aggregate-run/aggregate-calibration.json --output-dir /path/to/evidence/calibration-promote-run --confirm true",
+      "npx tsx src/cli.ts badge --config /path/to/live.json --repo owner/repo --output docs/badges/precision.json",
       "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ],

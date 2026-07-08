@@ -22,13 +22,16 @@ review posts findings
 2. calibration-aggregate  — labels → per-bin precision + Wilson lower bounds
         │
         ▼
+2b. precision badge       — aggregate → Shields endpoint JSON, gray until gated
+        │
+        ▼
 3. calibration-promote    — evidence numbers → reviewable config patch (human-gated)
         │
         ▼
 4. manual human edit      — flipping publicDisplay.mode is never automated
 ```
 
-Steps 1–3 are CLI commands. Step 4 is deliberately not.
+Steps 1–3 and badge regeneration are CLI commands. Step 4 is deliberately not.
 
 ## 1. Observe Outcomes: `neondiff outcome-observe`
 
@@ -109,6 +112,33 @@ neondiff calibration-aggregate \
 This step is read-only with respect to behavior: it evaluates the
 public-confidence floors and reports eligibility, but never mutates config and
 never switches the public display.
+
+### Regenerating The Precision Badge Endpoint
+
+After each aggregate run, regenerate the static Shields endpoint JSON:
+
+```bash
+mkdir -p docs/badges
+neondiff badge \
+  --config config.local.json \
+  --output docs/badges/precision.json
+```
+
+The badge command is safe to run before calibration is earned. When the
+aggregate is empty, below the public-confidence gate, or still paired with
+`confidenceCalibration.publicDisplay.mode: "uncalibrated"`, the endpoint must
+remain gray with a `calibrating (n=...)` message. A public percentage can appear
+only when the aggregate passes the same floors listed below and a human has
+manually flipped public display mode to `"calibrated"`.
+
+The generated JSON is self-attested evidence, not a third-party benchmark: it
+reports what NeonDiff's own calibration aggregate currently proves. The
+generator is deliberately un-inflatable by tooling: it does not accept a
+percentage override, does not write public display mode, and must fall back to
+gray when the proof boundary is not met. Treat manual edits that add or raise a
+percentage as invalid; regenerate from the aggregate instead. See
+[precision-badge.md](precision-badge.md) for the public README snippet and
+review rules.
 
 ## 3. Promote Evidence: `neondiff calibration-promote`
 
