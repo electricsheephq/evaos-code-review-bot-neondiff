@@ -529,6 +529,7 @@ describe("provider adapter fixtures", () => {
 
   it("retries malformed OpenAI-compatible review JSON with schema feedback and records retry evidence", async () => {
     const calls: unknown[] = [];
+    const signals: AbortSignal[] = [];
     const result = await runProviderAdapterFixture({
       adapter: createOpenAICompatibleReviewAdapter({
         providerId: "schema-feedback-local",
@@ -537,6 +538,7 @@ describe("provider adapter fixtures", () => {
           structuredOutputMode: "none"
         }),
         fetchImpl: async (_url, init) => {
+          signals.push(init?.signal as AbortSignal);
           const body = JSON.parse(String(init?.body)) as {
             messages?: Array<{ role?: string; content?: string }>;
           };
@@ -580,8 +582,55 @@ describe("provider adapter fixtures", () => {
 
     expect(result.ok).toBe(true);
     expect(calls).toHaveLength(2);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]).toBe(signals[0]);
     expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":1');
     expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output was not a parseable JSON review object."]');
+  });
+
+  it("does not retry malformed review JSON when schema feedback is disabled", async () => {
+    const calls: unknown[] = [];
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-disabled-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 0,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as {
+            messages?: Array<{ role?: string; content?: string }>;
+          };
+          calls.push(body);
+          expect(body.messages).toHaveLength(2);
+          return jsonResponse({
+            id: "malformed-disabled",
+            choices: [
+              {
+                message: {
+                  content: "not json"
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-disabled-fixture",
+        providerId: "schema-feedback-disabled-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "Adapter output was not a parseable JSON review object."
+      }
+    });
   });
 
   it("exhausts bounded schema-feedback retries without changing the model-output error class", async () => {

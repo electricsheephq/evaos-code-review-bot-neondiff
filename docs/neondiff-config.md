@@ -117,10 +117,11 @@ OpenAI-compatible provider entries may also set `retrySchemaFeedbackMax`
 or JSON that fails the canonical findings schema, NeonDiff can reprompt the same
 chat-completions conversation with only the exact schema error and the canonical
 findings schema. The retry loop uses the same provider timeout as the original
-review call, records `schemaRetries` and redacted `schemaRetryErrors` in adapter
-evidence, and falls back to the existing model-output/provider-deferred path
-after the bounded attempts are exhausted. Set the value to `0` to disable this
-adapter-level recovery behavior.
+review call as one total wall-clock budget across all attempts, records
+`schemaRetries` and redacted `schemaRetryErrors` in adapter evidence, and falls
+back to the existing model-output/provider-deferred path after the bounded
+attempts are exhausted. Set the value to `0` to disable this adapter-level
+recovery behavior.
 
 ## Safety Defaults
 
