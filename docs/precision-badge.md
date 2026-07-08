@@ -20,6 +20,10 @@ The `n` denominator counts validated findings only. It excludes explicit-control
 and unvalidated outcome labels so the public badge denominator matches the
 calibration aggregate used for the precision gate.
 
+When calibrated display is enabled, the percentage is the aggregate-wide Wilson
+lower bound over the same validated findings counted by `n`, floored to a whole
+percent for display.
+
 ## Public Percentage Gate
 
 No public percentage may appear in `docs/badges/precision.json` unless all of
@@ -37,6 +41,10 @@ these are true:
 If any condition is missing, stale, malformed, or below threshold, the badge
 falls back to gray `calibrating (n=...)`. The tool must not expose raw confidence
 values, model self-ratings, or a best-case estimate as a public precision claim.
+
+The checked-in `docs/badges/precision.json` starts as a below-gate placeholder
+with `n=0`. After main has a real aggregate packet available, regenerate and
+commit the file from the outcome-label store rather than hand-editing the count.
 
 ## Generate The Endpoint JSON
 

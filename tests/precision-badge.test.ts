@@ -29,8 +29,17 @@ const PASSING_AGGREGATE = {
   labeledFindings: 120,
   p0p1Labels: 35,
   negativeControlScenarios: 12,
-  bins: [],
-  bestWilsonLowerBound: 0.956,
+  bins: [
+    {
+      minConfidence: 0.8,
+      maxConfidence: 1,
+      findings: 120,
+      matched: 119,
+      empiricalPrecision: 119 / 120,
+      rawWilsonLowerBound: 0.9543025846256779
+    }
+  ],
+  bestWilsonLowerBound: 0.9543025846256779,
   categoryPrecision: [],
   thresholds: {
     minLabeledFindings: 100,
@@ -53,7 +62,7 @@ const CALIBRATED_POLICY = {
   minNegativeControlScenarios: 10,
   negativeControlScenarios: 12,
   minWilsonLowerBound: 0.95,
-  wilsonLowerBound: 0.956
+  wilsonLowerBound: 0.9543025846256779
 };
 
 describe("precision badge endpoint (#425)", () => {
@@ -136,7 +145,8 @@ describe("precision badge endpoint (#425)", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.wilsonLowerBound).toBe(0.956);
+    expect(result.wilsonLowerBound).toBe(0.9543025846256779);
+    expect(result.displayWilsonLowerBound).toBe(0.9543025846256779);
     expect(existsSync(output)).toBe(true);
     const parsed = JSON.parse(readFileSync(output, "utf8"));
     expect(parsed).toEqual({
@@ -177,6 +187,7 @@ describe("precision badge endpoint (#425)", () => {
       message: "calibrating (n=1)",
       publicMode: "uncalibrated"
     });
+    expect(parsed).not.toHaveProperty("badge");
     expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
       schemaVersion: 1,
       label: "NeonDiff precision",
@@ -184,4 +195,59 @@ describe("precision badge endpoint (#425)", () => {
       color: "lightgrey"
     });
   });
+
+  it("exposes a CLI calibrated path that writes the green percentage badge from config publicDisplay", () => {
+    const dir = mkdtempSync(join(tmpdir(), "neondiff-badge-cli-calibrated-"));
+    roots.push(dir);
+    const configPath = join(dir, "config.json");
+    const outputPath = join(dir, "public", "precision.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(dir, "runtime"),
+      statePath: join(dir, "state.sqlite"),
+      evidenceDir: join(dir, "evidence"),
+      confidenceCalibration: {
+        publicDisplay: CALIBRATED_POLICY
+      }
+    })}\n`);
+    const store = new ReviewStateStore(join(dir, "state.sqlite"));
+    for (let i = 0; i < 119; i += 1) {
+      store.recordFindingOutcomeLabel(label({ confidence: 0.9, verdict: "true_positive" }));
+    }
+    store.recordFindingOutcomeLabel(label({ confidence: 0.9, verdict: "false_positive" }));
+    for (let i = 0; i < 12; i += 1) {
+      store.recordFindingOutcomeLabel(label({
+        confidence: 0,
+        verdict: "unvalidated",
+        labelSource: "explicit_control"
+      }));
+    }
+    store.close();
+
+    const output = execFileSync(process.execPath, [
+      tsxCli, "src/cli.ts", "badge", "--config", configPath, "--repo", "owner/repo", "--output", outputPath
+    ], { cwd: process.cwd(), encoding: "utf8" });
+
+    const parsed = JSON.parse(output);
+    expect(parsed).toMatchObject({
+      command: "badge",
+      ok: true,
+      outputPath,
+      repo: "owner/repo",
+      label: "NeonDiff precision",
+      schemaVersion: 1,
+      message: "95% (n=120)",
+      color: "green",
+      publicMode: "calibrated",
+      allowed: true,
+      labeledFindings: 120
+    });
+    expect(parsed).not.toHaveProperty("badge");
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      label: "NeonDiff precision",
+      message: "95% (n=120)",
+      color: "green"
+    });
+  }, 15_000);
 });

@@ -24,6 +24,7 @@ export interface PrecisionBadgeResult {
   missingThresholds: PublicConfidencePolicyEvaluation["missingThresholds"];
   labeledFindings: number;
   wilsonLowerBound: number;
+  displayWilsonLowerBound: number;
   proofBoundary: string;
 }
 
@@ -52,7 +53,7 @@ function badgeForEvaluation(
   return {
     schemaVersion: 1,
     label: "NeonDiff precision",
-    message: `${formatConservativePercent(aggregate.bestWilsonLowerBound)}% (n=${n})`,
+    message: `${formatConservativePercent(aggregateWilsonLowerBound(aggregate))}% (n=${n})`,
     color: "green"
   };
 }
@@ -75,7 +76,8 @@ export function writePrecisionBadgeEndpoint(input: {
     missingThresholds: evaluation.missingThresholds,
     labeledFindings: input.aggregate.labeledFindings,
     wilsonLowerBound: input.aggregate.bestWilsonLowerBound,
-    proofBoundary: "Shields endpoint badge only. Percentages render only when the existing public-confidence gate passes and publicDisplay.mode is human-flipped to calibrated."
+    displayWilsonLowerBound: aggregateWilsonLowerBound(input.aggregate),
+    proofBoundary: "Shields endpoint badge only. Percentages render only when the existing public-confidence gate passes and publicDisplay.mode is human-flipped to calibrated. The displayed percentage is the aggregate-wide Wilson lower bound over validated findings."
   };
 }
 
@@ -95,4 +97,20 @@ function evaluatePrecisionBadgePolicy(input: {
 function formatConservativePercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, Math.floor(value * 100)));
+}
+
+function aggregateWilsonLowerBound(aggregate: CalibrationAggregate): number {
+  const findings = aggregate.bins.reduce((sum, bin) => sum + bin.findings, 0);
+  const matched = aggregate.bins.reduce((sum, bin) => sum + bin.matched, 0);
+  return wilsonLowerBound95(matched, findings);
+}
+
+function wilsonLowerBound95(successes: number, total: number): number {
+  if (!Number.isFinite(successes) || !Number.isFinite(total) || total <= 0 || successes < 0 || successes > total) return 0;
+  const z = 1.96;
+  const p = successes / total;
+  const denominator = 1 + z ** 2 / total;
+  const centre = p + z ** 2 / (2 * total);
+  const margin = z * Math.sqrt((p * (1 - p) + z ** 2 / (4 * total)) / total);
+  return Math.max(0, (centre - margin) / denominator);
 }

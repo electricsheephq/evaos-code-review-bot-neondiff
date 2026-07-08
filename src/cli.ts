@@ -1674,7 +1674,17 @@ async function main(): Promise<void> {
       });
       console.log(stringifyRedactedJson({
         command: "badge",
-        ...result,
+        ok: result.ok,
+        outputPath: result.outputPath,
+        publicMode: result.publicMode,
+        allowed: result.allowed,
+        missingThresholds: result.missingThresholds,
+        labeledFindings: result.labeledFindings,
+        wilsonLowerBound: result.wilsonLowerBound,
+        displayWilsonLowerBound: result.displayWilsonLowerBound,
+        proofBoundary: result.proofBoundary,
+        schemaVersion: result.badge.schemaVersion,
+        label: result.badge.label,
         message: result.badge.message,
         color: result.badge.color,
         ...(repo ? { repo } : {})
