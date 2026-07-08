@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import type { BotConfig } from "./config.js";
 import { getLicenseStatus, type LicenseStatusResult } from "./license.js";
+import { writeSecureFileSync } from "./temp-files.js";
 import {
   doctorProviderRegistry,
   type ProviderDoctorCheck,
@@ -587,9 +588,9 @@ export async function runLocalDashboardPreviewSmoke(input: {
     const statusPath = join(outputDir, "dashboard-status.json");
     const providerVerifyPath = join(outputDir, "provider-verify.json");
     const packetPath = join(outputDir, "preview-smoke.json");
-    writeFileSync(htmlPath, redactSecrets(html));
-    writeFileSync(statusPath, stringifyRedactedJson(JSON.parse(statusText)));
-    writeFileSync(providerVerifyPath, stringifyRedactedJson(JSON.parse(providerVerifyText)));
+    writeSecureFileSync(htmlPath, redactSecrets(html));
+    writeSecureFileSync(statusPath, stringifyRedactedJson(JSON.parse(statusText)));
+    writeSecureFileSync(providerVerifyPath, stringifyRedactedJson(JSON.parse(providerVerifyText)));
 
     const statusScriptRendered = html.includes('id="dashboard-status"');
     const controlsRendered =
@@ -624,7 +625,7 @@ export async function runLocalDashboardPreviewSmoke(input: {
       settledUiState,
       proofBoundary: "Preview/browser smoke proves the local HTML dashboard routes and controls only; it does not prove signed Mac app behavior, updater, TCC, customer readiness, or GA."
     };
-    writeFileSync(packetPath, stringifyRedactedJson(result));
+    writeSecureFileSync(packetPath, stringifyRedactedJson(result));
     return JSON.parse(stringifyRedactedJson(result)) as LocalDashboardPreviewSmokeResult;
   } finally {
     await closeServer(handle.server);
