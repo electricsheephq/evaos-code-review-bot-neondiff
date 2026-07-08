@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
 import { buildReviewBudgetStatus, type ReviewBudgetStatus } from "./review-budget.js";
+import { containsSecretLikeText } from "./secrets.js";
 import { parseProviderCooldownError, PROVIDER_COOLDOWN_ERROR_PREFIX } from "./state.js";
 import { buildZCodeTimeoutInspectCommand, summarizeZCodeTimeoutErrors, ZCODE_TIMEOUT_ERROR_PREFIX } from "./zcode-timeout.js";
 import type { BotConfig } from "./config.js";
@@ -128,6 +129,7 @@ export interface PublicReleaseStatus {
     checkoutIssuanceRequiredDeclaredForThisRelease?: boolean;
     checkoutIssuanceUrl?: string;
     checkoutIssuanceProofPath?: string;
+    checkoutIssuanceAuthenticatedProofPath?: string;
     checkoutIssuanceState?: string;
     checkoutIssuanceTrackingIssue?: string;
   };
@@ -204,6 +206,28 @@ const CHECKOUT_ISSUANCE_DEFERRED_STATES = new Set(["deferred", "pending_secret_a
 const CHECKOUT_ISSUANCE_STATES = new Set([
   CHECKOUT_ISSUANCE_READY_STATE,
   ...CHECKOUT_ISSUANCE_DEFERRED_STATES
+]);
+const CHECKOUT_ISSUANCE_LOOKUP_KEYS = new Set([
+  "neondiff_monthly",
+  "neondiff_yearly",
+  "neondiff_org_yearly"
+]);
+const AUTHENTICATED_CHECKOUT_PROOF_FIELDS = new Set([
+  "evidenceKind",
+  "releaseVersion",
+  "observedAt",
+  "method",
+  "url",
+  "statusCode",
+  "redactedResponse",
+  "captureContext"
+]);
+const AUTHENTICATED_CHECKOUT_REDACTED_RESPONSE_FIELDS = new Set([
+  "status",
+  "replayed",
+  "checkoutLookupKey",
+  "issuedLicensePrefix",
+  "issuedLicenseFingerprint"
 ]);
 const GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES = new Set([
   ...REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES,
@@ -598,6 +622,7 @@ export function readPublicReleaseManifestStatus(input: {
       releaseRequiresCheckoutIssuance && !sourceBetaExplicitlyDefersCheckoutIssuance;
     const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
     const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
+    const licenseIssuanceAuthenticatedProofPath = readString(licenseApi.checkoutIssuanceAuthenticatedProofPath);
     const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
     const licenseIssuanceTrackingIssue = readString(licenseApi.checkoutIssuanceTrackingIssue);
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
@@ -640,16 +665,31 @@ export function readPublicReleaseManifestStatus(input: {
         })
       : { ok: true, detail: "" };
     const licenseIssuanceProofOk = licenseIssuanceProof.ok;
+    const licenseNeedsAuthenticatedIssuanceProof = licenseNeedsIssuanceProof && releaseLevel === "stable";
+    const licenseShouldValidateAuthenticatedIssuanceProof =
+      licenseNeedsAuthenticatedIssuanceProof || licenseIssuanceAuthenticatedProofPath !== undefined;
+    const licenseIssuanceAuthenticatedProof = licenseShouldValidateAuthenticatedIssuanceProof
+      ? validateAuthenticatedLicenseIssuanceProof({
+          cwd: input.cwd,
+          proofPath: licenseIssuanceAuthenticatedProofPath,
+          expectedReleaseVersion: expectedVersion,
+          expectedUrl: licenseIssuanceUrl,
+          now: input.now
+        })
+      : { ok: true, detail: "" };
+    const licenseIssuanceAuthenticatedProofOk = licenseIssuanceAuthenticatedProof.ok;
     const licenseMetadataFailures = licenseHealthMetadataFailures.concat(licenseIssuanceMetadataFailures);
     const licenseMetadataOk = licenseMetadataFailures.length === 0;
     const licenseOk =
       isLicenseApiStateAcceptable(licenseState, licenseRequired) &&
       licenseMetadataOk &&
       licenseHealthProofOk &&
-      licenseIssuanceProofOk;
+      licenseIssuanceProofOk &&
+      licenseIssuanceAuthenticatedProofOk;
     const licenseDetailParts = [
       ...(licenseNeedsHealthProof ? [licenseHealthProof.detail] : []),
       ...(licenseNeedsIssuanceProof ? [licenseIssuanceProof.detail] : []),
+      ...(licenseShouldValidateAuthenticatedIssuanceProof ? [licenseIssuanceAuthenticatedProof.detail] : []),
       ...licenseMetadataFailures
     ].filter(Boolean);
     const declaredChannelNames = Object.keys(updateChannels);
@@ -732,6 +772,7 @@ export function readPublicReleaseManifestStatus(input: {
         checkoutIssuanceRequiredDeclaredForThisRelease: explicitLicenseIssuanceRequired,
         checkoutIssuanceUrl: licenseIssuanceUrl,
         checkoutIssuanceProofPath: licenseIssuanceProofPath,
+        checkoutIssuanceAuthenticatedProofPath: licenseIssuanceAuthenticatedProofPath,
         checkoutIssuanceState: licenseIssuanceState,
         checkoutIssuanceTrackingIssue: licenseIssuanceTrackingIssue,
         detail: licenseOk
@@ -1112,6 +1153,118 @@ function validateLicenseIssuanceProof(input: {
     : { ok: true, detail: `validated checkout issuance proof ${input.proofPath}` };
 }
 
+function validateAuthenticatedLicenseIssuanceProof(input: {
+  cwd: string;
+  proofPath?: string;
+  expectedReleaseVersion?: string;
+  expectedUrl?: string;
+  now?: Date;
+}): { ok: boolean; detail: string } {
+  if (!input.proofPath) {
+    return {
+      ok: false,
+      detail: "missing authenticated checkout issuance proof path (no checkoutIssuanceAuthenticatedProofPath declared)"
+    };
+  }
+  if (containsSecretLikeText(input.proofPath)) {
+    return {
+      ok: false,
+      detail: "invalid authenticated checkout issuance proof path: checkoutIssuanceAuthenticatedProofPath must not contain secret-like text"
+    };
+  }
+  const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.proofPath, "checkoutIssuanceAuthenticatedProofPath");
+  if (!confinedPath.ok) {
+    return { ok: false, detail: `invalid authenticated checkout issuance proof ${input.proofPath}: ${confinedPath.detail}` };
+  }
+  const absolutePath = confinedPath.absolutePath;
+  if (!existsSync(absolutePath)) return { ok: false, detail: `missing authenticated checkout issuance proof ${input.proofPath}` };
+
+  let proof: Record<string, unknown>;
+  try {
+    proof = asRecord(JSON.parse(readFileSync(absolutePath, "utf8")));
+  } catch {
+    return { ok: false, detail: `invalid authenticated checkout issuance proof ${input.proofPath}: proof JSON is invalid` };
+  }
+
+  const evidenceKind = readString(proof.evidenceKind);
+  const releaseVersion = readString(proof.releaseVersion);
+  const observedAt = readString(proof.observedAt);
+  const method = readString(proof.method);
+  const url = readString(proof.url);
+  const statusCode = typeof proof.statusCode === "number" ? proof.statusCode : undefined;
+  const redactedResponse = asRecord(proof.redactedResponse);
+  const responseStatus = readString(redactedResponse.status);
+  const replayed = typeof redactedResponse.replayed === "boolean" ? redactedResponse.replayed : undefined;
+  const checkoutLookupKey = readString(redactedResponse.checkoutLookupKey);
+  const issuedLicensePrefix = readString(redactedResponse.issuedLicensePrefix);
+  const issuedLicenseFingerprint = readString(redactedResponse.issuedLicenseFingerprint);
+  const captureContext = asRecord(proof.captureContext);
+  const captureTool = readString(captureContext.tool);
+  const captureTransport = readString(captureContext.transport);
+  const captureTlsValidation = readString(captureContext.tlsValidation);
+  const captureHost = readString(captureContext.capturedFrom);
+  const failures: string[] = [];
+  const unexpectedProofKeys = collectUnexpectedKeys(proof, AUTHENTICATED_CHECKOUT_PROOF_FIELDS);
+  const unexpectedRedactedResponseKeys = collectUnexpectedKeys(
+    redactedResponse,
+    AUTHENTICATED_CHECKOUT_REDACTED_RESPONSE_FIELDS
+  );
+
+  if (evidenceKind !== "license_api_checkout_issuance_authenticated") {
+    failures.push("evidenceKind must be license_api_checkout_issuance_authenticated");
+  }
+  if (unexpectedProofKeys.length > 0) failures.push("proof must contain only allowed top-level fields");
+  if (unexpectedRedactedResponseKeys.length > 0) failures.push("redactedResponse must contain only allowed fields");
+  if (!input.expectedReleaseVersion) {
+    failures.push("expected releaseVersion must be present");
+  } else if (releaseVersion !== input.expectedReleaseVersion) {
+    failures.push(`releaseVersion must match ${input.expectedReleaseVersion}`);
+  }
+  if (!input.expectedUrl) {
+    failures.push("checkoutIssuanceUrl must be present when validating authenticated checkout issuance proof");
+  } else if (url !== input.expectedUrl) {
+    failures.push(`url must match ${input.expectedUrl}`);
+  }
+  if (method !== "POST") failures.push("method must be POST");
+  if (statusCode !== 200) failures.push("statusCode must be 200");
+  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
+  if (!isPlainRecord(proof.redactedResponse)) failures.push("redactedResponse must be present");
+  if (responseStatus !== "issued") failures.push("redactedResponse.status must be issued");
+  if (replayed === undefined) failures.push("redactedResponse.replayed must be boolean");
+  if (!checkoutLookupKey || !CHECKOUT_ISSUANCE_LOOKUP_KEYS.has(checkoutLookupKey)) {
+    failures.push(`redactedResponse.checkoutLookupKey must be one of ${Array.from(CHECKOUT_ISSUANCE_LOOKUP_KEYS).join(", ")}`);
+  }
+  if (issuedLicensePrefix !== "nd_live_") failures.push("redactedResponse.issuedLicensePrefix must be nd_live_");
+  if (!issuedLicenseFingerprint || !/^sha256:[a-f0-9]{64}$/.test(issuedLicenseFingerprint)) {
+    failures.push("redactedResponse.issuedLicenseFingerprint must be sha256:<64 lowercase hex chars>");
+  }
+  if (Object.prototype.hasOwnProperty.call(proof, "responseBody")) {
+    failures.push("responseBody must be omitted from authenticated proof");
+  }
+  if (Object.prototype.hasOwnProperty.call(proof, "responseBodySha256")) {
+    failures.push("responseBodySha256 must be omitted from authenticated proof");
+  }
+  const forbiddenKeys = collectForbiddenAuthenticatedProofKeys(proof);
+  if (forbiddenKeys.length > 0) {
+    failures.push("proof must omit sensitive field names");
+  }
+  const serializedProof = JSON.stringify(proof);
+  if (/LICENSE_ISSUANCE_SECRET/i.test(serializedProof)) {
+    failures.push("proof must not mention owner-held issuance secret names");
+  }
+  if (/\bBearer\s+[A-Za-z0-9._~+/=-]+/i.test(serializedProof) || containsSecretLikeText(serializedProof)) {
+    failures.push("proof must not contain secret-like text");
+  }
+  if (!captureTool) failures.push("captureContext.tool must be present");
+  if (!captureTransport) failures.push("captureContext.transport must be present");
+  if (!captureTlsValidation) failures.push("captureContext.tlsValidation must be present");
+  if (!captureHost) failures.push("captureContext.capturedFrom must be present");
+
+  return failures.length
+    ? { ok: false, detail: `invalid authenticated checkout issuance proof ${input.proofPath}: ${failures.join("; ")}` }
+    : { ok: true, detail: `validated authenticated checkout issuance proof ${input.proofPath}` };
+}
+
 function validateLicenseHealthMetadata(input: {
   cwd: string;
   healthUrl?: string;
@@ -1276,7 +1429,7 @@ function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: t
 function resolveConfinedEvidenceProofPath(
   cwd: string,
   proofPath: string,
-  fieldName: "healthProofPath" | "checkoutIssuanceProofPath"
+  fieldName: "healthProofPath" | "checkoutIssuanceProofPath" | "checkoutIssuanceAuthenticatedProofPath"
 ): { ok: true; absolutePath: string } | { ok: false; detail: string } {
   if (isAbsolute(proofPath)) {
     return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };
@@ -1307,14 +1460,47 @@ function isPathInsideOrEqual(target: string, root: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+function collectUnexpectedKeys(value: Record<string, unknown>, allowedKeys: Set<string>): string[] {
+  return Object.keys(value).filter((key) => !allowedKeys.has(key)).sort();
+}
+
+function collectForbiddenAuthenticatedProofKeys(value: unknown, path = ""): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => collectForbiddenAuthenticatedProofKeys(item, `${path}[${index}]`));
+  }
+  if (!isPlainRecord(value)) return [];
+  const forbidden: string[] = [];
+  for (const [key, child] of Object.entries(value)) {
+    const keyPath = path ? `${path}.${key}` : key;
+    const normalized = key.toLowerCase();
+    if (
+      normalized === "licensekey" ||
+      normalized === "responsebody" ||
+      normalized === "rawresponse" ||
+      normalized === "authorization" ||
+      normalized === "authorizationheader" ||
+      normalized === "cookie" ||
+      normalized.includes("secret")
+    ) {
+      forbidden.push(keyPath);
+    }
+    forbidden.push(...collectForbiddenAuthenticatedProofKeys(child, keyPath));
+  }
+  return Array.from(new Set(forbidden)).sort();
+}
+
 function isUpdateChannelStateAcceptable(name: string, state: string, requiredForThisRelease: boolean): boolean {
   return requiredForThisRelease
     ? REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES.has(state)
     : (OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATE_OVERRIDES.get(name) ?? GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES).has(state);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
+  return isPlainRecord(value)
     ? value as Record<string, unknown>
     : {};
 }

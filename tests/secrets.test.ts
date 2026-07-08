@@ -24,6 +24,13 @@ describe("secret redaction", () => {
     expect(redactSecrets(`license=${license}`)).toBe("license=[redacted-secret]");
   });
 
+  it("redacts lowercase live license keys from checkout issuance responses", () => {
+    const license = "nd_live_abcdefgh12345678";
+
+    expect(containsSecretLikeText(license)).toBe(true);
+    expect(redactSecrets(`licenseKey=${license}`)).toBe("licenseKey=[redacted-secret]");
+  });
+
   it("does not redact documented NeonDiff environment variable names", () => {
     const text = "Set NEONDIFF_GITHUB_APP_ID and NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH before doctor github.";
 
