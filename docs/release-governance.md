@@ -143,7 +143,11 @@ Before tagging:
    - for stable GA, a redacted authenticated checkout issuance success proof
      path (`checkoutIssuanceAuthenticatedProofPath`) with no raw bearer secret,
      license key, cookie, customer data, checkout payload secret, or raw response
-     body
+     body. Generate it with `npx tsx src/cli.ts checkout-issuance-smoke
+     --dry-run false --confirm-live-issuance true --secret-env
+     LICENSE_ISSUANCE_SECRET --output
+     docs/evidence/license-checkout-issuance-authenticated.json` after the
+     paired Fly and server-side checkout secrets are configured.
    - computed checkout issuance status and, when present, the raw manifest
      declaration that produced it
    - CLI, daemon, website, and desktop update-channel state

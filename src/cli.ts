@@ -59,6 +59,11 @@ import {
   writeOutcomeLedgerPacket
 } from "./outcome-ledger.js";
 import {
+  buildCheckoutIssuanceSmokeRequestPreview,
+  runCheckoutIssuanceSmoke,
+  validateCheckoutIssuanceUrl
+} from "./checkout-issuance-smoke.js";
+import {
   readOutcomeScorecardInput,
   writeOutcomeScorecardPacket
 } from "./outcome-scorecard.js";
@@ -167,6 +172,57 @@ async function main(): Promise<void> {
 
   if (command === "pricing") {
     console.log(stringifyRedactedJson(buildPricingOutput()));
+    return;
+  }
+
+  if (command === "checkout-issuance-smoke") {
+    const url = parseSingleArg(args.url ?? "https://neondiff-license.fly.dev/v1/admin/licenses/issue", "--url");
+    const releaseVersion = parseSingleArg(args["release-version"] ?? "v1.0.0", "--release-version");
+    const checkoutLookupKey = parseSingleArg(args["checkout-lookup-key"] ?? "neondiff_monthly", "--checkout-lookup-key");
+    const idempotencyKey = args["idempotency-key"] ? parseSingleArg(args["idempotency-key"], "--idempotency-key") : undefined;
+    const urlCheck = validateCheckoutIssuanceUrl(url);
+    if (!urlCheck.ok) {
+      console.log(stringifyRedactedJson({
+        ok: false,
+        command: "checkout-issuance-smoke",
+        errorCode: "invalid_url",
+        detail: urlCheck.detail,
+        proofBoundary: "No authenticated checkout issuance proof was produced."
+      }));
+      process.exitCode = 1;
+      return;
+    }
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    if (dryRun) {
+      console.log(stringifyRedactedJson({
+        ok: true,
+        command: "checkout-issuance-smoke",
+        mode: "dry_run",
+        url,
+        releaseVersion,
+        requestPreview: buildCheckoutIssuanceSmokeRequestPreview({
+          releaseVersion,
+          checkoutLookupKey,
+          ...(idempotencyKey ? { idempotencyKey } : {})
+        }),
+        proofBoundary: "Dry-run request preview only; no owner-held secret was read and no network request was sent."
+      }));
+      return;
+    }
+    const secretEnvName = parseSingleArg(args["secret-env"] ?? "LICENSE_ISSUANCE_SECRET", "--secret-env");
+    const result = await runCheckoutIssuanceSmoke({
+      url,
+      releaseVersion,
+      checkoutLookupKey,
+      confirmLiveIssuance: args["confirm-live-issuance"] === undefined
+        ? false
+        : parseBooleanArg(args["confirm-live-issuance"], "--confirm-live-issuance"),
+      secretEnvName,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(args.output ? { outputPath: parseSingleArg(args.output, "--output") } : {})
+    });
+    console.log(stringifyRedactedJson(result));
+    if (!result.ok) process.exitCode = 1;
     return;
   }
 
@@ -3044,6 +3100,19 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--require-coverage", description: "true to fail release-status when active repo coverage has unreadable, unprocessed, or stale heads." },
       { name: "--public-release-manifest", description: "Public release manifest to validate for source-beta releases." },
       { name: "--expected-public-version", description: "Expected public release version/tag when validating a public manifest." }
+    ]
+  },
+  "checkout-issuance-smoke": {
+    description: "Dry-run or run the owner-held authenticated checkout issuance smoke and emit a redacted release-status proof.",
+    flags: [
+      { name: "--url", description: "Full /v1/admin/licenses/issue URL (default https://neondiff-license.fly.dev/v1/admin/licenses/issue)." },
+      { name: "--release-version", description: "Release version recorded in the proof (default v1.0.0)." },
+      { name: "--checkout-lookup-key", description: "Checkout lookup key to smoke: neondiff_monthly, neondiff_yearly, or neondiff_org_yearly." },
+      { name: "--idempotency-key", description: "Optional stable smoke idempotency key; defaults to release/version/lookup-key." },
+      { name: "--dry-run", description: "true by default; false sends the live POST." },
+      { name: "--confirm-live-issuance", description: "Must be true with --dry-run false before reading --secret-env and sending the POST." },
+      { name: "--secret-env", description: "Env var name holding the owner-held issuance bearer secret; raw secrets are never accepted on argv." },
+      { name: "--output", description: "Optional proof JSON path, normally docs/evidence/license-checkout-issuance-authenticated.json." }
     ]
   },
   "review-pr": {
