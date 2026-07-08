@@ -642,6 +642,47 @@ describe("provider adapter fixtures", () => {
     expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output was not a parseable JSON review object.","Adapter output did not contain a review findings array."]');
   });
 
+  it("retries parseable findings JSON that fails canonical schema validation", async () => {
+    const requestBodies: Array<{ messages?: Array<{ role?: string; content?: string }> }> = [];
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "schema-feedback-invalid-finding-local",
+        provider: makeOpenAICompatibleProvider({
+          retrySchemaFeedbackMax: 1,
+          structuredOutputMode: "none"
+        }),
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as { messages?: Array<{ role?: string; content?: string }> };
+          requestBodies.push(body);
+          return jsonResponse({
+            id: `schema-feedback-invalid-finding-${requestBodies.length}`,
+            choices: [
+              {
+                message: {
+                  content: requestBodies.length === 1
+                    ? '{"findings":[{"severity":"P1","path":"src/app.ts","line":12,"title":"Bug","body":"Fix it.","confidence":1.0000001}]}'
+                    : '{"findings":[],"summary":"Recovered after invalid finding schema."}'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "schema-feedback-invalid-finding-fixture",
+        providerId: "schema-feedback-invalid-finding-local",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies[1]?.messages?.at(-1)?.content).toContain("Adapter output contained invalid review findings.");
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetries":1');
+    expect(result.evidence.rawEvidencePreview).toContain('"schemaRetryErrors":["Adapter output contained invalid review findings."]');
+  });
+
   it("does not retry malformed review JSON when schema feedback is disabled", async () => {
     const calls: unknown[] = [];
     const result = await runProviderAdapterFixture({
