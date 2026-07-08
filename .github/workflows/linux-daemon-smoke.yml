@@ -50,4 +50,4 @@ jobs:
         run: |
           set -euo pipefail
           node dist/src/cli.js daemon status > linux-daemon-status.json || true
-          node -e 'const fs=require("fs"); const out=JSON.parse(fs.readFileSync("linux-daemon-status.json","utf8")); if (out.ok !== false || out.serviceManager !== "systemd") process.exit(1);'
+          node -e 'const fs=require("fs"); const out=JSON.parse(fs.readFileSync("linux-daemon-status.json","utf8")); if (out.ok !== false || out.command !== "daemon status" || out.serviceManager !== "systemd" || typeof out.error !== "string") process.exit(1);'

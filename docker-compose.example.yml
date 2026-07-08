@@ -8,6 +8,7 @@ services:
     environment:
       - NEONDIFF_CONFIG=/config/config.local.json
       - OLLAMA_BASE_URL=http://ollama:11434
+    command: ["daemon", "--config", "/config/config.local.json", "--dry-run", "true"]
     volumes:
       - ./config.local.json:/config/config.local.json:ro
       - ./secrets:/config/secrets:ro

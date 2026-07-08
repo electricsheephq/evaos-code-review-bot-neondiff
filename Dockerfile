@@ -16,12 +16,18 @@ ENV NEONDIFF_CONFIG=/config/config.local.json
 
 WORKDIR /app
 COPY --from=build /app /app
-RUN npm link
+RUN npm link \
+  && mkdir -p /config /state /evidence /work \
+  && chown -R node:node /app /config /state /evidence /work
 
 VOLUME ["/config", "/state", "/evidence", "/work"]
+
+USER node
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD neondiff providers list --config "$NEONDIFF_CONFIG" --json >/dev/null || exit 1
 
-# Equivalent operator command: neondiff daemon --config /config/config.local.json
-CMD ["neondiff", "daemon", "--config", "/config/config.local.json"]
+ENTRYPOINT ["neondiff"]
+
+# Equivalent operator command: neondiff daemon --config /config/config.local.json --dry-run true
+CMD ["daemon", "--config", "/config/config.local.json", "--dry-run", "true"]

@@ -27,12 +27,25 @@ docker compose -f docker-compose.local.yml logs -f neondiff
 The example also includes an `ollama` service for local OpenAI-compatible
 provider experiments. It is optional; remove it if your provider runs elsewhere.
 
+The image runs as the bundled non-root `node` user. The example daemon command
+is deliberately explicit about `--dry-run true`, so a first deploy can prove the
+worker loop and evidence path without posting GitHub comments. To post live
+reviews from Docker, change the compose command to:
+
+```yaml
+command: ["daemon", "--config", "/config/config.local.json", "--dry-run", "false"]
+```
+
+Only make that change after `doctor`, provider readiness, repo allowlist,
+current-head proof, duplicate suppression, and issue/PR approval are recorded.
+
 ## Healthcheck
 
 The image healthcheck runs a config/provider-list command against
 `NEONDIFF_CONFIG`. A healthy container means the CLI can start and parse the
 configured provider registry; it is not a guarantee of review quality or live
-posting readiness. Pair it with:
+posting readiness, and it does not distinguish dry-run from live posting mode.
+Pair it with:
 
 ```bash
 docker compose -f docker-compose.local.yml exec neondiff \

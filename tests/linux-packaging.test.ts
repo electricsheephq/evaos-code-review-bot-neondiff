@@ -30,14 +30,23 @@ describe("Linux daemon packaging", () => {
     expect(dockerfile).toContain("FROM node:26");
     expect(dockerfile).toContain("HEALTHCHECK");
     expect(dockerfile).toContain("neondiff daemon");
+    expect(dockerfile).toContain("USER node");
+    expect(dockerfile).toContain("\"--dry-run\", \"true\"");
     expect(compose).toContain("neondiff:");
     expect(compose).toContain("ollama:");
     expect(compose).toContain("NEONDIFF_CONFIG=/config/config.local.json");
+    expect(compose).toContain("[\"daemon\", \"--config\", \"/config/config.local.json\", \"--dry-run\", \"true\"]");
+    expect(dockerDocs).toContain("--dry-run true");
+    expect(dockerDocs).toContain("--dry-run\", \"false");
+    expect(ciDocs).toContain("actions/checkout@v4");
+    expect(ciDocs).toContain("actions/setup-node@v4");
 
     expect(linuxSmokeWorkflow).toContain("ubuntu-latest");
     expect(linuxSmokeWorkflow).toContain("NEONDIFF_TEST_PLATFORM: linux");
     expect(linuxSmokeWorkflow).toContain("tests/linux-packaging.test.ts");
     expect(linuxSmokeWorkflow).toContain("node dist/src/cli.js daemon status");
+    expect(linuxSmokeWorkflow).toContain("out.command !== \"daemon status\"");
+    expect(linuxSmokeWorkflow).toContain("typeof out.error !== \"string\"");
   });
 
   it("includes Linux operator assets in the npm package allowlist", () => {
