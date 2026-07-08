@@ -32,6 +32,12 @@ Recommended package install:
 npm install -g neondiff@0.4.30-beta.1
 ```
 
+GA/latest package install path after the `v1.0.0` dist-tag cutover:
+
+```bash
+npm install -g neondiff
+```
+
 Installer script:
 
 ```bash
@@ -220,6 +226,12 @@ neondiff providers list --config config.local.json --json
 neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
+
+The local HTML dashboard is the human first-run surface. It shows license
+status, GitHub App status, daemon status, and provider readiness with redacted
+output. Use the provider card's `Verify API Key` button before launch/use; the
+button checks the selected provider path and reports pass/fail without printing
+the submitted key.
 
 The full doctor output is JSON. Check:
 
