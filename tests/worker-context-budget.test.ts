@@ -5,9 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewStateStore } from "../src/state.js";
-import type { PullRequestSummary } from "../src/types.js";
+import type { Finding, PullRequestSummary } from "../src/types.js";
 
 const zcodePrompts = vi.hoisted((): string[] => []);
+const zcodeFindingsByPath = vi.hoisted(() => new Map<string, Finding[]>());
 
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
@@ -28,10 +29,13 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
     ...actual,
     runZCodeReview: vi.fn((input: { prompt: string }) => {
       zcodePrompts.push(input.prompt);
+      const findings = [...zcodeFindingsByPath.entries()]
+        .filter(([path]) => input.prompt.includes(path))
+        .flatMap(([, entries]) => entries);
       return {
-        findings: [],
+        findings,
         droppedFromSchema: [],
-        rawResponse: "{\"findings\":[]}",
+        rawResponse: JSON.stringify({ findings }),
         attempts: 1,
         degradedRecovery: false
       };
@@ -39,7 +43,7 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
   };
 });
 
-const { localDateFolder, reviewPull } = await import("../src/worker.js");
+const { localDateFolder, prepareFailedHeadRetry, reviewPull } = await import("../src/worker.js");
 const { buildReviewPrompt } = await import("../src/zcode.js");
 
 describe("worker context budget preflight", () => {
@@ -47,6 +51,7 @@ describe("worker context budget preflight", () => {
 
   afterEach(() => {
     zcodePrompts.length = 0;
+    zcodeFindingsByPath.clear();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -93,8 +98,18 @@ describe("worker context budget preflight", () => {
     expect(result).toBe("skipped_context_budget");
     expect(zcodePrompts).toEqual([]);
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
-      status: "skipped",
+      status: "failed",
       error: "context_budget_overflow"
+    });
+    expect(prepareFailedHeadRetry({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      livePull: pull
+    })).toMatchObject({
+      previousStatus: "failed",
+      previousError: "context_budget_overflow"
     });
     const evidenceDir = join(
       root,
@@ -134,6 +149,8 @@ describe("worker context budget preflight", () => {
       pullFile("src/b.ts", 5_000),
       pullFile("src/c.ts", 5_000)
     ];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Chunk A finding")]);
+    zcodeFindingsByPath.set("src/b.ts", [finding("src/b.ts", "Chunk B finding")]);
     const singlePromptLengths = files.map((entry) => reviewPromptLength(config, pull, [entry]));
     const fullPromptLength = reviewPromptLength(config, pull, files);
     const largestSinglePromptLength = Math.max(...singlePromptLengths);
@@ -174,8 +191,61 @@ describe("worker context budget preflight", () => {
       ["src/b.ts"],
       ["src/c.ts"]
     ]);
+    const reviewPlan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
+    expect(reviewPlan.comments.map((comment: { path: string; line: number; title: string }) => ({
+      path: comment.path,
+      line: comment.line,
+      title: comment.title
+    }))).toEqual([
+      { path: "src/a.ts", line: 1, title: "Chunk A finding" },
+      { path: "src/b.ts", line: 1, title: "Chunk B finding" }
+    ]);
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
       status: "dry_run"
+    });
+    state.close();
+  });
+
+  it("stops chunk execution if the PR head advances between chunks", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-stale-chunk-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(403, "e".repeat(40));
+    const stalePull = pullSummary(403, "f".repeat(40));
+    const files = [
+      pullFile("src/a.ts", 5_000),
+      pullFile("src/b.ts", 5_000),
+      pullFile("src/c.ts", 5_000)
+    ];
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+
+    const result = await reviewPull({
+      config,
+      github: {
+        ...githubForPull(pull, files),
+        getPull: async () => stalePull
+      } as unknown as GitHubApi,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    });
+
+    expect(result).toBe("skipped_stale_head");
+    expect(zcodePrompts).toHaveLength(1);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "skipped"
     });
     state.close();
   });
@@ -290,15 +360,27 @@ function pullFile(filename: string, patchLength: number): {
   return {
     filename,
     patch: [
-      "@@ -1,1 +1,2 @@",
-      "+const value = \"",
-      "x".repeat(patchLength),
-      "\";"
+      "@@ -0,0 +1,2 @@",
+      `+const value = "${"x".repeat(patchLength)}";`,
+      "+export const ready = true;"
     ].join("\n"),
     status: "modified",
     additions: 2,
     deletions: 0,
     changes: 2
+  };
+}
+
+function finding(path: string, title: string): Finding {
+  return {
+    severity: "P2",
+    path,
+    line: 1,
+    title,
+    body: `${title} body`,
+    confidence: 0.9,
+    category: "runtime_correctness",
+    why_this_matters: `${title} matters`
   };
 }
 

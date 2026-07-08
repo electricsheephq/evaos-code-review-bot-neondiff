@@ -119,7 +119,7 @@ function contextBudgetEvidence(plan: ContextBudgetPlan): Record<string, unknown>
     reservedOutputTokens: plan.reservedOutputTokens,
     overflow: plan.overflow,
     ...(plan.contextWindowTokens !== undefined ? { contextWindowTokens: plan.contextWindowTokens } : {}),
-    ...(plan.budgetTokens !== undefined ? { budgetTokens: plan.budgetTokens } : {}),
+    ...(plan.budgetTokens !== undefined ? { budgetTokens: Math.max(0, plan.budgetTokens) } : {}),
     ...(plan.reason ? { reason: plan.reason } : {}),
     ...(plan.chunks
       ? {
@@ -1515,14 +1515,18 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         repo,
         pullNumber: pull.number,
         headSha: pull.head.sha,
-        status: "skipped",
+        status: "failed",
         error: contextBudget.reason
       });
       return "skipped_context_budget";
     }
 
-    const zcodeResult = await runReviewWithContextBudget({
+    const zcodeExecution = await runReviewWithContextBudget({
       config,
+      github,
+      state,
+      repo,
+      pull,
       worktreePath: worktree.path,
       prompt,
       contextBudget,
@@ -1530,6 +1534,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       useZCode: input.useZCode,
       evidenceDir
     });
+    if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
+    const zcodeResult = zcodeExecution.result;
 
     assertGitClean(worktree.path);
 
@@ -2115,7 +2121,7 @@ export function isCanaryAllowed(config: Pick<BotConfig, "canaryPulls">, repo: st
   return new Set(config.canaryPulls).has(`${repo}#${pullNumber}`);
 }
 
-export type StaleHeadPhase = "before_command" | "before_review" | "before_plan" | "before_post";
+export type StaleHeadPhase = "before_command" | "before_review" | "before_chunk" | "before_plan" | "before_post";
 
 export interface StaleHeadEvidence {
   reason: `stale_head_${StaleHeadPhase}`;
@@ -2784,15 +2790,23 @@ function parseSelfConsistencyVerdict(rawResponse: string): SelfConsistencySecond
   return { verified, confidence };
 }
 
+type ContextBudgetReviewExecution =
+  | { status: "reviewed"; result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } }
+  | { status: "skipped_stale_head" };
+
 async function runReviewWithContextBudget(input: {
   config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
   worktreePath: string;
   prompt: string;
   contextBudget: ContextBudgetPlan;
   promptForFiles: (files: PullFilePatch[]) => string;
   useZCode: boolean;
   evidenceDir: string;
-}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+}): Promise<ContextBudgetReviewExecution> {
   if (input.contextBudget.mode === "chunk") {
     return runChunkedZCodeReview({
       ...input,
@@ -2800,23 +2814,29 @@ async function runReviewWithContextBudget(input: {
     });
   }
 
-  if (!input.useZCode) return disabledZCodeReviewResult(input.config);
-  return runZCodeReviewWithProviderRetry({
-    config: input.config,
-    worktreePath: input.worktreePath,
-    prompt: input.prompt,
-    evidenceDir: input.evidenceDir
-  });
+  const result = input.useZCode
+    ? await runZCodeReviewWithProviderRetry({
+        config: input.config,
+        worktreePath: input.worktreePath,
+        prompt: input.prompt,
+        evidenceDir: input.evidenceDir
+      })
+    : disabledZCodeReviewResult(input.config);
+  return { status: "reviewed", result };
 }
 
 async function runChunkedZCodeReview(input: {
   config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
   worktreePath: string;
   contextBudget: Extract<ContextBudgetPlan, { mode: "chunk" }>;
   promptForFiles: (files: PullFilePatch[]) => string;
   useZCode: boolean;
   evidenceDir: string;
-}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+}): Promise<ContextBudgetReviewExecution> {
   const startedAt = new Date();
   const findings: ZCodeReviewResult["findings"] = [];
   const droppedFromSchema: ZCodeReviewResult["droppedFromSchema"] = [];
@@ -2827,6 +2847,14 @@ async function runChunkedZCodeReview(input: {
   let providerAttempts = 0;
 
   for (const chunk of input.contextBudget.chunks) {
+    if (chunk.index > 1) {
+      const livePull = await input.github.getPull(input.repo, input.pull.number);
+      const stale = detectStalePullHead({ expected: input.pull, live: livePull, phase: "before_chunk" });
+      if (stale) {
+        recordStaleHeadSkip({ state: input.state, repo: input.repo, pull: input.pull, stale, evidenceDir: input.evidenceDir });
+        return { status: "skipped_stale_head" };
+      }
+    }
     const chunkDir = join(input.evidenceDir, "context-chunks", `chunk-${String(chunk.index).padStart(3, "0")}`);
     mkdirSync(chunkDir, { recursive: true });
     const prompt = input.promptForFiles(chunk.files);
@@ -2854,19 +2882,22 @@ async function runChunkedZCodeReview(input: {
 
   const completedAt = new Date();
   return {
-    findings,
-    droppedFromSchema,
-    rawResponse: JSON.stringify({ chunks: rawResponses }),
-    attempts,
-    degradedRecovery,
-    runtime: {
-      provider: input.config.zcode.providerId,
-      model: input.config.zcode.model,
-      startedAt: startedAt.toISOString(),
-      completedAt: completedAt.toISOString(),
-      latencyMs: completedAt.getTime() - startedAt.getTime(),
-      providerAttempts,
-      notes: runtimeNotes
+    status: "reviewed",
+    result: {
+      findings,
+      droppedFromSchema,
+      rawResponse: JSON.stringify({ chunks: rawResponses }),
+      attempts,
+      degradedRecovery,
+      runtime: {
+        provider: input.config.zcode.providerId,
+        model: input.config.zcode.model,
+        startedAt: startedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        latencyMs: completedAt.getTime() - startedAt.getTime(),
+        providerAttempts,
+        notes: runtimeNotes
+      }
     }
   };
 }

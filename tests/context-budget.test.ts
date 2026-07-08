@@ -4,7 +4,9 @@ import {
   estimateContextTokens,
   planContextBudget
 } from "../src/context-budget.js";
-import type { PullFilePatch } from "../src/types.js";
+import { loadConfigFromObject } from "../src/config.js";
+import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
+import { buildReviewPrompt } from "../src/zcode.js";
 
 describe("context budget preflight", () => {
   it("estimates prompt tokens with a provider fudge factor", () => {
@@ -87,6 +89,32 @@ describe("context budget preflight", () => {
     });
     expect(plan.chunks).toBeUndefined();
   });
+
+  it("keeps the default ZCode budget above the existing max patch prompt ceiling", () => {
+    const config = loadConfigFromObject({});
+    const files = [file("src/max-patch.ts", config.zcode.maxPatchBytes)];
+    const buildPrompt = (chunkFiles: PullFilePatch[]) => buildReviewPrompt({
+      repo: "owner/repo",
+      pull: pullSummary(),
+      files: chunkFiles,
+      maxPatchBytes: config.zcode.maxPatchBytes
+    });
+    const prompt = buildPrompt(files);
+
+    const plan = planContextBudget({
+      prompt,
+      files,
+      contextWindowTokens: config.providers!.providers[config.providers!.defaultProviderId]!.contextWindowTokens,
+      config: config.contextBudget,
+      buildPrompt
+    });
+
+    expect(plan).toMatchObject({
+      mode: "within_budget",
+      contextWindowTokens: 128_000,
+      budgetTokens: 123_904
+    });
+  });
 });
 
 function file(filename: string, patchLength: number): PullFilePatch {
@@ -97,5 +125,25 @@ function file(filename: string, patchLength: number): PullFilePatch {
     additions: 1,
     deletions: 1,
     changes: 2
+  };
+}
+
+function pullSummary(): PullRequestSummary {
+  return {
+    number: 401,
+    title: "Default context budget",
+    draft: false,
+    head: {
+      sha: "h".repeat(40),
+      ref: "feature"
+    },
+    base: {
+      sha: "b".repeat(40),
+      ref: "main",
+      repo: {
+        full_name: "owner/repo"
+      }
+    },
+    html_url: "https://github.test/owner/repo/pull/401"
   };
 }

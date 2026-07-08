@@ -138,7 +138,7 @@ packet.
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `enabled` | `boolean` | `true` | Enables pre-send context-window checks when the selected provider declares `contextWindowTokens`. Providers without a configured window write `mode: "unknown_window"` evidence and continue with the legacy single-prompt path. |
-| `overflow` | `"skip" \| "chunk"` | `"skip"` | `skip` records the head as `skipped` with reason `context_budget_overflow` before any provider call. `chunk` deterministically groups changed files into budget-sized prompts along file boundaries and runs each chunk through the same review/gate path. |
+| `overflow` | `"skip" \| "chunk"` | `"skip"` | `skip` records the processed head as `failed` with reason `context_budget_overflow` before any provider call, so operators can retry after tuning the budget or after the PR shrinks. `chunk` deterministically groups changed files into budget-sized prompts along file boundaries and runs each chunk through the same review/gate path. |
 | `reservedOutputTokens` | `integer` (`>= 1`) | `4096` | Output-token reserve subtracted from the provider context window before input budgeting. |
 | `charsPerToken` | `integer` (`>= 1`) | `4` | Conservative tokenizer-free estimator denominator. |
 | `providerFudgeFactor` | `number` (`> 0`) | `1.15` | Multiplier applied after character/token estimation to leave provider-specific slack. |
@@ -151,6 +151,17 @@ only on current RIGHT-side diff lines. A single changed file that cannot fit in
 the configured budget is skipped with reason
 `context_budget_single_file_overflow`; NeonDiff never splits a hunk or sends a
 known-over-budget chunk.
+
+Context-budget skip reasons are operator-facing:
+
+- `context_budget_overflow`: the full prompt is too large and `overflow` is `skip`.
+- `context_budget_no_available_input_tokens`: `reservedOutputTokens` leaves no input budget.
+- `context_budget_single_file_overflow`: chunk mode cannot fit one changed file in the available budget.
+- `context_budget_chunk_count_exceeded`: chunk mode would exceed `maxChunks`.
+
+All four are recorded as retryable `failed` processed rows, not terminal
+`skipped` rows. After changing the provider window, reserve, overflow mode, or
+PR contents, retry the head through the normal failed-head retry path.
 
 ## Safety Defaults
 
