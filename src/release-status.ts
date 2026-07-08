@@ -587,16 +587,16 @@ export function readPublicReleaseManifestStatus(input: {
     const licenseHealthProofPath = readString(licenseApi.healthProofPath);
     const licenseHealthUrl = readString(licenseApi.healthUrl);
     const explicitLicenseIssuanceRequired = readBoolean(licenseApi.checkoutIssuanceRequiredForThisRelease);
+    const releaseLevelSupportsCheckoutIssuance =
+      releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta";
     const releaseRequiresCheckoutIssuance =
-      (releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta") && licenseRequired;
+      releaseLevelSupportsCheckoutIssuance && (licenseRequired || explicitLicenseIssuanceRequired === true);
     const licenseIssuanceRequired =
       releaseRequiresCheckoutIssuance && !(explicitLicenseIssuanceRequired === false && releaseLevel === "source-beta");
     const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
     const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
     const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
     const licenseIssuanceTrackingIssue = readString(licenseApi.checkoutIssuanceTrackingIssue);
-    const releaseLevelSupportsCheckoutIssuance =
-      releaseLevel === "stable" || releaseLevel === "beta" || releaseLevel === "source-beta";
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
     const licenseHealthMetadataFailures = validateLicenseHealthMetadata({
       cwd: input.cwd,
@@ -614,8 +614,7 @@ export function readPublicReleaseManifestStatus(input: {
         })
       : { ok: true, detail: "" };
     const licenseHealthProofOk = licenseHealthProof.ok;
-    const licenseHealthGateOk = licenseHealthMetadataFailures.length === 0 && licenseHealthProofOk;
-    const licenseNeedsIssuanceProof = licenseNeedsHealthProof && licenseHealthGateOk && licenseIssuanceRequired;
+    const licenseNeedsIssuanceProof = licenseIssuanceRequired;
     const licenseIssuanceMetadataFailures = validateLicenseIssuanceMetadata({
       cwd: input.cwd,
       issuanceUrl: licenseIssuanceUrl,
