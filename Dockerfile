@@ -25,7 +25,7 @@ VOLUME ["/config", "/state", "/evidence", "/work"]
 USER node
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD neondiff providers list --config "$NEONDIFF_CONFIG" --json >/dev/null || exit 1
+  CMD neondiff help >/dev/null || exit 1
 
 ENTRYPOINT ["neondiff"]
 

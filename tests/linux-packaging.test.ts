@@ -29,6 +29,7 @@ describe("Linux daemon packaging", () => {
 
     expect(dockerfile).toContain("FROM node:26");
     expect(dockerfile).toContain("HEALTHCHECK");
+    expect(dockerfile).toContain("neondiff help");
     expect(dockerfile).toContain("neondiff daemon");
     expect(dockerfile).toContain("USER node");
     expect(dockerfile).toContain("\"--dry-run\", \"true\"");

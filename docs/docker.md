@@ -39,15 +39,16 @@ command: ["daemon", "--config", "/config/config.local.json", "--dry-run", "false
 Only make that change after `doctor`, provider readiness, repo allowlist,
 current-head proof, duplicate suppression, and issue/PR approval are recorded.
 
-## Healthcheck
+## Healthcheck And Readiness
 
-The image healthcheck runs a config/provider-list command against
-`NEONDIFF_CONFIG`. A healthy container means the CLI can start and parse the
-configured provider registry; it is not a guarantee of review quality or live
-posting readiness, and it does not distinguish dry-run from live posting mode.
-Pair it with:
+The image healthcheck runs `neondiff help` as a cheap process/CLI liveness
+check. It intentionally does not read the mounted config, call a provider, or
+distinguish dry-run from live posting mode. Treat it as container liveness only.
+Use explicit readiness checks before live review:
 
 ```bash
+docker compose -f docker-compose.local.yml exec neondiff \
+  neondiff providers list --config /config/config.local.json --json
 docker compose -f docker-compose.local.yml exec neondiff \
   neondiff doctor --config /config/config.local.json --json
 ```
