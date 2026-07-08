@@ -5,6 +5,8 @@ review loop without handing every diff to a hosted review SaaS.**
 
 ![NeonDiff cyberpunk wordmark in toxic green inside a black HUD frame](assets/readme/neondiff-cyberpunk-hero.png)
 
+[![NeonDiff precision](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Felectricsheephq%2Fevaos-code-review-bot-neondiff%2Fmain%2Fdocs%2Fbadges%2Fprecision.json)](docs/precision-badge.md)
+
 Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
@@ -22,6 +24,7 @@ sold. NeonDiff is a source-available beta, not an open-source or GA release.
 [License Boundary](docs/license-boundary.md) · [Pricing](docs/pricing.md) ·
 [Providers](docs/providers.md) ·
 [Known Limitations](docs/known-limitations-and-provider-status.md) ·
+[Precision Badge](docs/precision-badge.md) ·
 [Roadmap](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103) ·
 [Repository](https://github.com/electricsheephq/evaos-code-review-bot-neondiff)
 
@@ -223,6 +226,26 @@ Not claimed:
   [docs/calibration-loop.md](docs/calibration-loop.md) passes and a human
   flips it)
 - desktop client readiness
+
+### Precision Badge
+
+NeonDiff's precision badge is public-safe by default: the generated Shields
+endpoint at `docs/badges/precision.json` shows a gray `calibrating (n=...)`
+state until the calibration aggregate passes the existing public-confidence
+gate and a human flips `confidenceCalibration.publicDisplay.mode` to
+`"calibrated"`. Below that gate, no public percentage is displayed.
+
+Copy-paste README badge snippet, replacing the branch if you publish from
+somewhere other than `main`:
+
+```md
+[![NeonDiff precision](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Felectricsheephq%2Fevaos-code-review-bot-neondiff%2Fmain%2Fdocs%2Fbadges%2Fprecision.json)](docs/precision-badge.md)
+```
+
+The badge JSON is generated from NeonDiff's own aggregate evidence; the tool
+does not accept a public-percent override and does not flip calibrated display
+mode. See [docs/precision-badge.md](docs/precision-badge.md) for the review
+rules behind that contract.
 
 ## Roadmap Vs Shipped
 
