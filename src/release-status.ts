@@ -125,6 +125,7 @@ export interface PublicReleaseStatus {
     healthUrl?: string;
     healthProofPath?: string;
     checkoutIssuanceRequiredForThisRelease?: boolean;
+    checkoutIssuanceRequiredDeclaredForThisRelease?: boolean;
     checkoutIssuanceUrl?: string;
     checkoutIssuanceProofPath?: string;
     checkoutIssuanceState?: string;
@@ -613,7 +614,7 @@ export function readPublicReleaseManifestStatus(input: {
       issuanceProofPath: licenseIssuanceProofPath,
       issuanceTrackingIssue: licenseIssuanceTrackingIssue,
       proofRequired: licenseNeedsIssuanceProof,
-      healthProofRequired: licenseNeedsHealthProof && licenseHealthGateOk,
+      deferralPolicyApplies: licenseNeedsHealthProof,
       issuanceRequiredExplicit: explicitLicenseIssuanceRequired,
       releaseLevel,
       expectedHost: extractUrlHost(licenseHealthUrl)
@@ -717,6 +718,7 @@ export function readPublicReleaseManifestStatus(input: {
         healthUrl: licenseHealthUrl,
         healthProofPath: licenseHealthProofPath,
         checkoutIssuanceRequiredForThisRelease: licenseIssuanceRequired,
+        checkoutIssuanceRequiredDeclaredForThisRelease: explicitLicenseIssuanceRequired,
         checkoutIssuanceUrl: licenseIssuanceUrl,
         checkoutIssuanceProofPath: licenseIssuanceProofPath,
         checkoutIssuanceState: licenseIssuanceState,
@@ -1126,7 +1128,7 @@ function validateLicenseIssuanceMetadata(input: {
   issuanceProofPath?: string;
   issuanceTrackingIssue?: string;
   proofRequired: boolean;
-  healthProofRequired: boolean;
+  deferralPolicyApplies: boolean;
   issuanceRequiredExplicit?: boolean;
   releaseLevel: string;
   expectedHost?: string;
@@ -1135,7 +1137,7 @@ function validateLicenseIssuanceMetadata(input: {
   if (input.proofRequired && !input.issuanceUrl) {
     failures.push("checkoutIssuanceUrl must be present when validating checkout issuance proof");
   }
-  if (input.healthProofRequired && input.issuanceRequiredExplicit === false) {
+  if (input.deferralPolicyApplies && input.issuanceRequiredExplicit === false) {
     if (input.releaseLevel !== "source-beta") {
       failures.push("checkoutIssuanceRequiredForThisRelease:false is only allowed for source-beta releases");
     } else if (!input.issuanceTrackingIssue) {

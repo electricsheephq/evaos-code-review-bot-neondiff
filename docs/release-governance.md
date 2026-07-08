@@ -139,6 +139,8 @@ Before tagging:
    - license API state and whether it is required for this release
    - license API health proof, plus checkout issuance proof unless a source-beta
      release explicitly defers it with a tracking issue
+   - computed checkout issuance status and, when present, the raw manifest
+     declaration that produced it
    - CLI, daemon, website, and desktop update-channel state
    - rollback command or tracking issue for each required channel
    - required-channel rollback fields with one source revert command such as

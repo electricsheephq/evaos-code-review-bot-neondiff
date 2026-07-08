@@ -340,7 +340,10 @@ npx tsx src/cli.ts review-head-gate \
   `{"status":"unauthorized"}`. Stable/GA releases require this checkout
   issuance proof by default. Public beta and source-beta releases also require
   this proof by default; source-beta releases may defer it explicitly only with a
-  tracking issue and `checkoutIssuanceRequiredForThisRelease: false`.
+  tracking issue and `checkoutIssuanceRequiredForThisRelease: false`. In
+  `release:status` output, `checkoutIssuanceRequiredForThisRelease` is the
+  computed effective gate; `checkoutIssuanceRequiredDeclaredForThisRelease`
+  preserves the raw manifest declaration when present.
 - launchd emits a fresh heartbeat after restart.
 - live DB has no unexpected error rows.
 - active provider cooldown rows are allowed only when they are explicit

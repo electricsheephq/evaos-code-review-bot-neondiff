@@ -1139,6 +1139,7 @@ describe("beta release status", () => {
     });
 
     expect(manifest.licenseApi.checkoutIssuanceRequiredForThisRelease).toBe(false);
+    expect(manifest.licenseApi.checkoutIssuanceRequiredDeclaredForThisRelease).toBe(false);
     expect(manifest.licenseApi.detail).toContain(
       "checkoutIssuanceTrackingIssue must be present when checkout issuance proof is deferred"
     );
@@ -1248,11 +1249,65 @@ describe("beta release status", () => {
       });
 
       expect(manifest.licenseApi.checkoutIssuanceRequiredForThisRelease).toBe(true);
+      expect(manifest.licenseApi.checkoutIssuanceRequiredDeclaredForThisRelease).toBe(false);
       expect(manifest.licenseApi.detail).toContain(
         "checkoutIssuanceRequiredForThisRelease:false is only allowed for source-beta releases"
       );
       expect(manifest.ok).toBe(false);
     }
+  });
+
+  it("keeps checkout issuance deferral diagnostics visible when health proof is invalid", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-issuance-deferral-invalid-health-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0.md"), "# v1.0.0\n");
+    writeChangelogHead(root, "1.0.0", "docs/releases/v1.0.0.md");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.0",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        checkoutIssuanceRequiredForThisRelease: false,
+        checkoutIssuanceTrackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "published",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "launchd_prerelease",
+          version: "v1.0.0",
+          rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0"
+    });
+
+    expect(manifest.licenseApi.checkoutIssuanceRequiredForThisRelease).toBe(true);
+    expect(manifest.licenseApi.checkoutIssuanceRequiredDeclaredForThisRelease).toBe(false);
+    expect(manifest.licenseApi.detail).toContain("missing health proof path");
+    expect(manifest.licenseApi.detail).toContain(
+      "checkoutIssuanceRequiredForThisRelease:false is only allowed for source-beta releases"
+    );
+    expect(manifest.ok).toBe(false);
   });
 
   it("requires checkout issuance proof by default for stable releases", () => {
@@ -1359,6 +1414,7 @@ describe("beta release status", () => {
     expect(manifest.licenseApi).toMatchObject({
       ok: true,
       checkoutIssuanceRequiredForThisRelease: true,
+      checkoutIssuanceRequiredDeclaredForThisRelease: true,
       checkoutIssuanceProofPath
     });
     expect(manifest.licenseApi.detail).toContain(`validated checkout issuance proof ${checkoutIssuanceProofPath}`);
