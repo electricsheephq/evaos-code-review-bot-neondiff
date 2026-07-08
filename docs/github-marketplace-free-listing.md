@@ -32,15 +32,17 @@ Compliance read:
 - GitHub allows free app listings and free pricing plans.
 - Paid Marketplace plans require publisher/payment readiness and Marketplace
   purchase-event handling.
-- GitHub's pricing-plan docs currently include a free-plan restriction when the
-  app also offers a paid service outside Marketplace.
+- Free-plan Marketplace apps still need purchase and cancellation webhook
+  handling for Marketplace events.
+- GitHub's pricing-plan docs currently prohibit a free Marketplace pricing plan
+  when the app offers a paid service outside Marketplace.
 - NeonDiff currently has direct paid private/commercial support licenses outside
   Marketplace.
 
 Owner checkpoint before publish:
 
-- Either get GitHub Support/Marketplace confirmation that a free listing scoped
-  only to free public open-source repo review is acceptable while direct
+- Either get written GitHub Support/Marketplace confirmation that a free listing
+  scoped only to free public open-source repo review is acceptable while direct
   private/commercial support licenses are sold elsewhere, or defer publication
   until #329 adds Marketplace-compatible paid plans and purchase-event handling.
 - Do not publish copy that implies private/commercial NeonDiff use is free
@@ -48,6 +50,24 @@ Owner checkpoint before publish:
 - Do not publish copy that implies Marketplace billing, seats, Team plans,
   Enterprise readiness, hosted review service, bundled provider credits, or
   auto-update entitlement is shipped.
+- Do not paste beta or public-preview wording into the Marketplace listing
+  unless GitHub confirms that wording is acceptable for this listing.
+
+## Pre-Publish Blockers
+
+- Publish blocker: provide a valid privacy-policy URL. README, Security.md
+  (`SECURITY.md`), and license-boundary wording are useful source copy, but
+  GitHub Marketplace requires a valid privacy-policy link in the listing form.
+- Publish blocker: implement or explicitly defer Marketplace purchase-event
+  webhooks. Free plans need at least new-purchase and cancellation handling;
+  paid plans also need upgrade, downgrade, and trial handling.
+- Publish blocker: create Marketplace logo and feature-card assets that meet
+  GitHub's current listing-image requirements. The existing README hero is a
+  brand asset, not proof that required Marketplace assets exist.
+- Publish blocker: record the free-plan/direct-paid-license decision on #428
+  with the exact GitHub pricing restriction quoted or linked.
+- Publish blocker: remove or replace beta/public-preview listing copy if
+  GitHub requires the app to be generally available before publication.
 
 ## Listing Fields
 
@@ -57,13 +77,15 @@ Owner checkpoint before publish:
 | Short description | Local-first AI PR review from your GitHub App, your provider key, and your repo policy. |
 | Category | Code review |
 | Secondary category | Developer tools |
-| Pricing | Free listing for public open-source repository review only; private/commercial license remains direct until #329. |
+| Pricing | Blocked until GitHub confirms the free-listing/direct-paid-license boundary or #329 adds Marketplace-compatible paid plans. |
 | Website | https://www.neondiff.com |
 | Support URL | https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/new/choose |
 | Support email | support@electricsheephq.com; owner must verify monitoring before Marketplace publication. |
 | Security URL | https://github.com/electricsheephq/evaos-code-review-bot-neondiff/security/policy |
-| Privacy / data handling | Use README, Security.md (`SECURITY.md`), and docs/license-boundary.md wording until a dedicated Marketplace privacy page ships. |
-| Screenshot source | `assets/readme/neondiff-cyberpunk-hero.png`; owner should add real dashboard/setup screenshots before publication. |
+| Privacy policy | Publish blocker: provide a valid privacy-policy URL before publication. |
+| Privacy / data handling | Draft from README, Security.md (`SECURITY.md`), and docs/license-boundary.md after the privacy-policy URL exists. |
+| Image assets | Publish blocker: create Marketplace logo and feature-card assets before publication. |
+| Screenshot source | `assets/readme/neondiff-cyberpunk-hero.png`; owner must add real dashboard/setup screenshots before publication. |
 
 ## Listing Copy
 
@@ -95,9 +117,9 @@ remain honored but are no longer sold. Provider/model costs stay external
 through BYOK or local providers; NeonDiff does not include hosted model credits,
 unlimited SaaS inference, or bundled provider tokens.
 
-NeonDiff is source-available beta software, not open-source software. It does
-not approve PRs, merge branches, push repairs, claim calibrated review accuracy,
-or replace human review.
+NeonDiff is source-available software, not open-source software. It does not
+approve PRs, merge branches, push repairs, claim calibrated review accuracy, or
+replace human review.
 
 ### Setup Notes
 
@@ -129,6 +151,13 @@ review flow.
 - Owner compliance decision recorded on #428.
 - Free listing does not imply private/commercial use is free.
 - Direct license path is described as outside Marketplace until #329.
+- GitHub has confirmed the free-plan/direct-paid-license boundary, or #329 has
+  shipped Marketplace-compatible paid plans.
+- Marketplace new-purchase and cancellation webhook handling is shipped, or the
+  owner has recorded why publication can proceed without it.
+- A valid privacy-policy URL is available.
+- Marketplace logo and feature-card assets exist.
+- Do not paste beta or public-preview wording into the Marketplace listing.
 - Support URL points to public-safe issue intake.
 - Security reports route to SECURITY.md / private vulnerability reporting.
 - Screenshots use real current UI and contain no secrets, private repo names,

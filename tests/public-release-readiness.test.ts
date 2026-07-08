@@ -263,6 +263,10 @@ describe("NeonDiff public release readiness", () => {
     expect(listing).toMatch(/provider\/model costs stay external/i);
     expect(listing).toMatch(/support@electricsheephq\.com/);
     expect(listing).toMatch(/Security\.md/);
+    expect(listing).toMatch(/Publish blocker: provide a valid privacy-policy URL/i);
+    expect(listing).toMatch(/Publish blocker: implement or explicitly defer Marketplace purchase-event\s+webhooks/i);
+    expect(listing).toMatch(/Publish blocker: create Marketplace logo and feature-card assets/i);
+    expect(listing).toMatch(/Do not paste beta or public-preview wording into the Marketplace listing/i);
   });
 
   it("CI workflows gate build, tests, package, docs claims, and npm provenance publish", () => {
