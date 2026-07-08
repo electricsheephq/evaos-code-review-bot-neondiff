@@ -829,6 +829,51 @@ describe("operator CLI summaries", () => {
     expect(JSON.stringify(inventory)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
 
+  it("surfaces reviewer sessions covered by active queue retries in runtime inventory", () => {
+    const inventory = buildRuntimeInventory({
+      release: releaseStatus({
+        ok: true,
+        database: {
+          activeReviewerSessionCount: 1,
+          expiredReviewerSessionCount: 0,
+          retryCoveredReviewerSessionCount: 1
+        }
+      }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      durableQueue: durableQueueSnapshot({
+        ok: true,
+        summary: {
+          ...cleanDurableQueueSummary(),
+          total: 1,
+          running: 1
+        },
+        jobs: [
+          durableJob({
+            repo: "electricsheephq/evaos-code-review-bot-neondiff",
+            pullNumber: 451,
+            headSha: "active-head",
+            state: "running",
+            sessionId: "covered-failed-session"
+          })
+        ]
+      }),
+      providerCooldowns: [],
+      repoProviderCooldowns: [],
+      checkedAt: "2026-07-08T07:51:35.481Z"
+    });
+
+    expect(inventory.ok).toBe(true);
+    expect(inventory.runtimeState).toBe("healthy_active");
+    expect(inventory.summary.retryCoveredReviewerSessions).toBe(1);
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_reviewer_sessions_retry_covered",
+      ok: true,
+      detail: "1 reviewer session(s) with terminal/stale row state covered by active queue retry"
+    });
+    expect(inventory.recommendedActions).toContain("monitor active review work; avoid restarting a healthy in-flight run");
+  });
+
   it("flags uncovered pending heads as blocked runtime inventory", () => {
     const inventory = buildRuntimeInventory({
       release: releaseStatus({ ok: true }),

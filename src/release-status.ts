@@ -34,6 +34,7 @@ export interface ReleaseDatabaseStatus {
   reviewerSessionCount?: number;
   activeReviewerSessionCount?: number;
   expiredReviewerSessionCount?: number;
+  retryCoveredReviewerSessionCount?: number;
   reviewerSessionsByRepo?: ReviewerSessionRepoStatus[];
   providerCooldownCount?: number;
   activeProviderCooldownCount?: number;
@@ -64,6 +65,7 @@ export interface ReviewerSessionRepoStatus {
   total: number;
   active: number;
   expired: number;
+  retryCovered?: number;
 }
 
 export interface ReviewQueueRepoStatus {
@@ -1763,7 +1765,7 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       : retryableExpiredProviderCooldownCount > 0
         ? "expired_retryable"
         : "none";
-    const reviewerSessions = readReviewerSessionCounts(db, now);
+    const reviewerSessions = readReviewerSessionCounts(db, now, leaseTtlMs);
     const reviewQueue = readReviewQueueCounts(db, now);
     const reviewRunLeases = readReviewRunLeaseCounts(db, now);
     const staleActiveReviewQueueJobCount = readStaleActiveReviewQueueJobCount(db, now, leaseTtlMs);
@@ -1773,6 +1775,7 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       reviewerSessionCount: reviewerSessions.total,
       activeReviewerSessionCount: reviewerSessions.active,
       expiredReviewerSessionCount: reviewerSessions.expired,
+      retryCoveredReviewerSessionCount: reviewerSessions.retryCovered,
       reviewerSessionsByRepo: reviewerSessions.byRepo,
       providerCooldownCount: row.providerCooldownCount ?? 0,
       activeProviderCooldownCount,
@@ -1960,35 +1963,55 @@ function readStaleActiveReviewQueueJobCount(db: DatabaseSync, now: Date, leaseTt
 
 function readReviewerSessionCounts(
   db: DatabaseSync,
-  now: Date
-): { total: number; active: number; expired: number; byRepo: ReviewerSessionRepoStatus[] } {
+  now: Date,
+  leaseTtlMs: number
+): { total: number; active: number; expired: number; retryCovered: number; byRepo: ReviewerSessionRepoStatus[] } {
   const hasTable = db
     .prepare("select 1 from sqlite_master where type = 'table' and name = 'reviewer_sessions' limit 1")
     .get();
-  if (!hasTable) return { total: 0, active: 0, expired: 0, byRepo: [] };
+  if (!hasTable) return { total: 0, active: 0, expired: 0, retryCovered: 0, byRepo: [] };
   const rows = db
     .prepare(
-      `select repo, state, expires_at, head_count_used, head_count_limit, worker_pid
+      `select session_id, repo, state, expires_at, head_count_used, head_count_limit, worker_pid
        from reviewer_sessions`
     )
     .all() as unknown as ReviewerSessionCountRow[];
+  const retryCoveredSessionIds = readRetryCoveredReviewerSessionIds(db, now, leaseTtlMs);
   const byRepo = new Map<string, ReviewerSessionRepoStatus>();
+  let active = 0;
+  let expired = 0;
+  let retryCoveredCount = 0;
   for (const row of rows) {
     const repoStatus = byRepo.get(row.repo) ?? { repo: row.repo, total: 0, active: 0, expired: 0 };
+    const rowActive = isReviewerSessionActiveForStatus(row, now);
+    const retryCovered = !rowActive && retryCoveredSessionIds.has(row.session_id);
+    const rowExpired = !retryCovered && isReviewerSessionExpiredForStatus(row, now);
     repoStatus.total += 1;
-    if (isReviewerSessionActiveForStatus(row, now)) repoStatus.active += 1;
-    if (isReviewerSessionExpiredForStatus(row, now)) repoStatus.expired += 1;
+    if (rowActive || retryCovered) {
+      active += 1;
+      repoStatus.active += 1;
+    }
+    if (rowExpired) {
+      expired += 1;
+      repoStatus.expired += 1;
+    }
+    if (retryCovered) {
+      retryCoveredCount += 1;
+      repoStatus.retryCovered = (repoStatus.retryCovered ?? 0) + 1;
+    }
     byRepo.set(row.repo, repoStatus);
   }
   return {
     total: rows.length,
-    active: rows.filter((row) => isReviewerSessionActiveForStatus(row, now)).length,
-    expired: rows.filter((row) => isReviewerSessionExpiredForStatus(row, now)).length,
+    active,
+    expired,
+    retryCovered: retryCoveredCount,
     byRepo: [...byRepo.values()].sort((left, right) => left.repo.localeCompare(right.repo))
   };
 }
 
 interface ReviewerSessionCountRow {
+  session_id: string;
   repo: string;
   state: string;
   expires_at: string | null;
@@ -2007,6 +2030,60 @@ function isReviewerSessionActiveForStatus(row: ReviewerSessionCountRow, now: Dat
 function isReviewerSessionExpiredForStatus(row: ReviewerSessionCountRow, now: Date): boolean {
   const expiresAtMs = row.expires_at ? Date.parse(row.expires_at) : Number.NaN;
   return row.state === "expired" || !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime() || row.head_count_used >= row.head_count_limit;
+}
+
+function readRetryCoveredReviewerSessionIds(db: DatabaseSync, now: Date, leaseTtlMs: number): Set<string> {
+  const hasRequiredTables = ["reviewer_session_jobs", "review_queue_jobs"].every((tableName) =>
+    Boolean(
+      db
+        .prepare("select 1 from sqlite_master where type = 'table' and name = ? limit 1")
+        .get(tableName)
+    )
+  );
+  if (!hasRequiredTables) return new Set();
+
+  const queueColumns = new Set(
+    (db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>)
+      .map((column) => column.name)
+  );
+  const sessionJobColumns = new Set(
+    (db.prepare("pragma table_info(reviewer_session_jobs)").all() as unknown as Array<{ name: string }>)
+      .map((column) => column.name)
+  );
+  const requiredQueueColumns = ["session_id", "repo", "pull_number", "head_sha", "state", "updated_at"];
+  const requiredSessionJobColumns = ["session_id", "repo", "pull_number", "head_sha"];
+  if (
+    requiredQueueColumns.some((column) => !queueColumns.has(column)) ||
+    requiredSessionJobColumns.some((column) => !sessionJobColumns.has(column))
+  ) {
+    return new Set();
+  }
+
+  const hasLeaseExpiresAt = queueColumns.has("lease_expires_at");
+  const activeLeaseClause = hasLeaseExpiresAt
+    ? `and (
+         (q.lease_expires_at is not null and datetime(q.lease_expires_at) > datetime(?))
+         or (q.lease_expires_at is null and datetime(q.updated_at) > datetime(?))
+       )`
+    : "and datetime(q.updated_at) > datetime(?)";
+  const rows = db
+    .prepare(
+      `select distinct sj.session_id as session_id
+       from reviewer_session_jobs sj
+       join review_queue_jobs q
+         on q.session_id = sj.session_id
+        and q.repo = sj.repo
+        and q.pull_number = sj.pull_number
+        and q.head_sha = sj.head_sha
+       where q.state in ('leased', 'running')
+       ${activeLeaseClause}`
+    )
+    .all(
+      ...(hasLeaseExpiresAt
+        ? [now.toISOString(), new Date(now.getTime() - leaseTtlMs).toISOString()]
+        : [new Date(now.getTime() - leaseTtlMs).toISOString()])
+    ) as unknown as Array<{ session_id: string | null }>;
+  return new Set(rows.map((row) => row.session_id).filter((sessionId): sessionId is string => Boolean(sessionId)));
 }
 
 interface ProviderCooldownCandidate {

@@ -4881,6 +4881,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(status.database.reviewerSessionCount).toBe(5);
     expect(status.database.activeReviewerSessionCount).toBe(1);
     expect(status.database.expiredReviewerSessionCount).toBe(3);
+    expect(status.database.retryCoveredReviewerSessionCount).toBe(0);
     expect(status.database.reviewerSessionsByRepo).toHaveLength(4);
     expect(status.database.reviewerSessionsByRepo).toEqual(
       expect.arrayContaining([
@@ -4890,6 +4891,432 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         { repo: "electricsheephq/evaos-code-review-bot", total: 2, active: 0, expired: 1 }
       ])
     );
+  });
+
+  function createReviewerSessionRetryFixture(options: {
+    rootPrefix: string;
+    includeLeaseExpiresAt?: boolean;
+    queueLeaseExpiresAt?: string | null;
+    queueUpdatedAt?: string;
+    queueState?: string;
+    sessionId?: string;
+    sessionState?: string;
+    sessionHeadSha?: string;
+    queueHeadSha?: string;
+    includeSessionJob?: boolean;
+    includeQueueJob?: boolean;
+  }): string {
+    const root = mkdtempSync(join(tmpdir(), options.rootPrefix));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    const includeLeaseExpiresAt = options.includeLeaseExpiresAt ?? true;
+    const sessionId = options.sessionId ?? "covered-failed-session";
+    const repo = "electricsheephq/evaos-code-review-bot-neondiff";
+    const sessionHeadSha = options.sessionHeadSha ?? "active-head";
+    const queueHeadSha = options.queueHeadSha ?? sessionHeadSha;
+    const queueUpdatedAt = options.queueUpdatedAt ?? "2026-07-08T07:50:35.197Z";
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table reviewer_sessions (
+          session_id text primary key,
+          repo text not null,
+          repo_family text,
+          state text not null,
+          started_at text not null,
+          last_used_at text not null,
+          expires_at text not null,
+          head_count_used integer not null,
+          head_count_limit integer not null,
+          worker_pid integer,
+          model text,
+          provider text,
+          zcode_cli_version text,
+          memory_packet_sha text,
+          gitnexus_packet_sha text,
+          last_error text
+        );
+
+        create table reviewer_session_jobs (
+          session_id text not null,
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          job_state text not null,
+          assignment_reason text not null,
+          created_at text not null,
+          started_at text,
+          finished_at text,
+          processed_review_status text,
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          ${includeLeaseExpiresAt ? "lease_expires_at text," : ""}
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at,
+           head_count_used, head_count_limit, worker_pid, last_error)
+         values (?, ?, ?, ?, ?, ?, 1, 10, null, ?)`
+      ).run(
+        sessionId,
+        repo,
+        options.sessionState ?? "failed",
+        "2026-07-08T07:27:13.504Z",
+        "2026-07-08T07:34:41.973Z",
+        "2026-07-08T08:30:00.000Z",
+        "owner_pid_not_alive:1594"
+      );
+      if (options.includeSessionJob ?? true) {
+        db.prepare(
+          `insert into reviewer_session_jobs
+            (session_id, repo, pull_number, head_sha, job_state, assignment_reason, created_at, started_at)
+           values (?, ?, ?, ?, 'running', 'same_repo_active_session', ?, ?)`
+        ).run(
+          sessionId,
+          repo,
+          451,
+          sessionHeadSha,
+          "2026-07-08T07:27:13.504Z",
+          "2026-07-08T07:34:41.973Z"
+        );
+      }
+      if (options.includeQueueJob ?? true) {
+        if (includeLeaseExpiresAt) {
+          db.prepare(
+            `insert into review_queue_jobs
+              (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+               priority, state, lease_id, lease_expires_at, session_id, created_at, updated_at, started_at)
+             values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            "running-active-head",
+            `automatic:${repo}#451@${queueHeadSha}`,
+            repo,
+            "electricsheephq",
+            451,
+            queueHeadSha,
+            options.queueState ?? "running",
+            "lease-active",
+            options.queueLeaseExpiresAt === undefined ? "2026-07-08T08:05:35.197Z" : options.queueLeaseExpiresAt,
+            sessionId,
+            "2026-07-08T07:27:13.504Z",
+            queueUpdatedAt,
+            "2026-07-08T07:34:41.973Z"
+          );
+        } else {
+          db.prepare(
+            `insert into review_queue_jobs
+              (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+               priority, state, lease_id, session_id, created_at, updated_at, started_at)
+             values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            "running-active-head",
+            `automatic:${repo}#451@${queueHeadSha}`,
+            repo,
+            "electricsheephq",
+            451,
+            queueHeadSha,
+            options.queueState ?? "running",
+            "lease-active",
+            sessionId,
+            "2026-07-08T07:27:13.504Z",
+            queueUpdatedAt,
+            "2026-07-08T07:34:41.973Z"
+          );
+        }
+      }
+    } finally {
+      db.close();
+    }
+    return dbPath;
+  }
+
+  it("counts failed reviewer sessions covered by active durable queue jobs as active retry-covered work", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-reviewer-session-covered-failure-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null default (datetime('now')),
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table reviewer_sessions (
+          session_id text primary key,
+          repo text not null,
+          repo_family text,
+          state text not null,
+          started_at text not null,
+          last_used_at text not null,
+          expires_at text not null,
+          head_count_used integer not null,
+          head_count_limit integer not null,
+          worker_pid integer,
+          model text,
+          provider text,
+          zcode_cli_version text,
+          memory_packet_sha text,
+          gitnexus_packet_sha text,
+          last_error text
+        );
+
+        create table reviewer_session_jobs (
+          session_id text not null,
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          job_state text not null,
+          assignment_reason text not null,
+          created_at text not null,
+          started_at text,
+          finished_at text,
+          processed_review_status text,
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          lease_expires_at text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare(
+        `insert into reviewer_sessions
+          (session_id, repo, state, started_at, last_used_at, expires_at,
+           head_count_used, head_count_limit, worker_pid, last_error)
+         values (?, ?, 'failed', ?, ?, ?, 1, 10, ?, ?)`
+      ).run(
+        "covered-failed-session",
+        "electricsheephq/evaos-code-review-bot-neondiff",
+        "2026-07-08T07:27:13.504Z",
+        "2026-07-08T07:34:41.973Z",
+        "2026-07-08T08:30:00.000Z",
+        1_594,
+        "owner_pid_not_alive:1594"
+      );
+      db.prepare(
+        `insert into reviewer_session_jobs
+          (session_id, repo, pull_number, head_sha, job_state, assignment_reason, created_at, started_at)
+         values (?, ?, ?, ?, 'running', 'same_repo_active_session', ?, ?)`
+      ).run(
+        "covered-failed-session",
+        "electricsheephq/evaos-code-review-bot-neondiff",
+        451,
+        "active-head",
+        "2026-07-08T07:27:13.504Z",
+        "2026-07-08T07:34:41.973Z"
+      );
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, lease_id, lease_expires_at, session_id, created_at, updated_at, started_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'running', ?, ?, ?, ?, ?, ?)`
+      ).run(
+        "running-active-head",
+        "automatic:electricsheephq/evaos-code-review-bot-neondiff#451@active-head",
+        "electricsheephq/evaos-code-review-bot-neondiff",
+        "electricsheephq",
+        451,
+        "active-head",
+        "lease-active",
+        "2026-07-08T08:05:35.197Z",
+        "covered-failed-session",
+        "2026-07-08T07:27:13.504Z",
+        "2026-07-08T07:34:41.973Z",
+        "2026-07-08T07:34:41.973Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-08T07:51:35.481Z")
+    });
+
+    expect(status.database.reviewerSessionCount).toBe(1);
+    expect(status.database.activeReviewerSessionCount).toBe(1);
+    expect(status.database.expiredReviewerSessionCount).toBe(0);
+    expect(status.database.retryCoveredReviewerSessionCount).toBe(1);
+    expect(status.database.reviewerSessionsByRepo).toEqual([
+      {
+        repo: "electricsheephq/evaos-code-review-bot-neondiff",
+        total: 1,
+        active: 1,
+        expired: 0,
+        retryCovered: 1
+      }
+    ]);
+  });
+
+  it("counts failed reviewer sessions covered by legacy active durable queue jobs without lease expiry columns", () => {
+    const dbPath = createReviewerSessionRetryFixture({
+      rootPrefix: "release-status-reviewer-session-legacy-retry-",
+      includeLeaseExpiresAt: false
+    });
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-08T07:51:35.481Z")
+    });
+
+    expect(status.database.activeReviewerSessionCount).toBe(1);
+    expect(status.database.expiredReviewerSessionCount).toBe(0);
+    expect(status.database.retryCoveredReviewerSessionCount).toBe(1);
+    expect(status.database.reviewerSessionsByRepo).toEqual([
+      {
+        repo: "electricsheephq/evaos-code-review-bot-neondiff",
+        total: 1,
+        active: 1,
+        expired: 0,
+        retryCovered: 1
+      }
+    ]);
+  });
+
+  it("counts failed reviewer sessions covered by active queue jobs with null lease expiry and recent updates", () => {
+    const dbPath = createReviewerSessionRetryFixture({
+      rootPrefix: "release-status-reviewer-session-null-lease-retry-",
+      queueLeaseExpiresAt: null
+    });
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-08T07:51:35.481Z")
+    });
+
+    expect(status.database.activeReviewerSessionCount).toBe(1);
+    expect(status.database.expiredReviewerSessionCount).toBe(0);
+    expect(status.database.retryCoveredReviewerSessionCount).toBe(1);
+  });
+
+  it("does not retry-cover unmatched sessions, expired queue leases, or already-active sessions", () => {
+    const unmatchedDbPath = createReviewerSessionRetryFixture({
+      rootPrefix: "release-status-reviewer-session-unmatched-retry-",
+      queueHeadSha: "different-head"
+    });
+    const unmatchedStatus = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: unmatchedDbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-08T07:51:35.481Z")
+    });
+
+    expect(unmatchedStatus.database.activeReviewerSessionCount).toBe(0);
+    expect(unmatchedStatus.database.retryCoveredReviewerSessionCount).toBe(0);
+
+    const expiredLeaseDbPath = createReviewerSessionRetryFixture({
+      rootPrefix: "release-status-reviewer-session-expired-lease-retry-",
+      queueLeaseExpiresAt: "2026-07-08T07:05:35.197Z"
+    });
+    const expiredLeaseStatus = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: expiredLeaseDbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-08T07:51:35.481Z")
+    });
+
+    expect(expiredLeaseStatus.database.activeReviewerSessionCount).toBe(0);
+    expect(expiredLeaseStatus.database.retryCoveredReviewerSessionCount).toBe(0);
+
+    const activeSessionDbPath = createReviewerSessionRetryFixture({
+      rootPrefix: "release-status-reviewer-session-active-no-double-count-",
+      sessionState: "active"
+    });
+    const activeSessionStatus = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: activeSessionDbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-08T07:51:35.481Z")
+    });
+
+    expect(activeSessionStatus.database.activeReviewerSessionCount).toBe(1);
+    expect(activeSessionStatus.database.retryCoveredReviewerSessionCount).toBe(0);
+    expect(activeSessionStatus.database.reviewerSessionsByRepo).toEqual([
+      {
+        repo: "electricsheephq/evaos-code-review-bot-neondiff",
+        total: 1,
+        active: 1,
+        expired: 0
+      }
+    ]);
   });
 
   it("reports durable review queue counts and fails retryable deferred or failed jobs", () => {
