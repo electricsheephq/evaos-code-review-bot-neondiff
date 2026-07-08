@@ -1,0 +1,18 @@
+[Unit]
+Description=NeonDiff local review daemon
+Documentation=https://github.com/electricsheephq/evaos-code-review-bot-neondiff/blob/main/docs/systemd.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/neondiff/neondiff.env
+WorkingDirectory=%h/.local/share/neondiff
+ExecStart=/usr/bin/env neondiff daemon --config ${NEONDIFF_CONFIG}
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

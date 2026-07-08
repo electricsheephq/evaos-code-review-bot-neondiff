@@ -20,11 +20,18 @@
     "CODE_OF_CONDUCT.md",
     "config.example.json",
     "docs/SETUP.md",
+    "docs/ci-runner.md",
+    "docs/docker.md",
     "docs/github-app-setup.md",
     "docs/providers.md",
     "docs/license-boundary.md",
     "docs/pricing.md",
-    "docs/schema/neondiff-config.schema.json"
+    "docs/schema/neondiff-config.schema.json",
+    "docs/systemd.md",
+    "systemd/neondiff.service.example",
+    "systemd/neondiff.user.service.example",
+    "Dockerfile",
+    "docker-compose.example.yml"
   ],
   "engines": {
     "node": ">=26"

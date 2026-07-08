@@ -2846,6 +2846,38 @@ exit 1
     });
   });
 
+  it("degrades launchd daemon controls on Linux with systemd guidance", async () => {
+    const startError = await runCli([
+      "daemon",
+      "start",
+      "--launchd-label",
+      "com.example.neondiff"
+    ], { env: { NEONDIFF_TEST_PLATFORM: "linux" } }).catch((error: { stdout: string }) => error);
+    const statusError = await runCli([
+      "daemon",
+      "status"
+    ], { env: { NEONDIFF_TEST_PLATFORM: "linux" } }).catch((error: { stdout: string }) => error);
+
+    expect(JSON.parse(startError.stdout)).toMatchObject({
+      ok: false,
+      command: "daemon start",
+      platform: "linux",
+      serviceManager: "systemd",
+      docs: "docs/systemd.md",
+      error: expect.stringContaining("launchd daemon controls are only supported on macOS")
+    });
+    expect(JSON.parse(startError.stdout).error).toContain("use systemd");
+    expect(JSON.parse(startError.stdout).plannedCommands).toBeUndefined();
+    expect(JSON.parse(statusError.stdout)).toMatchObject({
+      ok: false,
+      command: "daemon status",
+      platform: "linux",
+      serviceManager: "systemd",
+      docs: "docs/systemd.md",
+      error: expect.stringContaining("use systemd")
+    });
+  });
+
   it("validates launchd labels and plist labels before planning daemon commands", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-plist-"));
     roots.push(root);

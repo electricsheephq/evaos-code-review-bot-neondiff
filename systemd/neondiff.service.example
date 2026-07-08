@@ -1,0 +1,25 @@
+[Unit]
+Description=NeonDiff local review daemon
+Documentation=https://github.com/electricsheephq/evaos-code-review-bot-neondiff/blob/main/docs/systemd.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neondiff
+Group=neondiff
+EnvironmentFile=/etc/neondiff/neondiff.env
+WorkingDirectory=/var/lib/neondiff
+StateDirectory=neondiff
+CacheDirectory=neondiff
+LogsDirectory=neondiff
+ExecStart=/usr/bin/env neondiff daemon --config ${NEONDIFF_CONFIG}
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/neondiff /var/cache/neondiff /var/log/neondiff /etc/neondiff
+
+[Install]
+WantedBy=multi-user.target

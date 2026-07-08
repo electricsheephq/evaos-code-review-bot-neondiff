@@ -157,7 +157,10 @@ evaos-review-bot status --config config.local.json
   the existing scoped `run-once` review command. Live posting through this
   public alias requires `--dry-run false --confirm true` after the exact repo,
   PR, head SHA, and config path are approved.
-- `daemon start|stop|status`: JSON-first launchd controls. All daemon
+- `daemon start|stop|status`: JSON-first macOS launchd controls. On Linux and
+  other non-Darwin platforms these subcommands fail closed with
+  `serviceManager: "systemd"` and a pointer to [docs/systemd.md](systemd.md)
+  instead of trying to run `launchctl`. All macOS daemon
   subcommands require `--launchd-label`; `start` and `stop` default to dry-run planning; live mutation
   requires both `--dry-run false` and `--confirm true`.
   When `start` uses `--plist <path>`, `stop` can either pass the same `--plist`

@@ -1,0 +1,54 @@
+# Docker Operator Guide
+
+The Docker recipe is for local or self-hosted workers where config, state,
+evidence, and checkout work directories are mounted as volumes. It is not a
+hosted NeonDiff SaaS path and does not bundle model credits.
+
+## Compose Quick Start
+
+Copy the example and provide secrets through an untracked `.env` file:
+
+```bash
+cp docker-compose.example.yml docker-compose.local.yml
+cat > .env <<'EOF'
+NEONDIFF_GITHUB_APP_ID=123456
+NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH=/config/neondiff.private-key.pem
+EOF
+```
+
+Mount your config at `/config/config.local.json` and keep keys outside git:
+
+```bash
+docker compose -f docker-compose.local.yml build neondiff
+docker compose -f docker-compose.local.yml up -d neondiff
+docker compose -f docker-compose.local.yml logs -f neondiff
+```
+
+The example also includes an `ollama` service for local OpenAI-compatible
+provider experiments. It is optional; remove it if your provider runs elsewhere.
+
+## Healthcheck
+
+The image healthcheck runs a config/provider-list command against
+`NEONDIFF_CONFIG`. A healthy container means the CLI can start and parse the
+configured provider registry; it is not a guarantee of review quality or live
+posting readiness. Pair it with:
+
+```bash
+docker compose -f docker-compose.local.yml exec neondiff \
+  neondiff doctor --config /config/config.local.json --json
+```
+
+## Volumes
+
+Recommended mounts:
+
+| Mount | Purpose |
+| --- | --- |
+| `/config` | Local config, GitHub App private key path, and untracked env inputs |
+| `/state` | SQLite state DBs and license cache files |
+| `/evidence` | Redacted review evidence packets |
+| `/work` | Bare mirrors and per-PR worktrees |
+
+Do not bake GitHub App keys, provider API keys, license keys, customer data, or
+raw review evidence into the image.

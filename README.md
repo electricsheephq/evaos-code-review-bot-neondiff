@@ -23,6 +23,7 @@ sold. NeonDiff is a source-available beta, not an open-source or GA release.
 [Code of Conduct](CODE_OF_CONDUCT.md) · [License](LICENSE.md) ·
 [License Boundary](docs/license-boundary.md) · [Pricing](docs/pricing.md) ·
 [Providers](docs/providers.md) ·
+[systemd](docs/systemd.md) · [Docker](docs/docker.md) · [CI Runner](docs/ci-runner.md) ·
 [Known Limitations](docs/known-limitations-and-provider-status.md) ·
 [Precision Badge](docs/precision-badge.md) ·
 [Roadmap](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103) ·
@@ -133,6 +134,16 @@ selected-repo install path.
 Do not store the GitHub App private key, provider API key, license key, tokens,
 or customer data in this repository. Keep local config, secrets, state DBs, and
 evidence outside git.
+
+Platform operator paths:
+
+| Platform | Daemon path | Status |
+| --- | --- | --- |
+| macOS | launchd with [docs/launchd.md](docs/launchd.md) | Tested beta operator path |
+| Linux | systemd with [docs/systemd.md](docs/systemd.md) | Packaged and covered by Ubuntu smoke tests |
+| Docker | Compose recipe with [docs/docker.md](docs/docker.md) | Packaged for local/self-hosted workers |
+| CI runners | One-shot review or dry-run with [docs/ci-runner.md](docs/ci-runner.md) | Documented for Ubuntu-style runners |
+| Windows | CLI-only source/package usage | Untested; no supervised daemon claim |
 
 ## Provider Resources And Compatibility
 
