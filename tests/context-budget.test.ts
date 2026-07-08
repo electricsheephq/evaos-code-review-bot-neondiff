@@ -117,6 +117,42 @@ describe("context budget preflight", () => {
     });
   });
 
+  it("keeps the default ZCode budget above max patch plus configured advisory packet ceilings", () => {
+    const config = loadConfigFromObject({});
+    const files = [file("src/max-patch.ts", config.zcode.maxPatchBytes)];
+    const buildPrompt = (chunkFiles: PullFilePatch[]) => buildReviewPrompt({
+      repo: "owner/repo",
+      pull: pullSummary(),
+      files: chunkFiles,
+      maxPatchBytes: config.zcode.maxPatchBytes,
+      repoMemoryPacket: advisoryPacket("repo-memory", config.repoMemory!.maxPacketBytes),
+      gitnexusContextPacket: {
+        ...advisoryPacket("gitnexus", config.gitnexusContext!.maxPacketBytes),
+        gitnexus: { freshness: "fresh", degradedMode: false }
+      },
+      githubRelatedContextPacket: advisoryPacket("github-related", config.githubRelatedContext!.maxPacketBytes),
+      skillPackContextPacket: advisoryPacket("skill-pack", config.skillPacks!.maxPacketBytes)
+    });
+    const prompt = buildPrompt(files);
+
+    const plan = planContextBudget({
+      prompt,
+      files,
+      contextWindowTokens: config.providers!.providers[config.providers!.defaultProviderId]!.contextWindowTokens,
+      config: config.contextBudget,
+      buildPrompt
+    });
+
+    expect(plan).toMatchObject({
+      mode: "within_budget",
+      contextWindowTokens: 128_000,
+      budgetTokens: 123_904,
+      reason: "context_budget_within_budget"
+    });
+    if (plan.mode !== "within_budget") throw new Error(`expected within_budget plan, got ${plan.mode}`);
+    expect(plan.estimatedTokens).toBeLessThanOrEqual(plan.budgetTokens);
+  });
+
   it("uses literal reasons for non-skip plan outcomes", () => {
     const files = [file("src/a.ts", 10)];
     const buildPrompt = (chunkFiles: PullFilePatch[]) =>
@@ -156,6 +192,16 @@ function file(filename: string, patchLength: number): PullFilePatch {
     additions: 1,
     deletions: 1,
     changes: 2
+  };
+}
+
+function advisoryPacket(prefix: string, byteEstimate: number) {
+  const marker = `# ${prefix}\n`;
+  return {
+    sha256: prefix.padEnd(64, "0").slice(0, 64),
+    byteEstimate,
+    tokenEstimate: Math.ceil(byteEstimate / 4),
+    markdown: `${marker}${"x".repeat(Math.max(0, byteEstimate - marker.length))}`
   };
 }
 

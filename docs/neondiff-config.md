@@ -153,11 +153,15 @@ the configured budget is skipped with reason
 known-over-budget chunk.
 
 Chunk mode is a provider-window safety fallback, not a full-context substitute:
-each provider call sees only the files in that deterministic file-boundary chunk,
-so cross-file findings that require files from different chunks can be missed.
-To avoid comments on files the model did not inspect, NeonDiff accepts findings
-from a chunk only when their `path` is one of that chunk's filenames; any
-cross-chunk coordinates are discarded before the deterministic review gate.
+each provider call receives only that deterministic file-boundary chunk in the
+`Files` and `Diff` sections, but advisory context packets such as GitNexus,
+repo memory, related GitHub references, and read-only skill packs remain
+PR-scoped when enabled. That fixed packet overhead is included in every chunk's
+budget estimate. Cross-file findings that require diff files from different
+chunks can be missed. To avoid comments on files the model did not inspect,
+NeonDiff accepts findings from a chunk only when their `path` is one of that
+chunk's filenames; any cross-chunk coordinates are discarded before the
+deterministic review gate.
 
 Context-budget skip reasons are operator-facing:
 
