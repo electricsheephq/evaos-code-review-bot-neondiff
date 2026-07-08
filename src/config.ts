@@ -1333,7 +1333,12 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
   if (value.contextWindowTokens !== undefined) validatePositiveInteger(value.contextWindowTokens, `${label}.contextWindowTokens`);
   if (value.timeoutMs !== undefined) validatePositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
   if (value.retryMaxRetries !== undefined) validateNonNegativeInteger(value.retryMaxRetries, `${label}.retryMaxRetries`);
-  if (value.retrySchemaFeedbackMax !== undefined) validateIntegerRange(value.retrySchemaFeedbackMax, `${label}.retrySchemaFeedbackMax`, 0, 3);
+  if (value.retrySchemaFeedbackMax !== undefined) {
+    if (adapter !== "openai-compatible") {
+      throw new Error(`${label}.retrySchemaFeedbackMax is only supported for openai-compatible providers`);
+    }
+    validateIntegerRange(value.retrySchemaFeedbackMax, `${label}.retrySchemaFeedbackMax`, 0, 3);
+  }
   if (value.structuredOutputMode !== undefined && !isProviderStructuredOutputMode(value.structuredOutputMode)) {
     throw new Error(`${label}.structuredOutputMode must be one of ${PROVIDER_STRUCTURED_OUTPUT_MODES.join(", ")}`);
   }

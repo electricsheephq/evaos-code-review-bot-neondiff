@@ -674,7 +674,7 @@ describe("provider adapter fixtures", () => {
     });
   });
 
-  it("preserves schema-output classification when the shared retry timeout expires", async () => {
+  it("classifies a shared schema-feedback retry deadline as timeout", async () => {
     let calls = 0;
     const result = await runProviderAdapterFixture({
       adapter: createOpenAICompatibleReviewAdapter({
@@ -712,8 +712,8 @@ describe("provider adapter fixtures", () => {
     expect(result).toMatchObject({
       ok: false,
       error: {
-        class: "model-output",
-        message: "Adapter output was not a parseable JSON review object."
+        class: "timeout",
+        message: "deadline exceeded"
       }
     });
   });
@@ -939,7 +939,46 @@ describe("provider adapter fixtures", () => {
       ok: false,
       error: {
         class: "model-output",
-        message: "OpenAI-compatible review output was truncated before a parseable JSON review object (finish_reason=length)."
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object."
+      }
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("does not schema-retry JSON-looking truncated review output without finish_reason length", async () => {
+    let calls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAICompatibleReviewAdapter({
+        providerId: "truncated-without-finish-reason-local-model",
+        provider: makeOpenAICompatibleProvider({
+          baseUrl: "http://localhost:8080/v1"
+        }),
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: '{"findings":[{"severity":"P1"'
+                }
+              }
+            ]
+          });
+        }
+      }),
+      fixture: makeFixture({
+        id: "truncated-without-finish-reason-local-model-fixture",
+        providerId: "truncated-without-finish-reason-local-model",
+        adapterId: "openai-compatible",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: "model-output",
+        message: "OpenAI-compatible review output was truncated before a parseable JSON review object."
       }
     });
     expect(calls).toBe(1);

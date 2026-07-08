@@ -2271,5 +2271,26 @@ describe("provider registry", () => {
         }
       }
     })).toThrow(/retrySchemaFeedbackMax must be an integer from 0 to 3/);
+
+    expect(() => loadConfigFromObject({
+      providers: {
+        defaultProviderId: "zcode-with-schema-feedback-retry",
+        providers: {
+          "zcode-with-schema-feedback-retry": {
+            enabled: true,
+            adapter: "zcode",
+            model: "GLM-5.2",
+            authMode: "zcode-app-config",
+            retrySchemaFeedbackMax: 1,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    })).toThrow(/retrySchemaFeedbackMax is only supported for openai-compatible providers/);
   });
 });
