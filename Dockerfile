@@ -27,7 +27,7 @@ VOLUME ["/config", "/state", "/evidence", "/work"]
 USER node
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD neondiff help >/dev/null || exit 1
+  CMD node -e 'const fs = require("node:fs"); const cmd = fs.readFileSync("/proc/1/cmdline", "utf8").replace(/\0/g, " "); if (!/\bdaemon\b/.test(cmd)) process.exit(1);'
 
 ENTRYPOINT ["neondiff"]
 

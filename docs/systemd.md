@@ -6,6 +6,20 @@ not change review behavior: the worker still reviews only configured repos,
 uses current-head duplicate suppression, redacts secrets, and writes evidence
 under the configured paths.
 
+## Install The CLI
+
+Install NeonDiff into a path visible to systemd before enabling either unit.
+The example units use `/usr/bin/env neondiff`, so `command -v neondiff` should
+resolve to a systemd-visible path such as `/usr/local/bin/neondiff` or
+`/usr/bin/neondiff`. If your npm global prefix is account-local, edit
+`ExecStart` in the copied unit file to the absolute path returned by
+`command -v neondiff`.
+
+```bash
+npm install -g neondiff
+command -v neondiff
+```
+
 ## User Service
 
 Use the user unit for a single operator account that owns the config, state, and

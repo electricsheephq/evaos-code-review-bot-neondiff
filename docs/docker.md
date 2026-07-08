@@ -44,10 +44,11 @@ suppression, and issue/PR approval are recorded.
 
 ## Healthcheck And Readiness
 
-The image healthcheck runs `neondiff help` as a cheap process/CLI liveness
-check. It intentionally does not read the mounted config, call a provider, or
-distinguish dry-run from live posting mode. Treat it as container liveness only.
-Use explicit readiness checks before live review:
+The image healthcheck verifies that PID 1 was launched as the `neondiff daemon`
+command. It intentionally does not read the mounted config, call a provider,
+or distinguish dry-run from live posting mode. Treat it as container liveness
+only, not evidence that reviews are draining or providers are ready. Use
+explicit readiness checks before live review:
 
 ```bash
 docker compose -f docker-compose.local.yml exec neondiff \
