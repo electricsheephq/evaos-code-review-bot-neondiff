@@ -2869,12 +2869,18 @@ async function runChunkedZCodeReview(input: {
         })
       : disabledZCodeReviewResult(input.config);
 
-    findings.push(...result.findings);
+    const allowedFilenames = new Set(chunk.filenames);
+    const chunkFindings = result.findings.filter((finding) => allowedFilenames.has(finding.path));
+    const droppedCrossChunkFindings = result.findings.length - chunkFindings.length;
+    findings.push(...chunkFindings);
     droppedFromSchema.push(...result.droppedFromSchema);
     rawResponses.push({ index: chunk.index, rawResponse: result.rawResponse });
     attempts += result.attempts;
     degradedRecovery = degradedRecovery || result.degradedRecovery;
     providerAttempts += result.runtime.providerAttempts ?? 0;
+    if (droppedCrossChunkFindings > 0) {
+      runtimeNotes.push(`chunk ${chunk.index}: dropped ${droppedCrossChunkFindings} finding(s) outside this chunk's file set.`);
+    }
     if (result.runtime.notes) {
       runtimeNotes.push(...result.runtime.notes.map((note) => `chunk ${chunk.index}: ${note}`));
     }
@@ -2886,7 +2892,7 @@ async function runChunkedZCodeReview(input: {
     result: {
       findings,
       droppedFromSchema,
-      rawResponse: JSON.stringify({ chunks: rawResponses }),
+      rawResponse: JSON.stringify({ findings, chunks: rawResponses }),
       attempts,
       degradedRecovery,
       runtime: {

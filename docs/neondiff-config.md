@@ -152,6 +152,13 @@ the configured budget is skipped with reason
 `context_budget_single_file_overflow`; NeonDiff never splits a hunk or sends a
 known-over-budget chunk.
 
+Chunk mode is a provider-window safety fallback, not a full-context substitute:
+each provider call sees only the files in that deterministic file-boundary chunk,
+so cross-file findings that require files from different chunks can be missed.
+To avoid comments on files the model did not inspect, NeonDiff accepts findings
+from a chunk only when their `path` is one of that chunk's filenames; any
+cross-chunk coordinates are discarded before the deterministic review gate.
+
 Context-budget skip reasons are operator-facing:
 
 - `context_budget_overflow`: the full prompt is too large and `overflow` is `skip`.

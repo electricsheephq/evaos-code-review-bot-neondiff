@@ -9,6 +9,13 @@ import type { Finding, PullRequestSummary } from "../src/types.js";
 
 const zcodePrompts = vi.hoisted((): string[] => []);
 const zcodeFindingsByPath = vi.hoisted(() => new Map<string, Finding[]>());
+const createdReviews = vi.hoisted((): Array<{
+  repo: string;
+  pullNumber: number;
+  event: string;
+  body: string;
+  comments: Array<{ path: string; line: number; title: string }>;
+}> => []);
 
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
@@ -43,6 +50,32 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/github.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/github.js")>();
+  return {
+    ...actual,
+    GitHubApi: class {
+      canPostAsApp(): boolean {
+        return true;
+      }
+
+      async createReview(input: {
+        repo: string;
+        pullNumber: number;
+        event: string;
+        body: string;
+        comments: Array<{ path: string; line: number; title: string }>;
+      }): Promise<{ html_url: string; id: number }> {
+        createdReviews.push(input);
+        return {
+          html_url: `https://github.com/${input.repo}/pull/${input.pullNumber}#pullrequestreview-${createdReviews.length}`,
+          id: createdReviews.length
+        };
+      }
+    }
+  };
+});
+
 const { localDateFolder, prepareFailedHeadRetry, reviewPull } = await import("../src/worker.js");
 const { buildReviewPrompt } = await import("../src/zcode.js");
 
@@ -52,6 +85,7 @@ describe("worker context budget preflight", () => {
   afterEach(() => {
     zcodePrompts.length = 0;
     zcodeFindingsByPath.clear();
+    createdReviews.length = 0;
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -130,7 +164,7 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
-  it("executes provider review once per deterministic context chunk", async () => {
+  it("executes provider review once per deterministic context chunk and posts merged current-line comments", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-chunk-"));
     roots.push(root);
     const config = minimalConfig(root);
@@ -151,6 +185,7 @@ describe("worker context budget preflight", () => {
     ];
     zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Chunk A finding")]);
     zcodeFindingsByPath.set("src/b.ts", [finding("src/b.ts", "Chunk B finding")]);
+    zcodeFindingsByPath.set("src/c.ts", [finding("src/a.ts", "Cross-chunk misplaced finding")]);
     const singlePromptLengths = files.map((entry) => reviewPromptLength(config, pull, [entry]));
     const fullPromptLength = reviewPromptLength(config, pull, files);
     const largestSinglePromptLength = Math.max(...singlePromptLengths);
@@ -164,7 +199,7 @@ describe("worker context budget preflight", () => {
       state,
       repo: "electricsheephq/WorldOS",
       pull,
-      dryRun: true,
+      dryRun: false,
       useZCode: true
     });
 
@@ -200,8 +235,24 @@ describe("worker context budget preflight", () => {
       { path: "src/a.ts", line: 1, title: "Chunk A finding" },
       { path: "src/b.ts", line: 1, title: "Chunk B finding" }
     ]);
+    expect(reviewPlan.dropped).toEqual([]);
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]).toMatchObject({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      event: "COMMENT"
+    });
+    expect(createdReviews[0]?.comments.map((comment) => ({
+      path: comment.path,
+      line: comment.line,
+      title: comment.title
+    }))).toEqual([
+      { path: "src/a.ts", line: 1, title: "Chunk A finding" },
+      { path: "src/b.ts", line: 1, title: "Chunk B finding" }
+    ]);
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
-      status: "dry_run"
+      status: "posted",
+      reviewUrl: `https://github.com/electricsheephq/WorldOS/pull/${pull.number}#pullrequestreview-1`
     });
     state.close();
   });

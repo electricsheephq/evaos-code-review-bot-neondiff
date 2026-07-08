@@ -2013,10 +2013,11 @@ function updateQueueJobAfterReviewStatus(input: {
       });
       return;
     case "skipped_context_budget":
+      const contextBudgetProcessed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "failed",
-        lastError: input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)?.reason ?? "context_budget_overflow"
+        lastError: contextBudgetProcessed?.error ?? "context_budget_overflow"
       });
       return;
     case "skipped_canary":
