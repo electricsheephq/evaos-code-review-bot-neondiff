@@ -1550,6 +1550,8 @@ function reviewResultStatusCommentState(
       return "stale_head";
     case "skipped_capacity":
       return "provider_deferred";
+    case "skipped_context_budget":
+      return "skipped";
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -1700,6 +1702,8 @@ function readinessStateForReviewResult(
     case "skipped_provider_cooldown":
     case "skipped_capacity":
       return "provider_deferred";
+    case "skipped_context_budget":
+      return "skipped";
     case "skipped_stale_head":
       return "stale";
     case "skipped_draft":
@@ -1732,6 +1736,8 @@ function readinessReasonForReviewResult(
       return "provider_cooldown";
     case "skipped_capacity":
       return "review_capacity_busy";
+    case "skipped_context_budget":
+      return processed?.error ?? "context_budget_overflow";
     case "skipped_stale_head":
       return "stale_head";
     case "skipped_draft":
@@ -1934,6 +1940,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
     case "skipped_stale_head":
+    case "skipped_context_budget":
       updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
       return;
     default:
@@ -2005,6 +2012,15 @@ function updateQueueJobAfterReviewStatus(input: {
         lastError: "legacy_review_capacity_busy"
       });
       return;
+    case "skipped_context_budget": {
+      const contextBudgetProcessed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "failed",
+        lastError: contextBudgetProcessed?.error ?? "context_budget_overflow"
+      });
+      return;
+    }
     case "skipped_canary":
     case "skipped_policy":
     case "skipped_license_gate":
@@ -2295,6 +2311,10 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
     case "skipped_capacity":
       result.skippedCapacity += 1;
       break;
+    case "skipped_context_budget":
+      result.skippedContextBudget += 1;
+      result.queue.failedQueueJobs += 1;
+      break;
     case "skipped_provider_cooldown":
       result.skippedProviderCooldown += 1;
       result.queue.providerDeferred += 1;
@@ -2332,6 +2352,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
     commandReviewRequested: 0,
     skippedProcessed: 0,
     skippedCapacity: 0,
+    skippedContextBudget: 0,
     skippedProviderCooldown: 0,
     skippedStaleHead: 0,
     baselinedExisting: 0,

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname, join } from "node:path";
+import { DEFAULT_CONTEXT_BUDGET_CONFIG, type ContextBudgetConfig } from "./context-budget.js";
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
@@ -63,6 +64,7 @@ export interface BotConfig {
     transientRetryBaseDelayMs: number;
     transientRetryMaxDelayMs: number;
   };
+  contextBudget?: ContextBudgetConfig;
   walkthrough: {
     enabled: boolean;
     postIssueComment: boolean;
@@ -325,6 +327,7 @@ const DEFAULT_CONFIG: BotConfig = {
     transientRetryBaseDelayMs: 2_000,
     transientRetryMaxDelayMs: 20_000
   },
+  contextBudget: DEFAULT_CONTEXT_BUDGET_CONFIG,
   walkthrough: {
     enabled: true,
     postIssueComment: false
@@ -615,6 +618,9 @@ function validateConfig(config: BotConfig): void {
   validateNonNegativeInteger(config.providerCooldown.transientRetryAttempts, "config.providerCooldown.transientRetryAttempts");
   validatePositiveInteger(config.providerCooldown.transientRetryBaseDelayMs, "config.providerCooldown.transientRetryBaseDelayMs");
   validatePositiveInteger(config.providerCooldown.transientRetryMaxDelayMs, "config.providerCooldown.transientRetryMaxDelayMs");
+  const contextBudget = { ...DEFAULT_CONTEXT_BUDGET_CONFIG, ...(config.contextBudget ?? {}) };
+  config.contextBudget = contextBudget;
+  validateContextBudgetConfig(contextBudget, "config.contextBudget");
   validateBoolean(config.walkthrough.enabled, "config.walkthrough.enabled");
   validateBoolean(config.walkthrough.postIssueComment, "config.walkthrough.postIssueComment");
   const reviewStatusComment = config.reviewStatusComment ?? DEFAULT_CONFIG.reviewStatusComment!;
@@ -1357,6 +1363,18 @@ function validateProviderRegistryEntry(value: unknown, label: string): void {
   }
 }
 
+function validateContextBudgetConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  if (value.overflow !== "skip" && value.overflow !== "chunk") {
+    throw new Error(`${label}.overflow must be skip or chunk`);
+  }
+  validatePositiveInteger(value.reservedOutputTokens, `${label}.reservedOutputTokens`);
+  validatePositiveInteger(value.charsPerToken, `${label}.charsPerToken`);
+  validatePositiveFiniteNumber(value.providerFudgeFactor, `${label}.providerFudgeFactor`);
+  validatePositiveInteger(value.maxChunks, `${label}.maxChunks`);
+}
+
 function validateProviderAdapterAuthMode(adapter: string, authMode: string, label: string): void {
   const allowedByAdapter: Record<string, string[]> = {
     zcode: ["zcode-app-config"],
@@ -1564,6 +1582,12 @@ function validatePositiveInteger(value: unknown, label: string): void {
 
 function validateNonNegativeInteger(value: unknown, label: string): void {
   if (!Number.isInteger(value) || Number(value) < 0) throw new Error(`${label} must be a non-negative integer`);
+}
+
+function validatePositiveFiniteNumber(value: unknown, label: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${label} must be a positive finite number`);
+  }
 }
 
 function validateIntegerRange(value: unknown, label: string, min: number, max: number): void {

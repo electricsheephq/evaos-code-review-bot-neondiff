@@ -221,6 +221,52 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("maps context-budget skips into skipped readiness and failed durable queue state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-context-budget-skip-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 7, HEAD_D)]]
+      ]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "failed",
+          error: "context_budget_overflow"
+        });
+        return "skipped_context_budget";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    expect(result.skippedContextBudget).toBe(1);
+    expect(result.queue.failedQueueJobs).toBe(1);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
+    expect(state.getReviewReadiness("org/repo-a", 7, HEAD_D)).toMatchObject({
+      state: "skipped",
+      reason: "context_budget_overflow"
+    });
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toEqual([
+      expect.objectContaining({
+        pullNumber: 7,
+        headSha: HEAD_D,
+        state: "failed",
+        lastError: "context_budget_overflow"
+      })
+    ]);
+    state.close();
+  });
+
   it("preserves the worker-recorded license gate reason when scheduler syncs readiness", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-license-gate-reason-"));
     roots.push(root);
