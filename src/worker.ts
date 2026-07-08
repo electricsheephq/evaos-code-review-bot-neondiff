@@ -1742,6 +1742,14 @@ export async function reconcileProcessedHeadAfterDirectReview(input: {
 
   const now = input.now ?? new Date();
   if (activeJobs.length === 0) {
+    recordDirectReviewReadinessIfRepairable({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      processed,
+      existingReadiness: input.state.getReviewReadiness(input.repo, input.pull.number, input.pull.head.sha),
+      now
+    });
     return {
       activeQueueJobs: 0,
       settledQueueJobs: 0,
@@ -1835,6 +1843,37 @@ function directReviewReconcileReadinessReason(previous?: ReviewReadinessRecord):
     return DIRECT_REVIEW_RECONCILED_REASON;
   }
   return `${DIRECT_REVIEW_RECONCILED_REASON}; previous_reason=${redactSecrets(previousReason).slice(0, 200)}`;
+}
+
+function recordDirectReviewReadinessIfRepairable(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  processed: { event?: ReviewEvent; reviewUrl?: string };
+  existingReadiness?: ReviewReadinessRecord;
+  now: Date;
+}): void {
+  if (!shouldRepairDirectReviewReadiness(input.existingReadiness)) return;
+  input.state.recordReviewReadiness({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: readinessStateForDirectProcessedReview(input.processed.event),
+    reason: directReviewReconcileReadinessReason(input.existingReadiness),
+    ...(input.processed.event ? { event: input.processed.event } : {}),
+    ...(input.processed.reviewUrl ? { reviewUrl: input.processed.reviewUrl } : {}),
+    now: input.now
+  });
+}
+
+function shouldRepairDirectReviewReadiness(readiness?: ReviewReadinessRecord): boolean {
+  return (
+    !readiness ||
+    readiness.state === "queued" ||
+    readiness.state === "reviewing" ||
+    readiness.state === "awaiting_re_review" ||
+    readiness.state === "provider_deferred"
+  );
 }
 
 function readinessStateForDirectProcessedReview(event?: ReviewEvent): ReviewReadinessState {
