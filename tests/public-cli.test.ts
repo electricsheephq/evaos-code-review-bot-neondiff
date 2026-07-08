@@ -293,7 +293,7 @@ exit 1
       "--trusted-authors",
       "100yenadmin",
       "--body",
-      "@evaos-code-review-bot changelog draft",
+      "@neondiff changelog draft",
       "--generated-at",
       "2026-07-03T00:00:00.000Z"
     ]);
@@ -722,8 +722,8 @@ exit 1
 
       const { stdout } = await runCli(["doctor", "github", "--config", configPath], {
         env: {
-          EVAOS_REVIEW_BOT_APP_ID: "12345",
-          EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: privateKeyPath
+          NEONDIFF_GITHUB_APP_ID: "12345",
+          NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: privateKeyPath
         }
       });
       const output = JSON.parse(stdout);
@@ -770,6 +770,7 @@ exit 1
       expect(output.requiredRepositoryPermissions).toContain("Pull requests: read/write");
       expect(output.optionalPermissions.join(" ")).toMatch(/issue-enrichment/i);
       expect(output.licenseBoundary.privateRepoDataStaysLocal).toBe(true);
+      expect(output.github.botLogin).toBe("configured GitHub App bot");
       expect(stdout).not.toContain(privateKeyPem);
       expect(stdout).not.toContain(privateKeyPath);
       expect(stdout).not.toContain(installationToken);
@@ -923,6 +924,32 @@ exit 1
     } finally {
       await closeServer(server);
     }
+  });
+
+  it("doctor github points missing App credentials at NeonDiff env names", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-missing-env-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/demo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+
+    let stdout = "";
+    try {
+      await runCli(["doctor", "github", "--config", configPath]);
+    } catch (error) {
+      stdout = (error as { stdout?: string }).stdout ?? "";
+    }
+    const output = JSON.parse(stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.github.readMode).toBe("unconfigured");
+    expect(output.troubleshooting.join("\n")).toContain("NEONDIFF_GITHUB_APP_ID");
+    expect(output.troubleshooting.join("\n")).toContain("NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH");
+    expect(output.troubleshooting.join("\n")).not.toContain("Set EVAOS_REVIEW_BOT_APP_ID");
   });
 
   it("rejects non-boolean public rollback ref verification values", async () => {
@@ -2944,6 +2971,8 @@ async function runCli(args: string[], options: { cwd?: string; timeout?: number;
     encoding: "utf8",
     env: {
       ...process.env,
+      NEONDIFF_GITHUB_APP_ID: "",
+      NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: "",
       EVAOS_REVIEW_BOT_APP_ID: "",
       EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
       GITHUB_TOKEN: "",

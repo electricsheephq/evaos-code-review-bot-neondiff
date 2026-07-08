@@ -5,18 +5,18 @@ Launchd should stay disabled until GitHub App installation is complete and a rea
 Recommended first live command:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
-export EVAOS_REVIEW_BOT_APP_ID=4184532
-export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH=/Volumes/LEXAR/Codex/evaos-code-review-bot/secrets/evaos-code-review-bot.private-key.pem
-npm run run-once -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true --repo electricsheephq/WorldOS --pr 1161
+cd /path/to/neondiff
+export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+npm run run-once -- --config /absolute/path/to/config.local.json --dry-run true --repo owner/repo --pr 123
 ```
 
 After the GitHub App is installed, use app credentials and keep `--dry-run true` for the first observation window:
 
 ```bash
-export EVAOS_REVIEW_BOT_APP_ID=4184532
-export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH=/Volumes/LEXAR/Codex/evaos-code-review-bot/secrets/evaos-code-review-bot.private-key.pem
-npm run daemon -- --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/canary-dry-run.json --dry-run true
+export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+npm run daemon -- --config /absolute/path/to/config.local.json --dry-run true
 ```
 
 When installed as a LaunchAgent, write stdout/stderr to `~/Library/Logs/evaos-code-review-bot/`. On this Mac, launchd failed with `EX_CONFIG` when those paths pointed directly at the Lexar volume; copy the local launch logs into the Lexar evidence packet after each proof window.
@@ -32,10 +32,10 @@ Minimum LaunchAgent environment block:
 ```xml
 <key>EnvironmentVariables</key>
 <dict>
-  <key>EVAOS_REVIEW_BOT_APP_ID</key>
+  <key>NEONDIFF_GITHUB_APP_ID</key>
   <string>&lt;github-app-id&gt;</string>
-  <key>EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH</key>
-  <string>/absolute/path/to/evaos-code-review-bot.private-key.pem</string>
+  <key>NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH</key>
+  <string>/absolute/path/to/neondiff.private-key.pem</string>
   <key>NODE_OPTIONS</key>
   <string>--use-system-ca</string>
 </dict>

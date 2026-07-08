@@ -14,7 +14,7 @@ The beta release unit is:
 - evidence root: `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
 
 Packaged or non-source deployments must set
-`EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT` to the live operator checkout so
+`NEONDIFF_PROTECTED_CHECKOUT_ROOT` to the live operator checkout so
 review mirrors and worktrees cannot be planned inside or above that checkout.
 
 The beta release unit does not include expanding monitored repos, GitHub App

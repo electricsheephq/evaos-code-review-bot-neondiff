@@ -610,6 +610,8 @@ describe("desktop config CLI", () => {
 
   async function runConfigRaw(args: string[]): Promise<{ stdout: string; stderr: string }> {
     const {
+      NEONDIFF_GITHUB_APP_ID,
+      NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH,
       EVAOS_REVIEW_BOT_APP_ID,
       EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH,
       GITHUB_TOKEN,

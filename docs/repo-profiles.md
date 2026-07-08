@@ -240,8 +240,8 @@ The template intentionally keeps:
 Before copying any part of the template into the active live config, run:
 
 ```sh
-EVAOS_REVIEW_BOT_APP_ID=4184532 \
-EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH=/Volumes/LEXAR/Codex/evaos-code-review-bot/secrets/evaos-code-review-bot.private-key.pem \
+NEONDIFF_GITHUB_APP_ID="<github-app-id>" \
+NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem" \
 npx tsx src/cli.ts doctor --config /path/to/candidate-live-config.json
 ```
 

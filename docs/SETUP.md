@@ -91,8 +91,8 @@ be enabled just because a repo is monitored:
 Save the generated private key outside the repository.
 
 ```bash
-export EVAOS_REVIEW_BOT_APP_ID="<github-app-id>"
-export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 ```
 
 ## 3. Configure Provider And License
@@ -310,10 +310,10 @@ set.
 
 | Variable | Read by | Overrides config value | Notes |
 | --- | --- | --- | --- |
-| `EVAOS_REVIEW_BOT_APP_ID` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.appId` | Set once per step 2; unset falls back to the config-file value. |
-| `EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.privateKeyPath` | Path to the GitHub App private key; keep the key itself outside the repo. |
+| `NEONDIFF_GITHUB_APP_ID` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.appId` | Set once per step 2; unset falls back to the config-file value. Legacy `EVAOS_REVIEW_BOT_APP_ID` remains supported for existing internal deployments. |
+| `NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.privateKeyPath` | Path to the GitHub App private key; keep the key itself outside the repo. Legacy `EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH` remains supported for existing internal deployments. |
 | `GITHUB_TOKEN` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.token` | Local-development fallback token only; App auth is required for App-authored posting. |
-| `EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT` | `getProtectedCheckoutRoots` (`src/path-safety.ts`) | Adds to the built-in checkout-isolation boundary | Advanced use only: an additional path `config.workRoot` must stay outside of, alongside the current package checkout. Unset by default. |
+| `NEONDIFF_PROTECTED_CHECKOUT_ROOT` | `getProtectedCheckoutRoots` (`src/path-safety.ts`) | Adds to the built-in checkout-isolation boundary | Advanced use only: an additional path `config.workRoot` must stay outside of, alongside the current package checkout. Legacy `EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT` remains supported for existing internal deployments. |
 | `NEONDIFF_ALLOW_REMOTE_SMOKE` | `providers doctor` remote smoke path (`src/providers.ts`) | N/A (opt-in gate, not a config override) | Required before a hosted (non-loopback) provider smoke check is allowed to run. See [docs/providers.md](providers.md). |
 | A provider's configured `apiKeyEnv` name (e.g. `ANTHROPIC_API_KEY`, `NEONDIFF_PROVIDER_API_KEY`) | Provider adapters for any `authMode: "api-key-env"` provider (`src/providers.ts`, `src/provider-adapters.ts`) | N/A (the config only stores the variable *name*, never the key) | Applies to `anthropic`, `openai`, and `openai-compatible` adapters. See [docs/providers.md](providers.md) for the per-provider list. |
 

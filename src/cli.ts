@@ -2799,7 +2799,7 @@ async function buildDoctorGithubReport(config: BotConfig) {
     github: {
       canPostAsApp: appCredentialsConfigured,
       readMode: appCredentialsConfigured ? "app_installation" : hasFallbackReadToken ? "fallback_token" : "unconfigured",
-      botLogin: config.github.botLogin ?? "evaos-code-review-bot[bot]",
+      botLogin: config.github.botLogin ?? "configured GitHub App bot",
       apiBaseUrl: config.github.apiBaseUrl ?? "https://api.github.com",
       readChecks
     },
@@ -2827,7 +2827,7 @@ async function buildDoctorGithubReport(config: BotConfig) {
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff"
     ],
     troubleshooting: [
-      ...(appCredentialsConfigured ? [] : ["Set EVAOS_REVIEW_BOT_APP_ID and EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH, or configure github.appId/privateKeyPath outside git."]),
+      ...(appCredentialsConfigured ? [] : ["Set NEONDIFF_GITHUB_APP_ID and NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH, or configure github.appId/privateKeyPath outside git. Legacy EVAOS_REVIEW_BOT_* aliases remain supported for existing internal deployments."]),
       ...(activeRepoChecks > 0 ? [] : ["Add at least one enabled repo to pilotRepos or repoProfiles before using this as an install proof."]),
       ...(readChecks.some((check) => !check.ok) ? ["Confirm the GitHub App is installed on selected repositories with the required repository permissions."] : [])
     ]
@@ -3174,7 +3174,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts calibration-aggregate --config /path/to/live.json --output-dir /path/to/evidence/calibration-aggregate-run",
       "npx tsx src/cli.ts calibration-promote --input /path/to/evidence/calibration-aggregate-run/aggregate-calibration.json --output-dir /path/to/evidence/calibration-promote-run --confirm true",
       "npx tsx src/cli.ts badge --config /path/to/live.json --repo owner/repo --output docs/badges/precision.json",
-      "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@evaos-code-review-bot explain risk'",
+      "npx tsx src/cli.ts finishing-touch-dry-run --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD --current-head HEAD --comment-id 456 --author maintainer --trusted-authors maintainer --body '@neondiff explain risk'",
       "npx tsx src/cli.ts cooldowns --config /path/to/live.json --expired-only true"
     ],
     outcomeLedger: {
@@ -3460,10 +3460,10 @@ function resolveFinishingTouchAction(input: {
   const botMentions = parseCsv(input.botMentions);
   const parsed = parseFinishingTouchCommand({
     body,
-    botMentions: botMentions.length > 0 ? botMentions : ["@evaos-code-review-bot"]
+    botMentions: botMentions.length > 0 ? botMentions : ["@neondiff"]
   });
   if (!parsed) {
-    throw new Error(`--body must contain one of the finishing-touch commands for mentions ${botMentions.join(", ") || "@evaos-code-review-bot"}`);
+    throw new Error(`--body must contain one of the finishing-touch commands for mentions ${botMentions.join(", ") || "@neondiff"}`);
   }
   return parsed.action;
 }

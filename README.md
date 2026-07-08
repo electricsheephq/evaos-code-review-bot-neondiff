@@ -106,13 +106,18 @@ version is:
 
 ```bash
 neondiff init --config config.local.json
-export EVAOS_REVIEW_BOT_APP_ID="<github-app-id>"
-export EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 neondiff doctor github --config config.local.json --json
 neondiff providers list --config config.local.json --json
 neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
+
+Create or install the GitHub App before expecting PR reviews to run. The App
+must be installed on the same selected repositories listed in `pilotRepos`; see
+[docs/github-app-setup.md](docs/github-app-setup.md) for the permission set and
+selected-repo install path.
 
 Do not store the GitHub App private key, provider API key, license key, tokens,
 or customer data in this repository. Keep local config, secrets, state DBs, and
