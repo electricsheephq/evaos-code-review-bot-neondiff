@@ -1737,6 +1737,70 @@ describe("beta release status", () => {
     expect(manifest.ok).toBe(true);
   });
 
+  it("accepts valid checkout issuance proof for stable and beta releases", () => {
+    for (const releaseLevel of ["stable", "beta"]) {
+      const releaseVersion = releaseLevel === "stable" ? "v1.0.0" : "v1.0.0-beta.1";
+      const changelogVersion = releaseVersion.replace(/^v/, "");
+      const root = mkdtempSync(join(tmpdir(), `public-release-manifest-${releaseLevel}-valid-issuance-proof-`));
+      roots.push(root);
+      mkdirSync(join(root, "docs", "releases"), { recursive: true });
+      writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+      writeFileSync(join(root, "docs", "releases", `${releaseVersion}.md`), `# ${releaseVersion}\n`);
+      writeChangelogHead(root, changelogVersion, `docs/releases/${releaseVersion}.md`);
+      const healthProofPath = writeLicenseHealthProof(root, {
+        releaseVersion,
+        url: "https://license.example/healthz"
+      });
+      const checkoutIssuanceProofPath = writeLicenseIssuanceProof(root, {
+        releaseVersion,
+        url: "https://license.example/v1/admin/licenses/issue"
+      });
+      writeFileSync(join(root, "public-release.json"), JSON.stringify({
+        version: releaseVersion,
+        releaseLevel,
+        docs: {
+          version: releaseVersion,
+          setupPath: "docs/SETUP.md",
+          releaseNotesPath: `docs/releases/${releaseVersion}.md`
+        },
+        licenseApi: {
+          requiredForThisRelease: true,
+          state: "healthy",
+          healthUrl: "https://license.example/healthz",
+          healthProofPath,
+          checkoutIssuanceRequiredForThisRelease: true,
+          checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue",
+          checkoutIssuanceState: "ready",
+          checkoutIssuanceProofPath
+        },
+        updateChannels: {
+          cli: {
+            requiredForThisRelease: true,
+            state: releaseLevel === "stable" ? "published" : "source_checkout",
+            version: releaseVersion,
+            rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+          },
+          daemon: {
+            requiredForThisRelease: true,
+            state: "launchd_prerelease",
+            version: releaseVersion,
+            rollback: "git reset --hard refs/tags/v0.4.9-beta.1"
+          }
+        }
+      }));
+
+      const manifest = readPublicReleaseManifestStatus({
+        cwd: root,
+        manifestPath: "public-release.json",
+        expectedVersion: releaseVersion
+      });
+
+      expect(manifest.licenseApi.ok).toBe(true);
+      expect(manifest.licenseApi.detail).toContain(`validated checkout issuance proof ${checkoutIssuanceProofPath}`);
+      expect(manifest.ok).toBe(true);
+    }
+  });
+
   it("blocks deferred checkout issuance state when proof is required", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-required-issuance-deferred-state-"));
     roots.push(root);

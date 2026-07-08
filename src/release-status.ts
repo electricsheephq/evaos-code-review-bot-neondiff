@@ -195,12 +195,9 @@ export interface ReleaseStatus {
 const REQUIRED_PUBLIC_UPDATE_CHANNELS = ["cli", "daemon"] as const;
 const PUBLIC_RELEASE_LEVELS = new Set(["beta", "source-beta", "stable"]);
 const MAX_PUBLIC_VERSION_TAG_LENGTH = 128;
-const LICENSE_HEALTH_PROOF_MAX_AGE_DAYS = 30;
-const LICENSE_HEALTH_PROOF_MAX_AGE_MS = LICENSE_HEALTH_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
-const LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
-const LICENSE_ISSUANCE_PROOF_MAX_AGE_DAYS = 30;
-const LICENSE_ISSUANCE_PROOF_MAX_AGE_MS = LICENSE_ISSUANCE_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
-const LICENSE_ISSUANCE_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
+const LICENSE_PROOF_MAX_AGE_DAYS = 30;
+const LICENSE_PROOF_MAX_AGE_MS = LICENSE_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
+const LICENSE_PROOF_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const REQUIRED_PUBLIC_UPDATE_CHANNEL_STATES = new Set(["source_checkout", "launchd_prerelease", "healthy", "published"]);
 const CHECKOUT_ISSUANCE_READY_STATE = "ready";
 const CHECKOUT_ISSUANCE_DEFERRED_STATES = new Set(["deferred", "pending_secret_and_website_publish"]);
@@ -950,6 +947,22 @@ function isLicenseApiStateAcceptable(state: string, requiredForThisRelease: bool
   return state === "healthy" || state === "not_applicable" || state === "disabled" || state === "pending";
 }
 
+function validateLicenseProofObservedAt(observedAt: string | undefined, now?: Date): string[] {
+  if (!observedAt) return ["observedAt must be a valid ISO timestamp"];
+  const observedAtMs = Date.parse(observedAt);
+  if (Number.isNaN(observedAtMs)) return ["observedAt must be a valid ISO timestamp"];
+
+  const failures: string[] = [];
+  const nowMs = (now ?? new Date()).getTime();
+  if (observedAtMs > nowMs + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
+    failures.push("observedAt must not be more than 5 minutes in the future");
+  }
+  if (nowMs - observedAtMs > LICENSE_PROOF_MAX_AGE_MS) {
+    failures.push(`observedAt must be no older than ${LICENSE_PROOF_MAX_AGE_DAYS} days`);
+  }
+  return failures;
+}
+
 function validateLicenseHealthProof(input: {
   cwd: string;
   proofPath?: string;
@@ -998,18 +1011,7 @@ function validateLicenseHealthProof(input: {
   }
   if (method !== "GET") failures.push("method must be GET");
   if (statusCode !== 200) failures.push("statusCode must be 200");
-  const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
-  if (!observedAt || Number.isNaN(observedAtMs)) {
-    failures.push("observedAt must be a valid ISO timestamp");
-  } else {
-    const nowMs = (input.now ?? new Date()).getTime();
-    if (observedAtMs > nowMs + LICENSE_HEALTH_PROOF_MAX_FUTURE_SKEW_MS) {
-      failures.push("observedAt must not be more than 5 minutes in the future");
-    }
-    if (nowMs - observedAtMs > LICENSE_HEALTH_PROOF_MAX_AGE_MS) {
-      failures.push(`observedAt must be no older than ${LICENSE_HEALTH_PROOF_MAX_AGE_DAYS} days`);
-    }
-  }
+  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
   if (responseBody === undefined) {
     failures.push("responseBody must be present");
   }
@@ -1079,18 +1081,7 @@ function validateLicenseIssuanceProof(input: {
   // must fail closed. Authenticated issuance smoke uses owner-held secrets and
   // belongs in the deploy runbook/evidence lane, not committed manifest JSON.
   if (statusCode !== 401) failures.push("statusCode must be 401");
-  const observedAtMs = observedAt ? Date.parse(observedAt) : NaN;
-  if (!observedAt || Number.isNaN(observedAtMs)) {
-    failures.push("observedAt must be a valid ISO timestamp");
-  } else {
-    const nowMs = (input.now ?? new Date()).getTime();
-    if (observedAtMs > nowMs + LICENSE_ISSUANCE_PROOF_MAX_FUTURE_SKEW_MS) {
-      failures.push("observedAt must not be more than 5 minutes in the future");
-    }
-    if (nowMs - observedAtMs > LICENSE_ISSUANCE_PROOF_MAX_AGE_MS) {
-      failures.push(`observedAt must be no older than ${LICENSE_ISSUANCE_PROOF_MAX_AGE_DAYS} days`);
-    }
-  }
+  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
   if (responseBody === undefined) {
     failures.push("responseBody must be present");
   }
