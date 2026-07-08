@@ -344,6 +344,14 @@ npx tsx src/cli.ts review-head-gate \
   `pending_secret_and_website_publish`), and
   `checkoutIssuanceRequiredForThisRelease: false`. When checkout issuance proof
   is required and a state is declared, `checkoutIssuanceState` must be `ready`.
+  This manifest proof is a negative fail-closed boundary only; it proves the
+  public endpoint rejects unauthenticated callers. It does not prove a valid
+  owner-held checkout secret can issue a license, write the DB, or complete the
+  paid/trial fulfillment path. Authenticated issuance success must be captured
+  in the deploy runbook's redacted owner-held evidence lane before claiming
+  checkout issuance works end to end; the first-class release-status smoke gate
+  for that positive path is tracked in
+  `https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/456`.
   In `release:status` output, `checkoutIssuanceRequiredForThisRelease` is the
   computed effective gate; `checkoutIssuanceRequiredDeclaredForThisRelease`
   preserves the raw manifest declaration when present.

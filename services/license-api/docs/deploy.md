@@ -94,6 +94,12 @@ release-status: an unauthenticated request to the checkout issuance endpoint mus
 return `401` with `{"status":"unauthorized"}`. A `503` response with
 `license issuance is not configured` means the Fly app is still missing
 `LICENSE_ISSUANCE_SECRET` and is not ready for paid/trial checkout activation.
+This release-status proof intentionally verifies only the fail-closed public
+boundary. It does not prove that a valid server-side checkout webhook can issue
+a license or write the DB. Capture positive authenticated issuance smoke in an
+owner-held, redacted evidence packet outside tracked manifest JSON; the
+first-class release-status gate for that path is tracked in
+`https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/456`.
 
 ## 4. Deploy
 
