@@ -386,6 +386,22 @@ npx tsx src/cli.ts review-head-gate \
   payload secrets, or raw response bodies. Public beta and source-beta releases
   may continue to use only the no-secret 401 gate unless authenticated checkout
   issuance is part of that release's scope.
+  Use the owner-run smoke helper to create the stable/GA proof after the shared
+  issuance secret is configured on both Fly and the server-side checkout webhook:
+
+  ```bash
+  npx tsx src/cli.ts checkout-issuance-smoke \
+    --url https://neondiff-license.fly.dev/v1/admin/licenses/issue \
+    --release-version <release-version> \
+    --checkout-lookup-key neondiff_monthly \
+    --secret-env LICENSE_ISSUANCE_SECRET \
+    --dry-run false \
+    --confirm-live-issuance true \
+    --output docs/evidence/license-checkout-issuance-authenticated.json
+  ```
+
+  Run the same command with `--dry-run true` first when preparing a release
+  packet; dry-run mode does not read the secret and does not send the POST.
   In `release:status` output, `checkoutIssuanceRequiredForThisRelease` is the
   computed effective gate; `checkoutIssuanceRequiredDeclaredForThisRelease`
   preserves the raw manifest declaration when present.

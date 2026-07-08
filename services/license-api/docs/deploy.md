@@ -105,6 +105,41 @@ issued license key. It must not store raw bearer headers,
 `LICENSE_ISSUANCE_SECRET`, raw `licenseKey`, cookies, customer data, checkout
 payload secrets, or raw response bodies.
 
+Use the repo-owned smoke helper for that owner-held success proof. Start with a
+dry run so the request shape is visible without reading the secret or sending a
+network request:
+
+```sh
+npx tsx src/cli.ts checkout-issuance-smoke \
+  --url https://neondiff-license.fly.dev/v1/admin/licenses/issue \
+  --release-version <release-version> \
+  --checkout-lookup-key neondiff_monthly \
+  --dry-run true
+```
+
+After the same issuance secret has been configured on the license API and the
+server-side checkout webhook, run the live proof capture from a clean checkout:
+
+```sh
+export LICENSE_ISSUANCE_SECRET="<owner-held-shared-secret>"
+npx tsx src/cli.ts checkout-issuance-smoke \
+  --url https://neondiff-license.fly.dev/v1/admin/licenses/issue \
+  --release-version <release-version> \
+  --checkout-lookup-key neondiff_monthly \
+  --secret-env LICENSE_ISSUANCE_SECRET \
+  --dry-run false \
+  --confirm-live-issuance true \
+  --output docs/evidence/license-checkout-issuance-authenticated.json
+```
+
+The command reads the bearer value only from `--secret-env`, never from argv,
+and writes only the strict redacted proof accepted by
+`checkoutIssuanceAuthenticatedProofPath`. It rejects non-HTTPS URLs before
+reading the secret. The smoke request uses a stable synthetic `idempotencyKey`
+as the replay key; `externalCheckoutId` mirrors that value only as smoke
+metadata, while the license API's idempotent issuance contract is keyed by
+`idempotencyKey`.
+
 ## 4. Deploy
 
 ```sh

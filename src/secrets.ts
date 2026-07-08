@@ -31,6 +31,13 @@ const SAFE_ENV_VAR_NAMES = [
   "NEONDIFF_PROVIDER_API_KEY",
   "NEONDIFF_ALLOW_REMOTE_SMOKE"
 ];
+const SAFE_STRUCTURAL_VALUES = [
+  "missing_secret_env"
+];
+const SAFE_REDACTION_LITERALS = [
+  ...SAFE_ENV_VAR_NAMES,
+  ...SAFE_STRUCTURAL_VALUES
+];
 
 export function containsSecretLikeText(input: string): boolean {
   const safeInput = protectSafeEnvVarNames(input);
@@ -96,14 +103,14 @@ function readSensitiveCookieHeader(line: string): string | undefined {
 }
 
 function protectSafeEnvVarNames(input: string): string {
-  return SAFE_ENV_VAR_NAMES.reduce((text, name, index) => {
+  return SAFE_REDACTION_LITERALS.reduce((text, name, index) => {
     const pattern = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`, "g");
     return text.replace(pattern, `__NEONDIFF_SAFE_ENV_${index}__`);
   }, input);
 }
 
 function restoreSafeEnvVarNames(input: string): string {
-  return SAFE_ENV_VAR_NAMES.reduce(
+  return SAFE_REDACTION_LITERALS.reduce(
     (text, name, index) => text.replaceAll(`__NEONDIFF_SAFE_ENV_${index}__`, name),
     input
   );
