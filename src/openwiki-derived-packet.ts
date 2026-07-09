@@ -12,8 +12,9 @@ import {
 const OPENWIKI_DIR = "openwiki";
 const OPENWIKI_METADATA_PATH = "openwiki/.last-update.json";
 const DEFAULT_MAX_PACKET_BYTES = 12_000;
+const GIT_COMMAND_TIMEOUT_MS = 5_000;
 const SENSITIVE_ENV_NAME_PATTERN =
-  /\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|COOKIE|SESSION|PRIVATE_KEY)[A-Z0-9_]*\b/g;
+  /\b(?:[A-Z][A-Z0-9_]*_)?(?:API_KEY|TOKEN|SECRET|PASSWORD|COOKIE|SESSION|PRIVATE_KEY)(?:_[A-Z0-9]+)*\b/g;
 
 export interface BuildOpenWikiDerivedRepoWikiPacketInput {
   repo: string;
@@ -80,7 +81,15 @@ function resolveSourceFreshness(input: {
       staleReason: "No OpenWiki Markdown files were found under openwiki/."
     };
   }
-  if (readDirtyNonOpenWikiPaths(input.worktreePath).length > 0) {
+  const dirtyStatus = readDirtyNonOpenWikiPaths(input.worktreePath);
+  if (!dirtyStatus.ok) {
+    return {
+      ...base,
+      status: "stale",
+      staleReason: "Unable to read git worktree status; regenerate OpenWiki before building a packet."
+    };
+  }
+  if (dirtyStatus.paths.length > 0) {
     return {
       ...base,
       status: "stale",
@@ -170,15 +179,31 @@ function readOpenWikiMetadata(worktreePath: string): OpenWikiMetadata | undefine
   }
 }
 
-function readDirtyNonOpenWikiPaths(worktreePath: string): string[] {
-  const status = readGit(worktreePath, ["status", "--porcelain"]);
-  return status
-    .split(/\r?\n/)
-    .map((line) => line.slice(3).trim())
+function readDirtyNonOpenWikiPaths(worktreePath: string): { ok: boolean; paths: string[] } {
+  const status = readGitResult(worktreePath, ["status", "--porcelain=v1", "-z"]);
+  if (!status.ok) return { ok: false, paths: [] };
+  const paths = parsePorcelainStatusPaths(status.stdout)
     .filter(Boolean)
     .filter((changedPath) => changedPath !== ".neondiff" && !changedPath.startsWith(".neondiff/"))
     .filter((changedPath) => changedPath !== ".neondiff/repo-wiki-packet.json")
     .filter((changedPath) => changedPath !== OPENWIKI_DIR && !changedPath.startsWith(`${OPENWIKI_DIR}/`));
+  return { ok: true, paths };
+}
+
+function parsePorcelainStatusPaths(status: string): string[] {
+  const paths: string[] = [];
+  const records = status.split("\0").filter(Boolean);
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] ?? "";
+    const statusCode = record.slice(0, 2);
+    const changedPath = record.slice(3).trim();
+    if (changedPath) paths.push(changedPath);
+    if (/[RC]/.test(statusCode) && records[index + 1]) {
+      index += 1;
+      paths.push((records[index] ?? "").trim());
+    }
+  }
+  return paths;
 }
 
 function readDefaultBranch(worktreePath: string): string | undefined {
@@ -188,11 +213,19 @@ function readDefaultBranch(worktreePath: string): string | undefined {
 }
 
 function readGit(worktreePath: string, args: string[]): string {
+  const result = readGitResult(worktreePath, args);
+  return result.ok ? result.stdout.trim() : "";
+}
+
+function readGitResult(worktreePath: string, args: string[]): { ok: boolean; stdout: string } {
   const result = spawnSync("git", args, {
     cwd: worktreePath,
-    encoding: "utf8"
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    timeout: GIT_COMMAND_TIMEOUT_MS
   });
-  return result.status === 0 ? result.stdout.trim() : "";
+  if (result.error || result.status !== 0) return { ok: false, stdout: result.stdout ?? "" };
+  return { ok: true, stdout: result.stdout ?? "" };
 }
 
 function readFirstHeading(markdown: string): string | undefined {
