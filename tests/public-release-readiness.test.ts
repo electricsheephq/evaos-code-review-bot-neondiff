@@ -51,9 +51,11 @@ describe("NeonDiff public release readiness", () => {
       updateChannels?: Record<string, {
         requiredForThisRelease?: boolean;
         state?: string;
+        version?: string;
         rollback?: string;
         rollbackRepository?: string;
         trackingIssue?: string;
+        note?: string;
       }>;
     };
 
@@ -165,10 +167,11 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.updateChannels?.website).toMatchObject({
       requiredForThisRelease: true,
       state: "published",
-      version: "v1.0.0",
+      version: "v1.0.1",
       rollback: "git revert 6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
       rollbackRepository: "electricsheephq/neon-diff-agent-website"
     });
+    expect(manifest.updateChannels?.website?.note).toMatch(/defaults to npm latest/i);
     expect(manifest.updateChannels?.desktop).toBeUndefined();
   });
 
@@ -420,7 +423,7 @@ describe("NeonDiff public release readiness", () => {
     const publish = read(".github/workflows/publish-npm.yml");
 
     expect(ci).toMatch(/node-version:\s*26/);
-    expect(ci).toContain("actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5");
+    expect(ci).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0");
     expect(ci).toContain("actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5");
     expect(ci).not.toMatch(/uses:\s*actions\/(?:checkout|setup-node)@v\d+/);
     expect(ci).toMatch(/npm ci/);
@@ -431,7 +434,7 @@ describe("NeonDiff public release readiness", () => {
     expect(ci).toMatch(/secret/i);
 
     expect(publish).toMatch(/id-token:\s*write/);
-    expect(publish).toContain("actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5");
+    expect(publish).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0");
     expect(publish).toContain("actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5");
     expect(publish).not.toMatch(/uses:\s*actions\/(?:checkout|setup-node)@v\d+/);
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);

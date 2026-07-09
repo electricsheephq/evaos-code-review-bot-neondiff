@@ -122,11 +122,11 @@
     "website": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v1.0.0",
+      "version": "v1.0.1",
       "rollback": "git revert 6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
       "rollbackRepository": "electricsheephq/neon-diff-agent-website",
       "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/450",
-      "note": "No website code changes ship in v1.0.1; this channel remains declared so the hosted install surface stays part of release-status."
+      "note": "The hosted installer remains part of release-status for v1.0.1. It serves an installer that defaults to npm latest, so no website code deploy is required for the installer to pick up neondiff@1.0.1 after the npm latest promotion."
     }
   }
 }

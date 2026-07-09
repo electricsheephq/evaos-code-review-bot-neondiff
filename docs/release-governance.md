@@ -166,14 +166,14 @@ when the secret is absent so release captains do not spend a full release cycle
 before discovering npm authentication is missing.
 
 The required GitHub Actions paths should pin official action majors to immutable
-commit SHAs while staying compatible with the GitHub Actions Node 24 runtime and
-the project runtime installed by each workflow. The public CI and npm publish
-workflows currently use the approved v5 commits for `actions/checkout` and
-`actions/setup-node`, and they continue to install Node.js 26 for NeonDiff
-itself. Runner fleets must be on GitHub Actions runner `v2.327.1` or newer for
-those actions. Pinned Swift or desktop smoke actions that still target the older
-action runtime are post-launch desktop-release hygiene unless they block the
-current release.
+release commit SHAs while staying compatible with the GitHub Actions Node 24
+runtime and the project runtime installed by each workflow. The public CI and
+npm publish workflows currently use the approved v5.0.0 release commits for
+`actions/checkout` and `actions/setup-node`, and they continue to install
+Node.js 26 for NeonDiff itself. Runner fleets must be on GitHub Actions runner
+`v2.327.1` or newer for those actions. Pinned Swift or desktop smoke actions
+that still target the older action runtime are post-launch desktop-release
+hygiene unless they block the current release.
 
 The manifest `rollback` field is intentionally only the source-revert step.
 Full operator rollback runbooks may restart launchd after that source revert,

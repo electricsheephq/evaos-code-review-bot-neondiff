@@ -3645,6 +3645,78 @@ describe("beta release status", () => {
     expect(manifest.updateChannels.ok).toBe(false);
   });
 
+  it("still verifies current-repo rollback refs from fork or mirror origins", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-fork-origin-rollback-ref-"));
+    roots.push(root);
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/someone/evaos-code-review-bot-neondiff.git"], {
+      cwd: root,
+      stdio: "ignore"
+    });
+    writeFileSync(join(root, "package.json"), JSON.stringify({
+      repository: {
+        type: "git",
+        url: "git+https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git"
+      }
+    }));
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.0-beta.1.md"), "# v1.0.0-beta.1\n");
+    writeChangelogHead(root);
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.0-beta.1",
+      releaseLevel: "source-beta",
+      docs: {
+        version: "v1.0.0-beta.1",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.0-beta.1.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: false,
+        state: "pending"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.0-beta.1",
+          rollback: "git reset --hard refs/tags/v9.9.9-beta.1",
+          rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff"
+        },
+        website: {
+          requiredForThisRelease: true,
+          state: "published",
+          version: "v1.0.0-beta.1",
+          rollback: "git revert 0123456789abcdef0123456789abcdef01234567",
+          rollbackRepository: "electricsheephq/neon-diff-agent-website"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.0-beta.1",
+      verifyRollbackRefs: true
+    });
+
+    expect(manifest.updateChannels.channels).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "cli",
+          ok: false,
+          detail: "cli state source_checkout blocks this release; requiredForThisRelease=true; missing rollback target"
+        }),
+        expect.objectContaining({
+          name: "website",
+          ok: true,
+          detail: "website state published; requiredForThisRelease=true"
+        })
+      ])
+    );
+    expect(manifest.updateChannels.ok).toBe(false);
+  });
+
   it("passes required public update channels when strict rollback targets exist in a git checkout", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-existing-rollback-ref-"));
     roots.push(root);

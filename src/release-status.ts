@@ -897,7 +897,11 @@ function checkRollbackTarget(
   if (options.verifyRollbackRefs !== true) return { ok: true, missingMetadata: "rollback command" };
   if (options.rollbackRepository && options.cwd) {
     const currentRepository = readCurrentGitHubRepository(options.cwd);
-    if (currentRepository && currentRepository !== options.rollbackRepository) {
+    const packageRepository = readPackageGitHubRepository(options.cwd);
+    if (!currentRepository && !packageRepository) {
+      return { ok: false, missingMetadata: "rollback target" };
+    }
+    if (options.rollbackRepository !== currentRepository && options.rollbackRepository !== packageRepository) {
       return { ok: true, missingMetadata: "rollback command" };
     }
   }
@@ -915,11 +919,23 @@ function readCurrentGitHubRepository(cwd: string): string | undefined {
   }
 }
 
+function readPackageGitHubRepository(cwd: string): string | undefined {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(cwd, "package.json"), "utf8")) as unknown;
+    const repository = asRecord(pkg).repository;
+    if (typeof repository === "string") return normalizeGitHubRepository(repository);
+    const repositoryUrl = readString(asRecord(repository).url);
+    return repositoryUrl ? normalizeGitHubRepository(repositoryUrl) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeGitHubRepository(remoteUrl: string): string | undefined {
   const withoutGitSuffix = remoteUrl.trim().replace(/\.git$/, "");
   const sshMatch = withoutGitSuffix.match(/^git@github\.com:([^/]+\/[^/]+)$/);
   if (sshMatch) return sshMatch[1];
-  const httpsMatch = withoutGitSuffix.match(/^https:\/\/(?:[^/@]+@)?github\.com\/([^/]+\/[^/]+)$/);
+  const httpsMatch = withoutGitSuffix.match(/^(?:git\+)?https:\/\/(?:[^/@]+@)?github\.com\/([^/]+\/[^/]+)$/);
   if (httpsMatch) return httpsMatch[1];
   return undefined;
 }
