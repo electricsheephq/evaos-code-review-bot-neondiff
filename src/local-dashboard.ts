@@ -758,8 +758,27 @@ function licenseStatusItemFromResult(status: LicenseStatusResult, checkedAt: str
 
 function buildGitHubAppStatusItem(config: BotConfig, checkedAt: string): LocalDashboardStatusItem {
   const hasApp = Boolean(config.github.appId && config.github.privateKeyPath);
+  const hasAppId = Boolean(config.github.appId);
+  const hasClientId = Boolean(config.github.clientId);
   const hasReadableKeyPath = Boolean(config.github.privateKeyPath && existsSync(config.github.privateKeyPath));
   const hasFallbackToken = Boolean(config.github.token);
+  const baseMetadata = {
+    appIdConfigured: hasAppId,
+    clientIdConfigured: hasClientId,
+    botLogin: config.github.botLogin ?? null
+  };
+  if (hasAppId && hasClientId && !hasReadableKeyPath && !hasFallbackToken) {
+    return {
+      id: "githubApp",
+      label: "GitHub App",
+      state: "configured_unverified",
+      detail: "GitHub App identity is configured for desktop sign-in; install/repo access still needs user authorization and doctor github proof.",
+      checkedAt,
+      redacted: true,
+      actions: ["Connect GitHub from the desktop app, then run neondiff doctor github --config config.local.json --json for installation-scope proof."],
+      metadata: baseMetadata
+    };
+  }
   if (hasApp && hasReadableKeyPath) {
     return {
       id: "githubApp",
@@ -770,6 +789,7 @@ function buildGitHubAppStatusItem(config: BotConfig, checkedAt: string): LocalDa
       redacted: true,
       actions: ["Run neondiff doctor github --config config.local.json --json."],
       metadata: {
+        ...baseMetadata,
         readMode: "app_installation",
         appIdConfigured: true,
         privateKeyPathPresent: true
@@ -785,7 +805,7 @@ function buildGitHubAppStatusItem(config: BotConfig, checkedAt: string): LocalDa
       checkedAt,
       redacted: true,
       actions: ["Create/install the GitHub App and set NEONDIFF_GITHUB_APP_ID plus NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH."],
-      metadata: { readMode: "fallback_token" }
+      metadata: { ...baseMetadata, readMode: "fallback_token" }
     };
   }
   return {
@@ -795,7 +815,8 @@ function buildGitHubAppStatusItem(config: BotConfig, checkedAt: string): LocalDa
     detail: "No GitHub App credentials or fallback token are configured.",
     checkedAt,
     redacted: true,
-    actions: ["Create/install the GitHub App before expecting PR reviews."]
+    actions: ["Create/install the GitHub App before expecting PR reviews."],
+    metadata: baseMetadata
   };
 }
 

@@ -45,6 +45,7 @@ const EXACT_PATCH_PATHS = new Set([
   "zcode.providerId",
   "zcode.timeoutMs",
   "github.appId",
+  "github.clientId",
   "github.botLogin",
   "github.requestTimeoutMs",
   "desktop.openAICompatibleEndpoint",

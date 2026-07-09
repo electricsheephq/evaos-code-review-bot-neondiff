@@ -12,11 +12,13 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var repos: [RepoMonitor] = []
     @Published var providers = ProviderSettings()
     @Published var license = LicenseStatus()
+    @Published var github = GitHubConnectionStatus()
     @Published var logText = "No logs loaded."
     @Published var lastError: String?
     @Published var lastCommandLine = ""
     @Published var dashboardLaunchStatus = "not opened"
     @Published var dashboardProcessIdentifier: Int32?
+    @Published var pendingRepoName = ""
     @Published var pendingProviderKey = ""
     @Published var pendingLicenseKey = ""
     @Published var onboardingFlow = OnboardingFlow()
@@ -37,6 +39,8 @@ final class NeonDiffDesktopModel: ObservableObject {
         let providerKeyStored = keychain.containsSecret(account: providerKeyAccount)
         self.providers.providerKeyStored = providerKeyStored
         self.license.keyStored = keychain.containsSecret(account: licenseKeyAccount)
+        self.github.userTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
+        self.github.installationState = self.github.userTokenStored ? "user authorized" : "not connected"
         self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
         self.isOnboardingPresented = !userDefaults.bool(forKey: onboardingCompletedKey)
         self.lastCommandLine = statusCommand.commandLine
@@ -80,6 +84,14 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     var providerPatchApplyCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(cliPath: cliPath, configPath: configPath, inputPath: providerPatchPath.path, dryRun: false)
+    }
+
+    var repoSelectionPatchPreviewCommand: DesktopCommand {
+        NeonDiffCommandBuilder.configPatch(cliPath: cliPath, configPath: configPath, inputPath: repoSelectionPatchPath.path)
+    }
+
+    var repoSelectionPatchApplyCommand: DesktopCommand {
+        NeonDiffCommandBuilder.configPatch(cliPath: cliPath, configPath: configPath, inputPath: repoSelectionPatchPath.path, dryRun: false)
     }
 
     func persistLocalSettings() {
@@ -171,6 +183,44 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     func applyProviderConfigPatch() {
         runProviderConfigPatch(dryRun: false)
+    }
+
+    func addPendingRepoToAllowlist() {
+        let repoName = pendingRepoName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isValidRepoName(repoName) else {
+            lastError = "Enter a GitHub repository as owner/repo."
+            return
+        }
+        if let index = repos.firstIndex(where: { $0.name.caseInsensitiveCompare(repoName) == .orderedSame }) {
+            repos[index].enabled = true
+        } else {
+            repos.append(RepoMonitor(name: repoName, enabled: true, profile: "selected"))
+            repos.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }
+        pendingRepoName = ""
+        lastError = nil
+        logText = "Repo allowlist updated locally. Preview or apply the config patch to persist it."
+    }
+
+    func toggleRepoAllowlist(_ repo: RepoMonitor) {
+        guard let index = repos.firstIndex(where: { $0.id == repo.id }) else { return }
+        repos[index].enabled.toggle()
+        lastError = nil
+        logText = "Repo allowlist updated locally. Preview or apply the config patch to persist it."
+    }
+
+    func removeRepoFromAllowlist(_ repo: RepoMonitor) {
+        repos.removeAll { $0.id == repo.id }
+        lastError = nil
+        logText = "Repo removed locally. Preview or apply the config patch to persist it."
+    }
+
+    func previewRepoAllowlistPatch() {
+        runRepoSelectionPatch(dryRun: true)
+    }
+
+    func applyRepoAllowlistPatch() {
+        runRepoSelectionPatch(dryRun: false)
     }
 
     func storeProviderKey() {
@@ -284,6 +334,10 @@ final class NeonDiffDesktopModel: ObservableObject {
         appSupportDirectory.appendingPathComponent("provider-settings-patch.json")
     }
 
+    private var repoSelectionPatchPath: URL {
+        appSupportDirectory.appendingPathComponent("repo-allowlist-patch.json")
+    }
+
     private var appSupportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -307,6 +361,42 @@ final class NeonDiffDesktopModel: ObservableObject {
         try data.write(to: providerPatchPath, options: [.atomic])
     }
 
+    private func runRepoSelectionPatch(dryRun: Bool) {
+        do {
+            try writeRepoSelectionPatch()
+        } catch {
+            lastError = NeonDiffRedactor.redact(error.localizedDescription)
+            return
+        }
+        var arguments = [
+            "config",
+            "patch",
+            "--config",
+            configPath,
+            "--input",
+            repoSelectionPatchPath.path,
+            "--dry-run",
+            dryRun ? "true" : "false"
+        ]
+        if !dryRun {
+            arguments.append(contentsOf: ["--confirm", "true"])
+        }
+        runCLI(arguments: arguments, displayCommand: dryRun ? repoSelectionPatchPreviewCommand : repoSelectionPatchApplyCommand)
+    }
+
+    private func writeRepoSelectionPatch() throws {
+        try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
+        let selectedRepos = repos
+            .filter(\.enabled)
+            .map(\.name)
+        let uniqueRepos = uniqueSortedRepoNames(selectedRepos)
+        let patch: [String: Any] = [
+            "pilotRepos": uniqueRepos
+        ]
+        let data = try JSONSerialization.data(withJSONObject: patch, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: repoSelectionPatchPath, options: [.atomic])
+    }
+
     private func applyCLIResult(_ result: CLIRunResult, fallbackCommand: String, configPath: String, launchdLabel: String) {
         let redactedStdout = result.redactedStdout.trimmingCharacters(in: .whitespacesAndNewlines)
         let redactedStderr = result.redactedStderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -318,11 +408,13 @@ final class NeonDiffDesktopModel: ObservableObject {
             if let snapshot = ConfigInspectParser.parse(
                 result.stdout,
                 providerKeyStored: keychain.containsSecret(account: providerKeyAccount),
-                licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount)
+                licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
+                githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
             ) {
                 if !snapshot.repos.isEmpty { repos = snapshot.repos }
                 providers = snapshot.providers
                 license = snapshot.license
+                github = snapshot.github
             }
             return
         }
@@ -349,4 +441,23 @@ final class NeonDiffDesktopModel: ObservableObject {
 
 private let providerKeyAccount = "provider/glm/api-key"
 private let licenseKeyAccount = "license/default"
+private let githubUserTokenAccount = "github/user-access-token"
 private let onboardingCompletedKey = "neondiff.hasCompletedOnboarding"
+
+private func isValidRepoName(_ value: String) -> Bool {
+    let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+    guard parts.count == 2 else { return false }
+    return parts.allSatisfy { part in
+        !part.isEmpty && part != "." && part != ".." && part.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
+        }
+    }
+}
+
+private func uniqueSortedRepoNames(_ names: [String]) -> [String] {
+    var seen = Set<String>()
+    return names
+        .filter(isValidRepoName)
+        .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        .filter { seen.insert($0.lowercased()).inserted }
+}
