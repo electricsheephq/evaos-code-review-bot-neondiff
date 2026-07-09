@@ -41,6 +41,18 @@ do {
     else {
         throw NSError(domain: "NeonDiffDesktopSmoke", code: 10, userInfo: [NSLocalizedDescriptionKey: "dashboard command does not launch the local HTML dashboard"])
     }
+    let dashboardServerCommand = NeonDiffCommandBuilder.dashboard(
+        cliPath: "neondiff",
+        configPath: "/tmp/config.local.json",
+        launchdLabel: "com.example.neondiff",
+        openBrowser: false
+    )
+    guard dashboardServerCommand.title == "Start local dashboard",
+          dashboardServerCommand.commandLine.contains("--open false"),
+          !dashboardServerCommand.commandLine.contains("--open true")
+    else {
+        throw NSError(domain: "NeonDiffDesktopSmoke", code: 11, userInfo: [NSLocalizedDescriptionKey: "dashboard server command does not stay inside the Mac app launch bar"])
+    }
 
     let fakeStatusJSON = """
     {

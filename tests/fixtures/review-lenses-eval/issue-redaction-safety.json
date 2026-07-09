@@ -1,0 +1,29 @@
+{
+  "evalName": "review-lenses-eval-gate-v0.1",
+  "runId": "issue-redaction-safety",
+  "suite": "review_lens_packet_safety",
+  "surface": "issue_enrichment",
+  "reviewLenses": {
+    "enabled": true,
+    "packetVersion": "review-lens-packet-v0.1",
+    "active": [
+      { "id": "first_principles", "surface": "issue_enrichment", "mode": "summary" }
+    ],
+    "maxLensBytes": 4000,
+    "maxPacketBytes": 12000
+  },
+  "issue": {
+    "repo": "owner/repo",
+    "number": 44,
+    "state": "open",
+    "title": "Redact leaked setup token",
+    "body": "The setup log included a placeholder token and needs a safe runbook correction.",
+    "html_url": "https://github.test/owner/repo/issues/44"
+  },
+  "expected": {
+    "includedLenses": ["first_principles"],
+    "maxPacketBytes": 12000,
+    "secretFindings": 0,
+    "requestChangesEligible": false
+  }
+}
