@@ -46,28 +46,20 @@ final class NeonDiffDesktopModel: ObservableObject {
         self.launchdLabel = userDefaults.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
         let providerKeyStored = keychain.containsSecret(account: providerKeyAccount)
         let githubUserTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
-        let githubAccessTokenExpired = Self.storedDate(
-            keychain: keychain,
-            account: githubTokenExpiresAtAccount
-        ).map { $0 <= Date() } ?? false
-        let githubRefreshTokenValid = keychain.containsSecret(account: githubRefreshTokenAccount)
-            && !(Self.storedDate(keychain: keychain, account: githubRefreshTokenExpiresAtAccount).map { $0 <= Date() } ?? false)
+        let githubRefreshTokenStored = keychain.containsSecret(account: githubRefreshTokenAccount)
         self.providers.providerKeyStored = providerKeyStored
         self.license.keyStored = keychain.containsSecret(account: licenseKeyAccount)
-        self.github.userTokenStored = githubUserTokenStored && (!githubAccessTokenExpired || githubRefreshTokenValid)
-        if githubUserTokenStored && githubAccessTokenExpired && githubRefreshTokenValid {
-            self.github.installationState = "authorization refresh needed"
-            self.githubAuthorizationStatus = "authorization refresh needed"
-        } else if githubUserTokenStored && githubAccessTokenExpired {
-            self.github.installationState = "authorization expired; reconnect GitHub"
-            self.githubAuthorizationStatus = "authorization expired; reconnect GitHub"
+        self.github.userTokenStored = githubUserTokenStored
+        if githubUserTokenStored {
+            self.github.installationState = "authorization stored; verify"
+            self.githubAuthorizationStatus = "authorization stored; refresh repos to verify"
+        } else if githubRefreshTokenStored {
+            self.github.installationState = "authorization refresh available"
+            self.githubAuthorizationStatus = "authorization refresh available"
         } else {
-            self.github.installationState = self.github.userTokenStored ? "user authorized" : "not connected"
+            self.github.installationState = "not connected"
         }
-        self.github.authorizedUserLogin = try? keychain.readSecret(account: githubUserLoginAccount)
-        if let login = self.github.authorizedUserLogin, !githubAccessTokenExpired {
-            self.githubAuthorizationStatus = "authorized as \(login)"
-        }
+        self.github.authorizedUserLogin = nil
         self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
         self.isOnboardingPresented = !userDefaults.bool(forKey: onboardingCompletedKey)
         self.lastCommandLine = statusCommand.commandLine
@@ -146,7 +138,11 @@ final class NeonDiffDesktopModel: ObservableObject {
         lastCommandLine = command.commandLine
         dashboardLaunchStatus = openBrowser ? "opening browser" : "starting server"
         let executablePath = cliPath
-        let arguments = ["dashboard", "--config", configPath, "--launchd-label", launchdLabel, "--open", openBrowser ? "true" : "false"]
+        let arguments = NeonDiffCommandBuilder.dashboardArguments(
+            configPath: configPath,
+            launchdLabel: launchdLabel,
+            openBrowser: openBrowser
+        )
         let workingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
 
         Task { [weak self] in
@@ -620,6 +616,13 @@ final class NeonDiffDesktopModel: ObservableObject {
         Self.storedDate(keychain: keychain, account: account)
     }
 
+    private static func storedDate(keychain: DesktopSecretStoring, account: String) -> Date? {
+        guard let value = try? keychain.readSecret(account: account) else {
+            return nil
+        }
+        return ISO8601DateFormatter().date(from: value)
+    }
+
     private func writeRepoSelectionPatch() throws {
         try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
         let selectedRepos = repos
@@ -682,12 +685,6 @@ final class NeonDiffDesktopModel: ObservableObject {
         return root["command"] as? String
     }
 
-    private static func storedDate(keychain: DesktopSecretStoring, account: String) -> Date? {
-        guard let value = try? keychain.readSecret(account: account) else {
-            return nil
-        }
-        return ISO8601DateFormatter().date(from: value)
-    }
 }
 
 private enum GitHubDesktopAuthorizationStateError: LocalizedError {

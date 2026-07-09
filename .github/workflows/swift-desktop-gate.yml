@@ -101,16 +101,16 @@ jobs:
     name: Swift desktop smoke
     needs: swift-desktop-impact
     if: needs.swift-desktop-impact.outputs.affected == 'true'
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
 
-      - name: Build Swift core checks target
+      - name: Build Swift Keychain checks target
         working-directory: apps/neondiff-desktop
-        run: swift build --target NeonDiffDesktopCoreChecks
+        run: swift build --target NeonDiffDesktopKeychainChecks
 
       - name: Swift build
         working-directory: apps/neondiff-desktop
