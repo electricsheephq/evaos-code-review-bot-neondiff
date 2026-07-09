@@ -9,7 +9,7 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v0.4.30-beta.1
+        default: v1.0.1
 
 permissions:
   contents: read
@@ -22,7 +22,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'release' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ github.event.inputs.tag || github.event.release.tag_name }}
 
@@ -31,6 +31,11 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.event.release.tag_name }}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if node -e "process.exit(require('./package.json').version.includes('-') ? 0 : 1)"; then
+            NPM_TAG="beta"
+          else
+            NPM_TAG="latest"
+          fi
           if [ "$TAG" != "v$PACKAGE_VERSION" ]; then
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
               echo "::error::Manual npm publish tag $TAG does not match package.json version v$PACKAGE_VERSION"
@@ -46,10 +51,21 @@ jobs:
             exit 1
           fi
           echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify npm publish token is configured
+        if: steps.package_release.outputs.should_publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN Actions secret is not configured; publish cannot continue"
+            exit 1
+          fi
 
       - name: Setup Node.js
         if: steps.package_release.outputs.should_publish == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 26
           registry-url: https://registry.npmjs.org
@@ -78,8 +94,7 @@ jobs:
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             echo "neondiff@$PACKAGE_VERSION already exists; verifying dist-tags"
-            test "$(npm view neondiff dist-tags.latest)" = "$PACKAGE_VERSION"
-            test "$(npm view neondiff dist-tags.beta)" = "$PACKAGE_VERSION"
+            test "$(npm view neondiff dist-tags.${{ steps.package_release.outputs.npm_tag }})" = "$PACKAGE_VERSION"
             exit 0
           fi
-          npm publish --provenance --access public --tag beta
+          npm publish --provenance --access public --tag "${{ steps.package_release.outputs.npm_tag }}"

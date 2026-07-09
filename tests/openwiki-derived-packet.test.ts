@@ -122,9 +122,100 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(packet.includedSections.map((section) => section.id)).toEqual(["quickstart"]);
     expect(formatRepoWikiPacketJson(packet)).not.toContain("suggested-doc-edits");
   });
+
+  it("redacts sensitive env names that start with the sensitive keyword", () => {
+    const { head, root } = createRepoWithOpenWiki({
+      openWikiBody: [
+        "# Provider setup",
+        "",
+        "Use API_KEY, TOKEN, SECRET, PASSWORD, PRIVATE_KEY, and SESSION_COOKIE only in GitHub secrets.",
+        ""
+      ].join("\n")
+    });
+    roots.push(root);
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+    const body = packet.includedSections[0]?.body ?? "";
+
+    expect(body).toContain("[redacted-secret]");
+    expect(body).not.toContain("API_KEY");
+    expect(body).not.toContain("PRIVATE_KEY");
+    expect(body).not.toContain("SESSION_COOKIE");
+  });
+
+  it("marks packets stale when dirty git status renames OpenWiki files into source docs", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    mkdirSync(join(root, "docs"), { recursive: true });
+    git(root, ["mv", "openwiki/quickstart.md", "docs/quickstart.md"]);
+    writeFileSync(join(root, "openwiki", "replacement.md"), "# Replacement\n\nStill advisory.\n", "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "Repository has non-openwiki worktree changes; regenerate OpenWiki before building a packet."
+    });
+    expect(packet.degraded).toBe(true);
+  });
+
+  it("fails closed when git status cannot be read", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      const packet = buildOpenWikiDerivedRepoWikiPacket({
+        repo,
+        worktreePath: root,
+        generatedAt,
+        headSha: head,
+        defaultBranch: "main"
+      });
+
+      expect(packet.source).toMatchObject({
+        status: "stale",
+        staleReason: "Unable to read git worktree status; regenerate OpenWiki before building a packet."
+      });
+      expect(packet.degraded).toBe(true);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("marks packets missing when OpenWiki has no Markdown sections", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    rmSync(join(root, "openwiki", "quickstart.md"));
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "missing",
+      staleReason: "No OpenWiki Markdown files were found under openwiki/."
+    });
+  });
 });
 
-function createRepoWithOpenWiki(options: { metadataHead?: string } = {}): { head: string; root: string } {
+function createRepoWithOpenWiki(options: { metadataHead?: string; openWikiBody?: string } = {}): { head: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "neondiff-openwiki-derived-"));
   git(root, ["init"]);
   git(root, ["config", "user.email", "test@example.com"]);
@@ -135,18 +226,19 @@ function createRepoWithOpenWiki(options: { metadataHead?: string } = {}): { head
   writeFileSync(join(root, "src", "worker.ts"), "export const worker = true;\n", "utf8");
   writeFileSync(
     join(root, "openwiki", "quickstart.md"),
-    [
-      "# Quickstart",
-      "",
-      "NeonDiff reviews pull requests. Configure provider credentials with OPENROUTER_API_KEY.",
-      "",
-      "## Source map",
-      "",
-      "- README.md",
-      "- src/worker.ts",
-      "- Git evidence: commits `abc1234`",
-      ""
-    ].join("\n"),
+    options.openWikiBody ??
+      [
+        "# Quickstart",
+        "",
+        "NeonDiff reviews pull requests. Configure provider credentials with OPENROUTER_API_KEY.",
+        "",
+        "## Source map",
+        "",
+        "- README.md",
+        "- src/worker.ts",
+        "- Git evidence: commits `abc1234`",
+        ""
+      ].join("\n"),
     "utf8"
   );
   git(root, ["add", "."]);

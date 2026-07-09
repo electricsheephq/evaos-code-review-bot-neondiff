@@ -41,6 +41,14 @@
       "floorCalibratedCategories": "deep"
     }
   },
+  "_reviewLensesComment": "Default-off advisory review lenses (#481). Lenses are curated text packets injected as bounded context only; they cannot enable tools, native ZCode skills, MCP, shell, web, memory, writes, REQUEST_CHANGES, or confidence claims.",
+  "reviewLenses": {
+    "enabled": false,
+    "packetVersion": "review-lens-packet-v0.1",
+    "active": [],
+    "maxLensBytes": 4000,
+    "maxPacketBytes": 12000
+  },
   "_repoMemoryComment": "Durable per-repo memory packet (policy notes, machine facts, learned false positives) surfaced to the model. Disabled means no packet is built.",
   "repoMemory": {
     "enabled": false,

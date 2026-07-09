@@ -1,8 +1,8 @@
-# NeonDiff Source-Available Beta License
+# NeonDiff Source-Available Commercial License
 
 Copyright (c) Electric Sheep. All rights reserved.
 
-NeonDiff is source-available beta software. The source is available for
+NeonDiff is source-available commercial software. The source is available for
 inspection, contribution, and self-hosted evaluation, but this repository is not
 published under an open-source license.
 
