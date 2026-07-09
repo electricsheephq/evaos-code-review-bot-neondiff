@@ -40,6 +40,8 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import { selectReviewMode } from "./review-mode-router.js";
+import type { ReviewModeAnalysisPlan } from "./review-mode-types.js";
 import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
@@ -48,6 +50,7 @@ import {
   type OutcomeLedgerSafetyGateInput
 } from "./outcome-ledger.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
+import { buildRepoWikiContextPacket, type RepoWikiContextPacket } from "./repo-wiki-context.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import {
@@ -1460,12 +1463,29 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       workRoot: config.workRoot,
       protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
+    const reviewModeSelection = selectReviewMode({
+      config,
+      repo,
+      pull,
+      files: reviewFiles,
+      profile: repoPolicy.profile
+    });
+    const analysisPlan = reviewModeSelection?.analysisPlan;
     const repoMemory = buildRepoMemoryContext({
       config,
       state,
       repo,
       evidenceDir
     });
+    const repoWikiContext = analysisPlan?.repoWikiContext === false
+      ? {}
+      : buildRepoWikiContext({
+          config,
+          repo,
+          worktreePath: worktree.path,
+          worktreeHeadSha: worktree.headSha,
+          evidenceDir
+        });
     const skillPackContext = buildSkillPackContext({
       config,
       evidenceDir
@@ -1476,21 +1496,25 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       evidenceDir,
       files: reviewFiles
     });
-    const gitnexusContext = buildGitNexusContext({
-      config,
-      repo,
-      pull,
-      files: reviewFiles,
-      evidenceDir
-    });
-    const githubRelatedContext = await buildGitHubRelatedContext({
-      config,
-      github: createGitHubRelatedContextReader(config, github),
-      repo,
-      pull,
-      files: reviewFiles,
-      evidenceDir
-    });
+    const gitnexusContext = analysisPlan?.gitnexusContext === false
+      ? {}
+      : buildGitNexusContext({
+          config,
+          repo,
+          pull,
+          files: reviewFiles,
+          evidenceDir
+        });
+    const githubRelatedContext = analysisPlan?.githubRelatedContext === false
+      ? {}
+      : await buildGitHubRelatedContext({
+          config,
+          github: createGitHubRelatedContextReader(config, github),
+          repo,
+          pull,
+          files: reviewFiles,
+          evidenceDir
+        });
 
     const promptForFiles = (filesForPrompt: PullFilePatch[]) => buildReviewPrompt({
       repo,
@@ -1500,6 +1524,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
       ...(reviewLensContext.packet ? { reviewLensPacket: reviewLensContext.packet } : {}),
       ...(repoMemory.packet ? { repoMemoryPacket: repoMemory.packet } : {}),
+      ...(repoWikiContext.packet ? { repoWikiContextPacket: repoWikiContext.packet } : {}),
       ...(gitnexusContext.packet ? { gitnexusContextPacket: gitnexusContext.packet } : {}),
       ...(githubRelatedContext.packet ? { githubRelatedContextPacket: githubRelatedContext.packet } : {}),
       maxPatchBytes: config.zcode.maxPatchBytes
@@ -2260,6 +2285,35 @@ export function buildRepoMemoryContext(input: {
     memoryRoot: repoMemoryConfig.memoryRoot
   });
   return { packet: packetResult.packet, falsePositiveFingerprints, falsePositives };
+}
+
+export function buildRepoWikiContext(input: {
+  config: BotConfig;
+  repo: string;
+  worktreePath: string;
+  worktreeHeadSha?: string;
+  evidenceDir: string;
+  analysisPlan?: Pick<ReviewModeAnalysisPlan, "repoWikiContext">;
+}): { packet?: RepoWikiContextPacket } {
+  if (input.analysisPlan?.repoWikiContext === false) return {};
+  const repoWikiConfig = input.config.repoWikiContext;
+  if (!repoWikiConfig?.enabled) return {};
+
+  const packetResult = buildRepoWikiContextPacket({
+    repo: input.repo,
+    worktreePath: input.worktreePath,
+    config: repoWikiConfig,
+    expectedHeadSha: input.worktreeHeadSha
+  });
+
+  if (!packetResult.packet) {
+    writeRedactedJson(join(input.evidenceDir, "repo-wiki-context-packet-error.json"), packetResult);
+    return {};
+  }
+
+  writeRedactedJson(join(input.evidenceDir, "repo-wiki-context-packet.json"), packetResult);
+  writeRedactedText(join(input.evidenceDir, "repo-wiki-context-packet.md"), packetResult.packet.markdown);
+  return { packet: packetResult.packet };
 }
 
 function isRepoMemoryBudgetFailure(packetResult: ReturnType<typeof buildRepoMemoryPacket>): boolean {

@@ -71,6 +71,8 @@ export interface ReviewModesConfig {
 export interface ReviewModeAnalysisPlan {
   /** Effective selfConsistency after applying the mode's demote-only knob to the base setting. */
   selfConsistency: boolean;
+  /** Effective repo-wiki advisory context add-on after the mode's demote-only knob. */
+  repoWikiContext: boolean;
   /** Effective gitnexus context add-on after the mode's demote-only knob. */
   gitnexusContext: boolean;
   /** Effective github-related context add-on after the mode's demote-only knob. */

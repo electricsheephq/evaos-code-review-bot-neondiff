@@ -57,6 +57,13 @@
     "maxStateNotes": 20,
     "includeStaleNotes": false
   },
+  "_repoWikiContextComment": "Optional advisory repo-wiki packet surfaced to review prompts. Disabled means no packet is read and prompts stay unchanged.",
+  "repoWikiContext": {
+    "enabled": false,
+    "packetPath": ".neondiff/repo-wiki-packet.json",
+    "maxPacketBytes": 12000,
+    "includeStaleContext": false
+  },
   "_workRootComment": "workRoot must resolve outside this checkout (enforced at config load: config.workRoot must be outside the current repository checkout). /tmp/neondiff is a placeholder that satisfies that check on any machine without edits; point it at a durable path for real use.",
   "workRoot": "/tmp/neondiff/runtime",
   "statePath": "/tmp/neondiff/state/reviews.sqlite",

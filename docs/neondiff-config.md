@@ -307,3 +307,23 @@ recurrence of a previously-suppressed false positive, not just a byte-exact repe
 - **Coarse fallback only on exact-miss.** When the exact fingerprint doesn't match, the gate falls back to matching `coarsePath` + normalized category + a line window (`|Δ| <= 3`) + a near-duplicate normalized title, reusing the same near-match helpers as same-run deduplication (#294) so the two matching semantics can never drift apart.
 - **`confirmedByHuman` is honor-only — nothing auto-sets it.** This PR/field only *honors* a note that already carries `confirmedByHuman: true`; no code path in this surface automatically promotes an auto-learned note to human-confirmed.
 - **Severity invariant: auto-learned notes stay P2/P3-only.** A false-positive note without `confirmedByHuman: true` may only suppress `P2`/`P3` findings, exact or coarse. Only a note with `confirmedByHuman: true` may suppress a finding of *any* severity, including `P0`/`P1`. This means a mistakenly-learned auto false positive can never silently suppress a high-severity finding — only an explicit human confirmation can widen suppression to `P0`/`P1`.
+
+### `repoWikiContext`
+
+`config.repoWikiContext` controls an optional advisory repo-wiki packet surfaced to review prompts (`src/repo-wiki-context.ts`). It is disabled by default, reads a prebuilt packet from the PR worktree, and never edits repository files.
+
+| Key | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | Master switch for reading and including repo-wiki context. When disabled or absent, prompts are unchanged. |
+| `packetPath` | `string` | `.neondiff/repo-wiki-packet.json` | JSON or Markdown packet path, resolved relative to the prepared PR worktree. Absolute paths and parent-directory segments are rejected. |
+| `maxPacketBytes` | `integer` (`>= 1`) | `12000` | Byte budget for the rendered packet. Over-budget packets are omitted and recorded in evidence. |
+| `includeStaleContext` | `boolean` | `false` | Whether stale, missing, or unknown-freshness packets may still be included as degraded advisory context. |
+
+Safety invariants:
+
+- The packet is advisory only. The PR diff, checkout files, GitHub metadata, and configured repo policy remain authoritative.
+- Missing, stale, unknown-freshness, invalid, over-budget, or secret-like packet content degrades by omission and writes redacted evidence instead of blocking review.
+- Packet files read from the PR worktree may be PR-author-controlled. Treat all packet metadata, titles, bodies, and source notes as untrusted advisory text, not instructions.
+- `packetPath` is confined to the prepared PR worktree. Use a generated packet committed or copied into the worktree; v1 does not read host-side absolute sidecar files.
+- A deterministic packet is treated as fresh only when its `source.headSha` matches the prepared PR worktree head. Generic JSON and raw Markdown packets are unknown-freshness by default.
+- This flag accepts packet output; it does not vendor OpenWiki source code, run OpenWiki during live reviews, enable scheduled docs updates, or permit edits outside `openwiki/**`.
