@@ -1,0 +1,25 @@
+{
+  "evalName": "review-lenses-eval-gate-v0.1",
+  "runId": "decision-human-review",
+  "suite": "review_lens_packet_safety",
+  "surface": "walkthrough",
+  "reviewLenses": {
+    "enabled": true,
+    "packetVersion": "review-lens-packet-v0.1",
+    "active": [
+      { "id": "decision", "surface": "walkthrough", "mode": "dry_run" }
+    ],
+    "maxLensBytes": 4000,
+    "maxPacketBytes": 12000
+  },
+  "decision": {
+    "status": "human_review",
+    "reason": "Ambiguous rollout boundary needs maintainer confirmation before live activation."
+  },
+  "expected": {
+    "includedLenses": ["decision"],
+    "maxPacketBytes": 12000,
+    "secretFindings": 0,
+    "requestChangesEligible": false
+  }
+}
