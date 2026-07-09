@@ -85,6 +85,26 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(packet.degraded).toBe(true);
   });
 
+  it("does not treat the standard packet artifact as stale source", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(join(root, ".neondiff", "repo-wiki-packet.json"), "{}\n", "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      headSha: head,
+      status: "fresh"
+    });
+  });
+
   it("omits OpenWiki review suggestions from prompt packets", () => {
     const { head, root } = createRepoWithOpenWiki();
     roots.push(root);

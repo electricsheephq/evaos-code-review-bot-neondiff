@@ -176,6 +176,8 @@ function readDirtyNonOpenWikiPaths(worktreePath: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.slice(3).trim())
     .filter(Boolean)
+    .filter((changedPath) => changedPath !== ".neondiff" && !changedPath.startsWith(".neondiff/"))
+    .filter((changedPath) => changedPath !== ".neondiff/repo-wiki-packet.json")
     .filter((changedPath) => changedPath !== OPENWIKI_DIR && !changedPath.startsWith(`${OPENWIKI_DIR}/`));
 }
 
