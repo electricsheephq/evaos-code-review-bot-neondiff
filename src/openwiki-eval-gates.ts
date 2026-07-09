@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   assertEvalOutputDirSafe,
   countEvalFalsePositiveSeverities,
+  guardEmptyOutputRoot,
   runOfflineEval,
   type EvalLabelInput,
   type EvalRunResult,
@@ -16,6 +17,8 @@ import type { Severity } from "./types.js";
 import { codeUnitCompare, type RepoWikiPacket } from "./repo-wiki-packet.js";
 
 export type RepoWikiEvalMode = "baseline" | "deterministic" | "openwiki";
+
+const REPO_WIKI_EVAL_MODES = ["baseline", "deterministic", "openwiki"] as const;
 
 export interface RepoWikiContextModeInput {
   botFindings: unknown;
@@ -180,11 +183,13 @@ export function runRepoWikiContextAbEval(
 ): RepoWikiContextAbEvalResult {
   const now = options.now ?? new Date();
   const evalName = input.evalName ?? "neondiff-openwiki-context-ab-v0.1";
+  const modeInputs = validateRepoWikiContextAbModes(input.modes);
   const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
+  guardEmptyOutputRoot(outputRoot, "repo-wiki context A/B eval");
   mkdirSync(outputRoot, { recursive: true });
   const modes = Object.fromEntries(
-    (["baseline", "deterministic", "openwiki"] as const).map((mode) => {
-      const modeInput = input.modes[mode];
+    REPO_WIKI_EVAL_MODES.map((mode) => {
+      const modeInput = modeInputs[mode];
       const result = runOfflineEval({
         evalName,
         runId: `${input.runId}-${mode}`,
@@ -250,6 +255,22 @@ export function runRepoWikiContextAbEval(
       "repo-wiki-context-ab-report.md": reportPath
     }
   };
+}
+
+function validateRepoWikiContextAbModes(value: unknown): Record<RepoWikiEvalMode, RepoWikiContextModeInput> {
+  if (!isRecord(value)) {
+    throw new Error("repoWikiContextAb.modes must be an object");
+  }
+  for (const mode of REPO_WIKI_EVAL_MODES) {
+    if (!isRecord(value[mode])) {
+      throw new Error(`repoWikiContextAb.modes.${mode} is required`);
+    }
+  }
+  return value as Record<RepoWikiEvalMode, RepoWikiContextModeInput>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function runDocsDriftEval(

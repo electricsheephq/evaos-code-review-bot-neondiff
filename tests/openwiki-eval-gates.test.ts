@@ -80,6 +80,31 @@ describe("OpenWiki eval gates", () => {
     }));
   });
 
+  it("throws a clean validation error when a required A/B mode is missing", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-missing-mode-"));
+    roots.push(outputRoot);
+    const input = buildAbInput();
+    delete (input.modes as Partial<RepoWikiContextAbEvalInput["modes"]>).openwiki;
+
+    expect(() => runRepoWikiContextAbEval(input, {
+      outputRoot,
+      now: new Date(generatedAt)
+    })).toThrow("repoWikiContextAb.modes.openwiki is required");
+    expect(existsSync(join(outputRoot, "repo-wiki-context-ab-summary.json"))).toBe(false);
+  });
+
+  it("rejects non-empty A/B output roots before writing new artifacts", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-non-empty-"));
+    roots.push(outputRoot);
+    writeFileSync(join(outputRoot, "previous-run.json"), "{}", "utf8");
+
+    expect(() => runRepoWikiContextAbEval(buildAbInput(), {
+      outputRoot,
+      now: new Date(generatedAt)
+    })).toThrow("outputRoot must be empty before running repo-wiki context A/B eval");
+    expect(existsSync(join(outputRoot, "repo-wiki-context-ab-summary.json"))).toBe(false);
+  });
+
   it("buckets unmatched false positives by their actual severity", () => {
     const labels: EvalLabelInput[] = [{
       source: "seeded_defect",

@@ -1521,14 +1521,14 @@ function guardOutputDir(outputDir: string): void {
   assertEvalOutputDirSafe(outputDir);
 }
 
-function guardEmptyOutputRoot(outputRoot: string): void {
+export function guardEmptyOutputRoot(outputRoot: string, evalLabel = "sticky-vs-cold eval"): void {
   if (!existsSync(outputRoot)) return;
   const stat = statSync(outputRoot);
   if (!stat.isDirectory()) {
     throw new Error("outputRoot must be a directory when it already exists");
   }
   if (readdirSync(outputRoot).length > 0) {
-    throw new Error("outputRoot must be empty before running sticky-vs-cold eval; choose a fresh output root to avoid stale artifacts");
+    throw new Error(`outputRoot must be empty before running ${evalLabel}; choose a fresh output root to avoid stale artifacts`);
   }
 }
 

@@ -42,7 +42,10 @@ npx tsx src/cli.ts eval-openwiki-docs-drift \
 ```
 
 Both OpenWiki gates are offline evidence generators. They do not call a model,
-post GitHub comments, enable the daemon, add cron, or edit production docs.
+post GitHub comments, enable the daemon, add cron, or edit production docs. The
+docs-drift gate may write a `suggested-doc-edits.md` evidence artifact under the
+chosen `--output-root`; treat that file as a review packet, not as a repository
+documentation change.
 
 The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
