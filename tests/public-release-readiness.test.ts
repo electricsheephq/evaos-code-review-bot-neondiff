@@ -182,6 +182,9 @@ describe("NeonDiff public release readiness", () => {
         checkoutIssuanceState?: string;
         checkoutIssuanceTrackingIssue?: string;
       };
+      updateChannels?: Record<string, {
+        rollback?: string;
+      }>;
     };
 
     expect(manifest.licenseApi).toMatchObject({
