@@ -120,29 +120,42 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         guard let resolvedExecutable = NeonDiffCLIResolver.resolveExecutablePath(executablePath, workingDirectory: workingDirectory) else {
             throw NeonDiffCLIError.launchFailed("Could not find executable NeonDiff CLI at \(executablePath). Set an absolute CLI path or install the `neondiff` command in a GUI-visible bin directory.")
         }
-        process.executableURL = resolvedExecutable
-        process.arguments = arguments
+        let commandLine = ([resolvedExecutable.path] + arguments).map(shellQuote).joined(separator: " ")
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [
+            "-lc",
+            "\(commandLine) >/dev/null 2>&1 & pid=$!; sleep 0.25; if kill -0 \"$pid\" 2>/dev/null; then echo \"$pid\"; else wait \"$pid\"; exit $?; fi"
+        ]
         process.environment = guiSafeEnvironment()
         if let workingDirectory {
             process.currentDirectoryURL = workingDirectory
         }
 
-        let nullOutput = FileHandle(forWritingAtPath: "/dev/null")
-        process.standardOutput = nullOutput
-        process.standardError = nullOutput
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
 
         do {
             try process.run()
         } catch {
-            nullOutput?.closeFile()
             throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(error.localizedDescription)")
         }
-        nullOutput?.closeFile()
+        process.waitUntilExit()
+
+        let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else {
+            throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(NeonDiffRedactor.redact(stderrText.trimmingCharacters(in: .whitespacesAndNewlines)))")
+        }
+        guard let processIdentifier = Int32(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw NeonDiffCLIError.launchFailed("Failed to read detached NeonDiff CLI process id")
+        }
 
         return CLILaunchResult(
-            processIdentifier: process.processIdentifier,
-            executablePath: process.executableURL?.path ?? executablePath,
-            arguments: process.arguments ?? arguments
+            processIdentifier: processIdentifier,
+            executablePath: resolvedExecutable.path,
+            arguments: arguments
         )
     }
 }

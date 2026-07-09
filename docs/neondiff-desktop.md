@@ -49,9 +49,12 @@ The ZCode defaults in `config.example.json` are developer-machine paths. On any 
 
 ## Local Dashboard Launcher
 
-Opening the dev app starts the same local dashboard server as:
+The dev app no longer opens a browser tab automatically. It exposes explicit
+controls to start the same local dashboard server without opening a browser, or
+to open the browser dashboard when the user chooses it:
 
 ```bash
+neondiff dashboard --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --open false
 neondiff dashboard --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --open true
 ```
 
