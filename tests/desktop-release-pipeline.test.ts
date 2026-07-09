@@ -44,14 +44,13 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
       "swift run NeonDiffDesktopCoreChecks",
       "swift run NeonDiffDesktopAppcastChecks",
       "script/build_and_run.sh build",
-      "script/build_and_run.sh bundle-check"
+      "script/build_and_run.sh bundle-check",
+      "script/release-proof.sh"
     ]) {
       expect(workflow).toContain(command);
     }
 
     expect(workflow).not.toContain("NeonDiffDesktopCoreSmoke");
-    expect(workflow).toContain("release_ready");
-    expect(workflow).toContain("customer_ready");
     expect(workflow).toContain("unsigned");
     expect(workflow).toMatch(/hosted-runner-safe core checks/);
     expect(workflow).toMatch(/persist-credentials:\s*false/);
@@ -62,10 +61,52 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).not.toMatch(/actions\/upload-artifact@v4/);
     expect(workflow).toMatch(/NeonDiffDesktop\.app\.zip/);
     expect(workflow).toMatch(/desktop-release-smoke-metadata\.json/);
+    expect(workflow).toMatch(/NEONDIFF_DESKTOP_UI_LAUNCH/);
+    expect(workflow).toMatch(/NEONDIFF_DESKTOP_ARTIFACT_CLASSIFICATION/);
 
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./);
     expect(workflow).not.toMatch(/\b(codesign|notarytool|stapler|spctl)\b/);
     expect(workflow).not.toMatch(/\bopen\s+-n\b/);
+  });
+
+  it("has a reusable release proof script that records artifact identity and proof boundaries", () => {
+    const scriptPath = "apps/neondiff-desktop/script/release-proof.sh";
+
+    expect(existsSync(scriptPath)).toBe(true);
+
+    const script = read(scriptPath);
+    for (const field of [
+      "artifact_sha256",
+      "source_sha",
+      "source_ref",
+      "app_bundle_path",
+      "bundle_id",
+      "short_version",
+      "build_version",
+      "signing_identity_class",
+      "ui_launch",
+      "visual_smoke_required",
+      "release_ready",
+      "customer_ready",
+      "proof_boundary"
+    ]) {
+      expect(script).toContain(field);
+    }
+
+    expect(script).toContain("shasum -a 256");
+    expect(script).toContain("PlistBuddy");
+    expect(script).toContain("codesign");
+    expect(script).toContain("normalize_bool");
+    expect(script).toContain("ensure_clean_source_tree");
+    expect(script).toContain("verify_existing_app_launch");
+    expect(script).toContain("SOURCE_SHA_PROVIDED");
+    expect(script).toContain('git -C "$REPO_ROOT" diff --quiet');
+    expect(script).toContain("ls-files --others --exclude-standard");
+    expect(script).toContain("jq -n");
+    expect(script).toContain("NEONDIFF_DESKTOP_UI_LAUNCH");
+    expect(script).not.toContain('build_and_run.sh" verify');
+    expect(script).not.toMatch(/\$\{\{\s*secrets\./);
+    expect(script).not.toMatch(/\b(notarytool|stapler|spctl)\b/);
   });
 
   it("documents the desktop smoke artifact as non-release proof", () => {
@@ -80,6 +121,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(docs).toMatch(/customer-not-ready/i);
     expect(docs).toMatch(/NeonDiffDesktopCoreChecks/);
     expect(docs).toMatch(/Keychain/i);
+    expect(docs).toMatch(/artifact_sha256/i);
+    expect(docs).toMatch(/bundle_id/i);
+    expect(docs).toMatch(/visible smoke/i);
     expect(docs).not.toMatch(/\b(codesign|notarytool|stapler|spctl)\b/);
   });
 });
