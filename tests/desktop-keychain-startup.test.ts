@@ -1,19 +1,31 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+function swiftBlock(source: string, declaration: string): string {
+  const declarationStart = source.indexOf(declaration);
+  expect(declarationStart).toBeGreaterThanOrEqual(0);
+
+  const blockStart = source.indexOf("{", declarationStart);
+  expect(blockStart).toBeGreaterThan(declarationStart);
+
+  let depth = 0;
+  for (let index = blockStart; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] !== "}") continue;
+    depth -= 1;
+    if (depth === 0) return source.slice(declarationStart, index + 1);
+  }
+
+  throw new Error(`Unterminated Swift block for ${declaration}`);
+}
+
 describe("NeonDiff desktop Keychain startup safety", () => {
   it("uses metadata-only secret presence checks during model initialization", () => {
     const source = readFileSync(
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Models/NeonDiffDesktopModel.swift",
       "utf8"
     );
-    const initializerStart = source.indexOf("    init(\n");
-    const initializerEnd = source.indexOf("\n    var statusCommand", initializerStart);
-
-    expect(initializerStart).toBeGreaterThanOrEqual(0);
-    expect(initializerEnd).toBeGreaterThan(initializerStart);
-
-    const initializer = source.slice(initializerStart, initializerEnd);
+    const initializer = swiftBlock(source, "init(\n");
     expect(initializer).toContain("containsSecret(");
     expect(initializer).not.toContain("readSecret(");
     expect(initializer).not.toContain("storedDate(");
