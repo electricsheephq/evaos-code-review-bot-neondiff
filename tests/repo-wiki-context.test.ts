@@ -10,6 +10,7 @@ import { buildReviewPrompt } from "../src/zcode.js";
 
 const repo = "electricsheephq/evaos-code-review-bot-neondiff";
 const generatedAt = "2026-07-09T04:00:00.000Z";
+const packetHeadSha = "abc12345";
 const pull = {
   number: 415,
   title: "Repo wiki context",
@@ -85,7 +86,7 @@ describe("repo wiki advisory context", () => {
       repo,
       worktreePath: root,
       config: config(),
-      expectedHeadSha: "abc123"
+      expectedHeadSha: packetHeadSha
     });
 
     expect(result.packet).toMatchObject({
@@ -206,7 +207,7 @@ describe("repo wiki advisory context", () => {
         repo,
         worktreePath: root,
         config: config({ maxPacketBytes: 1 }),
-        expectedHeadSha: "abc123"
+        expectedHeadSha: packetHeadSha
       })
     ).toMatchObject({
       omitted: expect.objectContaining({ reason: "stale_packet" })
@@ -218,7 +219,7 @@ describe("repo wiki advisory context", () => {
         repo,
         worktreePath: root,
         config: config({ maxPacketBytes: 1 }),
-        expectedHeadSha: "abc123"
+        expectedHeadSha: packetHeadSha
       })
     ).toMatchObject({
       omitted: expect.objectContaining({ reason: "budget_exceeded" })
@@ -350,7 +351,7 @@ describe("repo wiki advisory context", () => {
       repo,
       worktreePath: root,
       config: config(),
-      expectedHeadSha: "abc123"
+      expectedHeadSha: packetHeadSha
     });
     expect(deterministicResult.packet?.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(deterministicResult.packet?.sha256).not.toContain("Injected prompt text");
@@ -366,7 +367,7 @@ describe("repo wiki advisory context", () => {
       JSON.stringify({
         packetVersion: "repo-wiki-packet-v0.1",
         repo: { fullName: repo },
-        source: { ref: "main", status: "fresh", headSha: "abc123", checkedAt: generatedAt },
+        source: { ref: "main", status: "fresh", headSha: packetHeadSha, checkedAt: generatedAt },
         includedSections: [],
         packetSha: "a".repeat(64)
       })
@@ -377,7 +378,7 @@ describe("repo wiki advisory context", () => {
         repo,
         worktreePath: root,
         config: config(),
-        expectedHeadSha: "abc123"
+        expectedHeadSha: packetHeadSha
       })
     ).not.toThrow();
     expect(
@@ -385,7 +386,7 @@ describe("repo wiki advisory context", () => {
         repo,
         worktreePath: root,
         config: config(),
-        expectedHeadSha: "abc123"
+        expectedHeadSha: packetHeadSha
       })
     ).toMatchObject({
       omitted: expect.objectContaining({
@@ -411,7 +412,7 @@ describe("repo wiki advisory context", () => {
       repo,
       worktreePath: root,
       config: config({ includeStaleContext: true }),
-      expectedHeadSha: "abc123"
+      expectedHeadSha: packetHeadSha
     });
 
     expect(result.packet?.repoWiki.packetVersion).toBeUndefined();
@@ -463,11 +464,32 @@ describe("repo wiki advisory context", () => {
       repo,
       worktreePath: root,
       config: config(),
-      expectedHeadSha: "abc123".padEnd(40, "0")
+      expectedHeadSha: packetHeadSha.padEnd(40, "0")
     });
 
     expect(result.packet).toMatchObject({
       repoWiki: { freshness: "fresh", degradedMode: false }
+    });
+  });
+
+  it("does not promote packets to fresh from fewer than 8 matching SHA characters", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    const shortPacket = repoWikiPacket("fresh");
+    shortPacket.source.headSha = packetHeadSha.slice(0, 7);
+    writeFileSync(packetPath, formatRepoWikiPacketJson(shortPacket));
+
+    const result = buildRepoWikiContextPacket({
+      repo,
+      worktreePath: root,
+      config: config(),
+      expectedHeadSha: shortPacket.source.headSha.padEnd(40, "0")
+    });
+
+    expect(result).toMatchObject({
+      omitted: expect.objectContaining({ reason: "stale_packet" })
     });
   });
 
@@ -536,6 +558,47 @@ describe("repo wiki advisory context", () => {
     expect(readFileSync(evidencePath, "utf8")).not.toContain(root);
   });
 
+  it("worker writes fresh packet evidence and forwards the packet into review prompts", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    mkdirSync(evidenceDir, { recursive: true });
+    writeFileSync(packetPath, formatRepoWikiPacketJson(repoWikiPacket("fresh")));
+
+    const result = buildRepoWikiContext({
+      config: loadConfigFromObject({ repoWikiContext: { enabled: true } }),
+      repo,
+      worktreePath: root,
+      worktreeHeadSha: packetHeadSha,
+      evidenceDir
+    });
+
+    expect(result.packet).toMatchObject({
+      repoWiki: { freshness: "fresh", degradedMode: false }
+    });
+    const evidenceJsonPath = join(evidenceDir, "repo-wiki-context-packet.json");
+    const evidenceMarkdownPath = join(evidenceDir, "repo-wiki-context-packet.md");
+    expect(existsSync(evidenceJsonPath)).toBe(true);
+    expect(existsSync(evidenceMarkdownPath)).toBe(true);
+    expect(JSON.parse(readFileSync(evidenceJsonPath, "utf8"))).toMatchObject({
+      packet: {
+        repoWiki: { freshness: "fresh", degradedMode: false }
+      }
+    });
+    expect(readFileSync(evidenceMarkdownPath, "utf8")).toContain("Architecture overview");
+
+    const prompt = buildReviewPrompt({
+      repo,
+      pull,
+      files,
+      repoWikiContextPacket: result.packet
+    });
+    expect(prompt).toContain("Repo wiki context packet (advisory; feature-flagged context):");
+    expect(prompt).toContain("Architecture overview");
+  });
+
   it("worker honors review-mode analysis-plan demotion before reading repo wiki context", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
     roots.push(root);
@@ -564,7 +627,7 @@ function repoWikiPacket(status: "fresh" | "stale" | "missing") {
     repo: { fullName: repo, defaultBranch: "main" },
     source: {
       ref: "main",
-      headSha: "abc123",
+      headSha: packetHeadSha,
       checkedAt: generatedAt,
       status,
       ...(status === "stale" ? { staleReason: "Packet was generated from an older head." } : {}),

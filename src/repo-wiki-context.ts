@@ -406,7 +406,7 @@ function headShaMatches(packetHeadSha: string | undefined, expectedHeadSha: stri
   const packetSha = packetHeadSha?.trim().toLowerCase();
   const expectedSha = expectedHeadSha?.trim().toLowerCase();
   if (!packetSha || !expectedSha) return false;
-  const gitSha = /^[a-f0-9]{6,40}$/;
+  const gitSha = /^[a-f0-9]{8,40}$/;
   if (!gitSha.test(packetSha) || !gitSha.test(expectedSha)) return packetSha === expectedSha;
   return packetSha.startsWith(expectedSha) || expectedSha.startsWith(packetSha);
 }
