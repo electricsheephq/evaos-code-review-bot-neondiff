@@ -10,6 +10,18 @@ import { formatRepoWikiPacketJson } from "../src/repo-wiki-packet.js";
 
 const repo = "electricsheephq/evaos-code-review-bot-neondiff";
 const generatedAt = "2026-07-09T08:30:00.000Z";
+const defaultOpenWikiBody = [
+  "# Quickstart",
+  "",
+  "NeonDiff reviews pull requests. Configure provider credentials with OPENROUTER_API_KEY.",
+  "",
+  "## Source map",
+  "",
+  "- README.md",
+  "- src/worker.ts",
+  "- Git evidence: commits `abc1234`",
+  ""
+].join("\n");
 
 describe("OpenWiki-derived repo-wiki packets", () => {
   const roots: string[] = [];
@@ -45,8 +57,9 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     ]);
     expect(section?.body).toContain("[redacted-secret]");
     expect(section?.body).not.toContain("OPENROUTER_API_KEY");
-    expect(section?.sourceSha).toBe(sha256(section?.body ?? ""));
+    expect(section?.sourceSha).toBe(sha256(defaultOpenWikiBody.trim()));
     expect(section?.emittedBodySha).toBe(sha256(section?.body ?? ""));
+    expect(section?.sourceSha).not.toBe(section?.emittedBodySha);
     expect(packet.redaction).toMatchObject({
       status: "redacted",
       replacementCount: 1
@@ -159,22 +172,24 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(body).not.toContain("ZAI_TOKEN");
     expect(body).not.toContain("api_key");
     expect(body).not.toContain("openrouter_api_key");
-    expect(body).not.toContain("zcodeToken");
+    expect(body).toContain("zcodeToken");
     expect(body).not.toContain("privateKey");
     expect(body).toContain("TOKEN, SECRET, PASSWORD, COOKIE, and SESSION should stay readable.");
     expect(packet.redaction).toMatchObject({
       status: "redacted",
-      replacementCount: 8
+      replacementCount: 7
     });
   });
 
-  it("redacts secret-like values from OpenWiki section bodies and JSON output", () => {
+  it("redacts secret-like values and assignments from OpenWiki section bodies and JSON output", () => {
     const secret = "ghp_1234567890abcdef";
+    const unprefixedSecret = "Sup3rS3cr3tV4lue99";
     const { head, root } = createRepoWithOpenWiki({
       openWikiBody: [
         "# Provider setup",
         "",
         `Never paste ${secret} into OpenWiki docs.`,
+        `OPENROUTER_API_KEY=${unprefixedSecret}`,
         ""
       ].join("\n")
     });
@@ -192,7 +207,9 @@ describe("OpenWiki-derived repo-wiki packets", () => {
 
     expect(body).toContain("[redacted-secret]");
     expect(body).not.toContain(secret);
+    expect(body).not.toContain(unprefixedSecret);
     expect(json).not.toContain(secret);
+    expect(json).not.toContain(unprefixedSecret);
     expect(packet.redaction.status).toBe("redacted");
   });
 
@@ -259,6 +276,39 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(sourceFiles).not.toContain("v1.2");
     expect(sourceFiles).not.toContain("3.14");
     expect(sourceFiles).not.toContain("20.10.0");
+  });
+
+  it("honors declared OpenWiki section order before filename order", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    writeFileSync(join(root, "openwiki", "aaa-architecture.md"), [
+      "---",
+      "order: 50",
+      "---",
+      "# Architecture",
+      "",
+      "Architecture details."
+    ].join("\n"), "utf8");
+    writeFileSync(join(root, "openwiki", "zzz-runbook.md"), [
+      "<!-- openwiki-order: -5 -->",
+      "# Runbook",
+      "",
+      "Runbook details."
+    ].join("\n"), "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.includedSections.map((section) => section.id)).toEqual([
+      "zzz-runbook",
+      "quickstart",
+      "aaa-architecture"
+    ]);
   });
 
   it("marks packets stale when dirty git status renames OpenWiki files into source docs", () => {
@@ -394,19 +444,7 @@ function createRepoWithOpenWiki(options: { metadataHead?: string; openWikiBody?:
   writeFileSync(join(root, "src", "worker.ts"), "export const worker = true;\n", "utf8");
   writeFileSync(
     join(root, "openwiki", "quickstart.md"),
-    options.openWikiBody ??
-      [
-        "# Quickstart",
-        "",
-        "NeonDiff reviews pull requests. Configure provider credentials with OPENROUTER_API_KEY.",
-        "",
-        "## Source map",
-        "",
-        "- README.md",
-        "- src/worker.ts",
-        "- Git evidence: commits `abc1234`",
-        ""
-      ].join("\n"),
+    options.openWikiBody ?? defaultOpenWikiBody,
     "utf8"
   );
   git(root, ["add", "."]);
