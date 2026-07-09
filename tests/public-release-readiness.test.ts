@@ -379,6 +379,7 @@ describe("NeonDiff public release readiness", () => {
         hostedWorkflowSourceIsCandidateAncestor?: boolean;
         visibleLocalSourcesMatchMergedCandidate?: boolean;
         hostedReleaseSurfaceMatchesMergedCandidate?: boolean;
+        verification?: string;
       };
     };
     expect(desktopProof).toMatchObject({
@@ -412,9 +413,11 @@ describe("NeonDiff public release readiness", () => {
         visibleLocalBundleSourceIsCandidateAncestor: false,
         hostedWorkflowSourceIsCandidateAncestor: false,
         visibleLocalSourcesMatchMergedCandidate: true,
-        hostedReleaseSurfaceMatchesMergedCandidate: true
+        hostedReleaseSurfaceMatchesMergedCandidate: true,
+        verification: expect.stringContaining(".github/workflows/swift-desktop-gate.yml")
       }
     });
+    expect(desktopProof.artifactRelationship?.verification).not.toContain(".github/workflows/swift-desktop.yml");
     expect(desktopProof.proofBoundary).toMatch(/signing/i);
     expect(JSON.stringify(desktopProof)).not.toMatch(/\/Volumes\/LEXAR|\/Users\/lume|ghp_|github_pat_|nd_live_|session_id=/);
   });
