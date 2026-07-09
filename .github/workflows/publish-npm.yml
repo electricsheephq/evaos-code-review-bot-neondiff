@@ -9,7 +9,7 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v0.4.30-beta.1
+        default: v1.0.1
 
 permissions:
   contents: read

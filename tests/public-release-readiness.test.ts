@@ -162,7 +162,13 @@ describe("NeonDiff public release readiness", () => {
       requiredForThisRelease: true,
       state: "published"
     });
-    expect(manifest.updateChannels?.website).toBeUndefined();
+    expect(manifest.updateChannels?.website).toMatchObject({
+      requiredForThisRelease: true,
+      state: "published",
+      version: "v1.0.0",
+      rollback: "git revert 6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      rollbackRepository: "electricsheephq/neon-diff-agent-website"
+    });
     expect(manifest.updateChannels?.desktop).toBeUndefined();
   });
 
@@ -322,6 +328,13 @@ describe("NeonDiff public release readiness", () => {
           rollbackTarget: "v1.0.0",
           targetVerifiedBy: "git rev-list -n 1 refs/tags/v1.0.0",
           targetVerifiedSha: "23d66717c0627b25a8c56895bba9627bcdd69cca"
+        },
+        website: {
+          rollbackRepository: "electricsheephq/neon-diff-agent-website",
+          rollbackCommand: manifest.updateChannels?.website?.rollback,
+          rollbackTarget: "6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+          targetVerifiedBy: "gh api repos/electricsheephq/neon-diff-agent-website/commits/6b670d00cd587fb7d564347b6bc0d4d3e8d13186 --jq .sha",
+          targetVerifiedSha: "6b670d00cd587fb7d564347b6bc0d4d3e8d13186"
         }
       }
     });
@@ -439,5 +452,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/require\('\.\/package\.json'\)\.version/);
     expect(publish).toMatch(/already exists; verifying dist-tags/);
     expect(publish).toMatch(/dist-tags\.\$\{\{\s*steps\.package_release\.outputs\.npm_tag\s*\}\}/);
+    expect(publish).toMatch(/default:\s*v1\.0\.1/);
+    expect(publish).not.toMatch(/default:\s*v0\.4\.30-beta\.1/);
   });
 });

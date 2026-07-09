@@ -838,7 +838,7 @@ function buildPublicReleaseChannelStatus(
   const rollbackRepository = readString(channel.rollbackRepository);
   const trackingIssue = readString(channel.trackingIssue);
   const stateOk = isUpdateChannelStateAcceptable(name, state, requiredForThisRelease);
-  const rollbackCheck = rollback ? checkRollbackCommand(rollback, options) : { ok: false, missingMetadata: "rollback command" };
+  const rollbackCheck = rollback ? checkRollbackCommand(rollback, { ...options, rollbackRepository }) : { ok: false, missingMetadata: "rollback command" };
   const missingRequiredMetadata = [
     ...(requiredForThisRelease && !version ? ["version"] : []),
     ...(requiredForThisRelease && !rollbackCheck.ok ? [rollbackCheck.missingMetadata] : [])
@@ -877,7 +877,7 @@ function isRequiredPublicUpdateChannel(name: string): boolean {
 
 function checkRollbackCommand(
   rollback: string,
-  options: { cwd?: string; verifyRollbackRefs?: boolean }
+  options: { cwd?: string; verifyRollbackRefs?: boolean; rollbackRepository?: string }
 ): { ok: boolean; missingMetadata: "rollback command" | "rollback target" } {
   if (/\s*(?:&&|\|\||;)\s*/.test(rollback)) return { ok: false, missingMetadata: "rollback command" };
   const command = rollback.trim();
@@ -890,15 +890,38 @@ function checkRollbackCommand(
 
 function checkRollbackTarget(
   target: string,
-  options: { cwd?: string; verifyRollbackRefs?: boolean }
+  options: { cwd?: string; verifyRollbackRefs?: boolean; rollbackRepository?: string }
 ): { ok: boolean; missingMetadata: "rollback command" | "rollback target" } {
   const targetFormatOk = isRollbackVersionTagRef(target) || /^[0-9a-f]{40}$/i.test(target);
   if (!targetFormatOk) return { ok: false, missingMetadata: "rollback command" };
   if (options.verifyRollbackRefs !== true) return { ok: true, missingMetadata: "rollback command" };
+  if (options.rollbackRepository && options.cwd) {
+    const currentRepository = readCurrentGitHubRepository(options.cwd);
+    if (currentRepository && currentRepository !== options.rollbackRepository) {
+      return { ok: true, missingMetadata: "rollback command" };
+    }
+  }
   if (!options.cwd || !isGitWorktree(options.cwd)) return { ok: false, missingMetadata: "rollback target" };
   return gitCommitishExists(options.cwd, target)
     ? { ok: true, missingMetadata: "rollback command" }
     : { ok: false, missingMetadata: "rollback target" };
+}
+
+function readCurrentGitHubRepository(cwd: string): string | undefined {
+  try {
+    return normalizeGitHubRepository(git(cwd, ["config", "--get", "remote.origin.url"]));
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeGitHubRepository(remoteUrl: string): string | undefined {
+  const withoutGitSuffix = remoteUrl.trim().replace(/\.git$/, "");
+  const sshMatch = withoutGitSuffix.match(/^git@github\.com:([^/]+\/[^/]+)$/);
+  if (sshMatch) return sshMatch[1];
+  const httpsMatch = withoutGitSuffix.match(/^https:\/\/(?:[^/@]+@)?github\.com\/([^/]+\/[^/]+)$/);
+  if (httpsMatch) return httpsMatch[1];
+  return undefined;
 }
 
 function isPublicVersionTag(version: string): boolean {
