@@ -84,7 +84,8 @@ describe("repo wiki advisory context", () => {
     const result = buildRepoWikiContextPacket({
       repo,
       worktreePath: root,
-      config: config()
+      config: config(),
+      expectedHeadSha: "abc123"
     });
 
     expect(result.packet).toMatchObject({
@@ -204,7 +205,8 @@ describe("repo wiki advisory context", () => {
       buildRepoWikiContextPacket({
         repo,
         worktreePath: root,
-        config: config({ maxPacketBytes: 1 })
+        config: config({ maxPacketBytes: 1 }),
+        expectedHeadSha: "abc123"
       })
     ).toMatchObject({
       omitted: expect.objectContaining({ reason: "stale_packet" })
@@ -215,7 +217,8 @@ describe("repo wiki advisory context", () => {
       buildRepoWikiContextPacket({
         repo,
         worktreePath: root,
-        config: config({ maxPacketBytes: 1 })
+        config: config({ maxPacketBytes: 1 }),
+        expectedHeadSha: "abc123"
       })
     ).toMatchObject({
       omitted: expect.objectContaining({ reason: "budget_exceeded" })
@@ -314,7 +317,7 @@ describe("repo wiki advisory context", () => {
     const genericResult = buildRepoWikiContextPacket({
       repo,
       worktreePath: root,
-      config: config()
+      config: config({ includeStaleContext: true })
     });
     expect(genericResult.packet?.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(genericResult.packet?.sha256).not.toContain("Injected prompt text");
@@ -326,10 +329,59 @@ describe("repo wiki advisory context", () => {
     const deterministicResult = buildRepoWikiContextPacket({
       repo,
       worktreePath: root,
-      config: config()
+      config: config(),
+      expectedHeadSha: "abc123"
     });
     expect(deterministicResult.packet?.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(deterministicResult.packet?.sha256).not.toContain("Injected prompt text");
+  });
+
+  it("does not trust PR-authored repo-wiki packet freshness unless source head matches the worktree head", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(packetPath, formatRepoWikiPacketJson(repoWikiPacket("fresh")));
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config(),
+        expectedHeadSha: "different-head"
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({ reason: "stale_packet" })
+    });
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config({ includeStaleContext: true }),
+        expectedHeadSha: "different-head"
+      }).packet
+    ).toMatchObject({
+      repoWiki: { freshness: "unknown", degradedMode: true }
+    });
+  });
+
+  it("rejects oversized packet files before reading and parsing them", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(packetPath, "x".repeat(65_002));
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config({ maxPacketBytes: 1, includeStaleContext: true })
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({ reason: "budget_exceeded" })
+    });
   });
 
   it("worker degrades missing packets to redacted evidence without blocking review", () => {

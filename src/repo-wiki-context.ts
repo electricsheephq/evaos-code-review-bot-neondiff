@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { formatRepoWikiPacketMarkdown, type RepoWikiPacket, type RepoWikiSourceStatus } from "./repo-wiki-packet.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+
+const PACKET_FILE_OVERHEAD_BYTES = 64_000;
 
 export interface RepoWikiContextConfig {
   enabled: boolean;
@@ -43,6 +45,7 @@ export function buildRepoWikiContextPacket(input: {
   repo: string;
   worktreePath: string;
   config: RepoWikiContextConfig;
+  expectedHeadSha?: string;
 }): RepoWikiContextBuildResult {
   if (!input.config.enabled) {
     return {
@@ -84,6 +87,17 @@ export function buildRepoWikiContextPacket(input: {
       }
     };
   }
+  const packetFileBytes = statSync(sourcePath).size;
+  const maxPacketFileBytes = input.config.maxPacketBytes + PACKET_FILE_OVERHEAD_BYTES;
+  if (packetFileBytes > maxPacketFileBytes) {
+    return {
+      omitted: {
+        reason: "budget_exceeded",
+        detail: `Repo wiki packet file exceeded safe read limit (${packetFileBytes} > ${maxPacketFileBytes})`,
+        sourcePath: evidenceSourcePath
+      }
+    };
+  }
 
   const raw = readFileSync(sourcePath, "utf8");
   if (containsSecretLikeText(raw)) {
@@ -96,7 +110,7 @@ export function buildRepoWikiContextPacket(input: {
     };
   }
 
-  const parsed = parseRepoWikiContextRaw(raw, evidenceSourcePath);
+  const parsed = parseRepoWikiContextRaw(raw, evidenceSourcePath, input.expectedHeadSha);
   if (!parsed.ok) {
     return {
       omitted: { reason: "invalid_packet", detail: parsed.error, sourcePath: evidenceSourcePath }
@@ -180,7 +194,8 @@ function isExistingPathInsideOrEqual(candidatePath: string, rootPath: string): b
 
 function parseRepoWikiContextRaw(
   raw: string,
-  sourcePath: string
+  sourcePath: string,
+  expectedHeadSha?: string
 ): { ok: true; packet: RepoWikiContextPacket } | { ok: false; error: string } {
   const trimmed = raw.trimStart();
   if (!trimmed) return { ok: false, error: "Repo wiki packet is empty" };
@@ -190,7 +205,7 @@ function parseRepoWikiContextRaw(
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return { ok: false, error: "Repo wiki packet JSON must be an object" };
     if (typeof parsed.markdown === "string") return packetFromGenericJson(parsed);
-    if (looksLikeRepoWikiPacket(parsed)) return packetFromRepoWikiPacket(parsed);
+    if (looksLikeRepoWikiPacket(parsed)) return packetFromRepoWikiPacket(parsed, expectedHeadSha);
     return {
       ok: false,
       error: `Unsupported repo wiki packet shape at ${redactSecrets(sourcePath)}`
@@ -229,13 +244,8 @@ function packetFromGenericJson(parsed: Record<string, unknown>): {
 } {
   const markdown = String(parsed.markdown);
   const byteEstimate = Buffer.byteLength(markdown, "utf8");
-  const freshness =
-    readFreshness(parsed.freshness) ?? readFreshness(readNested(parsed, "repoWiki", "freshness")) ?? "unknown";
-  const explicitDegradedMode =
-    typeof readNested(parsed, "repoWiki", "degradedMode") === "boolean"
-      ? Boolean(readNested(parsed, "repoWiki", "degradedMode"))
-      : false;
-  const degradedMode = explicitDegradedMode || freshness !== "fresh";
+  const freshness = "unknown";
+  const degradedMode = true;
 
   return {
     ok: true,
@@ -253,12 +263,15 @@ function packetFromGenericJson(parsed: Record<string, unknown>): {
   };
 }
 
-function packetFromRepoWikiPacket(packet: RepoWikiPacket): {
+function packetFromRepoWikiPacket(packet: RepoWikiPacket, expectedHeadSha?: string): {
   ok: true;
   packet: RepoWikiContextPacket;
 } {
   const markdown = formatRepoWikiPacketMarkdown(packet);
   const byteEstimate = Buffer.byteLength(markdown, "utf8");
+  const sourceStatus = readFreshness(packet.source.status) ?? "unknown";
+  const sourceHeadMatches = Boolean(expectedHeadSha && packet.source.headSha === expectedHeadSha);
+  const freshness = sourceStatus === "fresh" && !sourceHeadMatches ? "unknown" : sourceStatus;
   return {
     ok: true,
     packet: {
@@ -267,8 +280,8 @@ function packetFromRepoWikiPacket(packet: RepoWikiPacket): {
       tokenEstimate: Math.max(1, Math.ceil(byteEstimate / 4)),
       markdown,
       repoWiki: {
-        freshness: packet.source.status,
-        degradedMode: packet.degraded,
+        freshness,
+        degradedMode: packet.degraded || freshness !== "fresh",
         ...(packet.source.staleReason ? { degradedReason: packet.source.staleReason } : {}),
         packetVersion: packet.packetVersion
       }

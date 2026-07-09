@@ -1471,13 +1471,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       evidenceDir
     });
-    const repoWikiContext = buildRepoWikiContext({
-      config,
-      repo,
-      worktreePath: worktree.path,
-      evidenceDir,
-      analysisPlan
-    });
+    const repoWikiContext = analysisPlan?.repoWikiContext === false
+      ? {}
+      : buildRepoWikiContext({
+          config,
+          repo,
+          worktreePath: worktree.path,
+          worktreeHeadSha: worktree.headSha,
+          evidenceDir
+        });
     const skillPackContext = buildSkillPackContext({
       config,
       evidenceDir
@@ -2276,6 +2278,7 @@ export function buildRepoWikiContext(input: {
   config: BotConfig;
   repo: string;
   worktreePath: string;
+  worktreeHeadSha?: string;
   evidenceDir: string;
   analysisPlan?: Pick<ReviewModeAnalysisPlan, "repoWikiContext">;
 }): { packet?: RepoWikiContextPacket } {
@@ -2286,7 +2289,8 @@ export function buildRepoWikiContext(input: {
   const packetResult = buildRepoWikiContextPacket({
     repo: input.repo,
     worktreePath: input.worktreePath,
-    config: repoWikiConfig
+    config: repoWikiConfig,
+    expectedHeadSha: input.worktreeHeadSha
   });
 
   if (!packetResult.packet) {
