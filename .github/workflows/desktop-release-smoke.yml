@@ -16,7 +16,7 @@ concurrency:
 jobs:
   unsigned-desktop-release-smoke:
     name: Unsigned desktop release smoke
-    runs-on: macos-latest
+    runs-on: macos-15
     defaults:
       run:
         working-directory: apps/neondiff-desktop
@@ -48,7 +48,7 @@ jobs:
           NEONDIFF_DESKTOP_ARTIFACT_CLASSIFICATION: unsigned-desktop-release-smoke
           NEONDIFF_DESKTOP_UI_LAUNCH: "false"
           NEONDIFF_DESKTOP_VISUAL_SMOKE_REQUIRED: "true"
-          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release app bundle build, hosted-runner-safe Keychain checks, appcast checks, bundle structure check, artifact checksum, and metadata only
+          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release app bundle build, macOS 15 Keychain checks, appcast checks, bundle structure check, artifact checksum, and metadata only
         run: script/release-proof.sh
 
       - name: Upload unsigned app bundle

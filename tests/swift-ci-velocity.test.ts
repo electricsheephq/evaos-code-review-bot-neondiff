@@ -53,7 +53,7 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/name:\s*Swift desktop smoke/);
     expect(gate).toMatch(/needs:\s*swift-desktop-impact/);
     expect(gate).toMatch(/if:\s*needs\.swift-desktop-impact\.outputs\.affected == 'true'/);
-    expect(gate).toMatch(/runs-on:\s*macos-latest/);
+    expect(gate).toMatch(/runs-on:\s*macos-15/);
     expect(gate).toMatch(/swift-desktop-gate:/);
     expect(gate).toMatch(/Swift desktop gate/);
     expect(gate).toMatch(/needs:\s*\n\s*-\s*swift-desktop-impact\n\s*-\s*swift-desktop-smoke/);

@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 import Security
 
 public protocol DesktopSecretStoring {
@@ -101,12 +100,10 @@ public final class KeychainSecretStore: DesktopSecretStoring {
 
         switch operation {
         case .contains:
-            query[kSecUseAuthenticationContext as String] = noninteractiveContext()
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
         case .read(let allowUserInteraction):
             query[kSecReturnData as String] = true
             if !allowUserInteraction {
-                query[kSecUseAuthenticationContext as String] = noninteractiveContext()
                 query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
             }
         }
@@ -121,9 +118,4 @@ public final class KeychainSecretStore: DesktopSecretStoring {
         ]
     }
 
-    private static func noninteractiveContext() -> LAContext {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        return context
-    }
 }

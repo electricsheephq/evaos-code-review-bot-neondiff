@@ -12,4 +12,4 @@ keeps `ui_launch: false`; a real release packet still needs a local visible smok
 that opens the app artifact and clicks through first-run controls before claiming
 user-ready desktop behavior.
 
-`NeonDiffDesktopCoreChecks` and the Keychain-backed `NeonDiffDesktopCoreSmoke` executable remain local proof on a runner with known-good detached-process and Keychain behavior. Hosted CI compiles the broad checks but executes only the focused Keychain contract target because the unsigned release-smoke lane must stay deterministic without touching credentials or depending on a long-lived detached process.
+`NeonDiffDesktopCoreChecks` and the Keychain-backed `NeonDiffDesktopCoreSmoke` executable remain local proof on a runner with known-good detached-process and Keychain behavior. Hosted CI compiles the broad checks but executes only the focused Keychain contract target on a pinned `macos-15` runner because the unsigned release-smoke lane must stay deterministic without touching credentials or depending on a long-lived detached process.

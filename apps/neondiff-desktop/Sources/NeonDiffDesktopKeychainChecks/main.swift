@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 @_spi(Testing) import NeonDiffDesktopCore
 import Security
 
@@ -18,10 +17,7 @@ let existenceQuery = KeychainSecretStore.query(
     operation: .contains
 )
 check(existenceQuery[kSecReturnData as String] == nil, "startup existence checks never request secret data")
-check(
-    (existenceQuery[kSecUseAuthenticationContext as String] as? LAContext)?.interactionNotAllowed == true,
-    "startup existence checks cannot present Keychain UI"
-)
+check(existenceQuery[kSecUseAuthenticationContext as String] == nil, "startup checks do not construct a LocalAuthentication context")
 check(
     existenceQuery[kSecUseAuthenticationUI as String] as? String == kSecUseAuthenticationUISkip as String,
     "startup existence checks skip legacy Keychain items that would present UI"
@@ -33,10 +29,7 @@ let noninteractiveReadQuery = KeychainSecretStore.query(
     operation: .read(allowUserInteraction: false)
 )
 check(noninteractiveReadQuery[kSecReturnData as String] as? Bool == true, "noninteractive reads still request secret data")
-check(
-    (noninteractiveReadQuery[kSecUseAuthenticationContext as String] as? LAContext)?.interactionNotAllowed == true,
-    "noninteractive reads cannot present Keychain UI"
-)
+check(noninteractiveReadQuery[kSecUseAuthenticationContext as String] == nil, "noninteractive reads do not construct a LocalAuthentication context")
 check(
     noninteractiveReadQuery[kSecUseAuthenticationUI as String] as? String == kSecUseAuthenticationUISkip as String,
     "noninteractive reads skip legacy Keychain items that would present UI"
