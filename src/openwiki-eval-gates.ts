@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   assertEvalOutputDirSafe,
+  buildEvalThresholds,
   countEvalFalsePositiveSeverities,
   guardEmptyOutputRoot,
   runOfflineEval,
@@ -184,6 +185,7 @@ export function runRepoWikiContextAbEval(
   const now = options.now ?? new Date();
   const evalName = input.evalName ?? "neondiff-openwiki-context-ab-v0.1";
   const modeInputs = validateRepoWikiContextAbModes(input.modes);
+  validateRepoWikiContextAbThresholds(input.thresholds);
   const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
   guardEmptyOutputRoot(outputRoot, "repo-wiki context A/B eval");
   mkdirSync(outputRoot, { recursive: true });
@@ -237,7 +239,10 @@ export function runRepoWikiContextAbEval(
     comparisons,
     gates
   };
-  writeJson(reportPath, buildAbReport(summaryWithoutInventory));
+  assertNoSecretLikeText(summaryWithoutInventory, "repo-wiki context A/B summary");
+  const reportText = buildAbReport(summaryWithoutInventory);
+  assertNoSecretLikeText(reportText, "repo-wiki context A/B report");
+  writeJson(reportPath, reportText);
   const artifactInventory = buildArtifactInventory(outputRoot, [
     "baseline/scorecard.json",
     "deterministic/scorecard.json",
@@ -245,6 +250,7 @@ export function runRepoWikiContextAbEval(
     "repo-wiki-context-ab-report.md"
   ]);
   const summary = { ...summaryWithoutInventory, artifactInventory };
+  assertNoSecretLikeText(summary, "repo-wiki context A/B summary with artifact inventory");
   writeJson(summaryPath, summary);
   return {
     ok: summary.ok,
@@ -269,6 +275,10 @@ function validateRepoWikiContextAbModes(value: unknown): Record<RepoWikiEvalMode
   return value as Record<RepoWikiEvalMode, RepoWikiContextModeInput>;
 }
 
+function validateRepoWikiContextAbThresholds(thresholds: EvalScenarioInput["thresholds"]): void {
+  buildEvalThresholds(thresholds, "gating");
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -279,6 +289,7 @@ export function runDocsDriftEval(
 ): DocsDriftEvalResult {
   const now = options.now ?? new Date();
   const evalName = input.evalName ?? "neondiff-openwiki-docs-drift-v0.1";
+  const thresholds = validateDocsDriftThresholds(input.thresholds);
   const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
   guardEmptyOutputRoot(outputRoot, "OpenWiki docs-drift eval");
   mkdirSync(outputRoot, { recursive: true });
@@ -289,10 +300,6 @@ export function runDocsDriftEval(
     if (result.suggestion) suggestions.push(result.suggestion);
     return result.claimSummary;
   });
-  const thresholds = {
-    minStaleCaught: input.thresholds?.minStaleCaught ?? 4,
-    maxMaterialFalsePositives: input.thresholds?.maxMaterialFalsePositives ?? 0
-  };
   const staleClaims = input.claims.filter((claim) => claim.expected === "stale").length;
   const trueTraps = input.claims.filter((claim) => claim.expected === "true").length;
   const staleCaught = claims.filter((claim) => claim.expected === "stale" && claim.detected === "suggested").length;
@@ -315,7 +322,8 @@ export function runDocsDriftEval(
     },
     {
       name: "suggestions_have_citations",
-      ok: suggestions.every((suggestion) => suggestion.sourceCitation.path.length > 0 && suggestion.packetSectionIds.length > 0),
+      ok: suggestions.length > 0 &&
+        suggestions.every((suggestion) => suggestion.sourceCitation.path.length > 0 && suggestion.packetSectionIds.length > 0),
       detail: `${suggestions.length} suggestion(s) checked`
     }
   ];
@@ -374,6 +382,20 @@ export function runDocsDriftEval(
       "suggested-doc-edits.md": suggestionsPath
     }
   };
+}
+
+function validateDocsDriftThresholds(thresholds: DocsDriftEvalInput["thresholds"]): DocsDriftEvalSummary["thresholds"] {
+  const merged = {
+    minStaleCaught: thresholds?.minStaleCaught ?? 4,
+    maxMaterialFalsePositives: thresholds?.maxMaterialFalsePositives ?? 0
+  };
+  if (!Number.isInteger(merged.minStaleCaught) || merged.minStaleCaught < 1) {
+    throw new Error("minStaleCaught must be a positive integer");
+  }
+  if (!Number.isInteger(merged.maxMaterialFalsePositives) || merged.maxMaterialFalsePositives < 0) {
+    throw new Error("maxMaterialFalsePositives must be a non-negative integer");
+  }
+  return merged;
 }
 
 function summarizeMode(input: {

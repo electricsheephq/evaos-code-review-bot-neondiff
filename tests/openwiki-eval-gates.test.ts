@@ -71,6 +71,20 @@ describe("OpenWiki eval gates", () => {
     expect(readFileSync(result.artifacts["repo-wiki-context-ab-summary.json"]!, "utf8")).not.toContain(secret);
   });
 
+  it("fails closed before A/B summaries can include secret-like packet metadata", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-summary-secret-"));
+    roots.push(outputRoot);
+    const input = buildAbInput();
+    input.modes.openwiki.packetSha = "ghp_1234567890abcdef";
+
+    expect(() => runRepoWikiContextAbEval(input, {
+      outputRoot,
+      now: new Date(generatedAt)
+    })).toThrow("repo-wiki context A/B summary contains secret-like text");
+    expect(existsSync(join(outputRoot, "repo-wiki-context-ab-summary.json"))).toBe(false);
+    expect(existsSync(join(outputRoot, "repo-wiki-context-ab-report.md"))).toBe(false);
+  });
+
   it("fails A/B eval when OpenWiki context adds a P1 false positive", () => {
     const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-fail-"));
     roots.push(outputRoot);
@@ -124,6 +138,18 @@ describe("OpenWiki eval gates", () => {
       now: new Date(generatedAt)
     })).toThrow("outputRoot must be empty before running repo-wiki context A/B eval");
     expect(existsSync(join(outputRoot, "repo-wiki-context-ab-summary.json"))).toBe(false);
+  });
+
+  it("validates A/B thresholds before creating the output root", () => {
+    const outputRoot = join(tmpdir(), `neondiff-ab-invalid-threshold-${Date.now()}`);
+    const input = buildAbInput();
+    input.thresholds = { minPrecision: 0.1 };
+
+    expect(() => runRepoWikiContextAbEval(input, {
+      outputRoot,
+      now: new Date(generatedAt)
+    })).toThrow('minPrecision below the default requires mode="exploratory"');
+    expect(existsSync(outputRoot)).toBe(false);
   });
 
   it("buckets unmatched false positives by their scorecard severity", () => {
@@ -310,6 +336,26 @@ describe("OpenWiki eval gates", () => {
     })).toThrow("outputRoot must be empty before running OpenWiki docs-drift eval");
     expect(existsSync(join(outputRoot, "docs-drift-summary.json"))).toBe(false);
     expect(existsSync(join(outputRoot, "suggested-doc-edits.md"))).toBe(false);
+  });
+
+  it("rejects zero docs-drift stale-claim thresholds before creating artifacts", () => {
+    const { packetPath, root } = createDocsDriftFixture();
+    const outputRoot = join(tmpdir(), `neondiff-docs-drift-zero-threshold-${Date.now()}`);
+    roots.push(root);
+
+    expect(() => runDocsDriftEval({
+      runId: "docs-drift-zero-threshold",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath,
+      thresholds: { minStaleCaught: 0 },
+      claims: buildDocsDriftClaims()
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    })).toThrow("minStaleCaught must be a positive integer");
+    expect(existsSync(outputRoot)).toBe(false);
   });
 
   it("rejects packet paths that resolve outside the worktree", () => {

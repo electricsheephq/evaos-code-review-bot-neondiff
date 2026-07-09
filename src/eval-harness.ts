@@ -312,6 +312,16 @@ const DEFAULT_THRESHOLDS: EvalThresholds = {
   maxDuplicateFindings: 0
 };
 
+export function buildEvalThresholds(
+  thresholds: Partial<EvalThresholds> | undefined,
+  mode: "gating" | "exploratory" = "gating"
+): EvalThresholds {
+  const merged = { ...DEFAULT_THRESHOLDS, ...(thresholds ?? {}) };
+  validateThresholds(merged);
+  validateThresholdPolicy(mode, thresholds ?? {});
+  return merged;
+}
+
 export const PUBLIC_CONFIDENCE_POLICY: EvalPublicDisplayPolicy = {
   defaultLabel: "uncalibrated",
   minWilsonLowerBound: 0.95,
@@ -352,9 +362,7 @@ const DEFAULT_STICKY_VS_COLD_THRESHOLDS: StickyVsColdThresholds = {
 
 export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions = {}): EvalRunResult {
   validateEvalInput(input);
-  const thresholds = { ...DEFAULT_THRESHOLDS, ...(input.thresholds ?? {}) };
-  validateThresholds(thresholds);
-  validateThresholdPolicy(input.mode ?? "gating", input.thresholds ?? {});
+  const thresholds = buildEvalThresholds(input.thresholds, input.mode ?? "gating");
 
   const evalName = input.evalName ?? "evaos-zcode-review-bot-comparison-v0.1";
   const outputDir = options.outputDir ?? defaultEvalOutputDir(input, options.now ?? new Date());
@@ -1615,10 +1623,8 @@ function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
 }
 
 function validateEvalScenarioThresholdPolicy(input: EvalScenarioInput, labelPath: string): void {
-  const thresholds = { ...DEFAULT_THRESHOLDS, ...(input.thresholds ?? {}) };
   try {
-    validateThresholds(thresholds);
-    validateThresholdPolicy(input.mode ?? "gating", input.thresholds ?? {});
+    buildEvalThresholds(input.thresholds, input.mode ?? "gating");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`${labelPath}.${detail}`);
