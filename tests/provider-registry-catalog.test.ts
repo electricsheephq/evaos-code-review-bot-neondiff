@@ -77,6 +77,11 @@ describe("provider family catalog", () => {
       expect.arrayContaining(["json-object", "ollama-format-json-schema"])
     );
     expect(findProviderFamily("zcode-glm")?.structuredOutputModes).toEqual(["json-object"]);
+    expect(findProviderFamily("anthropic")?.supportsJsonMode).toBe(true);
+    expect(findProviderFamily("openai-native")?.structuredOutputModes).toEqual(
+      expect.arrayContaining(["json-object", "openai-json-schema"])
+    );
+    expect(findProviderFamily("gemini")?.supportsJsonMode).toBe(true);
   });
 
   it("keeps public metadata free of secret-looking auth values", () => {

@@ -23,6 +23,12 @@ export interface ZCodeReviewResult {
   degradedRecovery: boolean;
 }
 
+export interface ZCodeJsonObjectResult {
+  rawResponse: string;
+  attempts: number;
+  degradedRecovery: boolean;
+}
+
 // Distinct, detectable schema/parse-failure marker so runWithProviderRetry can classify persistent
 // model_output_schema failures as their own bounded retryable category instead of falling through
 // as non-retryable (#304).
@@ -299,6 +305,91 @@ export function runZCodeReview(input: {
   );
 }
 
+export function runZCodeJsonObject(input: {
+  cwd: string;
+  prompt: string;
+  cliPath: string;
+  appConfigPath: string;
+  model: string;
+  providerId?: string;
+  evidenceDir?: string;
+  timeoutMs?: number;
+  retryMaxRetries?: number;
+}): ZCodeJsonObjectResult {
+  const zcodeEnv = resolveZCodeProviderEnv({
+    appConfigPath: input.appConfigPath,
+    model: input.model,
+    providerId: input.providerId
+  });
+
+  const prompts = [
+    input.prompt,
+    buildStrictJsonObjectRetryPrompt(input.prompt)
+  ];
+  let lastParseError: unknown;
+
+  for (let attempt = 1; attempt <= prompts.length; attempt += 1) {
+    const result = withTemporaryZCodeReviewPolicy(input.cwd, input.evidenceDir, () =>
+      spawnSync(process.execPath, [
+        input.cliPath,
+        "--cwd",
+        input.cwd,
+        "--mode",
+        "plan",
+        "--json",
+        "--no-browser",
+        "--prompt",
+        prompts[attempt - 1]!
+      ], {
+        env: buildZCodeRuntimeEnv({
+          baseEnv: process.env,
+          providerEnv: zcodeEnv,
+          retryMaxRetries: input.retryMaxRetries ?? 0
+        }),
+        encoding: "utf8",
+        maxBuffer: 20 * 1024 * 1024,
+        timeout: input.timeoutMs ?? 180_000
+      })
+    );
+
+    const stdout = redactSecrets(result.stdout.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
+    const stderr = redactSecrets(result.stderr.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
+    if (input.evidenceDir) {
+      mkdirSync(input.evidenceDir, { recursive: true });
+      writeSecureFileSync(join(input.evidenceDir, `zcode-json-attempt-${attempt}-stdout.jsonl`), stdout);
+      writeSecureFileSync(join(input.evidenceDir, `zcode-json-attempt-${attempt}-stderr.txt`), stderr);
+      writeSecureFileSync(join(input.evidenceDir, "zcode-json-last-stdout.jsonl"), stdout);
+      writeSecureFileSync(join(input.evidenceDir, "zcode-json-last-stderr.txt"), stderr);
+    }
+
+    if (result.status !== 0) {
+      if (result.error) {
+        throw enrichZCodeProcessError({
+          error: new Error(`ZCode failed before completion: ${result.error.message}`),
+          originalError: result.error,
+          signal: result.signal,
+          status: result.status
+        });
+      }
+      throw new Error(`ZCode failed with status ${result.status}: ${stderr || stdout.slice(0, 1000)}`);
+    }
+
+    try {
+      const rawResponse = extractZCodeResponse(result.stdout);
+      JSON.parse(extractAnyJsonObject(rawResponse));
+      return { rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
+    } catch (error) {
+      lastParseError = error;
+    }
+  }
+
+  throw new Error(
+    `${ZCODE_SCHEMA_FAILURE_ERROR_PREFIX}: ZCode response did not contain a parseable JSON object after ${prompts.length} attempts: ${
+      lastParseError instanceof Error ? lastParseError.message : String(lastParseError)
+    }`
+  );
+}
+
 function buildStrictJsonRetryPrompt(originalPrompt: string): string {
   return [
     "Your previous review output was rejected because it was not valid JSON.",
@@ -306,6 +397,16 @@ function buildStrictJsonRetryPrompt(originalPrompt: string): string {
     "The response must parse with JSON.parse and must have this exact top-level shape:",
     "{\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\",\"category\":\"optional enum hint\"}],\"summary\":\"short review summary\"}",
     "If you cannot produce a finding with a current RIGHT-side diff line, return {\"findings\":[],\"summary\":\"No validated current-diff findings.\"}.",
+    "",
+    originalPrompt
+  ].join("\n");
+}
+
+function buildStrictJsonObjectRetryPrompt(originalPrompt: string): string {
+  return [
+    "Your previous output was rejected because it was not valid JSON.",
+    "Repeat the task and return ONLY the required JSON object. Do not include markdown, prose, analysis, confidence narration, or code fences.",
+    "The response must parse with JSON.parse.",
     "",
     originalPrompt
   ].join("\n");
@@ -465,10 +566,37 @@ export function extractJsonObject(text: string): string {
   throw new Error("ZCode response did not contain a parseable JSON review object.");
 }
 
+export function extractAnyJsonObject(text: string): string {
+  const fencedMatches = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  for (const fenced of fencedMatches) {
+    const candidate = fenced[1]!.trim();
+    if (isJsonObject(candidate)) return candidate;
+  }
+
+  const starts = [...text.matchAll(/\{/g)].map((match) => match.index).filter((index): index is number => index !== undefined);
+  const ends = [...text.matchAll(/\}/g)].map((match) => match.index).filter((index): index is number => index !== undefined);
+  for (const start of starts.reverse()) {
+    for (const end of ends.filter((index) => index > start).reverse()) {
+      const candidate = text.slice(start, end + 1).trim();
+      if (isJsonObject(candidate)) return candidate;
+    }
+  }
+  throw new Error("ZCode response did not contain a parseable JSON object.");
+}
+
 function isReviewJsonObject(candidate: string): boolean {
   try {
     const parsed = JSON.parse(candidate) as { findings?: unknown };
     return typeof parsed === "object" && parsed !== null && Array.isArray(parsed.findings);
+  } catch {
+    return false;
+  }
+}
+
+function isJsonObject(candidate: string): boolean {
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed));
   } catch {
     return false;
   }

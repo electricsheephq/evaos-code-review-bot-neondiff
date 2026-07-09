@@ -30,8 +30,18 @@ import {
   type FinishingTouchAction
 } from "./finishing-touches.js";
 import { GitHubApi } from "./github.js";
+import { parseFindings } from "./findings.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
+import {
+  createAnthropicReviewAdapter,
+  createGeminiReviewAdapter,
+  createOpenAICompatibleReviewAdapter,
+  createOpenAINativeReviewAdapter,
+  type ProviderAdapterOutputContract,
+  type ProviderRuntimeAdapter
+} from "./provider-adapters.js";
+import type { ProviderRegistryEntry } from "./providers.js";
 import {
   buildPullFileFilterImpact,
   buildReviewSettingsPreview,
@@ -76,17 +86,54 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { buildReviewPrompt, extractJsonObject, extractZCodeResponse, isZCodeSchemaFailureError, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
-import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
+import {
+  buildReviewPrompt,
+  extractAnyJsonObject,
+  extractJsonObject,
+  extractZCodeResponse,
+  isZCodeSchemaFailureError,
+  runZCodeJsonObject,
+  runZCodeReview,
+  type ZCodeReviewResult
+} from "./zcode.js";
+import { runSelfConsistencyRecheckAsync, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
-import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import type {
+  DroppedFinding,
+  Finding,
+  PullFilePatch,
+  PullRequestSummary,
+  RepositorySummary,
+  ReviewComment,
+  ReviewEvent,
+  ReviewPlan,
+  ReviewProviderMetadata
+} from "./types.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
 const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private" | "unknown"; expiresAtMs: number }>();
+const SELF_CONSISTENCY_OUTPUT_CONTRACT: ProviderAdapterOutputContract = {
+  name: "neondiff_self_consistency_verdict",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["verified", "confidence"],
+    properties: {
+      verified: { type: "boolean" },
+      confidence: { type: "number", minimum: 0, maximum: 1 }
+    }
+  },
+  strict: true,
+  systemInstruction: [
+    "Return only the NeonDiff self-consistency verdict JSON object.",
+    "Do not include markdown, prose, tool calls, or raw diff excerpts."
+  ].join(" "),
+  reviewJson: false
+};
 
 export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
   const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
@@ -1570,7 +1617,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
     // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
     // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.
-    const selfConsistency = applySelfConsistencyRecheck({
+    const selfConsistency = await applySelfConsistencyRecheck({
       config,
       gate,
       files: reviewFiles,
@@ -2619,6 +2666,9 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
   const providerRequestId = extractProviderRequestId(message);
   const retryAfterMs = extractRetryAfterMs(message);
   const requestRateLimited =
+    normalized.includes("429") ||
+    normalized.includes("throttle") ||
+    normalized.includes("too many requests") ||
     normalized.includes("rate limit") ||
     normalized.includes("rate_limit_error") ||
     normalized.includes("providercode: '1302'") ||
@@ -2626,6 +2676,9 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
     normalized.includes("[1302]") ||
     providerCode === "1302";
   const overloaded =
+    /\b5\d\d\b/.test(normalized) ||
+    normalized.includes("network failure") ||
+    normalized.includes("service unavailable") ||
     normalized.includes("temporarily overloaded") ||
     normalized.includes("overloaded_error") ||
     normalized.includes("providercode: '1305'") ||
@@ -2655,6 +2708,9 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
   // bounded attempt budget (attempt < maxAttempts), but NOT a provider cooldown — it is a model
   // formatting problem, not a rate/quota/overload signal. The bound guarantees no infinite loop.
   if (isZCodeSchemaFailureError(error)) {
+    return { ...base, category: "model_output_schema", reason: "model_output_schema_failure", retryable: true, cooldown: false };
+  }
+  if (/\b(json|schema|parseable|review object|review json|findings array|malformed output|invalid output)\b/.test(normalized)) {
     return { ...base, category: "model_output_schema", reason: "model_output_schema_failure", retryable: true, cooldown: false };
   }
   return {
@@ -2708,20 +2764,20 @@ function providerCooldownJitterMs(
   return Math.floor(Math.random() * (max + 1));
 }
 
-function applySelfConsistencyRecheck(input: {
+async function applySelfConsistencyRecheck(input: {
   config: BotConfig;
   gate: DeterministicReviewGateResult;
   files: PullFilePatch[];
   worktreePath: string;
   evidenceDir: string;
-}): { comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string } {
+}): Promise<{ comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string }> {
   const selfConsistencyConfig = input.config.reviewGate?.selfConsistency;
   if (!selfConsistencyConfig?.enabled) {
     return { comments: input.gate.comments, event: input.gate.event };
   }
 
-  const providerId = selfConsistencyConfig.provider ?? input.config.zcode.providerId;
-  const result = runSelfConsistencyRecheck({
+  const providerId = selfConsistencyConfig.provider ?? resolveSelectedReviewProvider(input.config).providerId;
+  const result = await runSelfConsistencyRecheckAsync({
     comments: input.gate.comments,
     files: input.files,
     config: selfConsistencyConfig,
@@ -2731,18 +2787,15 @@ function applySelfConsistencyRecheck(input: {
     ...(input.config.reviewGate?.categoryPrecisionFloors
       ? { categoryPrecisionFloors: input.config.reviewGate.categoryPrecisionFloors }
       : {}),
-    secondDraw: ({ comment, hunk }) => {
-      const draw = runZCodeReview({
-        cwd: input.worktreePath,
-        prompt: buildSelfConsistencyPrompt(comment, hunk),
-        cliPath: input.config.zcode.cliPath,
-        appConfigPath: input.config.zcode.appConfigPath,
-        model: input.config.zcode.model,
-        ...(providerId ? { providerId } : {}),
-        timeoutMs: input.config.zcode.timeoutMs,
-        retryMaxRetries: input.config.zcode.retryMaxRetries
+    secondDraw: async ({ comment, hunk }) => {
+      const rawResponse = await runSelfConsistencySecondDraw({
+        config: input.config,
+        providerId,
+        worktreePath: input.worktreePath,
+        evidenceDir: input.evidenceDir,
+        prompt: buildSelfConsistencyPrompt(comment, hunk)
       });
-      return parseSelfConsistencyVerdict(draw.rawResponse);
+      return parseSelfConsistencyVerdict(rawResponse);
     }
   });
 
@@ -2762,6 +2815,52 @@ function applySelfConsistencyRecheck(input: {
     : undefined;
 
   return { comments: result.comments, event: result.event, ...(runtimeNote ? { runtimeNote } : {}) };
+}
+
+async function runSelfConsistencySecondDraw(input: {
+  config: BotConfig;
+  providerId: string;
+  worktreePath: string;
+  evidenceDir: string;
+  prompt: string;
+}): Promise<string> {
+  const selection = resolveSelectedReviewProvider(input.config, input.providerId);
+  if (!selection.provider || selection.provider.adapter === "zcode") {
+    const draw = runZCodeJsonObject({
+      cwd: input.worktreePath,
+      prompt: input.prompt,
+      cliPath: input.config.zcode.cliPath,
+      appConfigPath: input.config.zcode.appConfigPath,
+      model: input.config.zcode.model,
+      providerId: selection.providerId,
+      evidenceDir: input.evidenceDir,
+      timeoutMs: input.config.zcode.timeoutMs,
+      retryMaxRetries: input.config.zcode.retryMaxRetries
+    });
+    return draw.rawResponse;
+  }
+
+  const provider = selection.provider;
+  const adapter = createReviewRuntimeAdapter(selection.providerId, provider);
+  const execution = await runWithProviderRetry({
+    config: input.config,
+    evidenceDir: input.evidenceDir,
+    operation: () => adapter.execute({
+      fixtureId: "self-consistency",
+      providerId: selection.providerId,
+      adapterId: provider.adapter,
+      model: provider.model,
+      prompt: input.prompt,
+      outputContract: SELF_CONSISTENCY_OUTPUT_CONTRACT
+    })
+  });
+  writeRedactedJson(join(input.evidenceDir, "self-consistency-provider-evidence.json"), {
+    providerId: selection.providerId,
+    adapterId: provider.adapter,
+    model: provider.model,
+    rawEvidence: execution.rawEvidence
+  });
+  return execution.text;
 }
 
 function buildSelfConsistencyPrompt(comment: DeterministicReviewGateResult["comments"][number], hunk: string): string {
@@ -2785,12 +2884,21 @@ function buildSelfConsistencyPrompt(comment: DeterministicReviewGateResult["comm
 }
 
 function parseSelfConsistencyVerdict(rawResponse: string): SelfConsistencySecondDrawResult {
-  const parsed = JSON.parse(extractJsonObject(extractZCodeResponse(rawResponse))) as { verified?: unknown; confidence?: unknown };
+  let response = rawResponse;
+  try {
+    response = extractZCodeResponse(rawResponse);
+  } catch {
+    // Native/provider-adapter self-consistency responses are already model JSON text.
+  }
+  const parsed = JSON.parse(extractAnyJsonObject(response)) as { verified?: unknown; confidence?: unknown };
+  if (typeof parsed.verified !== "boolean") {
+    throw new Error("Self-consistency verdict missing boolean verified field.");
+  }
+  if (typeof parsed.confidence !== "number" || !Number.isFinite(parsed.confidence)) {
+    throw new Error("Self-consistency verdict missing finite confidence field.");
+  }
   const verified = parsed.verified === true;
-  const confidence =
-    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-      ? Math.min(1, Math.max(0, parsed.confidence))
-      : verified ? 1 : 0;
+  const confidence = Math.min(1, Math.max(0, parsed.confidence));
   return { verified, confidence };
 }
 
@@ -2820,7 +2928,7 @@ async function runReviewWithContextBudget(input: {
   }
 
   const result = input.useZCode
-    ? await runZCodeReviewWithProviderRetry({
+    ? await runSelectedReviewWithProviderRetry({
         config: input.config,
         worktreePath: input.worktreePath,
         prompt: input.prompt,
@@ -2866,7 +2974,7 @@ async function runChunkedZCodeReview(input: {
     let result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput };
     try {
       result = input.useZCode
-        ? await runZCodeReviewWithProviderRetry({
+        ? await runSelectedReviewWithProviderRetry({
             config: input.config,
             worktreePath: input.worktreePath,
             prompt,
@@ -2915,6 +3023,7 @@ async function runChunkedZCodeReview(input: {
   }
 
   const completedAt = new Date();
+  const providerMetadata = buildReviewProviderMetadata(input.config);
   return {
     status: "reviewed",
     result: {
@@ -2924,8 +3033,8 @@ async function runChunkedZCodeReview(input: {
       attempts,
       degradedRecovery,
       runtime: {
-        provider: input.config.zcode.providerId,
-        model: input.config.zcode.model,
+        provider: providerMetadata.providerId,
+        model: providerMetadata.model,
         startedAt: startedAt.toISOString(),
         completedAt: completedAt.toISOString(),
         latencyMs: completedAt.getTime() - startedAt.getTime(),
@@ -2937,6 +3046,7 @@ async function runChunkedZCodeReview(input: {
 }
 
 function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } {
+  const provider = buildReviewProviderMetadata(config);
   return {
     findings: [],
     droppedFromSchema: [],
@@ -2944,12 +3054,106 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
     attempts: 0,
     degradedRecovery: false,
     runtime: {
-      provider: config.zcode.providerId,
-      model: config.zcode.model,
+      provider: provider.providerId,
+      model: provider.model,
       providerAttempts: 0,
-      notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+      notes: ["Review provider execution disabled for this dry-run; provider latency and token usage were not measured."]
     }
   };
+}
+
+async function runSelectedReviewWithProviderRetry(input: {
+  config: BotConfig;
+  worktreePath: string;
+  prompt: string;
+  evidenceDir: string;
+  providerId?: string;
+}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+  const selection = resolveSelectedReviewProvider(input.config, input.providerId);
+  if (!selection.provider || selection.provider.adapter === "zcode") {
+    return runZCodeReviewWithProviderRetry(input);
+  }
+  const provider = selection.provider;
+  const adapter = createReviewRuntimeAdapter(selection.providerId, provider);
+  const startedAt = new Date();
+  let providerAttempts = 0;
+  const result = await runWithProviderRetry({
+    config: input.config,
+    evidenceDir: input.evidenceDir,
+    operation: async () => {
+      providerAttempts += 1;
+      const execution = await adapter.execute({
+        fixtureId: "live-review",
+        providerId: selection.providerId,
+        adapterId: provider.adapter,
+        model: provider.model,
+        prompt: input.prompt
+      });
+      writeRedactedJson(join(input.evidenceDir, "provider-adapter-evidence.json"), {
+        providerId: selection.providerId,
+        adapterId: provider.adapter,
+        model: provider.model,
+        reviewJsonValidated: execution.reviewJsonValidated === true,
+        rawEvidence: execution.rawEvidence
+      });
+      const parsed = JSON.parse(extractJsonObject(execution.text)) as unknown;
+      const { findings, dropped } = parseFindings(parsed);
+      return {
+        findings,
+        droppedFromSchema: dropped,
+        rawResponse: execution.text,
+        attempts: 1,
+        degradedRecovery: false
+      };
+    }
+  });
+  const completedAt = new Date();
+  return {
+    ...result,
+    runtime: {
+      provider: selection.providerId,
+      model: provider.model,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      latencyMs: completedAt.getTime() - startedAt.getTime(),
+      providerAttempts,
+      notes: [
+        `Observed outer provider retry attempts: ${providerAttempts}.`,
+        `Review executed through ${provider.adapter} provider adapter.`
+      ]
+    }
+  };
+}
+
+function resolveSelectedReviewProvider(config: BotConfig, providerOverride?: string): {
+  providerId: string;
+  provider?: ProviderRegistryEntry;
+} {
+  const providerId = providerOverride ?? config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
+  return {
+    providerId,
+    provider: config.providers?.providers[providerId]
+  };
+}
+
+function createReviewRuntimeAdapter(providerId: string, provider: ProviderRegistryEntry): ProviderRuntimeAdapter {
+  if (!provider.enabled) throw new Error(`Selected review provider ${providerId} is disabled.`);
+  if (!provider.capabilities.review || !provider.capabilities.jsonOutput) {
+    throw new Error(`Selected review provider ${providerId} must declare review and JSON output capabilities.`);
+  }
+  if (provider.adapter === "openai-compatible") {
+    return createOpenAICompatibleReviewAdapter({ providerId, provider });
+  }
+  if (provider.adapter === "anthropic") {
+    return createAnthropicReviewAdapter({ providerId, provider });
+  }
+  if (provider.adapter === "openai") {
+    return createOpenAINativeReviewAdapter({ providerId, provider });
+  }
+  if (provider.adapter === "gemini") {
+    return createGeminiReviewAdapter({ providerId, provider });
+  }
+  throw new Error(`Selected review provider ${providerId} uses unsupported adapter ${provider.adapter}.`);
 }
 
 async function runZCodeReviewWithProviderRetry(input: {
@@ -2957,6 +3161,7 @@ async function runZCodeReviewWithProviderRetry(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
+  providerId?: string;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   const startedAt = new Date();
   let providerAttempts = 0;
@@ -2971,7 +3176,7 @@ async function runZCodeReviewWithProviderRetry(input: {
         cliPath: input.config.zcode.cliPath,
         appConfigPath: input.config.zcode.appConfigPath,
         model: input.config.zcode.model,
-        providerId: input.config.zcode.providerId,
+        providerId: input.providerId ?? input.config.zcode.providerId,
         evidenceDir: input.evidenceDir,
         timeoutMs: input.config.zcode.timeoutMs,
         retryMaxRetries: input.config.zcode.retryMaxRetries
@@ -2982,7 +3187,7 @@ async function runZCodeReviewWithProviderRetry(input: {
   return {
     ...result,
     runtime: {
-      provider: input.config.zcode.providerId,
+      provider: input.providerId ?? input.config.zcode.providerId,
       model: input.config.zcode.model,
       startedAt: startedAt.toISOString(),
       completedAt: completedAt.toISOString(),

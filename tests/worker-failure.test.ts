@@ -344,7 +344,7 @@ describe("worker review failures", () => {
       body: "Suppression notes use a separate read budget.",
       source: "test",
       fingerprint,
-      expiresAt: "2026-07-09T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
       now: new Date("2026-07-02T00:01:00.000Z")
     });
 
@@ -605,6 +605,8 @@ describe("worker review failures", () => {
     const rateLimit = classifyProviderError(new Error("ProviderBusinessError: [1302][Rate limit reached for requests] providerRequestId: 'req-1'"));
     const overload = classifyProviderError(new Error("ProviderBusinessError: [1305][The service may be temporarily overloaded, please try again later]"));
     const quota = classifyProviderError(new Error("ProviderBusinessError: [1310][Weekly/Monthly Limit Exhausted]"));
+    const nativeThrottle = classifyProviderError(new Error("OpenAI Chat Completions API returned 429 throttle failure: too many requests."));
+    const nativeNetwork = classifyProviderError(new Error("Gemini generateContent API returned 503 network failure: service unavailable."));
 
     expect(rateLimit).toMatchObject({
       category: "request_rate_limit",
@@ -625,6 +627,18 @@ describe("worker review failures", () => {
       providerCode: "1310",
       reason: "provider_quota_exhausted",
       retryable: false,
+      cooldown: true
+    });
+    expect(nativeThrottle).toMatchObject({
+      category: "request_rate_limit",
+      reason: "provider_request_rate_limit",
+      retryable: true,
+      cooldown: true
+    });
+    expect(nativeNetwork).toMatchObject({
+      category: "overloaded",
+      reason: "provider_overloaded",
+      retryable: true,
       cooldown: true
     });
     expect(providerCooldownDurationMs(config, rateLimit)).toBe(90_000);

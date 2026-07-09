@@ -1,9 +1,12 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
+  ANTHROPIC_REVIEW_FINDINGS_JSON_SCHEMA,
   REVIEW_FINDINGS_JSON_SCHEMA,
   REVIEW_FINDINGS_JSON_SCHEMA_NAME,
-  REVIEW_FINDINGS_JSON_SCHEMA_STRICT
+  REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
+  STRICT_REVIEW_FINDINGS_JSON_SCHEMA,
+  anthropicStructuredOutputSchema
 } from "./findings-schema.js";
 import { parseFindings } from "./findings.js";
 import { openAICompatibleProviderTargetError, SCHEMA_FEEDBACK_RETRY_MAX, type ProviderRegistryEntry, type ProviderStructuredOutputMode } from "./providers.js";
@@ -57,6 +60,15 @@ export interface ProviderAdapterExecutionInput {
   adapterId: string;
   model: string;
   prompt: string;
+  outputContract?: ProviderAdapterOutputContract;
+}
+
+export interface ProviderAdapterOutputContract {
+  name: string;
+  schema: unknown;
+  strict?: boolean;
+  systemInstruction: string;
+  reviewJson: boolean;
 }
 
 export interface ProviderAdapterExecutionResult {
@@ -71,6 +83,13 @@ export interface ProviderRuntimeAdapter {
 }
 
 export interface OpenAICompatibleReviewAdapterOptions {
+  providerId: string;
+  provider: ProviderRegistryEntry;
+  fetchImpl?: typeof fetch;
+  env?: Record<string, string | undefined>;
+}
+
+export interface NativeReviewAdapterOptions {
   providerId: string;
   provider: ProviderRegistryEntry;
   fetchImpl?: typeof fetch;
@@ -213,7 +232,8 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
 
       const apiKey = resolveOpenAICompatibleApiKey(provider, env);
       const timeout = createAbortSignal(provider.timeoutMs);
-      const structuredOutput = buildStructuredOutputRequestFields(provider);
+      const outputContract = input.outputContract ?? reviewOutputContract();
+      const structuredOutput = buildStructuredOutputRequestFields(provider, outputContract);
       const schemaFeedbackMax = resolveSchemaFeedbackRetryMax(provider);
       const schemaFeedbackErrors: string[] = [];
       const schemaEvidenceErrors: string[] = [];
@@ -232,6 +252,7 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
               model: input.model,
               prompt: input.prompt,
               structuredOutput,
+              outputContract,
               schemaFeedbackErrors,
               schemaFeedbackErrorLimit: schemaFeedbackMax
             }))
@@ -245,10 +266,10 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
           const responseText = await readResponseTextWithAbort(response, timeout.signal);
           const parsed = parseOpenAICompatibleResponse(responseText);
           const content = extractOpenAICompatibleMessageContent(parsed);
-          const reviewOutput = normalizeReviewJsonOutput(content);
-          if (!reviewOutput.ok) {
-            const schemaError = openAICompatibleReviewSchemaError(reviewOutput.error, parsed, content);
-            const schemaFeedbackError = buildSchemaFeedbackErrorForPrompt(schemaError, input.prompt);
+          const output = normalizeContractJsonOutput(content, outputContract);
+          if (!output.ok) {
+            const schemaError = openAICompatibleReviewSchemaError(output.error, parsed, content);
+            const schemaFeedbackError = buildSchemaFeedbackErrorForPrompt(schemaError, input.prompt, outputContract);
             const schemaEvidenceError = redactPrivateEvidenceText(schemaError, input.prompt);
             if (isTruncatedReviewJsonSchemaError(schemaError) || attempt >= schemaFeedbackMax) {
               throw new ProviderAdapterEvidenceError(schemaError, buildOpenAICompatibleSchemaRetryEvidence({
@@ -269,8 +290,8 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
           }
 
           return {
-            text: reviewOutput.text,
-            reviewJsonValidated: true,
+            text: output.text,
+            ...(outputContract.reviewJson ? { reviewJsonValidated: true } : {}),
             rawEvidence: {
               providerId: options.providerId,
               adapterId: input.adapterId,
@@ -290,11 +311,479 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
   };
 }
 
+export function createAnthropicReviewAdapter(options: NativeReviewAdapterOptions): ProviderRuntimeAdapter {
+  return {
+    id: "anthropic",
+    async execute(input) {
+      const provider = options.provider;
+      const fetchImpl = options.fetchImpl ?? fetch;
+      const env = options.env ?? process.env;
+      const apiKey = resolveNativeApiKey("Anthropic", provider, env);
+      const timeout = createAbortSignal(provider.timeoutMs);
+      const url = buildNativeEndpointUrl("Anthropic", provider.baseUrl, "https://api.anthropic.com/v1", "/messages");
+      const outputContract = input.outputContract ?? reviewOutputContract();
+      try {
+        // Hosted native adapters intentionally send the review prompt to the
+        // selected BYOK provider after config opt-in, env-key auth, and official-origin
+        // pinning. Provider docs and release notes make this egress boundary explicit.
+        //
+        // codeql[js/file-access-to-http]
+        // lgtm[js/file-access-to-http]
+        const response = await fetchImpl(url, {
+          method: "POST",
+          signal: timeout.signal,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "x-api-key": apiKey
+          },
+          body: JSON.stringify(buildAnthropicReviewRequestBody(input.model, input.prompt, outputContract))
+        });
+        if (!response.ok) {
+          const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
+          throw new Error(nativeProviderStatusErrorMessage("Anthropic Messages API", response.status, responseErrorText));
+        }
+        const responseText = await readResponseTextWithAbort(response, timeout.signal);
+        const parsed = parseNativeProviderResponse("Anthropic Messages API", responseText);
+        const content = extractAnthropicMessageContent(parsed);
+        const output = normalizeContractJsonOutput(content, outputContract);
+        if (!output.ok) {
+          throw new ProviderAdapterEvidenceError(output.error, buildAnthropicResponseEvidence({
+            providerId: options.providerId,
+            adapterId: input.adapterId,
+            model: input.model,
+            status: response.status,
+            parsed
+          }));
+        }
+        return {
+          text: output.text,
+          ...(outputContract.reviewJson ? { reviewJsonValidated: true } : {}),
+          rawEvidence: buildAnthropicResponseEvidence({
+            providerId: options.providerId,
+            adapterId: input.adapterId,
+            model: input.model,
+            status: response.status,
+            parsed
+          })
+        };
+      } finally {
+        timeout.dispose();
+      }
+    }
+  };
+}
+
+export function createOpenAINativeReviewAdapter(options: NativeReviewAdapterOptions): ProviderRuntimeAdapter {
+  return {
+    id: "openai",
+    async execute(input) {
+      const provider = options.provider;
+      const fetchImpl = options.fetchImpl ?? fetch;
+      const env = options.env ?? process.env;
+      const apiKey = resolveNativeApiKey("OpenAI", provider, env);
+      const timeout = createAbortSignal(provider.timeoutMs);
+      const url = buildNativeEndpointUrl("OpenAI", provider.baseUrl, "https://api.openai.com/v1", "/chat/completions");
+      const outputContract = input.outputContract ?? reviewOutputContract();
+      try {
+        // Hosted native adapters intentionally send the review prompt to the
+        // selected BYOK provider after config opt-in, env-key auth, and official-origin
+        // pinning. Provider docs and release notes make this egress boundary explicit.
+        //
+        // codeql[js/file-access-to-http]
+        // lgtm[js/file-access-to-http]
+        const response = await fetchImpl(url, {
+          method: "POST",
+          signal: timeout.signal,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`
+          },
+          body: JSON.stringify(buildOpenAINativeReviewRequestBody(input.model, input.prompt, provider, outputContract))
+        });
+        if (!response.ok) {
+          const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
+          throw new Error(nativeProviderStatusErrorMessage("OpenAI Chat Completions API", response.status, responseErrorText));
+        }
+        const responseText = await readResponseTextWithAbort(response, timeout.signal);
+        const parsed = parseOpenAICompatibleResponse(responseText);
+        const content = extractOpenAICompatibleMessageContent(parsed);
+        const output = normalizeContractJsonOutput(content, outputContract);
+        const evidence = buildOpenAINativeResponseEvidence({
+          providerId: options.providerId,
+          adapterId: input.adapterId,
+          model: input.model,
+          status: response.status,
+          parsed
+        });
+        if (!output.ok) {
+          throw new ProviderAdapterEvidenceError(openAICompatibleReviewSchemaError(output.error, parsed, content), evidence);
+        }
+        return {
+          text: output.text,
+          ...(outputContract.reviewJson ? { reviewJsonValidated: true } : {}),
+          rawEvidence: evidence
+        };
+      } finally {
+        timeout.dispose();
+      }
+    }
+  };
+}
+
+export function createGeminiReviewAdapter(options: NativeReviewAdapterOptions): ProviderRuntimeAdapter {
+  return {
+    id: "gemini",
+    async execute(input) {
+      const provider = options.provider;
+      const fetchImpl = options.fetchImpl ?? fetch;
+      const env = options.env ?? process.env;
+      const apiKey = resolveNativeApiKey("Gemini", provider, env);
+      const timeout = createAbortSignal(provider.timeoutMs);
+      const url = buildGeminiGenerateContentUrl(provider.baseUrl, input.model);
+      const outputContract = input.outputContract ?? reviewOutputContract();
+      try {
+        // Hosted native adapters intentionally send the review prompt to the
+        // selected BYOK provider after config opt-in, env-key auth, and official-origin
+        // pinning. Provider docs and release notes make this egress boundary explicit.
+        //
+        // codeql[js/file-access-to-http]
+        // lgtm[js/file-access-to-http]
+        const response = await fetchImpl(url, {
+          method: "POST",
+          signal: timeout.signal,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey
+          },
+          body: JSON.stringify(buildGeminiReviewRequestBody(input.prompt, provider, outputContract))
+        });
+        if (!response.ok) {
+          const responseErrorText = await readResponseTextWithAbort(response, timeout.signal);
+          throw new Error(nativeProviderStatusErrorMessage("Gemini generateContent API", response.status, responseErrorText));
+        }
+        const responseText = await readResponseTextWithAbort(response, timeout.signal);
+        const parsed = parseNativeProviderResponse("Gemini generateContent API", responseText);
+        const content = extractGeminiMessageContent(parsed);
+        const output = normalizeContractJsonOutput(content, outputContract);
+        const evidence = buildGeminiResponseEvidence({
+          providerId: options.providerId,
+          adapterId: input.adapterId,
+          model: input.model,
+          status: response.status,
+          parsed
+        });
+        if (!output.ok) {
+          throw new ProviderAdapterEvidenceError(geminiReviewSchemaError(output.error, parsed, content), evidence);
+        }
+        return {
+          text: output.text,
+          ...(outputContract.reviewJson ? { reviewJsonValidated: true } : {}),
+          rawEvidence: evidence
+        };
+      } finally {
+        timeout.dispose();
+      }
+    }
+  };
+}
+
+function buildAnthropicReviewRequestBody(
+  model: string,
+  prompt: string,
+  outputContract: ProviderAdapterOutputContract
+): Record<string, unknown> {
+  return {
+    model,
+    max_tokens: 4096,
+    system: outputContract.systemInstruction,
+    messages: [
+      {
+        role: "user",
+        content: prompt
+      }
+    ],
+    output_config: {
+      format: {
+        type: "json_schema",
+        schema: outputContract.reviewJson
+          ? ANTHROPIC_REVIEW_FINDINGS_JSON_SCHEMA
+          : anthropicStructuredOutputSchema(outputContract.schema)
+      }
+    }
+  };
+}
+
+function buildOpenAINativeReviewRequestBody(
+  model: string,
+  prompt: string,
+  provider: ProviderRegistryEntry,
+  outputContract: ProviderAdapterOutputContract
+): Record<string, unknown> {
+  return {
+    model,
+    stream: false,
+    ...(provider.temperature === undefined ? {} : { temperature: provider.temperature }),
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: outputContract.name,
+        strict: outputContract.strict ?? false,
+        schema: outputContract.schema
+      }
+    },
+    messages: [
+      {
+        role: "system",
+        content: outputContract.systemInstruction
+      },
+      {
+        role: "user",
+        content: prompt
+      }
+    ]
+  };
+}
+
+function buildGeminiReviewRequestBody(
+  prompt: string,
+  provider: ProviderRegistryEntry,
+  outputContract: ProviderAdapterOutputContract
+): Record<string, unknown> {
+  return {
+    systemInstruction: {
+      parts: [{ text: outputContract.systemInstruction }]
+    },
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }]
+      }
+    ],
+    generationConfig: {
+      ...(provider.temperature === undefined ? {} : { temperature: provider.temperature }),
+      responseMimeType: "application/json",
+      responseJsonSchema: outputContract.schema
+    }
+  };
+}
+
+function nativeReviewSystemInstruction(): string {
+  return "Return only the NeonDiff review JSON object. Do not include markdown, prose, tool calls, or raw diff excerpts.";
+}
+
+function reviewOutputContract(): ProviderAdapterOutputContract {
+  return {
+    name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
+    schema: STRICT_REVIEW_FINDINGS_JSON_SCHEMA,
+    strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
+    systemInstruction: nativeReviewSystemInstruction(),
+    reviewJson: true
+  };
+}
+
+function resolveNativeApiKey(
+  providerLabel: string,
+  provider: ProviderRegistryEntry,
+  env: Record<string, string | undefined>
+): string {
+  if (provider.authMode !== "api-key-env") throw new Error(`${providerLabel} provider requires api-key-env auth.`);
+  if (!provider.apiKeyEnv) throw new Error(`Missing api key environment variable name for ${providerLabel} provider.`);
+  const value = env[provider.apiKeyEnv];
+  if (!value) throw new Error(`Missing api key environment variable ${provider.apiKeyEnv}.`);
+  return value;
+}
+
+function buildNativeEndpointUrl(providerLabel: string, baseUrl: string | undefined, defaultBaseUrl: string, suffix: string): string {
+  if (baseUrl && normalizeNativeBaseUrl(baseUrl) !== normalizeNativeBaseUrl(defaultBaseUrl)) {
+    throw new Error(`${providerLabel} native provider baseUrl overrides are disabled during this beta; use the official ${defaultBaseUrl} endpoint.`);
+  }
+  const parsed = new URL(baseUrl ?? defaultBaseUrl);
+  const normalizedPathname = parsed.pathname.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
+  parsed.pathname = normalizedPathname.endsWith(normalizedSuffix)
+    ? normalizedPathname
+    : `${normalizedPathname}${normalizedSuffix}`;
+  return parsed.toString();
+}
+
+function normalizeNativeBaseUrl(value: string): string {
+  const parsed = new URL(value);
+  parsed.pathname = parsed.pathname.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function buildGeminiGenerateContentUrl(baseUrl: string | undefined, model: string): string {
+  const normalizedModel = model.replace(/^models\//, "");
+  return buildNativeEndpointUrl(
+    "Gemini",
+    baseUrl,
+    "https://generativelanguage.googleapis.com/v1beta",
+    `/models/${encodeURIComponent(normalizedModel)}:generateContent`
+  );
+}
+
+function nativeProviderStatusErrorMessage(providerLabel: string, status: number, responseText = ""): string {
+  const detail = previewEvidenceText(responseText).trim();
+  const suffix = detail ? `: ${detail}` : ".";
+  if (status === 401 || status === 403) return `${providerLabel} returned ${status} auth failure${suffix}`;
+  if (status === 429) return `${providerLabel} returned 429 throttle failure${suffix}`;
+  if (status === 408 || status === 504) return `${providerLabel} returned ${status} timeout failure${suffix}`;
+  if (status >= 500) return `${providerLabel} returned ${status} network failure${suffix}`;
+  return `${providerLabel} returned ${status}${suffix}`;
+}
+
+function parseNativeProviderResponse(providerLabel: string, value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // Fall through to the normalized schema error below.
+  }
+  throw new Error(`${providerLabel} response was not valid JSON.`);
+}
+
+function extractAnthropicMessageContent(parsed: Record<string, unknown>): string {
+  const content = parsed.content;
+  if (!Array.isArray(content)) throw new Error("Anthropic Messages API response had invalid response schema.");
+  const textParts = content
+    .map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return undefined;
+      const typedPart = part as { type?: unknown; text?: unknown };
+      if (typedPart.type !== "text" || typeof typedPart.text !== "string") return undefined;
+      const text = typedPart.text.trim();
+      return text.length > 0 ? text : undefined;
+    })
+    .filter((text): text is string => Boolean(text));
+  if (textParts.length === 0) throw new Error("Anthropic Messages API response had invalid response schema.");
+  return textParts.join("\n");
+}
+
+function extractGeminiMessageContent(parsed: Record<string, unknown>): string {
+  const candidates = parsed.candidates;
+  if (!Array.isArray(candidates)) throw new Error("Gemini generateContent API response had invalid response schema.");
+  const firstCandidate = candidates[0];
+  if (!firstCandidate || typeof firstCandidate !== "object" || Array.isArray(firstCandidate)) {
+    throw new Error("Gemini generateContent API response had invalid response schema.");
+  }
+  const content = (firstCandidate as { content?: unknown }).content;
+  if (!content || typeof content !== "object" || Array.isArray(content)) {
+    throw new Error("Gemini generateContent API response had invalid response schema.");
+  }
+  const parts = (content as { parts?: unknown }).parts;
+  if (!Array.isArray(parts)) throw new Error("Gemini generateContent API response had invalid response schema.");
+  const textParts = parts
+    .map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return undefined;
+      const text = (part as { text?: unknown }).text;
+      return typeof text === "string" && text.trim().length > 0 ? text.trim() : undefined;
+    })
+    .filter((text): text is string => Boolean(text));
+  if (textParts.length === 0) throw new Error("Gemini generateContent API response had invalid response schema.");
+  return textParts.join("\n");
+}
+
+function buildAnthropicResponseEvidence(input: {
+  providerId: string;
+  adapterId: string;
+  model: string;
+  status: number;
+  parsed: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    providerId: input.providerId,
+    adapterId: input.adapterId,
+    model: input.model,
+    status: input.status,
+    structuredOutputMode: "constrained:anthropic-output-config-json-schema",
+    ...(typeof input.parsed.id === "string" ? { responseId: input.parsed.id } : {}),
+    ...extractNativeStringEvidence(input.parsed, "stop_reason", "finishReason"),
+    ...extractNativeUsageEvidence(input.parsed.usage)
+  };
+}
+
+function buildOpenAINativeResponseEvidence(input: {
+  providerId: string;
+  adapterId: string;
+  model: string;
+  status: number;
+  parsed: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    providerId: input.providerId,
+    adapterId: input.adapterId,
+    model: input.model,
+    status: input.status,
+    structuredOutputMode: "constrained:openai-json-schema",
+    ...(typeof input.parsed.id === "string" ? { responseId: input.parsed.id } : {}),
+    ...extractOpenAICompatibleChoiceEvidence(input.parsed),
+    ...extractOpenAICompatibleUsageEvidence(input.parsed)
+  };
+}
+
+function buildGeminiResponseEvidence(input: {
+  providerId: string;
+  adapterId: string;
+  model: string;
+  status: number;
+  parsed: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    providerId: input.providerId,
+    adapterId: input.adapterId,
+    model: input.model,
+    status: input.status,
+    structuredOutputMode: "constrained:gemini-response-schema",
+    ...extractGeminiFinishReasonEvidence(input.parsed),
+    ...extractNativeUsageEvidence(input.parsed.usageMetadata)
+  };
+}
+
+function extractNativeStringEvidence(
+  parsed: Record<string, unknown>,
+  inputKey: string,
+  outputKey: string
+): Record<string, unknown> {
+  const value = parsed[inputKey];
+  return typeof value === "string" ? { [outputKey]: value } : {};
+}
+
+function extractGeminiFinishReasonEvidence(parsed: Record<string, unknown>): Record<string, unknown> {
+  const firstCandidate = Array.isArray(parsed.candidates) ? parsed.candidates[0] : undefined;
+  if (!firstCandidate || typeof firstCandidate !== "object" || Array.isArray(firstCandidate)) return {};
+  const finishReason = (firstCandidate as { finishReason?: unknown }).finishReason;
+  return typeof finishReason === "string" ? { finishReason } : {};
+}
+
+function extractNativeUsageEvidence(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return {
+    usage: Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entryValue]) => typeof entryValue === "number" && Number.isFinite(entryValue))
+        .map(([key, entryValue]) => [key, entryValue])
+    )
+  };
+}
+
+function geminiReviewSchemaError(error: string, parsed: Record<string, unknown>, content: string): string {
+  const finishReason = extractGeminiFinishReasonEvidence(parsed).finishReason;
+  if (finishReason === "MAX_TOKENS") return FINISH_REASON_LENGTH_TRUNCATED_REVIEW_JSON_ERROR;
+  if (isLikelyTruncatedReviewJsonContent(content)) return TRUNCATED_REVIEW_JSON_ERROR;
+  return error;
+}
+
 function buildOpenAICompatibleReviewRequestBody(input: {
   provider: ProviderRegistryEntry;
   model: string;
   prompt: string;
   structuredOutput: { requestFields: Record<string, unknown> };
+  outputContract: ProviderAdapterOutputContract;
   schemaFeedbackErrors: readonly string[];
   schemaFeedbackErrorLimit: number;
 }): Record<string, unknown> {
@@ -306,7 +795,7 @@ function buildOpenAICompatibleReviewRequestBody(input: {
     messages: [
       {
         role: "system",
-        content: "Return only the NeonDiff review JSON object. Do not include markdown, prose, tool calls, or raw diff excerpts."
+        content: input.outputContract.systemInstruction
       },
       {
         role: "user",
@@ -314,29 +803,41 @@ function buildOpenAICompatibleReviewRequestBody(input: {
       },
       ...(input.schemaFeedbackErrors.length === 0 ? [] : [{
         role: "user",
-        content: buildSchemaFeedbackRetryPrompt(input.schemaFeedbackErrors, input.schemaFeedbackErrorLimit)
+        content: buildSchemaFeedbackRetryPrompt(
+          input.schemaFeedbackErrors,
+          input.schemaFeedbackErrorLimit,
+          input.outputContract
+        )
       }])
     ]
   };
 }
 
-function buildSchemaFeedbackRetryPrompt(schemaErrors: readonly string[], maxSchemaErrors: number): string {
+function buildSchemaFeedbackRetryPrompt(
+  schemaErrors: readonly string[],
+  maxSchemaErrors: number,
+  outputContract: ProviderAdapterOutputContract
+): string {
   const schemaErrorLimit = Math.max(1, Math.min(maxSchemaErrors, SCHEMA_FEEDBACK_RETRY_MAX));
   const recentDistinctErrors = [...new Set(schemaErrors)].slice(-schemaErrorLimit);
   return [
     "The previous response could not be accepted as NeonDiff review JSON.",
     "Recent schema errors:",
     ...recentDistinctErrors.map((schemaError) => `- ${schemaError}`),
-    `Return only a JSON object matching ${REVIEW_FINDINGS_JSON_SCHEMA_NAME}.`,
+    `Return only a JSON object matching ${outputContract.name}.`,
     "Canonical schema:",
-    JSON.stringify(REVIEW_FINDINGS_JSON_SCHEMA)
+    JSON.stringify(outputContract.schema)
   ].join("\n");
 }
 
-function buildSchemaFeedbackErrorForPrompt(schemaError: string, prompt: string): string {
+function buildSchemaFeedbackErrorForPrompt(
+  schemaError: string,
+  prompt: string,
+  outputContract: ProviderAdapterOutputContract
+): string {
   const redactedError = redactPrivateEvidenceText(schemaError, prompt);
   if (redactedError === schemaError) return schemaError;
-  return "Adapter output failed NeonDiff review JSON schema validation.";
+  return `Adapter output failed ${outputContract.name} JSON schema validation.`;
 }
 
 function openAICompatibleReviewSchemaError(error: string, parsed: Record<string, unknown>, content: string): string {
@@ -434,11 +935,15 @@ function buildOpenAICompatibleResponseEvidence(status: number, parsed: Record<st
   };
 }
 
-function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
+function buildStructuredOutputRequestFields(
+  provider: ProviderRegistryEntry,
+  outputContract: ProviderAdapterOutputContract
+): {
   requestFields: Record<string, unknown>;
   evidenceMode: string;
 } {
   const mode = resolveStructuredOutputMode(provider);
+  const backendSchema = outputContract.reviewJson ? REVIEW_FINDINGS_JSON_SCHEMA : outputContract.schema;
   const evidenceMode = SCHEMA_CONSTRAINED_OUTPUT_MODES.has(mode)
     ? `constrained:${mode}`
     : "recovery";
@@ -455,9 +960,9 @@ function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
           response_format: {
             type: "json_schema",
             json_schema: {
-              name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
-              strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
-              schema: REVIEW_FINDINGS_JSON_SCHEMA
+              name: outputContract.name,
+              strict: outputContract.strict ?? false,
+              schema: outputContract.schema
             }
           }
         },
@@ -468,7 +973,7 @@ function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
         requestFields: {
           response_format: {
             type: "json_schema",
-            schema: REVIEW_FINDINGS_JSON_SCHEMA
+            schema: backendSchema
           }
         },
         evidenceMode
@@ -477,7 +982,7 @@ function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
       return {
         requestFields: {
           structured_outputs: {
-            json: REVIEW_FINDINGS_JSON_SCHEMA
+            json: backendSchema
           }
         },
         evidenceMode
@@ -485,14 +990,14 @@ function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
     case "vllm-guided-json":
       return {
         requestFields: {
-          guided_json: REVIEW_FINDINGS_JSON_SCHEMA
+          guided_json: backendSchema
         },
         evidenceMode
       };
     case "ollama-format-json-schema":
       return {
         requestFields: {
-          format: REVIEW_FINDINGS_JSON_SCHEMA
+          format: backendSchema
         },
         evidenceMode
       };
@@ -541,6 +1046,36 @@ function validateReviewJsonOutput(value: string): string | undefined {
   return result.ok ? undefined : result.error;
 }
 
+function normalizeContractJsonOutput(
+  value: string,
+  outputContract: ProviderAdapterOutputContract
+): { ok: true; text: string } | { ok: false; error: string } {
+  if (outputContract.reviewJson) return normalizeReviewJsonOutput(value);
+  return normalizeJsonObjectOutput(value, outputContract.name);
+}
+
+function normalizeJsonObjectOutput(
+  value: string,
+  contractName: string
+): { ok: true; text: string } | { ok: false; error: string } {
+  let parsed: unknown;
+  let jsonObject = value.trim();
+  try {
+    parsed = JSON.parse(jsonObject) as unknown;
+  } catch {
+    try {
+      jsonObject = extractAnyJsonObject(value);
+      parsed = JSON.parse(jsonObject) as unknown;
+    } catch {
+      return { ok: false, error: `Adapter output was not a parseable ${contractName} JSON object.` };
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: `Adapter output was not a ${contractName} JSON object.` };
+  }
+  return { ok: true, text: jsonObject };
+}
+
 function normalizeReviewJsonOutput(value: string): { ok: true; text: string } | { ok: false; error: string } {
   let parsed: unknown;
   let reviewJson = value.trim();
@@ -563,6 +1098,60 @@ function normalizeReviewJsonOutput(value: string): { ok: true; text: string } | 
   const { dropped } = parseFindings(reviewObject);
   if (dropped.length > 0) return { ok: false, error: "Adapter output contained invalid review findings." };
   return { ok: true, text: reviewJson };
+}
+
+function extractAnyJsonObject(text: string): string {
+  const boundedText = text.slice(0, REVIEW_JSON_EXTRACTION_CHAR_LIMIT);
+  const fencedMatches = [...boundedText.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  for (const fenced of fencedMatches) {
+    const candidate = fenced[1]!.trim();
+    if (jsonObjectText(candidate)) return candidate;
+  }
+
+  let depth = 0;
+  let candidateStart: number | undefined;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < boundedText.length; index += 1) {
+    const char = boundedText[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      if (depth === 0) candidateStart = index;
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      if (depth === 0 || candidateStart === undefined) continue;
+      depth -= 1;
+      if (depth !== 0) continue;
+      const candidate = boundedText.slice(candidateStart, index + 1).trim();
+      candidateStart = undefined;
+      if (jsonObjectText(candidate)) return candidate;
+    }
+  }
+  throw new Error("Adapter output did not contain a parseable JSON object.");
+}
+
+function jsonObjectText(candidate: string): boolean {
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed));
+  } catch {
+    return false;
+  }
 }
 
 function extractReviewJsonObject(text: string): string {

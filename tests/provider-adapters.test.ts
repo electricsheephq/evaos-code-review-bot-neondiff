@@ -1,15 +1,20 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  ANTHROPIC_REVIEW_FINDINGS_JSON_SCHEMA,
   REVIEW_FINDINGS_JSON_SCHEMA,
   REVIEW_FINDINGS_JSON_SCHEMA_NAME,
   REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
+  STRICT_REVIEW_FINDINGS_JSON_SCHEMA,
   type ReviewFindingsJsonSchema
 } from "../src/findings-schema.js";
 import {
   buildOpenAIChatCompletionsUrl,
   classifyProviderAdapterError,
+  createAnthropicReviewAdapter,
+  createGeminiReviewAdapter,
   createOpenAICompatibleReviewAdapter,
+  createOpenAINativeReviewAdapter,
   runProviderAdapterFixture,
   type ProviderRuntimeAdapter
 } from "../src/provider-adapters.js";
@@ -209,6 +214,269 @@ describe("provider adapter fixtures", () => {
     expect(JSON.stringify(result)).not.toContain(providerKey);
   });
 
+  it("executes Anthropic native reviews with output_config JSON schema and env-backed auth", async () => {
+    const providerKey = ["sk", "ant", "nativeFixtureToken1234567890"].join("-");
+    const adapter = createAnthropicReviewAdapter({
+      providerId: "anthropic",
+      provider: makeNativeProvider({
+        adapter: "anthropic",
+        model: "claude-sonnet-5",
+        apiKeyEnv: "ANTHROPIC_API_KEY"
+      }),
+      env: {
+        ANTHROPIC_API_KEY: providerKey
+      },
+      fetchImpl: async (url, init) => {
+        expect(String(url)).toBe("https://api.anthropic.com/v1/messages");
+        const headers = new Headers(init?.headers);
+        expect(headers.get("x-api-key")).toBe(providerKey);
+        expect(headers.get("anthropic-version")).toBe("2023-06-01");
+        const body = JSON.parse(String(init?.body)) as {
+          model?: string;
+          max_tokens?: number;
+          system?: string;
+          messages?: Array<{ role?: string; content?: string }>;
+          output_config?: { format?: { type?: string; schema?: ReviewFindingsJsonSchema } };
+        };
+        expect(body).toMatchObject({
+          model: "claude-sonnet-5",
+          max_tokens: 4096,
+          output_config: {
+            format: {
+              type: "json_schema",
+              schema: ANTHROPIC_REVIEW_FINDINGS_JSON_SCHEMA
+            }
+          }
+        });
+        const serializedSchema = JSON.stringify(body.output_config?.format?.schema);
+        expect(serializedSchema).not.toContain("minLength");
+        expect(serializedSchema).not.toContain("minimum");
+        expect(serializedSchema).not.toContain("maximum");
+        expect(body.system).toContain("Return only the NeonDiff review JSON object.");
+        expect(body.messages).toEqual([{ role: "user", content: "Review this patch." }]);
+        return jsonResponse({
+          id: "msg_anthropic_fixture",
+          stop_reason: "end_turn",
+          content: [
+            {
+              type: "text",
+              text: '{"findings":[],"summary":"Anthropic native adapter parsed."}'
+            }
+          ],
+          usage: {
+            input_tokens: 12,
+            output_tokens: 8
+          }
+        });
+      }
+    });
+
+    const result = await runProviderAdapterFixture({
+      adapter,
+      fixture: makeFixture({
+        id: "anthropic-native-fixture",
+        providerId: "anthropic",
+        adapterId: "anthropic",
+        model: "claude-sonnet-5",
+        prompt: "Review this patch.",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.outputPreview).toContain('"findings"');
+    expect(result.evidence.rawEvidencePreview).toContain('"providerId":"anthropic"');
+    expect(result.evidence.rawEvidencePreview).toContain('"structuredOutputMode":"constrained:anthropic-output-config-json-schema"');
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+  });
+
+  it("executes OpenAI native reviews with response_format JSON schema and env-backed auth", async () => {
+    const providerKey = ["sk", "proj", "openaiNativeFixtureToken1234567890"].join("-");
+    const adapter = createOpenAINativeReviewAdapter({
+      providerId: "openai",
+      provider: makeNativeProvider({
+        adapter: "openai",
+        model: "gpt-5.5",
+        apiKeyEnv: "OPENAI_API_KEY"
+      }),
+      env: {
+        OPENAI_API_KEY: providerKey
+      },
+      fetchImpl: async (url, init) => {
+        expect(String(url)).toBe("https://api.openai.com/v1/chat/completions");
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${providerKey}`);
+        const body = JSON.parse(String(init?.body)) as {
+          model?: string;
+          stream?: boolean;
+          response_format?: {
+            type?: string;
+            json_schema?: {
+              name?: string;
+              strict?: boolean;
+              schema?: ReviewFindingsJsonSchema;
+            };
+          };
+          messages?: Array<{ role?: string; content?: string }>;
+        };
+        expect(body).toMatchObject({
+          model: "gpt-5.5",
+          stream: false,
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
+              strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
+              schema: STRICT_REVIEW_FINDINGS_JSON_SCHEMA
+            }
+          }
+        });
+        expect(body.response_format?.json_schema?.schema?.properties.findings.items.required).toEqual([
+          "severity",
+          "path",
+          "line",
+          "title",
+          "body",
+          "confidence",
+          "category",
+          "why_this_matters"
+        ]);
+        expect(body.messages?.at(-1)).toEqual({ role: "user", content: "Review this patch." });
+        return jsonResponse({
+          id: "chatcmpl-openai-native-fixture",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: '{"findings":[],"summary":"OpenAI native adapter parsed."}'
+              }
+            }
+          ],
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 6
+          }
+        });
+      }
+    });
+
+    const result = await runProviderAdapterFixture({
+      adapter,
+      fixture: makeFixture({
+        id: "openai-native-fixture",
+        providerId: "openai",
+        adapterId: "openai",
+        model: "gpt-5.5",
+        prompt: "Review this patch.",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.rawEvidencePreview).toContain('"structuredOutputMode":"constrained:openai-json-schema"');
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+  });
+
+  it("executes Gemini native reviews with response schema and env-backed auth header", async () => {
+    const providerKey = ["AIza", "geminiNativeFixtureToken1234567890"].join("");
+    const adapter = createGeminiReviewAdapter({
+      providerId: "gemini",
+      provider: makeNativeProvider({
+        adapter: "gemini",
+        model: "gemini-3.5-flash",
+        apiKeyEnv: "GEMINI_API_KEY"
+      }),
+      env: {
+        GEMINI_API_KEY: providerKey
+      },
+      fetchImpl: async (url, init) => {
+        expect(String(url)).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent");
+        expect(new Headers(init?.headers).get("x-goog-api-key")).toBe(providerKey);
+        const body = JSON.parse(String(init?.body)) as {
+          systemInstruction?: { parts?: Array<{ text?: string }> };
+          contents?: Array<{ role?: string; parts?: Array<{ text?: string }> }>;
+          generationConfig?: {
+            responseMimeType?: string;
+            responseJsonSchema?: ReviewFindingsJsonSchema;
+          };
+        };
+        expect(body.systemInstruction?.parts?.[0]?.text).toContain("Return only the NeonDiff review JSON object.");
+        expect(body.contents).toEqual([{ role: "user", parts: [{ text: "Review this patch." }] }]);
+        expect(body.generationConfig).toEqual({
+          responseMimeType: "application/json",
+          responseJsonSchema: STRICT_REVIEW_FINDINGS_JSON_SCHEMA
+        });
+        return jsonResponse({
+          candidates: [
+            {
+              finishReason: "STOP",
+              content: {
+                parts: [
+                  {
+                    text: '{"findings":[],"summary":"Gemini native adapter parsed."}'
+                  }
+                ]
+              }
+            }
+          ],
+          usageMetadata: {
+            promptTokenCount: 10,
+            candidatesTokenCount: 5
+          }
+        });
+      }
+    });
+
+    const result = await runProviderAdapterFixture({
+      adapter,
+      fixture: makeFixture({
+        id: "gemini-native-fixture",
+        providerId: "gemini",
+        adapterId: "gemini",
+        model: "gemini-3.5-flash",
+        prompt: "Review this patch.",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence.rawEvidencePreview).toContain('"structuredOutputMode":"constrained:gemini-response-schema"');
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+  });
+
+  it("blocks native provider baseUrl overrides before sending keyed review requests", async () => {
+    let fetchCalls = 0;
+    const result = await runProviderAdapterFixture({
+      adapter: createOpenAINativeReviewAdapter({
+        providerId: "openai",
+        provider: makeNativeProvider({
+          adapter: "openai",
+          baseUrl: "https://gateway.example.test/v1",
+          apiKeyEnv: "OPENAI_API_KEY"
+        }),
+        env: {
+          OPENAI_API_KEY: "provider-secret"
+        },
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          return jsonResponse({ unreachable: true });
+        }
+      }),
+      fixture: makeFixture({
+        id: "native-base-url-override-fixture",
+        providerId: "openai",
+        adapterId: "openai",
+        prompt: "Review this patch.",
+        expectReviewJson: true
+      })
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected native baseUrl override to fail before fetch.");
+    expect(result.error.message).toContain("baseUrl overrides are disabled");
+    expect(fetchCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
   it("blocks unsafe OpenAI-compatible review targets before fetching private prompts", async () => {
     let fetched = false;
     const result = await runProviderAdapterFixture({
@@ -385,7 +653,7 @@ describe("provider adapter fixtures", () => {
             json_schema: {
               name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
               strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
-              schema: REVIEW_FINDINGS_JSON_SCHEMA
+              schema: STRICT_REVIEW_FINDINGS_JSON_SCHEMA
             }
           });
           return jsonResponse({
@@ -451,7 +719,7 @@ describe("provider adapter fixtures", () => {
             json_schema: {
               name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
               strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
-              schema: REVIEW_FINDINGS_JSON_SCHEMA
+              schema: STRICT_REVIEW_FINDINGS_JSON_SCHEMA
             }
           }
         }
@@ -970,6 +1238,99 @@ describe("provider adapter fixtures", () => {
       expect(JSON.stringify(result)).not.toContain("sk-live-secret-secret");
     }
   );
+
+  it.each([
+    {
+      label: "anthropic missing key",
+      expectedClass: "auth",
+      adapter: createAnthropicReviewAdapter({
+        providerId: "anthropic",
+        provider: makeNativeProvider({ adapter: "anthropic", apiKeyEnv: "ANTHROPIC_API_KEY" }),
+        env: {},
+        fetchImpl: async () => jsonResponse({ unreachable: true })
+      })
+    },
+    {
+      label: "anthropic throttle",
+      expectedClass: "throttle",
+      adapter: createAnthropicReviewAdapter({
+        providerId: "anthropic",
+        provider: makeNativeProvider({ adapter: "anthropic", apiKeyEnv: "ANTHROPIC_API_KEY" }),
+        env: { ANTHROPIC_API_KEY: "provider-secret" },
+        fetchImpl: async () => new Response("rate limit sk-live-secret-secret", { status: 429 })
+      })
+    },
+    {
+      label: "openai native auth",
+      expectedClass: "auth",
+      adapter: createOpenAINativeReviewAdapter({
+        providerId: "openai",
+        provider: makeNativeProvider({ adapter: "openai" }),
+        env: { OPENAI_API_KEY: "provider-secret" },
+        fetchImpl: async () => new Response("invalid api key sk-live-secret-secret", { status: 401 })
+      })
+    },
+    {
+      label: "gemini network",
+      expectedClass: "network",
+      adapter: createGeminiReviewAdapter({
+        providerId: "gemini",
+        provider: makeNativeProvider({ adapter: "gemini", apiKeyEnv: "GEMINI_API_KEY" }),
+        env: { GEMINI_API_KEY: "provider-secret" },
+        fetchImpl: async () => new Response("service unavailable sk-live-secret-secret", { status: 503 })
+      })
+    },
+    {
+      label: "gemini timeout",
+      expectedClass: "timeout",
+      adapter: createGeminiReviewAdapter({
+        providerId: "gemini",
+        provider: makeNativeProvider({ adapter: "gemini", apiKeyEnv: "GEMINI_API_KEY" }),
+        env: { GEMINI_API_KEY: "provider-secret" },
+        fetchImpl: async () => {
+          throw new Error("deadline exceeded");
+        }
+      })
+    },
+    {
+      label: "openai native bad json",
+      expectedClass: "model-output",
+      adapter: createOpenAINativeReviewAdapter({
+        providerId: "openai",
+        provider: makeNativeProvider({ adapter: "openai" }),
+        env: { OPENAI_API_KEY: "provider-secret" },
+        fetchImpl: async () => jsonResponse({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: "not json sk-live-secret-secret"
+              }
+            }
+          ]
+        })
+      })
+    }
+  ] as const)("bounds native adapter failures as $expectedClass for $label", async ({ expectedClass, adapter, label }) => {
+    const result = await runProviderAdapterFixture({
+      adapter,
+      fixture: makeFixture({
+        id: `${label.replace(/\s+/g, "-")}-fixture`,
+        providerId: "native-provider",
+        adapterId: adapter.id,
+        expectReviewJson: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        class: expectedClass
+      }
+    });
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+    expect(JSON.stringify(result)).not.toContain("sk-live-secret-secret");
+  });
 
   it("keeps model-output wording ahead of generic HTTP status tokens", () => {
     expect(classifyProviderAdapterError("500 invalid output from provider")).toBe("model-output");
@@ -1930,6 +2291,25 @@ function makeOpenAICompatibleProvider(overrides: Partial<ProviderRegistryEntry> 
       review: true,
       jsonOutput: true,
       local: true,
+      streaming: false
+    },
+    ...overrides
+  };
+}
+
+function makeNativeProvider(overrides: Partial<ProviderRegistryEntry> = {}): ProviderRegistryEntry {
+  return {
+    enabled: true,
+    adapter: "openai",
+    model: "native-review-model",
+    authMode: "api-key-env",
+    apiKeyEnv: "OPENAI_API_KEY",
+    timeoutMs: 180_000,
+    retryMaxRetries: 1,
+    capabilities: {
+      review: true,
+      jsonOutput: true,
+      local: false,
       streaming: false
     },
     ...overrides

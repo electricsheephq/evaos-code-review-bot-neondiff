@@ -4,11 +4,12 @@ NeonDiff keeps provider choice local-first and BYOK-oriented. The provider
 registry catalog lists supported provider families and the metadata operators
 need before wiring a provider into config validation or runtime adapters.
 
-This catalog is not a claim that every provider family can run live reviews
-today. The current runtime surface is still limited by the adapters and proof
-gates documented in `docs/providers.md`. A provider family should be promoted to
-runtime support only after fixture review proof, redaction proof, bounded retry
-behavior, cooldown behavior, and release-status evidence are available.
+This catalog is not a claim that every provider family should be selected for
+live reviews by default. The current default beta route remains ZCode-backed
+unless an operator explicitly selects another provider after the proof gates
+documented in `docs/providers.md`. A provider family should be promoted to
+routine runtime support only after fixture review proof, redaction proof, bounded
+retry behavior, cooldown behavior, and release-status evidence are available.
 
 ## Provider Families
 
@@ -23,11 +24,14 @@ behavior, cooldown behavior, and release-status evidence are available.
   preferred no-egress family when the endpoint is loopback and the model is
   local.
 - `anthropic`: Anthropic Messages API. Use `ANTHROPIC_API_KEY` from the
-  operator environment.
+  operator environment. Native adapter smoke uses an empty-findings review
+  fixture and Anthropic's JSON-schema output configuration.
 - `openai`: OpenAI Responses or Chat Completions API. Use `OPENAI_API_KEY` from
-  the operator environment.
+  the operator environment. Native adapter smoke uses Chat Completions structured
+  outputs.
 - `gemini`: Gemini / Google AI or Vertex AI surfaces. Use `GEMINI_API_KEY` or
-  `GOOGLE_APPLICATION_CREDENTIALS` from the operator environment.
+  `GOOGLE_APPLICATION_CREDENTIALS` from the operator environment. Native adapter
+  smoke uses generateContent JSON response schema controls.
 
 ## Public Metadata
 
@@ -51,5 +55,6 @@ The catalog metadata includes:
 
 `src/provider-registry.ts` is a typed catalog and lookup helper layer. It is
 intended for config validation, UI copy, and evidence-safe provider summaries.
-It does not replace the existing runtime provider doctor or implement live
-adapter execution for every listed family.
+Provider doctor/smoke, adapter factories, and explicit review selection live in
+the runtime/provider modules; non-default rollout still requires explicit config
+and proof.

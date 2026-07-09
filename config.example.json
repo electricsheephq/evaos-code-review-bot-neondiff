@@ -160,6 +160,57 @@
           "local": false,
           "streaming": false
         }
+      },
+      "anthropic": {
+        "enabled": false,
+        "adapter": "anthropic",
+        "displayName": "Anthropic native Messages API adapter",
+        "model": "claude-sonnet-5",
+        "authMode": "api-key-env",
+        "apiKeyEnv": "ANTHROPIC_API_KEY",
+        "contextWindowTokens": 200000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 1,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      },
+      "openai": {
+        "enabled": false,
+        "adapter": "openai",
+        "displayName": "OpenAI native Chat Completions adapter",
+        "model": "gpt-4.1",
+        "authMode": "api-key-env",
+        "apiKeyEnv": "OPENAI_API_KEY",
+        "contextWindowTokens": 128000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 1,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      },
+      "gemini": {
+        "enabled": false,
+        "adapter": "gemini",
+        "displayName": "Gemini native generateContent adapter",
+        "model": "gemini-2.5-pro",
+        "authMode": "api-key-env",
+        "apiKeyEnv": "GEMINI_API_KEY",
+        "contextWindowTokens": 1000000,
+        "timeoutMs": 180000,
+        "retryMaxRetries": 1,
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
       }
     }
   },

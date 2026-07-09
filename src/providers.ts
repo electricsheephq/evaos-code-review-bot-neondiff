@@ -2,12 +2,20 @@ import { lookup as defaultDnsLookup } from "node:dns/promises";
 import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
+import {
+  ANTHROPIC_REVIEW_FINDINGS_JSON_SCHEMA,
+  REVIEW_FINDINGS_JSON_SCHEMA,
+  STRICT_REVIEW_FINDINGS_JSON_SCHEMA
+} from "./findings-schema.js";
+import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const DEFAULT_PROVIDER_SMOKE_TIMEOUT_MS = 30_000;
 const MAX_PROVIDER_SMOKE_RESPONSE_BYTES = 256 * 1024;
 const REMOTE_SMOKE_OPT_IN_ERROR = "Remote OpenAI-compatible smoke checks require explicit remote opt-in and --provider <id>.";
+const REMOTE_NATIVE_SMOKE_OPT_IN_ERROR = "Remote native provider smoke checks require explicit remote opt-in and --provider <id>.";
 const REMOTE_SMOKE_ENV_OPT_IN = "NEONDIFF_ALLOW_REMOTE_SMOKE";
+const NATIVE_PROVIDER_SMOKE_PROMPT = "Return an empty NeonDiff findings JSON object for provider smoke. Do not include markdown or prose.";
 
 type DnsLookupAddress = { address: string; family: number };
 type DnsLookupImpl = (
@@ -134,7 +142,12 @@ export interface ProviderDoctorCheck {
   model: string;
   authMode: ProviderAuthMode;
   smokeAttempted: boolean;
-  readMode: "metadata_only" | "openai_compatible_models";
+  readMode:
+    | "metadata_only"
+    | "openai_compatible_models"
+    | "anthropic_messages_review_fixture"
+    | "openai_chat_completions_review_fixture"
+    | "gemini_generate_content_review_fixture";
   baseUrl?: string;
   apiKeyEnv?: string;
   errorCategory?: ProviderErrorCategory;
@@ -224,6 +237,17 @@ export async function doctorProviderRegistry(input: {
         error: `Provider ${safeProviderId} is not configured.`
       });
       troubleshooting.push(`Add provider ${safeProviderId} to providers.providers or choose an existing provider id.`);
+      continue;
+    }
+
+    if (input.smoke && isNativeProviderSmokeAdapter(provider.adapter)) {
+      checks.push(await smokeNativeProvider({
+        providerId,
+        provider,
+        fetchImpl,
+        env,
+        allowRemoteSmoke: input.allowRemoteSmoke === true || isRemoteSmokeEnvOptIn(env)
+      }));
       continue;
     }
 
@@ -420,6 +444,360 @@ async function smokeOpenAICompatibleProvider(input: {
   } finally {
     timeoutSignal.cleanup();
   }
+}
+
+function isNativeProviderSmokeAdapter(adapter: ProviderAdapter): adapter is "anthropic" | "openai" | "gemini" {
+  return adapter === "anthropic" || adapter === "openai" || adapter === "gemini";
+}
+
+async function smokeNativeProvider(input: {
+  providerId: string;
+  provider: ProviderRegistryEntry;
+  fetchImpl: typeof fetch;
+  env: Record<string, string | undefined>;
+  allowRemoteSmoke: boolean;
+}): Promise<ProviderDoctorCheck> {
+  const safeProviderId = safeProviderIdForOutput(input.providerId);
+  const baseCheck = {
+    providerId: safeProviderId,
+    adapter: input.provider.adapter,
+    enabled: input.provider.enabled,
+    model: input.provider.model,
+    authMode: input.provider.authMode,
+    smokeAttempted: true,
+    readMode: nativeProviderReadMode(input.provider.adapter),
+    ...(input.provider.baseUrl ? { baseUrl: redactProviderUrl(input.provider.baseUrl) } : {}),
+    ...(input.provider.apiKeyEnv ? { apiKeyEnv: input.provider.apiKeyEnv } : {})
+  };
+  if (!input.provider.enabled) return { ...baseCheck, ok: false, error: "Provider is disabled." };
+  const capabilityError = providerReadinessCapabilityError(input.provider);
+  if (capabilityError) return { ...baseCheck, ok: false, error: capabilityError };
+  const authError = providerAuthMetadataError(input.provider);
+  if (authError) return { ...baseCheck, ok: false, error: authError };
+  const baseUrlOverrideError = nativeProviderBaseUrlOverrideError(input.provider);
+  if (baseUrlOverrideError) return { ...baseCheck, ok: false, error: baseUrlOverrideError };
+  if (input.provider.authMode !== "api-key-env" || !input.provider.apiKeyEnv) {
+    return { ...baseCheck, ok: false, error: "Native provider smoke requires authMode api-key-env and apiKeyEnv." };
+  }
+  if (!input.env[input.provider.apiKeyEnv]) {
+    return { ...baseCheck, ok: false, error: `Missing API key environment variable ${input.provider.apiKeyEnv}.` };
+  }
+  if (!input.allowRemoteSmoke) {
+    return { ...baseCheck, ok: false, error: REMOTE_NATIVE_SMOKE_OPT_IN_ERROR };
+  }
+
+  const timeoutSignal = signalWithTimeout(input.provider.timeoutMs);
+  try {
+    const response = await input.fetchImpl(nativeProviderSmokeUrl(input.provider), {
+      method: "POST",
+      signal: timeoutSignal.signal,
+      headers: nativeProviderSmokeHeaders(input.provider, input.env),
+      body: JSON.stringify(nativeProviderSmokeBody(input.provider))
+    });
+    let text: string;
+    try {
+      text = await readResponseTextBounded(response);
+    } catch (error) {
+      if (error instanceof ProviderSmokeResponseTooLargeError) {
+        return {
+          ...baseCheck,
+          ok: false,
+          errorCategory: "model_output_schema",
+          error: error.message
+        };
+      }
+      throw error;
+    }
+    if (!response.ok) {
+      const redactedText = redactProviderSmokeText(text, input.provider, input.env);
+      const error = `${nativeProviderSmokeLabel(input.provider.adapter)} endpoint returned ${response.status}: ${redactedText.slice(0, 300)}`;
+      return {
+        ...baseCheck,
+        ok: false,
+        errorCategory: classifyProviderError(`${response.status} ${redactedText}`),
+        error
+      };
+    }
+    const reviewText = extractNativeProviderSmokeReviewText(input.provider.adapter, text);
+    const reviewError = validateNativeProviderSmokeReviewJson(reviewText);
+    if (reviewError) {
+      return {
+        ...baseCheck,
+        ok: false,
+        errorCategory: "model_output_schema",
+        error: reviewError
+      };
+    }
+    return {
+      ...baseCheck,
+      ok: true
+    };
+  } catch (error) {
+    if (error instanceof ProviderSmokeResponseTooLargeError) {
+      return {
+        ...baseCheck,
+        ok: false,
+        errorCategory: "model_output_schema",
+        error: error.message
+      };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const errorCategory = classifyProviderError(message);
+    const redactedMessage = redactProviderSmokeText(message, input.provider, input.env);
+    return {
+      ...baseCheck,
+      ok: false,
+      errorCategory,
+      error: `${errorCategory}: ${redactedMessage}`
+    };
+  } finally {
+    timeoutSignal.cleanup();
+  }
+}
+
+function nativeProviderReadMode(
+  adapter: ProviderAdapter
+): ProviderDoctorCheck["readMode"] {
+  if (adapter === "anthropic") return "anthropic_messages_review_fixture";
+  if (adapter === "openai") return "openai_chat_completions_review_fixture";
+  if (adapter === "gemini") return "gemini_generate_content_review_fixture";
+  return "metadata_only";
+}
+
+function nativeProviderSmokeLabel(adapter: ProviderAdapter): string {
+  if (adapter === "anthropic") return "Anthropic Messages";
+  if (adapter === "openai") return "OpenAI Chat Completions";
+  if (adapter === "gemini") return "Gemini generateContent";
+  return "Native provider";
+}
+
+function nativeProviderBaseUrlOverrideError(provider: ProviderRegistryEntry): string | undefined {
+  if (!provider.baseUrl) return undefined;
+  const defaultBaseUrl = nativeProviderDefaultBaseUrl(provider.adapter);
+  if (!defaultBaseUrl) return "Native provider baseUrl overrides are not supported for this adapter.";
+  if (normalizeNativeBaseUrl(provider.baseUrl) === normalizeNativeBaseUrl(defaultBaseUrl)) return undefined;
+  return `Native ${nativeProviderSmokeLabel(provider.adapter)} baseUrl overrides are disabled during this beta; use the official ${defaultBaseUrl} endpoint.`;
+}
+
+function nativeProviderDefaultBaseUrl(adapter: ProviderAdapter): string | undefined {
+  if (adapter === "anthropic") return "https://api.anthropic.com/v1";
+  if (adapter === "openai") return "https://api.openai.com/v1";
+  if (adapter === "gemini") return "https://generativelanguage.googleapis.com/v1beta";
+  return undefined;
+}
+
+function normalizeNativeBaseUrl(value: string): string {
+  const parsed = new URL(value);
+  parsed.pathname = parsed.pathname.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function nativeProviderSmokeUrl(provider: ProviderRegistryEntry): string {
+  if (provider.adapter === "anthropic") return buildNativeEndpointUrl(provider.baseUrl, "https://api.anthropic.com/v1", "/messages");
+  if (provider.adapter === "openai") return buildNativeEndpointUrl(provider.baseUrl, "https://api.openai.com/v1", "/chat/completions");
+  if (provider.adapter === "gemini") {
+    const normalizedModel = provider.model.replace(/^models\//, "");
+    return buildNativeEndpointUrl(
+      provider.baseUrl,
+      "https://generativelanguage.googleapis.com/v1beta",
+      `/models/${encodeURIComponent(normalizedModel)}:generateContent`
+    );
+  }
+  throw new Error(`Native smoke is not implemented for ${provider.adapter} providers.`);
+}
+
+function nativeProviderSmokeHeaders(
+  provider: ProviderRegistryEntry,
+  env: Record<string, string | undefined>
+): Record<string, string> {
+  if (provider.authMode !== "api-key-env" || !provider.apiKeyEnv || !env[provider.apiKeyEnv]) {
+    throw new Error("Native provider smoke requires an environment-backed API key.");
+  }
+  const key = env[provider.apiKeyEnv]!;
+  const baseHeaders = {
+    Accept: "application/json",
+    "Content-Type": "application/json"
+  };
+  if (provider.adapter === "anthropic") {
+    return {
+      ...baseHeaders,
+      "anthropic-version": "2023-06-01",
+      "x-api-key": key
+    };
+  }
+  if (provider.adapter === "openai") {
+    return {
+      ...baseHeaders,
+      Authorization: `Bearer ${key}`
+    };
+  }
+  if (provider.adapter === "gemini") {
+    return {
+      ...baseHeaders,
+      "x-goog-api-key": key
+    };
+  }
+  return baseHeaders;
+}
+
+function nativeProviderSmokeBody(provider: ProviderRegistryEntry): Record<string, unknown> {
+  if (provider.adapter === "anthropic") {
+    return {
+      model: provider.model,
+      max_tokens: 512,
+      system: nativeProviderSmokeSystemInstruction(),
+      messages: [
+        {
+          role: "user",
+          content: NATIVE_PROVIDER_SMOKE_PROMPT
+        }
+      ],
+      output_config: {
+        format: {
+          type: "json_schema",
+          schema: ANTHROPIC_REVIEW_FINDINGS_JSON_SCHEMA
+        }
+      }
+    };
+  }
+  if (provider.adapter === "openai") {
+    return {
+      model: provider.model,
+      stream: false,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "neondiff_review_findings",
+          strict: true,
+          schema: STRICT_REVIEW_FINDINGS_JSON_SCHEMA
+        }
+      },
+      messages: [
+        {
+          role: "system",
+          content: nativeProviderSmokeSystemInstruction()
+        },
+        {
+          role: "user",
+          content: NATIVE_PROVIDER_SMOKE_PROMPT
+        }
+      ]
+    };
+  }
+  if (provider.adapter === "gemini") {
+    return {
+      systemInstruction: {
+        parts: [{ text: nativeProviderSmokeSystemInstruction() }]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: NATIVE_PROVIDER_SMOKE_PROMPT }]
+        }
+      ],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseJsonSchema: STRICT_REVIEW_FINDINGS_JSON_SCHEMA
+      }
+    };
+  }
+  throw new Error(`Native smoke is not implemented for ${provider.adapter} providers.`);
+}
+
+function nativeProviderSmokeSystemInstruction(): string {
+  return "Return only the NeonDiff review JSON object. Do not include markdown, prose, tool calls, or raw diff excerpts.";
+}
+
+function extractNativeProviderSmokeReviewText(adapter: ProviderAdapter, responseText: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(responseText) as unknown;
+  } catch {
+    throw new Error(`${nativeProviderSmokeLabel(adapter)} response was not valid JSON.`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${nativeProviderSmokeLabel(adapter)} response had invalid response schema.`);
+  }
+  const response = parsed as Record<string, unknown>;
+  if (adapter === "anthropic") return extractAnthropicSmokeReviewText(response);
+  if (adapter === "openai") return extractOpenAISmokeReviewText(response);
+  if (adapter === "gemini") return extractGeminiSmokeReviewText(response);
+  throw new Error(`${nativeProviderSmokeLabel(adapter)} response had invalid response schema.`);
+}
+
+function extractAnthropicSmokeReviewText(response: Record<string, unknown>): string {
+  const content = response.content;
+  if (!Array.isArray(content)) throw new Error("Anthropic Messages response had invalid response schema.");
+  const textParts = content
+    .map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return undefined;
+      const typedPart = part as { type?: unknown; text?: unknown };
+      if (typedPart.type !== "text" || typeof typedPart.text !== "string") return undefined;
+      const text = typedPart.text.trim();
+      return text.length > 0 ? text : undefined;
+    })
+    .filter((text): text is string => Boolean(text));
+  if (textParts.length === 0) throw new Error("Anthropic Messages response had invalid response schema.");
+  return textParts.join("\n");
+}
+
+function extractOpenAISmokeReviewText(response: Record<string, unknown>): string {
+  const choices = response.choices;
+  if (!Array.isArray(choices)) throw new Error("OpenAI Chat Completions response had invalid response schema.");
+  const firstChoice = choices[0];
+  if (!firstChoice || typeof firstChoice !== "object" || Array.isArray(firstChoice)) {
+    throw new Error("OpenAI Chat Completions response had invalid response schema.");
+  }
+  const message = (firstChoice as { message?: unknown }).message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    throw new Error("OpenAI Chat Completions response had invalid response schema.");
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content !== "string" || content.trim().length === 0) {
+    throw new Error("OpenAI Chat Completions response had invalid response schema.");
+  }
+  return content;
+}
+
+function extractGeminiSmokeReviewText(response: Record<string, unknown>): string {
+  const candidates = response.candidates;
+  if (!Array.isArray(candidates)) throw new Error("Gemini generateContent response had invalid response schema.");
+  const firstCandidate = candidates[0];
+  if (!firstCandidate || typeof firstCandidate !== "object" || Array.isArray(firstCandidate)) {
+    throw new Error("Gemini generateContent response had invalid response schema.");
+  }
+  const content = (firstCandidate as { content?: unknown }).content;
+  if (!content || typeof content !== "object" || Array.isArray(content)) {
+    throw new Error("Gemini generateContent response had invalid response schema.");
+  }
+  const parts = (content as { parts?: unknown }).parts;
+  if (!Array.isArray(parts)) throw new Error("Gemini generateContent response had invalid response schema.");
+  const textParts = parts
+    .map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return undefined;
+      const text = (part as { text?: unknown }).text;
+      return typeof text === "string" && text.trim().length > 0 ? text.trim() : undefined;
+    })
+    .filter((text): text is string => Boolean(text));
+  if (textParts.length === 0) throw new Error("Gemini generateContent response had invalid response schema.");
+  return textParts.join("\n");
+}
+
+function validateNativeProviderSmokeReviewJson(value: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return "Native provider smoke output was not a parseable JSON review object.";
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !Array.isArray((parsed as { findings?: unknown }).findings)) {
+    return "Native provider smoke output did not contain a review findings array.";
+  }
+  const { dropped } = parseFindings(parsed);
+  if (dropped.length > 0) return "Native provider smoke output contained invalid review findings.";
+  return undefined;
 }
 
 function isRemoteSmokeEnvOptIn(env: Record<string, string | undefined>): boolean {
@@ -913,6 +1291,16 @@ export function buildOpenAIModelsUrl(baseUrl: string): string {
   const parsed = new URL(baseUrl);
   const pathname = parsed.pathname.replace(/\/+$/, "");
   parsed.pathname = pathname.endsWith("/models") ? pathname : `${pathname}/models`;
+  return parsed.toString();
+}
+
+function buildNativeEndpointUrl(baseUrl: string | undefined, defaultBaseUrl: string, suffix: string): string {
+  const parsed = new URL(baseUrl ?? defaultBaseUrl);
+  const normalizedPathname = parsed.pathname.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
+  parsed.pathname = normalizedPathname.endsWith(normalizedSuffix)
+    ? normalizedPathname
+    : `${normalizedPathname}${normalizedSuffix}`;
   return parsed.toString();
 }
 
