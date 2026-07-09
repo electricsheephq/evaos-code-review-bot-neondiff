@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -243,6 +243,7 @@ export interface EvalScorecard {
     seededRecall: number;
     maxWilsonLowerBound: number;
   };
+  falsePositiveSeverities: Record<Severity, number>;
   matchedLabelKeys: string[];
   thresholds: EvalThresholds;
   gates: Array<{ name: string; ok: boolean; detail: string }>;
@@ -311,6 +312,16 @@ const DEFAULT_THRESHOLDS: EvalThresholds = {
   maxDuplicateFindings: 0
 };
 
+export function buildEvalThresholds(
+  thresholds: Partial<EvalThresholds> | undefined,
+  mode: "gating" | "exploratory" = "gating"
+): EvalThresholds {
+  const merged = { ...DEFAULT_THRESHOLDS, ...(thresholds ?? {}) };
+  validateThresholds(merged);
+  validateThresholdPolicy(mode, thresholds ?? {});
+  return merged;
+}
+
 export const PUBLIC_CONFIDENCE_POLICY: EvalPublicDisplayPolicy = {
   defaultLabel: "uncalibrated",
   minWilsonLowerBound: 0.95,
@@ -351,9 +362,7 @@ const DEFAULT_STICKY_VS_COLD_THRESHOLDS: StickyVsColdThresholds = {
 
 export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions = {}): EvalRunResult {
   validateEvalInput(input);
-  const thresholds = { ...DEFAULT_THRESHOLDS, ...(input.thresholds ?? {}) };
-  validateThresholds(thresholds);
-  validateThresholdPolicy(input.mode ?? "gating", input.thresholds ?? {});
+  const thresholds = buildEvalThresholds(input.thresholds, input.mode ?? "gating");
 
   const evalName = input.evalName ?? "evaos-zcode-review-bot-comparison-v0.1";
   const outputDir = options.outputDir ?? defaultEvalOutputDir(input, options.now ?? new Date());
@@ -411,7 +420,7 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   writeJson(artifacts["merged-fixes.json"]!, mergedFixes);
   writeJson(artifacts["redaction-report.json"]!, redactionReport);
   writeJson(artifacts["duplicate-report.json"]!, duplicateReport);
-  writeFileSync(artifacts["comparison.csv"]!, buildComparisonCsv(botFindings, labels, matches));
+  writeEvalArtifactFile(artifacts["comparison.csv"]!, buildComparisonCsv(botFindings, labels, matches));
   writeJson(artifacts["labels.json"]!, labels);
   writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, labels, matches, input.negativeControl === true));
   writeJson(artifacts["scorecard.json"]!, scorecard);
@@ -448,6 +457,10 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   };
 }
 
+export function countEvalFalsePositiveSeverities(scorecard: EvalScorecard): Record<Severity, number> {
+  return { ...scorecard.falsePositiveSeverities };
+}
+
 export function runStickyVsColdEval(
   input: StickyVsColdScenarioInput,
   options: { outputRoot?: string; now?: Date } = {}
@@ -481,7 +494,7 @@ export function runStickyVsColdEval(
     thresholds,
     now
   });
-  writeFileSync(reportPath, buildStickyVsColdReport(summary));
+  writeEvalArtifactFile(reportPath, buildStickyVsColdReport(summary));
   const artifactInventory = [
     { name: "sticky-vs-cold-report.md", sha256: sha256File(reportPath) },
     { name: "cold/scorecard.json", sha256: sha256File(cold.artifacts["scorecard.json"]!) },
@@ -904,6 +917,7 @@ function buildScorecard(input: {
   const truePositive = matchedBotIds.size;
   const falsePositive = input.botFindings.length - truePositive;
   const falseNegative = input.labels.length - matchedLabelIds.size;
+  const falsePositiveSeverities = countFindingSeverities(input.botFindings.filter((finding) => !matchedBotIds.has(finding.id)));
   const labelById = new Map(input.labels.map((label) => [label.id, label]));
   const matchedLabelKeys = [...matchedLabelIds]
     .map((labelId) => labelById.get(labelId))
@@ -962,6 +976,7 @@ function buildScorecard(input: {
       seededRecall: roundMetric(seededRecall),
       maxWilsonLowerBound
     },
+    falsePositiveSeverities,
     matchedLabelKeys,
     thresholds: input.thresholds,
     gates: [
@@ -1002,6 +1017,12 @@ function buildScorecard(input: {
       }
     ]
   };
+}
+
+function countFindingSeverities(findings: NormalizedEvalFinding[]): Record<Severity, number> {
+  const counts: Record<Severity, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const finding of findings) counts[finding.severity] += 1;
+  return counts;
 }
 
 function evaluateSuiteRequirements(input: {
@@ -1480,7 +1501,17 @@ function sanitizePathSegment(value: string): string {
 }
 
 function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeEvalArtifactFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function writeEvalArtifactFile(path: string, contents: string): void {
+  // Eval output roots are operator-controlled; exclusive creation avoids clobbering raced files or symlinks.
+  const fd = openSync(path, "wx", 0o600);
+  try {
+    writeFileSync(fd, contents, "utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function sha256File(path: string): string {
@@ -1504,14 +1535,14 @@ function guardOutputDir(outputDir: string): void {
   assertEvalOutputDirSafe(outputDir);
 }
 
-function guardEmptyOutputRoot(outputRoot: string): void {
+export function guardEmptyOutputRoot(outputRoot: string, evalLabel = "sticky-vs-cold eval"): void {
   if (!existsSync(outputRoot)) return;
   const stat = statSync(outputRoot);
   if (!stat.isDirectory()) {
     throw new Error("outputRoot must be a directory when it already exists");
   }
   if (readdirSync(outputRoot).length > 0) {
-    throw new Error("outputRoot must be empty before running sticky-vs-cold eval; choose a fresh output root to avoid stale artifacts");
+    throw new Error(`outputRoot must be empty before running ${evalLabel}; choose a fresh output root to avoid stale artifacts`);
   }
 }
 
@@ -1602,10 +1633,8 @@ function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
 }
 
 function validateEvalScenarioThresholdPolicy(input: EvalScenarioInput, labelPath: string): void {
-  const thresholds = { ...DEFAULT_THRESHOLDS, ...(input.thresholds ?? {}) };
   try {
-    validateThresholds(thresholds);
-    validateThresholdPolicy(input.mode ?? "gating", input.thresholds ?? {});
+    buildEvalThresholds(input.thresholds, input.mode ?? "gating");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`${labelPath}.${detail}`);

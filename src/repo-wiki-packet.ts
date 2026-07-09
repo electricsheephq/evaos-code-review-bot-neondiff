@@ -749,7 +749,7 @@ function assertSupportedAddonDryRunBudget(packet: SupportedAddonDryRunPacket): S
   return packet;
 }
 
-function codeUnitCompare(left: string, right: string): number {
+export function codeUnitCompare(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;

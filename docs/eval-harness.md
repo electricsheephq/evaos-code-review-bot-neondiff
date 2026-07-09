@@ -24,6 +24,29 @@ npm run eval:sticky-vs-cold -- \
   --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold-seeded-quality
 ```
 
+Run the repo-wiki context A/B gate with a fixture that contains baseline,
+deterministic repo-wiki, and curated OpenWiki-derived findings:
+
+```bash
+npx tsx src/cli.ts eval-repo-wiki-context-ab \
+  --input /path/to/repo-wiki-context-ab.json \
+  --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/ab
+```
+
+Run the suggest-only OpenWiki docs-drift gate:
+
+```bash
+npx tsx src/cli.ts eval-openwiki-docs-drift \
+  --input /path/to/docs-drift.json \
+  --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/docs-drift
+```
+
+Both OpenWiki gates are offline evidence generators. They do not call a model,
+post GitHub comments, enable the daemon, add cron, or edit production docs. The
+docs-drift gate may write a `suggested-doc-edits.md` evidence artifact under the
+chosen `--output-root`; treat that file as a review packet, not as a repository
+documentation change.
+
 Run the review-lenses dry-run comparison gate:
 
 ```bash

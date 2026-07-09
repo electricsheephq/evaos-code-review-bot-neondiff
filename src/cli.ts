@@ -26,6 +26,7 @@ import {
   runOfflineEval,
   runStickyVsColdEval
 } from "./eval-harness.js";
+import { runDocsDriftEval, runRepoWikiContextAbEval } from "./openwiki-eval-gates.js";
 import { inspectConfigForDesktop, patchConfigForDesktop } from "./config-cli.js";
 import { buildEnrichmentComment, buildIssueEnrichmentDryRunOutput } from "./enrichment.js";
 import {
@@ -1582,6 +1583,28 @@ async function main(): Promise<void> {
     const result = runStickyVsColdEval(input, {
       outputRoot: args["output-root"]
     });
+    console.log(JSON.stringify(result.summary, null, 2));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "eval-repo-wiki-context-ab") {
+    if (!args.input) throw new Error("--input is required for eval-repo-wiki-context-ab");
+    if (!args["output-root"]) throw new Error("--output-root is required for eval-repo-wiki-context-ab");
+    const outputRoot = assertEvalOutputDirSafe(parseSingleArg(args["output-root"], "--output-root"));
+    const input = readJsonInput(parseSingleArg(args.input, "--input"), "--input") as Parameters<typeof runRepoWikiContextAbEval>[0];
+    const result = runRepoWikiContextAbEval(input, { outputRoot });
+    console.log(JSON.stringify(result.summary, null, 2));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "eval-openwiki-docs-drift") {
+    if (!args.input) throw new Error("--input is required for eval-openwiki-docs-drift");
+    if (!args["output-root"]) throw new Error("--output-root is required for eval-openwiki-docs-drift");
+    const outputRoot = assertEvalOutputDirSafe(parseSingleArg(args["output-root"], "--output-root"));
+    const input = readJsonInput(parseSingleArg(args.input, "--input"), "--input") as Parameters<typeof runDocsDriftEval>[0];
+    const result = runDocsDriftEval(input, { outputRoot });
     console.log(JSON.stringify(result.summary, null, 2));
     if (!result.ok) process.exitCode = 1;
     return;
@@ -3304,6 +3327,8 @@ function buildHelp(command?: string) {
         "eval-offline",
         "eval-suite",
         "eval-sticky-vs-cold",
+        "eval-repo-wiki-context-ab",
+        "eval-openwiki-docs-drift",
         "review-lenses-eval",
         "outcome-ledger",
         "outcome-scorecard",
@@ -3363,6 +3388,8 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts clear-issue-enrichment-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts clear-review-queue-leases --config /path/to/live.json --dry-run true --expired-only true",
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
+      "npx tsx src/cli.ts eval-repo-wiki-context-ab --input /path/to/repo-wiki-ab.json --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/ab",
+      "npx tsx src/cli.ts eval-openwiki-docs-drift --input /path/to/docs-drift.json --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/docs-drift",
       "npx tsx src/cli.ts review-lenses-eval --input-dir tests/fixtures/review-lenses-eval --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) --dry-run true",
       "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
       "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",
