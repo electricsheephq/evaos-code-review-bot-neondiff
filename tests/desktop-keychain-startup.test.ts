@@ -18,4 +18,16 @@ describe("NeonDiff desktop Keychain startup safety", () => {
     expect(initializer).not.toContain("readSecret(");
     expect(initializer).not.toContain("storedDate(");
   });
+
+  it("uses the Security framework's UI-skip policy without constructing LAContext", () => {
+    const source = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/KeychainSecretStore.swift",
+      "utf8"
+    );
+
+    expect(source).not.toContain("import LocalAuthentication");
+    expect(source).not.toContain("noninteractiveContext");
+    expect(source.match(/kSecUseAuthenticationUISkip/g)).toHaveLength(2);
+    expect(source).not.toContain("kSecUseAuthenticationContext");
+  });
 });

@@ -61,8 +61,9 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/No Swift desktop files changed; macOS smoke correctly skipped/);
     expect(gate).toMatch(/scripts\/swift-affected\.mjs/);
     expect(gate).toMatch(/No Swift desktop files changed/);
-    expect(gate).toMatch(/swift run NeonDiffDesktopKeychainChecks/);
+    expect(gate).toMatch(/swift build --target NeonDiffDesktopKeychainChecks/);
     expect(gate).not.toMatch(/swift run NeonDiffDesktopCoreChecks/);
+    expect(gate).not.toMatch(/swift run NeonDiffDesktopKeychainChecks/);
     expect(gate).toMatch(/swift build/);
     expect(gate).toMatch(/script\/build_and_run\.sh build/);
     expect(gate).toMatch(/script\/build_and_run\.sh bundle-check/);
@@ -166,6 +167,7 @@ describe("Swift CI velocity policy", () => {
     expect(betaRunbook).toMatch(/preview server\/browser\s+smoke/);
     expect(betaRunbook).toMatch(/Swift desktop gate/);
     expect(betaRunbook).toMatch(/compiles `NeonDiffDesktopCoreChecks`/);
+    expect(betaRunbook).toMatch(/`NeonDiffDesktopKeychainChecks`/);
     expect(betaRunbook).toMatch(/docs\/swift-codeql-policy\.md/);
     expect(betaRunbook).toMatch(/must not contain `swift`/);
     expect(betaRunbook).toMatch(/code-scanning\/default-setup/);
