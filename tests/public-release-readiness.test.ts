@@ -154,19 +154,19 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.updateChannels?.browserDashboard).toMatchObject({
       requiredForThisRelease: true,
       state: "source_checkout",
-      rollback: "npm install -g neondiff@1.0.2",
+      rollback: "git reset --hard refs/tags/v1.0.2",
       rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
       trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
     });
     expect(manifest.updateChannels?.cli).toMatchObject({
       requiredForThisRelease: true,
       state: "source_checkout",
-      rollback: "npm dist-tag add neondiff@1.0.2 latest"
+      rollback: "git reset --hard refs/tags/v1.0.2"
     });
     expect(manifest.updateChannels?.daemon).toMatchObject({
       requiredForThisRelease: true,
       state: "source_checkout",
-      rollback: "npm install -g neondiff@1.0.2"
+      rollback: "git reset --hard refs/tags/v1.0.2"
     });
     expect(manifest.updateChannels?.website).toBeUndefined();
     expect(manifest.updateChannels?.desktop).toBeUndefined();
@@ -298,6 +298,7 @@ describe("NeonDiff public release readiness", () => {
       channels?: Record<string, {
         rollbackRepository?: string;
         rollbackCommand?: string;
+        operatorRollbackCommand?: string;
         rollbackTarget?: string;
         targetVerifiedBy?: string;
         targetVerifiedSha?: string;
@@ -312,6 +313,7 @@ describe("NeonDiff public release readiness", () => {
         cli: {
           rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
           rollbackCommand: manifest.updateChannels?.cli?.rollback,
+          operatorRollbackCommand: "npm dist-tag add neondiff@1.0.2 latest",
           rollbackTarget: "v1.0.2",
           targetVerifiedBy: "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
           targetVerifiedShasum: "d62619b1ee2c539e3230572135a29a299be3a6ed"
@@ -319,6 +321,7 @@ describe("NeonDiff public release readiness", () => {
         browserDashboard: {
           rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
           rollbackCommand: manifest.updateChannels?.browserDashboard?.rollback,
+          operatorRollbackCommand: "npm install -g neondiff@1.0.2",
           rollbackTarget: "v1.0.2",
           targetVerifiedBy: "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
           targetVerifiedShasum: "d62619b1ee2c539e3230572135a29a299be3a6ed"
@@ -326,6 +329,7 @@ describe("NeonDiff public release readiness", () => {
         daemon: {
           rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
           rollbackCommand: manifest.updateChannels?.daemon?.rollback,
+          operatorRollbackCommand: "npm install -g neondiff@1.0.2",
           rollbackTarget: "v1.0.2",
           targetVerifiedBy: "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
           targetVerifiedShasum: "d62619b1ee2c539e3230572135a29a299be3a6ed"
@@ -504,13 +508,13 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NPM_TOKEN Actions secret is not configured; publish cannot continue/);
     expect(publish).toMatch(/npm publish --provenance/);
     expect(releasePolicy).toMatch(/npmTag = packageVersion\.includes\("-"\) \? "beta" : "latest"/);
-    expect(publish).toMatch(/--tag "\$NPM_TAG"/);
     expect(publish).toMatch(/github\.event_name == 'release'/);
     expect(publish).toMatch(/environment:\s*npm-publish/);
     expect(publish).toMatch(/fetch-depth:\s*0/);
     expect(publish).toMatch(/npm-release-policy\.mjs classify/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-git/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-pack/);
+    expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
     expect(releasePolicy).toMatch(/stable npm packages require a non-prerelease GitHub Release/);
     expect(publish).toMatch(/release tag commit must be an ancestor of protected main/i);
     expect(releasePolicy).toMatch(/npm tarball integrity does not match the reviewed pack/);
@@ -523,6 +527,13 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/require\('\.\/package\.json'\)\.version/);
     expect(publish).toMatch(/already exists; verifying reviewed tarball identity/);
     expect(publish).toMatch(/dist-tags\.\$NPM_TAG/);
+    expect(publish).toMatch(/npm publish --provenance --access public --tag "release-candidate"/);
+    expect(publish.indexOf('npm publish --provenance --access public --tag "release-candidate"')).toBeLessThan(
+      publish.indexOf("npm-release-policy.mjs verify-pack")
+    );
+    expect(publish.indexOf("npm-release-policy.mjs verify-pack")).toBeLessThan(
+      publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
+    );
     expect(publish).toMatch(/default:\s*v1\.0\.3/);
     expect(publish).not.toMatch(/default:\s*v0\.4\.30-beta\.1/);
   });

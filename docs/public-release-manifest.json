@@ -101,21 +101,21 @@
       "requiredForThisRelease": true,
       "state": "source_checkout",
       "version": "v1.0.3",
-      "rollback": "npm dist-tag add neondiff@1.0.2 latest",
+      "rollback": "git reset --hard refs/tags/v1.0.2",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "source_checkout",
       "version": "v1.0.3",
-      "rollback": "npm install -g neondiff@1.0.2",
+      "rollback": "git reset --hard refs/tags/v1.0.2",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "browserDashboard": {
       "requiredForThisRelease": true,
       "state": "source_checkout",
       "version": "v1.0.3",
-      "rollback": "npm install -g neondiff@1.0.2",
+      "rollback": "git reset --hard refs/tags/v1.0.2",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
       "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
     }

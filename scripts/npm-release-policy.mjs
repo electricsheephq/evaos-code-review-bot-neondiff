@@ -64,6 +64,28 @@ function classify(args) {
   if (eventName === "release" && releasePrerelease && npmTag === "latest") {
     fail("stable npm packages require a non-prerelease GitHub Release");
   }
+  if (eventName === "workflow_dispatch") {
+    const releaseMetadataPath = args.get("release-metadata");
+    if (!releaseMetadataPath && npmTag === "latest") {
+      fail("manual stable publish requires an existing non-prerelease GitHub Release");
+    }
+    if (!releaseMetadataPath) fail("manual npm publish requires existing GitHub Release metadata");
+    let releaseMetadata;
+    try {
+      releaseMetadata = JSON.parse(readFileSync(releaseMetadataPath, "utf8"));
+    } catch {
+      fail("manual npm publish release metadata is not valid JSON");
+    }
+    if (releaseMetadata.tag_name !== tag || releaseMetadata.draft !== false) {
+      fail("manual npm publish requires matching published GitHub Release metadata");
+    }
+    if (npmTag === "latest" && releaseMetadata.prerelease !== false) {
+      fail("manual stable publish requires an existing non-prerelease GitHub Release");
+    }
+    if (npmTag === "beta" && releaseMetadata.prerelease !== true) {
+      fail("manual beta publish requires an existing prerelease GitHub Release");
+    }
+  }
 
   let shouldPublish = true;
   if (tag !== `v${packageVersion}`) {

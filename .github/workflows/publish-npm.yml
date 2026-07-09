@@ -68,6 +68,11 @@ jobs:
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           RELEASE_LEVEL="$(node -p "require('./docs/public-release-manifest.json').releaseLevel")"
           SKIPPED_VERSIONS="$(node -p "JSON.stringify(require('./docs/public-release-manifest.json').packageArtifact?.skippedPublicPackageVersions ?? [])")"
+          RELEASE_METADATA_ARGS=()
+          if [ "$RELEASE_EVENT_NAME" = "workflow_dispatch" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-metadata.json"
+            RELEASE_METADATA_ARGS=(--release-metadata "$RUNNER_TEMP/release-metadata.json")
+          fi
           node scripts/npm-release-policy.mjs classify \
             --event-name "$RELEASE_EVENT_NAME" \
             --release-prerelease "$RELEASE_PRERELEASE" \
@@ -75,6 +80,7 @@ jobs:
             --package-version "$PACKAGE_VERSION" \
             --release-level "$RELEASE_LEVEL" \
             --skipped-versions-json "$SKIPPED_VERSIONS" \
+            "${RELEASE_METADATA_ARGS[@]}" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Verify npm publish token is configured
@@ -121,7 +127,7 @@ jobs:
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             echo "neondiff@$PACKAGE_VERSION already exists; verifying reviewed tarball identity"
           else
-            npm publish --provenance --access public --tag "$NPM_TAG"
+            npm publish --provenance --access public --tag "release-candidate"
           fi
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
             if npm view "neondiff@$PACKAGE_VERSION" version dist.integrity dist.shasum gitHead --json > remote-package.json 2>/dev/null; then
@@ -140,3 +146,6 @@ jobs:
             --expected-git-head "$EXPECTED_GIT_HEAD"
           npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"
           test "$(npm view neondiff "dist-tags.$NPM_TAG")" = "$PACKAGE_VERSION"
+          if [ "$(npm view neondiff dist-tags.release-candidate 2>/dev/null || true)" = "$PACKAGE_VERSION" ]; then
+            npm dist-tag rm neondiff release-candidate
+          fi

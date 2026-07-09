@@ -360,19 +360,19 @@ describe("beta release status", () => {
           name: "cli",
           requiredForThisRelease: true,
           state: "source_checkout",
-          rollback: "npm dist-tag add neondiff@1.0.2 latest"
+          rollback: "git reset --hard refs/tags/v1.0.2"
         }),
         expect.objectContaining({
           name: "daemon",
           requiredForThisRelease: true,
           state: "source_checkout",
-          rollback: "npm install -g neondiff@1.0.2"
+          rollback: "git reset --hard refs/tags/v1.0.2"
         }),
         expect.objectContaining({
           name: "browserDashboard",
           requiredForThisRelease: true,
           state: "source_checkout",
-          rollback: "npm install -g neondiff@1.0.2",
+          rollback: "git reset --hard refs/tags/v1.0.2",
           rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff"
         })
       ])
@@ -526,7 +526,7 @@ describe("beta release status", () => {
       healthState: status.ok ? "runtime_ok" : "runtime_blocked",
       runtimeOk: status.ok
     });
-    expect(redactedOutput).toContain("npm dist-tag add neondiff@1.0.2 latest");
+    expect(redactedOutput).toContain("git reset --hard refs/tags/v1.0.2");
     expect(redactedOutput).toContain("cli=source_checkout; daemon=source_checkout");
     expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327");
     expect(redactedOutput).toContain("electricsheephq/evaos-code-review-bot-neondiff/issues/443");

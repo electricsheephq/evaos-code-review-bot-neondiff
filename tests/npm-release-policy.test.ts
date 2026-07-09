@@ -45,6 +45,43 @@ describe("npm release policy", () => {
     expect(JSON.parse(output)).toEqual({ shouldPublish: true, npmTag: "latest" });
   });
 
+  it("requires manual stable retries to prove an existing non-prerelease GitHub Release", () => {
+    const result = spawnSync(process.execPath, [
+      policyScript,
+      "classify",
+      "--event-name", "workflow_dispatch",
+      "--release-prerelease", "false",
+      "--tag", "v1.0.3",
+      "--package-version", "1.0.3",
+      "--release-level", "stable",
+      "--skipped-versions-json", "[]"
+    ], { encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("manual stable publish requires an existing non-prerelease GitHub Release");
+  });
+
+  it("accepts a manual stable retry only with matching published release metadata", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-manual-release-metadata-"));
+    roots.push(root);
+    const metadataPath = join(root, "release.json");
+    writeFileSync(metadataPath, JSON.stringify({ tag_name: "v1.0.3", draft: false, prerelease: false }));
+
+    const output = execFileSync(process.execPath, [
+      policyScript,
+      "classify",
+      "--event-name", "workflow_dispatch",
+      "--release-prerelease", "false",
+      "--tag", "v1.0.3",
+      "--package-version", "1.0.3",
+      "--release-level", "stable",
+      "--skipped-versions-json", "[]",
+      "--release-metadata", metadataPath
+    ], { encoding: "utf8" });
+
+    expect(JSON.parse(output)).toEqual({ shouldPublish: true, npmTag: "latest" });
+  });
+
   it("requires the release tag and declared candidate to be ancestors of protected main", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-npm-release-policy-"));
     roots.push(root);

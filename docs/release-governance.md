@@ -182,6 +182,19 @@ kickstart` alone is a restart, not a rollback. `git checkout` detaches HEAD or
 resets the working tree; it is not accepted as a release rollback for this
 manifest gate.
 
+Run a manifest `git reset --hard refs/tags/<tag>` only in an isolated recovery
+checkout. Never reset protected `main` or a maintainer's active worktree. Public
+npm rollback is a separate operator action: move the stable dist-tag to the
+verified prior package, reinstall that package on affected hosts, restart the
+host-specific daemon/dashboard, and preserve the immutable release tag and
+package as incident provenance.
+
+Stable npm publication uses a quarantine dist-tag first. Verify the registry
+integrity, shasum, and `gitHead` against the reviewed pack and annotated tag,
+then promote the package to `latest`. Manual retry runs must resolve the exact
+existing GitHub Release and prove it is published and non-prerelease before
+promotion.
+
 ## Tag And Release
 
 Create an annotated tag from the merged source SHA:

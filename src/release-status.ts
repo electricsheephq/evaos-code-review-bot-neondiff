@@ -885,10 +885,6 @@ function checkRollbackCommand(
   if (resetTarget) return checkRollbackTarget(resetTarget, options);
   const revertTarget = command.match(/^git\s+revert\s+(?:--no-edit\s+)?([^\s;&|]+)$/)?.[1];
   if (revertTarget) return checkRollbackTarget(revertTarget, options);
-  const npmDistTagVersion = command.match(/^npm\s+dist-tag\s+add\s+neondiff@([^\s;&|]+)\s+latest$/)?.[1];
-  if (npmDistTagVersion && isSemver(npmDistTagVersion)) return { ok: true, missingMetadata: "rollback command" };
-  const npmInstallVersion = command.match(/^npm\s+install\s+-g\s+neondiff@([^\s;&|]+)$/)?.[1];
-  if (npmInstallVersion && isSemver(npmInstallVersion)) return { ok: true, missingMetadata: "rollback command" };
   return { ok: false, missingMetadata: "rollback command" };
 }
 

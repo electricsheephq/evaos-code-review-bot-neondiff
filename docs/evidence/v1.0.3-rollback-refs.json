@@ -5,21 +5,24 @@
   "channels": {
     "cli": {
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
-      "rollbackCommand": "npm dist-tag add neondiff@1.0.2 latest",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "operatorRollbackCommand": "npm dist-tag add neondiff@1.0.2 latest",
       "rollbackTarget": "v1.0.2",
       "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
       "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
     },
     "daemon": {
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
-      "rollbackCommand": "npm install -g neondiff@1.0.2",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "operatorRollbackCommand": "npm install -g neondiff@1.0.2",
       "rollbackTarget": "v1.0.2",
       "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
       "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
     },
     "browserDashboard": {
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
-      "rollbackCommand": "npm install -g neondiff@1.0.2",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "operatorRollbackCommand": "npm install -g neondiff@1.0.2",
       "rollbackTarget": "v1.0.2",
       "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
       "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
@@ -34,5 +37,5 @@
       "targetSubject": "v1.0.3 keeps the previously published website installer; npm latest promotion supplies the new package version."
     }
   },
-  "proofBoundary": "npm is immutable: rollback moves latest to v1.0.2 and reinstalls v1.0.2 for affected local daemon/dashboard surfaces. The v1.0.3 package and tag remain as incident provenance. v1.0.3 does not advance the website channel, so website rollback is intentionally no-op."
+  "proofBoundary": "Manifest rollbackCommand values are source-checkout revert references for an isolated recovery checkout and must not reset protected main. npm is immutable: operator rollback moves latest to v1.0.2 and reinstalls v1.0.2 for affected local daemon/dashboard surfaces. The v1.0.3 package and tag remain as incident provenance. v1.0.3 does not advance the website channel, so website rollback is intentionally no-op."
 }
