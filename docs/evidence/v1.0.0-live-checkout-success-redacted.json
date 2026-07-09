@@ -12,7 +12,8 @@
   },
   "webhook": {
     "eventType": "checkout.session.completed",
-    "deliveryProof": "stripe_style_signed_replay_after_schema_fix",
+    "deliveryProof": "stripe_style_signed_replay_after_schema_fix_not_original_live_delivery",
+    "originalLiveDeliveryProof": "not_claimed",
     "statusCode": 200,
     "responseBody": "{\"received\":true}",
     "responseBodySha256": "332ddb00d111581386a54b79f7f57765ffc70cf17001c124c3db983a6e7d131b"
@@ -36,5 +37,5 @@
     "stripeEventId": "redacted",
     "customerAddress": "redacted"
   },
-  "proofBoundary": "Proves the live QA checkout success handoff and current deployed webhook fulfillment path without publishing raw credentials, customer-sensitive payloads, or operator-local scratch paths."
+  "proofBoundary": "Proves the owner-approved live QA checkout reached a redacted success page and the current deployed webhook fulfillment path accepted a Stripe-style signed replay after the schema fix. It does not claim the original in-flight Stripe delivery was accepted before the schema fix, and it does not publish raw credentials, customer-sensitive payloads, or operator-local scratch paths."
 }

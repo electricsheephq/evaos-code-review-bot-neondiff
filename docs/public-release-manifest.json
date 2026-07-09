@@ -105,7 +105,7 @@
     },
     "daemon": {
       "requiredForThisRelease": true,
-      "state": "launchd_prerelease",
+      "state": "published",
       "version": "v1.0.0",
       "rollback": "git reset --hard refs/tags/v0.4.46-beta.1"
     },

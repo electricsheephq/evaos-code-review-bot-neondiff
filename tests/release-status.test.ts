@@ -510,7 +510,7 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({
       name: "public_update_channels",
       ok: true,
-      detail: "cli=published; daemon=launchd_prerelease; browserDashboard=published; website=published"
+      detail: "cli=published; daemon=published; browserDashboard=published; website=published"
     });
     const redactedOutput = stringifyRedactedJson({
       ...status,
@@ -518,7 +518,7 @@ describe("beta release status", () => {
       runtimeOk: status.ok
     });
     expect(redactedOutput).toContain("git reset --hard refs/tags/v0.4.46-beta.1");
-    expect(redactedOutput).toContain("cli=published; daemon=launchd_prerelease");
+    expect(redactedOutput).toContain("cli=published; daemon=published");
     expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327");
     expect(redactedOutput).toContain("electricsheephq/neon-diff-agent-website");
   });

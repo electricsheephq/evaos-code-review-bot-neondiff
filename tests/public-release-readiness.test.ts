@@ -158,6 +158,10 @@ describe("NeonDiff public release readiness", () => {
       requiredForThisRelease: true,
       state: "published"
     });
+    expect(manifest.updateChannels?.daemon).toMatchObject({
+      requiredForThisRelease: true,
+      state: "published"
+    });
     expect(manifest.updateChannels?.website).toMatchObject({
       requiredForThisRelease: true,
       state: "published",
@@ -254,14 +258,23 @@ describe("NeonDiff public release readiness", () => {
       evidenceKind?: string;
       releaseVersion?: string;
       checkout?: { rawCheckoutSessionRedacted?: boolean };
-      webhook?: { statusCode?: number; responseBody?: string; responseBodySha256?: string };
+      webhook?: {
+        deliveryProof?: string;
+        originalLiveDeliveryProof?: string;
+        statusCode?: number;
+        responseBody?: string;
+        responseBodySha256?: string;
+      };
       successPage?: { hasLicenseActive?: boolean; hasCopyButton?: boolean; hasError?: boolean; url?: string };
+      proofBoundary?: string;
     };
     expect(liveCheckoutProof).toMatchObject({
       evidenceKind: "live_checkout_success_redacted",
       releaseVersion: "v1.0.0",
       checkout: { rawCheckoutSessionRedacted: true },
       webhook: {
+        deliveryProof: "stripe_style_signed_replay_after_schema_fix_not_original_live_delivery",
+        originalLiveDeliveryProof: "not_claimed",
         statusCode: 200,
         responseBody: "{\"received\":true}"
       },
@@ -275,6 +288,7 @@ describe("NeonDiff public release readiness", () => {
     expect(createHash("sha256").update(liveCheckoutProof.webhook?.responseBody ?? "").digest("hex")).toBe(
       liveCheckoutProof.webhook?.responseBodySha256
     );
+    expect(liveCheckoutProof.proofBoundary).toContain("does not claim the original in-flight Stripe delivery");
     expect(JSON.stringify(liveCheckoutProof)).not.toMatch(/cs_live_|evt_|whsec_|nd_live_[A-Za-z0-9]|session_id=|fulfillment_token=|121 South/i);
 
     const rollbackProof = JSON.parse(read("docs/evidence/v1.0.0-rollback-refs.json")) as {
@@ -284,6 +298,8 @@ describe("NeonDiff public release readiness", () => {
         rollbackRepository?: string;
         rollbackCommand?: string;
         rollbackTarget?: string;
+        targetVerifiedBy?: string;
+        targetVerifiedSha?: string;
         targetUrl?: string;
       }>;
     };
@@ -294,16 +310,21 @@ describe("NeonDiff public release readiness", () => {
         browserDashboard: {
           rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
           rollbackCommand: manifest.updateChannels?.browserDashboard?.rollback,
-          rollbackTarget: "74d133ff34935510c45a4a74a664b8b30dca52d8"
+          rollbackTarget: "74d133ff34935510c45a4a74a664b8b30dca52d8",
+          targetVerifiedBy: "git cat-file -e 74d133ff34935510c45a4a74a664b8b30dca52d8^{commit}",
+          targetVerifiedSha: "74d133ff34935510c45a4a74a664b8b30dca52d8"
         },
         website: {
           rollbackRepository: "electricsheephq/neon-diff-agent-website",
           rollbackCommand: manifest.updateChannels?.website?.rollback,
           rollbackTarget: "6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+          targetVerifiedBy: "gh api repos/electricsheephq/neon-diff-agent-website/commits/6b670d00cd587fb7d564347b6bc0d4d3e8d13186 --jq .sha",
+          targetVerifiedSha: "6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
           targetUrl: "https://github.com/electricsheephq/neon-diff-agent-website/commit/6b670d00cd587fb7d564347b6bc0d4d3e8d13186"
         }
       }
     });
+    expect(JSON.stringify(rollbackProof)).not.toContain("<sha>");
   });
 
   it("ships the canonical install script contract", () => {
