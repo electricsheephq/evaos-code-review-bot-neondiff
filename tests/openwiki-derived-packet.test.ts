@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,14 +37,15 @@ describe("OpenWiki-derived repo-wiki packets", () => {
       degraded: false
     });
     expect(packet.includedSections.map((section) => section.id)).toEqual(["quickstart"]);
-    expect(packet.includedSections[0]?.sourceFiles).toEqual([
+    const section = packet.includedSections[0];
+    expect(section?.sourceFiles).toEqual([
       "README.md",
       "openwiki/quickstart.md",
       "src/worker.ts"
     ]);
-    expect(packet.includedSections[0]?.body).toContain("[redacted-secret]");
-    expect(packet.includedSections[0]?.body).not.toContain("OPENROUTER_API_KEY");
-    expect(packet.includedSections[0]?.sourceSha).toMatch(/^[a-f0-9]{64}$/);
+    expect(section?.body).toContain("[redacted-secret]");
+    expect(section?.body).not.toContain("OPENROUTER_API_KEY");
+    expect(section?.sourceSha).toBe(sha256(section?.body ?? ""));
 
     mkdirSync(join(root, ".neondiff"), { recursive: true });
     writeFileSync(join(root, ".neondiff", "repo-wiki-packet.json"), formatRepoWikiPacketJson(packet));
@@ -171,6 +173,26 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(packet.degraded).toBe(true);
   });
 
+  it("marks packets stale when untracked non-openwiki files exist", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, "docs", "new-guide.md"), "# New Guide\n", "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "Repository has non-openwiki worktree changes; regenerate OpenWiki before building a packet."
+    });
+  });
+
   it("fails closed when git status cannot be read", () => {
     const { head, root } = createRepoWithOpenWiki();
     roots.push(root);
@@ -259,4 +281,8 @@ function createRepoWithOpenWiki(options: { metadataHead?: string; openWikiBody?:
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function sha256(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
 }
