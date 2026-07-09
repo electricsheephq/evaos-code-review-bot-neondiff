@@ -15,7 +15,8 @@ const DEFAULT_MAX_PACKET_BYTES = 12_000;
 const GIT_COMMAND_TIMEOUT_MS = 5_000;
 const REPO_PATH_EXTENSION_PATTERN = /\.(?:[cm]?[jt]sx?|mdx?|json|ya?ml|toml|lock|css|scss|html?|sh|bash|zsh|py|go|rs|swift|kt|java|rb|php|sql|txt)$/i;
 const ENV_NAME_TOKEN_PATTERN = /\b[A-Za-z][A-Za-z0-9_-]{1,80}\b/g;
-const ENV_ASSIGNMENT_PATTERN = /\b([A-Za-z][A-Za-z0-9_-]{1,80})\b\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{8,}["']?/g;
+const ENV_ASSIGNMENT_PATTERN = /\b([A-Za-z][A-Za-z0-9_-]{1,80})\b\s*[:=]\s*(?:"[^"\r\n]{0,256}"|'[^'\r\n]{0,256}'|[^\r\n]{1,256})/g;
+const REDACTION_SENTINEL = "\0OPENWIKI_REDACTED\0";
 const SENSITIVE_SEGMENTS = new Set(["token", "secret", "password", "cookie", "session"]);
 const SENSITIVE_PAIR_SUFFIXES = new Set([
   "api_key",
@@ -52,13 +53,15 @@ interface OpenWikiMetadata {
 
 export function buildOpenWikiDerivedRepoWikiPacket(input: BuildOpenWikiDerivedRepoWikiPacketInput): RepoWikiPacket {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
-  const headSha = input.headSha ?? readGit(input.worktreePath, ["rev-parse", "HEAD"]);
+  const headShaResult = input.headSha === undefined ? readGitResult(input.worktreePath, ["rev-parse", "HEAD"]) : undefined;
+  const headSha = input.headSha ?? (headShaResult?.ok ? headShaResult.stdout.trim() : undefined);
   const defaultBranch = input.defaultBranch ?? readDefaultBranch(input.worktreePath);
   const openWiki = readOpenWikiSections(input.worktreePath);
   const source = resolveSourceFreshness({
     worktreePath: input.worktreePath,
     generatedAt,
     headSha,
+    ...(headShaResult && !headShaResult.ok ? { headShaError: "Unable to read git HEAD; regenerate OpenWiki before building a packet." } : {}),
     defaultBranch,
     metadata: readOpenWikiMetadata(input.worktreePath),
     sectionCount: openWiki.sections.length,
@@ -80,6 +83,7 @@ function resolveSourceFreshness(input: {
   worktreePath: string;
   generatedAt: string;
   headSha?: string;
+  headShaError?: string;
   defaultBranch?: string;
   metadata: OpenWikiMetadata | undefined;
   sectionCount: number;
@@ -110,6 +114,13 @@ function resolveSourceFreshness(input: {
       ...base,
       status: "stale",
       staleReason: "Some OpenWiki Markdown files exceeded the safe read limit and were omitted."
+    };
+  }
+  if (input.headShaError) {
+    return {
+      ...base,
+      status: "stale",
+      staleReason: input.headShaError
     };
   }
   const dirtyStatus = readDirtyWorktreePaths(input.worktreePath);
@@ -305,13 +316,13 @@ function redactSensitiveEnvNames(input: string): { text: string; replacementCoun
   const withAssignmentsRedacted = input.replace(ENV_ASSIGNMENT_PATTERN, (match, envName: string) => {
     if (!isSensitiveEnvName(envName)) return match;
     replacementCount += 1;
-    return "[redacted-secret]";
+    return REDACTION_SENTINEL;
   });
   const text = withAssignmentsRedacted.replace(ENV_NAME_TOKEN_PATTERN, (match) => {
     if (!isSensitiveEnvName(match)) return match;
     replacementCount += 1;
-    return "[redacted-secret]";
-  });
+    return REDACTION_SENTINEL;
+  }).replaceAll(REDACTION_SENTINEL, "[redacted-secret]");
   return {
     text,
     replacementCount
@@ -323,7 +334,7 @@ function isSensitiveEnvName(name: string): boolean {
   if (SENSITIVE_CAMEL_SUFFIXES.some((suffix) => name === lowerFirst(suffix) || name.endsWith(suffix))) {
     return true;
   }
-  const parts = name.toLowerCase().replace(/-/g, "_").split("_").filter(Boolean);
+  const parts = name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().replace(/-/g, "_").split("_").filter(Boolean);
   if (parts.length < 2) return false;
   if (SENSITIVE_PAIR_SUFFIXES.has(parts.slice(-2).join("_"))) return true;
   return parts.some((part) => SENSITIVE_SEGMENTS.has(part));

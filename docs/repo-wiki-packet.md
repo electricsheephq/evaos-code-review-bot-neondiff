@@ -60,9 +60,10 @@ secret-like environment variable names before packet construction.
 
 Freshness is source-backed: the packet is `fresh` only when
 `openwiki/.last-update.json` records the current head SHA and the worktree has no
-non-`openwiki/**` changes. Missing or mismatched metadata produces stale or
-missing degraded packets, which the runtime omits unless stale context is
-explicitly allowed.
+non-`openwiki/**` changes. The packet's own `.neondiff/**` output artifacts are
+excluded from this dirty-worktree check so reruns do not make themselves stale.
+Missing or mismatched metadata produces stale or missing degraded packets, which
+the runtime omits unless stale context is explicitly allowed.
 
 ## Budgets And Redaction
 
