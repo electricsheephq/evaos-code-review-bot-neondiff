@@ -273,6 +273,34 @@ describe("NeonDiff public release readiness", () => {
       liveCheckoutProof.webhook?.responseBodySha256
     );
     expect(JSON.stringify(liveCheckoutProof)).not.toMatch(/cs_live_|evt_|whsec_|nd_live_[A-Za-z0-9]|session_id=|fulfillment_token=|121 South/i);
+
+    const rollbackProof = JSON.parse(read("docs/evidence/v1.0.0-rollback-refs.json")) as {
+      evidenceKind?: string;
+      releaseVersion?: string;
+      channels?: Record<string, {
+        rollbackRepository?: string;
+        rollbackCommand?: string;
+        rollbackTarget?: string;
+        targetUrl?: string;
+      }>;
+    };
+    expect(rollbackProof).toMatchObject({
+      evidenceKind: "release_rollback_refs",
+      releaseVersion: "v1.0.0",
+      channels: {
+        browserDashboard: {
+          rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
+          rollbackCommand: manifest.updateChannels?.browserDashboard?.rollback,
+          rollbackTarget: "74d133ff34935510c45a4a74a664b8b30dca52d8"
+        },
+        website: {
+          rollbackRepository: "electricsheephq/neon-diff-agent-website",
+          rollbackCommand: manifest.updateChannels?.website?.rollback,
+          rollbackTarget: "6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+          targetUrl: "https://github.com/electricsheephq/neon-diff-agent-website/commit/6b670d00cd587fb7d564347b6bc0d4d3e8d13186"
+        }
+      }
+    });
   });
 
   it("ships the canonical install script contract", () => {

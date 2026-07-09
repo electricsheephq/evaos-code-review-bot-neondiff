@@ -1,0 +1,23 @@
+{
+  "evidenceKind": "release_rollback_refs",
+  "releaseVersion": "v1.0.0",
+  "observedAt": "2026-07-09T09:45:00.000Z",
+  "channels": {
+    "browserDashboard": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git revert 74d133ff34935510c45a4a74a664b8b30dca52d8",
+      "rollbackTarget": "74d133ff34935510c45a4a74a664b8b30dca52d8",
+      "targetVerifiedBy": "git cat-file -e <sha>^{commit}",
+      "targetSubject": "docs: tighten GA dashboard launch setup (#462)"
+    },
+    "website": {
+      "rollbackRepository": "electricsheephq/neon-diff-agent-website",
+      "rollbackCommand": "git revert 6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      "rollbackTarget": "6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      "targetVerifiedBy": "gh api repos/electricsheephq/neon-diff-agent-website/commits/<sha>",
+      "targetUrl": "https://github.com/electricsheephq/neon-diff-agent-website/commit/6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      "targetSubject": "fix: support custom Stripe webhook secret (#35)"
+    }
+  },
+  "proofBoundary": "Rollback refs are repo-scoped. Website rollback must be run from the website repo, not from the NeonDiff product checkout."
+}
