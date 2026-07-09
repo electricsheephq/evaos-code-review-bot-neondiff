@@ -41,7 +41,8 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(job?.defaults?.run?.["working-directory"]).toBe("apps/neondiff-desktop");
 
     for (const command of [
-      "swift run NeonDiffDesktopCoreChecks",
+      "swift build --target NeonDiffDesktopCoreChecks",
+      "swift run NeonDiffDesktopKeychainChecks",
       "swift run NeonDiffDesktopAppcastChecks",
       "script/build_and_run.sh build",
       "script/build_and_run.sh bundle-check",
@@ -51,8 +52,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     }
 
     expect(workflow).not.toContain("NeonDiffDesktopCoreSmoke");
+    expect(workflow).not.toContain("swift run NeonDiffDesktopCoreChecks");
     expect(workflow).toContain("unsigned");
-    expect(workflow).toMatch(/hosted-runner-safe core checks/);
+    expect(workflow).toMatch(/hosted-runner-safe Keychain checks/);
     expect(workflow).toMatch(/persist-credentials:\s*false/);
     expect(workflow).toMatch(/SOURCE_SHA:/);
     expect(workflow).toMatch(/SOURCE_REF:/);
@@ -120,6 +122,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(docs).toMatch(/non-release proof/i);
     expect(docs).toMatch(/customer-not-ready/i);
     expect(docs).toMatch(/NeonDiffDesktopCoreChecks/);
+    expect(docs).toMatch(/NeonDiffDesktopKeychainChecks/);
     expect(docs).toMatch(/Keychain/i);
     expect(docs).toMatch(/artifact_sha256/i);
     expect(docs).toMatch(/bundle_id/i);

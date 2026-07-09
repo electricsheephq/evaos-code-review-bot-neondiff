@@ -26,8 +26,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run desktop core checks
-        run: swift run NeonDiffDesktopCoreChecks
+      - name: Build desktop core checks
+        run: swift build --target NeonDiffDesktopCoreChecks
+
+      - name: Run desktop Keychain checks
+        run: swift run NeonDiffDesktopKeychainChecks
 
       - name: Run desktop appcast checks
         run: swift run NeonDiffDesktopAppcastChecks
@@ -45,7 +48,7 @@ jobs:
           NEONDIFF_DESKTOP_ARTIFACT_CLASSIFICATION: unsigned-desktop-release-smoke
           NEONDIFF_DESKTOP_UI_LAUNCH: "false"
           NEONDIFF_DESKTOP_VISUAL_SMOKE_REQUIRED: "true"
-          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release app bundle build, hosted-runner-safe core checks, appcast checks, bundle structure check, artifact checksum, and metadata only
+          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release app bundle build, hosted-runner-safe Keychain checks, appcast checks, bundle structure check, artifact checksum, and metadata only
         run: script/release-proof.sh
 
       - name: Upload unsigned app bundle
