@@ -51,6 +51,8 @@ describe("NeonDiff public release readiness", () => {
       updateChannels?: Record<string, {
         requiredForThisRelease?: boolean;
         state?: string;
+        rollback?: string;
+        rollbackRepository?: string;
         trackingIssue?: string;
       }>;
     };
@@ -100,7 +102,7 @@ describe("NeonDiff public release readiness", () => {
       name: "neondiff",
       version: "1.0.0",
       requiredForThisRelease: true,
-      state: "pending_publish_after_merge",
+      state: "published",
       previousReleasedPackageVersion: "0.4.30-beta.1"
     });
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.29-beta.1");
@@ -148,7 +150,19 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.updateChannels?.browserDashboard).toMatchObject({
       requiredForThisRelease: true,
       state: "published",
+      rollback: "git revert 74d133ff34935510c45a4a74a664b8b30dca52d8",
+      rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
       trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
+    });
+    expect(manifest.updateChannels?.cli).toMatchObject({
+      requiredForThisRelease: true,
+      state: "published"
+    });
+    expect(manifest.updateChannels?.website).toMatchObject({
+      requiredForThisRelease: true,
+      state: "published",
+      rollback: "git revert 6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      rollbackRepository: "electricsheephq/neon-diff-agent-website"
     });
     expect(manifest.updateChannels?.desktop).toBeUndefined();
   });
@@ -232,6 +246,33 @@ describe("NeonDiff public release readiness", () => {
       }
     });
     expect(JSON.stringify(authenticatedProof)).not.toMatch(/licenseKey|Bearer |LICENSE_ISSUANCE_SECRET/);
+
+    const liveCheckoutProof = JSON.parse(read("docs/evidence/v1.0.0-live-checkout-success-redacted.json")) as {
+      evidenceKind?: string;
+      releaseVersion?: string;
+      checkout?: { rawCheckoutSessionRedacted?: boolean };
+      webhook?: { statusCode?: number; responseBody?: string; responseBodySha256?: string };
+      successPage?: { hasLicenseActive?: boolean; hasCopyButton?: boolean; hasError?: boolean; url?: string };
+    };
+    expect(liveCheckoutProof).toMatchObject({
+      evidenceKind: "live_checkout_success_redacted",
+      releaseVersion: "v1.0.0",
+      checkout: { rawCheckoutSessionRedacted: true },
+      webhook: {
+        statusCode: 200,
+        responseBody: "{\"received\":true}"
+      },
+      successPage: {
+        hasLicenseActive: true,
+        hasCopyButton: true,
+        hasError: false,
+        url: "REDACTED_SUCCESS_URL_WITH_ONE_SHOT_TOKEN"
+      }
+    });
+    expect(createHash("sha256").update(liveCheckoutProof.webhook?.responseBody ?? "").digest("hex")).toBe(
+      liveCheckoutProof.webhook?.responseBodySha256
+    );
+    expect(JSON.stringify(liveCheckoutProof)).not.toMatch(/cs_live_|evt_|whsec_|nd_live_[A-Za-z0-9]|session_id=|fulfillment_token=|121 South/i);
   });
 
   it("ships the canonical install script contract", () => {
@@ -271,6 +312,7 @@ describe("NeonDiff public release readiness", () => {
     expect(docs).toContain("git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git");
     expect(legacyRepoReferences).toEqual([]);
     expect(docs).not.toMatch(/npm link installs the local source-checkout shim/i);
+    expect(read("docs/releases/v1.0.0.md")).not.toMatch(/\/Volumes\/LEXAR|\/Users\/lume/);
   });
 
   it("keeps the GitHub Marketplace free-listing packet bounded to discoverability", () => {
@@ -320,7 +362,9 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/id-token:\s*write/);
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/npm publish --provenance/);
-    expect(publish).toMatch(/--tag beta/);
+    expect(publish).toMatch(/NPM_TAG="beta"/);
+    expect(publish).toMatch(/NPM_TAG="latest"/);
+    expect(publish).toMatch(/--tag "\$\{\{\s*steps\.package_release\.outputs\.npm_tag\s*\}\}"/);
     expect(publish).toMatch(/github\.event_name == 'release'/);
     expect(publish).not.toMatch(/github\.event\.release\.prerelease\s*==\s*true/);
     expect(publish).toMatch(/Classify npm package release/);
@@ -331,5 +375,6 @@ describe("NeonDiff public release readiness", () => {
     expect(publish.match(/if: steps\.package_release\.outputs\.should_publish == 'true'/g)).toHaveLength(5);
     expect(publish).toMatch(/require\('\.\/package\.json'\)\.version/);
     expect(publish).toMatch(/already exists; verifying dist-tags/);
+    expect(publish).toMatch(/dist-tags\.\$\{\{\s*steps\.package_release\.outputs\.npm_tag\s*\}\}/);
   });
 });

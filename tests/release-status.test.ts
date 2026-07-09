@@ -510,7 +510,7 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({
       name: "public_update_channels",
       ok: true,
-      detail: "cli=source_checkout; daemon=launchd_prerelease; browserDashboard=published; website=published"
+      detail: "cli=published; daemon=launchd_prerelease; browserDashboard=published; website=published"
     });
     const redactedOutput = stringifyRedactedJson({
       ...status,
@@ -518,8 +518,9 @@ describe("beta release status", () => {
       runtimeOk: status.ok
     });
     expect(redactedOutput).toContain("git reset --hard refs/tags/v0.4.46-beta.1");
-    expect(redactedOutput).toContain("cli=source_checkout; daemon=launchd_prerelease");
+    expect(redactedOutput).toContain("cli=published; daemon=launchd_prerelease");
     expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327");
+    expect(redactedOutput).toContain("electricsheephq/neon-diff-agent-website");
   });
 
   it("fails closed without throwing when collectReleaseStatus receives a missing public manifest path", () => {

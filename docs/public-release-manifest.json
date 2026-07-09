@@ -5,7 +5,7 @@
     "name": "neondiff",
     "version": "1.0.0",
     "requiredForThisRelease": true,
-    "state": "pending_publish_after_merge",
+    "state": "published",
     "previousReleasedPackageVersion": "0.4.30-beta.1",
     "skippedPublicPackageVersions": [
       "v0.4.25-beta.1",
@@ -30,7 +30,7 @@
       "v0.4.45-beta.1",
       "v0.4.46-beta.1"
     ],
-    "note": "v1.0.0 is the first GA npm package cut after the source/local-worker beta train; publish after this metadata PR merges, then move npm latest to 1.0.0."
+    "note": "v1.0.0 is the first GA npm package cut after the source/local-worker beta train; the non-prerelease GitHub Release publishes the package with the npm latest dist-tag."
   },
   "source": {
     "shaState": "pending_tag_stamp",
@@ -99,7 +99,7 @@
   "updateChannels": {
     "cli": {
       "requiredForThisRelease": true,
-      "state": "source_checkout",
+      "state": "published",
       "version": "v1.0.0",
       "rollback": "git reset --hard refs/tags/v0.4.46-beta.1"
     },
@@ -114,13 +114,15 @@
       "state": "published",
       "version": "v1.0.0",
       "rollback": "git revert 74d133ff34935510c45a4a74a664b8b30dca52d8",
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
       "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
     },
     "website": {
       "requiredForThisRelease": true,
       "state": "published",
       "version": "v1.0.0",
-      "rollback": "git revert bb39b6491f74bc6a01d2094a5a309542aaf944c2",
+      "rollback": "git revert 6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      "rollbackRepository": "electricsheephq/neon-diff-agent-website",
       "trackingIssue": "https://github.com/electricsheephq/neon-diff-agent-website/issues/22"
     }
   }

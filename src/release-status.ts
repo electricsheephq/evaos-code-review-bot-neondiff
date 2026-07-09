@@ -155,6 +155,7 @@ export interface PublicReleaseChannelStatus {
   requiredForThisRelease: boolean;
   version?: string;
   rollback?: string;
+  rollbackRepository?: string;
   trackingIssue?: string;
   detail: string;
 }
@@ -834,6 +835,7 @@ function buildPublicReleaseChannelStatus(
     (readBoolean(channel.requiredForThisRelease) ?? true);
   const version = readString(channel.version);
   const rollback = readString(channel.rollback);
+  const rollbackRepository = readString(channel.rollbackRepository);
   const trackingIssue = readString(channel.trackingIssue);
   const stateOk = isUpdateChannelStateAcceptable(name, state, requiredForThisRelease);
   const rollbackCheck = rollback ? checkRollbackCommand(rollback, options) : { ok: false, missingMetadata: "rollback command" };
@@ -850,6 +852,7 @@ function buildPublicReleaseChannelStatus(
     requiredForThisRelease,
     version,
     rollback,
+    rollbackRepository,
     trackingIssue,
     detail: ok
       ? `${name} state ${state}; requiredForThisRelease=${requiredForThisRelease}`

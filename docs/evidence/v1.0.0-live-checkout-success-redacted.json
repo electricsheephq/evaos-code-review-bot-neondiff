@@ -1,0 +1,40 @@
+{
+  "evidenceKind": "live_checkout_success_redacted",
+  "releaseVersion": "v1.0.0",
+  "observedAt": "2026-07-09T09:35:51.348Z",
+  "checkout": {
+    "mode": "live",
+    "lookupKey": "neondiff_monthly",
+    "promoCode": "NEONDIFF-QA25",
+    "discount": "100_percent_qa",
+    "submittedWithOwnerApprovedQaIdentity": true,
+    "rawCheckoutSessionRedacted": true
+  },
+  "webhook": {
+    "eventType": "checkout.session.completed",
+    "deliveryProof": "stripe_style_signed_replay_after_schema_fix",
+    "statusCode": 200,
+    "responseBody": "{\"received\":true}",
+    "responseBodySha256": "332ddb00d111581386a54b79f7f57765ffc70cf17001c124c3db983a6e7d131b"
+  },
+  "successPage": {
+    "path": "/checkout/success",
+    "title": "Purchase complete — NeonDiff",
+    "hasBuyerEmail": true,
+    "hasCopyButton": true,
+    "hasError": false,
+    "hasGithub": true,
+    "hasLicenseActive": true,
+    "hasLicenseLike": true,
+    "url": "REDACTED_SUCCESS_URL_WITH_ONE_SHOT_TOKEN"
+  },
+  "redaction": {
+    "rawLicenseKey": "redacted",
+    "fulfillmentToken": "redacted",
+    "webhookSigningSecret": "redacted",
+    "checkoutSessionId": "redacted",
+    "stripeEventId": "redacted",
+    "customerAddress": "redacted"
+  },
+  "proofBoundary": "Proves the live QA checkout success handoff and current deployed webhook fulfillment path without publishing raw credentials, customer-sensitive payloads, or operator-local scratch paths."
+}
