@@ -3,6 +3,8 @@
   "releaseVersion": "v1.0.3",
   "observedAt": "2026-07-09T20:56:23Z",
   "sourceHead": "b22b81ca85a41abe888f3054eea25bb397d08d68",
+  "sourceCommitUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/commit/b22b81ca85a41abe888f3054eea25bb397d08d68",
+  "sourceReachability": "public_commit_api",
   "mergedCandidateHead": "bcd2f7ace5b190dc86b5f86983aa62aae5e40652",
   "bundleId": "com.electricsheephq.NeonDiffDesktop",
   "binarySha256": "575d2b5ed97d81a869a5cbedfc16d1abbd07ee17f075f3f3e6184b2413f9f8d6",

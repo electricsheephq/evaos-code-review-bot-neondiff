@@ -131,14 +131,18 @@ jobs:
           else
             npm publish --provenance --access public --tag "release-candidate"
           fi
+          rm -f remote-package.json registry-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if npm view "neondiff@$PACKAGE_VERSION" version dist.integrity dist.shasum gitHead --json > remote-package.json 2>/dev/null; then
+            rm -f registry-metadata.tmp.json
+            if npm view "neondiff@$PACKAGE_VERSION" version dist.integrity dist.shasum gitHead --json > registry-metadata.tmp.json 2>/dev/null && \
+              node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' registry-metadata.tmp.json; then
+              mv registry-metadata.tmp.json remote-package.json
               break
             fi
             sleep 5
           done
           test -s remote-package.json || {
-            echo "::error::Published npm metadata did not become readable"
+            echo "::error::npm registry metadata remained unavailable or invalid after retries"
             exit 1
           }
           node scripts/npm-release-policy.mjs verify-pack \

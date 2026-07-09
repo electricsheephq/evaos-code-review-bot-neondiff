@@ -160,8 +160,13 @@ function verifyPack(args) {
   if (!localPack.shasum || localPack.shasum !== remote["dist.shasum"]) {
     fail("npm tarball shasum does not match the reviewed pack");
   }
-  if (expectedGitHead && remote.gitHead !== expectedGitHead) {
-    fail("npm gitHead does not match the reviewed release tag commit");
+  if (expectedGitHead) {
+    if (typeof remote.gitHead !== "string" || remote.gitHead.length === 0) {
+      fail("npm gitHead is missing from published package metadata");
+    }
+    if (remote.gitHead !== expectedGitHead) {
+      fail("npm gitHead does not match the reviewed release tag commit");
+    }
   }
   console.log(JSON.stringify({
     version: expectedVersion,

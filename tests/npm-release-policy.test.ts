@@ -194,5 +194,21 @@ describe("npm release policy", () => {
     ], { encoding: "utf8" });
     expect(gitHeadRejected.status).not.toBe(0);
     expect(gitHeadRejected.stderr).toContain("npm gitHead does not match the reviewed release tag commit");
+
+    writeFileSync(remotePath, JSON.stringify({
+      version: "1.0.3",
+      "dist.integrity": "sha512-reviewed",
+      "dist.shasum": "1111111111111111111111111111111111111111"
+    }));
+    const missingGitHeadRejected = spawnSync(process.execPath, [
+      policyScript,
+      "verify-pack",
+      "--local-pack", localPath,
+      "--remote-metadata", remotePath,
+      "--expected-version", "1.0.3",
+      "--expected-git-head", "1111111111111111111111111111111111111111"
+    ], { encoding: "utf8" });
+    expect(missingGitHeadRejected.status).not.toBe(0);
+    expect(missingGitHeadRejected.stderr).toContain("npm gitHead is missing from published package metadata");
   });
 });

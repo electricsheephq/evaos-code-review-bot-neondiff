@@ -349,6 +349,7 @@ describe("NeonDiff public release readiness", () => {
     const desktopProof = JSON.parse(read("docs/evidence/v1.0.3-desktop-startup-smoke.json")) as {
       evidenceKind?: string;
       releaseVersion?: string;
+      sourceCommitUrl?: string;
       proofBoundary?: string;
       bundleId?: string;
       binarySha256?: string;
@@ -385,6 +386,7 @@ describe("NeonDiff public release readiness", () => {
     expect(desktopProof).toMatchObject({
       evidenceKind: "desktop_startup_smoke_redacted",
       releaseVersion: "v1.0.3",
+      sourceCommitUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/commit/b22b81ca85a41abe888f3054eea25bb397d08d68",
       bundleId: "com.electricsheephq.NeonDiffDesktop",
       binarySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       signingIdentityClass: "unsigned-dev",
@@ -542,6 +544,9 @@ describe("NeonDiff public release readiness", () => {
     expect(publish.match(/if: steps\.package_release\.outputs\.should_publish == 'true'/g)).toHaveLength(6);
     expect(publish).toMatch(/require\('\.\/package\.json'\)\.version/);
     expect(publish).toMatch(/already exists; verifying reviewed tarball identity/);
+    expect(publish).toMatch(/registry-metadata\.tmp\.json/);
+    expect(publish).toMatch(/JSON\.parse/);
+    expect(publish).toMatch(/npm registry metadata remained unavailable or invalid after retries/);
     expect(publish).toMatch(/dist-tags\.\$NPM_TAG/);
     expect(publish).toMatch(/npm publish --provenance --access public --tag "release-candidate"/);
     expect(publish.indexOf('npm publish --provenance --access public --tag "release-candidate"')).toBeLessThan(
