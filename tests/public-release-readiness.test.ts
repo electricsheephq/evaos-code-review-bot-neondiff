@@ -569,5 +569,13 @@ describe("NeonDiff public release readiness", () => {
     expect(governance).toMatch(/partial quarantine promotion/i);
     expect(governance).toMatch(/npm dist-tag add neondiff@<version> latest/);
     expect(governance).toMatch(/npm dist-tag rm neondiff release-candidate/);
+    expect(governance).toMatch(/npm-release-policy\.mjs verify-channel/);
+    expect(governance).toMatch(/npm view neondiff dist-tags\.release-candidate/);
+    expect(governance.indexOf("npm-release-policy.mjs verify-channel")).toBeLessThan(
+      governance.indexOf("npm dist-tag add neondiff@<version> latest")
+    );
+    expect(governance.indexOf("npm view neondiff dist-tags.release-candidate")).toBeLessThan(
+      governance.indexOf("npm dist-tag add neondiff@<version> latest")
+    );
   });
 });

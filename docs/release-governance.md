@@ -209,10 +209,21 @@ attestation against the reviewed release packet and annotated tag:
 npm view neondiff@<version> version dist.integrity dist.shasum gitHead dist.attestations --json
 ```
 
-Only after that identity check passes, complete the interrupted promotion and
-verify the stable channel:
+The preferred recovery is to rerun the serialized `Publish npm` workflow for
+the exact existing release tag. If direct operator recovery is required, run
+it from an isolated checkout of that tag and apply the same channel guard as
+the workflow. Confirm that `release-candidate` still belongs to this exact
+version before changing `latest`:
 
 ```bash
+CURRENT_TAG_VERSION="$(npm view neondiff dist-tags.latest 2>/dev/null || true)"
+EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
+node scripts/npm-release-policy.mjs verify-channel \
+  --current-version "$CURRENT_TAG_VERSION" \
+  --target-version "<version>" \
+  --expected-predecessor "$EXPECTED_PREDECESSOR" \
+  --npm-tag latest
+test "$(npm view neondiff dist-tags.release-candidate)" = "<version>"
 npm dist-tag add neondiff@<version> latest
 test "$(npm view neondiff dist-tags.latest)" = "<version>"
 ```
