@@ -259,12 +259,14 @@ describe("resolved analysis plan is demote-only (#266)", () => {
   it("light mode forces stages off even when base has them on", () => {
     const config = loadConfigFromObject({
       reviewGate: { maxInlineComments: 25, selfConsistency: { enabled: true } },
+      repoWikiContext: { enabled: true },
       gitnexusContext: { enabled: true },
       githubRelatedContext: { enabled: true, packetVersion: "v", maxPacketBytes: 1000, maxRelatedItems: 4, queryLimit: 2, maxCommandOutputBytes: 1000 },
       reviewModes: reviewModes()
     });
     const selection = select(config, DOCS_FILES); // → light
     expect(selection?.analysisPlan.selfConsistency).toBe(false);
+    expect(selection?.analysisPlan.repoWikiContext).toBe(false);
     expect(selection?.analysisPlan.gitnexusContext).toBe(false);
     expect(selection?.analysisPlan.githubRelatedContext).toBe(false);
   });
@@ -273,6 +275,7 @@ describe("resolved analysis plan is demote-only (#266)", () => {
     const config = loadConfigFromObject({ reviewModes: reviewModes() }); // base all off
     const deep = select(config, AUTH_FILES);
     expect(deep?.analysisPlan.selfConsistency).toBe(false);
+    expect(deep?.analysisPlan.repoWikiContext).toBe(false);
     expect(deep?.analysisPlan.gitnexusContext).toBe(false);
     expect(deep?.analysisPlan.githubRelatedContext).toBe(false);
   });
@@ -288,20 +291,23 @@ describe("resolved analysis plan is demote-only (#266)", () => {
   });
 
   it("demotes only the enabled add-on and never turns the already-off one on (asymmetric)", () => {
-    // Base enables ONLY gitnexusContext; githubRelatedContext stays off. light demotes the single
+    // Base enables repoWikiContext and gitnexusContext; githubRelatedContext stays off. light demotes the single
     // contextAddons knob: the enabled add-on flips off, the already-off add-on stays off (never on).
     const config = loadConfigFromObject({
+      repoWikiContext: { enabled: true },
       gitnexusContext: { enabled: true },
       // githubRelatedContext deliberately omitted ⇒ base off.
       reviewModes: reviewModes()
     });
     const light = select(config, DOCS_FILES); // → light (contextAddons: false)
+    expect(light?.analysisPlan.repoWikiContext).toBe(false); // demoted from base-on
     expect(light?.analysisPlan.gitnexusContext).toBe(false); // demoted from base-on
     expect(light?.analysisPlan.githubRelatedContext).toBe(false); // stays off; never promoted on
 
     // standard inherits (no contextAddons demote): the enabled add-on stays on, the off one stays off.
     const standard = select(config, [{ filename: "misc/notes.txt" }, { filename: "docs/guide.md" }]);
     expect(standard?.mode).toBe("standard");
+    expect(standard?.analysisPlan.repoWikiContext).toBe(true); // inherited base-on
     expect(standard?.analysisPlan.gitnexusContext).toBe(true); // inherited base-on
     expect(standard?.analysisPlan.githubRelatedContext).toBe(false); // inherited base-off; never on
   });

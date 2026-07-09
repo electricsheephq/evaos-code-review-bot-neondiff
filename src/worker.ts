@@ -48,6 +48,7 @@ import {
   type OutcomeLedgerSafetyGateInput
 } from "./outcome-ledger.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } from "./repo-memory.js";
+import { buildRepoWikiContextPacket, type RepoWikiContextPacket } from "./repo-wiki-context.js";
 import { ReviewRunBudget } from "./review-budget.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import {
@@ -1460,6 +1461,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       evidenceDir
     });
+    const repoWikiContext = buildRepoWikiContext({
+      config,
+      repo,
+      worktreePath: worktree.path,
+      evidenceDir
+    });
     const skillPackContext = buildSkillPackContext({
       config,
       evidenceDir
@@ -1487,6 +1494,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repoProfile: repoPolicy.profile,
       ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
       ...(repoMemory.packet ? { repoMemoryPacket: repoMemory.packet } : {}),
+      ...(repoWikiContext.packet ? { repoWikiContextPacket: repoWikiContext.packet } : {}),
       ...(gitnexusContext.packet ? { gitnexusContextPacket: gitnexusContext.packet } : {}),
       ...(githubRelatedContext.packet ? { githubRelatedContextPacket: githubRelatedContext.packet } : {}),
       maxPatchBytes: config.zcode.maxPatchBytes
@@ -2247,6 +2255,31 @@ export function buildRepoMemoryContext(input: {
     memoryRoot: repoMemoryConfig.memoryRoot
   });
   return { packet: packetResult.packet, falsePositiveFingerprints, falsePositives };
+}
+
+export function buildRepoWikiContext(input: {
+  config: BotConfig;
+  repo: string;
+  worktreePath: string;
+  evidenceDir: string;
+}): { packet?: RepoWikiContextPacket } {
+  const repoWikiConfig = input.config.repoWikiContext;
+  if (!repoWikiConfig?.enabled) return {};
+
+  const packetResult = buildRepoWikiContextPacket({
+    repo: input.repo,
+    worktreePath: input.worktreePath,
+    config: repoWikiConfig
+  });
+
+  if (!packetResult.packet) {
+    writeRedactedJson(join(input.evidenceDir, "repo-wiki-context-packet-error.json"), packetResult);
+    return {};
+  }
+
+  writeRedactedJson(join(input.evidenceDir, "repo-wiki-context-packet.json"), packetResult);
+  writeRedactedText(join(input.evidenceDir, "repo-wiki-context-packet.md"), packetResult.packet.markdown);
+  return { packet: packetResult.packet };
 }
 
 function isRepoMemoryBudgetFailure(packetResult: ReturnType<typeof buildRepoMemoryPacket>): boolean {

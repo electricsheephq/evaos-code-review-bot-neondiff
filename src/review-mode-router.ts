@@ -125,6 +125,7 @@ export function selectReviewMode(input: ReviewModeSelectionInput): ReviewModeSel
 export function resolveAnalysisPlan(mode: ReviewMode, config: BotConfig): ReviewModeAnalysisPlan {
   const definition = config.reviewModes?.modes[mode] ?? {};
   const baseSelfConsistency = config.reviewGate?.selfConsistency?.enabled ?? false;
+  const baseRepoWiki = config.repoWikiContext?.enabled ?? false;
   const baseGitnexus = config.gitnexusContext?.enabled ?? false;
   const baseGithubRelated = config.githubRelatedContext?.enabled ?? false;
 
@@ -134,6 +135,7 @@ export function resolveAnalysisPlan(mode: ReviewMode, config: BotConfig): Review
 
   return {
     selfConsistency: baseSelfConsistency && selfConsistencyAllowed,
+    repoWikiContext: baseRepoWiki && contextAddonsAllowed,
     gitnexusContext: baseGitnexus && contextAddonsAllowed,
     githubRelatedContext: baseGithubRelated && contextAddonsAllowed,
     ...(definition.targetMinutes !== undefined ? { targetMinutes: definition.targetMinutes } : {})

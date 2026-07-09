@@ -1,9 +1,9 @@
 # Repo Wiki Packet
 
-Repo wiki packets are deterministic, evidence-safe context bundles for future
-codebase-map and repo-wiki review prompts. The MVP is library-only and dry-run:
-it does not change live worker behavior, prompt construction, GitHub comments,
-checks, queueing, or runtime state.
+Repo wiki packets are deterministic, evidence-safe context bundles for
+codebase-map and repo-wiki review prompts. Packet generation remains usable as a
+dry-run artifact, and live prompt inclusion is gated behind
+`repoWikiContext.enabled`.
 
 This context is advisory. GitHub diff, current checkout files, current review
 evidence, and configured repo policy remain truth. A stale or missing wiki
@@ -96,7 +96,13 @@ over-budget packet.
 
 ## Runtime Boundary
 
-This MVP intentionally does not wire packets into `src/worker.ts`,
-`src/walkthrough.ts`, `src/config.ts`, `src/cli.ts`, or `src/state.ts`.
-Future integration should add a separate feature flag, evidence files, and
-review-prompt caps before any live prompt use.
+Prompt integration is disabled by default through `config.repoWikiContext`.
+When enabled, `src/worker.ts` reads a prebuilt packet from the prepared PR
+worktree, records redacted evidence, and includes it in the review prompt only
+if it is fresh or explicitly allowed stale, within budget, and free of
+secret-like text.
+
+This integration does not run OpenWiki during live review, mutate repository
+files, change GitHub comment posting behavior, alter checks, or make repo-wiki
+context authoritative. OpenWiki-generated files remain confined to
+`openwiki/**`; suggestions for other docs are report-only.

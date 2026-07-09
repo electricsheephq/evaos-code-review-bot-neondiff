@@ -6,6 +6,7 @@ import type { GitNexusContextPacket } from "./gitnexus-context.js";
 import type { GitHubRelatedContextPacket } from "./github-related-context.js";
 import type { ProviderRuntimeAdapter } from "./provider-adapters.js";
 import type { RepoMemoryPacket } from "./repo-memory.js";
+import type { RepoWikiContextPacket } from "./repo-wiki-context.js";
 import { buildRepoProfilePromptSection, type ResolvedRepoProfile } from "./repo-policy.js";
 import { redactSecrets } from "./secrets.js";
 import type { SkillPackContextPacket } from "./skill-packs.js";
@@ -120,6 +121,7 @@ export function buildReviewPrompt(input: {
   files: PullFilePatch[];
   repoProfile?: ResolvedRepoProfile;
   repoMemoryPacket?: Pick<RepoMemoryPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
+  repoWikiContextPacket?: Pick<RepoWikiContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown" | "repoWiki">;
   gitnexusContextPacket?: Pick<GitNexusContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown" | "gitnexus">;
   githubRelatedContextPacket?: Pick<GitHubRelatedContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
   skillPackContextPacket?: Pick<SkillPackContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown">;
@@ -154,6 +156,7 @@ export function buildReviewPrompt(input: {
     ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile), ""] : []),
     ...(input.skillPackContextPacket ? [buildSkillPackContextPromptSection(input.skillPackContextPacket), ""] : []),
     ...(input.repoMemoryPacket ? [buildRepoMemoryPromptSection(input.repoMemoryPacket), ""] : []),
+    ...(input.repoWikiContextPacket ? [buildRepoWikiContextPromptSection(input.repoWikiContextPacket), ""] : []),
     ...(input.gitnexusContextPacket ? [buildGitNexusContextPromptSection(input.gitnexusContextPacket), ""] : []),
     ...(input.githubRelatedContextPacket ? [buildGitHubRelatedContextPromptSection(input.githubRelatedContextPacket), ""] : []),
     "Files:",
@@ -197,6 +200,18 @@ function buildGitNexusContextPromptSection(
     `Packet SHA-256: ${packet.sha256}`,
     `Packet budget: ${packet.byteEstimate} bytes; approx ${packet.tokenEstimate} tokens`,
     `GitNexus freshness: ${packet.gitnexus.freshness}; degraded=${packet.gitnexus.degradedMode ? "true" : "false"}`,
+    "",
+    packet.markdown.trim()
+  ].join("\n");
+}
+
+function buildRepoWikiContextPromptSection(packet: Pick<RepoWikiContextPacket, "sha256" | "byteEstimate" | "tokenEstimate" | "markdown" | "repoWiki">): string {
+  return [
+    "Repo wiki context packet (advisory; feature-flagged context):",
+    `Packet SHA-256: ${packet.sha256}`,
+    `Packet budget: ${packet.byteEstimate} bytes; approx ${packet.tokenEstimate} tokens`,
+    `Repo wiki freshness: ${packet.repoWiki.freshness}; degraded=${packet.repoWiki.degradedMode ? "true" : "false"}`,
+    "Current PR diff, checkout files, and GitHub metadata remain authoritative.",
     "",
     packet.markdown.trim()
   ].join("\n");

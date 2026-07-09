@@ -1,0 +1,229 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { loadConfigFromObject } from "../src/config.js";
+import { buildRepoWikiContextPacket, type RepoWikiContextConfig } from "../src/repo-wiki-context.js";
+import { buildRepoWikiPacket, formatRepoWikiPacketJson } from "../src/repo-wiki-packet.js";
+import { buildRepoWikiContext } from "../src/worker.js";
+import { buildReviewPrompt } from "../src/zcode.js";
+
+const repo = "electricsheephq/evaos-code-review-bot-neondiff";
+const generatedAt = "2026-07-09T04:00:00.000Z";
+const pull = {
+  number: 415,
+  title: "Repo wiki context",
+  draft: false,
+  head: { sha: "abc123", ref: "feature/repo-wiki-context" },
+  base: { sha: "base123", ref: "main", repo: { full_name: repo } },
+  html_url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/415"
+} as const;
+const files = [
+  {
+    filename: "src/worker.ts",
+    status: "modified",
+    additions: 1,
+    deletions: 0,
+    changes: 1,
+    patch: "@@ -1 +1 @@\n-old\n+new"
+  }
+];
+
+describe("repo wiki advisory context", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("loads default-off repo wiki context config", () => {
+    const config = loadConfigFromObject({});
+
+    expect(config.repoWikiContext).toMatchObject({
+      enabled: false,
+      packetPath: ".neondiff/repo-wiki-packet.json",
+      maxPacketBytes: 12_000,
+      includeStaleContext: false
+    });
+    expect(() => loadConfigFromObject({ repoWikiContext: { enabled: "yes" } })).toThrow(/repoWikiContext\.enabled/);
+  });
+
+  it("does not change prompts unless a repo wiki packet is supplied", () => {
+    const withoutPacket = buildReviewPrompt({ repo, pull, files });
+    const withPacket = buildReviewPrompt({
+      repo,
+      pull,
+      files,
+      repoWikiContextPacket: {
+        sha256: "a".repeat(64),
+        byteEstimate: 512,
+        tokenEstimate: 128,
+        markdown: "# Repo wiki packet\n\nCurrent PR diff remains truth.",
+        repoWiki: {
+          freshness: "fresh",
+          degradedMode: false
+        }
+      }
+    });
+
+    expect(withoutPacket).not.toContain("Repo wiki context packet");
+    expect(withPacket).toContain("Repo wiki context packet (advisory; feature-flagged context):");
+    expect(withPacket).toContain("Packet SHA-256: " + "a".repeat(64));
+    expect(withPacket).toContain("Repo wiki freshness: fresh; degraded=false");
+    expect(withPacket).toContain("Current PR diff remains truth");
+  });
+
+  it("loads a fresh OpenWiki-compatible JSON packet from the PR worktree", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(packetPath, formatRepoWikiPacketJson(repoWikiPacket("fresh")));
+
+    const result = buildRepoWikiContextPacket({
+      repo,
+      worktreePath: root,
+      config: config()
+    });
+
+    expect(result.packet).toMatchObject({
+      repoWiki: {
+        freshness: "fresh",
+        degradedMode: false
+      }
+    });
+    expect(result.packet?.markdown).toContain("# Repo Wiki Packet");
+    expect(result.packet?.markdown).toContain("GitHub diff and checkout remain truth");
+  });
+
+  it("omits missing packets and stale packets unless stale context is allowed", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config()
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({ reason: "missing_packet" })
+    });
+
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(packetPath, formatRepoWikiPacketJson(repoWikiPacket("stale")));
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config()
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({ reason: "stale_packet" })
+    });
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config({ includeStaleContext: true })
+      }).packet
+    ).toMatchObject({
+      repoWiki: { freshness: "stale", degradedMode: true }
+    });
+  });
+
+  it("rejects secret-like packet content before prompt injection", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(
+      join(root, ".neondiff", "repo-wiki-packet.json"),
+      JSON.stringify({
+        packetVersion: "repo-wiki-packet-v0.1",
+        packetSha: "b".repeat(64),
+        byteBudget: { usedBytes: 100 },
+        tokenBudget: { usedTokens: 25 },
+        source: { status: "fresh" },
+        includedSections: [
+          {
+            id: "secret",
+            title: "Secret",
+            body: "Do not include ghp_fake_token in prompt context.",
+            order: 1,
+            sourceFiles: ["README.md"],
+            byteLength: 50,
+            tokenEstimate: 12,
+            truncated: false,
+            redacted: false
+          }
+        ]
+      })
+    );
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config()
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({ reason: "secret_detected" })
+    });
+  });
+
+  it("worker degrades missing packets to redacted evidence without blocking review", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    mkdirSync(evidenceDir, { recursive: true });
+
+    const result = buildRepoWikiContext({
+      config: loadConfigFromObject({ repoWikiContext: { enabled: true } }),
+      repo,
+      worktreePath: root,
+      evidenceDir
+    });
+
+    expect(result.packet).toBeUndefined();
+    const evidencePath = join(evidenceDir, "repo-wiki-context-packet-error.json");
+    expect(existsSync(evidencePath)).toBe(true);
+    expect(JSON.parse(readFileSync(evidencePath, "utf8"))).toMatchObject({
+      omitted: expect.objectContaining({ reason: "missing_packet" })
+    });
+  });
+});
+
+function repoWikiPacket(status: "fresh" | "stale") {
+  return buildRepoWikiPacket({
+    repo: { fullName: repo, defaultBranch: "main" },
+    source: {
+      ref: "main",
+      headSha: "abc123",
+      checkedAt: generatedAt,
+      status,
+      ...(status === "stale" ? { staleReason: "Packet was generated from an older head." } : {})
+    },
+    generatedAt,
+    budget: { maxBytes: 12_000, maxTokens: 3_000 },
+    sections: [
+      {
+        id: "architecture",
+        title: "Architecture overview",
+        body: "NeonDiff reviews GitHub pull requests with local-first provider routing.",
+        sourceFiles: ["README.md", "src/worker.ts"]
+      }
+    ]
+  });
+}
+
+function config(overrides: Partial<RepoWikiContextConfig> = {}): RepoWikiContextConfig {
+  return {
+    enabled: true,
+    packetPath: ".neondiff/repo-wiki-packet.json",
+    maxPacketBytes: 12_000,
+    includeStaleContext: false,
+    ...overrides
+  };
+}

@@ -22,6 +22,7 @@ import {
 import { isApiKeyEnvName, isProviderId, isProviderStructuredOutputMode, PROVIDER_STRUCTURED_OUTPUT_MODES, SCHEMA_FEEDBACK_RETRY_MAX, type ProviderRegistryConfig } from "./providers.js";
 import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
+import type { RepoWikiContextConfig } from "./repo-wiki-context.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -77,6 +78,7 @@ export interface BotConfig {
   };
   reviewGate?: ReviewGateConfig;
   repoMemory?: RepoMemoryConfig;
+  repoWikiContext?: RepoWikiContextConfig;
   gitnexusContext?: GitNexusContextConfig;
   githubRelatedContext?: GitHubRelatedContextConfig;
   skillPacks?: SkillPackContextConfig;
@@ -348,6 +350,12 @@ const DEFAULT_CONFIG: BotConfig = {
     maxPacketBytes: 12_000,
     maxStateNotes: 20,
     includeStaleNotes: false
+  },
+  repoWikiContext: {
+    enabled: false,
+    packetPath: ".neondiff/repo-wiki-packet.json",
+    maxPacketBytes: 12_000,
+    includeStaleContext: false
   },
   gitnexusContext: {
     enabled: false,
@@ -643,6 +651,9 @@ function validateConfig(config: BotConfig): void {
   const repoMemory = config.repoMemory ?? DEFAULT_CONFIG.repoMemory!;
   config.repoMemory = repoMemory;
   validateRepoMemoryConfig(repoMemory, "config.repoMemory");
+  const repoWikiContext = config.repoWikiContext ?? DEFAULT_CONFIG.repoWikiContext!;
+  config.repoWikiContext = repoWikiContext;
+  validateRepoWikiContextConfig(repoWikiContext, "config.repoWikiContext");
   const gitnexusContext = config.gitnexusContext ?? DEFAULT_CONFIG.gitnexusContext!;
   config.gitnexusContext = gitnexusContext;
   validateGitNexusContextConfig(gitnexusContext, "config.gitnexusContext");
@@ -909,7 +920,7 @@ function validateReviewModesConfig(value: unknown, label: string, config: BotCon
     }
   }
   const baseSelfConsistency = config.reviewGate?.selfConsistency?.enabled ?? false;
-  const baseContextAddons = (config.gitnexusContext?.enabled ?? false) || (config.githubRelatedContext?.enabled ?? false);
+  const baseContextAddons = (config.repoWikiContext?.enabled ?? false) || (config.gitnexusContext?.enabled ?? false) || (config.githubRelatedContext?.enabled ?? false);
   const modes = value.modes as Record<string, unknown>;
   for (const mode of REVIEW_MODES) {
     // Distinguish an entirely ABSENT required mode key from a present-but-wrong-type value, so the
@@ -972,6 +983,17 @@ function validateRepoMemoryConfig(value: unknown, label: string): void {
   validatePositiveInteger(value.maxPacketBytes, `${label}.maxPacketBytes`);
   validatePositiveInteger(value.maxStateNotes, `${label}.maxStateNotes`);
   validateBoolean(value.includeStaleNotes, `${label}.includeStaleNotes`);
+}
+
+function validateRepoWikiContextConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.packetPath, `${label}.packetPath`);
+  if (typeof value.packetPath !== "string" || value.packetPath.trim().length === 0) {
+    throw new Error(`${label}.packetPath must be a non-empty string`);
+  }
+  validatePositiveInteger(value.maxPacketBytes, `${label}.maxPacketBytes`);
+  validateBoolean(value.includeStaleContext, `${label}.includeStaleContext`);
 }
 
 function validateGitNexusContextConfig(value: unknown, label: string): void {
