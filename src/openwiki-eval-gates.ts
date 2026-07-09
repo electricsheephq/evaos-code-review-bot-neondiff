@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   assertEvalOutputDirSafe,
@@ -7,6 +7,7 @@ import {
   countEvalFalsePositiveSeverities,
   guardEmptyOutputRoot,
   runOfflineEval,
+  writeEvalArtifactFile,
   type EvalLabelInput,
   type EvalRunResult,
   type EvalScenarioInput,
@@ -368,7 +369,7 @@ export function runDocsDriftEval(
   assertNoSecretLikeText(suggestionsText, "docs-drift suggestions");
   assertNoSecretLikeText(reportText, "docs-drift report");
   mkdirSync(outputRoot, { recursive: true });
-  writeFileSync(suggestionsPath, suggestionsText, "utf8");
+  writeEvalArtifactFile(suggestionsPath, suggestionsText);
   writeJson(reportPath, reportText);
   const artifactInventory = buildArtifactInventory(outputRoot, [
     "suggested-doc-edits.md",
@@ -748,7 +749,7 @@ function buildArtifactInventory(root: string, names: string[]): Array<{ name: st
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${typeof value === "string" ? value : JSON.stringify(value, null, 2)}\n`, "utf8");
+  writeEvalArtifactFile(path, `${typeof value === "string" ? value : JSON.stringify(value, null, 2)}\n`);
 }
 
 function assertNoSecretLikeText(value: unknown, label: string): void {

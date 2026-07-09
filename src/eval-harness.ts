@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -420,7 +420,7 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   writeJson(artifacts["merged-fixes.json"]!, mergedFixes);
   writeJson(artifacts["redaction-report.json"]!, redactionReport);
   writeJson(artifacts["duplicate-report.json"]!, duplicateReport);
-  writeFileSync(artifacts["comparison.csv"]!, buildComparisonCsv(botFindings, labels, matches));
+  writeEvalArtifactFile(artifacts["comparison.csv"]!, buildComparisonCsv(botFindings, labels, matches));
   writeJson(artifacts["labels.json"]!, labels);
   writeJson(artifacts["calibration-report.json"]!, buildCalibrationReport(botFindings, labels, matches, input.negativeControl === true));
   writeJson(artifacts["scorecard.json"]!, scorecard);
@@ -494,7 +494,7 @@ export function runStickyVsColdEval(
     thresholds,
     now
   });
-  writeFileSync(reportPath, buildStickyVsColdReport(summary));
+  writeEvalArtifactFile(reportPath, buildStickyVsColdReport(summary));
   const artifactInventory = [
     { name: "sticky-vs-cold-report.md", sha256: sha256File(reportPath) },
     { name: "cold/scorecard.json", sha256: sha256File(cold.artifacts["scorecard.json"]!) },
@@ -1501,7 +1501,17 @@ function sanitizePathSegment(value: string): string {
 }
 
 function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeEvalArtifactFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function writeEvalArtifactFile(path: string, contents: string): void {
+  // Eval output roots are operator-controlled; exclusive creation avoids clobbering raced files or symlinks.
+  const fd = openSync(path, "wx", 0o600);
+  try {
+    writeFileSync(fd, contents, "utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function sha256File(path: string): string {
