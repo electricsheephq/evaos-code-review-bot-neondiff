@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  assertEvalOutputDirSafe,
   countEvalFalsePositiveSeverities,
   runOfflineEval,
   type EvalLabelInput,
@@ -179,7 +180,8 @@ export function runRepoWikiContextAbEval(
 ): RepoWikiContextAbEvalResult {
   const now = options.now ?? new Date();
   const evalName = input.evalName ?? "neondiff-openwiki-context-ab-v0.1";
-  mkdirSync(options.outputRoot, { recursive: true });
+  const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
+  mkdirSync(outputRoot, { recursive: true });
   const modes = Object.fromEntries(
     (["baseline", "deterministic", "openwiki"] as const).map((mode) => {
       const modeInput = input.modes[mode];
@@ -195,7 +197,7 @@ export function runRepoWikiContextAbEval(
         botFindings: modeInput.botFindings,
         rawOutput: modeInput.rawOutput ?? modeInput.botFindings
       }, {
-        outputDir: join(options.outputRoot, mode),
+        outputDir: join(outputRoot, mode),
         now
       });
       return [mode, summarizeMode({ modeInput, result, labels: input.labels })];
@@ -212,8 +214,8 @@ export function runRepoWikiContextAbEval(
     ...(input.providerProof?.notes ? { notes: redactSecrets(input.providerProof.notes) } : {})
   };
   const gates = buildAbGates({ modes, comparisons, providerProof });
-  const summaryPath = join(options.outputRoot, "repo-wiki-context-ab-summary.json");
-  const reportPath = join(options.outputRoot, "repo-wiki-context-ab-report.md");
+  const summaryPath = join(outputRoot, "repo-wiki-context-ab-summary.json");
+  const reportPath = join(outputRoot, "repo-wiki-context-ab-report.md");
   const summaryWithoutInventory: Omit<RepoWikiContextAbEvalSummary, "artifactInventory"> = {
     evalName,
     artifactVersion: "0.1",
@@ -231,7 +233,7 @@ export function runRepoWikiContextAbEval(
     gates
   };
   writeJson(reportPath, buildAbReport(summaryWithoutInventory));
-  const artifactInventory = buildArtifactInventory(options.outputRoot, [
+  const artifactInventory = buildArtifactInventory(outputRoot, [
     "baseline/scorecard.json",
     "deterministic/scorecard.json",
     "openwiki/scorecard.json",
@@ -241,7 +243,7 @@ export function runRepoWikiContextAbEval(
   writeJson(summaryPath, summary);
   return {
     ok: summary.ok,
-    outputRoot: options.outputRoot,
+    outputRoot,
     summary,
     artifacts: {
       "repo-wiki-context-ab-summary.json": summaryPath,
@@ -256,7 +258,8 @@ export function runDocsDriftEval(
 ): DocsDriftEvalResult {
   const now = options.now ?? new Date();
   const evalName = input.evalName ?? "neondiff-openwiki-docs-drift-v0.1";
-  mkdirSync(options.outputRoot, { recursive: true });
+  const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
+  mkdirSync(outputRoot, { recursive: true });
   const packet = readRepoWikiPacket(input);
   const suggestions: DocsDriftSuggestion[] = [];
   const claims = input.claims.map((claim) => {
@@ -294,9 +297,9 @@ export function runDocsDriftEval(
       detail: `${suggestions.length} suggestion(s) checked`
     }
   ];
-  const suggestionsPath = join(options.outputRoot, "suggested-doc-edits.md");
-  const summaryPath = join(options.outputRoot, "docs-drift-summary.json");
-  const reportPath = join(options.outputRoot, "docs-drift-report.md");
+  const suggestionsPath = join(outputRoot, "suggested-doc-edits.md");
+  const summaryPath = join(outputRoot, "docs-drift-summary.json");
+  const reportPath = join(outputRoot, "docs-drift-report.md");
   writeFileSync(suggestionsPath, formatDocsDriftSuggestions(suggestions), "utf8");
   const summaryWithoutInventory: Omit<DocsDriftEvalSummary, "artifactInventory"> = {
     evalName,
@@ -327,7 +330,7 @@ export function runDocsDriftEval(
     proofBoundary: "suggest-only docs-drift eval artifact; no docs, source, config, workflow, daemon, or GitHub comments are modified"
   };
   writeJson(reportPath, buildDocsDriftReport(summaryWithoutInventory));
-  const artifactInventory = buildArtifactInventory(options.outputRoot, [
+  const artifactInventory = buildArtifactInventory(outputRoot, [
     "suggested-doc-edits.md",
     "docs-drift-report.md"
   ]);
@@ -335,7 +338,7 @@ export function runDocsDriftEval(
   writeJson(summaryPath, summary);
   return {
     ok: summary.ok,
-    outputRoot: options.outputRoot,
+    outputRoot,
     summary,
     artifacts: {
       "docs-drift-summary.json": summaryPath,
@@ -389,6 +392,11 @@ function buildAbGates(input: {
         name: `${mode}_precision_neutral_or_better`,
         ok: input.comparisons[mode].precisionDelta >= 0,
         detail: `${input.comparisons[mode].precisionDelta} >= 0`
+      },
+      {
+        name: `${mode}_recall_neutral_or_better`,
+        ok: input.comparisons[mode].recallDelta >= 0,
+        detail: `${input.comparisons[mode].recallDelta} >= 0`
       },
       {
         name: `${mode}_no_p0_p1_false_positive_regression`,
@@ -476,8 +484,7 @@ function evaluateDocsDriftClaim(input: {
   const shouldSuggest = docContainsClaim &&
     sourceBacked &&
     input.claim.claim.trim() !== input.claim.currentText.trim();
-  const falsePositive = input.claim.expected === "true" && shouldSuggest;
-  const ok = input.claim.expected === "stale" ? shouldSuggest : !falsePositive;
+  const ok = input.claim.expected === "stale" ? shouldSuggest : !shouldSuggest;
   const detail = !docContainsClaim
     ? "doc claim text not found"
     : !sourceContainsCurrentText
@@ -485,7 +492,9 @@ function evaluateDocsDriftClaim(input: {
       : packetSectionIds.length === 0
         ? "source path not present in curated packet"
         : shouldSuggest
-          ? "stale claim suggested with source citation"
+          ? input.claim.expected === "true"
+            ? "true trap would be rewritten; counted as material false positive"
+            : "stale claim suggested with source citation"
           : "claim left unchanged";
   return {
     claimSummary: {

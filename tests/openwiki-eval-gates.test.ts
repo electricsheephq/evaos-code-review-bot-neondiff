@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -35,8 +35,17 @@ describe("OpenWiki eval gates", () => {
     expect(containsSecretLikeText(JSON.stringify(result.summary))).toBe(false);
     expect(result.summary.comparisons.openwiki).toMatchObject({
       precisionDelta: 0,
+      recallDelta: 0,
       p0p1FalsePositiveDelta: 0
     });
+    expect(result.summary.gates).toContainEqual(expect.objectContaining({
+      name: "deterministic_recall_neutral_or_better",
+      ok: true
+    }));
+    expect(result.summary.gates).toContainEqual(expect.objectContaining({
+      name: "openwiki_recall_neutral_or_better",
+      ok: true
+    }));
     expect(readFileSync(result.artifacts["repo-wiki-context-ab-report.md"]!, "utf8")).toContain("Repo-Wiki Context A/B Eval");
   });
 
@@ -66,6 +75,25 @@ describe("OpenWiki eval gates", () => {
     expect(result.ok).toBe(false);
     expect(result.summary.gates).toContainEqual(expect.objectContaining({
       name: "openwiki_no_p0_p1_false_positive_regression",
+      ok: false
+    }));
+  });
+
+  it("fails A/B eval when OpenWiki context drops baseline recall", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-recall-fail-"));
+    roots.push(outputRoot);
+    const input = buildAbInput();
+    input.modes.openwiki.botFindings = { findings: [] };
+
+    const result = runRepoWikiContextAbEval(input, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.comparisons.openwiki.recallDelta).toBeLessThan(0);
+    expect(result.summary.gates).toContainEqual(expect.objectContaining({
+      name: "openwiki_recall_neutral_or_better",
       ok: false
     }));
   });
@@ -165,6 +193,31 @@ describe("OpenWiki eval gates", () => {
       name: "false_positive_limit",
       ok: false
     }));
+    expect(result.summary.claims).toContainEqual(expect.objectContaining({
+      id: "true-advisory",
+      detail: "true trap would be rewritten; counted as material false positive"
+    }));
+  });
+
+  it("rejects docs-drift output roots inside the checkout before writing artifacts", () => {
+    const { packetPath, root } = createDocsDriftFixture();
+    const outputRoot = join(process.cwd(), ".tmp-openwiki-docs-drift-inside-checkout");
+    roots.push(root, outputRoot);
+    rmSync(outputRoot, { recursive: true, force: true });
+
+    expect(() => runDocsDriftEval({
+      runId: "docs-drift-output-inside-checkout",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath,
+      claims: buildDocsDriftClaims()
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    })).toThrow("outputDir must not be inside the current git checkout");
+    expect(existsSync(join(outputRoot, "docs-drift-summary.json"))).toBe(false);
+    expect(existsSync(join(outputRoot, "suggested-doc-edits.md"))).toBe(false);
   });
 
   it("rejects packet paths that resolve outside the worktree", () => {
