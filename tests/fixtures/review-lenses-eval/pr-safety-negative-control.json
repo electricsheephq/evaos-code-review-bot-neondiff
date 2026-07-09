@@ -1,0 +1,41 @@
+{
+  "evalName": "review-lenses-eval-gate-v0.1",
+  "runId": "pr-safety-negative-control",
+  "suite": "review_lens_packet_safety",
+  "surface": "pr_shadow",
+  "negativeControl": true,
+  "reviewLenses": {
+    "enabled": true,
+    "packetVersion": "review-lens-packet-v0.1",
+    "active": [
+      { "id": "lean", "surface": "pr_shadow", "mode": "shadow" }
+    ],
+    "maxLensBytes": 4000,
+    "maxPacketBytes": 12000
+  },
+  "pull": {
+    "repo": "owner/repo",
+    "number": 8,
+    "title": "Add security validation guard",
+    "draft": false,
+    "body": "Adds auth/session validation and tests.",
+    "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+    "baseSha": "dddddddddddddddddddddddddddddddddddddddd",
+    "headRef": "feature/security-validation",
+    "baseRef": "main",
+    "html_url": "https://github.test/owner/repo/pull/8"
+  },
+  "files": [
+    {
+      "filename": "src/auth/session.ts",
+      "patch": "@@ -1 +1 @@\n+export function validateSessionAndAuditSecurityBoundary() {}"
+    }
+  ],
+  "expected": {
+    "includedLenses": ["lean"],
+    "maxPacketBytes": 12000,
+    "secretFindings": 0,
+    "requestChangesEligible": false,
+    "leanSuggestionsMax": 0
+  }
+}

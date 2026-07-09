@@ -71,6 +71,7 @@ import {
 import { buildReviewBudgetStatus } from "./review-budget.js";
 import { selectReviewMode } from "./review-mode-router.js";
 import type { ReviewMode } from "./review-mode-types.js";
+import { readReviewLensEvalScenario, runReviewLensEval, type ReviewLensEvalMode } from "./review-lens-eval.js";
 import type { PullFilePatch, PullRequestSummary } from "./types.js";
 import {
   buildOperatorDashboard,
@@ -1606,6 +1607,29 @@ async function main(): Promise<void> {
     const result = runDocsDriftEval(input, { outputRoot });
     console.log(JSON.stringify(result.summary, null, 2));
     if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "review-lenses-eval") {
+    if (args["output-root"] === undefined || (Array.isArray(args["output-root"]) && args["output-root"].length === 0)) {
+      throw new Error("--output-root is required for review-lenses-eval");
+    }
+    const hasInput = args.input !== undefined;
+    const hasInputDir = args["input-dir"] !== undefined;
+    if (hasInput === hasInputDir) throw new Error("review-lenses-eval requires exactly one of --input or --input-dir");
+    const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
+    const mode = parseReviewLensEvalMode(args.mode);
+    const scenarioPaths = hasInput
+      ? [parseSingleArg(args.input!, "--input")]
+      : listJsonFiles(parseSingleArg(args["input-dir"]!, "--input-dir"));
+    const result = runReviewLensEval({
+      scenarios: scenarioPaths.map((scenarioPath) => readReviewLensEvalScenario(scenarioPath)),
+      outputRoot: parseSingleArg(args["output-root"], "--output-root"),
+      mode,
+      dryRun
+    });
+    console.log(stringifyRedactedJson(result.summary));
+    if (!result.summary.ok) process.exitCode = 1;
     return;
   }
 
@@ -3185,6 +3209,16 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--confirm", description: "Must be true to allow --dry-run false." }
     ]
   },
+  "review-lenses-eval": {
+    description: "Run dry-run comparison evidence for default-off review lenses; no posting, provider calls, live config mutation, or activation.",
+    flags: [
+      { name: "--input", description: "Single review-lens eval scenario JSON." },
+      { name: "--input-dir", description: "Directory of review-lens eval scenario JSON files." },
+      { name: "--output-root", description: "Eval evidence output root outside the checkout." },
+      { name: "--mode", description: "deterministic (default) or model-shadow; model-shadow remains provider-free and dry-run only." },
+      { name: "--dry-run", description: "true by default; false is rejected." }
+    ]
+  },
   daemon: {
     description: "Control or run the review daemon: `daemon start|stop|status`, or no subcommand to run the poll loop directly.",
     flags: [
@@ -3295,6 +3329,7 @@ function buildHelp(command?: string) {
         "eval-sticky-vs-cold",
         "eval-repo-wiki-context-ab",
         "eval-openwiki-docs-drift",
+        "review-lenses-eval",
         "outcome-ledger",
         "outcome-scorecard",
         "review-mode",
@@ -3355,6 +3390,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
       "npx tsx src/cli.ts eval-repo-wiki-context-ab --input /path/to/repo-wiki-ab.json --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/ab",
       "npx tsx src/cli.ts eval-openwiki-docs-drift --input /path/to/docs-drift.json --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/docs-drift",
+      "npx tsx src/cli.ts review-lenses-eval --input-dir tests/fixtures/review-lenses-eval --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) --dry-run true",
       "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
       "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",
       "npx tsx src/cli.ts outcome-observe --config /path/to/live.json --input /path/to/outcome-observer-input.json --dry-run true --output-dir /path/to/evidence/outcome-observe-run",
@@ -3799,6 +3835,13 @@ function readReviewModeInput(path: string): {
     files: record.files as PullFilePatch[],
     ...(override !== undefined ? { repoOverrideMode: override as ReviewMode } : {})
   };
+}
+
+function parseReviewLensEvalMode(value?: string | string[]): ReviewLensEvalMode {
+  if (value === undefined) return "deterministic";
+  const parsed = parseSingleArg(value, "--mode");
+  if (parsed === "deterministic" || parsed === "model-shadow") return parsed;
+  throw new Error("--mode must be deterministic or model-shadow");
 }
 
 function listJsonFiles(inputDir: string): string[] {

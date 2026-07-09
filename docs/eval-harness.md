@@ -47,6 +47,20 @@ docs-drift gate may write a `suggested-doc-edits.md` evidence artifact under the
 chosen `--output-root`; treat that file as a review packet, not as a repository
 documentation change.
 
+Run the review-lenses dry-run comparison gate:
+
+```bash
+npx tsx src/cli.ts review-lenses-eval \
+  --input-dir tests/fixtures/review-lenses-eval \
+  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) \
+  --dry-run true
+```
+
+This command follows the same packet discipline: output stays outside the
+checkout, the output root must be fresh or empty, artifacts are redacted,
+thresholds are explicit, and the decision is advisory-only until a separate
+live activation promotion gate passes.
+
 The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.
