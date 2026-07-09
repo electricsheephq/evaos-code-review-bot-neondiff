@@ -321,8 +321,7 @@ export function runDocsDriftEval(
     },
     {
       name: "suggestions_have_citations",
-      ok: suggestions.length > 0 &&
-        suggestions.every((suggestion) => suggestion.sourceCitation.path.length > 0 && suggestion.packetSectionIds.length > 0),
+      ok: suggestions.every((suggestion) => suggestion.sourceCitation.path.length > 0 && suggestion.packetSectionIds.length > 0),
       detail: `${suggestions.length} suggestion(s) checked`
     }
   ];
@@ -580,12 +579,14 @@ function evaluateDocsDriftClaim(input: {
   const sourceFile = readWorktreeFile(input.input.worktreePath, input.claim.sourcePath, "sourcePath");
   const docText = docFile.ok ? docFile.text : "";
   const sourceText = sourceFile.ok ? sourceFile.text : "";
-  const docContainsClaim = docText.includes(input.claim.claim);
+  const docLine = readLine(docText, input.claim.line);
+  const docLineContainsClaim = docLine?.includes(input.claim.claim) ?? false;
+  const docContainsClaimElsewhere = docText.includes(input.claim.claim);
   const sourceContainsCurrentText = sourceText.includes(input.claim.currentText);
   const packetSectionIds = input.packet.sectionIdsBySourcePath.get(input.claim.sourcePath) ?? [];
   const sourceBacked = input.packet.ok && packetSectionIds.length > 0 && sourceContainsCurrentText;
   // v0.1 fixtures intentionally use exact, case-sensitive substring matching so seeded claims stay auditable.
-  const shouldSuggest = docContainsClaim &&
+  const shouldSuggest = docLineContainsClaim &&
     sourceBacked &&
     input.claim.claim.trim() !== input.claim.currentText.trim();
   const ok = input.claim.expected === "stale" ? shouldSuggest : !shouldSuggest;
@@ -594,8 +595,10 @@ function evaluateDocsDriftClaim(input: {
     detail = `doc file unreadable: ${docFile.error}`;
   } else if (!sourceFile.ok) {
     detail = `source file unreadable: ${sourceFile.error}`;
-  } else if (!docContainsClaim) {
-    detail = "doc claim text not found";
+  } else if (!docLineContainsClaim) {
+    detail = docContainsClaimElsewhere
+      ? `doc claim text found, but not at reported line ${input.claim.line}`
+      : "doc claim text not found";
   } else if (!sourceContainsCurrentText) {
     detail = "source evidence text not found";
   } else if (packetSectionIds.length === 0) {
@@ -632,6 +635,11 @@ function evaluateDocsDriftClaim(input: {
         }
       : {})
   };
+}
+
+function readLine(text: string, lineNumber: number): string | undefined {
+  if (!Number.isSafeInteger(lineNumber) || lineNumber < 1) return undefined;
+  return text.split(/\r?\n/)[lineNumber - 1];
 }
 
 function readWorktreeFile(

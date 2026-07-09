@@ -296,6 +296,63 @@ describe("OpenWiki eval gates", () => {
     }));
   });
 
+  it("does not suggest docs-drift edits when the seeded line does not contain the claim", () => {
+    const { packetPath, root } = createDocsDriftFixture();
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-wrong-line-"));
+    roots.push(root, outputRoot);
+    const claimWithWrongLine = {
+      ...buildDocsDriftClaims()[0]!,
+      line: 9
+    };
+
+    const result = runDocsDriftEval({
+      runId: "docs-drift-wrong-line",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath,
+      thresholds: { minStaleCaught: 1 },
+      claims: [claimWithWrongLine]
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.counts.suggestions).toBe(0);
+    expect(result.summary.claims).toContainEqual(expect.objectContaining({
+      id: "stale-raw-prompt",
+      detected: "not_suggested",
+      detail: "doc claim text found, but not at reported line 9"
+    }));
+  });
+
+  it("treats citation checks as neutral when docs-drift emits no suggestions", () => {
+    const { packetPath, root } = createDocsDriftFixture();
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-no-suggestions-"));
+    roots.push(root, outputRoot);
+
+    const result = runDocsDriftEval({
+      runId: "docs-drift-no-suggestions",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath,
+      claims: buildDocsDriftClaims().filter((claim) => claim.expected === "true")
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.counts.suggestions).toBe(0);
+    expect(result.summary.gates).toContainEqual(expect.objectContaining({
+      name: "suggestions_have_citations",
+      ok: true,
+      detail: "0 suggestion(s) checked"
+    }));
+  });
+
   it("rejects docs-drift output roots inside the checkout before writing artifacts", () => {
     const { packetPath, root } = createDocsDriftFixture();
     const outputRoot = join(process.cwd(), ".tmp-openwiki-docs-drift-inside-checkout");
@@ -728,10 +785,10 @@ function createDocsDriftFixture(options: { trueTrapMismatch?: boolean } = {}): {
 function buildDocsDriftClaims(options: { trueTrapMismatch?: boolean } = {}): DocsDriftSeedClaim[] {
   const stale: DocsDriftSeedClaim[] = [
     claim("stale-raw-prompt", "Use raw OpenWiki Markdown directly in prompts.", "Curated packets quote untrusted data only."),
-    claim("stale-runtime", "OpenWiki docs may update runtime daemon config.", "No production daemon config change."),
-    claim("stale-default", "Repo wiki context is enabled by default.", "repoWikiContext.enabled defaults false."),
-    claim("stale-doc-edit", "Docs drift edits can rewrite docs directly.", "Docs drift is suggest-only."),
-    claim("stale-api-docs", "OpenWiki replaces API documentation.", "OpenWiki is not authoritative API documentation.")
+    claim("stale-runtime", "OpenWiki docs may update runtime daemon config.", "No production daemon config change.", "stale", 3),
+    claim("stale-default", "Repo wiki context is enabled by default.", "repoWikiContext.enabled defaults false.", "stale", 4),
+    claim("stale-doc-edit", "Docs drift edits can rewrite docs directly.", "Docs drift is suggest-only.", "stale", 5),
+    claim("stale-api-docs", "OpenWiki replaces API documentation.", "OpenWiki is not authoritative API documentation.", "stale", 6)
   ];
   const trueClaims: DocsDriftSeedClaim[] = [
     claim(
