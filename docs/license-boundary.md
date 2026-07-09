@@ -1,12 +1,12 @@
 # NeonDiff License Boundary
 
-This document is the canonical public-beta wording for NeonDiff licensing and
+This document is the canonical public-release wording for NeonDiff licensing and
 commercial boundaries. Copy these claims into README, setup docs, website copy,
 CLI help, package metadata, and release notes instead of inventing new wording.
 
 ## Short Copy
 
-NeonDiff is source-available beta software, not open-source software. Public
+NeonDiff is source-available commercial software, not open-source software. Public
 open-source repository review is free. Private, internal, commercial,
 proprietary, hosted, marketplace, binary redistribution, and auto-updates require
 an active paid NeonDiff license.
@@ -44,7 +44,7 @@ The public-repository grant is based on repository visibility and use case:
 - Public repos used primarily for proprietary or commercial distribution:
   paid license required unless Electric Sheep grants an explicit exception.
 
-The default config may keep license enforcement disabled for internal beta
+The default config may keep license enforcement disabled for internal prerelease
 workers. Public/private product installs should enable license enforcement and
 keep `license.publicReposFree` true when the public free path is intended.
 
@@ -75,7 +75,7 @@ logs.
 
 Use:
 
-- "source-available beta"
+- "source-available commercial software"
 - "free for public open-source repositories"
 - "private and commercial repository review requires a paid NeonDiff license"
 - "$1/month or $10/year individual support license"
@@ -112,7 +112,7 @@ Avoid:
 
 CLI setup/help copy should say:
 
-> NeonDiff is source-available beta software. Public open-source repository
+> NeonDiff is source-available commercial software. Public open-source repository
 > review is free. Private, internal, and commercial repository review requires
 > an active paid NeonDiff license. Individual support tiers are $1/month or
 > $10/year, organization support is $100/year, trials are 7 days for individuals
@@ -131,4 +131,4 @@ Private-repo failure copy should say:
 - License/commercial boundary gate: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/104
 - Pricing implementation: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/105
 - License activation implementation: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/111
-- Public beta release readiness: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/232
+- Public release readiness: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/396
