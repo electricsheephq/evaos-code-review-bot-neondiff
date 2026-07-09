@@ -322,7 +322,6 @@ export function runDocsDriftEval(
   const suggestionsPath = join(outputRoot, "suggested-doc-edits.md");
   const summaryPath = join(outputRoot, "docs-drift-summary.json");
   const reportPath = join(outputRoot, "docs-drift-report.md");
-  writeFileSync(suggestionsPath, formatDocsDriftSuggestions(suggestions), "utf8");
   const summaryWithoutInventory: Omit<DocsDriftEvalSummary, "artifactInventory"> = {
     evalName,
     artifactVersion: "0.1",
@@ -352,7 +351,12 @@ export function runDocsDriftEval(
     proofBoundary: "suggest-only docs-drift eval artifact; no docs, source, config, workflow, daemon, or GitHub comments are modified"
   };
   assertNoSecretLikeText(summaryWithoutInventory, "docs-drift summary");
-  writeJson(reportPath, buildDocsDriftReport(summaryWithoutInventory));
+  const suggestionsText = formatDocsDriftSuggestions(suggestions);
+  const reportText = buildDocsDriftReport(summaryWithoutInventory);
+  assertNoSecretLikeText(suggestionsText, "docs-drift suggestions");
+  assertNoSecretLikeText(reportText, "docs-drift report");
+  writeFileSync(suggestionsPath, suggestionsText, "utf8");
+  writeJson(reportPath, reportText);
   const artifactInventory = buildArtifactInventory(outputRoot, [
     "suggested-doc-edits.md",
     "docs-drift-report.md"
@@ -500,8 +504,10 @@ function evaluateDocsDriftClaim(input: {
   claimSummary: DocsDriftEvalSummary["claims"][number];
   suggestion?: DocsDriftSuggestion;
 } {
-  const docText = readWorktreeFile(input.input.worktreePath, input.claim.docPath);
-  const sourceText = readWorktreeFile(input.input.worktreePath, input.claim.sourcePath);
+  const docFile = readWorktreeFile(input.input.worktreePath, input.claim.docPath, "docPath");
+  const sourceFile = readWorktreeFile(input.input.worktreePath, input.claim.sourcePath, "sourcePath");
+  const docText = docFile.ok ? docFile.text : "";
+  const sourceText = sourceFile.ok ? sourceFile.text : "";
   const docContainsClaim = docText.includes(input.claim.claim);
   const sourceContainsCurrentText = sourceText.includes(input.claim.currentText);
   const packetSectionIds = input.packet.sectionIdsBySourcePath.get(input.claim.sourcePath) ?? [];
@@ -511,17 +517,24 @@ function evaluateDocsDriftClaim(input: {
     sourceBacked &&
     input.claim.claim.trim() !== input.claim.currentText.trim();
   const ok = input.claim.expected === "stale" ? shouldSuggest : !shouldSuggest;
-  const detail = !docContainsClaim
-    ? "doc claim text not found"
-    : !sourceContainsCurrentText
-      ? "source evidence text not found"
-      : packetSectionIds.length === 0
-        ? "source path not present in curated packet"
-        : shouldSuggest
-          ? input.claim.expected === "true"
-            ? "true trap would be rewritten; counted as material false positive"
-            : "stale claim suggested with source citation"
-          : "claim left unchanged";
+  let detail: string;
+  if (!docFile.ok) {
+    detail = `doc file unreadable: ${docFile.error}`;
+  } else if (!sourceFile.ok) {
+    detail = `source file unreadable: ${sourceFile.error}`;
+  } else if (!docContainsClaim) {
+    detail = "doc claim text not found";
+  } else if (!sourceContainsCurrentText) {
+    detail = "source evidence text not found";
+  } else if (packetSectionIds.length === 0) {
+    detail = "source path not present in curated packet";
+  } else if (shouldSuggest) {
+    detail = input.claim.expected === "true"
+      ? "true trap would be rewritten; counted as material false positive"
+      : "stale claim suggested with source citation";
+  } else {
+    detail = "claim left unchanged";
+  }
   return {
     claimSummary: {
       id: input.claim.id,
@@ -549,13 +562,20 @@ function evaluateDocsDriftClaim(input: {
   };
 }
 
-function readWorktreeFile(worktreePath: string, relativePath: string): string {
-  const filePath = resolveExistingFileInside(worktreePath, relativePath, "path");
-  if (!filePath.ok) return "";
+function readWorktreeFile(
+  worktreePath: string,
+  relativePath: string,
+  label: string
+): { ok: true; text: string } | { ok: false; error: string } {
+  const filePath = resolveExistingFileInside(worktreePath, relativePath, label);
+  if (!filePath.ok) return { ok: false, error: redactSecrets(filePath.error) };
   try {
-    return readFileSync(filePath.path, "utf8");
-  } catch {
-    return "";
+    return { ok: true, text: readFileSync(filePath.path, "utf8") };
+  } catch (error) {
+    return {
+      ok: false,
+      error: redactSecrets(`could not read ${relativePath}: ${error instanceof Error ? error.message : String(error)}`)
+    };
   }
 }
 

@@ -489,6 +489,56 @@ describe("OpenWiki eval gates", () => {
     expect(readFileSync(result.artifacts["docs-drift-summary.json"]!, "utf8")).toContain("[redacted-secret]");
   });
 
+  it("records explicit docs-drift details when doc or source files are missing", () => {
+    const missingDoc = createDocsDriftFixture();
+    const missingSource = createDocsDriftFixture();
+    const missingDocOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-missing-doc-"));
+    const missingSourceOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-missing-source-"));
+    roots.push(missingDoc.root, missingSource.root, missingDocOutput, missingSourceOutput);
+    rmSync(join(missingDoc.root, "docs", "repo-wiki-packet.md"));
+    rmSync(join(missingSource.root, "src", "repo-wiki-context.ts"));
+
+    const missingDocResult = runDocsDriftEval({
+      runId: "docs-drift-missing-doc",
+      repo,
+      headSha,
+      worktreePath: missingDoc.root,
+      packetPath: missingDoc.packetPath,
+      thresholds: { minStaleCaught: 1 },
+      claims: [buildDocsDriftClaims()[0]!]
+    }, {
+      outputRoot: missingDocOutput,
+      now: new Date(generatedAt)
+    });
+    const missingSourceResult = runDocsDriftEval({
+      runId: "docs-drift-missing-source",
+      repo,
+      headSha,
+      worktreePath: missingSource.root,
+      packetPath: missingSource.packetPath,
+      thresholds: { minStaleCaught: 1 },
+      claims: [buildDocsDriftClaims()[0]!]
+    }, {
+      outputRoot: missingSourceOutput,
+      now: new Date(generatedAt)
+    });
+
+    expect(missingDocResult.ok).toBe(false);
+    expect(missingDocResult.summary.claims[0]).toMatchObject({
+      id: "stale-raw-prompt",
+      detected: "not_suggested",
+      ok: false,
+      detail: "doc file unreadable: docPath does not exist"
+    });
+    expect(missingSourceResult.ok).toBe(false);
+    expect(missingSourceResult.summary.claims[0]).toMatchObject({
+      id: "stale-raw-prompt",
+      detected: "not_suggested",
+      ok: false,
+      detail: "source file unreadable: sourcePath does not exist"
+    });
+  });
+
   it("fails closed before docs-drift summaries can include secret-like metadata", () => {
     const { packetPath, root } = createDocsDriftFixture();
     const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-summary-secret-"));
@@ -509,6 +559,7 @@ describe("OpenWiki eval gates", () => {
     })).toThrow("docs-drift summary contains secret-like text");
     expect(existsSync(join(outputRoot, "docs-drift-summary.json"))).toBe(false);
     expect(existsSync(join(outputRoot, "docs-drift-report.md"))).toBe(false);
+    expect(existsSync(join(outputRoot, "suggested-doc-edits.md"))).toBe(false);
   });
 });
 
