@@ -39,7 +39,12 @@ describe("local HTML dashboard", () => {
       },
       items: {
         license: expect.objectContaining({ id: "license", redacted: true }),
-        githubApp: expect.objectContaining({ id: "githubApp", state: "not_configured", redacted: true }),
+        githubApp: expect.objectContaining({
+          id: "githubApp",
+          state: "not_configured",
+          redacted: true,
+          metadata: expect.objectContaining({ clientIdConfigured: false })
+        }),
         daemon: expect.objectContaining({ id: "daemon", state: "not_configured", redacted: true }),
         provider: expect.objectContaining({ id: "provider", state: "configured_unverified", redacted: true })
       },
@@ -60,6 +65,34 @@ describe("local HTML dashboard", () => {
     expect(html).toContain("Daemon");
     expect(html).toContain("Provider");
     expect(html).toContain("openai-compatible");
+  });
+
+  it("reports GitHub App client-id readiness without exposing user tokens", async () => {
+    const config = loadConfigFromObject({
+      github: {
+        appId: "4184532",
+        clientId: "Iv1.publicclientid123",
+        botLogin: "neondiff-review-bot"
+      }
+    });
+    const status = await buildLocalDashboardStatus({
+      config,
+      configPath: "/Volumes/LEXAR/Codex/neondiff/config.local.json",
+      configExists: true,
+      now: new Date("2026-07-08T12:00:00.000Z")
+    });
+
+    expect(status.items.githubApp).toMatchObject({
+      id: "githubApp",
+      state: "configured_unverified",
+      redacted: true,
+      metadata: {
+        appIdConfigured: true,
+        clientIdConfigured: true,
+        botLogin: "neondiff-review-bot"
+      }
+    });
+    expect(JSON.stringify(status)).not.toMatch(/ghu_|ghr_|github_pat_|ghp_/);
   });
 
   it("verifies provider API key input without echoing the submitted key", async () => {
