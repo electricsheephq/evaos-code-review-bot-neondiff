@@ -17,17 +17,25 @@ struct OverviewView: View {
 
                 OperatorSection("Local Dashboard Launcher") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("The Mac launcher opens the same local HTML dashboard as the CLI. Provider, license, GitHub App, and daemon readiness remain redacted in the browser dashboard.")
+                        Text("The Mac app stays in control on launch. Start the local dashboard service here, then open the browser dashboard only when you choose to inspect the full HTML setup surface.")
                             .operatorBodyText()
                             .fixedSize(horizontal: false, vertical: true)
 
                         HStack(spacing: 10) {
-                            Button { model.openDashboard() } label: {
-                                Label("Open Dashboard", systemImage: "safari")
+                            Button { model.startDashboardServer() } label: {
+                                Label("Start Local Dashboard", systemImage: "play.circle")
                             }
+                            .accessibilityIdentifier("neondiff-start-dashboard-server")
+
+                            Button { model.openDashboard() } label: {
+                                Label("Open Browser Dashboard", systemImage: "safari")
+                            }
+                            .accessibilityIdentifier("neondiff-open-browser-dashboard")
+
                             Button { model.copyCommand(model.dashboardCommand) } label: {
                                 Label("Copy Dashboard Command", systemImage: "doc.on.doc")
                             }
+                            .accessibilityIdentifier("neondiff-copy-dashboard-command")
                         }
 
                         OperatorCommandText(text: model.dashboardCommand.commandLine, lineLimit: 3)
@@ -35,6 +43,7 @@ struct OverviewView: View {
                 }
 
                 CommandPanel(commands: [
+                    model.dashboardServerCommand,
                     model.dashboardCommand,
                     model.statusCommand,
                     model.startDaemonDryRunCommand,
@@ -43,21 +52,35 @@ struct OverviewView: View {
                 ], copy: model.copyCommand)
 
                 HStack(spacing: 10) {
-                    Button { model.openDashboard() } label: {
-                        Label("Dashboard", systemImage: "macwindow")
+                    Button { model.startDashboardServer() } label: {
+                        Label("Start Dashboard", systemImage: "play.circle")
                     }
+                    .accessibilityIdentifier("neondiff-overview-start-dashboard")
+
+                    Button { model.openDashboard() } label: {
+                        Label("Open Dashboard", systemImage: "macwindow")
+                    }
+                    .accessibilityIdentifier("neondiff-overview-open-dashboard")
+
                     Button { model.refreshStatus() } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
+                    .accessibilityIdentifier("neondiff-refresh-status")
+
                     Button { model.inspectConfig() } label: {
                         Label("Load Config", systemImage: "doc.text.magnifyingglass")
                     }
+                    .accessibilityIdentifier("neondiff-load-config")
+
                     Button { model.previewStartDaemon() } label: {
                         Label("Preview Start", systemImage: "play.circle")
                     }
+                    .accessibilityIdentifier("neondiff-preview-start-daemon")
+
                     Button { model.previewStopDaemon() } label: {
                         Label("Preview Stop", systemImage: "stop.circle")
                     }
+                    .accessibilityIdentifier("neondiff-preview-stop-daemon")
                 }
 
                 if let lastError = model.lastError, !lastError.isEmpty {

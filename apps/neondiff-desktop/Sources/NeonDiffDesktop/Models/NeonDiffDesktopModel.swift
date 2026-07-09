@@ -24,7 +24,6 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     private let userDefaults: UserDefaults
     private let keychain: DesktopSecretStoring
-    private var didAutoOpenDashboard = false
 
     init(
         userDefaults: UserDefaults = .standard,
@@ -49,6 +48,10 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     var dashboardCommand: DesktopCommand {
         NeonDiffCommandBuilder.dashboard(cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel)
+    }
+
+    var dashboardServerCommand: DesktopCommand {
+        NeonDiffCommandBuilder.dashboard(cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel, openBrowser: false)
     }
 
     var startDaemonDryRunCommand: DesktopCommand {
@@ -90,39 +93,46 @@ final class NeonDiffDesktopModel: ObservableObject {
         runCLI(arguments: ["daemon", "status", "--config", configPath, "--launchd-label", launchdLabel], displayCommand: statusCommand)
     }
 
-    func openDashboardOnLaunch() {
-        guard !didAutoOpenDashboard else { return }
-        didAutoOpenDashboard = true
-        openDashboard()
+    func openDashboard() {
+        launchDashboard(openBrowser: true)
     }
 
-    func openDashboard() {
-        persistLocalSettings()
-        lastCommandLine = dashboardCommand.commandLine
-        dashboardLaunchStatus = "starting"
-        let executablePath = cliPath
-        let arguments = ["dashboard", "--config", configPath, "--launchd-label", launchdLabel, "--open", "true"]
+    func startDashboardServer() {
+        launchDashboard(openBrowser: false)
+    }
 
-        Task.detached {
-            let client = NeonDiffCLIClient(
-                executablePath: executablePath,
-                workingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
-            )
+    private func launchDashboard(openBrowser: Bool) {
+        persistLocalSettings()
+        let command = openBrowser ? dashboardCommand : dashboardServerCommand
+        lastCommandLine = command.commandLine
+        dashboardLaunchStatus = openBrowser ? "opening browser" : "starting server"
+        let executablePath = cliPath
+        let arguments = ["dashboard", "--config", configPath, "--launchd-label", launchdLabel, "--open", openBrowser ? "true" : "false"]
+        let workingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
+
+        Task { [weak self] in
+            guard let self else { return }
             do {
-                let result = try client.launchDetached(arguments: arguments)
-                await MainActor.run {
-                    self.dashboardProcessIdentifier = result.processIdentifier
-                    self.dashboardLaunchStatus = "launched pid \(result.processIdentifier); browser opens the local HTML dashboard"
-                    self.lastError = nil
-                    self.logText = "Started NeonDiff local dashboard from the desktop launcher. The dashboard process opens the browser and serves the same HTML experience as `neondiff dashboard`."
-                }
+                let result = try await Task.detached(priority: .userInitiated) {
+                    let client = NeonDiffCLIClient(
+                        executablePath: executablePath,
+                        workingDirectory: workingDirectory
+                    )
+                    return try client.launchDetached(arguments: arguments)
+                }.value
+                self.dashboardProcessIdentifier = result.processIdentifier
+                self.dashboardLaunchStatus = openBrowser
+                    ? "launched pid \(result.processIdentifier); browser opens the local HTML dashboard"
+                    : "launched pid \(result.processIdentifier); local dashboard server started"
+                self.lastError = nil
+                self.logText = openBrowser
+                    ? "Started NeonDiff local dashboard from the desktop launcher and opened the browser dashboard."
+                    : "Started NeonDiff local dashboard server from the desktop launcher without opening a browser tab."
             } catch {
-                await MainActor.run {
-                    self.dashboardProcessIdentifier = nil
-                    self.dashboardLaunchStatus = "failed"
-                    self.lastError = NeonDiffRedactor.redact(error.localizedDescription)
-                    self.logText = self.lastError ?? "Unknown dashboard launch error"
-                }
+                self.dashboardProcessIdentifier = nil
+                self.dashboardLaunchStatus = "failed"
+                self.lastError = NeonDiffRedactor.redact(error.localizedDescription)
+                self.logText = self.lastError ?? "Unknown dashboard launch error"
             }
         }
     }
