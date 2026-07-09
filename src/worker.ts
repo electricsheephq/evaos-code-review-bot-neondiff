@@ -51,6 +51,12 @@ import { buildRepoMemoryPacket, readRepoMemoryMarkdown, type RepoMemoryPacket } 
 import { ReviewRunBudget } from "./review-budget.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import {
+  buildLeanReviewShadow,
+  buildReviewLensPacket,
+  type ReviewLensPacket,
+  type ReviewLensSurface
+} from "./review-lenses.js";
+import {
   postReviewStatusComment,
   type ReviewStatusCommentGithub,
   type ReviewStatusCommentState
@@ -1464,6 +1470,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       config,
       evidenceDir
     });
+    const reviewLensContext = buildReviewLensContext({
+      config,
+      surface: "pr_shadow",
+      evidenceDir,
+      files: reviewFiles
+    });
     const gitnexusContext = buildGitNexusContext({
       config,
       repo,
@@ -1486,6 +1498,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       files: filesForPrompt,
       repoProfile: repoPolicy.profile,
       ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
+      ...(reviewLensContext.packet ? { reviewLensPacket: reviewLensContext.packet } : {}),
       ...(repoMemory.packet ? { repoMemoryPacket: repoMemory.packet } : {}),
       ...(gitnexusContext.packet ? { gitnexusContextPacket: gitnexusContext.packet } : {}),
       ...(githubRelatedContext.packet ? { githubRelatedContextPacket: githubRelatedContext.packet } : {}),
@@ -2317,6 +2330,37 @@ export function buildSkillPackContext(input: {
 
   writeRedactedJson(join(input.evidenceDir, "skill-pack-context-packet.json"), packetResult);
   writeRedactedText(join(input.evidenceDir, "skill-pack-context-packet.md"), packetResult.packet.markdown);
+  return { packet: packetResult.packet };
+}
+
+export function buildReviewLensContext(input: {
+  config: BotConfig;
+  surface: ReviewLensSurface;
+  evidenceDir: string;
+  files?: PullFilePatch[];
+}): { packet?: ReviewLensPacket } {
+  const lensConfig = input.config.reviewLenses;
+  if (!lensConfig?.enabled) return {};
+
+  const packetResult = buildReviewLensPacket({
+    config: lensConfig,
+    surface: input.surface
+  });
+
+  if (!packetResult.ok) {
+    writeRedactedJson(join(input.evidenceDir, `review-lens-${input.surface}-packet-error.json`), packetResult);
+    throw new Error(`Review lens context packet failed closed: ${packetResult.error}`);
+  }
+  if (packetResult.packet.lenses.length === 0) {
+    writeRedactedJson(join(input.evidenceDir, `review-lens-${input.surface}-packet.json`), packetResult);
+    return {};
+  }
+
+  writeRedactedJson(join(input.evidenceDir, `review-lens-${input.surface}-packet.json`), packetResult);
+  writeRedactedText(join(input.evidenceDir, `review-lens-${input.surface}-packet.md`), packetResult.packet.markdown);
+  if (input.surface === "pr_shadow" && input.files && packetResult.packet.lenses.some((lens) => lens.id === "lean")) {
+    writeRedactedJson(join(input.evidenceDir, "lean-review-shadow.json"), buildLeanReviewShadow({ files: input.files }));
+  }
   return { packet: packetResult.packet };
 }
 

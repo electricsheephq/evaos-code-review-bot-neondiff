@@ -254,6 +254,36 @@ PR's changed surface instead of a flat FIFO priority (#301, `src/scheduler.ts`).
 - **`elevatedPriority` must be `<= docsOnlyPriority` whenever `enabled` is `true`.** Config validation fails closed if this invariant is violated, since a higher numeric value leases *later* and an inverted ordering would mean docs-only PRs jump ahead of elevated-risk ones.
 - **Never de-prioritizes a self-repo below its existing elevation**, and elevation is derived solely from the already-shipped changed-surface validation report — this feature introduces no new path-classification logic.
 
+### `reviewLenses`
+
+`config.reviewLenses` controls default-off advisory review lenses (`src/review-lenses.ts`).
+Lenses are small built-in text packets for first-principles, architecture, decision, and lean
+review. They are rendered like other bounded context packets, not as native ZCode skills.
+
+| Key | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | Master switch. When `false`, no lens packet is built and the review prompt is unchanged. |
+| `packetVersion` | `string` | `review-lens-packet-v0.1` | Packet schema/version marker written into evidence. |
+| `active` | `Array<{id,surface,mode}>` | `[]` | Explicit lens activations. Allowed ids: `first_principles`, `architecture`, `decision`, `lean`. Allowed surfaces: `issue_enrichment`, `pr_shadow`, `walkthrough`. Allowed modes: `dry_run`, `summary`, `shadow`. |
+| `maxLensBytes` | `integer` (`>= 1`) | `4000` | Per-lens byte cap before a lens is omitted from the packet. |
+| `maxPacketBytes` | `integer` (`>= 500`) | `12000` | Total rendered packet cap. Lenses over budget are omitted and recorded in packet evidence. |
+
+**Safety invariants:**
+
+- **No native capability expansion.** Lens packets cannot enable ZCode `skill: true`, tools, MCP,
+  shell, web, memory, agents, writes, comments, or reviews. Lens text that appears to request those
+  capabilities is omitted.
+- **Advisory only.** Lenses cannot override the JSON schema, current-head validation, redaction,
+  deterministic gate, valid RIGHT-side line checks, or posting policy.
+- **PR review is shadow-first.** Lean/Ponytail-style suggestions are written as evidence only and are
+  never eligible for `REQUEST_CHANGES`.
+- **Issue enrichment stays separate.** First-principles and architecture lens sections may appear in
+  issue-enrichment planner packets only when the separate issue-enrichment allowlist/throttle lane is
+  already active. They do not scan old backlog issues by themselves.
+- **Decision lens is ledger-only.** Decision output can be recorded as outcome-ledger evidence, but it
+  does not change the GitHub review verdict until a later calibrated promotion explicitly designs that
+  path.
+
 ### `repoMemory`
 
 `config.repoMemory` controls the durable per-repo memory packet (policy notes, machine facts,

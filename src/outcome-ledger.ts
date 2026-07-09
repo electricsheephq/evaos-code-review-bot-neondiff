@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+import type { ReviewLensId } from "./review-lenses.js";
 import type { PullFilePatch, PullRequestSummary, ReviewPlan } from "./types.js";
 
 export type OutcomeLedgerSubjectType = "pull_request" | "issue";
@@ -39,6 +40,7 @@ export interface OutcomeLedgerInput {
   proofGaps?: OutcomeLedgerProofGapInput[];
   safetyGates?: OutcomeLedgerSafetyGateInput[];
   reviewerDecision?: OutcomeLedgerReviewerDecisionInput;
+  reviewLensDecision?: OutcomeLedgerReviewLensDecisionInput;
   runtime?: OutcomeLedgerRuntimeInput;
   postMergeOutcome?: OutcomeLedgerPostMergeOutcomeInput;
 }
@@ -108,6 +110,12 @@ export interface OutcomeLedgerReviewerDecisionInput {
   requestedReviewer?: string;
 }
 
+export interface OutcomeLedgerReviewLensDecisionInput {
+  lensId: ReviewLensId;
+  status: OutcomeLedgerDecisionStatus;
+  reason?: string;
+}
+
 export interface OutcomeLedgerRuntimeInput {
   provider?: string;
   model?: string;
@@ -142,6 +150,7 @@ export interface OutcomeLedger {
   proofGaps: Array<Required<Pick<OutcomeLedgerProofGapInput, "id" | "severity" | "summary">> & OutcomeLedgerProofGapInput>;
   safetyGates: Required<Pick<OutcomeLedgerSafetyGateInput, "name" | "status" | "detail">>[];
   reviewerDecision: Required<OutcomeLedgerReviewerDecisionInput>;
+  reviewLensDecision?: Required<OutcomeLedgerReviewLensDecisionInput>;
   runtime: Required<OutcomeLedgerRuntimeInput>;
   postMergeOutcome: Required<OutcomeLedgerPostMergeOutcomeInput>;
   hardGateStatus: {
@@ -213,6 +222,7 @@ export function parseOutcomeLedgerInput(value: unknown): OutcomeLedgerInput {
     proofGaps: optionalArray(value.proofGaps, "proofGaps").map(parseProofGap),
     safetyGates: optionalArray(value.safetyGates, "safetyGates").map(parseSafetyGate),
     reviewerDecision: parseReviewerDecision(value.reviewerDecision),
+    reviewLensDecision: parseReviewLensDecision(value.reviewLensDecision),
     runtime: parseRuntime(value.runtime),
     postMergeOutcome: parsePostMergeOutcome(value.postMergeOutcome)
   };
@@ -243,6 +253,7 @@ export function buildOutcomeLedger(input: OutcomeLedgerInput, options: { now?: D
     proofGaps: (input.proofGaps ?? []).map(normalizeProofGap),
     safetyGates,
     reviewerDecision: normalizeReviewerDecision(input.reviewerDecision),
+    reviewLensDecision: normalizeReviewLensDecision(input.reviewLensDecision),
     runtime,
     postMergeOutcome,
     hardGateStatus,
@@ -420,6 +431,7 @@ export function renderOutcomeLedgerMarkdown(ledger: OutcomeLedger): string {
     "",
     `- Mode: \`${ledger.mode}\``,
     `- Decision: \`${ledger.reviewerDecision.status}\``,
+    ...(ledger.reviewLensDecision ? [`- Review lens decision: \`${ledger.reviewLensDecision.lensId}/${ledger.reviewLensDecision.status}\``] : []),
     `- OK: \`${ledger.ok ? "true" : "false"}\``,
     `- Head: \`${ledger.subject.headSha ?? "n/a"}\``,
     "",
@@ -530,6 +542,15 @@ function normalizeReviewerDecision(decision?: OutcomeLedgerReviewerDecisionInput
     status: decision?.status ?? "unknown",
     reason: redact(decision?.reason ?? ""),
     requestedReviewer: redact(decision?.requestedReviewer ?? "")
+  };
+}
+
+function normalizeReviewLensDecision(decision?: OutcomeLedgerReviewLensDecisionInput): Required<OutcomeLedgerReviewLensDecisionInput> | undefined {
+  if (!decision) return undefined;
+  return {
+    lensId: decision.lensId,
+    status: decision.status,
+    reason: redact(decision.reason ?? "")
   };
 }
 
@@ -689,6 +710,16 @@ function parseReviewerDecision(value: unknown): OutcomeLedgerReviewerDecisionInp
   };
 }
 
+function parseReviewLensDecision(value: unknown): OutcomeLedgerReviewLensDecisionInput | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("reviewLensDecision must be an object");
+  return {
+    lensId: parseReviewLensId(value.lensId),
+    status: parseDecisionStatus(value.status, "reviewLensDecision.status"),
+    reason: optionalString(value.reason, "reviewLensDecision.reason")
+  };
+}
+
 function parseRuntime(value: unknown): OutcomeLedgerRuntimeInput | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error("runtime must be an object");
@@ -800,8 +831,12 @@ function parseSafetyGateStatus(value: unknown): OutcomeLedgerSafetyGateStatus {
   return parseEnum(value, ["pass", "fail", "not_applicable", "unknown"] as const, "safetyGates.status");
 }
 
-function parseDecisionStatus(value: unknown): OutcomeLedgerDecisionStatus {
-  return parseEnum(value, ["block", "warn", "accept_with_evidence", "defer", "human_review", "unknown"] as const, "reviewerDecision.status");
+function parseReviewLensId(value: unknown): ReviewLensId {
+  return parseEnum(value, ["first_principles", "architecture", "decision", "lean"] as const, "reviewLensDecision.lensId");
+}
+
+function parseDecisionStatus(value: unknown, label = "reviewerDecision.status"): OutcomeLedgerDecisionStatus {
+  return parseEnum(value, ["block", "warn", "accept_with_evidence", "defer", "human_review", "unknown"] as const, label);
 }
 
 function parsePostMergeStatus(value: unknown): OutcomeLedgerPostMergeStatus {
