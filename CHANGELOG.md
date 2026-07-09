@@ -16,6 +16,21 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [1.0.2] - docs/releases/v1.0.2.md
+
+### Added
+
+- Publish the desktop GitHub connection foundation merged after `v1.0.1`:
+  GitHub App device authorization, Keychain-backed user-token storage,
+  installation/repository discovery, public/private repo visibility rendering,
+  and repo allowlist config-patch controls.
+
+### Changed
+
+- Refresh stable release manifest, license API health proof, unauthenticated
+  checkout issuance proof, and release notes for the `v1.0.2` public release
+  cut.
+
 ## [1.0.1] - docs/releases/v1.0.1.md
 
 ### Changed

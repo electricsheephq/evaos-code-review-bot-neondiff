@@ -1,0 +1,52 @@
+{
+  "evidenceKind": "desktop_github_smoke_redacted",
+  "releaseVersion": "v1.0.2",
+  "observedAt": "2026-07-09T16:12:03Z",
+  "sourceHead": "7e87832352cc9d8337079b4763c0496739aceea8",
+  "proofBoundary": "Local operator smoke proves the unsigned desktop source workflow after PR #500. It does not claim signed, notarized, Sparkle/appcast, or npm package delivery of the desktop app.",
+  "githubApp": {
+    "appSlug": "evaos-code-review-bot",
+    "appId": "4184532",
+    "deviceFlowEnabled": true,
+    "sensitiveFieldsRedacted": true
+  },
+  "desktopApp": {
+    "bundleId": "com.electricsheephq.NeonDiffDesktop",
+    "githubStatus": "authorized",
+    "userAuthorized": true,
+    "keychainUserTokenPresent": true,
+    "tokensStoredInConfig": false,
+    "browserDeviceFlowSuccess": true
+  },
+  "repoDiscovery": {
+    "installationCount": 3,
+    "discoveredRepositoryCount": 48,
+    "samplePublicRepos": [
+      "100yenadmin/evaOS-GUI",
+      "electricsheephq/evaos-code-review-bot-neondiff",
+      "Martian-Engineering/lossless-claw"
+    ],
+    "privateRepoNamesOmitted": true,
+    "publicPrivateVisibilityRendered": true,
+    "discoveredReposDefaultToDisabled": true
+  },
+  "allowlistPersistence": {
+    "smokeRepoSelected": "electricsheephq/evaos-code-review-bot-neondiff",
+    "configPatchPersisted": true,
+    "tokensPersistedInConfig": false,
+    "appliedToDisposableConfigOnly": true,
+    "livePostingChanged": false
+  },
+  "releaseTruth": {
+    "npmLatestAtSmoke": "1.0.1",
+    "githubReleaseAtSmoke": "v1.0.1",
+    "publicReleaseProof": false,
+    "nextReleaseRequired": "v1.0.2"
+  },
+  "redaction": {
+    "localPathsRemoved": true,
+    "tokensRemoved": true,
+    "rawDeviceCodeRemoved": true,
+    "privateRepoNamesOmitted": true
+  }
+}

@@ -9,7 +9,11 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v1.0.1
+        default: v1.0.2
+
+concurrency:
+  group: publish-npm-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
