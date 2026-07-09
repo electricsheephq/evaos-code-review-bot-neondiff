@@ -315,6 +315,13 @@ describe("NeonDiff public release readiness", () => {
           rollbackTarget: "v1.0.0",
           targetVerifiedBy: "git rev-list -n 1 refs/tags/v1.0.0",
           targetVerifiedSha: "23d66717c0627b25a8c56895bba9627bcdd69cca"
+        },
+        daemon: {
+          rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
+          rollbackCommand: manifest.updateChannels?.daemon?.rollback,
+          rollbackTarget: "v1.0.0",
+          targetVerifiedBy: "git rev-list -n 1 refs/tags/v1.0.0",
+          targetVerifiedSha: "23d66717c0627b25a8c56895bba9627bcdd69cca"
         }
       }
     });

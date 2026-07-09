@@ -165,12 +165,14 @@ The publish workflow fails early in `Verify npm publish token is configured`
 when the secret is absent so release captains do not spend a full release cycle
 before discovering npm authentication is missing.
 
-The required GitHub Actions paths should use Node 24-compatible official
-actions. The public CI and npm publish workflows use `actions/checkout@v5` and
-`actions/setup-node@v5`; runner fleets must be on GitHub Actions runner
+The required GitHub Actions paths should use official action majors compatible
+with the GitHub Actions Node 24 runtime while still installing the project
+runtime pinned by each workflow. The public CI and npm publish workflows use
+`actions/checkout@v5` and `actions/setup-node@v5`, and they continue to install
+Node.js 26 for NeonDiff itself. Runner fleets must be on GitHub Actions runner
 `v2.327.1` or newer for those actions. Pinned Swift or desktop smoke actions
-that still target the older runtime are post-launch desktop-release hygiene
-unless they block the current release.
+that still target the older action runtime are post-launch desktop-release
+hygiene unless they block the current release.
 
 The manifest `rollback` field is intentionally only the source-revert step.
 Full operator rollback runbooks may restart launchd after that source revert,
