@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { formatRepoWikiPacketMarkdown, type RepoWikiPacket, type RepoWikiSourceStatus } from "./repo-wiki-packet.js";
+import {
+  formatRepoWikiPacketMarkdown,
+  REPO_WIKI_PACKET_VERSION,
+  type RepoWikiPacket,
+  type RepoWikiSourceStatus
+} from "./repo-wiki-packet.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const PACKET_FILE_OVERHEAD_BYTES = 64_000;
@@ -235,7 +240,16 @@ function parseRepoWikiContextRaw(
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return { ok: false, error: "Repo wiki packet JSON must be an object" };
     if (typeof parsed.markdown === "string") return packetFromGenericJson(parsed);
-    if (looksLikeRepoWikiPacket(parsed)) return packetFromRepoWikiPacket(parsed, expectedHeadSha);
+    const repoWikiPacketError = validateRepoWikiPacketShape(parsed);
+    if (!repoWikiPacketError && isRepoWikiPacketShape(parsed)) {
+      return packetFromRepoWikiPacket(parsed, expectedHeadSha);
+    }
+    if (looksLikeRepoWikiPacketEnvelope(parsed)) {
+      return {
+        ok: false,
+        error: `Invalid repo wiki packet shape at ${redactSecrets(sourcePath)}: ${repoWikiPacketError}`
+      };
+    }
     return {
       ok: false,
       error: `Unsupported repo wiki packet shape at ${redactSecrets(sourcePath)}`
@@ -297,10 +311,21 @@ function packetFromRepoWikiPacket(packet: RepoWikiPacket, expectedHeadSha?: stri
   ok: true;
   packet: RepoWikiContextPacket;
 } {
-  const markdown = formatRepoWikiPacketMarkdown(packet);
+  const packetVersion = readSafePacketVersion(packet.packetVersion);
+  const staleReason = readSafeMetadataLine(packet.source.staleReason);
+  const safePacket: RepoWikiPacket = {
+    ...packet,
+    packetVersion: packetVersion ?? REPO_WIKI_PACKET_VERSION,
+    source: {
+      ...packet.source,
+      ...(staleReason ? { staleReason } : {})
+    }
+  };
+  if (!staleReason) delete safePacket.source.staleReason;
+  const markdown = formatRepoWikiPacketMarkdown(safePacket);
   const byteEstimate = Buffer.byteLength(markdown, "utf8");
-  const sourceStatus = readFreshness(packet.source.status) ?? "unknown";
-  const sourceHeadMatches = Boolean(expectedHeadSha && packet.source.headSha === expectedHeadSha);
+  const sourceStatus = readFreshness(safePacket.source.status) ?? "unknown";
+  const sourceHeadMatches = Boolean(expectedHeadSha && safePacket.source.headSha === expectedHeadSha);
   const freshness = sourceStatus === "fresh" && !sourceHeadMatches ? "unknown" : sourceStatus;
   return {
     ok: true,
@@ -311,15 +336,15 @@ function packetFromRepoWikiPacket(packet: RepoWikiPacket, expectedHeadSha?: stri
       markdown,
       repoWiki: {
         freshness,
-        degradedMode: packet.degraded || freshness !== "fresh",
-        ...(packet.source.staleReason ? { degradedReason: packet.source.staleReason } : {}),
-        packetVersion: packet.packetVersion
+        degradedMode: safePacket.degraded || freshness !== "fresh",
+        ...(staleReason ? { degradedReason: staleReason } : {}),
+        ...(packetVersion ? { packetVersion } : {})
       }
     }
   };
 }
 
-function looksLikeRepoWikiPacket(input: unknown): input is RepoWikiPacket {
+function looksLikeRepoWikiPacketEnvelope(input: unknown): boolean {
   if (!isRecord(input)) return false;
   return (
     isRecord(input.repo) &&
@@ -328,6 +353,74 @@ function looksLikeRepoWikiPacket(input: unknown): input is RepoWikiPacket {
     Array.isArray(input.includedSections) &&
     typeof input.packetSha === "string"
   );
+}
+
+function validateRepoWikiPacketShape(input: unknown): string | undefined {
+  if (!isRecord(input)) return "Repo wiki packet JSON must be an object";
+  if (!looksLikeRepoWikiPacketEnvelope(input)) return "missing repo/source/sections/packetSha envelope";
+  if (!isRecord(input.repo) || typeof input.repo.fullName !== "string") return "repo.fullName must be a string";
+  if (!isRecord(input.source)) return "source must be an object";
+  if (typeof input.source.ref !== "string") return "source.ref must be a string";
+  if (!readFreshness(input.source.status)) return "source.status must be fresh, stale, missing, or unknown";
+  if (typeof input.generatedAt !== "string") return "generatedAt must be a string";
+  if (typeof input.advisory !== "string") return "advisory must be a string";
+  if (typeof input.degraded !== "boolean") return "degraded must be a boolean";
+  if (!isBudget(input.byteBudget)) return "byteBudget must include numeric maxBytes and usedBytes";
+  if (!isTokenBudget(input.tokenBudget)) return "tokenBudget must include numeric maxTokens and usedTokens";
+  if (!isRecord(input.redaction)) return "redaction must be an object";
+  if (input.redaction.status !== "passed" && input.redaction.status !== "redacted") {
+    return "redaction.status must be passed or redacted";
+  }
+  if (typeof input.redaction.replacementCount !== "number") return "redaction.replacementCount must be a number";
+  const includedSections = input.includedSections;
+  if (!Array.isArray(includedSections)) return "includedSections must be an array";
+  if (!Array.isArray(input.excludedSections)) return "excludedSections must be an array";
+  if (!Array.isArray(input.includedFiles)) return "includedFiles must be an array";
+  for (const section of includedSections) {
+    if (!isRenderableIncludedSection(section)) return "includedSections entries must include renderable section fields";
+  }
+  return undefined;
+}
+
+function isRepoWikiPacketShape(input: unknown): input is RepoWikiPacket {
+  return validateRepoWikiPacketShape(input) === undefined;
+}
+
+function isBudget(value: unknown): value is { maxBytes: number; usedBytes: number } {
+  return isRecord(value) && typeof value.maxBytes === "number" && typeof value.usedBytes === "number";
+}
+
+function isTokenBudget(value: unknown): value is { maxTokens: number; usedTokens: number } {
+  return isRecord(value) && typeof value.maxTokens === "number" && typeof value.usedTokens === "number";
+}
+
+function isRenderableIncludedSection(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
+    typeof value.body === "string" &&
+    typeof value.order === "number" &&
+    Array.isArray(value.sourceFiles) &&
+    value.sourceFiles.every((sourceFile) => typeof sourceFile === "string") &&
+    typeof value.byteLength === "number" &&
+    typeof value.tokenEstimate === "number" &&
+    typeof value.truncated === "boolean" &&
+    typeof value.redacted === "boolean"
+  );
+}
+
+function readSafePacketVersion(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9._-]{1,80}$/.test(trimmed) ? trimmed : undefined;
+}
+
+function readSafeMetadataLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = redactSecrets(value).replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
 }
 
 function readFreshness(value: unknown): RepoWikiSourceStatus | "unknown" | undefined {
