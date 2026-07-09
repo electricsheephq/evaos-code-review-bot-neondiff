@@ -121,6 +121,19 @@ describe("npm release policy", () => {
     ], { cwd: root, encoding: "utf8" });
     expect(rejected.status).not.toBe(0);
     expect(rejected.stderr).toContain("release tag commit must be an ancestor of protected main");
+
+    const unsafeCandidate = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "main"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["tag", "-a", "v1.0.5", "-m", "v1.0.5"], { cwd: root });
+    const candidateRejected = spawnSync(process.execPath, [
+      policyScript,
+      "verify-git",
+      "--tag", "v1.0.5",
+      "--candidate-head", unsafeCandidate,
+      "--main-ref", "refs/remotes/origin/main"
+    ], { cwd: root, encoding: "utf8" });
+    expect(candidateRejected.status).not.toBe(0);
+    expect(candidateRejected.stderr).toContain("declared release candidate head must be an ancestor of the release tag commit");
   });
 
   it("rejects an existing npm tarball whose integrity differs from the reviewed pack", () => {
@@ -149,5 +162,37 @@ describe("npm release policy", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("npm tarball integrity does not match the reviewed pack");
+
+    writeFileSync(remotePath, JSON.stringify({
+      version: "1.0.3",
+      "dist.integrity": "sha512-reviewed",
+      "dist.shasum": "2222222222222222222222222222222222222222"
+    }));
+    const shasumRejected = spawnSync(process.execPath, [
+      policyScript,
+      "verify-pack",
+      "--local-pack", localPath,
+      "--remote-metadata", remotePath,
+      "--expected-version", "1.0.3"
+    ], { encoding: "utf8" });
+    expect(shasumRejected.status).not.toBe(0);
+    expect(shasumRejected.stderr).toContain("npm tarball shasum does not match the reviewed pack");
+
+    writeFileSync(remotePath, JSON.stringify({
+      version: "1.0.3",
+      "dist.integrity": "sha512-reviewed",
+      "dist.shasum": "1111111111111111111111111111111111111111",
+      gitHead: "2222222222222222222222222222222222222222"
+    }));
+    const gitHeadRejected = spawnSync(process.execPath, [
+      policyScript,
+      "verify-pack",
+      "--local-pack", localPath,
+      "--remote-metadata", remotePath,
+      "--expected-version", "1.0.3",
+      "--expected-git-head", "1111111111111111111111111111111111111111"
+    ], { encoding: "utf8" });
+    expect(gitHeadRejected.status).not.toBe(0);
+    expect(gitHeadRejected.stderr).toContain("npm gitHead does not match the reviewed release tag commit");
   });
 });

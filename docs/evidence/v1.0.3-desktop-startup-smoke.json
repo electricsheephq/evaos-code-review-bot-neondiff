@@ -36,10 +36,13 @@
     "privateRepoNamesOmitted": true
   },
   "artifactRelationship": {
-    "visibleLocalBundleSourceIsCandidateAncestor": true,
-    "hostedWorkflowSourceIsCandidateAncestor": true,
+    "visibleLocalBundleSourceIsCandidateAncestor": false,
+    "hostedWorkflowSourceIsCandidateAncestor": false,
+    "visibleLocalSourcesMatchMergedCandidate": true,
+    "hostedReleaseSurfaceMatchesMergedCandidate": true,
     "visibleLocalBinaryIsHostedArtifact": false,
-    "note": "The visible local smoke and hosted unsigned workflow are separate named artifacts from reviewed ancestors of the merged candidate; their hashes are intentionally recorded separately."
+    "verification": "git diff --quiet visible-source merged-candidate -- apps/neondiff-desktop/Sources; git diff --quiet hosted-source merged-candidate -- apps/neondiff-desktop .github/workflows/desktop-release-smoke.yml .github/workflows/swift-desktop.yml",
+    "note": "PR #506 was squash-merged, so the reviewed branch commits are not Git ancestors of the merged candidate. The visible app sources and hosted release surface match the merged candidate over the stated paths; the local and hosted artifact hashes remain intentionally separate."
   },
   "proofBoundary": "Visible local proof covers the named unsigned local binary at sourceHead only. The hosted macOS 15 artifact is separately identified by workflow head, artifact IDs, and archive SHA and covers compilation, bundle shape, and packaging only. Neither proves signing, notarization, Sparkle updates, or customer-ready installation."
 }

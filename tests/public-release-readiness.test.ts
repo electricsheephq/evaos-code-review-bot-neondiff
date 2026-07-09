@@ -374,6 +374,12 @@ describe("NeonDiff public release readiness", () => {
         localPathsRemoved?: boolean;
         tokensRemoved?: boolean;
       };
+      artifactRelationship?: {
+        visibleLocalBundleSourceIsCandidateAncestor?: boolean;
+        hostedWorkflowSourceIsCandidateAncestor?: boolean;
+        visibleLocalSourcesMatchMergedCandidate?: boolean;
+        hostedReleaseSurfaceMatchesMergedCandidate?: boolean;
+      };
     };
     expect(desktopProof).toMatchObject({
       evidenceKind: "desktop_startup_smoke_redacted",
@@ -401,6 +407,12 @@ describe("NeonDiff public release readiness", () => {
       redaction: {
         localPathsRemoved: true,
         tokensRemoved: true
+      },
+      artifactRelationship: {
+        visibleLocalBundleSourceIsCandidateAncestor: false,
+        hostedWorkflowSourceIsCandidateAncestor: false,
+        visibleLocalSourcesMatchMergedCandidate: true,
+        hostedReleaseSurfaceMatchesMergedCandidate: true
       }
     });
     expect(desktopProof.proofBoundary).toMatch(/signing/i);
