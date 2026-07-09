@@ -209,6 +209,7 @@ describe("NeonDiff public release readiness", () => {
     const proof = JSON.parse(read(manifest.licenseApi?.healthProofPath ?? "")) as {
       evidenceKind?: string;
       releaseVersion?: string;
+      observedAt?: string;
       url?: string;
       statusCode?: number;
       responseBody?: string;
@@ -226,6 +227,7 @@ describe("NeonDiff public release readiness", () => {
     const issuanceProof = JSON.parse(read(manifest.licenseApi?.checkoutIssuanceProofPath ?? "")) as {
       evidenceKind?: string;
       releaseVersion?: string;
+      observedAt?: string;
       statusCode?: number;
       responseBody?: string;
       responseBodySha256?: string;
@@ -237,6 +239,7 @@ describe("NeonDiff public release readiness", () => {
       responseBody: expect.stringContaining("\"unauthorized\"")
     });
     expect(createHash("sha256").update(issuanceProof.responseBody ?? "").digest("hex")).toBe(issuanceProof.responseBodySha256);
+    expect(issuanceProof.observedAt).not.toBe(proof.observedAt);
 
     const authenticatedProof = JSON.parse(read(manifest.licenseApi?.checkoutIssuanceAuthenticatedProofPath ?? "")) as {
       evidenceKind?: string;
@@ -420,6 +423,7 @@ describe("NeonDiff public release readiness", () => {
       }
     });
     expect(desktopProof.artifactRelationship?.verification).not.toContain(".github/workflows/swift-desktop.yml");
+    expect(JSON.stringify(desktopProof)).not.toContain("appcastChecksPassed");
     expect(desktopProof.proofBoundary).toMatch(/signing/i);
     expect(JSON.stringify(desktopProof)).not.toMatch(/\/Volumes\/LEXAR|\/Users\/lume|ghp_|github_pat_|nd_live_|session_id=/);
   });
@@ -519,6 +523,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/cancel-in-progress:\s*false/);
     expect(publish).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0");
     expect(publish).toContain("actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5");
+    expect(publish).toMatch(/persist-credentials:\s*false/);
     expect(publish).not.toMatch(/uses:\s*actions\/(?:checkout|setup-node)@v\d+/);
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/Verify npm publish token is configured/);
@@ -557,5 +562,10 @@ describe("NeonDiff public release readiness", () => {
     );
     expect(publish).toMatch(/default:\s*v1\.0\.3/);
     expect(publish).not.toMatch(/default:\s*v0\.4\.30-beta\.1/);
+
+    const governance = read("docs/release-governance.md");
+    expect(governance).toMatch(/partial quarantine promotion/i);
+    expect(governance).toMatch(/npm dist-tag add neondiff@<version> latest/);
+    expect(governance).toMatch(/npm dist-tag rm neondiff release-candidate/);
   });
 });

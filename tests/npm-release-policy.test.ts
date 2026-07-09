@@ -211,4 +211,23 @@ describe("npm release policy", () => {
     expect(missingGitHeadRejected.status).not.toBe(0);
     expect(missingGitHeadRejected.stderr).toContain("npm gitHead is missing from published package metadata");
   });
+
+  it("receives integrity and shasum from the npm dry-run pack used by the publish gate", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-npm-pack-dry-run-"));
+    roots.push(root);
+    writeFileSync(join(root, "package.json"), JSON.stringify({
+      name: "neondiff-pack-shape-probe",
+      version: "1.0.3",
+      files: ["index.js"]
+    }));
+    writeFileSync(join(root, "index.js"), "export const probe = true;\n");
+
+    const [pack] = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json"], {
+      cwd: root,
+      encoding: "utf8"
+    })) as Array<{ integrity?: string; shasum?: string }>;
+
+    expect(pack.integrity).toMatch(/^sha512-/);
+    expect(pack.shasum).toMatch(/^[a-f0-9]{40}$/);
+  });
 });

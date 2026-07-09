@@ -21,7 +21,7 @@ import { ReviewStateStore } from "../src/state.js";
 describe("beta release status", () => {
   const roots: string[] = [];
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const shippedReleaseValidationNow = new Date("2026-07-09T22:00:00Z");
+  const shippedReleaseValidationNow = new Date("2026-07-09T22:20:00Z");
 
   afterEach(() => {
     vi.useRealTimers();

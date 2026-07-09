@@ -28,7 +28,6 @@
     "metadataArtifactName": "neondiff-desktop-release-smoke-metadata",
     "coreChecksCompiled": true,
     "keychainChecksCompiled": true,
-    "appcastChecksPassed": true,
     "unsignedBundlePackaged": true
   },
   "redaction": {

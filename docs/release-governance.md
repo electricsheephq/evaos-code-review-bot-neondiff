@@ -195,6 +195,39 @@ then promote the package to `latest`. Manual retry runs must resolve the exact
 existing GitHub Release and prove it is published and non-prerelease before
 promotion.
 
+### Partial Quarantine Promotion Recovery
+
+If publication succeeds under `release-candidate` but promotion to `latest`
+does not complete, do not republish, retag, or unpublish the immutable package.
+First compare the package's registry integrity, shasum, `gitHead`, and
+attestation against the reviewed release packet and annotated tag:
+
+```bash
+npm view neondiff@<version> version dist.integrity dist.shasum gitHead dist.attestations --json
+```
+
+Only after that identity check passes, complete the interrupted promotion and
+verify the stable channel:
+
+```bash
+npm dist-tag add neondiff@<version> latest
+test "$(npm view neondiff dist-tags.latest)" = "<version>"
+```
+
+Remove the quarantine tag only when it still points to the same verified
+version. A different value means another release owns the tag and must not be
+changed by this recovery:
+
+```bash
+if [ "$(npm view neondiff dist-tags.release-candidate 2>/dev/null || true)" = "<version>" ]; then
+  npm dist-tag rm neondiff release-candidate
+fi
+```
+
+Record the failed workflow URL, registry identity output, repaired dist-tags,
+and operator in the release tracker. If any identity field is missing or does
+not match, leave `latest` unchanged and treat the package as quarantined.
+
 ## Tag And Release
 
 Create an annotated tag from the merged source SHA:
