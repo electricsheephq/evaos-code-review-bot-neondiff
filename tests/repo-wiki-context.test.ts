@@ -452,6 +452,25 @@ describe("repo wiki advisory context", () => {
     });
   });
 
+  it("accepts fresh packets when packet and worktree head SHAs differ only by abbreviation length", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(packetPath, formatRepoWikiPacketJson(repoWikiPacket("fresh")));
+
+    const result = buildRepoWikiContextPacket({
+      repo,
+      worktreePath: root,
+      config: config(),
+      expectedHeadSha: "abc123".padEnd(40, "0")
+    });
+
+    expect(result.packet).toMatchObject({
+      repoWiki: { freshness: "fresh", degradedMode: false }
+    });
+  });
+
   it("rejects oversized raw packet files before parsing or prompt use", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
     roots.push(root);

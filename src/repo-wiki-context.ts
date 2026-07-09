@@ -74,9 +74,9 @@ export function buildRepoWikiContextPacket(input: {
   }
 
   const sourcePath = resolvePacketPath(input.worktreePath, input.config.packetPath);
-  let isInsideWorktree: boolean;
+  let sourceRealPath: string | undefined;
   try {
-    isInsideWorktree = isExistingPathInsideOrEqual(sourcePath, input.worktreePath);
+    sourceRealPath = resolveExistingPathInsideOrEqual(sourcePath, input.worktreePath);
   } catch (error) {
     if (isMissingPathError(error)) {
       return {
@@ -90,7 +90,7 @@ export function buildRepoWikiContextPacket(input: {
     throw error;
   }
 
-  if (!isInsideWorktree) {
+  if (!sourceRealPath) {
     return {
       omitted: {
         reason: "invalid_packet",
@@ -102,7 +102,7 @@ export function buildRepoWikiContextPacket(input: {
 
   let raw: string;
   try {
-    raw = readFileSync(sourcePath, "utf8");
+    raw = readFileSync(sourceRealPath, "utf8");
   } catch (error) {
     if (isMissingPathError(error)) {
       return {
@@ -218,11 +218,11 @@ function isAbsoluteLike(packetPath: string): boolean {
   return isAbsolute(packetPath) || /^[A-Za-z]:[\\/]/.test(packetPath) || packetPath.startsWith("\\\\");
 }
 
-function isExistingPathInsideOrEqual(candidatePath: string, rootPath: string): boolean {
+function resolveExistingPathInsideOrEqual(candidatePath: string, rootPath: string): string | undefined {
   const rootRealPath = realpathSync.native(rootPath);
   const candidateRealPath = realpathSync.native(candidatePath);
   const rel = relative(rootRealPath, candidateRealPath);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)) ? candidateRealPath : undefined;
 }
 
 function isMissingPathError(error: unknown): boolean {
@@ -331,7 +331,7 @@ function packetFromRepoWikiPacket(packet: RepoWikiPacket, expectedHeadSha?: stri
   const markdown = formatRepoWikiPacketMarkdown(safePacket);
   const byteEstimate = Buffer.byteLength(markdown, "utf8");
   const sourceStatus = readFreshness(safePacket.source.status) ?? "unknown";
-  const sourceHeadMatches = Boolean(expectedHeadSha && safePacket.source.headSha === expectedHeadSha);
+  const sourceHeadMatches = headShaMatches(safePacket.source.headSha, expectedHeadSha);
   const freshness = sourceStatus === "fresh" && !sourceHeadMatches ? "unknown" : sourceStatus;
   return {
     ok: true,
@@ -348,6 +348,15 @@ function packetFromRepoWikiPacket(packet: RepoWikiPacket, expectedHeadSha?: stri
       }
     }
   };
+}
+
+function headShaMatches(packetHeadSha: string | undefined, expectedHeadSha: string | undefined): boolean {
+  const packetSha = packetHeadSha?.trim().toLowerCase();
+  const expectedSha = expectedHeadSha?.trim().toLowerCase();
+  if (!packetSha || !expectedSha) return false;
+  const gitSha = /^[a-f0-9]{6,40}$/;
+  if (!gitSha.test(packetSha) || !gitSha.test(expectedSha)) return packetSha === expectedSha;
+  return packetSha.startsWith(expectedSha) || expectedSha.startsWith(packetSha);
 }
 
 function looksLikeRepoWikiPacketEnvelope(input: unknown): boolean {
