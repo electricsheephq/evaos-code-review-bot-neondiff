@@ -270,12 +270,17 @@
       "description": "Default-off advisory review lenses. These are bounded context packets only; they do not enable tools, native skills, MCP, shell, web, memory, writes, posting escalation, or confidence claims.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "active", "maxLensBytes", "maxPacketBytes"],
+      "required": ["enabled", "packetVersion", "active", "maxLensBytes", "maxPacketBytes"],
       "properties": {
         "enabled": {
           "type": "boolean",
           "const": false,
           "default": false
+        },
+        "packetVersion": {
+          "type": "string",
+          "minLength": 1,
+          "default": "review-lens-packet-v0.1"
         },
         "active": {
           "type": "array",

@@ -289,7 +289,7 @@ export function buildLeanReviewShadow(input: { files: PullFilePatch[]; maxSugges
       });
       continue;
     }
-    if (/\b(class|function)\s+\w*(wrapper|factory|manager)\w*\b/i.test(text)) {
+    if (hasLeanAbstractionSignal(text)) {
       suggestions.push({
         tag: "shrink",
         path: file.filename,
@@ -305,6 +305,13 @@ export function buildLeanReviewShadow(input: { files: PullFilePatch[]; maxSugges
     suggestions,
     proofBoundary: "Lean review shadow is advisory evidence only. It cannot request changes, block a PR, or remove safety/proof gates."
   };
+}
+
+function hasLeanAbstractionSignal(text: string): boolean {
+  return (
+    /\b(?:export\s+)?(?:abstract\s+)?(?:class|function|const|let|var|interface|type)\s+\w*(?:wrapper|factory|manager|service|helper)\w*\b/i.test(text) ||
+    /\b\w*(?:wrapper|factory|manager|service|helper)\w*\s*\.\s*(?:create|build|make|get)\s*\(/i.test(text)
+  );
 }
 
 function renderWithinBudget(input: {

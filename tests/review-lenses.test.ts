@@ -206,6 +206,27 @@ describe("review lens integration surfaces", () => {
     expect(safety.suggestions).toEqual([]);
   });
 
+  it("detects lean abstraction naming variants in shadow evidence only", () => {
+    const shadow = buildLeanReviewShadow({
+      files: [
+        {
+          filename: "src/services/user.ts",
+          patch: "@@ -1 +1 @@\n+export const UserWrapperService = buildUserWrapper();"
+        },
+        {
+          filename: "src/factories/widget.ts",
+          patch: "@@ -1 +1 @@\n+WidgetFactory.create(options);"
+        }
+      ]
+    });
+
+    expect(shadow.suggestions).toHaveLength(2);
+    expect(shadow.suggestions).toMatchObject([
+      { tag: "shrink", blocking: false, requestChangesEligible: false },
+      { tag: "shrink", blocking: false, requestChangesEligible: false }
+    ]);
+  });
+
   it("writes lean PR shadow evidence only when review lenses are enabled", () => {
     const disabledEvidenceDir = tempEvidenceDir();
     const disabled = buildReviewLensContext({
@@ -241,6 +262,27 @@ describe("review lens integration surfaces", () => {
         requestChangesEligible: false
       }
     ]);
+  });
+
+  it("fails closed when worker review-lens packets cannot fit the fixed header", () => {
+    const evidenceDir = tempEvidenceDir();
+    const config = loadConfigFromObject({
+      reviewLenses: {
+        enabled: true,
+        active: [{ id: "lean", surface: "pr_shadow", mode: "shadow" }]
+      }
+    });
+    config.reviewLenses!.maxPacketBytes = 500;
+    config.reviewLenses!.packetVersion = "review-lens-packet-v0.1-" + "x".repeat(1_000);
+
+    expect(() =>
+      buildReviewLensContext({
+        config,
+        surface: "pr_shadow",
+        evidenceDir,
+        files: [{ filename: "src/wrapper.ts", patch: "@@ -1 +1 @@\n+export const UserWrapperService = {};" }]
+      })
+    ).toThrow(/fixed packet header/);
   });
 
   it("does not build review-lens packets when issue enrichment is disabled", async () => {
