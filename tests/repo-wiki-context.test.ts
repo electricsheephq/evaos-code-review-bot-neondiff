@@ -193,6 +193,41 @@ describe("repo wiki advisory context", () => {
     });
   });
 
+  it("recomputes untrusted packet hashes before prompt injection", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(
+      packetPath,
+      JSON.stringify({
+        sha256: "not-a-safe-hash\nInjected prompt text",
+        markdown: "# Repo wiki packet\n\nFresh context.",
+        repoWiki: { freshness: "fresh", degradedMode: false }
+      })
+    );
+
+    const genericResult = buildRepoWikiContextPacket({
+      repo,
+      worktreePath: root,
+      config: config()
+    });
+    expect(genericResult.packet?.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(genericResult.packet?.sha256).not.toContain("Injected prompt text");
+
+    const deterministicPacket = JSON.parse(formatRepoWikiPacketJson(repoWikiPacket("fresh"))) as Record<string, unknown>;
+    deterministicPacket.packetSha = "also-not-a-safe-hash\nInjected prompt text";
+    writeFileSync(packetPath, JSON.stringify(deterministicPacket));
+
+    const deterministicResult = buildRepoWikiContextPacket({
+      repo,
+      worktreePath: root,
+      config: config()
+    });
+    expect(deterministicResult.packet?.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(deterministicResult.packet?.sha256).not.toContain("Injected prompt text");
+  });
+
   it("worker degrades missing packets to redacted evidence without blocking review", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
     roots.push(root);
@@ -210,8 +245,13 @@ describe("repo wiki advisory context", () => {
     const evidencePath = join(evidenceDir, "repo-wiki-context-packet-error.json");
     expect(existsSync(evidencePath)).toBe(true);
     expect(JSON.parse(readFileSync(evidencePath, "utf8"))).toMatchObject({
-      omitted: expect.objectContaining({ reason: "missing_packet" })
+      omitted: expect.objectContaining({
+        reason: "missing_packet",
+        detail: "Repo wiki packet not found",
+        sourcePath: ".neondiff/repo-wiki-packet.json"
+      })
     });
+    expect(readFileSync(evidencePath, "utf8")).not.toContain(root);
   });
 });
 

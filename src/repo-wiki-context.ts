@@ -54,12 +54,13 @@ export function buildRepoWikiContextPacket(input: {
   }
 
   const sourcePath = resolvePacketPath(input.worktreePath, input.config.packetPath);
+  const evidenceSourcePath = formatPacketPathForEvidence(input.config.packetPath);
   if (!existsSync(sourcePath)) {
     return {
       omitted: {
         reason: "missing_packet",
-        detail: `Repo wiki packet not found at ${sourcePath}`,
-        sourcePath
+        detail: "Repo wiki packet not found",
+        sourcePath: evidenceSourcePath
       }
     };
   }
@@ -70,15 +71,15 @@ export function buildRepoWikiContextPacket(input: {
       omitted: {
         reason: "secret_detected",
         detail: "Repo wiki packet contains secret-like text",
-        sourcePath
+        sourcePath: evidenceSourcePath
       }
     };
   }
 
-  const parsed = parseRepoWikiContextRaw(raw, sourcePath);
+  const parsed = parseRepoWikiContextRaw(raw, evidenceSourcePath);
   if (!parsed.ok) {
     return {
-      omitted: { reason: "invalid_packet", detail: parsed.error, sourcePath }
+      omitted: { reason: "invalid_packet", detail: parsed.error, sourcePath: evidenceSourcePath }
     };
   }
 
@@ -88,7 +89,7 @@ export function buildRepoWikiContextPacket(input: {
       omitted: {
         reason: "budget_exceeded",
         detail: `Repo wiki packet exceeded maxPacketBytes (${byteEstimate} > ${input.config.maxPacketBytes})`,
-        sourcePath
+        sourcePath: evidenceSourcePath
       }
     };
   }
@@ -98,7 +99,7 @@ export function buildRepoWikiContextPacket(input: {
       omitted: {
         reason: "secret_detected",
         detail: "Rendered repo wiki packet contains secret-like text",
-        sourcePath
+        sourcePath: evidenceSourcePath
       }
     };
   }
@@ -109,7 +110,7 @@ export function buildRepoWikiContextPacket(input: {
       omitted: {
         reason: "stale_packet",
         detail: "Repo wiki packet is not fresh and includeStaleContext is false",
-        sourcePath
+        sourcePath: evidenceSourcePath
       }
     };
   }
@@ -121,7 +122,7 @@ export function buildRepoWikiContextPacket(input: {
       tokenEstimate: Math.max(1, Math.ceil(byteEstimate / 4)),
       repoWiki: {
         ...parsed.packet.repoWiki,
-        sourcePath
+        sourcePath: evidenceSourcePath
       }
     }
   };
@@ -129,6 +130,10 @@ export function buildRepoWikiContextPacket(input: {
 
 function resolvePacketPath(worktreePath: string, packetPath: string): string {
   return isAbsolute(packetPath) ? packetPath : resolve(worktreePath, packetPath);
+}
+
+function formatPacketPathForEvidence(packetPath: string): string {
+  return isAbsolute(packetPath) ? "[absolute-packet-path]" : packetPath;
 }
 
 function parseRepoWikiContextRaw(
@@ -192,7 +197,7 @@ function packetFromGenericJson(parsed: Record<string, unknown>): {
   return {
     ok: true,
     packet: {
-      sha256: typeof parsed.sha256 === "string" ? parsed.sha256 : sha256(markdown),
+      sha256: sha256(markdown),
       byteEstimate,
       tokenEstimate: Math.max(1, Math.ceil(byteEstimate / 4)),
       markdown,
@@ -214,7 +219,7 @@ function packetFromRepoWikiPacket(packet: RepoWikiPacket): {
   return {
     ok: true,
     packet: {
-      sha256: packet.packetSha || sha256(markdown),
+      sha256: sha256(markdown),
       byteEstimate,
       tokenEstimate: Math.max(1, Math.ceil(byteEstimate / 4)),
       markdown,
