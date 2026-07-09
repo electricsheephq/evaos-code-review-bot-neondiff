@@ -13,11 +13,15 @@ const OPENWIKI_DIR = "openwiki";
 const OPENWIKI_METADATA_PATH = "openwiki/.last-update.json";
 const DEFAULT_MAX_PACKET_BYTES = 12_000;
 const GIT_COMMAND_TIMEOUT_MS = 5_000;
+const MAX_OPENWIKI_SCAN_DEPTH = 8;
+const MAX_OPENWIKI_SCAN_ENTRIES = 500;
 const REPO_PATH_EXTENSION_PATTERN = /\.(?:[cm]?[jt]sx?|mdx?|json|ya?ml|toml|lock|css|scss|html?|sh|bash|zsh|py|go|rs|swift|kt|java|rb|php|sql|txt)$/i;
 const ENV_NAME_TOKEN_PATTERN = /\b[A-Za-z][A-Za-z0-9_-]{1,80}\b/g;
-const ENV_ASSIGNMENT_PATTERN = /\b([A-Za-z][A-Za-z0-9_-]{1,80})\b\s*[:=]\s*(?:"[^"\r\n]{0,256}"|'[^'\r\n]{0,256}'|[^\r\n]{1,256})/g;
+const LINE_ENV_ASSIGNMENT_PATTERN = /^(\s*)([A-Za-z][A-Za-z0-9_-]{1,80})\b\s*[:=]\s*(?:"[^"\r\n]{0,256}"|'[^'\r\n]{0,256}'|[^\r\n]{1,256})$/gm;
+const INLINE_ENV_ASSIGNMENT_PATTERN = /\b([A-Za-z][A-Za-z0-9_-]{1,80})\b\s*[:=]\s*(?:"[^"\r\n]{0,256}"|'[^'\r\n]{0,256}'|[^\s\r\n,;.)\]}]{1,256})/g;
 const REDACTION_SENTINEL = "\0OPENWIKI_REDACTED\0";
 const SENSITIVE_SEGMENTS = new Set(["token", "secret", "password", "cookie", "session"]);
+const SENSITIVE_ENV_ABBREVIATION_SEGMENTS = new Set(["pass", "key", "auth", "cred", "credential", "credentials"]);
 const SENSITIVE_PAIR_SUFFIXES = new Set([
   "api_key",
   "private_key",
@@ -186,18 +190,26 @@ function readOpenWikiSections(worktreePath: string): {
   };
 }
 
-function listMarkdownFiles(dir: string, worktreePath: string): { files: string[]; skippedOversizedCount: number } {
+function listMarkdownFiles(
+  dir: string,
+  worktreePath: string,
+  scanState: { entries: number } = { entries: 0 },
+  depth = 0
+): { files: string[]; skippedOversizedCount: number } {
   try {
     const files: string[] = [];
     let skippedOversizedCount = 0;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (scanState.entries >= MAX_OPENWIKI_SCAN_ENTRIES) break;
+      scanState.entries += 1;
       if (entry.name.startsWith(".")) continue;
       const absolutePath = join(dir, entry.name);
       const sourcePath = relative(worktreePath, absolutePath).replace(/\\/g, "/");
       if (sourcePath === "openwiki/_review" || sourcePath.startsWith("openwiki/_review/")) continue;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        const nested = listMarkdownFiles(absolutePath, worktreePath);
+        if (depth >= MAX_OPENWIKI_SCAN_DEPTH) continue;
+        const nested = listMarkdownFiles(absolutePath, worktreePath, scanState, depth + 1);
         files.push(...nested.files);
         skippedOversizedCount += nested.skippedOversizedCount;
         continue;
@@ -313,7 +325,12 @@ function readFirstHeading(markdown: string): string | undefined {
 
 function redactSensitiveEnvNames(input: string): { text: string; replacementCount: number } {
   let replacementCount = 0;
-  const withAssignmentsRedacted = input.replace(ENV_ASSIGNMENT_PATTERN, (match, envName: string) => {
+  const withLineAssignmentsRedacted = input.replace(LINE_ENV_ASSIGNMENT_PATTERN, (match, indent: string, envName: string) => {
+    if (!isSensitiveEnvName(envName)) return match;
+    replacementCount += 1;
+    return `${indent}${REDACTION_SENTINEL}`;
+  });
+  const withAssignmentsRedacted = withLineAssignmentsRedacted.replace(INLINE_ENV_ASSIGNMENT_PATTERN, (match, envName: string) => {
     if (!isSensitiveEnvName(envName)) return match;
     replacementCount += 1;
     return REDACTION_SENTINEL;
@@ -337,7 +354,12 @@ function isSensitiveEnvName(name: string): boolean {
   const parts = name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().replace(/-/g, "_").split("_").filter(Boolean);
   if (parts.length < 2) return false;
   if (SENSITIVE_PAIR_SUFFIXES.has(parts.slice(-2).join("_"))) return true;
+  if (isEnvStyleName(name) && parts.some((part) => SENSITIVE_ENV_ABBREVIATION_SEGMENTS.has(part))) return true;
   return parts.some((part) => SENSITIVE_SEGMENTS.has(part));
+}
+
+function isEnvStyleName(name: string): boolean {
+  return /[_-]/.test(name) || name === name.toUpperCase();
 }
 
 function lowerFirst(input: string): string {

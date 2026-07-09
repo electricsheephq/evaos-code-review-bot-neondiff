@@ -149,7 +149,9 @@ describe("OpenWiki-derived repo-wiki packets", () => {
         "# Provider setup",
         "",
         "Use API_KEY, PRIVATE_KEY, SESSION_COOKIE, and ZAI_TOKEN only in GitHub secrets.",
+        "Also redact DATABASE_PASS, SERVICE_AUTH, CLIENT_CRED, and CACHE_KEY from env-style examples.",
         "Also keep api_key, openrouter_api_key, zcodeToken, and privateKey out of docs.",
+        "The prose helper buildAuthFlow should stay readable.",
         "Bare prose words like TOKEN, SECRET, PASSWORD, COOKIE, and SESSION should stay readable.",
         ""
       ].join("\n")
@@ -170,14 +172,19 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(body).not.toContain("PRIVATE_KEY");
     expect(body).not.toContain("SESSION_COOKIE");
     expect(body).not.toContain("ZAI_TOKEN");
+    expect(body).not.toContain("DATABASE_PASS");
+    expect(body).not.toContain("SERVICE_AUTH");
+    expect(body).not.toContain("CLIENT_CRED");
+    expect(body).not.toContain("CACHE_KEY");
     expect(body).not.toContain("api_key");
     expect(body).not.toContain("openrouter_api_key");
     expect(body).not.toContain("zcodeToken");
     expect(body).not.toContain("privateKey");
+    expect(body).toContain("buildAuthFlow should stay readable.");
     expect(body).toContain("TOKEN, SECRET, PASSWORD, COOKIE, and SESSION should stay readable.");
     expect(packet.redaction).toMatchObject({
       status: "redacted",
-      replacementCount: 8
+      replacementCount: 12
     });
   });
 
@@ -250,6 +257,7 @@ describe("OpenWiki-derived repo-wiki packets", () => {
         "",
         "MY_DB_PASSWORD=plaintext value here",
         "OPENWIKI_SESSION_COOKIE=plaintextvalue123456",
+        "Use OPENWIKI_AUTH_TOKEN=abc123, then rotate it.",
         ""
       ].join("\n")
     });
@@ -269,10 +277,13 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(body).not.toContain("plaintext value here");
     expect(body).not.toContain("OPENWIKI_SESSION_COOKIE");
     expect(body).not.toContain("plaintextvalue123456");
+    expect(body).not.toContain("OPENWIKI_AUTH_TOKEN");
+    expect(body).not.toContain("abc123");
+    expect(body).toContain(", then rotate it.");
     expect(body).not.toContain("[[redacted-secret]]");
     expect(packet.redaction).toMatchObject({
       status: "redacted",
-      replacementCount: 2
+      replacementCount: 3
     });
   });
 
@@ -565,6 +576,28 @@ describe("OpenWiki-derived repo-wiki packets", () => {
       status: "missing",
       staleReason: "No OpenWiki Markdown files were found under openwiki/."
     });
+  });
+
+  it("bounds recursive OpenWiki Markdown scanning depth", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    let currentDir = join(root, "openwiki");
+    for (let index = 0; index < 10; index += 1) {
+      currentDir = join(currentDir, `level-${index}`);
+      mkdirSync(currentDir, { recursive: true });
+    }
+    writeFileSync(join(currentDir, "too-deep.md"), "# Too Deep\n\nShould not be scanned.\n", "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.includedSections.map((section) => section.id)).toEqual(["quickstart"]);
+    expect(formatRepoWikiPacketJson(packet)).not.toContain("Too Deep");
   });
 
   it("marks packets degraded when oversized OpenWiki Markdown files are omitted", () => {
