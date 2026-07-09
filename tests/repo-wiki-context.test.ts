@@ -261,6 +261,26 @@ describe("repo wiki advisory context", () => {
     });
   });
 
+  it("degrades unreadable packet paths instead of throwing", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config({ packetPath: ".neondiff" })
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({
+        reason: "invalid_packet",
+        detail: "Repo wiki packet could not be read",
+        sourcePath: ".neondiff"
+      })
+    });
+  });
+
   it("rejects secret-like packet content before prompt injection", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
     roots.push(root);
