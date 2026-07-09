@@ -99,10 +99,11 @@ Keep long JSON output in separate files and link it from the transcript.
 Validate the package install path first. Use the version named by the docs or
 the issue under test.
 
-Public install proof currently means the npm package `neondiff@0.4.30-beta.1`.
-Source-only beta releases `v0.4.31-beta.1` through `v0.4.37-beta.1` are held
-from npm; validate those by source SHA or local build path, not by expecting a
-new public npm artifact.
+Public install proof means the npm package version named by the current stable
+release manifest, for example `neondiff@1.0.2` for the v1.0.2 patch line.
+Historical source-only beta releases remain provenance/source-checkout releases;
+validate those by source SHA or local build path, not by expecting a new public
+npm artifact.
 
 ```bash
 npm install -g neondiff@<version-under-test> --prefix "$tmp_prefix"

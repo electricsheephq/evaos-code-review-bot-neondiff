@@ -14,10 +14,26 @@ const OPENWIKI_METADATA_PATH = "openwiki/.last-update.json";
 const DEFAULT_MAX_PACKET_BYTES = 12_000;
 const GIT_COMMAND_TIMEOUT_MS = 5_000;
 const REPO_PATH_EXTENSION_PATTERN = /\.(?:[cm]?[jt]sx?|mdx?|json|ya?ml|toml|lock|css|scss|html?|sh|bash|zsh|py|go|rs|swift|kt|java|rb|php|sql|txt)$/i;
-const SENSITIVE_ENV_ASSIGNMENT_PATTERN = /\b(?:(?:api[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?cookie)|(?:[a-z][a-z0-9]*[_-]+)+(?:api[_-]?key|private[_-]?key|token|secret|password|cookie|session)(?:[_-]+[a-z0-9]+)*|(?:apiKey|privateKey|accessToken|authToken|refreshToken|idToken|sessionCookie|[a-z][A-Za-z0-9]*(?:ApiKey|PrivateKey|AccessToken|AuthToken|RefreshToken|IdToken|SessionCookie)))\b\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{8,}["']?/gi;
-const SENSITIVE_ENV_NAME_PATTERNS = [
-  /\b(?:(?:api[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?cookie)|(?:[a-z][a-z0-9]*[_-]+)+(?:api[_-]?key|private[_-]?key|token|secret|password|cookie|session)(?:[_-]+[a-z0-9]+)*)\b/gi,
-  /\b(?:apiKey|privateKey|accessToken|authToken|refreshToken|idToken|sessionCookie|[a-z][A-Za-z0-9]*(?:ApiKey|PrivateKey|AccessToken|AuthToken|RefreshToken|IdToken|SessionCookie))\b/g
+const ENV_NAME_TOKEN_PATTERN = /\b[A-Za-z][A-Za-z0-9_-]{1,80}\b/g;
+const ENV_ASSIGNMENT_PATTERN = /\b([A-Za-z][A-Za-z0-9_-]{1,80})\b\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{8,}["']?/g;
+const SENSITIVE_SEGMENTS = new Set(["token", "secret", "password", "cookie", "session"]);
+const SENSITIVE_PAIR_SUFFIXES = new Set([
+  "api_key",
+  "private_key",
+  "access_token",
+  "auth_token",
+  "refresh_token",
+  "id_token",
+  "session_cookie"
+]);
+const SENSITIVE_CAMEL_SUFFIXES = [
+  "ApiKey",
+  "PrivateKey",
+  "AccessToken",
+  "AuthToken",
+  "RefreshToken",
+  "IdToken",
+  "SessionCookie"
 ];
 
 export interface BuildOpenWikiDerivedRepoWikiPacketInput {
@@ -111,11 +127,11 @@ function resolveSourceFreshness(input: {
       staleReason: "Repository has non-openwiki worktree changes; regenerate OpenWiki before building a packet."
     };
   }
-  if (dirtyStatus.openWikiMarkdownPaths.length > 0) {
+  if (dirtyStatus.openWikiPaths.length > 0) {
     return {
       ...base,
       status: "stale",
-      staleReason: "OpenWiki Markdown files have uncommitted changes; regenerate OpenWiki before building a fresh packet."
+      staleReason: "OpenWiki files have uncommitted changes; regenerate OpenWiki before building a fresh packet."
     };
   }
   if (!input.metadata?.gitHead) {
@@ -224,17 +240,17 @@ function readOpenWikiMetadata(worktreePath: string): OpenWikiMetadata | undefine
 function readDirtyWorktreePaths(worktreePath: string): {
   ok: boolean;
   nonOpenWikiPaths: string[];
-  openWikiMarkdownPaths: string[];
+  openWikiPaths: string[];
 } {
   const status = readGitResult(worktreePath, ["status", "--porcelain=v1", "-z"]);
-  if (!status.ok) return { ok: false, nonOpenWikiPaths: [], openWikiMarkdownPaths: [] };
+  if (!status.ok) return { ok: false, nonOpenWikiPaths: [], openWikiPaths: [] };
   const paths = parsePorcelainStatusPaths(status.stdout)
     .filter(Boolean)
     .filter((changedPath) => changedPath !== ".neondiff" && !changedPath.startsWith(".neondiff/"));
   return {
     ok: true,
     nonOpenWikiPaths: paths.filter((changedPath) => changedPath !== OPENWIKI_DIR && !changedPath.startsWith(`${OPENWIKI_DIR}/`)),
-    openWikiMarkdownPaths: paths.filter((changedPath) => changedPath.startsWith(`${OPENWIKI_DIR}/`) && changedPath.endsWith(".md"))
+    openWikiPaths: paths.filter((changedPath) => changedPath === OPENWIKI_DIR || changedPath.startsWith(`${OPENWIKI_DIR}/`))
   };
 }
 
@@ -286,23 +302,41 @@ function readFirstHeading(markdown: string): string | undefined {
 
 function redactSensitiveEnvNames(input: string): { text: string; replacementCount: number } {
   let replacementCount = 0;
-  const withAssignmentsRedacted = input.replace(SENSITIVE_ENV_ASSIGNMENT_PATTERN, () => {
+  const withAssignmentsRedacted = input.replace(ENV_ASSIGNMENT_PATTERN, (match, envName: string) => {
+    if (!isSensitiveEnvName(envName)) return match;
     replacementCount += 1;
     return "[redacted-secret]";
   });
-  const text = SENSITIVE_ENV_NAME_PATTERNS.reduce((current, pattern) => current.replace(pattern, () => {
-      replacementCount += 1;
-      return "[redacted-secret]";
-    }), withAssignmentsRedacted);
+  const text = withAssignmentsRedacted.replace(ENV_NAME_TOKEN_PATTERN, (match) => {
+    if (!isSensitiveEnvName(match)) return match;
+    replacementCount += 1;
+    return "[redacted-secret]";
+  });
   return {
     text,
     replacementCount
   };
 }
 
+function isSensitiveEnvName(name: string): boolean {
+  if (name.length > 80) return false;
+  if (SENSITIVE_CAMEL_SUFFIXES.some((suffix) => name === lowerFirst(suffix) || name.endsWith(suffix))) {
+    return true;
+  }
+  const parts = name.toLowerCase().replace(/-/g, "_").split("_").filter(Boolean);
+  if (parts.length < 2) return false;
+  if (SENSITIVE_PAIR_SUFFIXES.has(parts.slice(-2).join("_"))) return true;
+  return parts.some((part) => SENSITIVE_SEGMENTS.has(part));
+}
+
+function lowerFirst(input: string): string {
+  return `${input.slice(0, 1).toLowerCase()}${input.slice(1)}`;
+}
+
 function readDeclaredSectionOrder(markdown: string): number | undefined {
-  const frontMatter = markdown.match(/^---\n([\s\S]*?)\n---/);
-  const orderLine = frontMatter?.[1]?.match(/^order:\s*(-?\d+)\s*$/m) ?? markdown.match(/<!--\s*openwiki-order:\s*(-?\d+)\s*-->/i);
+  const normalized = markdown.replace(/\r\n?/g, "\n");
+  const frontMatter = normalized.match(/^---\n([\s\S]*?)\n---/);
+  const orderLine = frontMatter?.[1]?.match(/^order:\s*(-?\d+)\s*$/m) ?? normalized.match(/<!--\s*openwiki-order:\s*(-?\d+)\s*-->/i);
   if (!orderLine?.[1]) return undefined;
   const order = Number(orderLine[1]);
   return Number.isSafeInteger(order) ? order : undefined;

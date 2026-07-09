@@ -181,6 +181,36 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     });
   });
 
+  it("keeps secret-name redaction bounded to env-like tokens", () => {
+    const longToken = `not${"a".repeat(120)}token`;
+    const { head, root } = createRepoWithOpenWiki({
+      openWikiBody: [
+        "# Provider setup",
+        "",
+        `A long prose token ${longToken} should stay readable.`,
+        "The env-style ZAI_ACCESS_TOKEN should still be redacted.",
+        ""
+      ].join("\n")
+    });
+    roots.push(root);
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+    const body = packet.includedSections[0]?.body ?? "";
+
+    expect(body).toContain(longToken);
+    expect(body).not.toContain("ZAI_ACCESS_TOKEN");
+    expect(packet.redaction).toMatchObject({
+      status: "redacted",
+      replacementCount: 1
+    });
+  });
+
   it("redacts secret-like values and assignments from OpenWiki section bodies and JSON output", () => {
     const secret = "ghp_1234567890abcdef";
     const unprefixedSecret = "Sup3rS3cr3tV4lue99";
@@ -311,6 +341,32 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     ]);
   });
 
+  it("honors front-matter section order in CRLF OpenWiki files", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    writeFileSync(join(root, "openwiki", "zzz-runbook.md"), [
+      "---",
+      "order: -5",
+      "---",
+      "# Runbook",
+      "",
+      "Runbook details."
+    ].join("\r\n"), "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.includedSections.map((section) => section.id).slice(0, 2)).toEqual([
+      "zzz-runbook",
+      "quickstart"
+    ]);
+  });
+
   it("marks packets stale when dirty git status renames OpenWiki files into source docs", () => {
     const { head, root } = createRepoWithOpenWiki();
     roots.push(root);
@@ -388,7 +444,36 @@ describe("OpenWiki-derived repo-wiki packets", () => {
 
     expect(packet.source).toMatchObject({
       status: "stale",
-      staleReason: "OpenWiki Markdown files have uncommitted changes; regenerate OpenWiki before building a fresh packet."
+      staleReason: "OpenWiki files have uncommitted changes; regenerate OpenWiki before building a fresh packet."
+    });
+  });
+
+  it("marks packets stale when OpenWiki metadata has uncommitted changes", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    writeFileSync(
+      join(root, "openwiki", ".last-update.json"),
+      `${JSON.stringify({
+        updatedAt: generatedAt,
+        command: "update",
+        gitHead: head,
+        model: "GLM-5.2",
+        note: "dirty metadata"
+      })}\n`,
+      "utf8"
+    );
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "OpenWiki files have uncommitted changes; regenerate OpenWiki before building a fresh packet."
     });
   });
 
@@ -500,6 +585,8 @@ function createRepoWithOpenWiki(options: { metadataHead?: string; openWikiBody?:
     })}\n`,
     "utf8"
   );
+  git(root, ["add", "openwiki/.last-update.json"]);
+  git(root, ["commit", "-m", "add openwiki metadata"]);
   return { head, root };
 }
 
