@@ -138,7 +138,11 @@ final class NeonDiffDesktopModel: ObservableObject {
         lastCommandLine = command.commandLine
         dashboardLaunchStatus = openBrowser ? "opening browser" : "starting server"
         let executablePath = cliPath
-        let arguments = ["dashboard", "--config", configPath, "--launchd-label", launchdLabel, "--open", openBrowser ? "true" : "false"]
+        let arguments = NeonDiffCommandBuilder.dashboardArguments(
+            configPath: configPath,
+            launchdLabel: launchdLabel,
+            openBrowser: openBrowser
+        )
         let workingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
 
         Task { [weak self] in

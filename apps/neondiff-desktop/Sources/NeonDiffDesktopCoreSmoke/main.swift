@@ -37,9 +37,22 @@ do {
     guard dashboardCommand.commandLine.contains("dashboard"),
           dashboardCommand.commandLine.contains("--open true"),
           dashboardCommand.commandLine.contains("--launchd-label"),
-          !dashboardCommand.commandLine.contains("--operator true")
+          dashboardCommand.commandLine.contains("--operator false")
     else {
         throw NSError(domain: "NeonDiffDesktopSmoke", code: 10, userInfo: [NSLocalizedDescriptionKey: "dashboard command does not launch the local HTML dashboard"])
+    }
+    let dashboardArguments = NeonDiffCommandBuilder.dashboardArguments(
+        configPath: "/tmp/config.local.json",
+        launchdLabel: "com.example.neondiff"
+    )
+    guard dashboardArguments == [
+        "dashboard",
+        "--config", "/tmp/config.local.json",
+        "--launchd-label", "com.example.neondiff",
+        "--open", "true",
+        "--operator", "false"
+    ] else {
+        throw NSError(domain: "NeonDiffDesktopSmoke", code: 12, userInfo: [NSLocalizedDescriptionKey: "dashboard launch arguments do not explicitly select browser mode"])
     }
     let dashboardServerCommand = NeonDiffCommandBuilder.dashboard(
         cliPath: "neondiff",

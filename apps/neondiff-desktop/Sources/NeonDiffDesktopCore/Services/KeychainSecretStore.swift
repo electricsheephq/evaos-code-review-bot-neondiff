@@ -12,7 +12,8 @@ public protocol DesktopSecretStoring {
 
 public extension DesktopSecretStoring {
     func readSecret(account: String, allowUserInteraction: Bool) throws -> String? {
-        try readSecret(account: account)
+        guard allowUserInteraction else { return nil }
+        return try readSecret(account: account)
     }
 }
 

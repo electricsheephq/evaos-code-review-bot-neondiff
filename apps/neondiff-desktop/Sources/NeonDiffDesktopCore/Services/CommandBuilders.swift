@@ -35,6 +35,20 @@ public enum NeonDiffCommandBuilder {
         )
     }
 
+    public static func dashboardArguments(
+        configPath: String,
+        launchdLabel: String,
+        openBrowser: Bool = true
+    ) -> [String] {
+        [
+            "dashboard",
+            "--config", configPath,
+            "--launchd-label", launchdLabel,
+            "--open", openBrowser ? "true" : "false",
+            "--operator", "false"
+        ]
+    }
+
     public static func daemonControl(
         action: String,
         cliPath: String,

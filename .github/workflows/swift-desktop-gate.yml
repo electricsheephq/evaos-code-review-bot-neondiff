@@ -108,9 +108,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build Swift core checks target
+      - name: Run Swift core checks
         working-directory: apps/neondiff-desktop
-        run: swift build --target NeonDiffDesktopCoreChecks
+        run: swift run NeonDiffDesktopCoreChecks
 
       - name: Swift build
         working-directory: apps/neondiff-desktop

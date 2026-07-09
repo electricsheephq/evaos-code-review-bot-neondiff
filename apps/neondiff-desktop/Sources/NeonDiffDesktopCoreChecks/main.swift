@@ -125,8 +125,13 @@ final class LegacySecretStoreFixture: DesktopSecretStoring {
 let legacySecretStore = LegacySecretStoreFixture()
 let legacySecretValue = try legacySecretStore.readSecret(account: "provider", allowUserInteraction: false)
 check(
-    legacySecretValue == "legacy-fixture",
-    "existing secret-store conformers inherit additive noninteractive reads"
+    legacySecretValue == nil,
+    "existing secret-store conformers cannot fall back to interactive reads when UI is disallowed"
+)
+let legacyInteractiveSecretValue = try legacySecretStore.readSecret(account: "provider", allowUserInteraction: true)
+check(
+    legacyInteractiveSecretValue == "legacy-fixture",
+    "existing secret-store conformers retain interactive read behavior"
 )
 
 final class GitHubFixtureURLProtocol: URLProtocol {
