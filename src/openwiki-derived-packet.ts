@@ -13,6 +13,7 @@ const OPENWIKI_DIR = "openwiki";
 const OPENWIKI_METADATA_PATH = "openwiki/.last-update.json";
 const DEFAULT_MAX_PACKET_BYTES = 12_000;
 const GIT_COMMAND_TIMEOUT_MS = 5_000;
+const REPO_PATH_EXTENSION_PATTERN = /\.(?:[cm]?[jt]sx?|mdx?|json|ya?ml|toml|lock|css|scss|html?|sh|bash|zsh|py|go|rs|swift|kt|java|rb|php|sql|txt)$/i;
 const SENSITIVE_ENV_NAME_PATTERNS = [
   /\b(?:(?:api[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?cookie)|(?:[a-z][a-z0-9]*[_-]+)+(?:api[_-]?key|private[_-]?key|token|secret|password|cookie|session)(?:[_-]+[a-z0-9]+)*)\b/gi,
   /\b[a-z][A-Za-z0-9]*(?:ApiKey|PrivateKey|AccessToken|AuthToken|RefreshToken|IdToken|SessionCookie|Token|Secret|Password|Cookie|Session)\b/g
@@ -193,7 +194,7 @@ function readSourceMap(markdown: string): string[] {
     const item = match[1]?.trim() ?? "";
     if (/^Git evidence:/i.test(item)) continue;
     for (const candidate of item.split(/,\s*/)) {
-      const cleaned = candidate.replace(/[`"'<>]/g, "").trim();
+      const cleaned = candidate.replace(/[`"'<>]/g, "").replace(/[),.;:]+$/g, "").trim();
       if (isLikelyRepoPath(cleaned)) paths.push(cleaned);
     }
   }
@@ -227,11 +228,11 @@ function parsePorcelainStatusPaths(status: string): string[] {
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index] ?? "";
     const statusCode = record.slice(0, 2);
-    const changedPath = record.slice(3).trim();
+    const changedPath = record.slice(3);
     if (changedPath) paths.push(changedPath);
     if (/[RC]/.test(statusCode) && records[index + 1]) {
       index += 1;
-      paths.push((records[index] ?? "").trim());
+      paths.push(records[index] ?? "");
     }
   }
   return paths;
@@ -292,7 +293,9 @@ function isLikelyRepoPath(value: string): boolean {
   if (!value || /\s/.test(value)) return false;
   if (/^[a-f0-9]{7,40}$/i.test(value)) return false;
   if (/^[a-z]+:\/\//i.test(value)) return false;
-  return value.includes("/") || value.includes(".");
+  if (/^v?\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?$/i.test(value)) return false;
+  if (value.includes("/")) return true;
+  return REPO_PATH_EXTENSION_PATTERN.test(value);
 }
 
 function sha256(input: string): string {

@@ -23,7 +23,7 @@ struct ReposView: View {
                         )
                     }
 
-                    Text("Use GitHub App device authorization to discover repositories later. This release keeps tokens in Keychain and persists selected repositories through config patch only.")
+                    Text("Use GitHub App device authorization to discover accessible repositories. Tokens stay in Keychain and selected repositories persist through config patch only.")
                         .operatorBodyText()
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -32,6 +32,69 @@ struct ReposView: View {
                             .foregroundStyle(NeonDiffTheme.textPrimary)
                         Spacer()
                         Text(model.github.installationState)
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button { model.startGitHubAuthorization() } label: {
+                            Label(
+                                model.github.userTokenStored ? "Reconnect GitHub" : "Connect GitHub",
+                                systemImage: "person.crop.circle.badge.checkmark"
+                            )
+                        }
+                        .disabled(!model.github.clientIdConfigured || model.isGitHubAuthorizationInProgress)
+                        .accessibilityIdentifier("neondiff-github-connect")
+
+                        Button { model.refreshGitHubRepositories() } label: {
+                            Label("Refresh Repositories", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(!model.github.userTokenStored)
+                        .accessibilityIdentifier("neondiff-github-refresh-repos")
+
+                        if model.isGitHubAuthorizationInProgress {
+                            Button { model.cancelGitHubAuthorization() } label: {
+                                Label("Cancel", systemImage: "xmark.circle")
+                            }
+                            .accessibilityIdentifier("neondiff-github-cancel")
+                        }
+                    }
+
+                    if let code = model.githubAuthorizationCode {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 10) {
+                                Text(code.userCode)
+                                    .font(.system(.title3, design: .monospaced).weight(.semibold))
+                                    .foregroundStyle(NeonDiffTheme.accentSoft)
+                                    .textSelection(.enabled)
+                                    .accessibilityIdentifier("neondiff-github-user-code")
+
+                                Button { model.copyGitHubUserCode() } label: {
+                                    Label("Copy Code", systemImage: "doc.on.doc")
+                                }
+                                .accessibilityIdentifier("neondiff-github-copy-code")
+
+                                Button { model.openGitHubDeviceVerification() } label: {
+                                    Label("Open GitHub", systemImage: "safari")
+                                }
+                                .accessibilityIdentifier("neondiff-github-open-device")
+                            }
+
+                            Text("Expires \(code.expiresAt.formatted(date: .omitted, time: .shortened)); status: \(model.githubAuthorizationStatus)")
+                                .operatorBodyText()
+                        }
+                    } else {
+                        Text("GitHub status: \(model.githubAuthorizationStatus)")
+                            .operatorBodyText()
+                    }
+
+                    HStack(spacing: 10) {
+                        if let login = model.github.authorizedUserLogin {
+                            Label("@\(login)", systemImage: "person.crop.circle")
+                                .foregroundStyle(NeonDiffTheme.textPrimary)
+                        }
+                        Label("\(model.github.installationCount) installations", systemImage: "square.stack.3d.up")
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                        Label("\(model.github.discoveredRepositoryCount) repos discovered", systemImage: "folder.badge.plus")
                             .foregroundStyle(NeonDiffTheme.textSecondary)
                     }
                 }
@@ -89,6 +152,27 @@ struct ReposView: View {
                         Label("Add Repo", systemImage: "plus.circle")
                     }
                     .accessibilityIdentifier("neondiff-repo-add")
+                }
+
+                if !model.discoveredGitHubRepos.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Discovered From GitHub")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(NeonDiffTheme.textPrimary)
+
+                        ForEach(model.discoveredGitHubRepos.prefix(8)) { repo in
+                            HStack(spacing: 8) {
+                                Image(systemName: repo.visibility == "private" ? "lock.fill" : "globe")
+                                    .foregroundStyle(repo.visibility == "private" ? NeonDiffTheme.warning : NeonDiffTheme.accent)
+                                Text(repo.fullName)
+                                    .textSelection(.enabled)
+                                Spacer()
+                                Text(repo.permissionsSummary)
+                                    .foregroundStyle(NeonDiffTheme.textSecondary)
+                            }
+                            .font(.body)
+                        }
+                    }
                 }
 
                 HStack(spacing: 10) {

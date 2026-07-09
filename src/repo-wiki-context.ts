@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
   formatRepoWikiPacketMarkdown,
@@ -10,6 +10,7 @@ import {
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const PACKET_FILE_OVERHEAD_BYTES = 64_000;
+const MAX_PACKET_FILE_READ_BYTES = 1_000_000;
 
 export interface RepoWikiContextConfig {
   enabled: boolean;
@@ -100,6 +101,52 @@ export function buildRepoWikiContextPacket(input: {
     };
   }
 
+  let packetFileBytes: number;
+  const maxPacketFileBytes = Math.min(
+    input.config.maxPacketBytes + PACKET_FILE_OVERHEAD_BYTES,
+    MAX_PACKET_FILE_READ_BYTES
+  );
+  try {
+    const sourceStats = statSync(sourceRealPath);
+    if (!sourceStats.isFile()) {
+      return {
+        omitted: {
+          reason: "invalid_packet",
+          detail: "Repo wiki packet path did not resolve to a file",
+          sourcePath: evidenceSourcePath
+        }
+      };
+    }
+    packetFileBytes = sourceStats.size;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return {
+        omitted: {
+          reason: "missing_packet",
+          detail: "Repo wiki packet not found",
+          sourcePath: evidenceSourcePath
+        }
+      };
+    }
+    return {
+      omitted: {
+        reason: "invalid_packet",
+        detail: "Repo wiki packet metadata could not be read",
+        sourcePath: evidenceSourcePath
+      }
+    };
+  }
+
+  if (packetFileBytes > maxPacketFileBytes) {
+    return {
+      omitted: {
+        reason: "budget_exceeded",
+        detail: `Repo wiki packet file exceeded safe read limit (${packetFileBytes} > ${maxPacketFileBytes})`,
+        sourcePath: evidenceSourcePath
+      }
+    };
+  }
+
   let raw: string;
   try {
     raw = readFileSync(sourceRealPath, "utf8");
@@ -121,13 +168,12 @@ export function buildRepoWikiContextPacket(input: {
       }
     };
   }
-  const packetFileBytes = Buffer.byteLength(raw, "utf8");
-  const maxPacketFileBytes = input.config.maxPacketBytes + PACKET_FILE_OVERHEAD_BYTES;
-  if (packetFileBytes > maxPacketFileBytes) {
+  const rawPacketFileBytes = Buffer.byteLength(raw, "utf8");
+  if (rawPacketFileBytes > maxPacketFileBytes) {
     return {
       omitted: {
         reason: "budget_exceeded",
-        detail: `Repo wiki packet file exceeded safe read limit (${packetFileBytes} > ${maxPacketFileBytes})`,
+        detail: `Repo wiki packet file exceeded safe read limit (${rawPacketFileBytes} > ${maxPacketFileBytes})`,
         sourcePath: evidenceSourcePath
       }
     };

@@ -58,6 +58,7 @@ export interface RepoWikiIncludedSection {
   order: number;
   sourceFiles: string[];
   sourceSha?: string;
+  emittedBodySha?: string;
   byteLength: number;
   tokenEstimate: number;
   truncated: boolean;
@@ -227,15 +228,17 @@ export function buildRepoWikiPacket(input: BuildRepoWikiPacketInput): RepoWikiPa
     const redactedBody = redactAndCount(section.body, sectionRedactionCounter);
     const redactedSourceFileResults = section.sourceFiles.map((file) => redactAndCount(file, sectionRedactionCounter));
     const redactedSourceFiles = normalizeSourceFiles(redactedSourceFileResults.map((file) => file.text));
+    const redactedSourceSha = section.sourceSha ? redactAndCount(section.sourceSha, sectionRedactionCounter).text : undefined;
     const cappedBody = truncateUtf8Bytes(redactedBody.text, maxSectionBytes);
-    const emittedSourceSha = section.sourceSha ? sha256(cappedBody) : undefined;
+    const emittedBodySha = section.sourceSha ? sha256(cappedBody) : undefined;
     const included: RepoWikiIncludedSection = {
       id: section.id,
       title: redactedTitle.text,
       body: cappedBody,
       order: section.order,
       sourceFiles: redactedSourceFiles,
-      ...(emittedSourceSha ? { sourceSha: emittedSourceSha } : {}),
+      ...(redactedSourceSha ? { sourceSha: redactedSourceSha } : {}),
+      ...(emittedBodySha ? { emittedBodySha } : {}),
       byteLength: Buffer.byteLength(cappedBody, "utf8"),
       tokenEstimate: tokenEstimateForBytes(Buffer.byteLength(cappedBody, "utf8")),
       truncated: cappedBody !== redactedBody.text,
@@ -316,6 +319,7 @@ export function formatRepoWikiPacketMarkdown(packet: RepoWikiPacket): string {
           section.truncated ? "truncated=true" : "truncated=false",
           section.redacted ? "redacted=true" : "redacted=false",
           section.sourceSha ? `source_sha=${section.sourceSha}` : undefined,
+          section.emittedBodySha ? `emitted_body_sha=${section.emittedBodySha}` : undefined,
           section.sourceFiles.length ? `files=${section.sourceFiles.join(", ")}` : undefined
         ].filter(Boolean).join("; "),
         "",

@@ -54,9 +54,20 @@ The Repos pane shows GitHub App setup state without exposing tokens. The public
 GitHub App `clientId` may be stored in config for the desktop/device
 authorization flow, while GitHub user access tokens belong in Keychain only.
 
+When `github.clientId` is configured and device flow is enabled in the GitHub
+App settings, the Repos pane can start GitHub device authorization, show the
+short user code, open GitHub's verification page, store the resulting user token
+in Keychain, and list repositories visible through the user's GitHub App
+installations. Repository discovery is read-only and uses the standard GitHub
+user installation APIs; the desktop never stores the user token in config or
+release evidence. If GitHub returns `device_flow_disabled`, enable device flow
+on the GitHub App before retrying.
+
 The repo selector persists selected repositories by writing a `pilotRepos` patch
-through `config patch`. It does not post reviews, widen App permissions, or write
-GitHub user tokens into config.
+through `config patch`. Discovered repositories are disabled until the user
+selects them. It does not post reviews, widen App permissions, or write GitHub
+user tokens into config. Live PR reviews still post only through the configured
+GitHub App bot identity.
 
 ## Local Dashboard Launcher
 

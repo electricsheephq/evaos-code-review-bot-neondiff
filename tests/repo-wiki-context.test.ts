@@ -275,7 +275,7 @@ describe("repo wiki advisory context", () => {
     ).toMatchObject({
       omitted: expect.objectContaining({
         reason: "invalid_packet",
-        detail: "Repo wiki packet could not be read",
+        detail: "Repo wiki packet path did not resolve to a file",
         sourcePath: ".neondiff"
       })
     });
@@ -486,6 +486,27 @@ describe("repo wiki advisory context", () => {
       })
     ).toMatchObject({
       omitted: expect.objectContaining({ reason: "budget_exceeded" })
+    });
+  });
+
+  it("enforces a hard packet-file read cap independent of configured packet budget", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(packetPath, "x".repeat(1_000_001));
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config({ maxPacketBytes: 2_000_000, includeStaleContext: true })
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({
+        reason: "budget_exceeded",
+        detail: "Repo wiki packet file exceeded safe read limit (1000001 > 1000000)"
+      })
     });
   });
 

@@ -126,22 +126,34 @@ public struct LicenseStatus: Equatable {
 public struct GitHubConnectionStatus: Equatable {
     public var appIdConfigured: Bool
     public var clientIdConfigured: Bool
+    public var clientId: String?
     public var botLogin: String
     public var userTokenStored: Bool
     public var installationState: String
+    public var authorizedUserLogin: String?
+    public var installationCount: Int
+    public var discoveredRepositoryCount: Int
 
     public init(
         appIdConfigured: Bool = false,
         clientIdConfigured: Bool = false,
+        clientId: String? = nil,
         botLogin: String = "not configured",
         userTokenStored: Bool = false,
-        installationState: String = "not connected"
+        installationState: String = "not connected",
+        authorizedUserLogin: String? = nil,
+        installationCount: Int = 0,
+        discoveredRepositoryCount: Int = 0
     ) {
         self.appIdConfigured = appIdConfigured
         self.clientIdConfigured = clientIdConfigured
+        self.clientId = clientId
         self.botLogin = botLogin
         self.userTokenStored = userTokenStored
         self.installationState = installationState
+        self.authorizedUserLogin = authorizedUserLogin
+        self.installationCount = installationCount
+        self.discoveredRepositoryCount = discoveredRepositoryCount
     }
 }
 
