@@ -1,0 +1,40 @@
+{
+  "evalName": "review-lenses-eval-gate-v0.1",
+  "runId": "pr-overbuilt-lean",
+  "suite": "review_lens_packet_safety",
+  "surface": "pr_shadow",
+  "reviewLenses": {
+    "enabled": true,
+    "packetVersion": "review-lens-packet-v0.1",
+    "active": [
+      { "id": "lean", "surface": "pr_shadow", "mode": "shadow" }
+    ],
+    "maxLensBytes": 4000,
+    "maxPacketBytes": 12000
+  },
+  "pull": {
+    "repo": "owner/repo",
+    "number": 7,
+    "title": "Add custom date picker wrapper",
+    "draft": false,
+    "body": "Adds a custom picker abstraction.",
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "headRef": "feature/custom-picker",
+    "baseRef": "main",
+    "html_url": "https://github.test/owner/repo/pull/7"
+  },
+  "files": [
+    {
+      "filename": "src/components/custom-date-picker.tsx",
+      "patch": "@@ -1 +1 @@\n+export class CustomDatePickerWrapperFactory {}"
+    }
+  ],
+  "expected": {
+    "includedLenses": ["lean"],
+    "maxPacketBytes": 12000,
+    "secretFindings": 0,
+    "requestChangesEligible": false,
+    "leanSuggestionsMin": 1
+  }
+}

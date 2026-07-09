@@ -109,6 +109,11 @@ evaos-review-bot status --config config.local.json
   `github-related-context-packet.md` evidence. This command never posts
   comments, calls ZCode, auto-applies labels/reviewers, or searches GitHub
   beyond explicit references.
+- `review-lenses-eval`: dry-run evidence builder for default-off review lenses.
+  It compares configured lens packets against baseline output and writes an eval
+  packet to a fresh or empty output root. It does not post comments, mutate
+  GitHub, write SQLite, restart launchd, activate lenses, or widen
+  issue-enrichment/PR review allowlists.
 - `build-skill-pack`: compiles configured read-only skill-pack files into an
   advisory prompt packet. It emits JSON/Markdown with packet SHA, byte/token
   estimates, source provenance, omitted-source reasons, and a redaction report.
