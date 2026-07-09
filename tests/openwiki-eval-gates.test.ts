@@ -447,26 +447,32 @@ describe("OpenWiki eval gates", () => {
     }));
   });
 
-  it("marks missing, malformed, and secret-like packets unreadable", () => {
+  it("marks missing, malformed, shapeless, and secret-like packets unreadable", () => {
     const malformed = createDocsDriftFixture();
+    const shapeless = createDocsDriftFixture();
     const secret = createDocsDriftFixture();
     const missing = createDocsDriftFixture();
     const malformedOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-malformed-"));
+    const shapelessOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-shapeless-"));
     const secretOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-secret-"));
     const missingOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-missing-"));
     roots.push(
       malformed.root,
+      shapeless.root,
       secret.root,
       missing.root,
       malformedOutput,
+      shapelessOutput,
       secretOutput,
       missingOutput
     );
     writeFileSync(join(malformed.root, malformed.packetPath), "{not json", "utf8");
+    writeFileSync(join(shapeless.root, shapeless.packetPath), "{}", "utf8");
     writeFileSync(join(secret.root, secret.packetPath), "{\"token\":\"ghp_1234567890abcdef\"}", "utf8");
 
     const cases = [
       { fixture: malformed, outputRoot: malformedOutput },
+      { fixture: shapeless, outputRoot: shapelessOutput },
       { fixture: secret, outputRoot: secretOutput },
       { fixture: { root: missing.root, packetPath: ".neondiff/missing.json" }, outputRoot: missingOutput }
     ];

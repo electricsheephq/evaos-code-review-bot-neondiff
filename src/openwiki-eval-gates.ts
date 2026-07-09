@@ -292,7 +292,6 @@ export function runDocsDriftEval(
   const thresholds = validateDocsDriftThresholds(input.thresholds);
   const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
   guardEmptyOutputRoot(outputRoot, "OpenWiki docs-drift eval");
-  mkdirSync(outputRoot, { recursive: true });
   const packet = readRepoWikiPacket(input);
   const suggestions: DocsDriftSuggestion[] = [];
   const claims = input.claims.map((claim) => {
@@ -363,6 +362,7 @@ export function runDocsDriftEval(
   const reportText = buildDocsDriftReport(summaryWithoutInventory);
   assertNoSecretLikeText(suggestionsText, "docs-drift suggestions");
   assertNoSecretLikeText(reportText, "docs-drift report");
+  mkdirSync(outputRoot, { recursive: true });
   writeFileSync(suggestionsPath, suggestionsText, "utf8");
   writeJson(reportPath, reportText);
   const artifactInventory = buildArtifactInventory(outputRoot, [
@@ -491,7 +491,16 @@ function readRepoWikiPacket(input: DocsDriftEvalInput): {
     return { ok: false, error: "packet contains secret-like text", includedSourceFiles: [], sectionIdsBySourcePath: new Map() };
   }
   try {
-    const repoWiki = JSON.parse(raw) as RepoWikiPacket;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRepoWikiPacket(parsed)) {
+      return {
+        ok: false,
+        error: "packet JSON did not match repo-wiki packet shape",
+        includedSourceFiles: [],
+        sectionIdsBySourcePath: new Map()
+      };
+    }
+    const repoWiki = parsed;
     const sectionIdsBySourcePath = new Map<string, string[]>();
     for (const section of repoWiki.includedSections ?? []) {
       for (const sourceFile of section.sourceFiles ?? []) {
@@ -516,6 +525,47 @@ function readRepoWikiPacket(input: DocsDriftEvalInput): {
       sectionIdsBySourcePath: new Map()
     };
   }
+}
+
+function isRepoWikiPacket(value: unknown): value is RepoWikiPacket {
+  if (!isRecord(value)) return false;
+  if (typeof value.packetVersion !== "string") return false;
+  if (!isRecord(value.repo) || typeof value.repo.fullName !== "string") return false;
+  if (!isRecord(value.source) || !isRepoWikiSourceStatus(value.source.status)) return false;
+  if (typeof value.generatedAt !== "string") return false;
+  if (typeof value.advisory !== "string") return false;
+  if (typeof value.degraded !== "boolean") return false;
+  if (!isRecord(value.byteBudget) || typeof value.byteBudget.maxBytes !== "number" || typeof value.byteBudget.usedBytes !== "number") {
+    return false;
+  }
+  if (!isRecord(value.tokenBudget) || typeof value.tokenBudget.maxTokens !== "number" || typeof value.tokenBudget.usedTokens !== "number") {
+    return false;
+  }
+  if (!isRecord(value.redaction) || typeof value.redaction.status !== "string" || typeof value.redaction.replacementCount !== "number") {
+    return false;
+  }
+  if (!Array.isArray(value.includedSections) || !value.includedSections.every(isRepoWikiIncludedSection)) return false;
+  if (!Array.isArray(value.excludedSections)) return false;
+  if (!Array.isArray(value.includedFiles)) return false;
+  return typeof value.packetSha === "string";
+}
+
+function isRepoWikiIncludedSection(value: unknown): value is RepoWikiPacket["includedSections"][number] {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
+    typeof value.body === "string" &&
+    typeof value.order === "number" &&
+    Array.isArray(value.sourceFiles) &&
+    value.sourceFiles.every((sourceFile) => typeof sourceFile === "string") &&
+    typeof value.byteLength === "number" &&
+    typeof value.tokenEstimate === "number" &&
+    typeof value.truncated === "boolean" &&
+    typeof value.redacted === "boolean";
+}
+
+function isRepoWikiSourceStatus(value: unknown): value is RepoWikiPacket["source"]["status"] {
+  return value === "fresh" || value === "stale" || value === "missing";
 }
 
 function evaluateDocsDriftClaim(input: {
