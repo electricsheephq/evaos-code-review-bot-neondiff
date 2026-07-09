@@ -104,11 +104,11 @@ export function buildRepoWikiContextPacket(input: {
   }
 
   const freshness = parsed.packet.repoWiki.freshness;
-  if (freshness === "stale" && !input.config.includeStaleContext) {
+  if ((freshness === "stale" || freshness === "missing") && !input.config.includeStaleContext) {
     return {
       omitted: {
         reason: "stale_packet",
-        detail: "Repo wiki packet is stale and includeStaleContext is false",
+        detail: "Repo wiki packet is not fresh and includeStaleContext is false",
         sourcePath
       }
     };

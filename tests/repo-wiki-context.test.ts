@@ -132,6 +132,26 @@ describe("repo wiki advisory context", () => {
     ).toMatchObject({
       repoWiki: { freshness: "stale", degradedMode: true }
     });
+
+    writeFileSync(packetPath, formatRepoWikiPacketJson(repoWikiPacket("missing")));
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config()
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({ reason: "stale_packet" })
+    });
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config({ includeStaleContext: true })
+      }).packet
+    ).toMatchObject({
+      repoWiki: { freshness: "missing", degradedMode: true }
+    });
   });
 
   it("rejects secret-like packet content before prompt injection", () => {
@@ -195,7 +215,7 @@ describe("repo wiki advisory context", () => {
   });
 });
 
-function repoWikiPacket(status: "fresh" | "stale") {
+function repoWikiPacket(status: "fresh" | "stale" | "missing") {
   return buildRepoWikiPacket({
     repo: { fullName: repo, defaultBranch: "main" },
     source: {
@@ -203,7 +223,8 @@ function repoWikiPacket(status: "fresh" | "stale") {
       headSha: "abc123",
       checkedAt: generatedAt,
       status,
-      ...(status === "stale" ? { staleReason: "Packet was generated from an older head." } : {})
+      ...(status === "stale" ? { staleReason: "Packet was generated from an older head." } : {}),
+      ...(status === "missing" ? { staleReason: "OpenWiki source was missing when packet was built." } : {})
     },
     generatedAt,
     budget: { maxBytes: 12_000, maxTokens: 3_000 },
