@@ -40,8 +40,8 @@ describe("Linux daemon packaging", () => {
     expect(compose).toContain("[\"daemon\", \"--config\", \"/config/config.local.json\", \"--dry-run\", \"true\"]");
     expect(dockerDocs).toContain("--dry-run true");
     expect(dockerDocs).toContain("--dry-run\", \"false");
-    expect(ciDocs).toContain("actions/checkout@v4");
-    expect(ciDocs).toContain("actions/setup-node@v4");
+    expect(ciDocs).toContain("actions/checkout@v5");
+    expect(ciDocs).toContain("actions/setup-node@v5");
 
     expect(linuxSmokeWorkflow).toContain("ubuntu-latest");
     expect(linuxSmokeWorkflow).toContain("NEONDIFF_TEST_PLATFORM: linux");

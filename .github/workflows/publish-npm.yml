@@ -22,7 +22,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'release' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.tag || github.event.release.tag_name }}
 
@@ -55,11 +55,21 @@ jobs:
 
       - name: Setup Node.js
         if: steps.package_release.outputs.should_publish == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 26
           registry-url: https://registry.npmjs.org
           cache: npm
+
+      - name: Verify npm publish token is configured
+        if: steps.package_release.outputs.should_publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN Actions secret is not configured; publish cannot continue"
+            exit 1
+          fi
 
       - name: Install dependencies
         if: steps.package_release.outputs.should_publish == 'true'

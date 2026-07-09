@@ -158,6 +158,20 @@ Before tagging:
      `git reset --hard refs/tags/<tag>` or `git revert <sha>`
 7. `git status --short` is clean in the live checkout.
 
+For npm-published releases, confirm the repository or organization Actions
+secret `NPM_TOKEN` exists before publishing. Verify only the secret name and
+workflow preflight status; never print, echo, upload, or paste the token value.
+The publish workflow fails early in `Verify npm publish token is configured`
+when the secret is absent so release captains do not spend a full release cycle
+before discovering npm authentication is missing.
+
+The required GitHub Actions paths should use Node 24-compatible official
+actions. The public CI and npm publish workflows use `actions/checkout@v5` and
+`actions/setup-node@v5`; runner fleets must be on GitHub Actions runner
+`v2.327.1` or newer for those actions. Pinned Swift or desktop smoke actions
+that still target the older runtime are post-launch desktop-release hygiene
+unless they block the current release.
+
 The manifest `rollback` field is intentionally only the source-revert step.
 Full operator rollback runbooks may restart launchd after that source revert,
 but restart commands live outside the manifest rollback field. `launchctl
@@ -177,6 +191,13 @@ git pull --ff-only origin main
 git tag -a vX.Y.Z-beta.N <source-sha> -m "vX.Y.Z-beta.N"
 git push origin vX.Y.Z-beta.N
 ```
+
+If a GitHub Release exists but the npm publish workflow fails before publishing,
+repair the workflow or secret state, then rerun the `Publish npm` workflow for
+the exact release tag. Do not create a replacement tag for the same source SHA
+solely to retry publishing. Record the failed run URL, rerun URL, registry
+inventory, and final `npm view neondiff version dist-tags --json` output in the
+release tracker.
 
 Create the GitHub prerelease from the release packet:
 

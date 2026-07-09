@@ -1,12 +1,12 @@
 {
-  "version": "v1.0.0",
+  "version": "v1.0.1",
   "releaseLevel": "stable",
   "packageArtifact": {
     "name": "neondiff",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "requiredForThisRelease": true,
     "state": "published",
-    "previousReleasedPackageVersion": "0.4.30-beta.1",
+    "previousReleasedPackageVersion": "1.0.0",
     "skippedPublicPackageVersions": [
       "v0.4.25-beta.1",
       "v0.4.26-beta.1",
@@ -30,11 +30,11 @@
       "v0.4.45-beta.1",
       "v0.4.46-beta.1"
     ],
-    "note": "v1.0.0 is the first GA npm package cut after the source/local-worker beta train; the non-prerelease GitHub Release publishes the package with the npm latest dist-tag."
+    "note": "v1.0.1 is the first stable patch after GA: it keeps the license-gated npm latest line, removes pre-1.0 beta install exposure, and hardens release workflow preflights."
   },
   "source": {
     "shaState": "pending_tag_stamp",
-    "candidateHeadBeforeReleaseMetadata": "7453349008ca8f23641fab1665ac909d0b51b10a",
+    "candidateHeadBeforeReleaseMetadata": "23d66717c0627b25a8c56895bba9627bcdd69cca",
     "proof": "after merge and tag, release:status --expected-head $(git rev-parse HEAD)"
   },
   "releaseStages": {
@@ -78,9 +78,9 @@
     ]
   },
   "docs": {
-    "version": "v1.0.0",
+    "version": "v1.0.1",
     "setupPath": "docs/SETUP.md",
-    "releaseNotesPath": "docs/releases/v1.0.0.md",
+    "releaseNotesPath": "docs/releases/v1.0.1.md",
     "websiteRepo": "electricsheephq/neon-diff-agent-website"
   },
   "licenseApi": {
@@ -88,42 +88,36 @@
     "state": "healthy",
     "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327",
     "healthUrl": "https://neondiff-license.fly.dev/healthz",
-    "healthProofPath": "docs/evidence/v1.0.0-license-api-healthz.json",
+    "healthProofPath": "docs/evidence/v1.0.1-license-api-healthz.json",
     "checkoutIssuanceRequiredForThisRelease": true,
     "checkoutIssuanceUrl": "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
     "checkoutIssuanceState": "ready",
-    "checkoutIssuanceProofPath": "docs/evidence/v1.0.0-license-checkout-issuance-unauthenticated.json",
-    "checkoutIssuanceAuthenticatedProofPath": "docs/evidence/license-checkout-issuance-authenticated.json",
+    "checkoutIssuanceProofPath": "docs/evidence/v1.0.1-license-checkout-issuance-unauthenticated.json",
+    "checkoutIssuanceAuthenticatedProofPath": "docs/evidence/v1.0.1-license-checkout-issuance-authenticated.json",
     "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
   },
   "updateChannels": {
     "cli": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v1.0.0",
-      "rollback": "git reset --hard refs/tags/v0.4.46-beta.1"
+      "version": "v1.0.1",
+      "rollback": "git reset --hard refs/tags/v1.0.0",
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v1.0.0",
-      "rollback": "git reset --hard refs/tags/v0.4.46-beta.1"
+      "version": "v1.0.1",
+      "rollback": "git reset --hard refs/tags/v1.0.0",
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "browserDashboard": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v1.0.0",
-      "rollback": "git revert 74d133ff34935510c45a4a74a664b8b30dca52d8",
+      "version": "v1.0.1",
+      "rollback": "git reset --hard refs/tags/v1.0.0",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
       "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
-    },
-    "website": {
-      "requiredForThisRelease": true,
-      "state": "published",
-      "version": "v1.0.0",
-      "rollback": "git revert 6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
-      "rollbackRepository": "electricsheephq/neon-diff-agent-website",
-      "trackingIssue": "https://github.com/electricsheephq/neon-diff-agent-website/issues/22"
     }
   }
 }
