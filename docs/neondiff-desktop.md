@@ -2,15 +2,16 @@
 
 NeonDiff Desktop is a SwiftPM macOS app scaffold for issue #115. It is a thin local control panel over the NeonDiff CLI and daemon contracts.
 For the 1.0 launch bar, the Mac app is intentionally a minimal launcher:
-opening the app starts `neondiff dashboard` and opens the same local HTML
-dashboard used by the CLI.
+opening the app shows local controls that can start `neondiff dashboard` or open
+the same local HTML dashboard used by the CLI.
 
 ## Boundaries
 
 - No review engine runs in the desktop app.
 - No UI path posts GitHub reviews directly.
-- The Mac launcher does not implement a separate native setup flow; the local
-  HTML dashboard remains the first-run/provider/license/status surface.
+- The Mac launcher implements native setup/status controls only where they can
+  write through existing CLI contracts. The local HTML dashboard remains the
+  deeper browser-first setup surface.
 - No signing, notarization, Sparkle appcast, downloadable artifact, TCC, Mac-control, or customer-control proof is claimed here.
 - Provider and license keys are stored in macOS Keychain under a NeonDiff-specific service and are never written to config files.
 
@@ -46,6 +47,16 @@ neondiff dashboard --config config.local.json --launchd-label com.example.neondi
 Patch inputs use nested JSON object shape for editable paths. For example, the advertised `zcode.cliPath` path is supplied as `{ "zcode": { "cliPath": "/path/to/neondiff" } }`; flat dotted keys such as `{ "zcode.cliPath": "/path/to/neondiff" }` are rejected to avoid ambiguous profile keys.
 
 The ZCode defaults in `config.example.json` are developer-machine paths. On any non-author workstation or packaged desktop install, set explicit local values for `zcode.cliPath`, `zcode.appConfigPath`, and `zcode.model` before relying on daemon controls.
+
+## GitHub And Repo Allowlist
+
+The Repos pane shows GitHub App setup state without exposing tokens. The public
+GitHub App `clientId` may be stored in config for the desktop/device
+authorization flow, while GitHub user access tokens belong in Keychain only.
+
+The repo selector persists selected repositories by writing a `pilotRepos` patch
+through `config patch`. It does not post reviews, widen App permissions, or write
+GitHub user tokens into config.
 
 ## Local Dashboard Launcher
 

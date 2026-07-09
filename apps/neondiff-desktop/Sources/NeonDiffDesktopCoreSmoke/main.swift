@@ -132,6 +132,38 @@ do {
         throw NSError(domain: "NeonDiffDesktopSmoke", code: 8, userInfo: [NSLocalizedDescriptionKey: "repoProfiles fallback did not map"])
     }
 
+    let githubConfigJSON = """
+    {
+      "ok": true,
+      "command": "config inspect",
+      "config": {
+        "pilotRepos": ["owner/repo-one", "owner/repo-two"],
+        "github": {
+          "appId": "4184532",
+          "clientId": "Iv1.publicclientid123",
+          "botLogin": "neondiff-review-bot"
+        },
+        "repoProfiles": {
+          "repos": {
+            "owner/repo-one": { "enabled": true, "displayName": "Repo One" },
+            "owner/repo-two": { "enabled": false, "reviewProfile": "assertive" }
+          }
+        }
+      }
+    }
+    """
+    guard let githubSnapshot = ConfigInspectParser.parse(githubConfigJSON, providerKeyStored: false, licenseKeyStored: false),
+          githubSnapshot.github.appIdConfigured,
+          githubSnapshot.github.clientIdConfigured,
+          githubSnapshot.github.botLogin == "neondiff-review-bot",
+          githubSnapshot.repos == [
+            RepoMonitor(name: "owner/repo-one", enabled: true, profile: "Repo One"),
+            RepoMonitor(name: "owner/repo-two", enabled: false, profile: "assertive")
+          ]
+    else {
+        throw NSError(domain: "NeonDiffDesktopSmoke", code: 18, userInfo: [NSLocalizedDescriptionKey: "GitHub config and selected repo parsing failed"])
+    }
+
     let fakeProductLicense = "NEONDIFF-1234567890-ABCDE"
     let fakeUnderscoreLicense = "NDL_PRIVATE_1234567890"
     let jsonLicense = "fixture-license-secret-1234567890"

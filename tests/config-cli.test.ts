@@ -50,6 +50,7 @@ describe("desktop config CLI", () => {
     expect(output.editablePaths).toContain("zcode.model");
     expect(output.editablePaths).toContain("desktop.openAICompatibleEndpoint");
     expect(output.editablePaths).toContain("github.appId");
+    expect(output.editablePaths).toContain("github.clientId");
     expect(output.editablePaths).toContain("providers.defaultProviderId");
     expect(output.editablePaths).toContain("providers.providers.<provider-id>.<desktop-safe-provider-field>");
     expect(output.editablePaths).not.toContain("github.apiBaseUrl");
@@ -445,6 +446,68 @@ describe("desktop config CLI", () => {
       error: expect.stringContaining("non-desktop-safe path")
     });
     expect(output.error).toContain("github.apiBaseUrl");
+  });
+
+  it("allows desktop patches to set the public GitHub App client id", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+    writeConfig(patchPath, {
+      github: { clientId: "Iv1.publicclientid123" }
+    });
+
+    const output = await runConfig(["config", "patch", "--config", configPath, "--input", patchPath]);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: true,
+      wrote: false,
+      changedPaths: ["github.clientId"]
+    });
+    expect(output.config.github.clientId).toBe("Iv1.publicclientid123");
+  });
+
+  it("dry-runs repo allowlist selector patches and rejects invalid repo names", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "repo-selector-patch.json");
+    const invalidPatchPath = join(root, "invalid-repo-selector-patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/existing"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+    writeConfig(patchPath, {
+      pilotRepos: ["owner/existing", "owner/next-repo"]
+    });
+    writeConfig(invalidPatchPath, {
+      pilotRepos: ["owner/repo/extra"]
+    });
+
+    const before = readFileSync(configPath, "utf8");
+    const output = await runConfig(["config", "patch", "--config", configPath, "--input", patchPath]);
+
+    expect(output).toMatchObject({
+      ok: true,
+      dryRun: true,
+      wrote: false,
+      changedPaths: ["pilotRepos"]
+    });
+    expect(output.config.pilotRepos).toEqual(["owner/existing", "owner/next-repo"]);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+
+    const rejected = await runConfig(["config", "patch", "--config", configPath, "--input", invalidPatchPath]);
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("config.pilotRepos entries must be GitHub owner/repo names")
+    });
   });
 
   it("rejects empty ZCode string settings before live desktop writes", async () => {

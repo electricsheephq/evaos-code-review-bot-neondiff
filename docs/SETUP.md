@@ -333,6 +333,7 @@ set.
 | Variable | Read by | Overrides config value | Notes |
 | --- | --- | --- | --- |
 | `NEONDIFF_GITHUB_APP_ID` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.appId` | Set once per step 2; unset falls back to the config-file value. Legacy `EVAOS_REVIEW_BOT_APP_ID` remains supported for existing internal deployments. |
+| `NEONDIFF_GITHUB_APP_CLIENT_ID` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.clientId` | Public GitHub App client ID used by desktop/device authorization. This is not a secret. |
 | `NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.privateKeyPath` | Path to the GitHub App private key; keep the key itself outside the repo. Legacy `EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH` remains supported for existing internal deployments. |
 | `GITHUB_TOKEN` | `loadConfig`/`loadConfigFromObject` (`src/config.ts`) | `github.token` | Local-development fallback token only; App auth is required for App-authored posting. |
 | `NEONDIFF_PROTECTED_CHECKOUT_ROOT` | `getProtectedCheckoutRoots` (`src/path-safety.ts`) | Adds to the built-in checkout-isolation boundary | Advanced use only: an additional path `config.workRoot` must stay outside of, alongside the current package checkout. Legacy `EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT` remains supported for existing internal deployments. |
