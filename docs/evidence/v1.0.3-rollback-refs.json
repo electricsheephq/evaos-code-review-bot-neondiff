@@ -1,0 +1,38 @@
+{
+  "evidenceKind": "release_rollback_refs",
+  "releaseVersion": "v1.0.3",
+  "observedAt": "2026-07-09T21:09:40.000Z",
+  "channels": {
+    "cli": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "rollbackTarget": "v1.0.2",
+      "targetVerifiedBy": "git ls-remote origin refs/tags/v1.0.2",
+      "targetVerifiedSha": "bf76be80ccb573dde7b3ca0d0c2d6883259093fe"
+    },
+    "daemon": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "rollbackTarget": "v1.0.2",
+      "targetVerifiedBy": "git ls-remote origin refs/tags/v1.0.2",
+      "targetVerifiedSha": "bf76be80ccb573dde7b3ca0d0c2d6883259093fe"
+    },
+    "browserDashboard": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "rollbackTarget": "v1.0.2",
+      "targetVerifiedBy": "git ls-remote origin refs/tags/v1.0.2",
+      "targetVerifiedSha": "bf76be80ccb573dde7b3ca0d0c2d6883259093fe"
+    },
+    "website": {
+      "rollbackRepository": "electricsheephq/neon-diff-agent-website",
+      "releaseAction": "no_code_deploy_for_v1.0.3",
+      "currentChannelVersion": "v1.0.1",
+      "rollbackTarget": "no_action_for_v1.0.3",
+      "targetVerifiedBy": "docs/public-release-manifest.json omits updateChannels.website for v1.0.3",
+      "targetVerifiedSha": null,
+      "targetSubject": "v1.0.3 keeps the previously published website installer; npm latest promotion supplies the new package version."
+    }
+  },
+  "proofBoundary": "Rollback refs are repo-scoped. v1.0.3 does not advance the website channel, so website rollback is intentionally no-op for this release."
+}

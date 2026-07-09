@@ -1,0 +1,32 @@
+{
+  "evidenceKind": "desktop_startup_smoke_redacted",
+  "releaseVersion": "v1.0.3",
+  "observedAt": "2026-07-09T20:56:23Z",
+  "sourceHead": "b22b81ca85a41abe888f3054eea25bb397d08d68",
+  "mergedCandidateHead": "bcd2f7ace5b190dc86b5f86983aa62aae5e40652",
+  "bundleId": "com.electricsheephq.NeonDiffDesktop",
+  "binarySha256": "575d2b5ed97d81a869a5cbedfc16d1abbd07ee17f075f3f3e6184b2413f9f8d6",
+  "signingIdentityClass": "unsigned-dev",
+  "nativeUi": {
+    "welcomeVisible": true,
+    "providerStepVisibleAfterContinue": true,
+    "providerModel": "GLM-5.2",
+    "appRemainedAlive": true,
+    "securityAgentPresent": false,
+    "webViewEmbedded": false
+  },
+  "macos15ReleaseSmoke": {
+    "workflowRun": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29049779156",
+    "coreChecksCompiled": true,
+    "keychainChecksCompiled": true,
+    "appcastChecksPassed": true,
+    "unsignedBundlePackaged": true
+  },
+  "redaction": {
+    "localPathsRemoved": true,
+    "tokensRemoved": true,
+    "credentialsRemoved": true,
+    "privateRepoNamesOmitted": true
+  },
+  "proofBoundary": "Visible local proof covers the named unsigned bundle only. macOS 15 hosted proof covers compilation, bundle shape, and packaging only. Neither proves signing, notarization, Sparkle updates, or customer-ready installation."
+}

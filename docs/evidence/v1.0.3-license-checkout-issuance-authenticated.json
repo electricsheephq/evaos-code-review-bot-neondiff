@@ -1,0 +1,21 @@
+{
+  "evidenceKind": "license_api_checkout_issuance_authenticated",
+  "releaseVersion": "v1.0.3",
+  "observedAt": "2026-07-09T21:09:23.410Z",
+  "method": "POST",
+  "url": "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
+  "statusCode": 200,
+  "redactedResponse": {
+    "status": "issued",
+    "replayed": false,
+    "checkoutLookupKey": "neondiff_monthly",
+    "issuedLicensePrefix": "nd_live_",
+    "issuedLicenseFingerprint": "sha256:14ebc3a0cf5749aa489f32e459658f83e5ae187e470c279315f77a2985bd7e63"
+  },
+  "captureContext": {
+    "tool": "neondiff checkout-issuance-smoke",
+    "transport": "https",
+    "tlsValidation": "node default CA validation",
+    "capturedFrom": "operator CLI"
+  }
+}

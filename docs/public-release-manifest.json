@@ -1,12 +1,12 @@
 {
-  "version": "v1.0.2",
+  "version": "v1.0.3",
   "releaseLevel": "stable",
   "packageArtifact": {
     "name": "neondiff",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "requiredForThisRelease": true,
     "state": "published",
-    "previousReleasedPackageVersion": "1.0.1",
+    "previousReleasedPackageVersion": "1.0.2",
     "skippedPublicPackageVersions": [
       "v0.4.25-beta.1",
       "v0.4.26-beta.1",
@@ -30,12 +30,12 @@
       "v0.4.45-beta.1",
       "v0.4.46-beta.1"
     ],
-    "note": "v1.0.2 publishes the CLI/dashboard npm package and release metadata. Desktop GitHub device-flow and repo-discovery source changes are included in this source release, but desktop app artifacts are not part of the npm package."
+    "note": "v1.0.3 publishes the CLI/dashboard npm package and release metadata. Desktop Keychain startup-stability source changes are included in this source release, but desktop app artifacts are not part of the npm package."
   },
   "source": {
     "shaState": "pending_tag_stamp",
-    "candidateHeadBeforeReleaseMetadata": "fb2e0238287198a1fa1462f066f295dee6c9ea2e",
-    "proof": "after merge and tag, release:status --expected-head $(git rev-parse HEAD) and verify the tag contains candidate head fb2e0238287198a1fa1462f066f295dee6c9ea2e"
+    "candidateHeadBeforeReleaseMetadata": "bcd2f7ace5b190dc86b5f86983aa62aae5e40652",
+    "proof": "after merge and tag, release:status --expected-head $(git rev-parse HEAD) and verify the tag contains candidate head bcd2f7ace5b190dc86b5f86983aa62aae5e40652"
   },
   "releaseStages": {
     "launchCutLine": "1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not full signed desktop maturity.",
@@ -78,9 +78,9 @@
     ]
   },
   "docs": {
-    "version": "v1.0.2",
+    "version": "v1.0.3",
     "setupPath": "docs/SETUP.md",
-    "releaseNotesPath": "docs/releases/v1.0.2.md",
+    "releaseNotesPath": "docs/releases/v1.0.3.md",
     "websiteRepo": "electricsheephq/neon-diff-agent-website"
   },
   "licenseApi": {
@@ -88,34 +88,34 @@
     "state": "healthy",
     "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327",
     "healthUrl": "https://neondiff-license.fly.dev/healthz",
-    "healthProofPath": "docs/evidence/v1.0.2-license-api-healthz.json",
+    "healthProofPath": "docs/evidence/v1.0.3-license-api-healthz.json",
     "checkoutIssuanceRequiredForThisRelease": true,
     "checkoutIssuanceUrl": "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
     "checkoutIssuanceState": "ready",
-    "checkoutIssuanceProofPath": "docs/evidence/v1.0.2-license-checkout-issuance-unauthenticated.json",
-    "checkoutIssuanceAuthenticatedProofPath": "docs/evidence/v1.0.2-license-checkout-issuance-authenticated.json",
+    "checkoutIssuanceProofPath": "docs/evidence/v1.0.3-license-checkout-issuance-unauthenticated.json",
+    "checkoutIssuanceAuthenticatedProofPath": "docs/evidence/v1.0.3-license-checkout-issuance-authenticated.json",
     "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
   },
   "updateChannels": {
     "cli": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v1.0.2",
-      "rollback": "git reset --hard refs/tags/v1.0.1",
+      "version": "v1.0.3",
+      "rollback": "git reset --hard refs/tags/v1.0.2",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v1.0.2",
-      "rollback": "git reset --hard refs/tags/v1.0.1",
+      "version": "v1.0.3",
+      "rollback": "git reset --hard refs/tags/v1.0.2",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "browserDashboard": {
       "requiredForThisRelease": true,
       "state": "published",
-      "version": "v1.0.2",
-      "rollback": "git reset --hard refs/tags/v1.0.1",
+      "version": "v1.0.3",
+      "rollback": "git reset --hard refs/tags/v1.0.2",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
       "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
     }
