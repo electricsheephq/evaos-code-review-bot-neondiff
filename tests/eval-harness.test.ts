@@ -54,6 +54,7 @@ function promotionScorecard(input: {
       seededRecall: 1,
       maxWilsonLowerBound: input.maxWilsonLowerBound
     },
+    falsePositiveSeverities: { P0: 0, P1: 0, P2: 0, P3: 0 },
     matchedLabelKeys: [],
     thresholds: {
       minPrecision: 0.8,

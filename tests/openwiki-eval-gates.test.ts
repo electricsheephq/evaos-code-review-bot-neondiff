@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { countEvalFalsePositiveSeverities, type EvalLabelInput } from "../src/eval-harness.js";
+import type { EvalLabelInput } from "../src/eval-harness.js";
 import {
   runDocsDriftEval,
   runRepoWikiContextAbEval,
@@ -105,35 +105,27 @@ describe("OpenWiki eval gates", () => {
     expect(existsSync(join(outputRoot, "repo-wiki-context-ab-summary.json"))).toBe(false);
   });
 
-  it("buckets unmatched false positives by their actual severity", () => {
-    const labels: EvalLabelInput[] = [{
-      source: "seeded_defect",
-      severity: "P0",
-      path: "src/worker.ts",
-      line: 12,
-      title: "Matched outage",
-      body: "This finding is expected and should not count as a false positive.",
-      sourceId: "matched-p0"
-    }];
-
-    const counts = countEvalFalsePositiveSeverities({
+  it("buckets unmatched false positives by their scorecard severity", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-severity-buckets-"));
+    roots.push(outputRoot);
+    const input = buildAbInput();
+    input.modes.openwiki.botFindings = {
       findings: [
-        {
-          severity: "P0",
-          path: "src/worker.ts",
-          line: 12,
-          title: "Matched outage",
-          body: "This finding is expected and should not count as a false positive.",
-          confidence: 0.99
-        },
+        buildReviewFinding(),
         severityFinding("P0", "Unexpected outage"),
         severityFinding("P1", "Unexpected token fallback"),
         severityFinding("P2", "Unexpected docs drift"),
         severityFinding("P3", "Unexpected note")
       ]
-    }, labels);
+    };
 
-    expect(counts).toEqual({ P0: 1, P1: 1, P2: 1, P3: 1 });
+    const result = runRepoWikiContextAbEval(input, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.summary.modes.openwiki.falsePositiveSeverities).toEqual({ P0: 1, P1: 1, P2: 1, P3: 1 });
+    expect(result.summary.modes.openwiki.p0p1FalsePositives).toBe(2);
   });
 
   it("fails A/B eval when OpenWiki context drops baseline recall", () => {
@@ -274,6 +266,27 @@ describe("OpenWiki eval gates", () => {
       outputRoot,
       now: new Date(generatedAt)
     })).toThrow("outputDir must not be inside the current git checkout");
+    expect(existsSync(join(outputRoot, "docs-drift-summary.json"))).toBe(false);
+    expect(existsSync(join(outputRoot, "suggested-doc-edits.md"))).toBe(false);
+  });
+
+  it("rejects non-empty docs-drift output roots before writing new artifacts", () => {
+    const { packetPath, root } = createDocsDriftFixture();
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-non-empty-"));
+    roots.push(root, outputRoot);
+    writeFileSync(join(outputRoot, "previous-run.json"), "{}", "utf8");
+
+    expect(() => runDocsDriftEval({
+      runId: "docs-drift-output-non-empty",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath,
+      claims: buildDocsDriftClaims()
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    })).toThrow("outputRoot must be empty before running OpenWiki docs-drift eval");
     expect(existsSync(join(outputRoot, "docs-drift-summary.json"))).toBe(false);
     expect(existsSync(join(outputRoot, "suggested-doc-edits.md"))).toBe(false);
   });

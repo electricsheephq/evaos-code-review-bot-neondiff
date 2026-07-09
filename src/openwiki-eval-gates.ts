@@ -205,7 +205,7 @@ export function runRepoWikiContextAbEval(
         outputDir: join(outputRoot, mode),
         now
       });
-      return [mode, summarizeMode({ modeInput, result, labels: input.labels })];
+      return [mode, summarizeMode({ modeInput, result })];
     })
   ) as Record<RepoWikiEvalMode, RepoWikiModeSummary>;
 
@@ -280,6 +280,7 @@ export function runDocsDriftEval(
   const now = options.now ?? new Date();
   const evalName = input.evalName ?? "neondiff-openwiki-docs-drift-v0.1";
   const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
+  guardEmptyOutputRoot(outputRoot, "OpenWiki docs-drift eval");
   mkdirSync(outputRoot, { recursive: true });
   const packet = readRepoWikiPacket(input);
   const suggestions: DocsDriftSuggestion[] = [];
@@ -372,9 +373,8 @@ export function runDocsDriftEval(
 function summarizeMode(input: {
   modeInput: RepoWikiContextModeInput;
   result: EvalRunResult;
-  labels: EvalLabelInput[];
 }): RepoWikiModeSummary {
-  const falsePositiveSeverities = countFalsePositiveSeverities(input.modeInput.botFindings, input.labels);
+  const falsePositiveSeverities = countFalsePositiveSeverities(input.result.scorecard);
   return {
     outputDir: input.result.outputDir,
     ok: input.result.ok,
@@ -440,8 +440,8 @@ function buildAbGates(input: {
   ];
 }
 
-function countFalsePositiveSeverities(botFindings: unknown, labels: EvalLabelInput[]): Record<Severity, number> {
-  return countEvalFalsePositiveSeverities(botFindings, labels);
+function countFalsePositiveSeverities(scorecard: EvalScorecard): Record<Severity, number> {
+  return countEvalFalsePositiveSeverities(scorecard);
 }
 
 function readRepoWikiPacket(input: DocsDriftEvalInput): {

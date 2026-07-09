@@ -243,6 +243,7 @@ export interface EvalScorecard {
     seededRecall: number;
     maxWilsonLowerBound: number;
   };
+  falsePositiveSeverities: Record<Severity, number>;
   matchedLabelKeys: string[];
   thresholds: EvalThresholds;
   gates: Array<{ name: string; ok: boolean; detail: string }>;
@@ -448,21 +449,8 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   };
 }
 
-export function countEvalFalsePositiveSeverities(
-  botFindingsInput: unknown,
-  labelsInput: EvalLabelInput[]
-): Record<Severity, number> {
-  const parsedBot = parseFindings(botFindingsInput);
-  const botFindings = parsedBot.findings.map((finding, index) => normalizeFinding(finding, "bot", `bot-${index + 1}`));
-  const labels = labelsInput
-    .filter((label) => label.expected !== false)
-    .map((label, index) => normalizeFinding(label, label.source, `label-${index + 1}`));
-  const matchedBotIds = new Set(matchFindings(botFindings, labels).map((match) => match.botFindingId));
-  const counts: Record<Severity, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
-  for (const finding of botFindings) {
-    if (!matchedBotIds.has(finding.id)) counts[finding.severity] += 1;
-  }
-  return counts;
+export function countEvalFalsePositiveSeverities(scorecard: EvalScorecard): Record<Severity, number> {
+  return { ...scorecard.falsePositiveSeverities };
 }
 
 export function runStickyVsColdEval(
@@ -921,6 +909,7 @@ function buildScorecard(input: {
   const truePositive = matchedBotIds.size;
   const falsePositive = input.botFindings.length - truePositive;
   const falseNegative = input.labels.length - matchedLabelIds.size;
+  const falsePositiveSeverities = countFindingSeverities(input.botFindings.filter((finding) => !matchedBotIds.has(finding.id)));
   const labelById = new Map(input.labels.map((label) => [label.id, label]));
   const matchedLabelKeys = [...matchedLabelIds]
     .map((labelId) => labelById.get(labelId))
@@ -979,6 +968,7 @@ function buildScorecard(input: {
       seededRecall: roundMetric(seededRecall),
       maxWilsonLowerBound
     },
+    falsePositiveSeverities,
     matchedLabelKeys,
     thresholds: input.thresholds,
     gates: [
@@ -1019,6 +1009,12 @@ function buildScorecard(input: {
       }
     ]
   };
+}
+
+function countFindingSeverities(findings: NormalizedEvalFinding[]): Record<Severity, number> {
+  const counts: Record<Severity, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const finding of findings) counts[finding.severity] += 1;
+  return counts;
 }
 
 function evaluateSuiteRequirements(input: {
