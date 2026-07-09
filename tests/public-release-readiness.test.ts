@@ -567,15 +567,12 @@ describe("NeonDiff public release readiness", () => {
 
     const governance = read("docs/release-governance.md");
     expect(governance).toMatch(/partial quarantine promotion/i);
-    expect(governance).toMatch(/npm dist-tag add neondiff@<version> latest/);
-    expect(governance).toMatch(/npm dist-tag rm neondiff release-candidate/);
-    expect(governance).toMatch(/npm-release-policy\.mjs verify-channel/);
-    expect(governance).toMatch(/npm view neondiff dist-tags\.release-candidate/);
-    expect(governance.indexOf("npm-release-policy.mjs verify-channel")).toBeLessThan(
-      governance.indexOf("npm dist-tag add neondiff@<version> latest")
-    );
-    expect(governance.indexOf("npm view neondiff dist-tags.release-candidate")).toBeLessThan(
-      governance.indexOf("npm dist-tag add neondiff@<version> latest")
-    );
+    const recovery = governance.split("### Partial Quarantine Promotion Recovery")[1]?.split("## Tag And Release")[0] ?? "";
+    expect(recovery).toMatch(/gh workflow run publish-npm\.yml/);
+    expect(recovery).toMatch(/--ref main/);
+    expect(recovery).toMatch(/-f tag=v<version>/);
+    expect(recovery).toMatch(/direct dist-tag mutation is not supported/i);
+    expect(recovery).not.toMatch(/npm dist-tag add/);
+    expect(recovery).not.toMatch(/npm dist-tag rm/);
   });
 });

@@ -202,40 +202,28 @@ an unexpected channel version blocks promotion instead of moving backward.
 
 If publication succeeds under `release-candidate` but promotion to `latest`
 does not complete, do not republish, retag, or unpublish the immutable package.
-First compare the package's registry integrity, shasum, `gitHead`, and
-attestation against the reviewed release packet and annotated tag:
+Direct dist-tag mutation is not supported for recovery because it bypasses the
+serialized workflow's registry retries, provenance checks, channel predecessor
+guard, and quarantine ownership check. Rerun the hardened workflow from
+protected `main` for the exact existing release tag:
+
+```bash
+gh workflow run publish-npm.yml \
+  --repo electricsheephq/evaos-code-review-bot-neondiff \
+  --ref main \
+  -f tag=v<version>
+gh run list \
+  --repo electricsheephq/evaos-code-review-bot-neondiff \
+  --workflow publish-npm.yml \
+  --limit 5
+```
+
+After that exact-tag run succeeds, verify the registry package identity and
+stable channel without mutating either one:
 
 ```bash
 npm view neondiff@<version> version dist.integrity dist.shasum gitHead dist.attestations --json
-```
-
-The preferred recovery is to rerun the serialized `Publish npm` workflow for
-the exact existing release tag. If direct operator recovery is required, run
-it from an isolated checkout of that tag and apply the same channel guard as
-the workflow. Confirm that `release-candidate` still belongs to this exact
-version before changing `latest`:
-
-```bash
-CURRENT_TAG_VERSION="$(npm view neondiff dist-tags.latest 2>/dev/null || true)"
-EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
-node scripts/npm-release-policy.mjs verify-channel \
-  --current-version "$CURRENT_TAG_VERSION" \
-  --target-version "<version>" \
-  --expected-predecessor "$EXPECTED_PREDECESSOR" \
-  --npm-tag latest
-test "$(npm view neondiff dist-tags.release-candidate)" = "<version>"
-npm dist-tag add neondiff@<version> latest
 test "$(npm view neondiff dist-tags.latest)" = "<version>"
-```
-
-Remove the quarantine tag only when it still points to the same verified
-version. A different value means another release owns the tag and must not be
-changed by this recovery:
-
-```bash
-if [ "$(npm view neondiff dist-tags.release-candidate 2>/dev/null || true)" = "<version>" ]; then
-  npm dist-tag rm neondiff release-candidate
-fi
 ```
 
 Record the failed workflow URL, registry identity output, repaired dist-tags,
