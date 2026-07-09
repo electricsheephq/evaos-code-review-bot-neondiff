@@ -14,9 +14,10 @@ const OPENWIKI_METADATA_PATH = "openwiki/.last-update.json";
 const DEFAULT_MAX_PACKET_BYTES = 12_000;
 const GIT_COMMAND_TIMEOUT_MS = 5_000;
 const REPO_PATH_EXTENSION_PATTERN = /\.(?:[cm]?[jt]sx?|mdx?|json|ya?ml|toml|lock|css|scss|html?|sh|bash|zsh|py|go|rs|swift|kt|java|rb|php|sql|txt)$/i;
+const SENSITIVE_ENV_ASSIGNMENT_PATTERN = /\b(?:(?:api[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?cookie)|(?:[a-z][a-z0-9]*[_-]+)+(?:api[_-]?key|private[_-]?key|token|secret|password|cookie|session)(?:[_-]+[a-z0-9]+)*|(?:apiKey|privateKey|accessToken|authToken|refreshToken|idToken|sessionCookie|[a-z][A-Za-z0-9]*(?:ApiKey|PrivateKey|AccessToken|AuthToken|RefreshToken|IdToken|SessionCookie)))\b\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{8,}["']?/gi;
 const SENSITIVE_ENV_NAME_PATTERNS = [
   /\b(?:(?:api[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?cookie)|(?:[a-z][a-z0-9]*[_-]+)+(?:api[_-]?key|private[_-]?key|token|secret|password|cookie|session)(?:[_-]+[a-z0-9]+)*)\b/gi,
-  /\b[a-z][A-Za-z0-9]*(?:ApiKey|PrivateKey|AccessToken|AuthToken|RefreshToken|IdToken|SessionCookie|Token|Secret|Password|Cookie|Session)\b/g
+  /\b(?:apiKey|privateKey|accessToken|authToken|refreshToken|idToken|sessionCookie|[a-z][A-Za-z0-9]*(?:ApiKey|PrivateKey|AccessToken|AuthToken|RefreshToken|IdToken|SessionCookie))\b/g
 ];
 
 export interface BuildOpenWikiDerivedRepoWikiPacketInput {
@@ -136,14 +137,15 @@ function readOpenWikiSections(worktreePath: string): {
     skippedOversizedCount: listing.skippedOversizedCount,
     sections: listing.files.map((sourcePath, index) => {
       const raw = readFileSync(join(worktreePath, sourcePath), "utf8");
-      const body = redactSensitiveEnvNames(raw.trim());
+      const rawBody = raw.trim();
+      const body = redactSensitiveEnvNames(rawBody);
       return {
         id: normalizeSectionId(sourcePath.replace(/^openwiki\//, "").replace(/\.md$/, "")),
         title: readFirstHeading(body.text) ?? sourcePath,
         body: body.text,
-        order: index,
+        order: readDeclaredSectionOrder(body.text) ?? index,
         sourceFiles: normalizeSourceFiles([sourcePath, ...readSourceMap(body.text)]),
-        sourceSha: sha256(body.text),
+        sourceSha: sha256(rawBody),
         preRedactionReplacementCount: body.replacementCount
       };
     })
@@ -270,14 +272,26 @@ function readFirstHeading(markdown: string): string | undefined {
 
 function redactSensitiveEnvNames(input: string): { text: string; replacementCount: number } {
   let replacementCount = 0;
+  const withAssignmentsRedacted = input.replace(SENSITIVE_ENV_ASSIGNMENT_PATTERN, () => {
+    replacementCount += 1;
+    return "[redacted-secret]";
+  });
   const text = SENSITIVE_ENV_NAME_PATTERNS.reduce((current, pattern) => current.replace(pattern, () => {
       replacementCount += 1;
       return "[redacted-secret]";
-    }), input);
+    }), withAssignmentsRedacted);
   return {
     text,
     replacementCount
   };
+}
+
+function readDeclaredSectionOrder(markdown: string): number | undefined {
+  const frontMatter = markdown.match(/^---\n([\s\S]*?)\n---/);
+  const orderLine = frontMatter?.[1]?.match(/^order:\s*(-?\d+)\s*$/m) ?? markdown.match(/<!--\s*openwiki-order:\s*(-?\d+)\s*-->/i);
+  if (!orderLine?.[1]) return undefined;
+  const order = Number(orderLine[1]);
+  return Number.isSafeInteger(order) ? order : undefined;
 }
 
 function normalizeSourceFiles(files: string[]): string[] {
