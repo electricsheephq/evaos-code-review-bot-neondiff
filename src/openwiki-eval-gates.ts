@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   assertEvalOutputDirSafe,
@@ -188,6 +188,7 @@ export function runRepoWikiContextAbEval(
   validateRepoWikiContextAbThresholds(input.thresholds);
   const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
   guardEmptyOutputRoot(outputRoot, "repo-wiki context A/B eval");
+  try {
   mkdirSync(outputRoot, { recursive: true });
   const modes = Object.fromEntries(
     REPO_WIKI_EVAL_MODES.map((mode) => {
@@ -261,6 +262,10 @@ export function runRepoWikiContextAbEval(
       "repo-wiki-context-ab-report.md": reportPath
     }
   };
+  } catch (error) {
+    cleanupEvalOutputRoot(outputRoot);
+    throw error;
+  }
 }
 
 function validateRepoWikiContextAbModes(value: unknown): Record<RepoWikiEvalMode, RepoWikiContextModeInput> {
@@ -292,6 +297,7 @@ export function runDocsDriftEval(
   const thresholds = validateDocsDriftThresholds(input.thresholds);
   const outputRoot = assertEvalOutputDirSafe(options.outputRoot);
   guardEmptyOutputRoot(outputRoot, "OpenWiki docs-drift eval");
+  try {
   const packet = readRepoWikiPacket(input);
   const suggestions: DocsDriftSuggestion[] = [];
   const claims = input.claims.map((claim) => {
@@ -381,6 +387,10 @@ export function runDocsDriftEval(
       "suggested-doc-edits.md": suggestionsPath
     }
   };
+  } catch (error) {
+    cleanupEvalOutputRoot(outputRoot);
+    throw error;
+  }
 }
 
 function validateDocsDriftThresholds(thresholds: DocsDriftEvalInput["thresholds"]): DocsDriftEvalSummary["thresholds"] {
@@ -744,6 +754,10 @@ function writeJson(path: string, value: unknown): void {
 function assertNoSecretLikeText(value: unknown, label: string): void {
   const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
   if (containsSecretLikeText(text)) throw new Error(`${label} contains secret-like text`);
+}
+
+function cleanupEvalOutputRoot(outputRoot: string): void {
+  rmSync(outputRoot, { recursive: true, force: true });
 }
 
 function sha256File(path: string): string {

@@ -81,6 +81,10 @@ describe("OpenWiki eval gates", () => {
       outputRoot,
       now: new Date(generatedAt)
     })).toThrow("repo-wiki context A/B summary contains secret-like text");
+    expect(existsSync(outputRoot)).toBe(false);
+    expect(existsSync(join(outputRoot, "baseline"))).toBe(false);
+    expect(existsSync(join(outputRoot, "deterministic"))).toBe(false);
+    expect(existsSync(join(outputRoot, "openwiki"))).toBe(false);
     expect(existsSync(join(outputRoot, "repo-wiki-context-ab-summary.json"))).toBe(false);
     expect(existsSync(join(outputRoot, "repo-wiki-context-ab-report.md"))).toBe(false);
   });
@@ -666,6 +670,7 @@ describe("OpenWiki eval gates", () => {
       outputRoot,
       now: new Date(generatedAt)
     })).toThrow("docs-drift summary contains secret-like text");
+    expect(existsSync(outputRoot)).toBe(false);
     expect(existsSync(join(outputRoot, "docs-drift-summary.json"))).toBe(false);
     expect(existsSync(join(outputRoot, "docs-drift-report.md"))).toBe(false);
     expect(existsSync(join(outputRoot, "suggested-doc-edits.md"))).toBe(false);
