@@ -519,7 +519,7 @@ describe("NeonDiff public release readiness", () => {
     expect(ci).toMatch(/secret/i);
 
     expect(publish).toMatch(/id-token:\s*write/);
-    expect(publish).toMatch(/concurrency:\s*\n\s*group:\s*publish-npm-\$\{\{\s*github\.event\.inputs\.tag\s*\|\|\s*github\.event\.release\.tag_name\s*\|\|\s*github\.ref\s*\}\}/);
+    expect(publish).toMatch(/concurrency:\s*\n\s*group:\s*publish-npm-neondiff/);
     expect(publish).toMatch(/cancel-in-progress:\s*false/);
     expect(publish).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0");
     expect(publish).toContain("actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5");
@@ -536,6 +536,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/npm-release-policy\.mjs classify/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-git/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-pack/);
+    expect(publish).toMatch(/npm-release-policy\.mjs verify-channel/);
     expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
     expect(publish).toMatch(/GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
     expect(releasePolicy).toMatch(/stable npm packages require a non-prerelease GitHub Release/);
@@ -553,6 +554,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/JSON\.parse/);
     expect(publish).toMatch(/npm registry metadata remained unavailable or invalid after retries/);
     expect(publish).toMatch(/dist-tags\.\$NPM_TAG/);
+    expect(publish).toMatch(/previousReleasedPackageVersion/);
     expect(publish).toMatch(/npm publish --provenance --access public --tag "release-candidate"/);
     expect(publish.indexOf('npm publish --provenance --access public --tag "release-candidate"')).toBeLessThan(
       publish.indexOf("npm-release-policy.mjs verify-pack")

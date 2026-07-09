@@ -193,7 +193,10 @@ Stable npm publication uses a quarantine dist-tag first. Verify the registry
 integrity, shasum, and `gitHead` against the reviewed pack and annotated tag,
 then promote the package to `latest`. Manual retry runs must resolve the exact
 existing GitHub Release and prove it is published and non-prerelease before
-promotion.
+promotion. All NeonDiff npm releases share one workflow concurrency group.
+Before moving `latest` or `beta`, the workflow also requires the channel to be
+absent, already at the target, or exactly at the manifest-declared predecessor;
+an unexpected channel version blocks promotion instead of moving backward.
 
 ### Partial Quarantine Promotion Recovery
 

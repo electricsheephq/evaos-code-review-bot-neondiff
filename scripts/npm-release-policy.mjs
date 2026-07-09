@@ -64,6 +64,9 @@ function classify(args) {
   if (eventName === "release" && releasePrerelease && npmTag === "latest") {
     fail("stable npm packages require a non-prerelease GitHub Release");
   }
+  if (eventName === "release" && !releasePrerelease && npmTag === "beta") {
+    fail("beta npm packages require a prerelease GitHub Release");
+  }
   if (eventName === "workflow_dispatch") {
     const releaseMetadataPath = args.get("release-metadata");
     if (!releaseMetadataPath && npmTag === "latest") {
@@ -176,9 +179,31 @@ function verifyPack(args) {
   }));
 }
 
+function verifyChannel(args) {
+  const currentVersion = args.get("current-version") ?? "";
+  const targetVersion = required(args, "target-version");
+  const expectedPredecessor = required(args, "expected-predecessor");
+  const npmTag = required(args, "npm-tag");
+  const validVersion = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,127}$/;
+  if (!validVersion.test(targetVersion) || !validVersion.test(expectedPredecessor)) {
+    fail("target and expected predecessor must be bounded npm package versions");
+  }
+  if (currentVersion && !validVersion.test(currentVersion)) {
+    fail("current npm channel version must be a bounded npm package version");
+  }
+  if (npmTag !== "latest" && npmTag !== "beta") {
+    fail("npm tag must be latest or beta");
+  }
+  if (currentVersion && currentVersion !== targetVersion && currentVersion !== expectedPredecessor) {
+    fail(`refusing to move npm dist-tag ${npmTag} from unexpected ${currentVersion} to ${targetVersion}`);
+  }
+  console.log(JSON.stringify({ npmTag, currentVersion, targetVersion, expectedPredecessor }));
+}
+
 const [command, ...rawArgs] = process.argv.slice(2);
 const args = parseArgs(rawArgs);
 if (command === "classify") classify(args);
 else if (command === "verify-git") verifyGit(args);
 else if (command === "verify-pack") verifyPack(args);
-else fail("command must be classify, verify-git, or verify-pack");
+else if (command === "verify-channel") verifyChannel(args);
+else fail("command must be classify, verify-git, verify-pack, or verify-channel");

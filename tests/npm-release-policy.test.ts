@@ -30,6 +30,22 @@ describe("npm release policy", () => {
     expect(result.stderr).toContain("stable npm packages require a non-prerelease GitHub Release");
   });
 
+  it("rejects a beta npm package from a non-prerelease GitHub Release", () => {
+    const result = spawnSync(process.execPath, [
+      policyScript,
+      "classify",
+      "--event-name", "release",
+      "--release-prerelease", "false",
+      "--tag", "v1.1.0-beta.1",
+      "--package-version", "1.1.0-beta.1",
+      "--release-level", "beta",
+      "--skipped-versions-json", "[]"
+    ], { encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("beta npm packages require a prerelease GitHub Release");
+  });
+
   it("classifies a matching stable release for npm latest", () => {
     const output = execFileSync(process.execPath, [
       policyScript,
@@ -229,5 +245,35 @@ describe("npm release policy", () => {
 
     expect(pack.integrity).toMatch(/^sha512-/);
     expect(pack.shasum).toMatch(/^[a-f0-9]{40}$/);
+  });
+
+  it("allows only absent, identical, or manifest-declared predecessor channel values", () => {
+    for (const currentVersion of ["", "1.0.2", "1.0.3"]) {
+      const output = execFileSync(process.execPath, [
+        policyScript,
+        "verify-channel",
+        "--current-version", currentVersion,
+        "--target-version", "1.0.3",
+        "--expected-predecessor", "1.0.2",
+        "--npm-tag", "latest"
+      ], { encoding: "utf8" });
+      expect(JSON.parse(output)).toEqual({
+        npmTag: "latest",
+        currentVersion,
+        targetVersion: "1.0.3",
+        expectedPredecessor: "1.0.2"
+      });
+    }
+
+    const rejected = spawnSync(process.execPath, [
+      policyScript,
+      "verify-channel",
+      "--current-version", "1.0.4",
+      "--target-version", "1.0.3",
+      "--expected-predecessor", "1.0.2",
+      "--npm-tag", "latest"
+    ], { encoding: "utf8" });
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("refusing to move npm dist-tag latest from unexpected 1.0.4 to 1.0.3");
   });
 });

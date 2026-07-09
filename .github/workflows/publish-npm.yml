@@ -12,7 +12,7 @@ on:
         default: v1.0.3
 
 concurrency:
-  group: publish-npm-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref }}
+  group: publish-npm-neondiff
   cancel-in-progress: false
 
 permissions:
@@ -151,6 +151,27 @@ jobs:
             --remote-metadata remote-package.json \
             --expected-version "$PACKAGE_VERSION" \
             --expected-git-head "$EXPECTED_GIT_HEAD"
+          EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
+          rm -f channel-metadata.json channel-metadata.tmp.json
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            rm -f channel-metadata.tmp.json
+            if npm view neondiff dist-tags --json > channel-metadata.tmp.json 2>/dev/null && \
+              node -e 'const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!value || Array.isArray(value) || typeof value !== "object") process.exit(1)' channel-metadata.tmp.json; then
+              mv channel-metadata.tmp.json channel-metadata.json
+              break
+            fi
+            sleep 5
+          done
+          test -s channel-metadata.json || {
+            echo "::error::npm dist-tag metadata remained unavailable or invalid after retries"
+            exit 1
+          }
+          CURRENT_TAG_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags[process.argv[2]] ?? "")' channel-metadata.json "$NPM_TAG")"
+          node scripts/npm-release-policy.mjs verify-channel \
+            --current-version "$CURRENT_TAG_VERSION" \
+            --target-version "$PACKAGE_VERSION" \
+            --expected-predecessor "$EXPECTED_PREDECESSOR" \
+            --npm-tag "$NPM_TAG"
           npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"
           test "$(npm view neondiff "dist-tags.$NPM_TAG")" = "$PACKAGE_VERSION"
           if [ "$(npm view neondiff dist-tags.release-candidate 2>/dev/null || true)" = "$PACKAGE_VERSION" ]; then
