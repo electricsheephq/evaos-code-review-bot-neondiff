@@ -22,7 +22,7 @@ import {
 import { isApiKeyEnvName, isProviderId, isProviderStructuredOutputMode, PROVIDER_STRUCTURED_OUTPUT_MODES, SCHEMA_FEEDBACK_RETRY_MAX, type ProviderRegistryConfig } from "./providers.js";
 import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
-import type { RepoWikiContextConfig } from "./repo-wiki-context.js";
+import { validateRelativePacketPath, type RepoWikiContextConfig } from "./repo-wiki-context.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -992,6 +992,8 @@ function validateRepoWikiContextConfig(value: unknown, label: string): void {
   if (typeof value.packetPath !== "string" || value.packetPath.trim().length === 0) {
     throw new Error(`${label}.packetPath must be a non-empty string`);
   }
+  const packetPathError = validateRelativePacketPath(value.packetPath);
+  if (packetPathError) throw new Error(`${label}.packetPath ${packetPathError.replace(/^Repo wiki packetPath /, "")}`);
   validatePositiveInteger(value.maxPacketBytes, `${label}.maxPacketBytes`);
   validateBoolean(value.includeStaleContext, `${label}.includeStaleContext`);
 }

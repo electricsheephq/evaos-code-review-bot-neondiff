@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { formatRepoWikiPacketMarkdown, type RepoWikiPacket, type RepoWikiSourceStatus } from "./repo-wiki-packet.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
@@ -53,13 +53,33 @@ export function buildRepoWikiContextPacket(input: {
     };
   }
 
-  const sourcePath = resolvePacketPath(input.worktreePath, input.config.packetPath);
   const evidenceSourcePath = formatPacketPathForEvidence(input.config.packetPath);
+  const packetPathError = validateRelativePacketPath(input.config.packetPath);
+  if (packetPathError) {
+    return {
+      omitted: {
+        reason: "invalid_packet",
+        detail: packetPathError,
+        sourcePath: evidenceSourcePath
+      }
+    };
+  }
+
+  const sourcePath = resolvePacketPath(input.worktreePath, input.config.packetPath);
   if (!existsSync(sourcePath)) {
     return {
       omitted: {
         reason: "missing_packet",
         detail: "Repo wiki packet not found",
+        sourcePath: evidenceSourcePath
+      }
+    };
+  }
+  if (!isExistingPathInsideOrEqual(sourcePath, input.worktreePath)) {
+    return {
+      omitted: {
+        reason: "invalid_packet",
+        detail: "Repo wiki packet path resolved outside the prepared PR worktree",
         sourcePath: evidenceSourcePath
       }
     };
@@ -130,11 +150,32 @@ export function buildRepoWikiContextPacket(input: {
 }
 
 function resolvePacketPath(worktreePath: string, packetPath: string): string {
-  return isAbsolute(packetPath) ? packetPath : resolve(worktreePath, packetPath);
+  return resolve(worktreePath, packetPath);
 }
 
 function formatPacketPathForEvidence(packetPath: string): string {
-  return isAbsolute(packetPath) ? "[absolute-packet-path]" : packetPath;
+  return validateRelativePacketPath(packetPath) ? "[invalid-packet-path]" : packetPath;
+}
+
+export function validateRelativePacketPath(packetPath: string): string | undefined {
+  const trimmed = packetPath.trim();
+  if (!trimmed) return "Repo wiki packetPath must be a non-empty relative path";
+  if (isAbsoluteLike(trimmed)) return "Repo wiki packetPath must be relative to the prepared PR worktree";
+  if (trimmed.split(/[\\/]+/).includes("..")) {
+    return "Repo wiki packetPath must not contain parent-directory segments";
+  }
+  return undefined;
+}
+
+function isAbsoluteLike(packetPath: string): boolean {
+  return isAbsolute(packetPath) || /^[A-Za-z]:[\\/]/.test(packetPath) || packetPath.startsWith("\\\\");
+}
+
+function isExistingPathInsideOrEqual(candidatePath: string, rootPath: string): boolean {
+  const rootRealPath = realpathSync.native(rootPath);
+  const candidateRealPath = realpathSync.native(candidatePath);
+  const rel = relative(rootRealPath, candidateRealPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function parseRepoWikiContextRaw(

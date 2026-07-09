@@ -100,8 +100,10 @@ Prompt integration is disabled by default through `config.repoWikiContext`.
 When enabled, `src/worker.ts` reads a prebuilt packet from the prepared PR
 worktree, records redacted evidence, and includes it in the review prompt only
 if it is fresh or explicitly allowed stale/degraded, within budget, and free of
-secret-like text. Loose JSON or raw Markdown packets without freshness metadata
-are treated as `unknown`, which is omitted unless `includeStaleContext=true`.
+secret-like text. `packetPath` is confined to a relative path inside the
+prepared PR worktree; absolute paths and parent-directory segments are rejected.
+Loose JSON or raw Markdown packets without freshness metadata are treated as
+`unknown`, which is omitted unless `includeStaleContext=true`.
 
 Packets read from the PR worktree can be PR-author-controlled. Treat packet
 metadata, section titles, section bodies, and source notes as untrusted advisory

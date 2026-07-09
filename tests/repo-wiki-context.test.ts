@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -219,6 +219,42 @@ describe("repo wiki advisory context", () => {
       })
     ).toMatchObject({
       omitted: expect.objectContaining({ reason: "budget_exceeded" })
+    });
+  });
+
+  it("confines packetPath to relative paths inside the prepared worktree", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    const outsideRoot = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-outside-"));
+    roots.push(root, outsideRoot);
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    writeFileSync(join(outsideRoot, "repo-wiki-packet.json"), formatRepoWikiPacketJson(repoWikiPacket("fresh")));
+
+    expect(() =>
+      loadConfigFromObject({ repoWikiContext: { enabled: true, packetPath: join(outsideRoot, "repo-wiki-packet.json") } })
+    ).toThrow(/repoWikiContext\.packetPath.*relative/);
+    expect(() =>
+      loadConfigFromObject({ repoWikiContext: { enabled: true, packetPath: "../repo-wiki-packet.json" } })
+    ).toThrow(/repoWikiContext\.packetPath.*parent-directory/);
+
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config({ packetPath: "../repo-wiki-packet.json" })
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({ reason: "invalid_packet", sourcePath: "[invalid-packet-path]" })
+    });
+
+    symlinkSync(join(outsideRoot, "repo-wiki-packet.json"), join(root, ".neondiff", "repo-wiki-packet.json"));
+    expect(
+      buildRepoWikiContextPacket({
+        repo,
+        worktreePath: root,
+        config: config()
+      })
+    ).toMatchObject({
+      omitted: expect.objectContaining({ reason: "invalid_packet" })
     });
   });
 
