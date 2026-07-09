@@ -182,6 +182,54 @@ kickstart` alone is a restart, not a rollback. `git checkout` detaches HEAD or
 resets the working tree; it is not accepted as a release rollback for this
 manifest gate.
 
+Run a manifest `git reset --hard refs/tags/<tag>` only in an isolated recovery
+checkout. Never reset protected `main` or a maintainer's active worktree. Public
+npm rollback is a separate operator action: move the stable dist-tag to the
+verified prior package, reinstall that package on affected hosts, restart the
+host-specific daemon/dashboard, and preserve the immutable release tag and
+package as incident provenance.
+
+Stable npm publication uses a quarantine dist-tag first. Verify the registry
+integrity, shasum, and `gitHead` against the reviewed pack and annotated tag,
+then promote the package to `latest`. Manual retry runs must resolve the exact
+existing GitHub Release and prove it is published and non-prerelease before
+promotion. All NeonDiff npm releases share one workflow concurrency group.
+Before moving `latest` or `beta`, the workflow also requires the channel to be
+absent, already at the target, or exactly at the manifest-declared predecessor;
+an unexpected channel version blocks promotion instead of moving backward.
+
+### Partial Quarantine Promotion Recovery
+
+If publication succeeds under `release-candidate` but promotion to `latest`
+does not complete, do not republish, retag, or unpublish the immutable package.
+Direct dist-tag mutation is not supported for recovery because it bypasses the
+serialized workflow's registry retries, provenance checks, channel predecessor
+guard, and quarantine ownership check. Rerun the hardened workflow from
+protected `main` for the exact existing release tag:
+
+```bash
+gh workflow run publish-npm.yml \
+  --repo electricsheephq/evaos-code-review-bot-neondiff \
+  --ref main \
+  -f tag=v<version>
+gh run list \
+  --repo electricsheephq/evaos-code-review-bot-neondiff \
+  --workflow publish-npm.yml \
+  --limit 5
+```
+
+After that exact-tag run succeeds, verify the registry package identity and
+stable channel without mutating either one:
+
+```bash
+npm view neondiff@<version> version dist.integrity dist.shasum gitHead dist.attestations --json
+test "$(npm view neondiff dist-tags.latest)" = "<version>"
+```
+
+Record the failed workflow URL, registry identity output, repaired dist-tags,
+and operator in the release tracker. If any identity field is missing or does
+not match, leave `latest` unchanged and treat the package as quarantined.
+
 ## Tag And Release
 
 Create an annotated tag from the merged source SHA:

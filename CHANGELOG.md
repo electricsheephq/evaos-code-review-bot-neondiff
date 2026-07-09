@@ -16,6 +16,23 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [1.0.3] - docs/releases/v1.0.3.md
+
+### Fixed
+
+- Prevent NeonDiff Desktop startup from decrypting Keychain values or opening
+  repeated authorization prompts before the native window stabilizes.
+- Keep metadata-only startup checks noninteractive for modern and legacy
+  Keychain items while preserving explicit user-triggered secret reads.
+
+### Changed
+
+- Use one shared argument contract so displayed and detached dashboard launches
+  explicitly select browser mode with `--operator false`.
+- Pin Swift desktop and unsigned release-smoke builds to macOS 15, compile the
+  focused Keychain contract there, and keep Security-linked helper execution in
+  the local visible-smoke lane.
+
 ## [1.0.2] - docs/releases/v1.0.2.md
 
 ### Added

@@ -9,10 +9,10 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v1.0.2
+        default: v1.0.3
 
 concurrency:
-  group: publish-npm-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref }}
+  group: publish-npm-neondiff
   cancel-in-progress: false
 
 permissions:
@@ -23,39 +23,68 @@ jobs:
   publish:
     name: Publish neondiff
     runs-on: ubuntu-latest
+    environment: npm-publish
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'release' }}
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
+      RELEASE_EVENT_NAME: ${{ github.event_name }}
+      RELEASE_PRERELEASE: ${{ github.event.release.prerelease || false }}
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          ref: ${{ github.event.inputs.tag || github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release provenance before repository code runs
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git cat-file -t "$RELEASE_TAG")" = "tag" || {
+            echo "::error::Release tag must be annotated"
+            exit 1
+          }
+          TAG_COMMIT="$(git rev-list -n 1 "$RELEASE_TAG")"
+          git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main || {
+            echo "::error::Release tag commit must be an ancestor of protected main"
+            exit 1
+          }
+          CANDIDATE_HEAD="$(node -e 'const manifest = require("./docs/public-release-manifest.json"); process.stdout.write(manifest.source?.candidateHeadBeforeReleaseMetadata ?? "");')"
+          test "$(printf '%s' "$CANDIDATE_HEAD" | wc -c | tr -d ' ')" = "40" || {
+            echo "::error::Release candidate head must be a full Git SHA"
+            exit 1
+          }
+          git merge-base --is-ancestor "$CANDIDATE_HEAD" "$TAG_COMMIT" || {
+            echo "::error::Declared release candidate head must be an ancestor of the release tag commit"
+            exit 1
+          }
+          node scripts/npm-release-policy.mjs verify-git \
+            --tag "$RELEASE_TAG" \
+            --candidate-head "$CANDIDATE_HEAD" \
+            --main-ref refs/remotes/origin/main
 
       - name: Classify npm package release
         id: package_release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.event.release.tag_name }}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          if node -e "process.exit(require('./package.json').version.includes('-') ? 0 : 1)"; then
-            NPM_TAG="beta"
-          else
-            NPM_TAG="latest"
+          RELEASE_LEVEL="$(node -p "require('./docs/public-release-manifest.json').releaseLevel")"
+          SKIPPED_VERSIONS="$(node -p "JSON.stringify(require('./docs/public-release-manifest.json').packageArtifact?.skippedPublicPackageVersions ?? [])")"
+          RELEASE_METADATA_ARGS=()
+          if [ "$RELEASE_EVENT_NAME" = "workflow_dispatch" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-metadata.json"
+            RELEASE_METADATA_ARGS=(--release-metadata "$RUNNER_TEMP/release-metadata.json")
           fi
-          if [ "$TAG" != "v$PACKAGE_VERSION" ]; then
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              echo "::error::Manual npm publish tag $TAG does not match package.json version v$PACKAGE_VERSION"
-              exit 1
-            fi
-            SKIPPED_SOURCE_RELEASE="$(TAG="$TAG" node -e 'const manifest = require("./docs/public-release-manifest.json"); const skippedVersions = manifest.packageArtifact?.skippedPublicPackageVersions ?? []; process.stdout.write(manifest.releaseLevel === "source-beta" && skippedVersions.includes(process.env.TAG) ? "true" : "false");')"
-            if [ "$SKIPPED_SOURCE_RELEASE" = "true" ]; then
-              echo "::notice::Skipping npm publish for source-only prerelease $TAG; package.json remains v$PACKAGE_VERSION"
-              echo "should_publish=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "::error::Release tag $TAG does not match package.json version v$PACKAGE_VERSION and is not listed in docs/public-release-manifest.json packageArtifact.skippedPublicPackageVersions"
-            exit 1
-          fi
-          echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
+          node scripts/npm-release-policy.mjs classify \
+            --event-name "$RELEASE_EVENT_NAME" \
+            --release-prerelease "$RELEASE_PRERELEASE" \
+            --tag "$RELEASE_TAG" \
+            --package-version "$PACKAGE_VERSION" \
+            --release-level "$RELEASE_LEVEL" \
+            --skipped-versions-json "$SKIPPED_VERSIONS" \
+            "${RELEASE_METADATA_ARGS[@]}" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Verify npm publish token is configured
         if: steps.package_release.outputs.should_publish == 'true'
@@ -94,11 +123,57 @@ jobs:
         if: steps.package_release.outputs.should_publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ steps.package_release.outputs.npm_tag }}
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED_GIT_HEAD="$(git rev-list -n 1 "$RELEASE_TAG")"
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
-            echo "neondiff@$PACKAGE_VERSION already exists; verifying dist-tags"
-            test "$(npm view neondiff dist-tags.${{ steps.package_release.outputs.npm_tag }})" = "$PACKAGE_VERSION"
-            exit 0
+            echo "neondiff@$PACKAGE_VERSION already exists; verifying reviewed tarball identity"
+          else
+            npm publish --provenance --access public --tag "release-candidate"
           fi
-          npm publish --provenance --access public --tag "${{ steps.package_release.outputs.npm_tag }}"
+          rm -f remote-package.json registry-metadata.tmp.json
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            rm -f registry-metadata.tmp.json
+            if npm view "neondiff@$PACKAGE_VERSION" version dist.integrity dist.shasum gitHead --json > registry-metadata.tmp.json 2>/dev/null && \
+              node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' registry-metadata.tmp.json; then
+              mv registry-metadata.tmp.json remote-package.json
+              break
+            fi
+            sleep 5
+          done
+          test -s remote-package.json || {
+            echo "::error::npm registry metadata remained unavailable or invalid after retries"
+            exit 1
+          }
+          node scripts/npm-release-policy.mjs verify-pack \
+            --local-pack pack.json \
+            --remote-metadata remote-package.json \
+            --expected-version "$PACKAGE_VERSION" \
+            --expected-git-head "$EXPECTED_GIT_HEAD"
+          EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
+          rm -f channel-metadata.json channel-metadata.tmp.json
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            rm -f channel-metadata.tmp.json
+            if npm view neondiff dist-tags --json > channel-metadata.tmp.json 2>/dev/null && \
+              node -e 'const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!value || Array.isArray(value) || typeof value !== "object") process.exit(1)' channel-metadata.tmp.json; then
+              mv channel-metadata.tmp.json channel-metadata.json
+              break
+            fi
+            sleep 5
+          done
+          test -s channel-metadata.json || {
+            echo "::error::npm dist-tag metadata remained unavailable or invalid after retries"
+            exit 1
+          }
+          CURRENT_TAG_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags[process.argv[2]] ?? "")' channel-metadata.json "$NPM_TAG")"
+          node scripts/npm-release-policy.mjs verify-channel \
+            --current-version "$CURRENT_TAG_VERSION" \
+            --target-version "$PACKAGE_VERSION" \
+            --expected-predecessor "$EXPECTED_PREDECESSOR" \
+            --npm-tag "$NPM_TAG"
+          npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"
+          test "$(npm view neondiff "dist-tags.$NPM_TAG")" = "$PACKAGE_VERSION"
+          if [ "$(npm view neondiff dist-tags.release-candidate 2>/dev/null || true)" = "$PACKAGE_VERSION" ]; then
+            npm dist-tag rm neondiff release-candidate
+          fi

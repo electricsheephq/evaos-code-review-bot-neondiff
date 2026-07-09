@@ -1,0 +1,41 @@
+{
+  "evidenceKind": "release_rollback_refs",
+  "releaseVersion": "v1.0.3",
+  "observedAt": "2026-07-09T21:09:40.000Z",
+  "channels": {
+    "cli": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "operatorRollbackCommand": "npm dist-tag add neondiff@1.0.2 latest",
+      "rollbackTarget": "v1.0.2",
+      "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
+      "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
+    },
+    "daemon": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "operatorRollbackCommand": "npm install -g neondiff@1.0.2",
+      "rollbackTarget": "v1.0.2",
+      "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
+      "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
+    },
+    "browserDashboard": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "operatorRollbackCommand": "npm install -g neondiff@1.0.2",
+      "rollbackTarget": "v1.0.2",
+      "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
+      "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
+    },
+    "website": {
+      "rollbackRepository": "electricsheephq/neon-diff-agent-website",
+      "releaseAction": "no_code_deploy_for_v1.0.3",
+      "currentChannelVersion": "v1.0.1",
+      "rollbackTarget": "no_action_for_v1.0.3",
+      "targetVerifiedBy": "docs/public-release-manifest.json omits updateChannels.website for v1.0.3",
+      "targetVerifiedSha": null,
+      "targetSubject": "v1.0.3 keeps the previously published website installer; npm latest promotion supplies the new package version."
+    }
+  },
+  "proofBoundary": "Manifest rollbackCommand values are source-checkout revert references for an isolated recovery checkout and must not reset protected main. npm is immutable: operator rollback moves latest to v1.0.2 and reinstalls v1.0.2 for affected local daemon/dashboard surfaces. The v1.0.3 package and tag remain as incident provenance. v1.0.3 does not advance the website channel, so website rollback is intentionally no-op."
+}

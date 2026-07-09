@@ -100,7 +100,7 @@ Validate the package install path first. Use the version named by the docs or
 the issue under test.
 
 Public install proof means the npm package version named by the current stable
-release manifest, for example `neondiff@1.0.2` for the v1.0.2 patch line.
+release manifest, for example `neondiff@1.0.3` for the v1.0.3 patch line.
 Historical source-only beta releases remain provenance/source-checkout releases;
 validate those by source SHA or local build path, not by expecting a new public
 npm artifact.
