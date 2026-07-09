@@ -507,7 +507,6 @@ export async function runIssueEnrichmentCycle(input: {
 }): Promise<IssueEnrichmentCycleResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
-  const reviewLensPacket = buildIssueEnrichmentReviewLensPacket(input.config.reviewLenses);
   const releasePreacquiredLeaseBeforeRun = () => {
     if (!input.dryRun && input.preacquiredLease) {
       input.state.releaseIssueEnrichmentRunLease(input.preacquiredLease.leaseId);
@@ -531,6 +530,7 @@ export async function runIssueEnrichmentCycle(input: {
       recommendedActions: buildScanRecommendedActions(status, emptyCycleSummary())
     };
   }
+  const reviewLensPacket = buildIssueEnrichmentReviewLensPacket(input.config.reviewLenses);
   const blockedForRun = status.state === "blocked" &&
     !(input.dryRun && status.blockers.every((blocker) => DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(blocker)));
   if (blockedForRun) {

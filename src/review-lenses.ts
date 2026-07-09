@@ -315,6 +315,10 @@ function renderWithinBudget(input: {
   lenses: ReviewLensPacketLens[];
   omittedLenses: ReviewLensOmittedLens[];
 }, maxPacketBytes: number): { markdown: string; lenses: ReviewLensPacketLens[]; omittedLenses: ReviewLensOmittedLens[] } {
+  const emptyPacketMarkdown = renderMarkdown({ ...input, lenses: [], omittedLenses: [] });
+  if (Buffer.byteLength(emptyPacketMarkdown, "utf8") > maxPacketBytes) {
+    throw new Error("reviewLenses.maxPacketBytes is too small for the fixed packet header");
+  }
   const lenses = [...input.lenses];
   const omittedLenses = [...input.omittedLenses];
   const omittedForMarkdown = [...omittedLenses];
