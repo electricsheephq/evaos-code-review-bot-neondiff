@@ -58,8 +58,13 @@ Keep the private key and local config out of git. A typical shell setup is:
 
 ```bash
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_CLIENT_ID="<github-app-client-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 ```
+
+`NEONDIFF_GITHUB_APP_CLIENT_ID` is public metadata used by the desktop/device
+authorization flow. Do not put user access tokens or refresh tokens in config;
+desktop user tokens belong in Keychain.
 
 ## Verify Installation
 

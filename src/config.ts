@@ -100,6 +100,7 @@ export interface BotConfig {
   };
   github: {
     appId?: string;
+    clientId?: string;
     privateKeyPath?: string;
     token?: string;
     apiBaseUrl?: string;
@@ -556,6 +557,7 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     legacyName: "EVAOS_REVIEW_BOT_APP_ID",
     valueLabel: "github.appId"
   }) ?? merged.github.appId;
+  merged.github.clientId = process.env.NEONDIFF_GITHUB_APP_CLIENT_ID ?? merged.github.clientId;
   merged.github.privateKeyPath = resolveEnvAlias({
     primaryName: "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
     legacyName: "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH",
@@ -691,6 +693,8 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(config.zcode.maxPatchBytes, "config.zcode.maxPatchBytes");
   validateNonNegativeInteger(config.zcode.retryMaxRetries, "config.zcode.retryMaxRetries");
   validateOptionalString(config.zcode.providerId, "config.zcode.providerId");
+  validateOptionalString(config.github.appId, "config.github.appId");
+  validateOptionalString(config.github.clientId, "config.github.clientId");
   validateOptionalString(config.github.apiBaseUrl, "config.github.apiBaseUrl");
   validateOptionalString(config.github.botLogin, "config.github.botLogin");
   if (config.github.requestTimeoutMs !== undefined) validatePositiveInteger(config.github.requestTimeoutMs, "config.github.requestTimeoutMs");
