@@ -67,8 +67,10 @@ NeonDiff publishes to npm under two dist-tags:
 At GA cutover, `latest` is repointed to the stable GA release so that a
 plain `npm install -g neondiff` (no tag suffix) installs GA, and `beta`
 keeps tracking whatever prerelease train is active after GA (for example, a
-`v1.1.0-beta.N` line preparing the next minor). The cutover step is a single
-explicit command run once the GA package version is published:
+`v1.1.0-beta.N` line preparing the next minor). The publish workflow should
+publish non-prerelease tags with the `latest` npm dist-tag. If the package was
+published through another path or the tag needs repair, the explicit cutover
+command is:
 
 ```bash
 npm dist-tag add neondiff@<ga> latest

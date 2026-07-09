@@ -1,7 +1,7 @@
 {
   "id": "public-community-readiness-review",
   "version": "v1.0",
-  "surface": "NeonDiff source-available beta repository",
+  "surface": "NeonDiff source-available commercial repository",
   "current_score": "pass",
   "reviewed_at": "2026-07-03",
   "claim_class": "pr_ready",
@@ -11,12 +11,12 @@
     "AGENTS gives repository agents a concise first-read checklist and source-available product boundary.",
     "Issue templates and PR template collect public-safe evidence and warn against secrets, tokens, credentials, and private data.",
     "Setup guide documents GitHub App permissions, provider setup, config, dry-run review, daemon/status checks, and troubleshooting.",
-    "Docs avoid open-source, MIT, GA, CodeRabbit parity, enterprise-ready, and public-launch-complete claims."
+    "Docs avoid open-source, MIT, unearned launch-complete, CodeRabbit parity, enterprise-ready, and production-ready claims."
   ],
-  "proof_boundary": "This scorecard proves repo/docs public beta review readiness only. It does not prove public launch, final legal adequacy, package publishing, GitHub Release readiness, review accuracy, CodeRabbit parity, live worker promotion, or star growth.",
+  "proof_boundary": "This scorecard proves repo/docs public release review readiness only. It does not by itself prove completed public launch, final legal adequacy, package publishing, GitHub Release readiness, review accuracy, CodeRabbit parity, live worker promotion, or star growth.",
   "remaining_gaps": [
-    "Final license text remains gated by issue #104.",
-    "Public CLI package and final binary name remain gated by issue #107.",
-    "Website docs and license portal remain in electricsheephq/neon-diff-agent issues #1, #2, and #3."
+    "Completed public launch still requires the v1.0.0 npm publish, non-prerelease GitHub Release, and post-publish manifest verification in issue #396.",
+    "Live checkout completion remains gated by issue #421 unless the owner explicitly waives that gate.",
+    "Signed desktop artifacts and appcast auto-update remain post-launch work."
   ]
 }

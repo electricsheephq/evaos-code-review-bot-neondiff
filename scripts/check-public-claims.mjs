@@ -8,11 +8,11 @@ const paths = [
   "docs/license-boundary.md",
   "docs/pricing.md",
   "docs/github-marketplace-free-listing.md",
-  "docs/releases/v0.4.30-beta.1.md"
+  "docs/releases/v1.0.0.md"
 ];
 
 const required = [
-  /source-available beta/i,
+  /source-available/i,
   /public open-source repositor(?:y|ies).*free/i,
   /private.*commercial.*paid|paid.*private.*commercial/i,
   /\$100\/(?:year|yr)/i,

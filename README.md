@@ -15,7 +15,8 @@ Public open-source repos are free. Private and commercial repos require a paid
 NeonDiff support license: $1/month or $10/year for individuals, or $100/year for
 organizations. Individual plans include a 7-day trial, organization plans include
 a 30-day trial, and legacy lifetime licenses remain honored but are no longer
-sold. NeonDiff is a source-available beta, not an open-source or GA release.
+sold. NeonDiff is source-available commercial software, not open-source
+software.
 
 [Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
 [GitHub App Install](docs/github-app-setup.md) · [Contributing](CONTRIBUTING.md) ·
@@ -69,13 +70,7 @@ Requirements:
 - a model/provider path configured locally, such as GLM/Z.ai, Ollama, or a
   future OpenAI-compatible provider slot
 
-Recommended package install for the current beta:
-
-```bash
-npm install -g neondiff@0.4.30-beta.1
-```
-
-GA/latest package install path after the `v1.0.0` dist-tag cutover:
+Recommended package install:
 
 ```bash
 npm install -g neondiff
@@ -276,10 +271,10 @@ rules behind that contract.
 
 ## Roadmap Vs Shipped
 
-The current repo is a source-available beta implementation. The public MVP is
+The current repo is the source-available NeonDiff implementation. The public roadmap is
 tracked in [#103](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103).
-Provider registry, `.neondiff.yml`, public package publishing, license activation,
-desktop client, wiki exports, and marketplace packaging each have separate
+Provider registry, `.neondiff.yml`, desktop client signing/appcast, wiki exports,
+and marketplace packaging each have separate
 issues and must not be treated as shipped until their PRs and proof gates close.
 
 The ranking/scoring and calibration program
@@ -295,17 +290,17 @@ real review volume and a human applies it. See [CHANGELOG.md](CHANGELOG.md)
 for the per-version record.
 
 Use [LICENSE.md](LICENSE.md) and [docs/license-boundary.md](docs/license-boundary.md)
-as the canonical public-beta license language. Do not copy older issue comments
+as the canonical public license language. Do not copy older issue comments
 or release notes into public product surfaces when these files are more recent.
 
-For live beta operation, use [docs/beta-release-runbook.md](docs/beta-release-runbook.md)
+For live release operation, use [docs/beta-release-runbook.md](docs/beta-release-runbook.md)
 and [docs/release-governance.md](docs/release-governance.md). Documentation-only
 changes do not restart launchd or promote a release by themselves.
 
-For public source-beta release readiness, use
+For public release readiness, use
 [docs/public-release-manifest.json](docs/public-release-manifest.json) with
-`neondiff release-status --public-release-manifest docs/public-release-manifest.json --expected-public-version <public-beta-tag>`.
-Replace `<public-beta-tag>` with the actual semver prerelease tag, such as
-`v0.4.30-beta.1`; the CLI rejects literal placeholders. The manifest is the
+`neondiff release-status --public-release-manifest docs/public-release-manifest.json --expected-public-version <public-version-tag>`.
+Replace `<public-version-tag>` with the actual semver tag, such as
+`v1.0.0`; the CLI rejects literal placeholders. The manifest is the
 compact version/alignment surface for setup docs, release notes, license API
 state, and update-channel readiness.

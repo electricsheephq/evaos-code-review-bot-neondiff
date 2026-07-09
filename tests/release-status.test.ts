@@ -21,7 +21,7 @@ import { ReviewStateStore } from "../src/state.js";
 describe("beta release status", () => {
   const roots: string[] = [];
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const shippedReleaseValidationNow = new Date("2026-07-08T09:50:00Z");
+  const shippedReleaseValidationNow = new Date("2026-07-09T06:00:00Z");
 
   afterEach(() => {
     vi.useRealTimers();
@@ -324,30 +324,30 @@ describe("beta release status", () => {
     const manifest = readPublicReleaseManifestStatus({
       cwd: repoRoot,
       manifestPath: "docs/public-release-manifest.json",
-      expectedVersion: "v0.4.46-beta.1",
+      expectedVersion: "v1.0.0",
       now: shippedReleaseValidationNow
     });
 
     expect(manifest).toMatchObject({
       ok: true,
-      version: "v0.4.46-beta.1",
+      version: "v1.0.0",
       docs: {
         ok: true,
         setupPath: "docs/SETUP.md",
-        releaseNotesPath: "docs/releases/v0.4.46-beta.1.md",
+        releaseNotesPath: "docs/releases/v1.0.0.md",
         changelogPath: "CHANGELOG.md",
-        changelogHeadVersion: "0.4.46-beta.1",
-        changelogReleaseNotesPath: "docs/releases/v0.4.46-beta.1.md"
+        changelogHeadVersion: "1.0.0",
+        changelogReleaseNotesPath: "docs/releases/v1.0.0.md"
       },
       licenseApi: {
         ok: true,
         requiredForThisRelease: true,
         state: "healthy",
         healthUrl: "https://neondiff-license.fly.dev/healthz",
-        healthProofPath: "docs/evidence/v0.4.46-beta.1-license-api-healthz.json",
-        checkoutIssuanceRequiredForThisRelease: false,
+        healthProofPath: "docs/evidence/v1.0.0-license-api-healthz.json",
+        checkoutIssuanceRequiredForThisRelease: true,
         checkoutIssuanceUrl: "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
-        checkoutIssuanceState: "pending_secret_and_website_publish",
+        checkoutIssuanceState: "ready",
         checkoutIssuanceTrackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
       },
       updateChannels: {
@@ -359,12 +359,12 @@ describe("beta release status", () => {
         expect.objectContaining({
           name: "cli",
           requiredForThisRelease: true,
-          rollback: "git reset --hard refs/tags/v0.4.45-beta.1"
+          rollback: "git reset --hard refs/tags/v0.4.46-beta.1"
         }),
         expect.objectContaining({
           name: "daemon",
           requiredForThisRelease: true,
-          rollback: "git reset --hard refs/tags/v0.4.45-beta.1"
+          rollback: "git reset --hard refs/tags/v0.4.46-beta.1"
         })
       ])
     );
@@ -374,15 +374,15 @@ describe("beta release status", () => {
     const manifest = readPublicReleaseManifestStatus({
       cwd: repoRoot,
       manifestPath: "docs/public-release-manifest.json",
-      expectedVersion: "v0.4.46-beta.1",
-      now: new Date("2026-08-08T00:00:00Z")
+      expectedVersion: "v1.0.0",
+      now: new Date("2026-08-09T12:00:00Z")
     });
 
     expect(manifest.licenseApi).toMatchObject({
       ok: false,
       requiredForThisRelease: true,
       state: "healthy",
-      healthProofPath: "docs/evidence/v0.4.46-beta.1-license-api-healthz.json"
+      healthProofPath: "docs/evidence/v1.0.0-license-api-healthz.json"
     });
     expect(manifest.licenseApi.detail).toContain("observedAt must be no older than 30 days");
     expect(manifest.ok).toBe(false);
@@ -498,28 +498,29 @@ describe("beta release status", () => {
       statePath: join(root, "missing-live-state.sqlite"),
       configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
       publicReleaseManifestPath: "docs/public-release-manifest.json",
-      expectedPublicVersion: "v0.4.46-beta.1",
+      expectedPublicVersion: "v1.0.0",
       launchdLabel: "com.electricsheephq.evaos-code-review-bot",
       now: shippedReleaseValidationNow
     });
 
     expect(status.publicRelease).toMatchObject({
       ok: true,
-      version: "v0.4.46-beta.1"
+      version: "v1.0.0"
     });
     expect(status.gates).toContainEqual({
       name: "public_update_channels",
       ok: true,
-      detail: "cli=published; daemon=launchd_prerelease; browserDashboard=pending (not required); website=published (not required); desktop=post_1_0 (not required)"
+      detail: "cli=published; daemon=published; browserDashboard=published; website=published"
     });
     const redactedOutput = stringifyRedactedJson({
       ...status,
       healthState: status.ok ? "runtime_ok" : "runtime_blocked",
       runtimeOk: status.ok
     });
-    expect(redactedOutput).toContain("git reset --hard refs/tags/v0.4.45-beta.1");
-    expect(redactedOutput).toContain("cli=published; daemon=launchd_prerelease");
+    expect(redactedOutput).toContain("git reset --hard refs/tags/v0.4.46-beta.1");
+    expect(redactedOutput).toContain("cli=published; daemon=published");
     expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327");
+    expect(redactedOutput).toContain("electricsheephq/neon-diff-agent-website");
   });
 
   it("fails closed without throwing when collectReleaseStatus receives a missing public manifest path", () => {
