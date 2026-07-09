@@ -1,0 +1,30 @@
+{
+  "evalName": "review-lenses-eval-gate-v0.1",
+  "runId": "issue-architecture-runtime",
+  "suite": "review_lens_packet_safety",
+  "surface": "issue_enrichment",
+  "reviewLenses": {
+    "enabled": true,
+    "packetVersion": "review-lens-packet-v0.1",
+    "active": [
+      { "id": "first_principles", "surface": "issue_enrichment", "mode": "summary" },
+      { "id": "architecture", "surface": "issue_enrichment", "mode": "summary" }
+    ],
+    "maxLensBytes": 4000,
+    "maxPacketBytes": 12000
+  },
+  "issue": {
+    "repo": "owner/repo",
+    "number": 42,
+    "state": "open",
+    "title": "Architecture migration for provider queue",
+    "body": "Need a bounded adapter, degraded mode, and rollback before changing scheduler runtime.",
+    "html_url": "https://github.test/owner/repo/issues/42"
+  },
+  "expected": {
+    "includedLenses": ["architecture", "first_principles"],
+    "maxPacketBytes": 12000,
+    "secretFindings": 0,
+    "requestChangesEligible": false
+  }
+}

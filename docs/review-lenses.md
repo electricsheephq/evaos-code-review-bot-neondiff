@@ -25,6 +25,18 @@ validation, current-head checks, redaction, and deterministic posting policy rem
 - `pr_shadow`: lean suggestions are recorded in evidence, not posted as blocking findings.
 - `walkthrough`: reserved for future compact summaries after fixture/eval review.
 
+## Dry-Run Eval Gate
+
+Use `review-lenses-eval` before any live activation. The command compares
+lens-enabled output against a no-lens baseline and writes redacted evidence only.
+The output root must be fresh or empty so stale artifacts cannot affect the
+scorecard. It does not flip `reviewLenses.enabled`, change public defaults, post
+comments, alter GitHub permissions, widen monitored repos, mutate live config,
+or promote the `walkthrough` surface.
+
+Each scenario writes `manifest.json`, paired `baseline/` and `lens/` artifacts,
+`diff-summary.json`, `redaction-report.json`, and `lens-scorecard.json`.
+
 ## Config Sketch
 
 ```json
