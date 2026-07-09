@@ -16,6 +16,24 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [1.0.0] - docs/releases/v1.0.0.md
+
+### Added
+
+- Cut the stable GA release surface for the `neondiff` npm package, local HTML
+  dashboard setup/status flow, provider API-key verification, minimal Mac
+  launcher proof, and configured license checkout issuance gate.
+- Add v1.0.0 license API health, unauthenticated checkout issuance, and
+  authenticated redacted issuance proof artifacts for the public release
+  manifest.
+
+### Changed
+
+- Move public install docs and the website installer default from the held beta
+  package path to `npm install -g neondiff`.
+- Keep signed desktop packaging, notarization, Sparkle appcast, and auto-update
+  proof explicitly post-launch.
+
 ## [0.4.46-beta.1] - docs/releases/v0.4.46-beta.1.md
 
 ### Changed
