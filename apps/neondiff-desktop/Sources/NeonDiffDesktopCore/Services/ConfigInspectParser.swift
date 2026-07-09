@@ -61,6 +61,7 @@ public enum ConfigInspectParser {
         let github = GitHubConnectionStatus(
             appIdConfigured: appId?.isEmpty == false,
             clientIdConfigured: clientId?.isEmpty == false,
+            clientId: clientId,
             botLogin: botLogin?.isEmpty == false ? botLogin! : "not configured",
             userTokenStored: githubUserTokenStored,
             installationState: githubUserTokenStored ? "user authorized" : "not connected"

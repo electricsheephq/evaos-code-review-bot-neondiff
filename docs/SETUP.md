@@ -92,8 +92,14 @@ Save the generated private key outside the repository.
 
 ```bash
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_CLIENT_ID="<github-app-client-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 ```
+
+For the Mac desktop Repos pane, copy the GitHub App client ID into
+`github.clientId` or `NEONDIFF_GITHUB_APP_CLIENT_ID`, and enable device flow in
+the GitHub App settings. Without that optional feature, GitHub will return
+`device_flow_disabled` when the desktop tries to show a user authorization code.
 
 ## 3. Configure Provider And License
 

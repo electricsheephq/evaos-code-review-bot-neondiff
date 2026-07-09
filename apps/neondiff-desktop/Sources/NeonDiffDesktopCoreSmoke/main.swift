@@ -155,6 +155,7 @@ do {
     guard let githubSnapshot = ConfigInspectParser.parse(githubConfigJSON, providerKeyStored: false, licenseKeyStored: false),
           githubSnapshot.github.appIdConfigured,
           githubSnapshot.github.clientIdConfigured,
+          githubSnapshot.github.clientId == "Iv1.publicclientid123",
           githubSnapshot.github.botLogin == "neondiff-review-bot",
           githubSnapshot.repos == [
             RepoMonitor(name: "owner/repo-one", enabled: true, profile: "Repo One"),
