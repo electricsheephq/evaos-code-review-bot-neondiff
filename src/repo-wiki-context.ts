@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
   formatRepoWikiPacketMarkdown,
@@ -101,83 +101,13 @@ export function buildRepoWikiContextPacket(input: {
     };
   }
 
-  let packetFileBytes: number;
   const maxPacketFileBytes = Math.min(
     input.config.maxPacketBytes + PACKET_FILE_OVERHEAD_BYTES,
     MAX_PACKET_FILE_READ_BYTES
   );
-  try {
-    const sourceStats = statSync(sourceRealPath);
-    if (!sourceStats.isFile()) {
-      return {
-        omitted: {
-          reason: "invalid_packet",
-          detail: "Repo wiki packet path did not resolve to a file",
-          sourcePath: evidenceSourcePath
-        }
-      };
-    }
-    packetFileBytes = sourceStats.size;
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return {
-        omitted: {
-          reason: "missing_packet",
-          detail: "Repo wiki packet not found",
-          sourcePath: evidenceSourcePath
-        }
-      };
-    }
-    return {
-      omitted: {
-        reason: "invalid_packet",
-        detail: "Repo wiki packet metadata could not be read",
-        sourcePath: evidenceSourcePath
-      }
-    };
-  }
-
-  if (packetFileBytes > maxPacketFileBytes) {
-    return {
-      omitted: {
-        reason: "budget_exceeded",
-        detail: `Repo wiki packet file exceeded safe read limit (${packetFileBytes} > ${maxPacketFileBytes})`,
-        sourcePath: evidenceSourcePath
-      }
-    };
-  }
-
-  let raw: string;
-  try {
-    raw = readFileSync(sourceRealPath, "utf8");
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return {
-        omitted: {
-          reason: "missing_packet",
-          detail: "Repo wiki packet not found",
-          sourcePath: evidenceSourcePath
-        }
-      };
-    }
-    return {
-      omitted: {
-        reason: "invalid_packet",
-        detail: "Repo wiki packet could not be read",
-        sourcePath: evidenceSourcePath
-      }
-    };
-  }
-  const rawPacketFileBytes = Buffer.byteLength(raw, "utf8");
-  if (rawPacketFileBytes > maxPacketFileBytes) {
-    return {
-      omitted: {
-        reason: "budget_exceeded",
-        detail: `Repo wiki packet file exceeded safe read limit (${rawPacketFileBytes} > ${maxPacketFileBytes})`,
-        sourcePath: evidenceSourcePath
-      }
-    };
-  }
+  const packetFile = readBoundedPacketFile(sourceRealPath, evidenceSourcePath, maxPacketFileBytes);
+  if (!packetFile.ok) return packetFile.result;
+  const raw = packetFile.raw;
 
   if (containsSecretLikeText(raw)) {
     return {
@@ -240,6 +170,82 @@ export function buildRepoWikiContextPacket(input: {
       }
     }
   };
+}
+
+function readBoundedPacketFile(
+  sourceRealPath: string,
+  evidenceSourcePath: string,
+  maxPacketFileBytes: number
+): { ok: true; raw: string } | { ok: false; result: RepoWikiContextBuildResult } {
+  let fd: number | undefined;
+  try {
+    fd = openSync(sourceRealPath, "r");
+    const sourceStats = fstatSync(fd);
+    if (!sourceStats.isFile()) {
+      return {
+        ok: false,
+        result: {
+          omitted: {
+            reason: "invalid_packet",
+            detail: "Repo wiki packet path did not resolve to a file",
+            sourcePath: evidenceSourcePath
+          }
+        }
+      };
+    }
+    if (sourceStats.size > maxPacketFileBytes) {
+      return {
+        ok: false,
+        result: {
+          omitted: {
+            reason: "budget_exceeded",
+            detail: `Repo wiki packet file exceeded safe read limit (${sourceStats.size} > ${maxPacketFileBytes})`,
+            sourcePath: evidenceSourcePath
+          }
+        }
+      };
+    }
+    const raw = readFileSync(fd, "utf8");
+    const rawPacketFileBytes = Buffer.byteLength(raw, "utf8");
+    if (rawPacketFileBytes > maxPacketFileBytes) {
+      return {
+        ok: false,
+        result: {
+          omitted: {
+            reason: "budget_exceeded",
+            detail: `Repo wiki packet file exceeded safe read limit (${rawPacketFileBytes} > ${maxPacketFileBytes})`,
+            sourcePath: evidenceSourcePath
+          }
+        }
+      };
+    }
+    return { ok: true, raw };
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return {
+        ok: false,
+        result: {
+          omitted: {
+            reason: "missing_packet",
+            detail: "Repo wiki packet not found",
+            sourcePath: evidenceSourcePath
+          }
+        }
+      };
+    }
+    return {
+      ok: false,
+      result: {
+        omitted: {
+          reason: "invalid_packet",
+          detail: "Repo wiki packet could not be read",
+          sourcePath: evidenceSourcePath
+        }
+      }
+    };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 function resolvePacketPath(worktreePath: string, packetPath: string): string {
