@@ -132,3 +132,9 @@ This integration does not run OpenWiki during live review, mutate repository
 files, change GitHub comment posting behavior, alter checks, or make repo-wiki
 context authoritative. OpenWiki-generated files remain confined to
 `openwiki/**`; suggestions for other docs are report-only.
+
+The OpenWiki-derived packet builder is an offline/lab helper for producing the
+prebuilt packet consumed by this seam. Runtime wiring that invokes OpenWiki
+during a review is intentionally deferred to a later lab-enablement issue; live
+review workers should continue to read only a prepared packet from the PR
+worktree.
