@@ -14,7 +14,7 @@ const OPENWIKI_METADATA_PATH = "openwiki/.last-update.json";
 const DEFAULT_MAX_PACKET_BYTES = 12_000;
 const GIT_COMMAND_TIMEOUT_MS = 5_000;
 const SENSITIVE_ENV_NAME_PATTERN =
-  /\b(?:[A-Z][A-Z0-9_]*_)?(?:API_KEY|TOKEN|SECRET|PASSWORD|COOKIE|SESSION|PRIVATE_KEY)(?:_[A-Z0-9]+)*\b/g;
+  /\b(?:(?:API_KEY|PRIVATE_KEY|ACCESS_TOKEN|AUTH_TOKEN|REFRESH_TOKEN|ID_TOKEN|SESSION_COOKIE)|(?:[A-Z][A-Z0-9]*_)+(?:API_KEY|PRIVATE_KEY|TOKEN|SECRET|PASSWORD|COOKIE|SESSION)(?:_[A-Z0-9]+)*)\b/g;
 
 export interface BuildOpenWikiDerivedRepoWikiPacketInput {
   repo: string;
@@ -119,11 +119,12 @@ function readOpenWikiSections(worktreePath: string): RepoWikiSectionInput[] {
     const body = redactSensitiveEnvNames(raw.trim());
     return {
       id: normalizeSectionId(sourcePath.replace(/^openwiki\//, "").replace(/\.md$/, "")),
-      title: readFirstHeading(body) ?? sourcePath,
-      body,
+      title: readFirstHeading(body.text) ?? sourcePath,
+      body: body.text,
       order: index,
-      sourceFiles: normalizeSourceFiles([sourcePath, ...readSourceMap(body)]),
-      sourceSha: sha256(body)
+      sourceFiles: normalizeSourceFiles([sourcePath, ...readSourceMap(body.text)]),
+      sourceSha: sha256(body.text),
+      preRedactionReplacementCount: body.replacementCount
     };
   });
 }
@@ -235,8 +236,15 @@ function readFirstHeading(markdown: string): string | undefined {
     .trim();
 }
 
-function redactSensitiveEnvNames(input: string): string {
-  return input.replace(SENSITIVE_ENV_NAME_PATTERN, "[redacted-secret]");
+function redactSensitiveEnvNames(input: string): { text: string; replacementCount: number } {
+  let replacementCount = 0;
+  return {
+    text: input.replace(SENSITIVE_ENV_NAME_PATTERN, () => {
+      replacementCount += 1;
+      return "[redacted-secret]";
+    }),
+    replacementCount
+  };
 }
 
 function normalizeSourceFiles(files: string[]): string[] {

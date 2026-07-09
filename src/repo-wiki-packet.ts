@@ -28,6 +28,7 @@ export interface RepoWikiSectionInput {
   order?: number;
   sourceFiles?: string[];
   sourceSha?: string;
+  preRedactionReplacementCount?: number;
 }
 
 export interface RepoWikiNormalizedSection {
@@ -37,6 +38,7 @@ export interface RepoWikiNormalizedSection {
   order: number;
   sourceFiles: string[];
   sourceSha?: string;
+  preRedactionReplacementCount?: number;
 }
 
 export type RepoWikiExcludedSectionReason =
@@ -178,6 +180,7 @@ export function normalizeRepoWikiSections(input: RepoWikiSectionInput[]): {
     .map((section) => {
       const baseId = normalizeSectionId(section.id);
       const body = normalizeText(section.body);
+      const preRedactionReplacementCount = readPreRedactionReplacementCount(section.preRedactionReplacementCount);
       if (!body) {
         excluded.push({ id: baseId, reason: "empty" });
         return undefined;
@@ -188,7 +191,8 @@ export function normalizeRepoWikiSections(input: RepoWikiSectionInput[]): {
         body,
         order: Number.isFinite(section.order) ? Number(section.order) : 0,
         sourceFiles: normalizeSourceFiles(section.sourceFiles ?? []),
-        ...(section.sourceSha ? { sourceSha: section.sourceSha } : {})
+        ...(section.sourceSha ? { sourceSha: section.sourceSha } : {}),
+        ...(preRedactionReplacementCount > 0 ? { preRedactionReplacementCount } : {})
       } satisfies RepoWikiNormalizedSection;
     })
     .filter((section): section is RepoWikiNormalizedSection => section !== undefined)
@@ -216,6 +220,8 @@ export function buildRepoWikiPacket(input: BuildRepoWikiPacketInput): RepoWikiPa
   const redactionCounter = { count: 0 };
   const includedSections: RepoWikiIncludedSection[] = [];
   for (const section of normalized.sections) {
+    const preRedactionReplacementCount = section.preRedactionReplacementCount ?? 0;
+    redactionCounter.count += preRedactionReplacementCount;
     const redactedTitle = redactAndCount(section.title, redactionCounter);
     const redactedBody = redactAndCount(section.body, redactionCounter);
     const redactedSourceFileResults = section.sourceFiles.map((file) => redactAndCount(file, redactionCounter));
@@ -236,7 +242,7 @@ export function buildRepoWikiPacket(input: BuildRepoWikiPacketInput): RepoWikiPa
       byteLength: Buffer.byteLength(cappedBody, "utf8"),
       tokenEstimate: tokenEstimateForBytes(Buffer.byteLength(cappedBody, "utf8")),
       truncated: cappedBody !== redactedBody.text,
-      redacted: redactedTitle.replacementCount + redactedBody.replacementCount + provenanceReplacementCount > 0
+      redacted: preRedactionReplacementCount + redactedTitle.replacementCount + redactedBody.replacementCount + provenanceReplacementCount > 0
     };
     includedSections.push(included);
   }
@@ -530,6 +536,11 @@ function redactAndCount(input: string, counter: { count: number }): { text: stri
   const result = redactRepoWikiText(input);
   counter.count += result.replacementCount;
   return result;
+}
+
+function readPreRedactionReplacementCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
 }
 
 function normalizeSectionId(id: string): string {

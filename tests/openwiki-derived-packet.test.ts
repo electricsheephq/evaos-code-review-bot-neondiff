@@ -46,6 +46,10 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(section?.body).toContain("[redacted-secret]");
     expect(section?.body).not.toContain("OPENROUTER_API_KEY");
     expect(section?.sourceSha).toBe(sha256(section?.body ?? ""));
+    expect(packet.redaction).toMatchObject({
+      status: "redacted",
+      replacementCount: 1
+    });
 
     mkdirSync(join(root, ".neondiff"), { recursive: true });
     writeFileSync(join(root, ".neondiff", "repo-wiki-packet.json"), formatRepoWikiPacketJson(packet));
@@ -130,7 +134,8 @@ describe("OpenWiki-derived repo-wiki packets", () => {
       openWikiBody: [
         "# Provider setup",
         "",
-        "Use API_KEY, TOKEN, SECRET, PASSWORD, PRIVATE_KEY, and SESSION_COOKIE only in GitHub secrets.",
+        "Use API_KEY, PRIVATE_KEY, SESSION_COOKIE, and ZAI_TOKEN only in GitHub secrets.",
+        "Bare prose words like TOKEN, SECRET, PASSWORD, COOKIE, and SESSION should stay readable.",
         ""
       ].join("\n")
     });
@@ -149,6 +154,12 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(body).not.toContain("API_KEY");
     expect(body).not.toContain("PRIVATE_KEY");
     expect(body).not.toContain("SESSION_COOKIE");
+    expect(body).not.toContain("ZAI_TOKEN");
+    expect(body).toContain("TOKEN, SECRET, PASSWORD, COOKIE, and SESSION should stay readable.");
+    expect(packet.redaction).toMatchObject({
+      status: "redacted",
+      replacementCount: 4
+    });
   });
 
   it("marks packets stale when dirty git status renames OpenWiki files into source docs", () => {
@@ -196,25 +207,21 @@ describe("OpenWiki-derived repo-wiki packets", () => {
   it("fails closed when git status cannot be read", () => {
     const { head, root } = createRepoWithOpenWiki();
     roots.push(root);
-    const originalPath = process.env.PATH;
-    process.env.PATH = "";
-    try {
-      const packet = buildOpenWikiDerivedRepoWikiPacket({
-        repo,
-        worktreePath: root,
-        generatedAt,
-        headSha: head,
-        defaultBranch: "main"
-      });
+    rmSync(join(root, ".git"), { recursive: true, force: true });
 
-      expect(packet.source).toMatchObject({
-        status: "stale",
-        staleReason: "Unable to read git worktree status; regenerate OpenWiki before building a packet."
-      });
-      expect(packet.degraded).toBe(true);
-    } finally {
-      process.env.PATH = originalPath;
-    }
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "Unable to read git worktree status; regenerate OpenWiki before building a packet."
+    });
+    expect(packet.degraded).toBe(true);
   });
 
   it("marks packets missing when OpenWiki has no Markdown sections", () => {
