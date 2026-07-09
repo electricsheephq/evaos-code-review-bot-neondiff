@@ -50,6 +50,27 @@ describe("OpenWiki eval gates", () => {
     expect(readFileSync(result.artifacts["repo-wiki-context-ab-report.md"]!, "utf8")).toContain("Repo-Wiki Context A/B Eval");
   });
 
+  it("redacts provider proof notes before writing A/B summaries", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-provider-notes-"));
+    roots.push(outputRoot);
+    const secret = "ghp_1234567890abcdef";
+    const input = buildAbInput();
+    input.providerProof = {
+      mode: "zai_glm",
+      paidFallbackUsed: false,
+      notes: `Z.AI route used token ${secret}`
+    };
+
+    const result = runRepoWikiContextAbEval(input, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.summary.providerProof.notes).toContain("[redacted-secret]");
+    expect(result.summary.providerProof.notes).not.toContain(secret);
+    expect(readFileSync(result.artifacts["repo-wiki-context-ab-summary.json"]!, "utf8")).not.toContain(secret);
+  });
+
   it("fails A/B eval when OpenWiki context adds a P1 false positive", () => {
     const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-fail-"));
     roots.push(outputRoot);
@@ -466,6 +487,28 @@ describe("OpenWiki eval gates", () => {
     expect(JSON.stringify(result.summary)).not.toContain(secret);
     expect(readFileSync(result.artifacts["suggested-doc-edits.md"]!, "utf8")).not.toContain(secret);
     expect(readFileSync(result.artifacts["docs-drift-summary.json"]!, "utf8")).toContain("[redacted-secret]");
+  });
+
+  it("fails closed before docs-drift summaries can include secret-like metadata", () => {
+    const { packetPath, root } = createDocsDriftFixture();
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-summary-secret-"));
+    roots.push(root, outputRoot);
+    const secretPacketPath = ".neondiff/ghp_1234567890abcdef.json";
+    writeFileSync(join(root, secretPacketPath), readFileSync(join(root, packetPath), "utf8"), "utf8");
+
+    expect(() => runDocsDriftEval({
+      runId: "docs-drift-summary-secret",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath: secretPacketPath,
+      claims: buildDocsDriftClaims()
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    })).toThrow("docs-drift summary contains secret-like text");
+    expect(existsSync(join(outputRoot, "docs-drift-summary.json"))).toBe(false);
+    expect(existsSync(join(outputRoot, "docs-drift-report.md"))).toBe(false);
   });
 });
 

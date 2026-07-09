@@ -200,7 +200,7 @@ export function runRepoWikiContextAbEval(
         labels: input.labels,
         thresholds: input.thresholds,
         botFindings: modeInput.botFindings,
-        rawOutput: modeInput.rawOutput ?? modeInput.botFindings
+        rawOutput: modeInput.rawOutput
       }, {
         outputDir: join(outputRoot, mode),
         now
@@ -351,12 +351,14 @@ export function runDocsDriftEval(
     gates,
     proofBoundary: "suggest-only docs-drift eval artifact; no docs, source, config, workflow, daemon, or GitHub comments are modified"
   };
+  assertNoSecretLikeText(summaryWithoutInventory, "docs-drift summary");
   writeJson(reportPath, buildDocsDriftReport(summaryWithoutInventory));
   const artifactInventory = buildArtifactInventory(outputRoot, [
     "suggested-doc-edits.md",
     "docs-drift-report.md"
   ]);
   const summary = { ...summaryWithoutInventory, artifactInventory };
+  assertNoSecretLikeText(summary, "docs-drift summary with artifact inventory");
   writeJson(summaryPath, summary);
   return {
     ok: summary.ok,
@@ -435,6 +437,8 @@ function buildAbGates(input: {
       ok: input.providerProof.paidFallbackUsed === false,
       detail: input.providerProof.paidFallbackUsed
         ? "provider proof reports paid fallback"
+        : input.providerProof.mode === "offline_fixture"
+          ? "offline fixture made no provider call and reports no paid fallback"
         : `${input.providerProof.mode} reports no paid fallback`
     }
   ];
@@ -502,6 +506,7 @@ function evaluateDocsDriftClaim(input: {
   const sourceContainsCurrentText = sourceText.includes(input.claim.currentText);
   const packetSectionIds = input.packet.sectionIdsBySourcePath.get(input.claim.sourcePath) ?? [];
   const sourceBacked = input.packet.ok && packetSectionIds.length > 0 && sourceContainsCurrentText;
+  // v0.1 fixtures intentionally use exact, case-sensitive substring matching so seeded claims stay auditable.
   const shouldSuggest = docContainsClaim &&
     sourceBacked &&
     input.claim.claim.trim() !== input.claim.currentText.trim();
@@ -634,6 +639,11 @@ function buildArtifactInventory(root: string, names: string[]): Array<{ name: st
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${typeof value === "string" ? value : JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function assertNoSecretLikeText(value: unknown, label: string): void {
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
+  if (containsSecretLikeText(text)) throw new Error(`${label} contains secret-like text`);
 }
 
 function sha256File(path: string): string {
