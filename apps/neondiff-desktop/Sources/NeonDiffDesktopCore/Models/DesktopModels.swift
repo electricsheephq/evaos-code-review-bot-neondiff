@@ -123,6 +123,28 @@ public struct LicenseStatus: Equatable {
     }
 }
 
+public struct GitHubConnectionStatus: Equatable {
+    public var appIdConfigured: Bool
+    public var clientIdConfigured: Bool
+    public var botLogin: String
+    public var userTokenStored: Bool
+    public var installationState: String
+
+    public init(
+        appIdConfigured: Bool = false,
+        clientIdConfigured: Bool = false,
+        botLogin: String = "not configured",
+        userTokenStored: Bool = false,
+        installationState: String = "not connected"
+    ) {
+        self.appIdConfigured = appIdConfigured
+        self.clientIdConfigured = clientIdConfigured
+        self.botLogin = botLogin
+        self.userTokenStored = userTokenStored
+        self.installationState = installationState
+    }
+}
+
 public struct DesktopCommand: Identifiable, Equatable {
     public var id: String { commandLine }
     public var title: String

@@ -321,6 +321,7 @@
   },
   "github": {
     "appId": "set via NEONDIFF_GITHUB_APP_ID",
+    "clientId": "optional public GitHub App client ID for desktop/device authorization",
     "privateKeyPath": "set via NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
     "token": "optional fallback token for local development only"
   }
