@@ -473,15 +473,15 @@ const DEFAULT_CONFIG: BotConfig = {
       anthropic: {
         enabled: false,
         adapter: "anthropic",
-        displayName: "Anthropic native adapter placeholder",
-        model: "claude-sonnet-4",
+        displayName: "Anthropic native Messages API adapter",
+        model: "claude-sonnet-5",
         authMode: "api-key-env",
         apiKeyEnv: "ANTHROPIC_API_KEY",
         contextWindowTokens: 200_000,
         timeoutMs: 180_000,
         retryMaxRetries: 1,
         capabilities: {
-          review: false,
+          review: true,
           jsonOutput: true,
           local: false,
           streaming: false
@@ -490,7 +490,7 @@ const DEFAULT_CONFIG: BotConfig = {
       openai: {
         enabled: false,
         adapter: "openai",
-        displayName: "OpenAI native adapter placeholder",
+        displayName: "OpenAI native Chat Completions adapter",
         model: "gpt-4.1",
         authMode: "api-key-env",
         apiKeyEnv: "OPENAI_API_KEY",
@@ -498,7 +498,7 @@ const DEFAULT_CONFIG: BotConfig = {
         timeoutMs: 180_000,
         retryMaxRetries: 1,
         capabilities: {
-          review: false,
+          review: true,
           jsonOutput: true,
           local: false,
           streaming: false
@@ -507,7 +507,7 @@ const DEFAULT_CONFIG: BotConfig = {
       gemini: {
         enabled: false,
         adapter: "gemini",
-        displayName: "Gemini native adapter placeholder",
+        displayName: "Gemini native generateContent adapter",
         model: "gemini-2.5-pro",
         authMode: "api-key-env",
         apiKeyEnv: "GEMINI_API_KEY",
@@ -515,7 +515,7 @@ const DEFAULT_CONFIG: BotConfig = {
         timeoutMs: 180_000,
         retryMaxRetries: 1,
         capabilities: {
-          review: false,
+          review: true,
           jsonOutput: true,
           local: false,
           streaming: false

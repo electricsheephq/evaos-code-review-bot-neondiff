@@ -86,6 +86,8 @@ describe("worker context budget preflight", () => {
   const roots: string[] = [];
 
   afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     zcodePrompts.length = 0;
     zcodeFindingsByPath.clear();
     zcodeFailuresByPath.clear();
@@ -405,6 +407,348 @@ describe("worker context budget preflight", () => {
       reason: "context_budget_within_budget"
     });
     expect(existsSync(join(evidenceDir, "context-chunks"))).toBe(false);
+    state.close();
+  });
+
+  it("executes selected native review providers without falling back to ZCode", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-native-provider-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    delete config.zcode.providerId;
+    config.providers!.defaultProviderId = "openai";
+    config.providers!.providers.openai = {
+      enabled: true,
+      adapter: "openai",
+      displayName: "OpenAI native fixture",
+      model: "gpt-5.5",
+      authMode: "api-key-env",
+      apiKeyEnv: "OPENAI_API_KEY",
+      contextWindowTokens: 128_000,
+      timeoutMs: 1_000,
+      retryMaxRetries: 0,
+      capabilities: {
+        review: true,
+        jsonOutput: true,
+        local: false,
+        streaming: false
+      }
+    };
+    const providerKey = ["sk", "proj", "workerNativeFixtureToken1234567890"].join("-");
+    let fetchCalls = 0;
+    vi.stubEnv("OPENAI_API_KEY", providerKey);
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      fetchCalls += 1;
+      expect(String(url)).toBe("https://api.openai.com/v1/chat/completions");
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${providerKey}`);
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+        response_format?: { json_schema?: { schema?: { properties?: { findings?: { items?: { required?: string[] } } } } } };
+      };
+      expect(body.messages?.at(-1)?.content).toContain("src/native.ts");
+      expect(body.response_format?.json_schema?.schema?.properties?.findings?.items?.required).toContain("why_this_matters");
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: JSON.stringify({
+                findings: [
+                  {
+                    severity: "P2",
+                    path: "src/native.ts",
+                    line: 1,
+                    title: "Native provider finding",
+                    body: "The native provider path executed.",
+                    confidence: 0.91,
+                    category: "runtime_correctness",
+                    why_this_matters: "It proves selected hosted adapters do not silently run ZCode."
+                  }
+                ]
+              })
+            }
+          }
+        ]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(409, "m".repeat(40));
+
+    const result = await reviewPull({
+      config: {
+        ...config,
+        github: {}
+      },
+      github: githubForPull(pull, [pullFile("src/native.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(fetchCalls).toBe(1);
+    expect(zcodePrompts).toEqual([]);
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
+    const adapterEvidence = JSON.parse(readFileSync(join(evidenceDir, "provider-adapter-evidence.json"), "utf8"));
+    expect(adapterEvidence).toMatchObject({
+      providerId: "openai",
+      adapterId: "openai",
+      model: "gpt-5.5",
+      reviewJsonValidated: true
+    });
+    expect(JSON.stringify(adapterEvidence)).not.toContain(providerKey);
+    const reviewPlan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
+    expect(reviewPlan.comments.map((comment: { title: string }) => comment.title)).toEqual(["Native provider finding"]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "dry_run"
+    });
+    state.close();
+  });
+
+  it("uses the selected native provider for default self-consistency re-checks", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-native-self-consistency-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    delete config.zcode.providerId;
+    config.providers!.defaultProviderId = "openai";
+    config.reviewGate = {
+      ...config.reviewGate!,
+      selfConsistency: {
+        enabled: true,
+        severities: ["P1"],
+        maxFindingsPerReview: 1
+      }
+    };
+    config.providers!.providers.openai = {
+      enabled: true,
+      adapter: "openai",
+      displayName: "OpenAI native fixture",
+      model: "gpt-5.5",
+      authMode: "api-key-env",
+      apiKeyEnv: "OPENAI_API_KEY",
+      contextWindowTokens: 128_000,
+      timeoutMs: 1_000,
+      retryMaxRetries: 0,
+      capabilities: {
+        review: true,
+        jsonOutput: true,
+        local: false,
+        streaming: false
+      }
+    };
+    const providerKey = ["sk", "proj", "workerSelfConsistencyFixture123456"].join("-");
+    const requestSchemas: string[] = [];
+    vi.stubEnv("OPENAI_API_KEY", providerKey);
+    vi.stubGlobal("fetch", async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+        response_format?: { json_schema?: { name?: string; schema?: { properties?: Record<string, unknown> } } };
+      };
+      const schemaName = body.response_format?.json_schema?.name ?? "unknown";
+      requestSchemas.push(schemaName);
+      if (schemaName === "neondiff_self_consistency_verdict") {
+        expect(body.messages?.at(-1)?.content).toContain("Self-consistency candidate");
+        expect(body.response_format?.json_schema?.schema?.properties).toHaveProperty("verified");
+        return new Response(JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: JSON.stringify({ verified: false, confidence: 0.2 })
+              }
+            }
+          ]
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: JSON.stringify({
+                findings: [
+                  {
+                    severity: "P1",
+                    path: "src/native-self.ts",
+                    line: 1,
+                    title: "Self-consistency candidate",
+                    body: "The native provider finding should be rechecked through the same selected adapter.",
+                    confidence: 0.99,
+                    category: "runtime_correctness",
+                    why_this_matters: "It proves native main reviews do not silently switch self-consistency back to ZCode."
+                  }
+                ]
+              })
+            }
+          }
+        ]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(410, "n".repeat(40));
+
+    const result = await reviewPull({
+      config: {
+        ...config,
+        github: {}
+      },
+      github: githubForPull(pull, [pullFile("src/native-self.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(requestSchemas).toEqual(["neondiff_review_findings", "neondiff_self_consistency_verdict"]);
+    expect(zcodePrompts).toEqual([]);
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
+    const reviewPlan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
+    expect(reviewPlan.event).toBe("COMMENT");
+    expect(reviewPlan.comments).toEqual([
+      expect.objectContaining({
+        title: "Self-consistency candidate",
+        confidence: 0.2
+      })
+    ]);
+    const selfConsistencyEvidence = JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8"));
+    expect(selfConsistencyEvidence).toMatchObject({
+      enabled: true,
+      provider: "openai",
+      verdicts: [
+        expect.objectContaining({
+          title: "Self-consistency candidate",
+          refuted: true
+        })
+      ]
+    });
+    state.close();
+  });
+
+  it("fails open when native self-consistency returns malformed verdict JSON", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-native-self-consistency-malformed-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    delete config.zcode.providerId;
+    config.providers!.defaultProviderId = "openai";
+    config.reviewGate = {
+      ...config.reviewGate!,
+      selfConsistency: {
+        enabled: true,
+        severities: ["P1"],
+        maxFindingsPerReview: 1
+      }
+    };
+    config.providers!.providers.openai = {
+      enabled: true,
+      adapter: "openai",
+      displayName: "OpenAI native fixture",
+      model: "gpt-5.5",
+      authMode: "api-key-env",
+      apiKeyEnv: "OPENAI_API_KEY",
+      contextWindowTokens: 128_000,
+      timeoutMs: 1_000,
+      retryMaxRetries: 0,
+      capabilities: {
+        review: true,
+        jsonOutput: true,
+        local: false,
+        streaming: false
+      }
+    };
+    const providerKey = ["sk", "proj", "workerMalformedSelfConsistencyToken"].join("-");
+    vi.stubEnv("OPENAI_API_KEY", providerKey);
+    vi.stubGlobal("fetch", async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        response_format?: { json_schema?: { name?: string } };
+      };
+      if (body.response_format?.json_schema?.name === "neondiff_self_consistency_verdict") {
+        return new Response(JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: "{}"
+              }
+            }
+          ]
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: JSON.stringify({
+                findings: [
+                  {
+                    severity: "P1",
+                    path: "src/native-self-malformed.ts",
+                    line: 1,
+                    title: "Malformed verdict candidate",
+                    body: "The finding must survive malformed self-consistency output.",
+                    confidence: 0.99,
+                    category: "runtime_correctness",
+                    why_this_matters: "Malformed verdicts should fail open rather than silently refute P0/P1 findings."
+                  }
+                ]
+              })
+            }
+          }
+        ]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(411, "o".repeat(40));
+
+    const result = await reviewPull({
+      config: {
+        ...config,
+        github: {}
+      },
+      github: githubForPull(pull, [pullFile("src/native-self-malformed.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toEqual([]);
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
+    const reviewPlan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
+    expect(reviewPlan.event).toBe("REQUEST_CHANGES");
+    expect(reviewPlan.comments).toEqual([
+      expect.objectContaining({
+        title: "Malformed verdict candidate",
+        confidence: 0.99
+      })
+    ]);
+    const selfConsistencyEvidence = JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8"));
+    expect(selfConsistencyEvidence.verdicts).toEqual([
+      expect.objectContaining({
+        title: "Malformed verdict candidate",
+        error: "Self-consistency verdict missing boolean verified field."
+      })
+    ]);
     state.close();
   });
 

@@ -7,9 +7,10 @@ OpenAI-compatible gateway. For no-egress review, use a local model runtime. Do
 not paste provider API keys into tracked config, GitHub comments, release notes,
 or evidence packets.
 
-The current live review engine remains ZCode-backed. The provider registry is
-the public setup and operator surface for declaring available providers before
-alternate adapter execution is promoted.
+The default beta review route remains ZCode-backed. Explicit provider selection
+can route reviews through shipped OpenAI-compatible or native adapters only when
+the selected provider is enabled, review-capable, JSON-capable, and backed by
+dry-run/release evidence for the target rollout.
 
 For launch-facing caveats, including tested-vs-interface-compatible status,
 macOS/Linux backend limits, and the owner-pinning note for public visitors, see
@@ -29,6 +30,10 @@ Official/provider-owned docs:
 - [vLLM structured outputs](https://docs.vllm.ai/en/latest/features/structured_outputs/)
 - [llama.cpp server OpenAI-compatible endpoint](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
 - [SGLang structured outputs](https://docs.sglang.io/docs/advanced_features/structured_outputs)
+- [Anthropic Messages API](https://docs.anthropic.com/en/api/messages)
+- [Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
+- [OpenAI structured outputs](https://platform.openai.com/docs/guides/structured-outputs)
+- [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output)
 
 Discovery/resource catalogs:
 
@@ -60,6 +65,9 @@ Status definitions:
 | Ollama on `http://localhost:11434/v1` | `compatible by interface`; `ollama-format-json-schema` request construction shipped behind explicit config | Enable the local provider and run `neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json`, then a review fixture/dry-run | No-egress only when endpoint is loopback or self-hosted and the model runs locally | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240), schema mode [#399](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/399) |
 | LM Studio, vLLM, llama.cpp, SGLang, or local OpenAI-compatible gateway | `compatible by interface`; schema-constrained request construction shipped behind explicit config | Use an explicit provider id and local `/v1` base URL; promote only after fixture and dry-run review proof | No-egress only for local/self-hosted endpoints; hosted gateways are remote egress | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240), schema mode [#399](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/399) |
 | Hosted OpenAI-compatible BYOK gateway | `compatible by interface`; remote smoke and live review proof required | Store only `apiKeyEnv`, run a single-provider smoke, then record redacted evidence before live review | Hosted provider receives prompts and diffs | Hosted BYOK coverage [#241](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/241) |
+| Anthropic native Messages API | `compatible by interface`; native adapter, env-gated review-fixture smoke, and explicit review selection shipped | Configure `ANTHROPIC_API_KEY`, enable provider, then run `NEONDIFF_ALLOW_REMOTE_SMOKE=true neondiff providers doctor --config config.local.json --provider anthropic --smoke true --json` | Hosted provider receives the smoke prompt, and receives prompts/diffs only if explicitly selected for review after proof | Native adapter [#402](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/402) |
+| OpenAI native Chat Completions API | `compatible by interface`; native adapter, env-gated review-fixture smoke, and explicit review selection shipped | Configure `OPENAI_API_KEY`, enable provider, then run `NEONDIFF_ALLOW_REMOTE_SMOKE=true neondiff providers doctor --config config.local.json --provider openai --smoke true --json` | Hosted provider receives the smoke prompt, and receives prompts/diffs only if explicitly selected for review after proof | Native adapter [#402](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/402) |
+| Gemini native generateContent API | `compatible by interface`; native adapter, env-gated review-fixture smoke, and explicit review selection shipped | Configure `GEMINI_API_KEY`, enable provider, then run `NEONDIFF_ALLOW_REMOTE_SMOKE=true neondiff providers doctor --config config.local.json --provider gemini --smoke true --json` | Hosted provider receives the smoke prompt, and receives prompts/diffs only if explicitly selected for review after proof | Native adapter [#402](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/402) |
 | Free/trial provider catalogs such as `cheahjs/free-llm-api-resources` | `resource only / untested` unless a provider has a NeonDiff proof issue | Verify provider terms, model availability, OpenAI compatibility, quota, and NeonDiff proof separately | Usually hosted egress; read each provider's terms and privacy posture | This resource issue [#242](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/242) |
 | Agent runtimes such as Codex CLI, Claude Code, and OpenCode | `tracked/planned`; discovery only | Do not configure as a live review provider until the runtime contract is documented and proven | Depends on each runtime/provider chain; no general no-egress claim | Agent runtime discovery [#243](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/243) |
 
@@ -97,6 +105,26 @@ requests to every enabled provider. Local loopback endpoints can be smoked with
 `GET /models` request to the selected HTTPS endpoint with the configured
 environment-backed API key and does not send PR diffs, review prompts, fixture
 payloads, or GitHub mutations.
+
+Smoke a native hosted provider adapter:
+
+```bash
+export ANTHROPIC_API_KEY="..."
+NEONDIFF_ALLOW_REMOTE_SMOKE=true \
+  neondiff providers doctor \
+    --config config.local.json \
+    --provider anthropic \
+    --smoke true \
+    --json
+```
+
+Native provider smoke also requires `--provider` plus
+`NEONDIFF_ALLOW_REMOTE_SMOKE=true`. It performs one bounded review-fixture
+request to the selected provider using an empty-findings prompt, the provider's
+native JSON-schema request shape, and the configured environment-backed API key.
+It does not send repository diffs, PR metadata, GitHub tokens, or comments. A
+passing smoke proves only adapter/request/response plumbing for that provider,
+not review quality or live daemon selection.
 
 ## GLM/Z.ai Through ZCode
 
@@ -258,6 +286,83 @@ NEONDIFF_ALLOW_REMOTE_SMOKE=true \
     --smoke true \
     --json
 ```
+
+## Native Hosted BYOK Adapters
+
+Anthropic, OpenAI, and Gemini can be configured as native hosted providers. They
+are disabled by default and use environment variable names only:
+
+```json
+{
+  "providers": {
+    "providers": {
+      "anthropic": {
+        "enabled": true,
+        "adapter": "anthropic",
+        "model": "claude-sonnet-5",
+        "authMode": "api-key-env",
+        "apiKeyEnv": "ANTHROPIC_API_KEY",
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      },
+      "openai": {
+        "enabled": true,
+        "adapter": "openai",
+        "model": "gpt-4.1",
+        "authMode": "api-key-env",
+        "apiKeyEnv": "OPENAI_API_KEY",
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      },
+      "gemini": {
+        "enabled": true,
+        "adapter": "gemini",
+        "model": "gemini-2.5-pro",
+        "authMode": "api-key-env",
+        "apiKeyEnv": "GEMINI_API_KEY",
+        "capabilities": {
+          "review": true,
+          "jsonOutput": true,
+          "local": false,
+          "streaming": false
+        }
+      }
+    }
+  }
+}
+```
+
+The native adapters use the canonical NeonDiff findings schema through the
+provider's native structured-output surface:
+
+- Anthropic Messages: `output_config.format` with `type: "json_schema"`.
+  The REST wire schema intentionally strips unsupported constraints such as
+  `minimum`, `maximum`, and `minLength`; NeonDiff still applies stricter local
+  validation after parsing the model response.
+- OpenAI Chat Completions: `response_format.type: "json_schema"`.
+- Gemini generateContent: `generationConfig.responseMimeType:
+  "application/json"` plus `responseJsonSchema`.
+
+Native hosted adapters are pinned to official provider origins during this
+beta. Do not set `baseUrl` for `anthropic`, `openai`, or `gemini`; arbitrary
+native base URL overrides are rejected before any keyed smoke or review request
+is sent. Use an `openai-compatible` provider for self-hosted or gateway
+endpoints.
+
+Do not switch `providers.defaultProviderId` to a hosted native provider until
+single-provider smoke, dry-run review evidence, redaction checks, duplicate
+suppression, and release-status gates have been recorded for the target repo.
+If an older local config still sets `zcode.providerId`, unset it before using
+`providers.defaultProviderId` as the review provider selector; that legacy field
+continues to override the registry default for compatibility.
 
 ## Agent Runtime Adapters
 

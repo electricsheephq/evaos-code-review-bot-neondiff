@@ -109,6 +109,72 @@ export function runSelfConsistencyRecheck(input: {
   return { comments, event, verdicts };
 }
 
+export async function runSelfConsistencyRecheckAsync(input: {
+  comments: ReviewComment[];
+  files: PullFilePatch[];
+  config: SelfConsistencyRecheckConfig;
+  requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
+  categoryPrecisionFloors?: CategoryPrecisionFloors;
+  secondDraw: (input: SelfConsistencySecondDrawInput) => Promise<SelfConsistencySecondDrawResult>;
+}): Promise<{ comments: ReviewComment[]; event: ReviewEvent; verdicts: SelfConsistencyVerdict[] }> {
+  if (!input.config.enabled) {
+    return {
+      comments: input.comments,
+      event: decideReviewEvent(input.comments, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors),
+      verdicts: []
+    };
+  }
+
+  const severities = new Set<Severity>(input.config.severities ?? DEFAULT_SEVERITIES);
+  const maxFindings = input.config.maxFindingsPerReview ?? DEFAULT_MAX_FINDINGS;
+  const verdicts: SelfConsistencyVerdict[] = [];
+  const refutedKeys = new Set<string>();
+  const comments: ReviewComment[] = [];
+  let rechecked = 0;
+
+  for (const comment of input.comments) {
+    if (rechecked >= maxFindings || !severities.has(comment.severity)) {
+      comments.push(comment);
+      continue;
+    }
+    rechecked += 1;
+
+    const base: SelfConsistencyVerdict = {
+      path: comment.path,
+      line: comment.line,
+      severity: comment.severity,
+      title: comment.title,
+      originalConfidence: comment.confidence
+    };
+
+    let draw: SelfConsistencySecondDrawResult;
+    try {
+      draw = await input.secondDraw({ comment, hunk: extractHunk(comment, input.files) });
+    } catch (error) {
+      verdicts.push({ ...base, error: error instanceof Error ? error.message : String(error) });
+      comments.push(comment);
+      continue;
+    }
+
+    if (draw.verified) {
+      verdicts.push({ ...base, secondConfidence: draw.confidence, agreed: true, refuted: false });
+      comments.push(comment);
+      continue;
+    }
+
+    verdicts.push({ ...base, secondConfidence: draw.confidence, agreed: false, refuted: true });
+    refutedKeys.add(commentKey(comment));
+    comments.push({ ...comment, confidence: Math.min(comment.confidence, draw.confidence) });
+  }
+
+  const eligibleComments = comments.filter((comment) => !refutedKeys.has(commentKey(comment)));
+  const event = eligibleComments.some((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors))
+    ? "REQUEST_CHANGES"
+    : "COMMENT";
+
+  return { comments, event, verdicts };
+}
+
 function commentKey(comment: Pick<ReviewComment, "path" | "line" | "title">): string {
   return `${comment.path}${comment.line}${comment.title}`;
 }

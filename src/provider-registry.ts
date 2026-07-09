@@ -173,12 +173,12 @@ export const PROVIDER_FAMILY_CATALOG = [
       }
     ],
     locality: "remote",
-    supportsJsonMode: false,
+    supportsJsonMode: true,
     structuredOutputModes: [],
     supportsToolUse: true,
     riskNotes: [
       "Hosted provider; review prompts and repository excerpts can leave the local machine.",
-      "Schema-constrained output should be validated through adapter fixtures before runtime promotion."
+      "Native Messages API review execution uses an output_config JSON schema smoke/review fixture before promotion."
     ],
     byok: {
       posture: "required",
@@ -203,7 +203,7 @@ export const PROVIDER_FAMILY_CATALOG = [
     supportsToolUse: true,
     riskNotes: [
       "Hosted provider; review prompts and repository excerpts can leave the local machine.",
-      "Choose project and data controls appropriate to the repository sensitivity."
+      "Native Chat Completions review execution uses response_format json_schema and requires BYOK evidence before promotion."
     ],
     byok: {
       posture: "required",
@@ -232,7 +232,7 @@ export const PROVIDER_FAMILY_CATALOG = [
     supportsToolUse: true,
     riskNotes: [
       "Hosted provider; review prompts and repository excerpts can leave the local machine.",
-      "Google AI Studio and Vertex AI have different auth and data-governance postures."
+      "Native generateContent review execution uses responseMimeType and responseJsonSchema; Google AI Studio and Vertex AI have different auth and data-governance postures."
     ],
     byok: {
       posture: "required",

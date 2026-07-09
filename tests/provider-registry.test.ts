@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
+import { ANTHROPIC_REVIEW_FINDINGS_JSON_SCHEMA, STRICT_REVIEW_FINDINGS_JSON_SCHEMA } from "../src/findings-schema.js";
 import {
   buildOpenAIModelsUrl,
   buildProviderRegistrySummary,
@@ -562,6 +563,236 @@ describe("provider registry", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it.each([
+    {
+      providerId: "anthropic",
+      model: "claude-sonnet-5",
+      envName: "ANTHROPIC_API_KEY",
+      expectedUrl: "https://api.anthropic.com/v1/messages",
+      expectedReadMode: "anthropic_messages_review_fixture",
+      response: {
+        content: [
+          {
+            type: "text",
+            text: "{\"findings\":[]}"
+          }
+        ]
+      },
+      inspectBody(body: Record<string, unknown>) {
+        expect(body).toMatchObject({
+          model: "claude-sonnet-5",
+          output_config: {
+            format: {
+              type: "json_schema",
+              schema: ANTHROPIC_REVIEW_FINDINGS_JSON_SCHEMA
+            }
+          }
+        });
+      }
+    },
+    {
+      providerId: "openai",
+      model: "gpt-5.5",
+      envName: "OPENAI_API_KEY",
+      expectedUrl: "https://api.openai.com/v1/chat/completions",
+      expectedReadMode: "openai_chat_completions_review_fixture",
+      response: {
+        choices: [
+          {
+            message: {
+              content: "{\"findings\":[]}"
+            }
+          }
+        ]
+      },
+      inspectBody(body: Record<string, unknown>) {
+        expect(body).toMatchObject({
+          model: "gpt-5.5",
+          response_format: {
+            type: "json_schema"
+          }
+        });
+      }
+    },
+    {
+      providerId: "gemini",
+      model: "gemini-3.5-flash",
+      envName: "GEMINI_API_KEY",
+      expectedUrl: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+      expectedReadMode: "gemini_generate_content_review_fixture",
+      response: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: "{\"findings\":[]}"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      inspectBody(body: Record<string, unknown>) {
+        expect(body).toMatchObject({
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseJsonSchema: STRICT_REVIEW_FINDINGS_JSON_SCHEMA
+          }
+        });
+      }
+    }
+  ] as const)("smokes native $providerId providers through one env-gated review fixture", async (scenario) => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: scenario.providerId,
+        providers: {
+          [scenario.providerId]: {
+            enabled: true,
+            model: scenario.model,
+            authMode: "api-key-env",
+            apiKeyEnv: scenario.envName,
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: scenario.providerId,
+      smoke: true,
+      env: {
+        NEONDIFF_ALLOW_REMOTE_SMOKE: "true",
+        [scenario.envName]: "provider-secret"
+      },
+      fetchImpl: async (url, init) => {
+        fetchCalls += 1;
+        expect(String(url)).toBe(scenario.expectedUrl);
+        const serializedHeaders = JSON.stringify(Object.fromEntries(new Headers(init?.headers).entries()));
+        expect(serializedHeaders).toContain("provider-secret");
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        scenario.inspectBody(body);
+        expect(JSON.stringify(body)).not.toContain("provider-secret");
+        expect(JSON.stringify(body)).not.toContain("diff --git");
+        return new Response(JSON.stringify(scenario.response), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks[0]).toMatchObject({
+      providerId: scenario.providerId,
+      ok: true,
+      smokeAttempted: true,
+      readMode: scenario.expectedReadMode,
+      apiKeyEnv: scenario.envName
+    });
+    expect(fetchCalls).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("does not run native provider smoke without explicit remote opt-in", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "anthropic",
+        providers: {
+          anthropic: {
+            enabled: true,
+            model: "claude-sonnet-5",
+            authMode: "api-key-env",
+            apiKeyEnv: "ANTHROPIC_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "anthropic",
+      smoke: true,
+      env: {
+        ANTHROPIC_API_KEY: "provider-secret"
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response("{}");
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      smokeAttempted: true,
+      readMode: "anthropic_messages_review_fixture",
+      error: "Remote native provider smoke checks require explicit remote opt-in and --provider <id>."
+    });
+    expect(fetchCalls).toBe(0);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+  });
+
+  it("does not run native provider smoke against baseUrl overrides", async () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai",
+        providers: {
+          openai: {
+            enabled: true,
+            adapter: "openai",
+            baseUrl: "https://gateway.example.test/v1",
+            model: "gpt-5.5",
+            authMode: "api-key-env",
+            apiKeyEnv: "OPENAI_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    });
+    let fetchCalls = 0;
+
+    const result = await doctorProviderRegistry({
+      registry: config.providers!,
+      providerId: "openai",
+      smoke: true,
+      env: {
+        NEONDIFF_ALLOW_REMOTE_SMOKE: "true",
+        OPENAI_API_KEY: "provider-secret"
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response("{}");
+      }
+    });
+
+    expect(result.checks[0]).toMatchObject({
+      ok: false,
+      smokeAttempted: true,
+      readMode: "openai_chat_completions_review_fixture",
+      error: "Native OpenAI Chat Completions baseUrl overrides are disabled during this beta; use the official https://api.openai.com/v1 endpoint."
+    });
+    expect(fetchCalls).toBe(0);
     expect(JSON.stringify(result)).not.toContain("provider-secret");
   });
 

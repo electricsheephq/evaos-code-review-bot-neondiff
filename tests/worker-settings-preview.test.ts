@@ -88,7 +88,7 @@ describe("worker review settings preview evidence", () => {
       provider: "zcode-glm",
       model: "GLM-5.2",
       providerAttempts: 0,
-      notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+      notes: ["Review provider execution disabled for this dry-run; provider latency and token usage were not measured."]
     });
     state.close();
   });
