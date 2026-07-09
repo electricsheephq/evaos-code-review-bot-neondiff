@@ -64,6 +64,8 @@ jobs:
 
       - name: Classify npm package release
         id: package_release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           RELEASE_LEVEL="$(node -p "require('./docs/public-release-manifest.json').releaseLevel")"

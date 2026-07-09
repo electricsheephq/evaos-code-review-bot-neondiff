@@ -515,6 +515,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/npm-release-policy\.mjs verify-git/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-pack/);
     expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
+    expect(publish).toMatch(/GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
     expect(releasePolicy).toMatch(/stable npm packages require a non-prerelease GitHub Release/);
     expect(publish).toMatch(/release tag commit must be an ancestor of protected main/i);
     expect(releasePolicy).toMatch(/npm tarball integrity does not match the reviewed pack/);
