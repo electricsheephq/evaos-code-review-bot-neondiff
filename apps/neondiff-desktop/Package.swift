@@ -38,6 +38,10 @@ let package = Package(
             dependencies: ["NeonDiffDesktopCore"]
         ),
         .executableTarget(
+            name: "NeonDiffDesktopKeychainChecks",
+            dependencies: ["NeonDiffDesktopCore"]
+        ),
+        .executableTarget(
             name: "NeonDiffDesktopAppcastChecks",
             dependencies: ["NeonDiffDesktopCore"]
         ),

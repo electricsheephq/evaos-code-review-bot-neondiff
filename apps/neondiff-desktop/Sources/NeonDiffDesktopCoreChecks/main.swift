@@ -1,7 +1,5 @@
 import Foundation
-import LocalAuthentication
-@_spi(Testing) import NeonDiffDesktopCore
-import Security
+import NeonDiffDesktopCore
 
 @discardableResult
 func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
@@ -75,63 +73,6 @@ check(
 check(
     NeonDiffCLIResolver.resolveExecutablePath("neondiff", workingDirectory: tempRoot)?.standardizedFileURL == localCLI.standardizedFileURL,
     "local package CLI is preferred over GUI PATH fallback"
-)
-
-let existenceQuery = KeychainSecretStore.query(
-    service: "com.example.neondiff.core-checks",
-    account: "provider",
-    operation: .contains
-)
-check(existenceQuery[kSecReturnData as String] == nil, "startup existence checks never request secret data")
-check(
-    (existenceQuery[kSecUseAuthenticationContext as String] as? LAContext)?.interactionNotAllowed == true,
-    "startup existence checks cannot present Keychain UI"
-)
-check(
-    existenceQuery[kSecUseAuthenticationUI as String] as? String == kSecUseAuthenticationUISkip as String,
-    "startup existence checks skip legacy Keychain items that would present UI"
-)
-
-let noninteractiveReadQuery = KeychainSecretStore.query(
-    service: "com.example.neondiff.core-checks",
-    account: "github/user-login",
-    operation: .read(allowUserInteraction: false)
-)
-check(noninteractiveReadQuery[kSecReturnData as String] as? Bool == true, "noninteractive reads still request secret data")
-check(
-    (noninteractiveReadQuery[kSecUseAuthenticationContext as String] as? LAContext)?.interactionNotAllowed == true,
-    "noninteractive startup reads cannot present Keychain UI"
-)
-check(
-    noninteractiveReadQuery[kSecUseAuthenticationUI as String] as? String == kSecUseAuthenticationUISkip as String,
-    "noninteractive startup reads skip legacy Keychain items that would present UI"
-)
-
-let interactiveReadQuery = KeychainSecretStore.query(
-    service: "com.example.neondiff.core-checks",
-    account: "github/user-token",
-    operation: .read(allowUserInteraction: true)
-)
-check(interactiveReadQuery[kSecReturnData as String] as? Bool == true, "interactive reads request secret data")
-check(interactiveReadQuery[kSecUseAuthenticationContext as String] == nil, "interactive reads leave Keychain UI policy at system default")
-
-final class LegacySecretStoreFixture: DesktopSecretStoring {
-    func setSecret(_ secret: String, account: String) throws {}
-    func readSecret(account: String) throws -> String? { "legacy-fixture" }
-    func containsSecret(account: String) -> Bool { true }
-    func deleteSecret(account: String) throws {}
-}
-
-let legacySecretStore = LegacySecretStoreFixture()
-let legacySecretValue = try legacySecretStore.readSecret(account: "provider", allowUserInteraction: false)
-check(
-    legacySecretValue == nil,
-    "existing secret-store conformers cannot fall back to interactive reads when UI is disallowed"
-)
-let legacyInteractiveSecretValue = try legacySecretStore.readSecret(account: "provider", allowUserInteraction: true)
-check(
-    legacyInteractiveSecretValue == "legacy-fixture",
-    "existing secret-store conformers retain interactive read behavior"
 )
 
 final class GitHubFixtureURLProtocol: URLProtocol {
