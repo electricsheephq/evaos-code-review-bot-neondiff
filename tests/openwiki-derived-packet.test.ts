@@ -46,6 +46,7 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(section?.body).toContain("[redacted-secret]");
     expect(section?.body).not.toContain("OPENROUTER_API_KEY");
     expect(section?.sourceSha).toBe(sha256(section?.body ?? ""));
+    expect(section?.emittedBodySha).toBe(sha256(section?.body ?? ""));
     expect(packet.redaction).toMatchObject({
       status: "redacted",
       replacementCount: 1
@@ -167,14 +168,43 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     });
   });
 
-  it("hashes the emitted truncated section body", () => {
+  it("redacts secret-like values from OpenWiki section bodies and JSON output", () => {
+    const secret = "ghp_1234567890abcdef";
     const { head, root } = createRepoWithOpenWiki({
       openWikiBody: [
-        "# Long Section",
+        "# Provider setup",
         "",
-        "abcdefghijklmnopqrstuvwxyz",
-        "0123456789"
+        `Never paste ${secret} into OpenWiki docs.`,
+        ""
       ].join("\n")
+    });
+    roots.push(root);
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+    const json = formatRepoWikiPacketJson(packet);
+    const body = packet.includedSections[0]?.body ?? "";
+
+    expect(body).toContain("[redacted-secret]");
+    expect(body).not.toContain(secret);
+    expect(json).not.toContain(secret);
+    expect(packet.redaction.status).toBe("redacted");
+  });
+
+  it("preserves source provenance and separately hashes the emitted truncated section body", () => {
+    const fullBody = [
+      "# Long Section",
+      "",
+      "abcdefghijklmnopqrstuvwxyz",
+      "0123456789"
+    ].join("\n");
+    const { head, root } = createRepoWithOpenWiki({
+      openWikiBody: fullBody
     });
     roots.push(root);
 
@@ -190,7 +220,45 @@ describe("OpenWiki-derived repo-wiki packets", () => {
 
     expect(section?.truncated).toBe(true);
     expect(section?.body.length).toBeLessThan("abcdefghijklmnopqrstuvwxyz0123456789".length);
-    expect(section?.sourceSha).toBe(sha256(section?.body ?? ""));
+    expect(section?.sourceSha).toBe(sha256(fullBody));
+    expect(section?.emittedBodySha).toBe(sha256(section?.body ?? ""));
+  });
+
+  it("does not treat version-like source-map bullets as source files", () => {
+    const { head, root } = createRepoWithOpenWiki({
+      openWikiBody: [
+        "# Quickstart",
+        "",
+        "NeonDiff reviews pull requests.",
+        "",
+        "## Source map",
+        "",
+        "- README.md, v1.2, 3.14, 20.10.0",
+        "- src/worker.ts",
+        "- docs/api",
+        ""
+      ].join("\n")
+    });
+    roots.push(root);
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+    const sourceFiles = packet.includedSections[0]?.sourceFiles ?? [];
+
+    expect(sourceFiles).toEqual([
+      "README.md",
+      "docs/api",
+      "openwiki/quickstart.md",
+      "src/worker.ts"
+    ]);
+    expect(sourceFiles).not.toContain("v1.2");
+    expect(sourceFiles).not.toContain("3.14");
+    expect(sourceFiles).not.toContain("20.10.0");
   });
 
   it("marks packets stale when dirty git status renames OpenWiki files into source docs", () => {
@@ -220,6 +288,26 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     roots.push(root);
     mkdirSync(join(root, "docs"), { recursive: true });
     writeFileSync(join(root, "docs", "new-guide.md"), "# New Guide\n", "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "Repository has non-openwiki worktree changes; regenerate OpenWiki before building a packet."
+    });
+  });
+
+  it("preserves leading path whitespace when checking dirty non-openwiki status", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    mkdirSync(join(root, " openwiki"), { recursive: true });
+    writeFileSync(join(root, " openwiki", "notes.md"), "# Shadow docs\n", "utf8");
 
     const packet = buildOpenWikiDerivedRepoWikiPacket({
       repo,

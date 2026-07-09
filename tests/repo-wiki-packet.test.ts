@@ -91,6 +91,31 @@ describe("repo wiki packets", () => {
     );
   });
 
+  it("preserves caller sourceSha and records emitted body hashes separately", () => {
+    const packet = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "feature/wiki", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 1_000, maxTokens: 300, maxSectionBytes: 12 },
+      sections: [
+        section({
+          id: "provenance",
+          title: "Provenance",
+          body: "Source file body that will be truncated.",
+          sourceSha: "source-file-sha"
+        })
+      ]
+    });
+    const included = packet.includedSections[0];
+    const markdown = formatRepoWikiPacketMarkdown(packet);
+
+    expect(included?.sourceSha).toBe("source-file-sha");
+    expect(included?.emittedBodySha).toBe(sha256(included?.body ?? ""));
+    expect(included?.emittedBodySha).not.toBe(included?.sourceSha);
+    expect(markdown).toContain("source_sha=source-file-sha");
+    expect(markdown).toContain(`emitted_body_sha=${included?.emittedBodySha}`);
+  });
+
   it("counts redactions only from sections accepted after packet budgeting", () => {
     const packet = buildRepoWikiPacket({
       repo: { fullName: "electricsheephq/evaos-code-review-bot" },
@@ -602,6 +627,7 @@ function section(input: {
   body: string;
   order?: number;
   sourceFiles?: string[];
+  sourceSha?: string;
   preRedactionReplacementCount?: number;
 }) {
   return {
@@ -610,6 +636,7 @@ function section(input: {
     body: input.body,
     order: input.order,
     sourceFiles: input.sourceFiles ?? ["README.md", "AGENTS.md", "src/worker.ts", "src/cli.ts", "tests/repo-wiki-packet.test.ts"],
+    sourceSha: input.sourceSha,
     preRedactionReplacementCount: input.preRedactionReplacementCount
   };
 }
