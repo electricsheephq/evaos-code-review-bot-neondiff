@@ -13,6 +13,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var providers = ProviderSettings()
     @Published var license = LicenseStatus()
     @Published var github = GitHubConnectionStatus()
+    @Published var githubAuthorizationCode: GitHubDeviceAuthorizationCode?
+    @Published var githubAuthorizationStatus = "not connected"
+    @Published var discoveredGitHubRepos: [GitHubDiscoveredRepository] = []
+    @Published var isGitHubAuthorizationInProgress = false
     @Published var logText = "No logs loaded."
     @Published var lastError: String?
     @Published var lastCommandLine = ""
@@ -26,21 +30,44 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     private let userDefaults: UserDefaults
     private let keychain: DesktopSecretStoring
+    private let githubAuthClient: GitHubDesktopAuthenticating
+    private var githubAuthorizationTask: Task<Void, Never>?
 
     init(
         userDefaults: UserDefaults = .standard,
-        keychain: DesktopSecretStoring = KeychainSecretStore()
+        keychain: DesktopSecretStoring = KeychainSecretStore(),
+        githubAuthClient: GitHubDesktopAuthenticating = GitHubDeviceAuthClient()
     ) {
         self.userDefaults = userDefaults
         self.keychain = keychain
+        self.githubAuthClient = githubAuthClient
         self.configPath = userDefaults.string(forKey: "neondiff.configPath") ?? "config.local.json"
         self.cliPath = userDefaults.string(forKey: "neondiff.cliPath") ?? "neondiff"
         self.launchdLabel = userDefaults.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
         let providerKeyStored = keychain.containsSecret(account: providerKeyAccount)
+        let githubUserTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
+        let githubAccessTokenExpired = Self.storedDate(
+            keychain: keychain,
+            account: githubTokenExpiresAtAccount
+        ).map { $0 <= Date() } ?? false
+        let githubRefreshTokenValid = keychain.containsSecret(account: githubRefreshTokenAccount)
+            && !(Self.storedDate(keychain: keychain, account: githubRefreshTokenExpiresAtAccount).map { $0 <= Date() } ?? false)
         self.providers.providerKeyStored = providerKeyStored
         self.license.keyStored = keychain.containsSecret(account: licenseKeyAccount)
-        self.github.userTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
-        self.github.installationState = self.github.userTokenStored ? "user authorized" : "not connected"
+        self.github.userTokenStored = githubUserTokenStored && (!githubAccessTokenExpired || githubRefreshTokenValid)
+        if githubUserTokenStored && githubAccessTokenExpired && githubRefreshTokenValid {
+            self.github.installationState = "authorization refresh needed"
+            self.githubAuthorizationStatus = "authorization refresh needed"
+        } else if githubUserTokenStored && githubAccessTokenExpired {
+            self.github.installationState = "authorization expired; reconnect GitHub"
+            self.githubAuthorizationStatus = "authorization expired; reconnect GitHub"
+        } else {
+            self.github.installationState = self.github.userTokenStored ? "user authorized" : "not connected"
+        }
+        self.github.authorizedUserLogin = try? keychain.readSecret(account: githubUserLoginAccount)
+        if let login = self.github.authorizedUserLogin, !githubAccessTokenExpired {
+            self.githubAuthorizationStatus = "authorized as \(login)"
+        }
         self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
         self.isOnboardingPresented = !userDefaults.bool(forKey: onboardingCompletedKey)
         self.lastCommandLine = statusCommand.commandLine
@@ -215,6 +242,81 @@ final class NeonDiffDesktopModel: ObservableObject {
         logText = "Repo removed locally. Preview or apply the config patch to persist it."
     }
 
+    func startGitHubAuthorization() {
+        guard let clientId = github.clientId?.trimmingCharacters(in: .whitespacesAndNewlines), !clientId.isEmpty else {
+            lastError = "Set the public GitHub App client ID before connecting GitHub."
+            githubAuthorizationStatus = "client id missing"
+            return
+        }
+        githubAuthorizationTask?.cancel()
+        githubAuthorizationCode = nil
+        isGitHubAuthorizationInProgress = true
+        githubAuthorizationStatus = "requesting device code"
+        lastError = nil
+        githubAuthorizationTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let code = try await githubAuthClient.requestDeviceCode(clientId: clientId)
+                if Task.isCancelled { return }
+                githubAuthorizationCode = code
+                githubAuthorizationStatus = "enter code \(code.userCode)"
+                github.installationState = "waiting for GitHub authorization"
+                logText = "Open \(code.verificationURI.absoluteString) and enter code \(code.userCode)."
+                await pollGitHubAuthorization(clientId: clientId, code: code)
+            } catch {
+                if Task.isCancelled { return }
+                isGitHubAuthorizationInProgress = false
+                githubAuthorizationStatus = "failed"
+                lastError = NeonDiffRedactor.redact(error.localizedDescription)
+                logText = lastError ?? "GitHub authorization failed."
+            }
+        }
+    }
+
+    func cancelGitHubAuthorization() {
+        githubAuthorizationTask?.cancel()
+        githubAuthorizationTask = nil
+        isGitHubAuthorizationInProgress = false
+        githubAuthorizationCode = nil
+        githubAuthorizationStatus = "cancelled"
+        github.installationState = github.userTokenStored ? "user authorized" : "not connected"
+    }
+
+    func copyGitHubUserCode() {
+        guard let userCode = githubAuthorizationCode?.userCode else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(userCode, forType: .string)
+        githubAuthorizationStatus = "code copied"
+    }
+
+    func openGitHubDeviceVerification() {
+        guard let verificationURI = githubAuthorizationCode?.verificationURI else { return }
+        NSWorkspace.shared.open(verificationURI)
+        githubAuthorizationStatus = "verification page opened"
+    }
+
+    func refreshGitHubRepositories() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                githubAuthorizationStatus = "refreshing repositories"
+                let accessToken = try await gitHubAccessTokenForAPI()
+                let user = try await githubAuthClient.fetchCurrentUser(accessToken: accessToken)
+                let discovered = try await githubAuthClient.listAccessibleRepositories(accessToken: accessToken)
+                applyGitHubDiscovery(user: user, discovered: discovered)
+            } catch {
+                if error is GitHubDesktopAuthorizationStateError {
+                    lastError = NeonDiffRedactor.redact(error.localizedDescription)
+                    logText = lastError ?? "Reconnect GitHub."
+                    return
+                }
+                githubAuthorizationStatus = "repository refresh failed"
+                lastError = NeonDiffRedactor.redact(error.localizedDescription)
+                logText = lastError ?? "GitHub repository refresh failed."
+            }
+        }
+    }
+
     func previewRepoAllowlistPatch() {
         runRepoSelectionPatch(dryRun: true)
     }
@@ -384,6 +486,140 @@ final class NeonDiffDesktopModel: ObservableObject {
         runCLI(arguments: arguments, displayCommand: dryRun ? repoSelectionPatchPreviewCommand : repoSelectionPatchApplyCommand)
     }
 
+    private func gitHubAccessTokenForAPI() async throws -> String {
+        guard let accessToken = try keychain.readSecret(account: githubUserTokenAccount), !accessToken.isEmpty else {
+            clearStoredGitHubAuthorization(status: "connect GitHub first")
+            throw GitHubDesktopAuthorizationStateError.reconnectRequired("Connect GitHub before refreshing accessible repositories.")
+        }
+        guard let expiresAt = readGitHubStoredDate(account: githubTokenExpiresAtAccount) else {
+            return accessToken
+        }
+        if expiresAt > Date().addingTimeInterval(60) {
+            return accessToken
+        }
+        guard let clientId = github.clientId?.trimmingCharacters(in: .whitespacesAndNewlines), !clientId.isEmpty else {
+            clearStoredGitHubAuthorization(status: "authorization expired; reconnect GitHub")
+            throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization expired and the public client ID is missing. Reconnect GitHub after loading config.")
+        }
+        guard let refreshToken = try keychain.readSecret(account: githubRefreshTokenAccount), !refreshToken.isEmpty else {
+            clearStoredGitHubAuthorization(status: "authorization expired; reconnect GitHub")
+            throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization expired. Reconnect GitHub.")
+        }
+        if let refreshExpiresAt = readGitHubStoredDate(account: githubRefreshTokenExpiresAtAccount), refreshExpiresAt <= Date() {
+            clearStoredGitHubAuthorization(status: "refresh expired; reconnect GitHub")
+            throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub refresh token expired. Reconnect GitHub.")
+        }
+        githubAuthorizationStatus = "refreshing GitHub authorization"
+        let refreshedToken: GitHubUserToken
+        do {
+            refreshedToken = try await githubAuthClient.refreshUserToken(clientId: clientId, refreshToken: refreshToken)
+        } catch {
+            clearStoredGitHubAuthorization(status: "refresh failed; reconnect GitHub")
+            throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization refresh failed. Reconnect GitHub.")
+        }
+        try storeGitHubToken(refreshedToken)
+        githubAuthorizationStatus = "GitHub authorization refreshed"
+        return refreshedToken.accessToken
+    }
+
+    private func pollGitHubAuthorization(clientId: String, code: GitHubDeviceAuthorizationCode) async {
+        var intervalSeconds = code.intervalSeconds
+        while !Task.isCancelled && Date() < code.expiresAt {
+            do {
+                try await Task.sleep(nanoseconds: UInt64(max(1, intervalSeconds)) * 1_000_000_000)
+                let result = try await githubAuthClient.pollDeviceAuthorization(clientId: clientId, deviceCode: code.deviceCode)
+                switch result {
+                case .pending(let nextInterval):
+                    intervalSeconds = max(1, nextInterval)
+                    githubAuthorizationStatus = "waiting for authorization"
+                case .authorized(let token):
+                    try storeGitHubToken(token)
+                    let user = try await githubAuthClient.fetchCurrentUser(accessToken: token.accessToken)
+                    let discovered = try await githubAuthClient.listAccessibleRepositories(accessToken: token.accessToken)
+                    applyGitHubDiscovery(user: user, discovered: discovered)
+                    isGitHubAuthorizationInProgress = false
+                    githubAuthorizationCode = nil
+                    return
+                case .failed(let error, let description):
+                    isGitHubAuthorizationInProgress = false
+                    githubAuthorizationStatus = error.rawValue
+                    github.installationState = "authorization failed"
+                    lastError = NeonDiffRedactor.redact(description ?? error.rawValue)
+                    logText = lastError ?? "GitHub authorization failed."
+                    return
+                }
+            } catch {
+                if Task.isCancelled { return }
+                isGitHubAuthorizationInProgress = false
+                githubAuthorizationStatus = "failed"
+                lastError = NeonDiffRedactor.redact(error.localizedDescription)
+                logText = lastError ?? "GitHub authorization failed."
+                return
+            }
+        }
+        if !Task.isCancelled {
+            isGitHubAuthorizationInProgress = false
+            githubAuthorizationStatus = "expired"
+            github.installationState = "device code expired"
+        }
+    }
+
+    private func storeGitHubToken(_ token: GitHubUserToken) throws {
+        try keychain.setSecret(token.accessToken, account: githubUserTokenAccount)
+        if let refreshToken = token.refreshToken {
+            try keychain.setSecret(refreshToken, account: githubRefreshTokenAccount)
+        } else {
+            try? keychain.deleteSecret(account: githubRefreshTokenAccount)
+        }
+        if let expiresAt = token.expiresAt {
+            try keychain.setSecret(ISO8601DateFormatter().string(from: expiresAt), account: githubTokenExpiresAtAccount)
+        } else {
+            try? keychain.deleteSecret(account: githubTokenExpiresAtAccount)
+        }
+        if let refreshTokenExpiresAt = token.refreshTokenExpiresAt {
+            try keychain.setSecret(ISO8601DateFormatter().string(from: refreshTokenExpiresAt), account: githubRefreshTokenExpiresAtAccount)
+        } else {
+            try? keychain.deleteSecret(account: githubRefreshTokenExpiresAtAccount)
+        }
+        github.userTokenStored = true
+    }
+
+    private func applyGitHubDiscovery(user: GitHubAuthenticatedUser, discovered: [GitHubDiscoveredRepository]) {
+        discoveredGitHubRepos = discovered
+        repos = GitHubRepositoryDiscovery.mergeConfiguredAndDiscoveredRepos(configured: repos, discovered: discovered)
+        github.userTokenStored = true
+        github.authorizedUserLogin = user.login
+        github.installationCount = Set(discovered.map(\.installationId)).count
+        github.discoveredRepositoryCount = discovered.count
+        github.installationState = discovered.isEmpty
+            ? "authorized as \(user.login); no accessible installations found"
+            : "authorized as \(user.login); \(discovered.count) repositories available"
+        githubAuthorizationStatus = "authorized as \(user.login)"
+        lastError = nil
+        logText = "GitHub connected as \(user.login). Select repositories, then preview or apply the allowlist patch."
+        try? keychain.setSecret(user.login, account: githubUserLoginAccount)
+    }
+
+    private func clearStoredGitHubAuthorization(status: String) {
+        try? keychain.deleteSecret(account: githubUserTokenAccount)
+        try? keychain.deleteSecret(account: githubRefreshTokenAccount)
+        try? keychain.deleteSecret(account: githubTokenExpiresAtAccount)
+        try? keychain.deleteSecret(account: githubRefreshTokenExpiresAtAccount)
+        try? keychain.deleteSecret(account: githubUserLoginAccount)
+        github.userTokenStored = false
+        github.authorizedUserLogin = nil
+        github.installationCount = 0
+        github.discoveredRepositoryCount = 0
+        github.installationState = status
+        githubAuthorizationStatus = status
+        githubAuthorizationCode = nil
+        discoveredGitHubRepos = []
+    }
+
+    private func readGitHubStoredDate(account: String) -> Date? {
+        Self.storedDate(keychain: keychain, account: account)
+    }
+
     private func writeRepoSelectionPatch() throws {
         try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
         let selectedRepos = repos
@@ -414,7 +650,15 @@ final class NeonDiffDesktopModel: ObservableObject {
                 if !snapshot.repos.isEmpty { repos = snapshot.repos }
                 providers = snapshot.providers
                 license = snapshot.license
-                github = snapshot.github
+                var parsedGitHub = snapshot.github
+                parsedGitHub.userTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
+                parsedGitHub.authorizedUserLogin = github.authorizedUserLogin
+                parsedGitHub.installationCount = github.installationCount
+                parsedGitHub.discoveredRepositoryCount = github.discoveredRepositoryCount
+                if parsedGitHub.userTokenStored && parsedGitHub.installationState == "not connected" {
+                    parsedGitHub.installationState = github.installationState
+                }
+                github = parsedGitHub
             }
             return
         }
@@ -437,11 +681,33 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
         return root["command"] as? String
     }
+
+    private static func storedDate(keychain: DesktopSecretStoring, account: String) -> Date? {
+        guard let value = try? keychain.readSecret(account: account) else {
+            return nil
+        }
+        return ISO8601DateFormatter().date(from: value)
+    }
+}
+
+private enum GitHubDesktopAuthorizationStateError: LocalizedError {
+    case reconnectRequired(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .reconnectRequired(let message):
+            message
+        }
+    }
 }
 
 private let providerKeyAccount = "provider/glm/api-key"
 private let licenseKeyAccount = "license/default"
 private let githubUserTokenAccount = "github/user-access-token"
+private let githubRefreshTokenAccount = "github/user-refresh-token"
+private let githubTokenExpiresAtAccount = "github/user-token-expires-at"
+private let githubRefreshTokenExpiresAtAccount = "github/user-refresh-token-expires-at"
+private let githubUserLoginAccount = "github/user-login"
 private let onboardingCompletedKey = "neondiff.hasCompletedOnboarding"
 
 private func isValidRepoName(_ value: String) -> Bool {
