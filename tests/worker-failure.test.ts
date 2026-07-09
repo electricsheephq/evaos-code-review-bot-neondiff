@@ -315,6 +315,9 @@ describe("worker review failures", () => {
     const state = new ReviewStateStore(join(root, "state.sqlite"));
     const evidenceDir = join(root, "evidence");
     const fingerprint = `finding:${"c".repeat(64)}`;
+    const recordedAt = new Date();
+    const policyRecordedAt = new Date(recordedAt.getTime() - 60_000);
+    const suppressionExpiresAt = new Date(recordedAt.getTime() + 7 * 24 * 60 * 60_000);
     mkdirSync(evidenceDir, { recursive: true });
     const config: BotConfig = {
       ...minimalConfig(root),
@@ -334,7 +337,7 @@ describe("worker review failures", () => {
       title: "Policy survives",
       body: "Prompt memory should still include current policy notes.",
       source: "test",
-      now: new Date("2026-07-02T00:00:00.000Z")
+      now: policyRecordedAt
     });
     state.recordRepoMemoryNote({
       noteId: "fp-newer",
@@ -344,8 +347,8 @@ describe("worker review failures", () => {
       body: "Suppression notes use a separate read budget.",
       source: "test",
       fingerprint,
-      expiresAt: "2026-07-09T00:00:00.000Z",
-      now: new Date("2026-07-02T00:01:00.000Z")
+      expiresAt: suppressionExpiresAt.toISOString(),
+      now: recordedAt
     });
 
     const context = buildRepoMemoryContext({

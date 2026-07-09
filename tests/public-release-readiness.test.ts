@@ -289,6 +289,8 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/npm publish --provenance/);
     expect(publish).toMatch(/--tag beta/);
+    expect(publish).toMatch(/github\.event_name == 'release'/);
+    expect(publish).not.toMatch(/github\.event\.release\.prerelease\s*==\s*true/);
     expect(publish).toMatch(/Classify npm package release/);
     expect(publish).toMatch(/Skipping npm publish for source-only prerelease/);
     expect(publish).toMatch(/Manual npm publish tag .* does not match package\.json version/);
