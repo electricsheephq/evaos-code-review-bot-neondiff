@@ -5,7 +5,7 @@
     "name": "neondiff",
     "version": "1.0.3",
     "requiredForThisRelease": true,
-    "state": "published",
+    "state": "release_candidate",
     "previousReleasedPackageVersion": "1.0.2",
     "skippedPublicPackageVersions": [
       "v0.4.25-beta.1",
@@ -30,12 +30,12 @@
       "v0.4.45-beta.1",
       "v0.4.46-beta.1"
     ],
-    "note": "v1.0.3 publishes the CLI/dashboard npm package and release metadata. Desktop Keychain startup-stability source changes are included in this source release, but desktop app artifacts are not part of the npm package."
+    "note": "v1.0.3 is prepared as the CLI/dashboard npm package release candidate. After the non-prerelease GitHub Release, npm integrity verification, and installed-package smoke pass, a post-release state stamp records publication. Desktop Keychain startup-stability source changes are included, but desktop app artifacts are not part of the npm package."
   },
   "source": {
     "shaState": "pending_tag_stamp",
     "candidateHeadBeforeReleaseMetadata": "bcd2f7ace5b190dc86b5f86983aa62aae5e40652",
-    "proof": "after merge and tag, release:status --expected-head $(git rev-parse HEAD) and verify the tag contains candidate head bcd2f7ace5b190dc86b5f86983aa62aae5e40652"
+    "proof": "before publish, verify the annotated tag and candidate are ancestors of protected main; after npm/GitHub/install proof, stamp release_candidate and source_checkout states to published on main without moving the release tag"
   },
   "releaseStages": {
     "launchCutLine": "1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not full signed desktop maturity.",
@@ -99,23 +99,23 @@
   "updateChannels": {
     "cli": {
       "requiredForThisRelease": true,
-      "state": "published",
+      "state": "source_checkout",
       "version": "v1.0.3",
-      "rollback": "git reset --hard refs/tags/v1.0.2",
+      "rollback": "npm dist-tag add neondiff@1.0.2 latest",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "daemon": {
       "requiredForThisRelease": true,
-      "state": "published",
+      "state": "source_checkout",
       "version": "v1.0.3",
-      "rollback": "git reset --hard refs/tags/v1.0.2",
+      "rollback": "npm install -g neondiff@1.0.2",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "browserDashboard": {
       "requiredForThisRelease": true,
-      "state": "published",
+      "state": "source_checkout",
       "version": "v1.0.3",
-      "rollback": "git reset --hard refs/tags/v1.0.2",
+      "rollback": "npm install -g neondiff@1.0.2",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
       "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
     }

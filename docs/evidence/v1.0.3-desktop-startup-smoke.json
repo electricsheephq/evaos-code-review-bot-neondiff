@@ -17,6 +17,13 @@
   },
   "macos15ReleaseSmoke": {
     "workflowRun": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29049779156",
+    "workflowHead": "9eba343c8e69e832978e51c0fb63527b61939760",
+    "appArtifactId": 8211347648,
+    "appArtifactName": "neondiff-desktop-unsigned-app",
+    "appArchiveName": "NeonDiffDesktop.app.zip",
+    "appArchiveSha256": "f546568f0e10ebc7abd4adcf99cc40af8a96ad635bf3fbb6333195d0a8d1a7e7",
+    "metadataArtifactId": 8211347876,
+    "metadataArtifactName": "neondiff-desktop-release-smoke-metadata",
     "coreChecksCompiled": true,
     "keychainChecksCompiled": true,
     "appcastChecksPassed": true,
@@ -28,5 +35,11 @@
     "credentialsRemoved": true,
     "privateRepoNamesOmitted": true
   },
-  "proofBoundary": "Visible local proof covers the named unsigned bundle only. macOS 15 hosted proof covers compilation, bundle shape, and packaging only. Neither proves signing, notarization, Sparkle updates, or customer-ready installation."
+  "artifactRelationship": {
+    "visibleLocalBundleSourceIsCandidateAncestor": true,
+    "hostedWorkflowSourceIsCandidateAncestor": true,
+    "visibleLocalBinaryIsHostedArtifact": false,
+    "note": "The visible local smoke and hosted unsigned workflow are separate named artifacts from reviewed ancestors of the merged candidate; their hashes are intentionally recorded separately."
+  },
+  "proofBoundary": "Visible local proof covers the named unsigned local binary at sourceHead only. The hosted macOS 15 artifact is separately identified by workflow head, artifact IDs, and archive SHA and covers compilation, bundle shape, and packaging only. Neither proves signing, notarization, Sparkle updates, or customer-ready installation."
 }

@@ -359,17 +359,20 @@ describe("beta release status", () => {
         expect.objectContaining({
           name: "cli",
           requiredForThisRelease: true,
-          rollback: "git reset --hard refs/tags/v1.0.2"
+          state: "source_checkout",
+          rollback: "npm dist-tag add neondiff@1.0.2 latest"
         }),
         expect.objectContaining({
           name: "daemon",
           requiredForThisRelease: true,
-          rollback: "git reset --hard refs/tags/v1.0.2"
+          state: "source_checkout",
+          rollback: "npm install -g neondiff@1.0.2"
         }),
         expect.objectContaining({
           name: "browserDashboard",
           requiredForThisRelease: true,
-          rollback: "git reset --hard refs/tags/v1.0.2",
+          state: "source_checkout",
+          rollback: "npm install -g neondiff@1.0.2",
           rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff"
         })
       ])
@@ -516,15 +519,15 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({
       name: "public_update_channels",
       ok: true,
-      detail: "cli=published; daemon=published; browserDashboard=published"
+      detail: "cli=source_checkout; daemon=source_checkout; browserDashboard=source_checkout"
     });
     const redactedOutput = stringifyRedactedJson({
       ...status,
       healthState: status.ok ? "runtime_ok" : "runtime_blocked",
       runtimeOk: status.ok
     });
-    expect(redactedOutput).toContain("git reset --hard refs/tags/v1.0.2");
-    expect(redactedOutput).toContain("cli=published; daemon=published");
+    expect(redactedOutput).toContain("npm dist-tag add neondiff@1.0.2 latest");
+    expect(redactedOutput).toContain("cli=source_checkout; daemon=source_checkout");
     expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327");
     expect(redactedOutput).toContain("electricsheephq/evaos-code-review-bot-neondiff/issues/443");
   });

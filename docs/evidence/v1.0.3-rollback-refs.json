@@ -5,24 +5,24 @@
   "channels": {
     "cli": {
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
-      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "rollbackCommand": "npm dist-tag add neondiff@1.0.2 latest",
       "rollbackTarget": "v1.0.2",
-      "targetVerifiedBy": "git ls-remote origin refs/tags/v1.0.2",
-      "targetVerifiedSha": "bf76be80ccb573dde7b3ca0d0c2d6883259093fe"
+      "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
+      "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
     },
     "daemon": {
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
-      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "rollbackCommand": "npm install -g neondiff@1.0.2",
       "rollbackTarget": "v1.0.2",
-      "targetVerifiedBy": "git ls-remote origin refs/tags/v1.0.2",
-      "targetVerifiedSha": "bf76be80ccb573dde7b3ca0d0c2d6883259093fe"
+      "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
+      "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
     },
     "browserDashboard": {
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
-      "rollbackCommand": "git reset --hard refs/tags/v1.0.2",
+      "rollbackCommand": "npm install -g neondiff@1.0.2",
       "rollbackTarget": "v1.0.2",
-      "targetVerifiedBy": "git ls-remote origin refs/tags/v1.0.2",
-      "targetVerifiedSha": "bf76be80ccb573dde7b3ca0d0c2d6883259093fe"
+      "targetVerifiedBy": "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
+      "targetVerifiedShasum": "d62619b1ee2c539e3230572135a29a299be3a6ed"
     },
     "website": {
       "rollbackRepository": "electricsheephq/neon-diff-agent-website",
@@ -34,5 +34,5 @@
       "targetSubject": "v1.0.3 keeps the previously published website installer; npm latest promotion supplies the new package version."
     }
   },
-  "proofBoundary": "Rollback refs are repo-scoped. v1.0.3 does not advance the website channel, so website rollback is intentionally no-op for this release."
+  "proofBoundary": "npm is immutable: rollback moves latest to v1.0.2 and reinstalls v1.0.2 for affected local daemon/dashboard surfaces. The v1.0.3 package and tag remain as incident provenance. v1.0.3 does not advance the website channel, so website rollback is intentionally no-op."
 }
