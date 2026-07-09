@@ -407,6 +407,9 @@ describe("NeonDiff public release readiness", () => {
     const publish = read(".github/workflows/publish-npm.yml");
 
     expect(ci).toMatch(/node-version:\s*26/);
+    expect(ci).toContain("actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5");
+    expect(ci).toContain("actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5");
+    expect(ci).not.toMatch(/uses:\s*actions\/(?:checkout|setup-node)@v\d+/);
     expect(ci).toMatch(/npm ci/);
     expect(ci).toMatch(/npm run build/);
     expect(ci).toMatch(/tests\/public-release-readiness\.test\.ts/);
@@ -415,6 +418,9 @@ describe("NeonDiff public release readiness", () => {
     expect(ci).toMatch(/secret/i);
 
     expect(publish).toMatch(/id-token:\s*write/);
+    expect(publish).toContain("actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5");
+    expect(publish).toContain("actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5");
+    expect(publish).not.toMatch(/uses:\s*actions\/(?:checkout|setup-node)@v\d+/);
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/Verify npm publish token is configured/);
     expect(publish).toMatch(/NPM_TOKEN Actions secret is not configured; publish cannot continue/);
