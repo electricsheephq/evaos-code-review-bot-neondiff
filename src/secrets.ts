@@ -32,7 +32,9 @@ const SAFE_ENV_VAR_NAMES = [
   "NEONDIFF_ALLOW_REMOTE_SMOKE"
 ];
 const SAFE_STRUCTURAL_VALUES = [
-  "missing_secret_env"
+  "missing_secret_env",
+  "neondiff-openwiki-context-ab-v0.1",
+  "neondiff-openwiki-docs-drift-v0.1"
 ];
 const SAFE_REDACTION_LITERALS = [
   ...SAFE_ENV_VAR_NAMES,

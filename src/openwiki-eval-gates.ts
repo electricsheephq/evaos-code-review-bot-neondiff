@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
-import { parseFindings } from "./findings.js";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  countEvalFalsePositiveSeverities,
   runOfflineEval,
   type EvalLabelInput,
   type EvalRunResult,
@@ -11,7 +11,7 @@ import {
   type EvalSuiteName
 } from "./eval-harness.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
-import type { Finding, Severity } from "./types.js";
+import type { Severity } from "./types.js";
 import type { RepoWikiPacket } from "./repo-wiki-packet.js";
 
 export type RepoWikiEvalMode = "baseline" | "deterministic" | "openwiki";
@@ -412,53 +412,7 @@ function buildAbGates(input: {
 }
 
 function countFalsePositiveSeverities(botFindings: unknown, labels: EvalLabelInput[]): Record<Severity, number> {
-  const findings = parseFindings(botFindings).findings;
-  const matchedFindingIndexes = new Set<number>();
-  const usedLabelIndexes = new Set<number>();
-  const candidates = labels.flatMap((label, labelIndex) => findings
-    .map((finding, findingIndex) => ({ finding, findingIndex, label, labelIndex, kind: classifyMatch(finding, label) }))
-    .filter((candidate) => candidate.kind !== undefined));
-  candidates.sort((a, b) =>
-    matchRank(a.kind!) - matchRank(b.kind!) ||
-    Math.abs(a.finding.line - a.label.line) - Math.abs(b.finding.line - b.label.line) ||
-    b.finding.confidence - a.finding.confidence
-  );
-  for (const candidate of candidates) {
-    if (matchedFindingIndexes.has(candidate.findingIndex) || usedLabelIndexes.has(candidate.labelIndex)) continue;
-    matchedFindingIndexes.add(candidate.findingIndex);
-    usedLabelIndexes.add(candidate.labelIndex);
-  }
-  const counts: Record<Severity, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
-  findings.forEach((finding, index) => {
-    if (!matchedFindingIndexes.has(index)) counts[finding.severity] += 1;
-  });
-  return counts;
-}
-
-function classifyMatch(finding: Finding, label: EvalLabelInput): "exact_line" | "nearby_line" | "semantic" | undefined {
-  if (finding.severity !== label.severity || finding.path !== label.path) return undefined;
-  const overlap = tokenOverlap(finding, label);
-  if (finding.line === label.line && overlap >= 0.25) return "exact_line";
-  if (Math.abs(finding.line - label.line) <= 3 && overlap >= 0.35) return "nearby_line";
-  if (overlap >= 0.55) return "semantic";
-  return undefined;
-}
-
-function matchRank(kind: "exact_line" | "nearby_line" | "semantic"): number {
-  if (kind === "exact_line") return 0;
-  if (kind === "nearby_line") return 1;
-  return 2;
-}
-
-function tokenOverlap(a: Pick<Finding | EvalLabelInput, "title" | "body">, b: Pick<Finding | EvalLabelInput, "title" | "body">): number {
-  const aTokens = tokenize(`${a.title} ${a.body}`);
-  const bTokens = tokenize(`${b.title} ${b.body}`);
-  if (aTokens.size === 0 || bTokens.size === 0) return 0;
-  return [...aTokens].filter((token) => bTokens.has(token)).length / Math.min(aTokens.size, bTokens.size);
-}
-
-function tokenize(text: string): Set<string> {
-  return new Set(text.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 4));
+  return countEvalFalsePositiveSeverities(botFindings, labels);
 }
 
 function readRepoWikiPacket(input: DocsDriftEvalInput): {
@@ -469,14 +423,11 @@ function readRepoWikiPacket(input: DocsDriftEvalInput): {
   includedSourceFiles: string[];
   sectionIdsBySourcePath: Map<string, string[]>;
 } {
-  const absolutePath = resolve(input.worktreePath, input.packetPath);
-  if (!isInside(input.worktreePath, absolutePath)) {
-    return { ok: false, error: "packetPath must resolve inside worktreePath", includedSourceFiles: [], sectionIdsBySourcePath: new Map() };
+  const packetPath = resolveExistingFileInside(input.worktreePath, input.packetPath, "packetPath");
+  if (!packetPath.ok) {
+    return { ok: false, error: packetPath.error, includedSourceFiles: [], sectionIdsBySourcePath: new Map() };
   }
-  if (!existsSync(absolutePath)) {
-    return { ok: false, error: "packetPath does not exist", includedSourceFiles: [], sectionIdsBySourcePath: new Map() };
-  }
-  const raw = readFileSync(absolutePath, "utf8");
+  const raw = readFileSync(packetPath.path, "utf8");
   if (containsSecretLikeText(raw)) {
     return { ok: false, error: "packet contains secret-like text", includedSourceFiles: [], sectionIdsBySourcePath: new Map() };
   }
@@ -548,15 +499,15 @@ function evaluateDocsDriftClaim(input: {
       ? {
           suggestion: {
             claimId: input.claim.id,
-            docPath: input.claim.docPath,
+            docPath: redactSecrets(input.claim.docPath),
             line: input.claim.line,
-            currentClaim: input.claim.claim,
-            suggestedText: input.claim.suggestion,
+            currentClaim: redactSecrets(input.claim.claim),
+            suggestedText: redactSecrets(input.claim.suggestion),
             sourceCitation: {
-              path: input.claim.sourcePath,
-              text: input.claim.currentText
+              path: redactSecrets(input.claim.sourcePath),
+              text: redactSecrets(input.claim.currentText)
             },
-            packetSectionIds
+            packetSectionIds: packetSectionIds.map(redactSecrets)
           }
         }
       : {})
@@ -564,10 +515,10 @@ function evaluateDocsDriftClaim(input: {
 }
 
 function readWorktreeFile(worktreePath: string, relativePath: string): string {
-  const absolutePath = resolve(worktreePath, relativePath);
-  if (!isInside(worktreePath, absolutePath)) return "";
+  const filePath = resolveExistingFileInside(worktreePath, relativePath, "path");
+  if (!filePath.ok) return "";
   try {
-    return readFileSync(absolutePath, "utf8");
+    return readFileSync(filePath.path, "utf8");
   } catch {
     return "";
   }
@@ -667,11 +618,34 @@ function roundMetric(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function isInside(rootPath: string, candidatePath: string): boolean {
-  const root = resolve(rootPath);
-  const candidate = resolve(candidatePath);
-  const rel = relative(root, candidate);
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(`/`) && basename(rel) !== "");
+function resolveExistingFileInside(
+  rootPath: string,
+  candidatePath: string,
+  label: string
+): { ok: true; path: string } | { ok: false; error: string } {
+  const resolvedRoot = resolve(rootPath);
+  const resolvedCandidate = resolve(resolvedRoot, candidatePath);
+  const lexicalRelation = relative(resolvedRoot, resolvedCandidate);
+  if (lexicalRelation === "" || lexicalRelation.startsWith("..") || isAbsolute(lexicalRelation)) {
+    return { ok: false, error: `${label} must resolve inside worktreePath` };
+  }
+  if (!existsSync(resolvedCandidate)) {
+    return { ok: false, error: `${label} does not exist` };
+  }
+  try {
+    const realRoot = realpathSync(resolvedRoot);
+    const realCandidate = realpathSync(resolvedCandidate);
+    const realRelation = relative(realRoot, realCandidate);
+    if (realRelation === "" || realRelation.startsWith("..") || isAbsolute(realRelation)) {
+      return { ok: false, error: `${label} must resolve inside worktreePath` };
+    }
+    if (!statSync(realCandidate).isFile()) {
+      return { ok: false, error: `${label} must point to a file` };
+    }
+    return { ok: true, path: realCandidate };
+  } catch (error) {
+    return { ok: false, error: `${label} could not be resolved safely: ${error instanceof Error ? error.message : String(error)}` };
+  }
 }
 
 function codeUnitCompare(left: string, right: string): number {

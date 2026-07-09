@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   type RepoWikiContextAbEvalInput
 } from "../src/openwiki-eval-gates.js";
 import { buildRepoWikiPacket, formatRepoWikiPacketJson } from "../src/repo-wiki-packet.js";
+import { containsSecretLikeText } from "../src/secrets.js";
 
 const generatedAt = "2026-07-09T09:10:00.000Z";
 const repo = "electricsheephq/evaos-code-review-bot-neondiff";
@@ -31,6 +32,7 @@ describe("OpenWiki eval gates", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(containsSecretLikeText(JSON.stringify(result.summary))).toBe(false);
     expect(result.summary.comparisons.openwiki).toMatchObject({
       precisionDelta: 0,
       p0p1FalsePositiveDelta: 0
@@ -68,6 +70,47 @@ describe("OpenWiki eval gates", () => {
     }));
   });
 
+  it("counts expected-false labels the same way as the core scorecard", () => {
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-ab-expected-false-"));
+    roots.push(outputRoot);
+    const input = buildAbInput();
+    input.labels.push({
+      source: "seeded_defect",
+      severity: "P1",
+      path: "src/worker.ts",
+      line: 33,
+      title: "Provider fallback leaks paid tokens",
+      body: "This label is an explicit non-finding and must not match false positives.",
+      sourceId: "seed-expected-false",
+      expected: false
+    });
+    input.modes.openwiki.botFindings = {
+      findings: [
+        buildReviewFinding(),
+        {
+          severity: "P1",
+          path: "src/worker.ts",
+          line: 33,
+          title: "Provider fallback leaks paid tokens",
+          body: "This label is an explicit non-finding and must not match false positives.",
+          confidence: 0.9
+        }
+      ]
+    };
+
+    const result = runRepoWikiContextAbEval(input, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.summary.modes.openwiki.scorecard.counts.falsePositive).toBe(1);
+    expect(result.summary.modes.openwiki.p0p1FalsePositives).toBe(1);
+    expect(result.summary.gates).toContainEqual(expect.objectContaining({
+      name: "openwiki_no_p0_p1_false_positive_regression",
+      ok: false
+    }));
+  });
+
   it("passes docs-drift eval with source-cited suggestions and true-claim traps", () => {
     const { packetPath, root } = createDocsDriftFixture();
     const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-pass-"));
@@ -86,6 +129,7 @@ describe("OpenWiki eval gates", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(containsSecretLikeText(JSON.stringify(result.summary))).toBe(false);
     expect(result.summary.counts).toMatchObject({
       staleCaught: 5,
       materialFalsePositives: 0,
@@ -121,6 +165,183 @@ describe("OpenWiki eval gates", () => {
       name: "false_positive_limit",
       ok: false
     }));
+  });
+
+  it("rejects packet paths that resolve outside the worktree", () => {
+    const { root } = createDocsDriftFixture();
+    const outsideRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-outside-"));
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-outside-result-"));
+    roots.push(root, outsideRoot, outputRoot);
+    writeFileSync(join(outsideRoot, "packet.json"), "{}", "utf8");
+
+    const result = runDocsDriftEval({
+      runId: "packet-outside-worktree",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath: `../${outsideRoot.split("/").at(-1)}/packet.json`,
+      claims: buildDocsDriftClaims()
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.gates).toContainEqual(expect.objectContaining({
+      name: "packet_readable",
+      ok: false
+    }));
+  });
+
+  it("rejects symlinked packets that escape the worktree", () => {
+    const { root } = createDocsDriftFixture();
+    const outsideRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-symlink-outside-"));
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-symlink-result-"));
+    roots.push(root, outsideRoot, outputRoot);
+    const outsidePacket = join(outsideRoot, "packet.json");
+    writeFileSync(outsidePacket, formatRepoWikiPacketJson(buildRepoWikiPacket({
+      repo: { fullName: repo, defaultBranch: "main" },
+      source: { ref: "main", headSha, checkedAt: generatedAt, status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 12_000 },
+      sections: [{
+        id: "external",
+        title: "External Packet",
+        body: "This packet lives outside the worktree.",
+        sourceFiles: ["src/repo-wiki-context.ts"]
+      }]
+    })), "utf8");
+    symlinkSync(outsidePacket, join(root, ".neondiff", "linked-packet.json"));
+
+    const result = runDocsDriftEval({
+      runId: "packet-symlink-escape",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath: ".neondiff/linked-packet.json",
+      claims: buildDocsDriftClaims()
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.gates).toContainEqual(expect.objectContaining({
+      name: "packet_readable",
+      ok: false
+    }));
+  });
+
+  it("fails closed instead of throwing when packetPath resolves to the worktree root", () => {
+    const { root } = createDocsDriftFixture();
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-root-packet-"));
+    roots.push(root, outputRoot);
+
+    const result = runDocsDriftEval({
+      runId: "packet-root-path",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath: ".",
+      claims: buildDocsDriftClaims()
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.gates).toContainEqual(expect.objectContaining({
+      name: "packet_readable",
+      ok: false
+    }));
+  });
+
+  it("marks missing, malformed, and secret-like packets unreadable", () => {
+    const malformed = createDocsDriftFixture();
+    const secret = createDocsDriftFixture();
+    const missing = createDocsDriftFixture();
+    const malformedOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-malformed-"));
+    const secretOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-secret-"));
+    const missingOutput = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-missing-"));
+    roots.push(
+      malformed.root,
+      secret.root,
+      missing.root,
+      malformedOutput,
+      secretOutput,
+      missingOutput
+    );
+    writeFileSync(join(malformed.root, malformed.packetPath), "{not json", "utf8");
+    writeFileSync(join(secret.root, secret.packetPath), "{\"token\":\"ghp_1234567890abcdef\"}", "utf8");
+
+    const cases = [
+      { fixture: malformed, outputRoot: malformedOutput },
+      { fixture: secret, outputRoot: secretOutput },
+      { fixture: { root: missing.root, packetPath: ".neondiff/missing.json" }, outputRoot: missingOutput }
+    ];
+
+    for (const [index, item] of cases.entries()) {
+      const result = runDocsDriftEval({
+        runId: `packet-unreadable-${index}`,
+        repo,
+        headSha,
+        worktreePath: item.fixture.root,
+        packetPath: item.fixture.packetPath,
+        claims: buildDocsDriftClaims()
+      }, {
+        outputRoot: item.outputRoot,
+        now: new Date(generatedAt)
+      });
+      expect(result.ok).toBe(false);
+      expect(result.summary.gates).toContainEqual(expect.objectContaining({
+        name: "packet_readable",
+        ok: false
+      }));
+    }
+  });
+
+  it("redacts secret-like text before writing docs-drift artifacts", () => {
+    const { packetPath, root } = createDocsDriftFixture();
+    const outputRoot = mkdtempSync(join(tmpdir(), "neondiff-docs-drift-redaction-"));
+    roots.push(root, outputRoot);
+    const secret = "ghp_1234567890abcdef";
+    writeFileSync(
+      join(root, "docs", "repo-wiki-packet.md"),
+      "The documented token is stale.\n",
+      "utf8"
+    );
+    writeFileSync(
+      join(root, "src", "repo-wiki-context.ts"),
+      `export const secretExample = '${secret}';\n`,
+      "utf8"
+    );
+
+    const result = runDocsDriftEval({
+      runId: "docs-drift-redaction",
+      repo,
+      headSha,
+      worktreePath: root,
+      packetPath,
+      thresholds: { minStaleCaught: 1 },
+      claims: [{
+        id: "secret-redaction",
+        expected: "stale",
+        docPath: "docs/repo-wiki-packet.md",
+        line: 1,
+        claim: "The documented token is stale.",
+        sourcePath: "src/repo-wiki-context.ts",
+        currentText: secret,
+        suggestion: secret
+      }]
+    }, {
+      outputRoot,
+      now: new Date(generatedAt)
+    });
+
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result.summary)).not.toContain(secret);
+    expect(readFileSync(result.artifacts["suggested-doc-edits.md"]!, "utf8")).not.toContain(secret);
+    expect(readFileSync(result.artifacts["docs-drift-summary.json"]!, "utf8")).toContain("[redacted-secret]");
   });
 });
 

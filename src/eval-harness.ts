@@ -448,6 +448,23 @@ export function runOfflineEval(input: EvalScenarioInput, options: EvalRunOptions
   };
 }
 
+export function countEvalFalsePositiveSeverities(
+  botFindingsInput: unknown,
+  labelsInput: EvalLabelInput[]
+): Record<Severity, number> {
+  const parsedBot = parseFindings(botFindingsInput);
+  const botFindings = parsedBot.findings.map((finding, index) => normalizeFinding(finding, "bot", `bot-${index + 1}`));
+  const labels = labelsInput
+    .filter((label) => label.expected !== false)
+    .map((label, index) => normalizeFinding(label, label.source, `label-${index + 1}`));
+  const matchedBotIds = new Set(matchFindings(botFindings, labels).map((match) => match.botFindingId));
+  const counts: Record<Severity, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const finding of botFindings) {
+    if (!matchedBotIds.has(finding.id)) counts[finding.severity] += 1;
+  }
+  return counts;
+}
+
 export function runStickyVsColdEval(
   input: StickyVsColdScenarioInput,
   options: { outputRoot?: string; now?: Date } = {}
