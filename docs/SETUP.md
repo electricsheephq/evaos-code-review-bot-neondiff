@@ -1,6 +1,6 @@
 # NeonDiff Setup
 
-This guide is the first-run path for the current source-available beta. The
+This guide is the first-run path for the current source-available release. The
 recommended path installs the `neondiff` npm package; source checkout remains a
 fallback for contributors and reviewers who want to inspect or build locally. See
 [LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
@@ -27,12 +27,6 @@ unlimited SaaS inference, or bundled provider tokens.
 ## 1. Install NeonDiff
 
 Recommended package install:
-
-```bash
-npm install -g neondiff@0.4.30-beta.1
-```
-
-GA/latest package install path after the `v1.0.0` dist-tag cutover:
 
 ```bash
 npm install -g neondiff

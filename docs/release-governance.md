@@ -67,8 +67,10 @@ NeonDiff publishes to npm under two dist-tags:
 At GA cutover, `latest` is repointed to the stable GA release so that a
 plain `npm install -g neondiff` (no tag suffix) installs GA, and `beta`
 keeps tracking whatever prerelease train is active after GA (for example, a
-`v1.1.0-beta.N` line preparing the next minor). The cutover step is a single
-explicit command run once the GA package version is published:
+`v1.1.0-beta.N` line preparing the next minor). The publish workflow should
+publish non-prerelease tags with the `latest` npm dist-tag. If the package was
+published through another path or the tag needs repair, the explicit cutover
+command is:
 
 ```bash
 npm dist-tag add neondiff@<ga> latest
@@ -156,6 +158,23 @@ Before tagging:
      `git reset --hard refs/tags/<tag>` or `git revert <sha>`
 7. `git status --short` is clean in the live checkout.
 
+For npm-published releases, confirm the repository or organization Actions
+secret `NPM_TOKEN` exists before publishing. Verify only the secret name and
+workflow preflight status; never print, echo, upload, or paste the token value.
+The publish workflow fails early in `Verify npm publish token is configured`
+when the secret is absent so release captains do not spend a full release cycle
+before discovering npm authentication is missing.
+
+The required GitHub Actions paths should pin official action majors to immutable
+release commit SHAs while staying compatible with the GitHub Actions Node 24
+runtime and the project runtime installed by each workflow. The public CI and
+npm publish workflows currently use the approved v5.0.0 release commits for
+`actions/checkout` and `actions/setup-node`, and they continue to install
+Node.js 26 for NeonDiff itself. Runner fleets must be on GitHub Actions runner
+`v2.327.1` or newer for those actions. Pinned Swift or desktop smoke actions
+that still target the older action runtime are post-launch desktop-release
+hygiene unless they block the current release.
+
 The manifest `rollback` field is intentionally only the source-revert step.
 Full operator rollback runbooks may restart launchd after that source revert,
 but restart commands live outside the manifest rollback field. `launchctl
@@ -175,6 +194,13 @@ git pull --ff-only origin main
 git tag -a vX.Y.Z-beta.N <source-sha> -m "vX.Y.Z-beta.N"
 git push origin vX.Y.Z-beta.N
 ```
+
+If a GitHub Release exists but the npm publish workflow fails before publishing,
+repair the workflow or secret state, then rerun the `Publish npm` workflow for
+the exact release tag. Do not create a replacement tag for the same source SHA
+solely to retry publishing. Record the failed run URL, rerun URL, registry
+inventory, and final `npm view neondiff version dist-tags --json` output in the
+release tracker.
 
 Create the GitHub prerelease from the release packet:
 

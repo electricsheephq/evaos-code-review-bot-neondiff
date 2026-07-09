@@ -31,7 +31,7 @@ describe("NeonDiff public community funnel", () => {
       /30-day trial/i,
       /legacy lifetime licenses remain honored/i,
       /private.*commercial.*paid/i,
-      /source-available beta/i,
+      /source-available commercial software/i,
       /GitHub App/i,
       /dry-run review/i,
       /electricsheephq\/evaos-code-review-bot-neondiff\/issues\/103/i,
@@ -64,7 +64,7 @@ describe("NeonDiff public community funnel", () => {
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
 
     for (const text of [license, boundary]) {
-      expect(text).toMatch(/source-available beta/i);
+      expect(text).toMatch(/source-available commercial software/i);
       expect(text).toMatch(/Public open-source repositor(?:y|ies).*free/i);
       expect(text).toMatch(/private/i);
       expect(text).toMatch(/commercial/i);
@@ -296,12 +296,12 @@ describe("NeonDiff public community funnel", () => {
     };
 
     expect(scorecard.current_score).toBe("pass");
-    expect(scorecard.surface).toBe("NeonDiff source-available beta repository");
+    expect(scorecard.surface).toBe("NeonDiff source-available commercial repository");
     expect(JSON.stringify(scorecard.pass_criteria)).toMatch(/README/i);
     expect(JSON.stringify(scorecard.pass_criteria)).toMatch(/CONTRIBUTING/i);
     expect(JSON.stringify(scorecard.pass_criteria)).toMatch(/AGENTS/i);
     expect(JSON.stringify(scorecard.pass_criteria)).toMatch(/issue templates/i);
-    expect(String(scorecard.proof_boundary)).toMatch(/does not prove public launch/i);
+    expect(String(scorecard.proof_boundary)).toMatch(/does not by itself prove completed public launch/i);
   });
 
   it("launch-influx docs separate provider proof, triage, security, and support boundaries", () => {
