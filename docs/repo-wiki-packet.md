@@ -50,6 +50,21 @@ Inputs are normalized deterministically:
 - source file lists are trimmed, de-duplicated, and sorted.
 - sections sort by `order`, then `id`.
 
+## OpenWiki-Derived Packets
+
+`src/openwiki-derived-packet.ts` curates an existing `openwiki/**` tree into the
+same deterministic packet model. It does not run OpenWiki or call a model. It
+reads Markdown pages under `openwiki/`, excludes `openwiki/_review/**`
+suggestions, extracts `## Source map` bullets as provenance, and redacts
+secret-like environment variable names before packet construction.
+
+Freshness is source-backed: the packet is `fresh` only when
+`openwiki/.last-update.json` records the current head SHA and the worktree has no
+non-`openwiki/**` changes. The packet's own `.neondiff/**` output artifacts are
+excluded from this dirty-worktree check so reruns do not make themselves stale.
+Missing or mismatched metadata produces stale or missing degraded packets, which
+the runtime omits unless stale context is explicitly allowed.
+
 ## Budgets And Redaction
 
 The builder caps section bodies by UTF-8 byte length without splitting a
@@ -118,3 +133,9 @@ This integration does not run OpenWiki during live review, mutate repository
 files, change GitHub comment posting behavior, alter checks, or make repo-wiki
 context authoritative. OpenWiki-generated files remain confined to
 `openwiki/**`; suggestions for other docs are report-only.
+
+The OpenWiki-derived packet builder is an offline/lab helper for producing the
+prebuilt packet consumed by this seam. Runtime wiring that invokes OpenWiki
+during a review is intentionally deferred to a later lab-enablement issue; live
+review workers should continue to read only a prepared packet from the PR
+worktree.

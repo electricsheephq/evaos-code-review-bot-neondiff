@@ -91,6 +91,63 @@ describe("repo wiki packets", () => {
     );
   });
 
+  it("preserves caller sourceSha and records emitted body hashes separately", () => {
+    const packet = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "feature/wiki", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 1_000, maxTokens: 300, maxSectionBytes: 12 },
+      sections: [
+        section({
+          id: "provenance",
+          title: "Provenance",
+          body: "Source file body that will be truncated.",
+          sourceSha: "source-file-sha"
+        })
+      ]
+    });
+    const included = packet.includedSections[0];
+    const markdown = formatRepoWikiPacketMarkdown(packet);
+
+    expect(included?.sourceSha).toBe("source-file-sha");
+    expect(included?.emittedBodySha).toBe(sha256(included?.body ?? ""));
+    expect(included?.emittedBodySha).not.toBe(included?.sourceSha);
+    expect(markdown).toContain("source_sha=source-file-sha");
+    expect(markdown).toContain(`emitted_body_sha=${included?.emittedBodySha}`);
+  });
+
+  it("counts redactions only from sections accepted after packet budgeting", () => {
+    const packet = buildRepoWikiPacket({
+      repo: { fullName: "electricsheephq/evaos-code-review-bot" },
+      source: { ref: "feature/wiki", status: "fresh" },
+      generatedAt,
+      budget: { maxBytes: 700, maxTokens: 300, maxSectionBytes: 48 },
+      sections: [
+        section({
+          id: "kept",
+          title: "Kept notes",
+          order: 1,
+          body: "A".repeat(200)
+        }),
+        section({
+          id: "dropped",
+          title: "Dropped notes",
+          order: 2,
+          body: "B".repeat(200),
+          preRedactionReplacementCount: 5
+        })
+      ]
+    });
+
+    expect(packet.includedSections.map((included) => included.id)).toEqual(["kept"]);
+    expect(packet.excludedSections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "dropped", reason: "packet_budget_exceeded" })
+      ])
+    );
+    expect(packet.redaction).toEqual({ status: "passed", replacementCount: 0 });
+  });
+
   it("redacts token-like strings from markdown and JSON payloads", () => {
     const token = "ghp_fake_token";
     const packet = buildRepoWikiPacket({
@@ -570,13 +627,17 @@ function section(input: {
   body: string;
   order?: number;
   sourceFiles?: string[];
+  sourceSha?: string;
+  preRedactionReplacementCount?: number;
 }) {
   return {
     id: input.id,
     title: input.title,
     body: input.body,
     order: input.order,
-    sourceFiles: input.sourceFiles ?? ["README.md", "AGENTS.md", "src/worker.ts", "src/cli.ts", "tests/repo-wiki-packet.test.ts"]
+    sourceFiles: input.sourceFiles ?? ["README.md", "AGENTS.md", "src/worker.ts", "src/cli.ts", "tests/repo-wiki-packet.test.ts"],
+    sourceSha: input.sourceSha,
+    preRedactionReplacementCount: input.preRedactionReplacementCount
   };
 }
 
