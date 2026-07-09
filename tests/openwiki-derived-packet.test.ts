@@ -172,12 +172,12 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(body).not.toContain("ZAI_TOKEN");
     expect(body).not.toContain("api_key");
     expect(body).not.toContain("openrouter_api_key");
-    expect(body).toContain("zcodeToken");
+    expect(body).not.toContain("zcodeToken");
     expect(body).not.toContain("privateKey");
     expect(body).toContain("TOKEN, SECRET, PASSWORD, COOKIE, and SESSION should stay readable.");
     expect(packet.redaction).toMatchObject({
       status: "redacted",
-      replacementCount: 7
+      replacementCount: 8
     });
   });
 
@@ -241,6 +241,57 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(json).not.toContain(secret);
     expect(json).not.toContain(unprefixedSecret);
     expect(packet.redaction.status).toBe("redacted");
+  });
+
+  it("redacts assignment values with spaces without rescanning placeholders", () => {
+    const { head, root } = createRepoWithOpenWiki({
+      openWikiBody: [
+        "# Provider setup",
+        "",
+        "MY_DB_PASSWORD=plaintext value here",
+        "OPENWIKI_SESSION_COOKIE=plaintextvalue123456",
+        ""
+      ].join("\n")
+    });
+    roots.push(root);
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+    const body = packet.includedSections[0]?.body ?? "";
+
+    expect(body).toContain("[redacted-secret]");
+    expect(body).not.toContain("MY_DB_PASSWORD");
+    expect(body).not.toContain("plaintext value here");
+    expect(body).not.toContain("OPENWIKI_SESSION_COOKIE");
+    expect(body).not.toContain("plaintextvalue123456");
+    expect(body).not.toContain("[[redacted-secret]]");
+    expect(packet.redaction).toMatchObject({
+      status: "redacted",
+      replacementCount: 2
+    });
+  });
+
+  it("marks packets stale with explicit git HEAD reason when default head lookup fails", () => {
+    const { root } = createRepoWithOpenWiki();
+    roots.push(root);
+    rmSync(join(root, ".git"), { recursive: true, force: true });
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "Unable to read git HEAD; regenerate OpenWiki before building a packet."
+    });
   });
 
   it("preserves source provenance and separately hashes the emitted truncated section body", () => {
