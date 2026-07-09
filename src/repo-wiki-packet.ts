@@ -227,16 +227,15 @@ export function buildRepoWikiPacket(input: BuildRepoWikiPacketInput): RepoWikiPa
     const redactedBody = redactAndCount(section.body, sectionRedactionCounter);
     const redactedSourceFileResults = section.sourceFiles.map((file) => redactAndCount(file, sectionRedactionCounter));
     const redactedSourceFiles = normalizeSourceFiles(redactedSourceFileResults.map((file) => file.text));
-    const redactedSourceShaResult = section.sourceSha ? redactAndCount(section.sourceSha, sectionRedactionCounter) : undefined;
-    const redactedSourceSha = redactedSourceShaResult?.text;
     const cappedBody = truncateUtf8Bytes(redactedBody.text, maxSectionBytes);
+    const emittedSourceSha = section.sourceSha ? sha256(cappedBody) : undefined;
     const included: RepoWikiIncludedSection = {
       id: section.id,
       title: redactedTitle.text,
       body: cappedBody,
       order: section.order,
       sourceFiles: redactedSourceFiles,
-      ...(redactedSourceSha ? { sourceSha: redactedSourceSha } : {}),
+      ...(emittedSourceSha ? { sourceSha: emittedSourceSha } : {}),
       byteLength: Buffer.byteLength(cappedBody, "utf8"),
       tokenEstimate: tokenEstimateForBytes(Buffer.byteLength(cappedBody, "utf8")),
       truncated: cappedBody !== redactedBody.text,

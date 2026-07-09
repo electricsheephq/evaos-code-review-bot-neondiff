@@ -135,6 +135,7 @@ describe("OpenWiki-derived repo-wiki packets", () => {
         "# Provider setup",
         "",
         "Use API_KEY, PRIVATE_KEY, SESSION_COOKIE, and ZAI_TOKEN only in GitHub secrets.",
+        "Also keep api_key, openrouter_api_key, zcodeToken, and privateKey out of docs.",
         "Bare prose words like TOKEN, SECRET, PASSWORD, COOKIE, and SESSION should stay readable.",
         ""
       ].join("\n")
@@ -155,11 +156,41 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(body).not.toContain("PRIVATE_KEY");
     expect(body).not.toContain("SESSION_COOKIE");
     expect(body).not.toContain("ZAI_TOKEN");
+    expect(body).not.toContain("api_key");
+    expect(body).not.toContain("openrouter_api_key");
+    expect(body).not.toContain("zcodeToken");
+    expect(body).not.toContain("privateKey");
     expect(body).toContain("TOKEN, SECRET, PASSWORD, COOKIE, and SESSION should stay readable.");
     expect(packet.redaction).toMatchObject({
       status: "redacted",
-      replacementCount: 4
+      replacementCount: 8
     });
+  });
+
+  it("hashes the emitted truncated section body", () => {
+    const { head, root } = createRepoWithOpenWiki({
+      openWikiBody: [
+        "# Long Section",
+        "",
+        "abcdefghijklmnopqrstuvwxyz",
+        "0123456789"
+      ].join("\n")
+    });
+    roots.push(root);
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main",
+      maxSectionBytes: 20
+    });
+    const section = packet.includedSections[0];
+
+    expect(section?.truncated).toBe(true);
+    expect(section?.body.length).toBeLessThan("abcdefghijklmnopqrstuvwxyz0123456789".length);
+    expect(section?.sourceSha).toBe(sha256(section?.body ?? ""));
   });
 
   it("marks packets stale when dirty git status renames OpenWiki files into source docs", () => {
@@ -241,6 +272,26 @@ describe("OpenWiki-derived repo-wiki packets", () => {
       status: "missing",
       staleReason: "No OpenWiki Markdown files were found under openwiki/."
     });
+  });
+
+  it("marks packets degraded when oversized OpenWiki Markdown files are omitted", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    writeFileSync(join(root, "openwiki", "huge.md"), `# Huge\n\n${"x".repeat(256_001)}\n`, "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "Some OpenWiki Markdown files exceeded the safe read limit and were omitted."
+    });
+    expect(packet.degraded).toBe(true);
   });
 });
 

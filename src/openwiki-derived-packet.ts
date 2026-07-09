@@ -13,8 +13,10 @@ const OPENWIKI_DIR = "openwiki";
 const OPENWIKI_METADATA_PATH = "openwiki/.last-update.json";
 const DEFAULT_MAX_PACKET_BYTES = 12_000;
 const GIT_COMMAND_TIMEOUT_MS = 5_000;
-const SENSITIVE_ENV_NAME_PATTERN =
-  /\b(?:(?:API_KEY|PRIVATE_KEY|ACCESS_TOKEN|AUTH_TOKEN|REFRESH_TOKEN|ID_TOKEN|SESSION_COOKIE)|(?:[A-Z][A-Z0-9]*_)+(?:API_KEY|PRIVATE_KEY|TOKEN|SECRET|PASSWORD|COOKIE|SESSION)(?:_[A-Z0-9]+)*)\b/g;
+const SENSITIVE_ENV_NAME_PATTERNS = [
+  /\b(?:(?:api[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?cookie)|(?:[a-z][a-z0-9]*[_-]+)+(?:api[_-]?key|private[_-]?key|token|secret|password|cookie|session)(?:[_-]+[a-z0-9]+)*)\b/gi,
+  /\b[a-z][A-Za-z0-9]*(?:ApiKey|PrivateKey|AccessToken|AuthToken|RefreshToken|IdToken|SessionCookie|Token|Secret|Password|Cookie|Session)\b/g
+];
 
 export interface BuildOpenWikiDerivedRepoWikiPacketInput {
   repo: string;
@@ -34,14 +36,15 @@ export function buildOpenWikiDerivedRepoWikiPacket(input: BuildOpenWikiDerivedRe
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const headSha = input.headSha ?? readGit(input.worktreePath, ["rev-parse", "HEAD"]);
   const defaultBranch = input.defaultBranch ?? readDefaultBranch(input.worktreePath);
-  const sections = readOpenWikiSections(input.worktreePath);
+  const openWiki = readOpenWikiSections(input.worktreePath);
   const source = resolveSourceFreshness({
     worktreePath: input.worktreePath,
     generatedAt,
     headSha,
     defaultBranch,
     metadata: readOpenWikiMetadata(input.worktreePath),
-    sectionCount: sections.length
+    sectionCount: openWiki.sections.length,
+    skippedOversizedCount: openWiki.skippedOversizedCount
   });
   return buildRepoWikiPacket({
     repo: { fullName: input.repo, ...(defaultBranch ? { defaultBranch } : {}) },
@@ -51,7 +54,7 @@ export function buildOpenWikiDerivedRepoWikiPacket(input: BuildOpenWikiDerivedRe
       maxBytes: input.maxPacketBytes ?? DEFAULT_MAX_PACKET_BYTES,
       ...(input.maxSectionBytes ? { maxSectionBytes: input.maxSectionBytes } : {})
     },
-    sections
+    sections: openWiki.sections
   });
 }
 
@@ -62,6 +65,7 @@ function resolveSourceFreshness(input: {
   defaultBranch?: string;
   metadata: OpenWikiMetadata | undefined;
   sectionCount: number;
+  skippedOversizedCount: number;
 }): {
   ref: string;
   headSha?: string;
@@ -78,7 +82,16 @@ function resolveSourceFreshness(input: {
     return {
       ...base,
       status: "missing",
-      staleReason: "No OpenWiki Markdown files were found under openwiki/."
+      staleReason: input.skippedOversizedCount > 0
+        ? "OpenWiki Markdown files exceeded the safe read limit and were omitted."
+        : "No OpenWiki Markdown files were found under openwiki/."
+    };
+  }
+  if (input.skippedOversizedCount > 0) {
+    return {
+      ...base,
+      status: "stale",
+      staleReason: "Some OpenWiki Markdown files exceeded the safe read limit and were omitted."
     };
   }
   const dirtyStatus = readDirtyNonOpenWikiPaths(input.worktreePath);
@@ -113,37 +126,55 @@ function resolveSourceFreshness(input: {
   };
 }
 
-function readOpenWikiSections(worktreePath: string): RepoWikiSectionInput[] {
-  return listMarkdownFiles(join(worktreePath, OPENWIKI_DIR), worktreePath).map((sourcePath, index) => {
-    const raw = readFileSync(join(worktreePath, sourcePath), "utf8");
-    const body = redactSensitiveEnvNames(raw.trim());
-    return {
-      id: normalizeSectionId(sourcePath.replace(/^openwiki\//, "").replace(/\.md$/, "")),
-      title: readFirstHeading(body.text) ?? sourcePath,
-      body: body.text,
-      order: index,
-      sourceFiles: normalizeSourceFiles([sourcePath, ...readSourceMap(body.text)]),
-      sourceSha: sha256(body.text),
-      preRedactionReplacementCount: body.replacementCount
-    };
-  });
+function readOpenWikiSections(worktreePath: string): {
+  sections: RepoWikiSectionInput[];
+  skippedOversizedCount: number;
+} {
+  const listing = listMarkdownFiles(join(worktreePath, OPENWIKI_DIR), worktreePath);
+  return {
+    skippedOversizedCount: listing.skippedOversizedCount,
+    sections: listing.files.map((sourcePath, index) => {
+      const raw = readFileSync(join(worktreePath, sourcePath), "utf8");
+      const body = redactSensitiveEnvNames(raw.trim());
+      return {
+        id: normalizeSectionId(sourcePath.replace(/^openwiki\//, "").replace(/\.md$/, "")),
+        title: readFirstHeading(body.text) ?? sourcePath,
+        body: body.text,
+        order: index,
+        sourceFiles: normalizeSourceFiles([sourcePath, ...readSourceMap(body.text)]),
+        sourceSha: sha256(body.text),
+        preRedactionReplacementCount: body.replacementCount
+      };
+    })
+  };
 }
 
-function listMarkdownFiles(dir: string, worktreePath: string): string[] {
+function listMarkdownFiles(dir: string, worktreePath: string): { files: string[]; skippedOversizedCount: number } {
   try {
-    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-      if (entry.name.startsWith(".")) return [];
+    const files: string[] = [];
+    let skippedOversizedCount = 0;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
       const absolutePath = join(dir, entry.name);
       const sourcePath = relative(worktreePath, absolutePath).replace(/\\/g, "/");
-      if (sourcePath === "openwiki/_review" || sourcePath.startsWith("openwiki/_review/")) return [];
-      if (entry.isSymbolicLink()) return [];
-      if (entry.isDirectory()) return listMarkdownFiles(absolutePath, worktreePath);
-      if (!entry.isFile() || !entry.name.endsWith(".md")) return [];
-      if (statSync(absolutePath).size > 256_000) return [];
-      return [sourcePath];
-    }).sort(codeUnitCompare);
+      if (sourcePath === "openwiki/_review" || sourcePath.startsWith("openwiki/_review/")) continue;
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        const nested = listMarkdownFiles(absolutePath, worktreePath);
+        files.push(...nested.files);
+        skippedOversizedCount += nested.skippedOversizedCount;
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      if (statSync(absolutePath).size > 256_000) {
+        skippedOversizedCount += 1;
+        continue;
+      }
+      files.push(sourcePath);
+    }
+    return { files: files.sort(codeUnitCompare), skippedOversizedCount };
   } catch {
-    return [];
+    return { files: [], skippedOversizedCount: 0 };
   }
 }
 
@@ -238,11 +269,12 @@ function readFirstHeading(markdown: string): string | undefined {
 
 function redactSensitiveEnvNames(input: string): { text: string; replacementCount: number } {
   let replacementCount = 0;
-  return {
-    text: input.replace(SENSITIVE_ENV_NAME_PATTERN, () => {
+  const text = SENSITIVE_ENV_NAME_PATTERNS.reduce((current, pattern) => current.replace(pattern, () => {
       replacementCount += 1;
       return "[redacted-secret]";
-    }),
+    }), input);
+  return {
+    text,
     replacementCount
   };
 }
