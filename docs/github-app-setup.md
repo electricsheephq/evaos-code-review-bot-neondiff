@@ -66,6 +66,10 @@ export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-
 authorization flow. Do not put user access tokens or refresh tokens in config;
 desktop user tokens belong in Keychain.
 
+For the desktop Repos pane, enable device flow in the GitHub App settings before
+testing "Connect GitHub". If device flow is disabled, GitHub returns
+`device_flow_disabled` and the desktop cannot issue a user code.
+
 ## Verify Installation
 
 Run the GitHub-only doctor before provider or daemon checks:
