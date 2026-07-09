@@ -123,7 +123,7 @@ function readOpenWikiSections(worktreePath: string): RepoWikiSectionInput[] {
       body,
       order: index,
       sourceFiles: normalizeSourceFiles([sourcePath, ...readSourceMap(body)]),
-      sourceSha: sha256(raw)
+      sourceSha: sha256(body)
     };
   });
 }
@@ -185,7 +185,6 @@ function readDirtyNonOpenWikiPaths(worktreePath: string): { ok: boolean; paths: 
   const paths = parsePorcelainStatusPaths(status.stdout)
     .filter(Boolean)
     .filter((changedPath) => changedPath !== ".neondiff" && !changedPath.startsWith(".neondiff/"))
-    .filter((changedPath) => changedPath !== ".neondiff/repo-wiki-packet.json")
     .filter((changedPath) => changedPath !== OPENWIKI_DIR && !changedPath.startsWith(`${OPENWIKI_DIR}/`));
   return { ok: true, paths };
 }
