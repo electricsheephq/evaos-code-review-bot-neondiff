@@ -253,6 +253,28 @@ describe("repo wiki advisory context", () => {
     });
     expect(readFileSync(evidencePath, "utf8")).not.toContain(root);
   });
+
+  it("worker honors review-mode analysis-plan demotion before reading repo wiki context", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
+    roots.push(root);
+    const evidenceDir = join(root, "evidence");
+    const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");
+    mkdirSync(join(root, ".neondiff"), { recursive: true });
+    mkdirSync(evidenceDir, { recursive: true });
+    writeFileSync(packetPath, formatRepoWikiPacketJson(repoWikiPacket("fresh")));
+
+    const result = buildRepoWikiContext({
+      config: loadConfigFromObject({ repoWikiContext: { enabled: true } }),
+      repo,
+      worktreePath: root,
+      evidenceDir,
+      analysisPlan: { repoWikiContext: false }
+    });
+
+    expect(result.packet).toBeUndefined();
+    expect(existsSync(join(evidenceDir, "repo-wiki-context-packet.json"))).toBe(false);
+    expect(existsSync(join(evidenceDir, "repo-wiki-context-packet-error.json"))).toBe(false);
+  });
 });
 
 function repoWikiPacket(status: "fresh" | "stale" | "missing") {

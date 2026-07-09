@@ -40,6 +40,8 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import { selectReviewMode } from "./review-mode-router.js";
+import type { ReviewModeAnalysisPlan } from "./review-mode-types.js";
 import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
@@ -1455,6 +1457,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       workRoot: config.workRoot,
       protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
+    const reviewModeSelection = selectReviewMode({
+      config,
+      repo,
+      pull,
+      files: reviewFiles,
+      profile: repoPolicy.profile
+    });
+    const analysisPlan = reviewModeSelection?.analysisPlan;
     const repoMemory = buildRepoMemoryContext({
       config,
       state,
@@ -1465,27 +1475,32 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       config,
       repo,
       worktreePath: worktree.path,
-      evidenceDir
+      evidenceDir,
+      analysisPlan
     });
     const skillPackContext = buildSkillPackContext({
       config,
       evidenceDir
     });
-    const gitnexusContext = buildGitNexusContext({
-      config,
-      repo,
-      pull,
-      files: reviewFiles,
-      evidenceDir
-    });
-    const githubRelatedContext = await buildGitHubRelatedContext({
-      config,
-      github: createGitHubRelatedContextReader(config, github),
-      repo,
-      pull,
-      files: reviewFiles,
-      evidenceDir
-    });
+    const gitnexusContext = analysisPlan?.gitnexusContext === false
+      ? {}
+      : buildGitNexusContext({
+          config,
+          repo,
+          pull,
+          files: reviewFiles,
+          evidenceDir
+        });
+    const githubRelatedContext = analysisPlan?.githubRelatedContext === false
+      ? {}
+      : await buildGitHubRelatedContext({
+          config,
+          github: createGitHubRelatedContextReader(config, github),
+          repo,
+          pull,
+          files: reviewFiles,
+          evidenceDir
+        });
 
     const promptForFiles = (filesForPrompt: PullFilePatch[]) => buildReviewPrompt({
       repo,
@@ -2262,7 +2277,9 @@ export function buildRepoWikiContext(input: {
   repo: string;
   worktreePath: string;
   evidenceDir: string;
+  analysisPlan?: Pick<ReviewModeAnalysisPlan, "repoWikiContext">;
 }): { packet?: RepoWikiContextPacket } {
+  if (input.analysisPlan?.repoWikiContext === false) return {};
   const repoWikiConfig = input.config.repoWikiContext;
   if (!repoWikiConfig?.enabled) return {};
 
