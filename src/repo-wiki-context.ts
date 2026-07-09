@@ -113,7 +113,13 @@ export function buildRepoWikiContextPacket(input: {
         }
       };
     }
-    throw error;
+    return {
+      omitted: {
+        reason: "invalid_packet",
+        detail: "Repo wiki packet could not be read",
+        sourcePath: evidenceSourcePath
+      }
+    };
   }
   const packetFileBytes = Buffer.byteLength(raw, "utf8");
   const maxPacketFileBytes = input.config.maxPacketBytes + PACKET_FILE_OVERHEAD_BYTES;
@@ -425,11 +431,6 @@ function readSafeMetadataLine(value: unknown): string | undefined {
 
 function readFreshness(value: unknown): RepoWikiSourceStatus | "unknown" | undefined {
   return value === "fresh" || value === "stale" || value === "missing" || value === "unknown" ? value : undefined;
-}
-
-function readNested(input: Record<string, unknown>, objectKey: string, valueKey: string): unknown {
-  const nested = input[objectKey];
-  return isRecord(nested) ? nested[valueKey] : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
