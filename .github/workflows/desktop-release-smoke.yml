@@ -42,22 +42,11 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.sha }}
           SOURCE_REF: ${{ github.ref }}
-        run: |
-          mkdir -p dist/release-smoke
-          ditto -c -k --keepParent dist/NeonDiffDesktop.app dist/release-smoke/NeonDiffDesktop.app.zip
-          cat > dist/release-smoke/desktop-release-smoke-metadata.json <<JSON
-          {
-            "workflow": "desktop-release-smoke",
-            "artifact": "NeonDiffDesktop.app.zip",
-            "artifact_classification": "unsigned-desktop-release-smoke",
-            "source_sha": "$SOURCE_SHA",
-            "source_ref": "$SOURCE_REF",
-            "release_ready": false,
-            "customer_ready": false,
-            "ui_launch": false,
-            "proof_boundary": "non-release app bundle build, hosted-runner-safe core checks, appcast checks, and bundle structure check only"
-          }
-          JSON
+          NEONDIFF_DESKTOP_ARTIFACT_CLASSIFICATION: unsigned-desktop-release-smoke
+          NEONDIFF_DESKTOP_UI_LAUNCH: "false"
+          NEONDIFF_DESKTOP_VISUAL_SMOKE_REQUIRED: "true"
+          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release app bundle build, hosted-runner-safe core checks, appcast checks, bundle structure check, artifact checksum, and metadata only
+        run: script/release-proof.sh
 
       - name: Upload unsigned app bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
