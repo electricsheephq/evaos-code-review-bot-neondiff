@@ -266,6 +266,59 @@
         }
       }
     },
+    "reviewLenses": {
+      "description": "Default-off advisory review lenses. These are bounded context packets only; they do not enable tools, native skills, MCP, shell, web, memory, writes, posting escalation, or confidence claims.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "packetVersion", "active", "maxLensBytes", "maxPacketBytes"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "const": false,
+          "default": false
+        },
+        "packetVersion": {
+          "type": "string",
+          "minLength": 1,
+          "default": "review-lens-packet-v0.1"
+        },
+        "active": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "surface", "mode"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": ["first_principles", "architecture", "decision", "lean"]
+              },
+              "surface": {
+                "type": "string",
+                "enum": ["issue_enrichment", "pr_shadow", "walkthrough"]
+              },
+              "mode": {
+                "type": "string",
+                "enum": ["dry_run", "summary", "shadow"]
+              }
+            }
+          }
+        },
+        "maxLensBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000,
+          "default": 4000
+        },
+        "maxPacketBytes": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 60000,
+          "default": 12000
+        }
+      }
+    },
     "finishingTouches": {
       "description": "Post-review edits, labels, reviewers, or command-style follow-up. Default off and not runtime-wired in this slice.",
       "type": "object",

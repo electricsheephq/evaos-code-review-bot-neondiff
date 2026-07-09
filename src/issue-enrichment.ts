@@ -7,6 +7,11 @@ import {
   type IssueEnrichmentLifecycleInput
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import {
+  buildReviewLensPacket,
+  type ReviewLensConfig,
+  type ReviewLensPacket
+} from "./review-lenses.js";
 import { redactSecrets } from "./secrets.js";
 import type { IssueEnrichmentRecord, IssueEnrichmentRecordStatus, ReviewStateStore } from "./state.js";
 
@@ -480,7 +485,7 @@ export async function collectIssueEnrichmentScan(input: {
 }
 
 export async function runIssueEnrichmentCycle(input: {
-  config: { issueEnrichment?: IssueEnrichmentConfig };
+  config: { issueEnrichment?: IssueEnrichmentConfig; reviewLenses?: ReviewLensConfig };
   state: Pick<
     ReviewStateStore,
     "getIssueEnrichmentRecord" |
@@ -525,6 +530,7 @@ export async function runIssueEnrichmentCycle(input: {
       recommendedActions: buildScanRecommendedActions(status, emptyCycleSummary())
     };
   }
+  const reviewLensPacket = buildIssueEnrichmentReviewLensPacket(input.config.reviewLenses);
   const blockedForRun = status.state === "blocked" &&
     !(input.dryRun && status.blockers.every((blocker) => DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(blocker)));
   if (blockedForRun) {
@@ -626,7 +632,7 @@ export async function runIssueEnrichmentCycle(input: {
       if (cached) return cached;
       const issue = issuesByKey.get(key);
       if (!issue) return undefined;
-      const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue);
+      const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue, undefined, reviewLensPacket);
       plannedEnrichmentByIssue.set(key, enrichment);
       return enrichment;
     };
@@ -788,7 +794,7 @@ export async function runIssueEnrichmentCycle(input: {
         // #263: attach the mapped lifecycle state (`enriched`) to the marker at post time. This is a
         // renaming of the decision already made (status=posted) and rides the diagnostic state marker
         // only; bodyHash excludes the marker, so idempotency is unaffected.
-        const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue, { state: "enriched" });
+        const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue, { state: "enriched" }, reviewLensPacket);
         const postBodyHash = plannedBodyHashForItem(item) ?? enrichment.bodyHash;
         const post = await postEnrichmentComment({
           enabled: true,
@@ -1220,7 +1226,8 @@ function buildIssueEnrichmentForCycle(
   config: IssueEnrichmentConfig,
   repo: string,
   issue: GitHubRelatedIssueOrPull,
-  lifecycle?: IssueEnrichmentLifecycleInput
+  lifecycle?: IssueEnrichmentLifecycleInput,
+  reviewLensPacket?: ReviewLensPacket
 ): EnrichmentComment {
   const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
   const allowlists = issueSuggestionAllowlists(policy.suggestions);
@@ -1230,8 +1237,20 @@ function buildIssueEnrichmentForCycle(
     allowedLabels: allowlists.allowedLabels,
     allowedOwners: allowlists.allowedOwners,
     postIssueComment: true,
+    ...(reviewLensPacket ? { reviewLensPacket } : {}),
     ...(lifecycle ? { lifecycle } : {})
   });
+}
+
+function buildIssueEnrichmentReviewLensPacket(config?: ReviewLensConfig): ReviewLensPacket | undefined {
+  if (!config?.enabled) return undefined;
+  const result = buildReviewLensPacket({
+    config,
+    surface: "issue_enrichment"
+  });
+  if (!result.ok) throw new Error(`Review lens issue-enrichment packet failed closed: ${result.error}`);
+  if (result.packet.lenses.length === 0) return undefined;
+  return result.packet;
 }
 
 function sum<T extends keyof Pick<IssueEnrichmentRepoScan, "issuesSeen" | "eligible" | "skipped" | "wouldEnrich" | "wouldComment" | "deferred">>(
