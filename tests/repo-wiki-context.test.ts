@@ -366,7 +366,7 @@ describe("repo wiki advisory context", () => {
     });
   });
 
-  it("rejects oversized packet files before reading and parsing them", () => {
+  it("rejects oversized raw packet files before parsing or prompt use", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-repo-wiki-context-"));
     roots.push(root);
     const packetPath = join(root, ".neondiff", "repo-wiki-packet.json");

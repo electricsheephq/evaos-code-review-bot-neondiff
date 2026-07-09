@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { formatRepoWikiPacketMarkdown, type RepoWikiPacket, type RepoWikiSourceStatus } from "./repo-wiki-packet.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -69,16 +69,23 @@ export function buildRepoWikiContextPacket(input: {
   }
 
   const sourcePath = resolvePacketPath(input.worktreePath, input.config.packetPath);
-  if (!existsSync(sourcePath)) {
-    return {
-      omitted: {
-        reason: "missing_packet",
-        detail: "Repo wiki packet not found",
-        sourcePath: evidenceSourcePath
-      }
-    };
+  let isInsideWorktree: boolean;
+  try {
+    isInsideWorktree = isExistingPathInsideOrEqual(sourcePath, input.worktreePath);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return {
+        omitted: {
+          reason: "missing_packet",
+          detail: "Repo wiki packet not found",
+          sourcePath: evidenceSourcePath
+        }
+      };
+    }
+    throw error;
   }
-  if (!isExistingPathInsideOrEqual(sourcePath, input.worktreePath)) {
+
+  if (!isInsideWorktree) {
     return {
       omitted: {
         reason: "invalid_packet",
@@ -87,7 +94,23 @@ export function buildRepoWikiContextPacket(input: {
       }
     };
   }
-  const packetFileBytes = statSync(sourcePath).size;
+
+  let raw: string;
+  try {
+    raw = readFileSync(sourcePath, "utf8");
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return {
+        omitted: {
+          reason: "missing_packet",
+          detail: "Repo wiki packet not found",
+          sourcePath: evidenceSourcePath
+        }
+      };
+    }
+    throw error;
+  }
+  const packetFileBytes = Buffer.byteLength(raw, "utf8");
   const maxPacketFileBytes = input.config.maxPacketBytes + PACKET_FILE_OVERHEAD_BYTES;
   if (packetFileBytes > maxPacketFileBytes) {
     return {
@@ -99,7 +122,6 @@ export function buildRepoWikiContextPacket(input: {
     };
   }
 
-  const raw = readFileSync(sourcePath, "utf8");
   if (containsSecretLikeText(raw)) {
     return {
       omitted: {
@@ -190,6 +212,14 @@ function isExistingPathInsideOrEqual(candidatePath: string, rootPath: string): b
   const candidateRealPath = realpathSync.native(candidatePath);
   const rel = relative(rootRealPath, candidateRealPath);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return isNodeError(error) && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
 
 function parseRepoWikiContextRaw(
