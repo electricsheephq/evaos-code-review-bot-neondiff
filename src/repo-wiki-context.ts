@@ -84,15 +84,6 @@ export function buildRepoWikiContextPacket(input: {
   }
 
   const byteEstimate = Buffer.byteLength(parsed.packet.markdown, "utf8");
-  if (byteEstimate > input.config.maxPacketBytes) {
-    return {
-      omitted: {
-        reason: "budget_exceeded",
-        detail: `Repo wiki packet exceeded maxPacketBytes (${byteEstimate} > ${input.config.maxPacketBytes})`,
-        sourcePath: evidenceSourcePath
-      }
-    };
-  }
 
   if (containsSecretLikeText(parsed.packet.markdown)) {
     return {
@@ -105,11 +96,21 @@ export function buildRepoWikiContextPacket(input: {
   }
 
   const freshness = parsed.packet.repoWiki.freshness;
-  if ((freshness === "stale" || freshness === "missing") && !input.config.includeStaleContext) {
+  if (freshness !== "fresh" && !input.config.includeStaleContext) {
     return {
       omitted: {
         reason: "stale_packet",
-        detail: "Repo wiki packet is not fresh and includeStaleContext is false",
+        detail: "Repo wiki packet freshness is not fresh and includeStaleContext is false",
+        sourcePath: evidenceSourcePath
+      }
+    };
+  }
+
+  if (byteEstimate > input.config.maxPacketBytes) {
+    return {
+      omitted: {
+        reason: "budget_exceeded",
+        detail: `Repo wiki packet exceeded maxPacketBytes (${byteEstimate} > ${input.config.maxPacketBytes})`,
         sourcePath: evidenceSourcePath
       }
     };
@@ -175,7 +176,7 @@ function packetFromMarkdown(markdown: string): {
       markdown,
       repoWiki: {
         freshness: "unknown",
-        degradedMode: false
+        degradedMode: true
       }
     }
   };
@@ -189,10 +190,11 @@ function packetFromGenericJson(parsed: Record<string, unknown>): {
   const byteEstimate = Buffer.byteLength(markdown, "utf8");
   const freshness =
     readFreshness(parsed.freshness) ?? readFreshness(readNested(parsed, "repoWiki", "freshness")) ?? "unknown";
-  const degradedMode =
+  const explicitDegradedMode =
     typeof readNested(parsed, "repoWiki", "degradedMode") === "boolean"
       ? Boolean(readNested(parsed, "repoWiki", "degradedMode"))
-      : freshness === "stale" || freshness === "missing";
+      : false;
+  const degradedMode = explicitDegradedMode || freshness !== "fresh";
 
   return {
     ok: true,

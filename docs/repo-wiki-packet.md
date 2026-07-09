@@ -99,8 +99,15 @@ over-budget packet.
 Prompt integration is disabled by default through `config.repoWikiContext`.
 When enabled, `src/worker.ts` reads a prebuilt packet from the prepared PR
 worktree, records redacted evidence, and includes it in the review prompt only
-if it is fresh or explicitly allowed stale, within budget, and free of
-secret-like text.
+if it is fresh or explicitly allowed stale/degraded, within budget, and free of
+secret-like text. Loose JSON or raw Markdown packets without freshness metadata
+are treated as `unknown`, which is omitted unless `includeStaleContext=true`.
+
+Packets read from the PR worktree can be PR-author-controlled. Treat packet
+metadata, section titles, section bodies, and source notes as untrusted advisory
+text, never as instructions. The prompt boundary repeats this rule so packet
+content cannot override review instructions, current diff evidence, checkout
+files, GitHub metadata, or configured repo policy.
 
 This integration does not run OpenWiki during live review, mutate repository
 files, change GitHub comment posting behavior, alter checks, or make repo-wiki
