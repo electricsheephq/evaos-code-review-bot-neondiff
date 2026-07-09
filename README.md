@@ -110,6 +110,7 @@ version is:
 neondiff init --config config.local.json
 neondiff dashboard --config config.local.json
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
+export NEONDIFF_GITHUB_APP_CLIENT_ID="<github-app-client-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 neondiff doctor github --config config.local.json --json
 neondiff providers list --config config.local.json --json
@@ -124,7 +125,9 @@ includes a `Verify API Key` control that reports redacted pass/fail output.
 Create or install the GitHub App before expecting PR reviews to run. The App
 must be installed on the same selected repositories listed in `pilotRepos`; see
 [docs/github-app-setup.md](docs/github-app-setup.md) for the permission set and
-selected-repo install path.
+selected-repo install path. Enable device flow in the GitHub App settings before
+using the Mac desktop "Connect GitHub" repo selector; the desktop uses the
+public client ID for that user-code authorization flow.
 
 Do not store the GitHub App private key, provider API key, license key, tokens,
 or customer data in this repository. Keep local config, secrets, state DBs, and
