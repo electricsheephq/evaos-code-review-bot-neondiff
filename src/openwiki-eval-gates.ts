@@ -13,7 +13,7 @@ import {
 } from "./eval-harness.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { Severity } from "./types.js";
-import type { RepoWikiPacket } from "./repo-wiki-packet.js";
+import { codeUnitCompare, type RepoWikiPacket } from "./repo-wiki-packet.js";
 
 export type RepoWikiEvalMode = "baseline" | "deterministic" | "openwiki";
 
@@ -269,7 +269,7 @@ export function runDocsDriftEval(
   });
   const thresholds = {
     minStaleCaught: input.thresholds?.minStaleCaught ?? 4,
-    maxMaterialFalsePositives: input.thresholds?.maxMaterialFalsePositives ?? 1
+    maxMaterialFalsePositives: input.thresholds?.maxMaterialFalsePositives ?? 0
   };
   const staleClaims = input.claims.filter((claim) => claim.expected === "stale").length;
   const trueTraps = input.claims.filter((claim) => claim.expected === "true").length;
@@ -655,10 +655,4 @@ function resolveExistingFileInside(
   } catch (error) {
     return { ok: false, error: `${label} could not be resolved safely: ${error instanceof Error ? error.message : String(error)}` };
   }
-}
-
-function codeUnitCompare(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
 }

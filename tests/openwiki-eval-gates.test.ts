@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { countEvalFalsePositiveSeverities, type EvalLabelInput } from "../src/eval-harness.js";
 import {
   runDocsDriftEval,
   runRepoWikiContextAbEval,
@@ -77,6 +78,37 @@ describe("OpenWiki eval gates", () => {
       name: "openwiki_no_p0_p1_false_positive_regression",
       ok: false
     }));
+  });
+
+  it("buckets unmatched false positives by their actual severity", () => {
+    const labels: EvalLabelInput[] = [{
+      source: "seeded_defect",
+      severity: "P0",
+      path: "src/worker.ts",
+      line: 12,
+      title: "Matched outage",
+      body: "This finding is expected and should not count as a false positive.",
+      sourceId: "matched-p0"
+    }];
+
+    const counts = countEvalFalsePositiveSeverities({
+      findings: [
+        {
+          severity: "P0",
+          path: "src/worker.ts",
+          line: 12,
+          title: "Matched outage",
+          body: "This finding is expected and should not count as a false positive.",
+          confidence: 0.99
+        },
+        severityFinding("P0", "Unexpected outage"),
+        severityFinding("P1", "Unexpected token fallback"),
+        severityFinding("P2", "Unexpected docs drift"),
+        severityFinding("P3", "Unexpected note")
+      ]
+    }, labels);
+
+    expect(counts).toEqual({ P0: 1, P1: 1, P2: 1, P3: 1 });
   });
 
   it("fails A/B eval when OpenWiki context drops baseline recall", () => {
@@ -163,6 +195,7 @@ describe("OpenWiki eval gates", () => {
       materialFalsePositives: 0,
       suggestions: 5
     });
+    expect(result.summary.thresholds.maxMaterialFalsePositives).toBe(0);
     expect(result.summary.suggestions.every((suggestion) => suggestion.packetSectionIds.length > 0)).toBe(true);
     expect(readFileSync(result.artifacts["suggested-doc-edits.md"]!, "utf8")).toContain("Suggested Doc Edits");
   });
@@ -441,6 +474,17 @@ function buildReviewFinding() {
     title: "Fresh repo wiki context must not override the diff",
     body: "The review should preserve the current diff as authority when repo wiki context is present.",
     confidence: 0.96
+  };
+}
+
+function severityFinding(severity: "P0" | "P1" | "P2" | "P3", title: string) {
+  return {
+    severity,
+    path: "src/worker.ts",
+    line: 99,
+    title,
+    body: `${title} is intentionally unmatched.`,
+    confidence: 0.9
   };
 }
 
