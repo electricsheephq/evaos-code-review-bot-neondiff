@@ -22,6 +22,7 @@ import {
 import { isApiKeyEnvName, isProviderId, isProviderStructuredOutputMode, PROVIDER_STRUCTURED_OUTPUT_MODES, SCHEMA_FEEDBACK_RETRY_MAX, type ProviderRegistryConfig } from "./providers.js";
 import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
+import { DEFAULT_REVIEW_LENS_CONFIG, validateReviewLensConfig, type ReviewLensConfig } from "./review-lenses.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -80,6 +81,7 @@ export interface BotConfig {
   gitnexusContext?: GitNexusContextConfig;
   githubRelatedContext?: GitHubRelatedContextConfig;
   skillPacks?: SkillPackContextConfig;
+  reviewLenses?: ReviewLensConfig;
   enrichment?: EnrichmentConfig;
   issueEnrichment?: IssueEnrichmentConfig;
   license?: LicenseConfig;
@@ -388,6 +390,7 @@ const DEFAULT_CONFIG: BotConfig = {
     maxSkillBytes: 8_000,
     maxPacketBytes: 16_000
   },
+  reviewLenses: DEFAULT_REVIEW_LENS_CONFIG,
   enrichment: {
     enabled: false,
     postIssueComment: false,
@@ -652,6 +655,9 @@ function validateConfig(config: BotConfig): void {
   const skillPacks = config.skillPacks ?? DEFAULT_CONFIG.skillPacks!;
   config.skillPacks = skillPacks;
   validateSkillPacksConfig(skillPacks, "config.skillPacks");
+  const reviewLenses = config.reviewLenses ?? DEFAULT_CONFIG.reviewLenses!;
+  config.reviewLenses = reviewLenses;
+  validateReviewLensConfig(reviewLenses, "config.reviewLenses");
   const enrichment = config.enrichment ?? DEFAULT_CONFIG.enrichment!;
   config.enrichment = enrichment;
   validateEnrichmentConfig(enrichment, "config.enrichment");

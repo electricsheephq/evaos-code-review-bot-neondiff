@@ -8,6 +8,7 @@ import {
   type IssueLifecycleState,
   type MarkerLifecycleFields
 } from "./marker-lifecycle.js";
+import { buildReviewLensIssueSections, type ReviewLensPacket } from "./review-lenses.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import type {
@@ -53,6 +54,7 @@ interface IssuePlannerPacket {
   buildBorrowBuyScan: string[];
   candidateSources: string[];
   implementationWedge: string;
+  reviewLensSections: string[];
   acceptanceCriteria: string[];
   proofPlan: string[];
   knownTraps: string[];
@@ -177,6 +179,7 @@ export function buildIssueEnrichmentComment(input: {
   maxSuggestions?: number;
   postIssueComment?: boolean;
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  reviewLensPacket?: ReviewLensPacket;
   /** Optional lifecycle/handoff metadata (#263). Rides the diagnostic issue state marker only. */
   lifecycle?: IssueEnrichmentLifecycleInput;
 }): EnrichmentComment {
@@ -209,7 +212,8 @@ export function buildIssueEnrichmentComment(input: {
   const planner = buildIssuePlannerPacket({
     issue: input.issue,
     relatedRefs,
-    publicConfidencePolicy: input.publicConfidencePolicy
+    publicConfidencePolicy: input.publicConfidencePolicy,
+    reviewLensPacket: input.reviewLensPacket
   });
   const visibleBody = [
     "## evaOS issue enrichment",
@@ -231,6 +235,7 @@ export function buildIssueEnrichmentComment(input: {
     `Problem shape: ${planner.problemShape}`,
     `Product fit: ${planner.productFit}`,
     `Implementation wedge: ${planner.implementationWedge}`,
+    ...(planner.reviewLensSections.length ? ["", ...planner.reviewLensSections] : []),
     "",
     "Build / borrow / buy scan:",
     ...planner.buildBorrowBuyScan,
@@ -500,6 +505,7 @@ function buildIssuePlannerPacket(input: {
   issue: GitHubRelatedIssueOrPull;
   relatedRefs: string[];
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  reviewLensPacket?: ReviewLensPacket;
 }): IssuePlannerPacket {
   const text = `${input.issue.title ?? ""}\n${input.issue.body ?? ""}`;
   const classes = classifyIssueForPlanner(text);
@@ -554,6 +560,11 @@ function buildIssuePlannerPacket(input: {
     buildBorrowBuyScan: buildBuildBorrowBuyScan({ shouldResearch, classes }),
     candidateSources: buildCandidateSources({ shouldResearch, classes }),
     implementationWedge: buildImplementationWedge(classes),
+    reviewLensSections: buildReviewLensIssueSections({
+      packet: input.reviewLensPacket,
+      issueText: text,
+      architectureTriggered: classes.includes("architecture") || classes.includes("integration")
+    }),
     acceptanceCriteria: buildPlannerAcceptanceCriteria(input.issue),
     proofPlan: buildPlannerProofPlan(classes),
     knownTraps: buildPlannerKnownTraps(classes, shouldResearch),
