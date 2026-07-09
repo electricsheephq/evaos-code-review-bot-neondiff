@@ -31,7 +31,7 @@ public enum NeonDiffCommandBuilder {
     ) -> DesktopCommand {
         DesktopCommand(
             title: openBrowser ? "Open local dashboard" : "Start local dashboard",
-            commandLine: "\(shellQuote(cliPath)) dashboard --config \(shellQuote(configPath)) --launchd-label \(shellQuote(launchdLabel)) --open \(openBrowser ? "true" : "false")"
+            commandLine: "\(shellQuote(cliPath)) dashboard --config \(shellQuote(configPath)) --launchd-label \(shellQuote(launchdLabel)) --open \(openBrowser ? "true" : "false") --operator false"
         )
     }
 

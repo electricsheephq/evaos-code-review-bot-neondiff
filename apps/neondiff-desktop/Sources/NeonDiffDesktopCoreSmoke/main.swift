@@ -49,6 +49,7 @@ do {
     )
     guard dashboardServerCommand.title == "Start local dashboard",
           dashboardServerCommand.commandLine.contains("--open false"),
+          dashboardServerCommand.commandLine.contains("--operator false"),
           !dashboardServerCommand.commandLine.contains("--open true")
     else {
         throw NSError(domain: "NeonDiffDesktopSmoke", code: 11, userInfo: [NSLocalizedDescriptionKey: "dashboard server command does not stay inside the Mac app launch bar"])

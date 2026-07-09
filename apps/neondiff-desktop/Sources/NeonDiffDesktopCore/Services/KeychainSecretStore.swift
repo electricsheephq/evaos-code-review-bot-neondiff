@@ -1,11 +1,24 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 public protocol DesktopSecretStoring {
     func setSecret(_ secret: String, account: String) throws
     func readSecret(account: String) throws -> String?
+    func readSecret(account: String, allowUserInteraction: Bool) throws -> String?
     func containsSecret(account: String) -> Bool
     func deleteSecret(account: String) throws
+}
+
+public extension DesktopSecretStoring {
+    func readSecret(account: String, allowUserInteraction: Bool) throws -> String? {
+        try readSecret(account: account)
+    }
+}
+
+@_spi(Testing) public enum KeychainSecretQueryOperation {
+    case contains
+    case read(allowUserInteraction: Bool)
 }
 
 public enum KeychainSecretError: Error, LocalizedError {
@@ -40,13 +53,20 @@ public final class KeychainSecretStore: DesktopSecretStoring {
     }
 
     public func readSecret(account: String) throws -> String? {
-        var query = baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        try readSecret(account: account, allowUserInteraction: true)
+    }
+
+    public func readSecret(account: String, allowUserInteraction: Bool) throws -> String? {
+        let query = Self.query(
+            service: service,
+            account: account,
+            operation: .read(allowUserInteraction: allowUserInteraction)
+        )
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
+        if !allowUserInteraction && status == errSecInteractionNotAllowed { return nil }
         guard status == errSecSuccess else { throw KeychainSecretError.unexpectedStatus(status) }
         guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
             throw KeychainSecretError.invalidData
@@ -55,7 +75,8 @@ public final class KeychainSecretStore: DesktopSecretStoring {
     }
 
     public func containsSecret(account: String) -> Bool {
-        (try? readSecret(account: account)) != nil
+        let query = Self.query(service: service, account: account, operation: .contains)
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     public func deleteSecret(account: String) throws {
@@ -66,10 +87,42 @@ public final class KeychainSecretStore: DesktopSecretStoring {
     }
 
     private func baseQuery(account: String) -> [String: Any] {
+        Self.baseQuery(service: service, account: account)
+    }
+
+    @_spi(Testing) public static func query(
+        service: String,
+        account: String,
+        operation: KeychainSecretQueryOperation
+    ) -> [String: Any] {
+        var query = baseQuery(service: service, account: account)
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        switch operation {
+        case .contains:
+            query[kSecUseAuthenticationContext as String] = noninteractiveContext()
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+        case .read(let allowUserInteraction):
+            query[kSecReturnData as String] = true
+            if !allowUserInteraction {
+                query[kSecUseAuthenticationContext as String] = noninteractiveContext()
+                query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+            }
+        }
+        return query
+    }
+
+    private static func baseQuery(service: String, account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+    }
+
+    private static func noninteractiveContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 }
