@@ -50,6 +50,20 @@ Inputs are normalized deterministically:
 - source file lists are trimmed, de-duplicated, and sorted.
 - sections sort by `order`, then `id`.
 
+## OpenWiki-Derived Packets
+
+`src/openwiki-derived-packet.ts` curates an existing `openwiki/**` tree into the
+same deterministic packet model. It does not run OpenWiki or call a model. It
+reads Markdown pages under `openwiki/`, excludes `openwiki/_review/**`
+suggestions, extracts `## Source map` bullets as provenance, and redacts
+secret-like environment variable names before packet construction.
+
+Freshness is source-backed: the packet is `fresh` only when
+`openwiki/.last-update.json` records the current head SHA and the worktree has no
+non-`openwiki/**` changes. Missing or mismatched metadata produces stale or
+missing degraded packets, which the runtime omits unless stale context is
+explicitly allowed.
+
 ## Budgets And Redaction
 
 The builder caps section bodies by UTF-8 byte length without splitting a
