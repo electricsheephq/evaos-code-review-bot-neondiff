@@ -373,6 +373,25 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     });
   });
 
+  it("marks packets stale when OpenWiki Markdown has uncommitted changes", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    writeFileSync(join(root, "openwiki", "quickstart.md"), "# Quickstart\n\nUncommitted advisory docs.\n", "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "OpenWiki Markdown files have uncommitted changes; regenerate OpenWiki before building a fresh packet."
+    });
+  });
+
   it("fails closed when git status cannot be read", () => {
     const { head, root } = createRepoWithOpenWiki();
     roots.push(root);
@@ -428,6 +447,27 @@ describe("OpenWiki-derived repo-wiki packets", () => {
     expect(packet.source).toMatchObject({
       status: "stale",
       staleReason: "Some OpenWiki Markdown files exceeded the safe read limit and were omitted."
+    });
+    expect(packet.degraded).toBe(true);
+  });
+
+  it("marks packets stale when all OpenWiki Markdown files are oversized", () => {
+    const { head, root } = createRepoWithOpenWiki();
+    roots.push(root);
+    rmSync(join(root, "openwiki", "quickstart.md"));
+    writeFileSync(join(root, "openwiki", "huge.md"), `# Huge\n\n${"x".repeat(256_001)}\n`, "utf8");
+
+    const packet = buildOpenWikiDerivedRepoWikiPacket({
+      repo,
+      worktreePath: root,
+      generatedAt,
+      headSha: head,
+      defaultBranch: "main"
+    });
+
+    expect(packet.source).toMatchObject({
+      status: "stale",
+      staleReason: "OpenWiki Markdown files exceeded the safe read limit and were omitted."
     });
     expect(packet.degraded).toBe(true);
   });

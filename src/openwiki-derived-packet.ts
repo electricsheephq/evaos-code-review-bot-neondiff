@@ -83,7 +83,7 @@ function resolveSourceFreshness(input: {
   if (input.sectionCount === 0) {
     return {
       ...base,
-      status: "missing",
+      status: input.skippedOversizedCount > 0 ? "stale" : "missing",
       staleReason: input.skippedOversizedCount > 0
         ? "OpenWiki Markdown files exceeded the safe read limit and were omitted."
         : "No OpenWiki Markdown files were found under openwiki/."
@@ -96,7 +96,7 @@ function resolveSourceFreshness(input: {
       staleReason: "Some OpenWiki Markdown files exceeded the safe read limit and were omitted."
     };
   }
-  const dirtyStatus = readDirtyNonOpenWikiPaths(input.worktreePath);
+  const dirtyStatus = readDirtyWorktreePaths(input.worktreePath);
   if (!dirtyStatus.ok) {
     return {
       ...base,
@@ -104,11 +104,18 @@ function resolveSourceFreshness(input: {
       staleReason: "Unable to read git worktree status; regenerate OpenWiki before building a packet."
     };
   }
-  if (dirtyStatus.paths.length > 0) {
+  if (dirtyStatus.nonOpenWikiPaths.length > 0) {
     return {
       ...base,
       status: "stale",
       staleReason: "Repository has non-openwiki worktree changes; regenerate OpenWiki before building a packet."
+    };
+  }
+  if (dirtyStatus.openWikiMarkdownPaths.length > 0) {
+    return {
+      ...base,
+      status: "stale",
+      staleReason: "OpenWiki Markdown files have uncommitted changes; regenerate OpenWiki before building a fresh packet."
     };
   }
   if (!input.metadata?.gitHead) {
@@ -214,14 +221,21 @@ function readOpenWikiMetadata(worktreePath: string): OpenWikiMetadata | undefine
   }
 }
 
-function readDirtyNonOpenWikiPaths(worktreePath: string): { ok: boolean; paths: string[] } {
+function readDirtyWorktreePaths(worktreePath: string): {
+  ok: boolean;
+  nonOpenWikiPaths: string[];
+  openWikiMarkdownPaths: string[];
+} {
   const status = readGitResult(worktreePath, ["status", "--porcelain=v1", "-z"]);
-  if (!status.ok) return { ok: false, paths: [] };
+  if (!status.ok) return { ok: false, nonOpenWikiPaths: [], openWikiMarkdownPaths: [] };
   const paths = parsePorcelainStatusPaths(status.stdout)
     .filter(Boolean)
-    .filter((changedPath) => changedPath !== ".neondiff" && !changedPath.startsWith(".neondiff/"))
-    .filter((changedPath) => changedPath !== OPENWIKI_DIR && !changedPath.startsWith(`${OPENWIKI_DIR}/`));
-  return { ok: true, paths };
+    .filter((changedPath) => changedPath !== ".neondiff" && !changedPath.startsWith(".neondiff/"));
+  return {
+    ok: true,
+    nonOpenWikiPaths: paths.filter((changedPath) => changedPath !== OPENWIKI_DIR && !changedPath.startsWith(`${OPENWIKI_DIR}/`)),
+    openWikiMarkdownPaths: paths.filter((changedPath) => changedPath.startsWith(`${OPENWIKI_DIR}/`) && changedPath.endsWith(".md"))
+  };
 }
 
 function parsePorcelainStatusPaths(status: string): string[] {
