@@ -16,6 +16,18 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [1.0.1] - docs/releases/v1.0.1.md
+
+### Changed
+
+- Remove pre-1.0 npm beta install exposure and historical GitHub prerelease
+  pages while preserving Git tags/source refs for provenance and rollback.
+- Add npm publish-token preflight and move public CI/publish workflows to
+  Node 24-compatible official Actions.
+- Refresh stable release manifest, license API proof, authenticated issuance
+  proof, rollback proof, installer default, and public release-readiness checks
+  for the first post-GA patch.
+
 ## [1.0.0] - docs/releases/v1.0.0.md
 
 ### Added

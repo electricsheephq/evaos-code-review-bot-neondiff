@@ -1,0 +1,38 @@
+{
+  "evidenceKind": "release_rollback_refs",
+  "releaseVersion": "v1.0.1",
+  "observedAt": "2026-07-09T12:25:30.315Z",
+  "channels": {
+    "cli": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.0",
+      "rollbackTarget": "v1.0.0",
+      "targetVerifiedBy": "git rev-list -n 1 refs/tags/v1.0.0",
+      "targetVerifiedSha": "23d66717c0627b25a8c56895bba9627bcdd69cca"
+    },
+    "daemon": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.0",
+      "rollbackTarget": "v1.0.0",
+      "targetVerifiedBy": "git rev-list -n 1 refs/tags/v1.0.0",
+      "targetVerifiedSha": "23d66717c0627b25a8c56895bba9627bcdd69cca"
+    },
+    "browserDashboard": {
+      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
+      "rollbackCommand": "git reset --hard refs/tags/v1.0.0",
+      "rollbackTarget": "v1.0.0",
+      "targetVerifiedBy": "git rev-list -n 1 refs/tags/v1.0.0",
+      "targetVerifiedSha": "23d66717c0627b25a8c56895bba9627bcdd69cca"
+    },
+    "website": {
+      "rollbackRepository": "electricsheephq/neon-diff-agent-website",
+      "rollbackCommand": "git revert 6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      "rollbackTarget": "6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      "targetVerifiedBy": "gh api repos/electricsheephq/neon-diff-agent-website/commits/6b670d00cd587fb7d564347b6bc0d4d3e8d13186 --jq .sha",
+      "targetVerifiedSha": "6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      "targetUrl": "https://github.com/electricsheephq/neon-diff-agent-website/commit/6b670d00cd587fb7d564347b6bc0d4d3e8d13186",
+      "targetSubject": "fix: support custom Stripe webhook secret (#35)"
+    }
+  },
+  "proofBoundary": "Rollback refs are repo-scoped. Website rollback must be run from the website repo, not from the NeonDiff product checkout."
+}
