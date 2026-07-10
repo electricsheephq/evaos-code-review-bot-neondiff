@@ -52,6 +52,7 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var providerVerificationStatus = "Verify the stored API key when ready."
     @Published var isProviderVerificationInProgress = false
     @Published var isProviderVerificationCancelling = false
+    @Published private(set) var providerVerificationSafetyLatchMessage: String?
     @Published var pendingLicenseKey = ""
     @Published var onboardingFlow = OnboardingFlow()
     @Published var isOnboardingPresented = false
@@ -286,12 +287,15 @@ final class NeonDiffDesktopModel: ObservableObject {
             && previewedProviderSnapshot == nil
             && !isProviderVerificationInProgress
             && !isProviderVerificationCancelling
+            && providerVerificationSafetyLatchMessage == nil
             && !isConfigPatchInProgress
             && !isConfigInspectInProgress
     }
 
     var canEditProviderConfiguration: Bool {
-        !isProviderVerificationInProgress && !isProviderVerificationCancelling
+        !isProviderVerificationInProgress
+            && !isProviderVerificationCancelling
+            && providerVerificationSafetyLatchMessage == nil
     }
 
     var canPreviewProviderConfig: Bool {
@@ -343,6 +347,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func persistLocalSettings() {
+        guard providerVerificationSafetyLatchMessage == nil else {
+            lastError = providerVerificationSafetyLatchMessage
+            return
+        }
         userDefaults.set(configPath, forKey: "neondiff.configPath")
         userDefaults.set(cliPath, forKey: "neondiff.cliPath")
         userDefaults.set(launchdLabel, forKey: "neondiff.launchdLabel")
@@ -368,6 +376,11 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func launchDashboard(openBrowser: Bool) {
+        guard providerVerificationSafetyLatchMessage == nil else {
+            lastError = providerVerificationSafetyLatchMessage
+            dashboardLaunchStatus = "restart required"
+            return
+        }
         persistLocalSettings()
         let command = openBrowser ? dashboardCommand : dashboardServerCommand
         lastCommandLine = command.commandLine
@@ -437,6 +450,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func addPendingIssueRepo() {
+        guard canEditProviderConfiguration else {
+            lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
+            return
+        }
         let repo = pendingIssueRepoName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isValidRepoName(repo) else {
             lastError = "Enter an issue-enrichment repository as owner/repo."
@@ -452,6 +469,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func removeIssueRepo(_ repo: String) {
+        guard canEditProviderConfiguration else {
+            lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
+            return
+        }
         controlCenter.issueAllowlist.removeAll { $0.caseInsensitiveCompare(repo) == .orderedSame }
         controlCenterStatus = "Issue-enrichment allowlist changed locally; Preview is required before Apply."
     }
@@ -574,6 +595,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func addPendingRepoToAllowlist() {
+        guard canEditProviderConfiguration else {
+            lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
+            return
+        }
         let repoName = pendingRepoName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isValidRepoName(repoName) else {
             lastError = "Enter a GitHub repository as owner/repo."
@@ -732,6 +757,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func storeProviderKey() {
+        guard providerVerificationSafetyLatchMessage == nil else {
+            lastError = providerVerificationSafetyLatchMessage
+            return
+        }
         do {
             try keychain.setSecret(pendingProviderKey, account: providerKeyAccount)
             pendingProviderKey = ""
@@ -746,6 +775,12 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func verifyProviderKey() {
+        if let providerVerificationSafetyLatchMessage {
+            providerVerification = nil
+            providerVerificationStatus = providerVerificationSafetyLatchMessage
+            lastError = providerVerificationSafetyLatchMessage
+            return
+        }
         guard !isProviderVerificationInProgress else { return }
         guard providers.providerKeyStored, keychain.containsSecret(account: providerKeyAccount) else {
             providerVerification = nil
@@ -799,6 +834,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             do {
                 outcome = .success(try await service.verifyCancellable(
                     account: providerKeyAccount,
+                    expectedProviderId: providerId,
                     arguments: arguments,
                     timeout: 15
                 ))
@@ -813,6 +849,14 @@ final class NeonDiffDesktopModel: ObservableObject {
             self.activeProviderVerificationRequestGeneration = nil
             self.isProviderVerificationInProgress = false
             self.isProviderVerificationCancelling = false
+            if case .failure(NeonDiffCLIError.cleanupTimedOut) = outcome {
+                let message = "Provider verification process cleanup could not be proven. Restart NeonDiff before any further provider, config, or CLI operation."
+                self.providerVerificationSafetyLatchMessage = message
+                self.providerVerification = nil
+                self.providerVerificationStatus = message
+                self.lastError = message
+                return
+            }
             guard
                 !wasCancelled,
                 self.providerVerificationContextGeneration == requestContextGeneration,
@@ -924,6 +968,12 @@ final class NeonDiffDesktopModel: ObservableObject {
         displayCommand: DesktopCommand,
         controlCenterOperation: ControlCenterOperation? = nil
     ) {
+        if let providerVerificationSafetyLatchMessage {
+            lastError = providerVerificationSafetyLatchMessage
+            pendingProviderPatchProof = nil
+            if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
+            return
+        }
         let isConfigPatchCommand = arguments.count >= 2 && arguments[0] == "config" && arguments[1] == "patch"
         let isConfigInspectCommand = arguments.count >= 2 && arguments[0] == "config" && arguments[1] == "inspect"
         if (isConfigPatchCommand || isConfigInspectCommand)

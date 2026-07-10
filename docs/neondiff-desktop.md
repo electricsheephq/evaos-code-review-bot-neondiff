@@ -83,6 +83,15 @@ Preview binds to that revision, and Apply fails closed
 if the config changed before the write. A
 successful Apply returns the next revision, which becomes the compare-and-swap
 guard for the one-shot rollback.
+
+Provider Preview and Apply use that same whitelisted, revision-bound
+`config patch` engine: Preview carries the loaded revision, and confirmed Apply
+is authorized only for that exact previewed snapshot. The underlying operation
+is reversible by applying the previously inspected non-secret provider values
+through a new revision-checked patch. The current Providers pane does **not**
+offer the Policy pane's one-click in-memory rollback button, so this is
+rollback-safe config machinery rather than a claim that a provider rollback UI
+or live rollback was exercised in this slice.
 The native client accepts patch success only from an `ok=true`, `config patch`
 envelope whose lowercase SHA-256 revisions match the requested operation.
 Preview additionally requires `dryRun=true` and `wrote=false`; Apply and rollback

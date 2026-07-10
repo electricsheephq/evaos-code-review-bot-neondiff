@@ -1277,6 +1277,7 @@ let providerVerificationArguments = [
 ]
 let providerVerification = try providerVerificationService.verify(
     account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
     arguments: providerVerificationArguments,
     timeout: 15
 )
@@ -1315,6 +1316,7 @@ fakeProviderCLI.result = CLIRunResult(
 do {
     retainedProviderVerification = try providerVerificationService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1329,6 +1331,7 @@ fakeProviderCLI.error = FixtureProviderTransportError.unavailable
 do {
     retainedProviderVerification = try providerVerificationService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1346,6 +1349,7 @@ fakeProviderCLI.result = CLIRunResult(
 )
 let configuredProviderVerification = try providerVerificationService.verify(
     account: providerSecretAccount,
+    expectedProviderId: "github-copilot",
     arguments: providerVerificationArguments,
     timeout: 15
 )
@@ -1361,6 +1365,7 @@ fakeProviderCLI.result = CLIRunResult(
 )
 let blockedProviderVerification = try providerVerificationService.verify(
     account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
     arguments: providerVerificationArguments,
     timeout: 15
 )
@@ -1429,6 +1434,7 @@ for (message, result) in invalidProviderVerificationResults {
     let failure = captureProviderVerificationFailure(message) {
         _ = try providerVerificationService.verify(
             account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
             arguments: providerVerificationArguments,
             timeout: 15
         )
@@ -1450,6 +1456,7 @@ fakeProviderCLI.result = CLIRunResult(
 let stdoutLeakFailure = captureProviderVerificationFailure("secret in serialized stdout") {
     _ = try providerVerificationService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1467,6 +1474,7 @@ fakeProviderCLI.result = CLIRunResult(
 let stderrLeakFailure = captureProviderVerificationFailure("secret in stderr") {
     _ = try providerVerificationService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1486,6 +1494,7 @@ let escapedSecretCLI = FakeProviderVerificationCLI(
 let escapedSecretService = ProviderVerificationService(keychain: escapedSecretStore, cli: escapedSecretCLI)
 let escapedSafeSnapshot = try escapedSecretService.verify(
     account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
     arguments: providerVerificationArguments,
     timeout: 15
 )
@@ -1505,6 +1514,7 @@ let ecmaScriptNonWhitespaceSecret = "\u{0085}fixture-provider-value\u{0085}"
 try escapedSecretStore.setSecret(ecmaScriptNonWhitespaceSecret, account: providerSecretAccount)
 _ = try escapedSecretService.verify(
     account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
     arguments: providerVerificationArguments,
     timeout: 15
 )
@@ -1537,6 +1547,57 @@ func encodedProviderEnvelope(
     return checkedValue(String(data: data, encoding: .utf8), "provider envelope serializes as UTF-8")
 }
 
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: try encodedProviderEnvelope(),
+    stderr: ""
+)
+_ = try escapedSecretService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(true, "benign redacted provider metadata remains accepted")
+
+let credentialShapedEnvelopes = try [
+    encodedProviderEnvelope(detail: "Bearer " + "gh" + "p_" + String(repeating: "1", count: 36)),
+    encodedProviderEnvelope(troubleshooting: ["api_key=" + "sk-" + "proj-" + String(repeating: "2", count: 20)]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "github" + "_pat_" + String(repeating: "3", count: 30)]]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "-----BEGIN " + "PRIVATE" + " KEY-----"]])
+]
+for (index, envelope) in credentialShapedEnvelopes.enumerated() {
+    escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+    let failure = captureProviderVerificationFailure("credential-shaped envelope \(index)") {
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(failure.localizedDescription == ProviderVerificationError.secretInProcessOutput.localizedDescription, "credential-shaped output fails with a fixed redacted error")
+    check(!failure.localizedDescription.contains("1234567890"), "credential rejection error contains no credential fragment")
+}
+
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: try encodedProviderEnvelope().replacingOccurrences(of: #""providerId":"zcode-glm""#, with: #""providerId":"other-provider""#),
+    stderr: ""
+)
+let wrongProviderFailure = captureProviderVerificationFailure("wrong provider healthy envelope") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(wrongProviderFailure.localizedDescription == ProviderVerificationError.providerMismatch.localizedDescription, "wrong-provider healthy output is rejected explicitly")
+check(!wrongProviderFailure.localizedDescription.contains("other-provider"), "wrong-provider error is fixed and redacted")
+
+escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: healthyProviderVerificationJSON, stderr: "")
+
 let escapedSecretEnvelopes = try [
     encodedProviderEnvelope(detail: escapedOperationalSecret),
     encodedProviderEnvelope(troubleshooting: ["retry: \(escapedOperationalSecret)"]),
@@ -1551,6 +1612,7 @@ for (index, envelope) in escapedSecretEnvelopes.enumerated() {
     let failure = captureProviderVerificationFailure("decoded escaped secret envelope \(index)") {
         _ = try escapedSecretService.verify(
             account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
             arguments: providerVerificationArguments,
             timeout: 15
         )
@@ -1598,6 +1660,7 @@ for (index, stderrText) in escapedSecretStderrCases.enumerated() {
     let failure = captureProviderVerificationFailure("escaped normalized secret stderr \(index)") {
         _ = try escapedSecretService.verify(
             account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
             arguments: providerVerificationArguments,
             timeout: 15
         )
@@ -1619,6 +1682,7 @@ escapedSecretCLI.result = CLIRunResult(
 let nestedSerializedStdoutFailure = captureProviderVerificationFailure("nested serialized secret stdout") {
     _ = try escapedSecretService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1644,6 +1708,7 @@ escapedSecretCLI.result = CLIRunResult(
 let nestedSerializedStderrFailure = captureProviderVerificationFailure("nested serialized secret stderr") {
     _ = try escapedSecretService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1662,6 +1727,7 @@ escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: deeplyNestedEnvelope
 let deeplyNestedFailure = captureProviderVerificationFailure("deeply nested provider diagnostic") {
     _ = try escapedSecretService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1677,6 +1743,7 @@ escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: wideEnvelope, stderr
 let wideBudgetFailure = captureProviderVerificationFailure("provider diagnostic node budget") {
     _ = try escapedSecretService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1695,6 +1762,7 @@ let whitespaceOnlySecretService = ProviderVerificationService(
 _ = captureProviderVerificationFailure("whitespace-only normalized provider secret") {
     _ = try whitespaceOnlySecretService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )
@@ -1708,6 +1776,7 @@ let missingProviderSecretService = ProviderVerificationService(
 _ = captureProviderVerificationFailure("missing Keychain provider secret") {
     _ = try missingProviderSecretService.verify(
         account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
         arguments: providerVerificationArguments,
         timeout: 15
     )

@@ -9,6 +9,7 @@ Resolve the three current-head PR #513 P2 findings without weakening the Keychai
 - Parse `providers.defaultProviderId` and the selected registry entry into native provider state: id, display name, enabled state, adapter, auth mode, base URL, and model.
 - Bind the Providers pane endpoint/model and selector to that registry state. Keep ZCode CLI/app-config controls separate.
 - Patch only supported non-secret provider registry paths. Never write the provider key.
+- Use the existing revision-safe config-patch contract for provider Preview and Apply. Reversal remains a new expected-revision patch of the previously inspected non-secret values; do not claim or invent a one-click provider rollback where the pane does not expose one.
 - Keep a loaded provider snapshot and config revision. Disable Verify while provider settings are dirty, preview-only, applying, or otherwise not confirmed by an exact live apply/readback.
 - Enable the API-key Verify action only for an enabled `openai-compatible` + `api-key-env` target with a stored Keychain item.
 - Pass the exact selected `--provider` and `--expected-config-revision` to the CLI. Reject revision drift before reading stdin or launching provider verification.

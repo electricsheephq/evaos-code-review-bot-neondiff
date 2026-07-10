@@ -173,9 +173,50 @@ struct NeonDiffDesktopModelChecks {
         try await checkConfigMutationRejectsStaleResult()
         try await checkKeyMutationRejectsStaleResult()
         try await checkFailuresClearPriorState()
+        try await checkWrongProviderHealthyRejected()
+        try await checkCleanupTimeoutLatchesRestartRequirement()
         try checkDirtyApplyReadbackGate()
         try checkSuccessfulConfigWriteInvalidatesPriorState()
         print("NeonDiffDesktopModelChecks passed")
+    }
+
+    @MainActor
+    private static func checkWrongProviderHealthyRejected() async throws {
+        let wrongProviderJSON = healthyJSON.replacingOccurrences(of: #""providerId":"zcode-glm""#, with: #""providerId":"other-provider""#)
+        let fixture = try makeFixture(result: CLIRunResult(exitCode: 0, stdout: wrongProviderJSON, stderr: ""))
+        fixture.model.providerVerification = healthySnapshot()
+        fixture.model.verifyProviderKey()
+        await waitUntil("wrong-provider verification completes") { !fixture.model.isProviderVerificationInProgress }
+        check(fixture.model.providerVerification == nil, "healthy output for another provider cannot install")
+        check(fixture.model.lastError?.contains("other-provider") != true, "wrong-provider rejection does not expose provider output")
+    }
+
+    @MainActor
+    private static func checkCleanupTimeoutLatchesRestartRequirement() async throws {
+        let fixture = try makeFixture(result: CLIRunResult(exitCode: 0, stdout: healthyJSON, stderr: ""))
+        fixture.cli.error = NeonDiffCLIError.cleanupTimedOut
+        fixture.model.verifyProviderKey()
+        await waitUntil("cleanup-timeout verification completes") { !fixture.model.isProviderVerificationInProgress }
+        let restartMessage = fixture.model.providerVerificationSafetyLatchMessage
+        check(restartMessage?.contains("Restart NeonDiff") == true, "unproven cleanup latches a restart-required state")
+        check(fixture.model.providerVerification == nil, "cleanup timeout cannot retain verification output")
+        check(!fixture.model.canVerifyProviderKey, "cleanup timeout blocks another verification")
+        check(!fixture.model.canEditProviderConfiguration, "cleanup timeout blocks provider and config mutation")
+
+        let callsBeforeRetry = fixture.cli.callCount
+        fixture.model.verifyProviderKey()
+        check(fixture.cli.callCount == callsBeforeRetry, "cleanup timeout cannot launch a second verification process")
+        check(fixture.model.providerVerificationStatus == restartMessage, "retry remains on the fixed restart-required status")
+
+        let commandBeforeBlockedMutation = fixture.model.lastCommandLine
+        fixture.model.inspectConfig()
+        fixture.model.previewProviderConfigPatch()
+        fixture.model.applyProviderConfigPatch()
+        fixture.model.pendingProviderKey = "must-not-store"
+        fixture.model.storeProviderKey()
+        check(fixture.model.lastCommandLine == commandBeforeBlockedMutation, "restart latch blocks config and CLI process mutation")
+        check(fixture.model.providers.providerKeyStored, "restart latch does not mutate provider key state")
+        check(fixture.model.lastError == restartMessage, "restart latch reports only the fixed redacted operator status")
     }
 
     @MainActor
@@ -185,6 +226,7 @@ struct NeonDiffDesktopModelChecks {
         fixture.model.providers.selectedProviderBaseUrl = "https://edited.example/v1"
         check(!fixture.model.canVerifyProviderKey, "dirty provider edits disable Verify")
         check(fixture.model.canPreviewProviderConfig, "dirty provider edit enables preview")
+        check(fixture.model.providerPatchPreviewCommand.commandLine.contains("--expected-revision") && fixture.model.providerPatchPreviewCommand.commandLine.contains(loadedRevision), "provider Preview uses the loaded compare-and-swap revision")
 
         let previewJSON = #"{"ok":true,"command":"config patch","dryRun":true,"wrote":false,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://edited.example/v1","model":"fixture-model","authMode":"api-key-env"}}}}}"#
         fixture.model.applyProviderPatchResultForTesting(
@@ -193,6 +235,8 @@ struct NeonDiffDesktopModelChecks {
         )
         check(!fixture.model.canVerifyProviderKey, "preview-only provider settings cannot be verified")
         check(fixture.model.canApplyProviderConfig, "exact successful preview enables Apply")
+        check(fixture.model.providerPatchApplyCommand.commandLine.contains("--expected-revision") && fixture.model.providerPatchApplyCommand.commandLine.contains(loadedRevision), "provider Apply remains bound to the previewed revision")
+        check(fixture.model.providerPatchApplyCommand.commandLine.contains("--confirm true"), "provider Apply uses the confirmed reversible config patch contract")
 
         let afterRevision = String(repeating: "b", count: 64)
         let applyJSON = #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"\#(afterRevision)","config":{"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://edited.example/v1","model":"fixture-model","authMode":"api-key-env"}}}}}"#
@@ -236,7 +280,7 @@ struct NeonDiffDesktopModelChecks {
     private static func checkStructuredNonhealthyResults() async throws {
         let fixture = try makeFixture(result: CLIRunResult(
             exitCode: 1,
-            stdout: #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:01:00.000Z","providerId":"github-copilot","state":"configured_unverified","mode":"metadata_only","detail":"Metadata only.","redacted":true,"troubleshooting":["Choose an API-key provider."]}"#,
+            stdout: #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:01:00.000Z","providerId":"zcode-glm","state":"configured_unverified","mode":"metadata_only","detail":"Metadata only.","redacted":true,"troubleshooting":["Choose an API-key provider."]}"#,
             stderr: ""
         ))
         fixture.model.verifyProviderKey()

@@ -7,6 +7,15 @@ struct ProviderSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if let restartMessage = model.providerVerificationSafetyLatchMessage {
+                    OperatorSection("Restart Required") {
+                        OperatorBadge(text: "PROCESS CLEANUP UNPROVEN", color: NeonDiffTheme.warning)
+                        Text(restartMessage)
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 OperatorSection("ZCode / GLM") {
                     OperatorTextField(title: "Model", text: $model.providers.zcodeModel)
                     OperatorTextField(title: "CLI Path", text: $model.providers.zcodeCliPath)

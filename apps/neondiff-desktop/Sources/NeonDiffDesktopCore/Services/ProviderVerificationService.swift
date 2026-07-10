@@ -49,6 +49,7 @@ public enum ProviderVerificationError: Error, LocalizedError {
     case secretInProcessOutput
     case malformedEnvelope
     case invalidEnvelope
+    case providerMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -66,6 +67,8 @@ public enum ProviderVerificationError: Error, LocalizedError {
             "Provider verification returned malformed JSON"
         case .invalidEnvelope:
             "Provider verification returned an invalid redacted result"
+        case .providerMismatch:
+            "Provider verification returned a result for a different provider"
         }
     }
 }
@@ -88,6 +91,7 @@ public enum ProviderVerificationParser {
 
     public static func parse(
         result: CLIRunResult,
+        expectedProviderId: String,
         forbiddenValue: String? = nil
     ) throws -> ProviderVerificationSnapshot {
         if let forbiddenValue,
@@ -103,8 +107,11 @@ public enum ProviderVerificationParser {
             throw ProviderVerificationError.malformedEnvelope
         }
 
-        guard let envelope = object as? [String: Any], !containsSecretLikeKey(object) else {
+        guard let envelope = object as? [String: Any] else {
             throw ProviderVerificationError.invalidEnvelope
+        }
+        if containsSecretLikeKey(object) || containsCredentialShapedMaterial(object) {
+            throw ProviderVerificationError.secretInProcessOutput
         }
         guard
             strictBoolean(envelope["redacted"]) == true,
@@ -121,6 +128,9 @@ public enum ProviderVerificationParser {
             let troubleshooting = nonEmptyStringArray(envelope["troubleshooting"])
         else {
             throw ProviderVerificationError.invalidEnvelope
+        }
+        guard providerId == expectedProviderId else {
+            throw ProviderVerificationError.providerMismatch
         }
 
         switch state {
@@ -199,6 +209,69 @@ public enum ProviderVerificationParser {
         }
         return false
     }
+
+    private struct CredentialScanBudget {
+        static let maximumDepth = 32
+        static let maximumNodes = 4_096
+        static let maximumBytes = 2 * 1024 * 1024
+        var nodes = 0
+        var bytes = 0
+
+        mutating func consume(depth: Int, bytes additionalBytes: Int = 0) -> Bool {
+            nodes += 1
+            bytes += additionalBytes
+            return depth <= Self.maximumDepth
+                && nodes <= Self.maximumNodes
+                && bytes <= Self.maximumBytes
+        }
+    }
+
+    private static func containsCredentialShapedMaterial(_ value: Any) -> Bool {
+        var budget = CredentialScanBudget()
+        return containsCredentialShapedMaterial(value, depth: 0, budget: &budget)
+    }
+
+    private static func containsCredentialShapedMaterial(
+        _ value: Any,
+        depth: Int,
+        budget: inout CredentialScanBudget
+    ) -> Bool {
+        guard budget.consume(depth: depth) else { return true }
+        if let string = value as? String {
+            guard budget.consume(depth: depth, bytes: string.utf8.count) else { return true }
+            return credentialPatterns.contains { pattern in
+                string.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+            }
+        }
+        if let dictionary = value as? [String: Any] {
+            for (key, nested) in dictionary {
+                guard budget.consume(depth: depth + 1, bytes: key.utf8.count) else { return true }
+                if credentialPatterns.contains(where: {
+                    key.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
+                }) || containsCredentialShapedMaterial(nested, depth: depth + 1, budget: &budget) {
+                    return true
+                }
+            }
+        } else if let array = value as? [Any] {
+            for nested in array {
+                if containsCredentialShapedMaterial(nested, depth: depth + 1, budget: &budget) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static let credentialPatterns = [
+        #"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"#,
+        #"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}"#,
+        #"\bgithub_pat_[A-Za-z0-9_]{20,}"#,
+        #"\bgh[pousr]_[A-Za-z0-9]{20,}"#,
+        #"\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}"#,
+        #"\bAKIA[0-9A-Z]{16}\b"#,
+        #"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"#,
+        #"\b(?:api[_ -]?key|authorization|credential|password|secret|token)\s*[:=]\s*[^\s,;]{10,}"#
+    ]
 
     private struct ForbiddenValueScanBudget {
         static let maximumDepth = 32
@@ -506,6 +579,7 @@ public final class ProviderVerificationService {
 
     public func verify(
         account: String,
+        expectedProviderId: String,
         arguments: [String],
         timeout: TimeInterval
     ) throws -> ProviderVerificationSnapshot {
@@ -537,11 +611,16 @@ public final class ProviderVerificationService {
         ) else {
             throw ProviderVerificationError.secretInProcessOutput
         }
-        return try ProviderVerificationParser.parse(result: result, forbiddenValue: secret)
+        return try ProviderVerificationParser.parse(
+            result: result,
+            expectedProviderId: expectedProviderId,
+            forbiddenValue: secret
+        )
     }
 
     public func verifyCancellable(
         account: String,
+        expectedProviderId: String,
         arguments: [String],
         timeout: TimeInterval
     ) async throws -> ProviderVerificationSnapshot {
@@ -575,7 +654,11 @@ public final class ProviderVerificationService {
         ) else {
             throw ProviderVerificationError.secretInProcessOutput
         }
-        return try ProviderVerificationParser.parse(result: result, forbiddenValue: secret)
+        return try ProviderVerificationParser.parse(
+            result: result,
+            expectedProviderId: expectedProviderId,
+            forbiddenValue: secret
+        )
     }
 
     private static func hasStrictStandardInputCommand(_ arguments: [String]) -> Bool {

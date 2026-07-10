@@ -183,6 +183,7 @@ struct PolicyView: View {
                 .foregroundStyle(NeonDiffTheme.textSecondary)
             }
             .padding(24)
+            .disabled(!model.canEditProviderConfiguration)
         }
         .scrollContentBackground(.hidden)
     }
