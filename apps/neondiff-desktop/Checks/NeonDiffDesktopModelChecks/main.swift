@@ -168,6 +168,7 @@ func waitUntil(
 struct NeonDiffDesktopModelChecks {
     @MainActor
     static func main() async throws {
+        try checkVisualProofFixtureUsesSavedRegistryAuthority()
         try await checkHealthyConcurrencyAndSecretBoundary()
         try await checkStructuredNonhealthyResults()
         try await checkProviderMutationRejectsStaleResult()
@@ -181,6 +182,23 @@ struct NeonDiffDesktopModelChecks {
         try checkDirtyApplyReadbackGate()
         try checkSuccessfulConfigWriteInvalidatesPriorState()
         print("NeonDiffDesktopModelChecks passed")
+    }
+
+    @MainActor
+    private static func checkVisualProofFixtureUsesSavedRegistryAuthority() throws {
+        setenv("NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE", "provider-verification", 1)
+        defer { unsetenv("NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE") }
+        let defaults = UserDefaults(suiteName: "neondiff-model-visual-fixture-\(UUID().uuidString)")!
+        let model = NeonDiffDesktopModel(userDefaults: defaults, keychain: ModelCheckSecretStore())
+
+        check(model.providers.selectedProviderId == "zcode-glm", "visual fixture selects the saved registry provider")
+        check(model.providers.registryTargets.count == 1, "visual fixture seeds one saved registry target")
+        check(model.providers.selectedRegistryTarget?.displayName == "Z.AI GLM", "visual fixture exposes registry display metadata")
+        check(model.providers.selectedRegistryTarget?.isAPIKeyVerificationEligible == true, "visual fixture target is verification eligible")
+        check(model.providers.providerKeyStored, "visual fixture exposes provider-scoped Keychain state")
+        check(model.canVerifyProviderKey, "visual fixture renders an enabled Verify action")
+        check(model.providers.openAICompatibleEndpoint != model.providers.selectedProviderBaseUrl, "legacy endpoint is not the registry authority")
+        check(model.providerVerification?.providerId == model.providers.selectedProviderId, "visual fixture result is bound to the selected registry provider")
     }
 
     @MainActor

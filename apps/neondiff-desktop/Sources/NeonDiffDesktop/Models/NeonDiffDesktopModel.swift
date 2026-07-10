@@ -150,7 +150,25 @@ final class NeonDiffDesktopModel: ObservableObject {
             providers.zcodeModel = "glm-5"
             providers.zcodeCliPath = "/usr/local/bin/zcode"
             providers.zcodeAppConfigPath = "~/.config/zcode/config.json"
-            providers.openAICompatibleEndpoint = "https://api.z.ai/api/coding/paas/v4"
+            providers.openAICompatibleEndpoint = "https://legacy-endpoint.invalid/v1"
+            providers.selectedProviderId = "zcode-glm"
+            providers.registryTargets = [
+                ProviderRegistryTarget(
+                    id: "zcode-glm",
+                    displayName: "Z.AI GLM",
+                    enabled: true,
+                    adapter: "openai-compatible",
+                    authMode: "api-key-env",
+                    baseUrl: "https://api.z.ai/api/coding/paas/v4",
+                    model: "glm-5"
+                )
+            ]
+            providers.providerKeyStored = true
+            providerLoadedSnapshot = ProviderConfigurationSnapshot(
+                providers: providers,
+                configPath: configPath
+            )
+            providerLoadedRevision = String(repeating: "a", count: 64)
             providerVerification = ProviderVerificationSnapshot(
                 ok: true,
                 command: "providers verify",

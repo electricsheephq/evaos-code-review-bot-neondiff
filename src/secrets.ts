@@ -1,45 +1,18 @@
-const SECRET_PATTERNS: RegExp[] = [
-  /\bgh[pousr]_[A-Za-z0-9_]{8,}\b/g,
-  /\bgithub_pat_[A-Za-z0-9_]{8,}\b/g,
-  /\bsk-[A-Za-z0-9_-]{8,}\b/g,
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/gi,
-  /https?:\/\/[^/\s@]+@[^/\s]+/gi,
-  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gi,
-  /[?&](?:access[_-]?token|auth[_-]?token|api[_-]?key|token|secret|session|cookie)=[A-Za-z0-9._~+/=-]{16,}/gi,
-  /\bcustomer[_-]?id\b\s*[:=]\s*["']?cus_[A-Za-z0-9]{8,}/gi,
-  /\b(?:customer|client)[_-]?ssn\b\s*[:=]\s*["']?\d{3}-\d{2}-\d{4}\b/gi,
-  /\b(?:customer|client)[_-]?phone\b\s*[:=]\s*["']?\+?\d[\d ().-]{7,}\d\b/gi,
-  /\b(?:api[_-]?key|token|secret|password|cookie|session)\b\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{16,}/gi,
-  /\b(?:NEONDIFF|NDL|LIC)_[A-Za-z0-9][A-Za-z0-9_-]{11,}\b/gi,
-  /\bnd_live_[A-Za-z0-9_-]{8,}\b/gi,
-  /(?<![A-Za-z0-9_./-])(?:[Nn][Ee][Oo][Nn][Dd][Ii][Ff][Ff]|[Nn][Dd][Ll]|[Ll][Ii][Cc])-(?=[A-Za-z0-9_-]*[A-Z0-9])[A-Za-z0-9][A-Za-z0-9_-]{11,}\b/g,
-  /\b[A-Za-z0-9]{3,}[-_](?:secret|token|password|cookie)[-_][A-Za-z0-9_-]{3,}\b/gi,
-  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*/g
-];
+import {
+  canonicalSecretRules,
+  canonicalSecretSafeLiterals,
+  canonicalSensitiveCookieRule
+} from "./generated-secret-rules.js";
 
-const COOKIE_HEADER_PREFIX = "cookie:";
-const SENSITIVE_COOKIE_NAME_PATTERN = /(?:session|token|auth|secret|cookie)/i;
-const MAX_COOKIE_ATTRIBUTE_SCAN = 1_000;
-const SAFE_ENV_VAR_NAMES = [
-  "NEONDIFF_GITHUB_APP_ID",
-  "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
-  "NEONDIFF_PROTECTED_CHECKOUT_ROOT",
-  "NEONDIFF_LICENSE_KEY",
-  "NEONDIFF_PROVIDER_API_KEY",
-  "NEONDIFF_ALLOW_REMOTE_SMOKE"
-];
-const SAFE_STRUCTURAL_VALUES = [
-  "missing_secret_env",
-  "neondiff-openwiki-context-ab-v0.1",
-  "neondiff-openwiki-docs-drift-v0.1"
-];
-const SAFE_REDACTION_LITERALS = [
-  ...SAFE_ENV_VAR_NAMES,
-  ...SAFE_STRUCTURAL_VALUES
-];
+const SECRET_PATTERNS = canonicalSecretRules.map(
+  (rule) => new RegExp(rule.source, rule.ignoreCase ? "gi" : "g")
+);
+const COOKIE_HEADER_PREFIX = canonicalSensitiveCookieRule.prefix;
+const SENSITIVE_COOKIE_NAME_PATTERN = new RegExp(
+  canonicalSensitiveCookieRule.sensitiveNameSource,
+  "i"
+);
+const MAX_COOKIE_ATTRIBUTE_SCAN = canonicalSensitiveCookieRule.maximumAttributes;
 
 export function containsSecretLikeText(input: string): boolean {
   const safeInput = protectSafeEnvVarNames(input);
@@ -105,14 +78,14 @@ function readSensitiveCookieHeader(line: string): string | undefined {
 }
 
 function protectSafeEnvVarNames(input: string): string {
-  return SAFE_REDACTION_LITERALS.reduce((text, name, index) => {
+  return canonicalSecretSafeLiterals.reduce((text, name, index) => {
     const pattern = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`, "g");
     return text.replace(pattern, `__NEONDIFF_SAFE_ENV_${index}__`);
   }, input);
 }
 
 function restoreSafeEnvVarNames(input: string): string {
-  return SAFE_REDACTION_LITERALS.reduce(
+  return canonicalSecretSafeLiterals.reduce(
     (text, name, index) => text.replaceAll(`__NEONDIFF_SAFE_ENV_${index}__`, name),
     input
   );

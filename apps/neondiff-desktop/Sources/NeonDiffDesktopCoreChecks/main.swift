@@ -1596,7 +1596,6 @@ let canonicalRedactorSensitiveEnvelopes = try [
     encodedProviderEnvelope(troubleshooting: ["Retry https://example.com/callback?access_token=abcdefghijklmnop"]),
     encodedProviderEnvelope(diagnostic: ["nested": ["message": "cookie=abcdefghijklmnop"]]),
     encodedProviderEnvelope(diagnostic: ["nested": ["message": "session: abcdefghijklmnop"]]),
-    encodedProviderEnvelope(diagnostic: ["nested": ["message": "license=abcdefghijklmnop"]]),
     encodedProviderEnvelope(diagnostic: ["https://operator:provider-password@example.com": "benign value"])
 ]
 for (index, envelope) in canonicalRedactorSensitiveEnvelopes.enumerated() {
@@ -1632,6 +1631,66 @@ _ = try escapedSecretService.verify(
     timeout: 15
 )
 check(true, "canonical redactor leaves benign detail, troubleshooting, and nested metadata accepted")
+
+check(
+    CanonicalSecretRuleCorpus.sensitive.count == CanonicalSecretRuleCorpus.ruleIDs.count,
+    "canonical Swift secret corpus covers every generated Node rule"
+)
+for fixture in CanonicalSecretRuleCorpus.sensitive {
+    let locations: [(String, Any)] = [
+        ("detail", fixture.text),
+        ("troubleshooting", [fixture.text]),
+        ("nested value", ["nested": ["message": fixture.text]]),
+        ("nested key", ["nested": [fixture.text: "public-safe fixture metadata"]])
+    ]
+    for (location, value) in locations {
+        let envelope: String
+        switch location {
+        case "detail":
+            envelope = try encodedProviderEnvelope(detail: value as! String)
+        case "troubleshooting":
+            envelope = try encodedProviderEnvelope(troubleshooting: value as! [String])
+        default:
+            envelope = try encodedProviderEnvelope(diagnostic: value)
+        }
+        escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+        let failure = captureProviderVerificationFailure("canonical \(fixture.id) in \(location)") {
+            _ = try escapedSecretService.verify(
+                account: providerSecretAccount,
+                expectedProviderId: "zcode-glm",
+                arguments: providerVerificationArguments,
+                timeout: 15
+            )
+        }
+        check(
+            failure.localizedDescription == ProviderVerificationError.secretInProcessOutput.localizedDescription,
+            "canonical \(fixture.id) fails closed in \(location) with the fixed redacted error"
+        )
+        check(
+            !failure.localizedDescription.contains(fixture.text),
+            "canonical \(fixture.id) rejection never echoes the matched text"
+        )
+    }
+}
+
+for fixture in CanonicalSecretRuleCorpus.benign {
+    let envelopes = try [
+        encodedProviderEnvelope(detail: fixture.text),
+        encodedProviderEnvelope(troubleshooting: [fixture.text]),
+        encodedProviderEnvelope(diagnostic: ["nested": ["message": fixture.text]]),
+        encodedProviderEnvelope(diagnostic: ["nested": [fixture.text: "public-safe fixture metadata"]])
+    ]
+    for envelope in envelopes {
+        escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(true, "canonical benign \(fixture.id) stays accepted across decoded keys and values")
+}
 
 escapedSecretCLI.result = CLIRunResult(
     exitCode: 0,

@@ -110,10 +110,7 @@ public enum ProviderVerificationParser {
         guard let envelope = object as? [String: Any] else {
             throw ProviderVerificationError.invalidEnvelope
         }
-        if containsSecretLikeKey(object)
-            || containsCredentialShapedMaterial(object)
-            || containsCanonicalRedactorSensitiveMaterial(object)
-        {
+        if containsSecretLikeKey(object) || containsCanonicalSecretLikeMaterial(object) {
             throw ProviderVerificationError.secretInProcessOutput
         }
         guard
@@ -229,12 +226,12 @@ public enum ProviderVerificationParser {
         }
     }
 
-    private static func containsCredentialShapedMaterial(_ value: Any) -> Bool {
+    private static func containsCanonicalSecretLikeMaterial(_ value: Any) -> Bool {
         var budget = CredentialScanBudget()
-        return containsCredentialShapedMaterial(value, depth: 0, budget: &budget)
+        return containsCanonicalSecretLikeMaterial(value, depth: 0, budget: &budget)
     }
 
-    private static func containsCredentialShapedMaterial(
+    private static func containsCanonicalSecretLikeMaterial(
         _ value: Any,
         depth: Int,
         budget: inout CredentialScanBudget
@@ -242,69 +239,20 @@ public enum ProviderVerificationParser {
         guard budget.consume(depth: depth) else { return true }
         if let string = value as? String {
             guard budget.consume(depth: depth, bytes: string.utf8.count) else { return true }
-            return credentialPatterns.contains { pattern in
-                string.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
-            }
+            return CanonicalSecretScanner.containsSecretLikeText(string)
         }
         if let dictionary = value as? [String: Any] {
             for (key, nested) in dictionary {
                 guard budget.consume(depth: depth + 1, bytes: key.utf8.count) else { return true }
-                if credentialPatterns.contains(where: {
-                    key.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
-                }) || containsCredentialShapedMaterial(nested, depth: depth + 1, budget: &budget) {
+                if CanonicalSecretScanner.containsSecretLikeText(key)
+                    || containsCanonicalSecretLikeMaterial(nested, depth: depth + 1, budget: &budget)
+                {
                     return true
                 }
             }
         } else if let array = value as? [Any] {
             for nested in array {
-                if containsCredentialShapedMaterial(nested, depth: depth + 1, budget: &budget) {
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
-    private static let credentialPatterns = [
-        #"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"#,
-        #"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}"#,
-        #"\bgithub_pat_[A-Za-z0-9_]{20,}"#,
-        #"\bgh[pousr]_[A-Za-z0-9]{20,}"#,
-        #"\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}"#,
-        #"\bAKIA[0-9A-Z]{16}\b"#,
-        #"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"#,
-        #"\b(?:api[_ -]?key|authorization|credential|password|secret|token)\s*[:=]\s*[^\s,;]{10,}"#
-    ]
-
-    private static func containsCanonicalRedactorSensitiveMaterial(_ value: Any) -> Bool {
-        var budget = CredentialScanBudget()
-        return containsCanonicalRedactorSensitiveMaterial(value, depth: 0, budget: &budget)
-    }
-
-    private static func containsCanonicalRedactorSensitiveMaterial(
-        _ value: Any,
-        depth: Int,
-        budget: inout CredentialScanBudget
-    ) -> Bool {
-        guard budget.consume(depth: depth) else { return true }
-        if let string = value as? String {
-            guard budget.consume(depth: depth, bytes: string.utf8.count) else { return true }
-            return NeonDiffRedactor.redact(string) != string
-        }
-        if let dictionary = value as? [String: Any] {
-            for (key, nested) in dictionary {
-                guard budget.consume(depth: depth + 1, bytes: key.utf8.count),
-                      NeonDiffRedactor.redact(key) == key
-                else {
-                    return true
-                }
-                if containsCanonicalRedactorSensitiveMaterial(nested, depth: depth + 1, budget: &budget) {
-                    return true
-                }
-            }
-        } else if let array = value as? [Any] {
-            for nested in array {
-                if containsCanonicalRedactorSensitiveMaterial(nested, depth: depth + 1, budget: &budget) {
+                if containsCanonicalSecretLikeMaterial(nested, depth: depth + 1, budget: &budget) {
                     return true
                 }
             }

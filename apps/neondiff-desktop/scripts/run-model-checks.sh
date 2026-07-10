@@ -18,6 +18,7 @@ if [[ ! -e "${core_objects[0]}" ]]; then
 fi
 
 swiftc \
+  -D DEBUG \
   -parse-as-library \
   -I "$bin_path/Modules" \
   "$model_source" \
