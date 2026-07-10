@@ -53,7 +53,7 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
-import { runLocalDashboardPreviewSmoke, startLocalDashboardServer, verifyProviderApiKey } from "./local-dashboard.js";
+import { runLocalDashboardPreviewSmoke, startLocalDashboardServer } from "./local-dashboard.js";
 import {
   assertOutcomeLedgerOutputDirEmpty,
   readOutcomeLedgerInput,
@@ -96,13 +96,13 @@ import {
 } from "./operator-cli.js";
 import { buildPricingOutput } from "./pricing.js";
 import { buildProviderRegistrySummary, doctorProviderRegistry, isProviderId } from "./providers.js";
+import { runProvidersVerifyCommand } from "./providers-verify-command.js";
 import { collectReleaseStatus, collectReleaseStatusWithConfig, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
-import { readSecretFromStdin } from "./secret-stdin.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
 import {
   buildRetiredFailedHeadError,
@@ -235,6 +235,18 @@ async function main(): Promise<void> {
 
   if (command === "providers") {
     const action = args._[1];
+    if (action === "verify") {
+      const execution = await runProvidersVerifyCommand({
+        configPath: args.config,
+        providerId: args.provider,
+        apiKeyStdin: args["api-key-stdin"],
+        allowRemoteSmoke: args["allow-remote-smoke"],
+        stdin: process.stdin
+      });
+      console.log(stringifyProviderOutput(execution.output));
+      if (execution.exitCode !== 0) process.exitCode = execution.exitCode;
+      return;
+    }
     const config = loadConfig(args.config);
     if (action === "list") {
       console.log(stringifyProviderOutput({
@@ -272,36 +284,6 @@ async function main(): Promise<void> {
         proofBoundary: "Provider readiness check only; alternate providers are not selected for live review execution by this command."
       }));
       if (!result.ok) process.exitCode = 1;
-      return;
-    }
-    if (action === "verify") {
-      const providerId = args.provider ? parseSingleArg(args.provider, "--provider") : undefined;
-      if (providerId && !isProviderId(providerId)) {
-        console.log(stringifyProviderOutput({
-          ok: false,
-          command: "providers verify",
-          error: "--provider must be a stable provider identifier"
-        }));
-        process.exitCode = 1;
-        return;
-      }
-      if (args["api-key-stdin"] === undefined) {
-        throw new Error("providers verify requires --api-key-stdin true");
-      }
-      const apiKeyStdin = parseBooleanArg(args["api-key-stdin"], "--api-key-stdin");
-      if (!apiKeyStdin) throw new Error("providers verify requires --api-key-stdin true");
-      const apiKey = await readSecretFromStdin(process.stdin);
-      const result = await verifyProviderApiKey({
-        command: "providers verify",
-        config,
-        ...(providerId ? { providerId } : {}),
-        apiKey,
-        allowRemoteSmoke: args["allow-remote-smoke"] === undefined
-          ? false
-          : parseBooleanArg(args["allow-remote-smoke"], "--allow-remote-smoke")
-      });
-      console.log(stringifyRedactedJson(result));
-      if (!result.ok || result.state !== "healthy") process.exitCode = 1;
       return;
     }
     throw new Error("providers subcommand must be one of: list, doctor, verify");

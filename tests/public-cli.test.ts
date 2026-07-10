@@ -7,8 +7,11 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ProviderApiKeyVerificationInput } from "../src/local-dashboard.js";
+import { runProvidersVerifyCommand } from "../src/providers-verify-command.js";
 import { ReviewStateStore } from "../src/state.js";
 
 const execFileAsync = promisify(execFile);
@@ -669,6 +672,109 @@ exit 1
     } finally {
       await closeServer(server);
     }
+  });
+
+  it("requires the providers verify stdin flag to be present and true", async () => {
+    await expect(runCli([
+      "providers",
+      "verify",
+      "--provider",
+      "openai-compatible"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("providers verify requires --api-key-stdin true")
+    });
+
+    await expect(runCli([
+      "providers",
+      "verify",
+      "--provider",
+      "openai-compatible",
+      "--api-key-stdin",
+      "false"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("providers verify requires --api-key-stdin true")
+    });
+  });
+
+  it("wires explicit hosted remote-smoke consent to a healthy exit zero", async () => {
+    const fixtureSecret = "fixture-provider-value";
+    let verifierInput: ProviderApiKeyVerificationInput | undefined;
+    const result = await runProvidersVerifyCommand({
+      configPath: undefined,
+      providerId: "openai-compatible",
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "true",
+      stdin: Readable.from([`${fixtureSecret}\n`])
+    }, {
+      loadConfig: () => ({
+        providers: {
+          defaultProviderId: "openai-compatible",
+          providers: {
+            "openai-compatible": {
+              enabled: true,
+              adapter: "openai-compatible",
+              baseUrl: "https://gateway.example.test/v1",
+              model: "review-model",
+              authMode: "api-key-env",
+              apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+              capabilities: { review: true, jsonOutput: true, local: false, streaming: false }
+            }
+          }
+        }
+      }) as unknown as ReturnType<typeof import("../src/config.js").loadConfig>,
+      verifyProviderApiKey: async (input) => {
+        verifierInput = input;
+        return {
+          ok: true,
+          command: "providers verify",
+          checkedAt: "2026-07-10T00:00:00.000Z",
+          providerId: "openai-compatible",
+          state: "healthy",
+          mode: "openai_compatible_models",
+          detail: "Verified hosted provider with a redacted models check.",
+          redacted: true,
+          keySource: "submitted",
+          troubleshooting: []
+        };
+      }
+    });
+
+    expect(verifierInput).toMatchObject({
+      command: "providers verify",
+      providerId: "openai-compatible",
+      apiKey: fixtureSecret,
+      allowRemoteSmoke: true
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toMatchObject({ ok: true, state: "healthy", redacted: true });
+    expect(JSON.stringify(result.output)).not.toContain(fixtureSecret);
+  });
+
+  it("keeps configured-unverified hosted verification non-success", async () => {
+    const result = await runProvidersVerifyCommand({
+      configPath: undefined,
+      providerId: "openai-compatible",
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "false",
+      stdin: Readable.from(["fixture-provider-value\n"])
+    }, {
+      loadConfig: () => ({ providers: { defaultProviderId: "openai-compatible", providers: {} } }) as unknown as ReturnType<typeof import("../src/config.js").loadConfig>,
+      verifyProviderApiKey: async () => ({
+        ok: false,
+        command: "providers verify",
+        checkedAt: "2026-07-10T00:00:00.000Z",
+        providerId: "openai-compatible",
+        state: "configured_unverified",
+        mode: "metadata_only",
+        detail: "Hosted smoke was not run.",
+        redacted: true,
+        keySource: "submitted",
+        troubleshooting: ["Explicit remote consent is required."]
+      })
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toMatchObject({ ok: false, state: "configured_unverified", redacted: true });
   });
 
   it("fails hosted remote smoke through the public CLI without explicit remote opt-in", async () => {
