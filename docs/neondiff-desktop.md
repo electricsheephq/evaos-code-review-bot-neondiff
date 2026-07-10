@@ -74,6 +74,14 @@ Existing config paths are canonicalized through `realpath` before the sibling
 lock is chosen, so symlink aliases to the same physical file share one writer
 lock.
 
+This concurrency guarantee coordinates NeonDiff `config patch` writers on the
+same machine/path. An unrelated editor or external tool does not honor the
+sibling lock and can still race the final portable atomic rename. Operators must
+close external config editors before Apply; the Policy pane shows this boundary
+next to the mutation controls. The revision check rejects external drift
+observed before the lock-held pre-commit read, but it does not claim a universal
+filesystem transaction against non-participating writers.
+
 The PR review allowlist remains `pilotRepos` in the Repos pane. The Policy pane
 edits only `issueEnrichment.allowlist` plus bounded review, daemon, cap, lease,
 cooldown, burst, and lookback settings. Neither preview nor rollback can alter

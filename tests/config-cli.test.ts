@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -835,6 +835,23 @@ describe("desktop config CLI", () => {
         closeSync(fd);
       }
     };
+    const failingRealpathSync = (() => {
+      throw new Error("forced realpath failure");
+    }) as unknown as typeof realpathSync;
+    expect(inspectConfigForDesktop(configPath, { realpathSync: failingRealpathSync })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("forced realpath failure")
+    });
+    expect(patchConfigForDesktop({
+      configPath,
+      inputPath: firstPatchPath,
+      dryRun: false,
+      confirm: true,
+      fileOps: { realpathSync: failingRealpathSync }
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("failed to resolve config path")
+    });
 
     let competingResult: ReturnType<typeof patchConfigForDesktop> | undefined;
     const firstResult = patchConfigForDesktop({
@@ -894,6 +911,16 @@ describe("desktop config CLI", () => {
 
     unlinkSync(lockPath);
     writeFixtureLock(2_147_483_647);
+    const freshDeadOwnerRejected = patchConfigForDesktop({
+      configPath,
+      inputPath: secondPatchPath,
+      dryRun: false,
+      confirm: true
+    });
+    expect(freshDeadOwnerRejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("another config patch is running")
+    });
     utimesSync(lockPath, staleTime, staleTime);
     const recovered = patchConfigForDesktop({
       configPath,

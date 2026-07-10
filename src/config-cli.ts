@@ -126,6 +126,7 @@ type ConfigFileOps = {
   mkdirSync: typeof mkdirSync;
   openSync: typeof openSync;
   readFileSync: typeof readFileSync;
+  realpathSync: typeof realpathSync;
   renameSync: typeof renameSync;
   statSync: typeof statSync;
   unlinkSync: typeof unlinkSync;
@@ -140,6 +141,7 @@ const defaultConfigFileOps: ConfigFileOps = {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -152,7 +154,7 @@ export function inspectConfigForDesktop(configPath?: string, fileOps?: Partial<C
   let resolvedConfigPath = requestedConfigPath;
   let exists = requestedConfigPath ? ops.existsSync(requestedConfigPath) : false;
   try {
-    if (requestedConfigPath && exists) resolvedConfigPath = realpathSync(requestedConfigPath);
+    if (requestedConfigPath && exists) resolvedConfigPath = ops.realpathSync(requestedConfigPath);
     exists = resolvedConfigPath ? ops.existsSync(resolvedConfigPath) : false;
     const snapshot = exists && resolvedConfigPath ? readStableConfigSnapshot(resolvedConfigPath, fileOps) : undefined;
     const config = snapshot ? loadConfigFromObject(snapshot.value) : loadConfig();
@@ -188,11 +190,12 @@ export function patchConfigForDesktop(input: {
   expectedRevision?: string;
   fileOps?: Partial<ConfigFileOps>;
 }): ConfigPatchResult {
+  const ops = { ...defaultConfigFileOps, ...input.fileOps };
   const requestedConfigPath = resolve(input.configPath);
   const inputPath = resolve(input.inputPath);
   let configPath = requestedConfigPath;
   try {
-    if (existsSync(requestedConfigPath)) configPath = realpathSync(requestedConfigPath);
+    if (ops.existsSync(requestedConfigPath)) configPath = ops.realpathSync(requestedConfigPath);
   } catch (error) {
     return failedPatch(input, requestedConfigPath, inputPath, `failed to resolve config path: ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -169,6 +169,10 @@ struct PolicyView: View {
                         .font(.caption)
                         .foregroundStyle(NeonDiffTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Text("Close external config editors before Apply. The writer lock coordinates NeonDiff config commands; unrelated tools do not participate in that lock.")
+                        .font(.caption)
+                        .foregroundStyle(NeonDiffTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 OperatorSection("Proof Boundary") {
