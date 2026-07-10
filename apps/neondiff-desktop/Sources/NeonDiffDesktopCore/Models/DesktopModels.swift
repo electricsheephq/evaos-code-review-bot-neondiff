@@ -157,6 +157,168 @@ public struct GitHubConnectionStatus: Equatable {
     }
 }
 
+public struct DesktopControlCenterSettings: Equatable, Sendable {
+    public var pollIntervalMs: Int
+    public var skipDrafts: Bool
+    public var reviewMaxActiveRuns: Int
+    public var reviewLeaseTtlMs: Int
+    public var maxInlineComments: Int
+    public var issueEnrichmentEnabled: Bool
+    public var issuePostComment: Bool
+    public var issueAllowlist: [String]
+    public var issueMaxIssuesPerCycle: Int
+    public var issueMaxCommentsPerCycle: Int
+    public var issueGlobalMaxIssuesPerCycle: Int
+    public var issueGlobalMaxCommentsPerCycle: Int
+    public var issueMaxActiveRuns: Int
+    public var issueLeaseTtlMs: Int
+    public var issueCooldownMs: Int
+    public var issueBurstWindowMs: Int
+    public var issueMaxIssuesPerBurst: Int
+    public var issueLookbackMs: Int
+    public var issueProcessExistingOnActivation: Bool
+
+    public init(
+        pollIntervalMs: Int = 90_000,
+        skipDrafts: Bool = true,
+        reviewMaxActiveRuns: Int = 1,
+        reviewLeaseTtlMs: Int = 900_000,
+        maxInlineComments: Int = 25,
+        issueEnrichmentEnabled: Bool = false,
+        issuePostComment: Bool = false,
+        issueAllowlist: [String] = [],
+        issueMaxIssuesPerCycle: Int = 5,
+        issueMaxCommentsPerCycle: Int = 1,
+        issueGlobalMaxIssuesPerCycle: Int = 5,
+        issueGlobalMaxCommentsPerCycle: Int = 1,
+        issueMaxActiveRuns: Int = 1,
+        issueLeaseTtlMs: Int = 1_200_000,
+        issueCooldownMs: Int = 3_600_000,
+        issueBurstWindowMs: Int = 3_600_000,
+        issueMaxIssuesPerBurst: Int = 10,
+        issueLookbackMs: Int = 600_000,
+        issueProcessExistingOnActivation: Bool = false
+    ) {
+        self.pollIntervalMs = pollIntervalMs
+        self.skipDrafts = skipDrafts
+        self.reviewMaxActiveRuns = reviewMaxActiveRuns
+        self.reviewLeaseTtlMs = reviewLeaseTtlMs
+        self.maxInlineComments = maxInlineComments
+        self.issueEnrichmentEnabled = issueEnrichmentEnabled
+        self.issuePostComment = issuePostComment
+        self.issueAllowlist = issueAllowlist
+        self.issueMaxIssuesPerCycle = issueMaxIssuesPerCycle
+        self.issueMaxCommentsPerCycle = issueMaxCommentsPerCycle
+        self.issueGlobalMaxIssuesPerCycle = issueGlobalMaxIssuesPerCycle
+        self.issueGlobalMaxCommentsPerCycle = issueGlobalMaxCommentsPerCycle
+        self.issueMaxActiveRuns = issueMaxActiveRuns
+        self.issueLeaseTtlMs = issueLeaseTtlMs
+        self.issueCooldownMs = issueCooldownMs
+        self.issueBurstWindowMs = issueBurstWindowMs
+        self.issueMaxIssuesPerBurst = issueMaxIssuesPerBurst
+        self.issueLookbackMs = issueLookbackMs
+        self.issueProcessExistingOnActivation = issueProcessExistingOnActivation
+    }
+}
+
+public struct DesktopControlCenterSnapshot: Equatable, Sendable {
+    public let settings: DesktopControlCenterSettings
+    public let configPath: String
+
+    public init(settings: DesktopControlCenterSettings, configPath: String) {
+        self.settings = settings
+        self.configPath = configPath
+    }
+}
+
+public enum DesktopControlCenterPatchBuilder {
+    public static func validationError(for settings: DesktopControlCenterSettings) -> String? {
+        let positiveValues: [(String, Int)] = [
+            ("poll interval", settings.pollIntervalMs),
+            ("review max active runs", settings.reviewMaxActiveRuns),
+            ("review lease TTL", settings.reviewLeaseTtlMs),
+            ("max inline comments", settings.maxInlineComments),
+            ("issue max issues per cycle", settings.issueMaxIssuesPerCycle),
+            ("issue global max issues per cycle", settings.issueGlobalMaxIssuesPerCycle),
+            ("issue max active runs", settings.issueMaxActiveRuns),
+            ("issue lease TTL", settings.issueLeaseTtlMs),
+            ("issue cooldown", settings.issueCooldownMs),
+            ("issue burst window", settings.issueBurstWindowMs),
+            ("issue max issues per burst", settings.issueMaxIssuesPerBurst),
+            ("issue lookback", settings.issueLookbackMs)
+        ]
+        if let invalid = positiveValues.first(where: { $0.1 <= 0 }) {
+            return "\(invalid.0) must be a positive integer"
+        }
+        if settings.issueMaxCommentsPerCycle < 0 || settings.issueGlobalMaxCommentsPerCycle < 0 {
+            return "issue comments per cycle must be zero or greater"
+        }
+        if settings.issueMaxCommentsPerCycle > settings.issueMaxIssuesPerCycle {
+            return "issue comments per cycle must be less than or equal to issues per cycle"
+        }
+        if settings.issueGlobalMaxCommentsPerCycle > settings.issueGlobalMaxIssuesPerCycle {
+            return "global issue comments per cycle must be less than or equal to global issues per cycle"
+        }
+        for repo in settings.issueAllowlist where !isValidRepoName(repo) {
+            return "issue-enrichment allowlist entries must use owner/repo"
+        }
+        return nil
+    }
+
+    public static func data(for settings: DesktopControlCenterSettings) throws -> Data {
+        if let error = validationError(for: settings) {
+            throw DesktopControlCenterPatchError.invalidSettings(error)
+        }
+        let patch: [String: Any] = [
+            "pollIntervalMs": settings.pollIntervalMs,
+            "skipDrafts": settings.skipDrafts,
+            "reviewConcurrency": [
+                "maxActiveRuns": settings.reviewMaxActiveRuns,
+                "leaseTtlMs": settings.reviewLeaseTtlMs
+            ],
+            "reviewGate": [
+                "maxInlineComments": settings.maxInlineComments
+            ],
+            "issueEnrichment": [
+                "enabled": settings.issueEnrichmentEnabled,
+                "postIssueComment": settings.issuePostComment,
+                "allowlist": settings.issueAllowlist,
+                "maxIssuesPerCycle": settings.issueMaxIssuesPerCycle,
+                "maxCommentsPerCycle": settings.issueMaxCommentsPerCycle,
+                "globalMaxIssuesPerCycle": settings.issueGlobalMaxIssuesPerCycle,
+                "globalMaxCommentsPerCycle": settings.issueGlobalMaxCommentsPerCycle,
+                "maxActiveRuns": settings.issueMaxActiveRuns,
+                "leaseTtlMs": settings.issueLeaseTtlMs,
+                "cooldownMs": settings.issueCooldownMs,
+                "burstWindowMs": settings.issueBurstWindowMs,
+                "maxIssuesPerBurst": settings.issueMaxIssuesPerBurst,
+                "lookbackMs": settings.issueLookbackMs,
+                "processExistingOpenIssuesOnActivation": settings.issueProcessExistingOnActivation
+            ]
+        ]
+        return try JSONSerialization.data(withJSONObject: patch, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    private static func isValidRepoName(_ value: String) -> Bool {
+        let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return false }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_.-"))
+        return parts.allSatisfy { part in
+            !part.isEmpty && part.unicodeScalars.allSatisfy { allowed.contains($0) }
+        }
+    }
+}
+
+public enum DesktopControlCenterPatchError: Error, LocalizedError {
+    case invalidSettings(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidSettings(let message): message
+        }
+    }
+}
+
 public struct DesktopCommand: Identifiable, Equatable {
     public var id: String { commandLine }
     public var title: String

@@ -8,8 +8,17 @@ public enum NeonDiffCommandBuilder {
         )
     }
 
-    public static func configPatch(cliPath: String, configPath: String, inputPath: String, dryRun: Bool = true) -> DesktopCommand {
+    public static func configPatch(
+        cliPath: String,
+        configPath: String,
+        inputPath: String,
+        dryRun: Bool = true,
+        expectedRevision: String? = nil
+    ) -> DesktopCommand {
         var command = "\(shellQuote(cliPath)) config patch --config \(shellQuote(configPath)) --input \(shellQuote(inputPath)) --dry-run \(dryRun ? "true" : "false")"
+        if let expectedRevision {
+            command += " --expected-revision \(shellQuote(expectedRevision))"
+        }
         if !dryRun {
             command += " --confirm true"
         }

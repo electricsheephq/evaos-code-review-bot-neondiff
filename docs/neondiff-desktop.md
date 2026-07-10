@@ -36,15 +36,75 @@ The desktop uses these JSON-first CLI surfaces:
 
 ```bash
 neondiff config inspect --config config.local.json
-neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true
+neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true --expected-revision <sha256>
 neondiff daemon status --config config.local.json --launchd-label com.example.neondiff
 neondiff daemon start --config config.local.json --launchd-label com.example.neondiff --dry-run true
 neondiff daemon stop --config config.local.json --launchd-label com.example.neondiff --dry-run true
 neondiff dashboard --config config.local.json --launchd-label com.example.neondiff --open true
 ```
 
-`config patch` writes only whitelisted non-secret fields, defaults to dry-run, and requires `--confirm true` for live writes.
+`config patch` writes only whitelisted non-secret fields, defaults to dry-run, and requires `--confirm true` for live writes. Direct CLI callers may make an intentional confirmation-only write without `--expected-revision`; that path is serialized and re-reads under the writer lock, but it is not bound to an earlier Preview. The native Policy control center always supplies the inspected revision for Preview, Apply, and rollback.
 Patch inputs use nested JSON object shape for editable paths. For example, the advertised `zcode.cliPath` path is supplied as `{ "zcode": { "cliPath": "/path/to/neondiff" } }`; flat dotted keys such as `{ "zcode.cliPath": "/path/to/neondiff" }` are rejected to avoid ambiguous profile keys.
+
+The native Policy pane is a bounded configuration control center for daemon
+polling, PR review policy, and issue-enrichment policy. It loads current values
+through `config inspect`, validates them natively, and requires a successful
+dry-run Preview of the exact settings snapshot before Apply is enabled. Apply
+uses the CLI's canonical validation and confirmation contract. The app keeps one
+in-memory, non-secret baseline so the most recent Apply can be reversed with an
+explicit rollback patch; reopening or reloading the app clears that rollback.
+All live config patches are serialized so provider, repository, and policy
+writes cannot race one another. Inspect uses a retrying stable-snapshot read so
+it converges on the fully-old or fully-new file during an in-flight writer.
+Preview, Apply, and rollback each carry an immutable settings snapshot and config path,
+so edits or target-path changes made while the CLI is running cannot authorize
+or relabel a different operation.
+The inspect response includes a secret-safe SHA-256 revision token over the
+length-delimited file bytes; the token exposes no raw config values. Policy
+Preview binds to that revision, and Apply fails closed
+if the config changed before the write. A
+successful Apply returns the next revision, which becomes the compare-and-swap
+guard for the one-shot rollback.
+The native client accepts patch success only from an `ok=true`, `config patch`
+envelope whose lowercase SHA-256 revisions match the requested operation.
+Preview additionally requires `dryRun=true` and `wrote=false`; Apply and rollback
+require `dryRun=false` plus a typed write result. Malformed, mismatched, failed,
+or transport-ambiguous responses clear all loaded, preview, and rollback
+authorization until the config is loaded again.
+Live `config patch` writers also hold one exclusive sibling lock across stable
+read, validation, revision check, temp-file write, and atomic rename. A second
+writer fails closed. Every existing sibling lock fails closed; the CLI never
+deletes a lock it did not create. The error identifies a live owner when one can
+be verified, or reports the exact stale/corrupt lock path for manual recovery.
+If an atomic config write commits but owned-lock cleanup fails, the CLI preserves
+`ok`, `wrote`, and revision proof and adds an actionable `warning` with the exact
+lock path. The native Policy pane surfaces that warning instead of reporting the
+committed write as a failure.
+Existing config paths are canonicalized through `realpath` before the sibling
+lock is chosen, so symlink aliases to the same physical file share one writer
+lock.
+
+This concurrency guarantee coordinates NeonDiff `config patch` writers on the
+same machine/path. An unrelated editor or external tool does not honor the
+sibling lock and can still race the final portable atomic rename. Operators must
+close external config editors before Apply; the Policy pane shows this boundary
+next to the mutation controls. The revision check rejects external drift
+observed before the lock-held pre-commit read, but it does not claim a universal
+filesystem transaction against non-participating writers.
+
+If a crash leaves an old, empty, or malformed lock, the CLI keeps failing closed
+instead of guessing. Verify that no NeonDiff `config patch`
+process is running, resolve the config's canonical path, then remove only its
+`<config-realpath>.neondiff.lock` sibling before retrying Load and Preview. A PID
+record is a conservative liveness signal, not owner identity: macOS can recycle
+PIDs. If the recorded PID is in use, confirm that process is actually the active
+NeonDiff config patch before deciding whether the sibling lock is stale.
+
+The PR review allowlist remains `pilotRepos` in the Repos pane. The Policy pane
+edits only `issueEnrichment.allowlist` plus bounded review, daemon, cap, lease,
+cooldown, burst, and lookback settings. Neither preview nor rollback can alter
+provider/license secrets, GitHub tokens, working directories, commands, or the
+separate PR review allowlist.
 
 The ZCode defaults in `config.example.json` are developer-machine paths. On any non-author workstation or packaged desktop install, set explicit local values for `zcode.cliPath`, `zcode.appConfigPath`, and `zcode.model` before relying on daemon controls.
 
