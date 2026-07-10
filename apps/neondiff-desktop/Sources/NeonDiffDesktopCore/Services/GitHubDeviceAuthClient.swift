@@ -12,6 +12,7 @@ public enum GitHubDeviceAuthClientError: Error, LocalizedError {
     case invalidURL(String)
     case invalidResponse(String)
     case apiError(String)
+    case actionable(GitHubConnectionRecovery)
 
     public var errorDescription: String? {
         switch self {
@@ -21,7 +22,14 @@ public enum GitHubDeviceAuthClientError: Error, LocalizedError {
             "Invalid GitHub response: \(NeonDiffRedactor.redact(value))"
         case .apiError(let value):
             "GitHub API error: \(NeonDiffRedactor.redact(value))"
+        case .actionable(let recovery):
+            recovery.message
         }
+    }
+
+    public var recovery: GitHubConnectionRecovery? {
+        guard case .actionable(let recovery) = self else { return nil }
+        return recovery
     }
 }
 
@@ -188,8 +196,16 @@ public final class GitHubDeviceAuthClient: GitHubDesktopAuthenticating {
             throw GitHubDeviceAuthClientError.invalidResponse("missing HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? "<binary response>"
-            throw GitHubDeviceAuthClientError.apiError("HTTP \(http.statusCode): \(body)")
+            let headers = Dictionary(uniqueKeysWithValues: http.allHeaderFields.map {
+                (String(describing: $0.key).lowercased(), String(describing: $0.value))
+            })
+            let recovery = GitHubConnectionRecoveryClassifier.httpFailure(
+                statusCode: http.statusCode,
+                headers: headers,
+                requestPath: request.url?.path ?? "",
+                responseBody: String(data: data, encoding: .utf8)
+            )
+            throw GitHubDeviceAuthClientError.actionable(recovery)
         }
         do {
             return try JSONDecoder.github.decode(T.self, from: data)

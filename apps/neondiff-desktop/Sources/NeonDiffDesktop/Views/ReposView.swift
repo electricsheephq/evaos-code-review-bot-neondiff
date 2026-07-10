@@ -42,14 +42,27 @@ struct ReposView: View {
                                 systemImage: "person.crop.circle.badge.checkmark"
                             )
                         }
-                        .disabled(!model.github.clientIdConfigured || model.isGitHubAuthorizationInProgress)
+                        .disabled(
+                            !model.github.clientIdConfigured
+                                || model.isGitHubAuthorizationInProgress
+                                || model.isGitHubRepositoryRefreshInProgress
+                        )
                         .accessibilityIdentifier("neondiff-github-connect")
 
                         Button { model.refreshGitHubRepositories() } label: {
                             Label("Refresh Repositories", systemImage: "arrow.triangle.2.circlepath")
                         }
-                        .disabled(!model.github.userTokenStored)
+                        .disabled(
+                            !model.github.userTokenStored
+                                || model.isGitHubRepositoryRefreshInProgress
+                                || model.isGitHubAuthorizationInProgress
+                        )
                         .accessibilityIdentifier("neondiff-github-refresh-repos")
+
+                        Button { model.openGitHubAppInstallation() } label: {
+                            Label("Install / Manage App", systemImage: "shippingbox.and.arrow.backward")
+                        }
+                        .accessibilityIdentifier("neondiff-github-manage-app")
 
                         if model.isGitHubAuthorizationInProgress {
                             Button { model.cancelGitHubAuthorization() } label: {
@@ -57,6 +70,31 @@ struct ReposView: View {
                             }
                             .accessibilityIdentifier("neondiff-github-cancel")
                         }
+                    }
+
+                    Text("Use Only select repositories. Core review permissions are Metadata read, Contents read, Pull requests read/write, Checks read, and Actions read. Issues access is only for the separate issue-enrichment feature; organization admin is not a runtime permission.")
+                        .font(.caption)
+                        .foregroundStyle(NeonDiffTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let recovery = model.githubRecovery {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(NeonDiffTheme.warning)
+                            Text(recovery.message)
+                                .operatorBodyText()
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                            if model.githubRecoveryShowsAction {
+                                Button(model.githubRecoveryActionTitle) {
+                                    model.performGitHubRecoveryAction()
+                                }
+                                .disabled(model.isGitHubRepositoryRefreshInProgress)
+                                .accessibilityIdentifier("neondiff-github-recovery-action")
+                            }
+                        }
+                        .padding(10)
+                        .background(NeonDiffTheme.warning.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                     }
 
                     if let code = model.githubAuthorizationCode {
@@ -131,6 +169,21 @@ struct ReposView: View {
                         .accessibilityIdentifier("neondiff-repo-toggle-\(repo.name)")
                     }
                     TableColumn("Profile", value: \.profile)
+                    TableColumn("Access") { repo in
+                        if let cue = model.githubAccessCue(for: repo) {
+                            Text(cue.label)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(
+                                    cue == .licenseRequired || cue == .insufficientReadAccess
+                                        ? NeonDiffTheme.warning
+                                        : NeonDiffTheme.accent
+                                )
+                        } else {
+                            Text("MANUAL · VERIFY INSTALL")
+                                .font(.caption)
+                                .foregroundStyle(NeonDiffTheme.textSecondary)
+                        }
+                    }
                     TableColumn("Last Review", value: \.lastReview)
                     TableColumn("Remove") { repo in
                         Button { model.removeRepoFromAllowlist(repo) } label: {
@@ -167,8 +220,21 @@ struct ReposView: View {
                                 Text(repo.fullName)
                                     .textSelection(.enabled)
                                 Spacer()
-                                Text(repo.permissionsSummary)
-                                    .foregroundStyle(NeonDiffTheme.textSecondary)
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    let cue = GitHubRepositoryAccessPolicy.cue(
+                                        for: repo,
+                                        licenseEntitlement: model.license.entitlement
+                                    )
+                                    Text(cue.label)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(
+                                            cue == .licenseRequired || cue == .insufficientReadAccess
+                                                ? NeonDiffTheme.warning
+                                                : NeonDiffTheme.accent
+                                        )
+                                    Text(repo.permissionsSummary)
+                                        .foregroundStyle(NeonDiffTheme.textSecondary)
+                                }
                             }
                             .font(.body)
                         }

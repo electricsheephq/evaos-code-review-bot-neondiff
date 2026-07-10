@@ -222,6 +222,34 @@ final class GitHubFixtureURLProtocol: URLProtocol {
     }
 }
 
+final class GitHubRateLimitURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "rate-limit.github.local"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let payload = Data(#"{"message":"API rate limit exceeded","token":"must-not-surface"}"#.utf8)
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 403,
+            httpVersion: "HTTP/1.1",
+            headerFields: [
+                "Content-Type": "application/json",
+                "X-RateLimit-Remaining": "0"
+            ]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: payload)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
 let fixtureSessionConfig = URLSessionConfiguration.ephemeral
 fixtureSessionConfig.protocolClasses = [GitHubFixtureURLProtocol.self]
 let fixtureGitHubClient = GitHubDeviceAuthClient(
@@ -343,5 +371,126 @@ let fakeGitHubRefreshToken = ["ghr", "fixture_token_12345678901234567890"].joine
 let redactedGitHubTokens = NeonDiffRedactor.redact("access=\(fakeGitHubAccessToken) refresh=\(fakeGitHubRefreshToken)")
 check(!redactedGitHubTokens.contains("ghu_fixture"), "GitHub user access tokens are redacted")
 check(!redactedGitHubTokens.contains("ghr_fixture"), "GitHub refresh tokens are redacted")
+
+let unauthorizedRecovery = GitHubConnectionRecoveryClassifier.httpFailure(
+    statusCode: 401,
+    headers: [:],
+    requestPath: "/user/installations"
+)
+check(unauthorizedRecovery.action == .reconnect, "GitHub 401 tells the user to reconnect")
+check(unauthorizedRecovery.status == "authorization expired", "GitHub 401 has a stable visible status")
+
+let rateLimitRecovery = GitHubConnectionRecoveryClassifier.httpFailure(
+    statusCode: 403,
+    headers: ["x-ratelimit-remaining": "0"],
+    requestPath: "/user/installations"
+)
+check(rateLimitRecovery.action == .retryLater, "GitHub rate limits tell the user to retry later")
+check(rateLimitRecovery.message.contains("rate limit"), "GitHub rate limits are named in the visible recovery copy")
+
+let secondaryRateLimitRecovery = GitHubConnectionRecoveryClassifier.httpFailure(
+    statusCode: 403,
+    headers: ["Retry-After": "60"],
+    requestPath: "/user/installations"
+)
+check(secondaryRateLimitRecovery.action == .retryLater, "GitHub secondary rate limits are not mislabeled as organization policy")
+
+let organizationRecovery = GitHubConnectionRecoveryClassifier.httpFailure(
+    statusCode: 403,
+    headers: [:],
+    requestPath: "/user/installations"
+)
+check(organizationRecovery.action == .installOrManageApp, "Ambiguous GitHub 403 responses use permission recovery without assuming org policy")
+check(organizationRecovery.status == "permission denied", "Ambiguous GitHub 403 responses have a stable permission status")
+
+let confirmedOrganizationRecovery = GitHubConnectionRecoveryClassifier.httpFailure(
+    statusCode: 403,
+    headers: [:],
+    requestPath: "/user/installations",
+    responseBody: #"{"message":"Resource protected by organization SAML enforcement"}"#
+)
+check(confirmedOrganizationRecovery.action == .contactOrganizationOwner, "Confirmed GitHub org policy blocks name the organization-owner recovery")
+check(confirmedOrganizationRecovery.message.contains("organization policy"), "Confirmed org policy blocks are distinct from permission denials")
+
+let installationRecovery = GitHubConnectionRecoveryClassifier.httpFailure(
+    statusCode: 404,
+    headers: [:],
+    requestPath: "/user/installations/42/repositories"
+)
+check(installationRecovery.action == .installOrManageApp, "Missing installations point to GitHub App management")
+
+check(
+    GitHubAppInstallLink.url(botLogin: "evaos-code-review-bot[bot]")?.absoluteString
+        == "https://github.com/apps/evaos-code-review-bot/installations/new",
+    "GitHub App bot login maps to the selected-repository install URL"
+)
+check(GitHubAppInstallLink.url(botLogin: "configured GitHub App bot") == nil, "Placeholder bot labels do not become install URLs")
+check(
+    GitHubAppInstallLink.publicAppURL.absoluteString
+        == "https://github.com/apps/evaos-code-review-bot/installations/new",
+    "The public product has a stable selected-repository install URL when botLogin is omitted"
+)
+
+let publicRepoCue = GitHubRepositoryAccessPolicy.cue(
+    for: GitHubDiscoveredRepository(
+        fullName: "octo-org/public-repo",
+        visibility: "public",
+        installationId: 42,
+        installationAccount: "octo-org",
+        permissionsSummary: "admin:false,push:false,pull:true"
+    ),
+    licenseEntitlement: "not activated"
+)
+check(publicRepoCue == .publicFree, "Public repositories show the free-path cue")
+
+let privateRepoCue = GitHubRepositoryAccessPolicy.cue(
+    for: GitHubDiscoveredRepository(
+        fullName: "octo-org/private-repo",
+        visibility: "private",
+        installationId: 42,
+        installationAccount: "octo-org",
+        permissionsSummary: "admin:false,push:false,pull:true"
+    ),
+    licenseEntitlement: "stored locally"
+)
+check(privateRepoCue == .licenseRequired, "Private repositories do not treat a stored key as active entitlement")
+
+let unreadableRepoCue = GitHubRepositoryAccessPolicy.cue(
+    for: GitHubDiscoveredRepository(
+        fullName: "octo-org/unreadable-repo",
+        visibility: "private",
+        installationId: 42,
+        installationAccount: "octo-org",
+        permissionsSummary: "admin:false,push:false,pull:false"
+    ),
+    licenseEntitlement: "active"
+)
+check(unreadableRepoCue == .insufficientReadAccess, "Unreadable repositories name the permissions blocker before license state")
+
+let locallyExpiredDeviceCode = GitHubConnectionRecoveryClassifier.deviceCodeExpired
+check(locallyExpiredDeviceCode.action == .reconnect, "Locally detected device-code expiry exposes reconnect recovery")
+check(locallyExpiredDeviceCode.status == "device code expired", "Local and GitHub-returned device expiry share a stable status")
+
+var refreshGate = GitHubLatestRequestGate()
+let firstRefresh = refreshGate.begin()
+let secondRefresh = refreshGate.begin()
+check(!refreshGate.isCurrent(firstRefresh), "An older repository refresh cannot overwrite a newer refresh")
+check(refreshGate.isCurrent(secondRefresh), "The newest repository refresh may update UI state")
+
+let rateLimitSessionConfig = URLSessionConfiguration.ephemeral
+rateLimitSessionConfig.protocolClasses = [GitHubRateLimitURLProtocol.self]
+let rateLimitClient = GitHubDeviceAuthClient(
+    apiBaseURL: URL(string: "https://rate-limit.github.local")!,
+    session: URLSession(configuration: rateLimitSessionConfig)
+)
+do {
+    _ = try await rateLimitClient.fetchCurrentUser(accessToken: "fixture-access-token")
+    check(false, "GitHub client must reject a rate-limited API response")
+} catch let error as GitHubDeviceAuthClientError {
+    check(error.recovery?.action == .retryLater, "GitHub client carries the classified rate-limit recovery to the UI model")
+    check(!error.localizedDescription.contains("must-not-surface"), "GitHub client does not surface raw API response bodies")
+} catch {
+    check(false, "GitHub client must expose a typed, actionable failure")
+}
 
 print("NeonDiffDesktopCoreChecks passed")

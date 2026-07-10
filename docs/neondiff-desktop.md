@@ -69,6 +69,24 @@ selects them. It does not post reviews, widen App permissions, or write GitHub
 user tokens into config. Live PR reviews still post only through the configured
 GitHub App bot identity.
 
+The Repos pane links to the public GitHub App's install/manage page and tells
+users to choose `Only select repositories`. It names the core review permissions
+and keeps optional Issues access scoped to the separate issue-enrichment feature.
+It distinguishes expired user
+authorization, API rate limiting, missing App installation, and organization
+policy or permission blocks without showing raw API bodies. Discovered repos
+show one of these access cues:
+
+- `PUBLIC · FREE` for the public-repo path;
+- `PRIVATE · LICENSE REQUIRED` until active entitlement is proven;
+- `PRIVATE · LICENSE ACTIVE` only for an explicit active entitlement state;
+- `INSUFFICIENT READ ACCESS` when GitHub reports that the user cannot read the
+  repository.
+
+A stored license key is not treated as active entitlement. Repo selection still
+writes only the local allowlist; the worker's pre-checkout license and GitHub App
+gates remain authoritative for review execution.
+
 ## Local Dashboard Launcher
 
 The dev app no longer opens a browser tab automatically. It exposes explicit

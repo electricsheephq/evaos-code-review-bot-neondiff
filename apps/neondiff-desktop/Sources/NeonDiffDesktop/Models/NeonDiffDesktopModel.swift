@@ -15,8 +15,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var github = GitHubConnectionStatus()
     @Published var githubAuthorizationCode: GitHubDeviceAuthorizationCode?
     @Published var githubAuthorizationStatus = "not connected"
+    @Published var githubRecovery: GitHubConnectionRecovery?
     @Published var discoveredGitHubRepos: [GitHubDiscoveredRepository] = []
     @Published var isGitHubAuthorizationInProgress = false
+    @Published var isGitHubRepositoryRefreshInProgress = false
     @Published var logText = "No logs loaded."
     @Published var lastError: String?
     @Published var lastCommandLine = ""
@@ -32,6 +34,8 @@ final class NeonDiffDesktopModel: ObservableObject {
     private let keychain: DesktopSecretStoring
     private let githubAuthClient: GitHubDesktopAuthenticating
     private var githubAuthorizationTask: Task<Void, Never>?
+    private var githubRepositoryRefreshTask: Task<Void, Never>?
+    private var githubRepositoryRefreshGate = GitHubLatestRequestGate()
 
     init(
         userDefaults: UserDefaults = .standard,
@@ -111,6 +115,24 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     var repoSelectionPatchApplyCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(cliPath: cliPath, configPath: configPath, inputPath: repoSelectionPatchPath.path, dryRun: false)
+    }
+
+    var githubAppInstallURL: URL {
+        GitHubAppInstallLink.url(botLogin: github.botLogin) ?? GitHubAppInstallLink.publicAppURL
+    }
+
+    var githubRecoveryActionTitle: String {
+        switch githubRecovery?.action {
+        case .reconnect: "Reconnect GitHub"
+        case .retryLater, .retry: "Retry Repository Discovery"
+        case .installOrManageApp: "Install / Manage App"
+        case .contactOrganizationOwner: "Manage App Access"
+        case nil: "Retry"
+        }
+    }
+
+    var githubRecoveryShowsAction: Bool {
+        githubRecovery?.action != .contactOrganizationOwner
     }
 
     func persistLocalSettings() {
@@ -232,6 +254,15 @@ final class NeonDiffDesktopModel: ObservableObject {
         logText = "Repo allowlist updated locally. Preview or apply the config patch to persist it."
     }
 
+    func githubAccessCue(for repo: RepoMonitor) -> GitHubRepositoryAccessCue? {
+        guard let discovered = discoveredGitHubRepos.first(where: {
+            $0.fullName.caseInsensitiveCompare(repo.name) == .orderedSame
+        }) else {
+            return nil
+        }
+        return GitHubRepositoryAccessPolicy.cue(for: discovered, licenseEntitlement: license.entitlement)
+    }
+
     func removeRepoFromAllowlist(_ repo: RepoMonitor) {
         repos.removeAll { $0.id == repo.id }
         lastError = nil
@@ -239,6 +270,7 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func startGitHubAuthorization() {
+        guard !isGitHubRepositoryRefreshInProgress else { return }
         guard let clientId = github.clientId?.trimmingCharacters(in: .whitespacesAndNewlines), !clientId.isEmpty else {
             lastError = "Set the public GitHub App client ID before connecting GitHub."
             githubAuthorizationStatus = "client id missing"
@@ -248,6 +280,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         githubAuthorizationCode = nil
         isGitHubAuthorizationInProgress = true
         githubAuthorizationStatus = "requesting device code"
+        githubRecovery = nil
         lastError = nil
         githubAuthorizationTask = Task { [weak self] in
             guard let self else { return }
@@ -262,9 +295,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             } catch {
                 if Task.isCancelled { return }
                 isGitHubAuthorizationInProgress = false
-                githubAuthorizationStatus = "failed"
-                lastError = NeonDiffRedactor.redact(error.localizedDescription)
-                logText = lastError ?? "GitHub authorization failed."
+                applyGitHubFailure(error, fallbackStatus: "authorization failed")
             }
         }
     }
@@ -291,24 +322,60 @@ final class NeonDiffDesktopModel: ObservableObject {
         githubAuthorizationStatus = "verification page opened"
     }
 
+    func openGitHubAppInstallation() {
+        NSWorkspace.shared.open(githubAppInstallURL)
+        githubAuthorizationStatus = "App installation page opened"
+    }
+
+    func performGitHubRecoveryAction() {
+        switch githubRecovery?.action {
+        case .reconnect:
+            startGitHubAuthorization()
+        case .retryLater, .retry:
+            refreshGitHubRepositories()
+        case .installOrManageApp:
+            openGitHubAppInstallation()
+        case .contactOrganizationOwner:
+            logText = githubRecovery?.message ?? "Ask an organization owner to approve GitHub App access."
+        case nil:
+            refreshGitHubRepositories()
+        }
+    }
+
     func refreshGitHubRepositories() {
-        Task { [weak self] in
+        guard !isGitHubRepositoryRefreshInProgress, !isGitHubAuthorizationInProgress else { return }
+        githubRepositoryRefreshTask?.cancel()
+        let requestGeneration = githubRepositoryRefreshGate.begin()
+        isGitHubRepositoryRefreshInProgress = true
+        githubRepositoryRefreshTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if githubRepositoryRefreshGate.isCurrent(requestGeneration) {
+                    isGitHubRepositoryRefreshInProgress = false
+                    githubRepositoryRefreshTask = nil
+                }
+            }
             do {
                 githubAuthorizationStatus = "refreshing repositories"
+                githubRecovery = nil
                 let accessToken = try await gitHubAccessTokenForAPI()
                 let user = try await githubAuthClient.fetchCurrentUser(accessToken: accessToken)
                 let discovered = try await githubAuthClient.listAccessibleRepositories(accessToken: accessToken)
+                guard !Task.isCancelled, githubRepositoryRefreshGate.isCurrent(requestGeneration) else { return }
                 applyGitHubDiscovery(user: user, discovered: discovered)
             } catch {
+                guard !Task.isCancelled, githubRepositoryRefreshGate.isCurrent(requestGeneration) else { return }
                 if error is GitHubDesktopAuthorizationStateError {
                     lastError = NeonDiffRedactor.redact(error.localizedDescription)
                     logText = lastError ?? "Reconnect GitHub."
+                    githubRecovery = GitHubConnectionRecovery(
+                        status: "reconnect required",
+                        message: lastError ?? "Reconnect GitHub before refreshing repositories.",
+                        action: .reconnect
+                    )
                     return
                 }
-                githubAuthorizationStatus = "repository refresh failed"
-                lastError = NeonDiffRedactor.redact(error.localizedDescription)
-                logText = lastError ?? "GitHub repository refresh failed."
+                applyGitHubFailure(error, fallbackStatus: "repository refresh failed")
             }
         }
     }
@@ -540,23 +607,27 @@ final class NeonDiffDesktopModel: ObservableObject {
                     isGitHubAuthorizationInProgress = false
                     githubAuthorizationStatus = error.rawValue
                     github.installationState = "authorization failed"
-                    lastError = NeonDiffRedactor.redact(description ?? error.rawValue)
-                    logText = lastError ?? "GitHub authorization failed."
+                    let recovery = GitHubConnectionRecoveryClassifier.deviceAuthorizationFailure(error, description: description)
+                    githubRecovery = recovery
+                    lastError = recovery.message
+                    logText = recovery.message
                     return
                 }
             } catch {
                 if Task.isCancelled { return }
                 isGitHubAuthorizationInProgress = false
-                githubAuthorizationStatus = "failed"
-                lastError = NeonDiffRedactor.redact(error.localizedDescription)
-                logText = lastError ?? "GitHub authorization failed."
+                applyGitHubFailure(error, fallbackStatus: "authorization failed")
                 return
             }
         }
         if !Task.isCancelled {
             isGitHubAuthorizationInProgress = false
-            githubAuthorizationStatus = "expired"
-            github.installationState = "device code expired"
+            let recovery = GitHubConnectionRecoveryClassifier.deviceCodeExpired
+            githubAuthorizationStatus = recovery.status
+            github.installationState = recovery.status
+            githubRecovery = recovery
+            lastError = recovery.message
+            logText = recovery.message
         }
     }
 
@@ -588,8 +659,9 @@ final class NeonDiffDesktopModel: ObservableObject {
         github.installationCount = Set(discovered.map(\.installationId)).count
         github.discoveredRepositoryCount = discovered.count
         github.installationState = discovered.isEmpty
-            ? "authorized as \(user.login); no accessible installations found"
+            ? "authorized as \(user.login); no accessible App repositories found"
             : "authorized as \(user.login); \(discovered.count) repositories available"
+        githubRecovery = discovered.isEmpty ? GitHubConnectionRecoveryClassifier.noInstallations : nil
         githubAuthorizationStatus = "authorized as \(user.login)"
         lastError = nil
         logText = "GitHub connected as \(user.login). Select repositories, then preview or apply the allowlist patch."
@@ -610,6 +682,20 @@ final class NeonDiffDesktopModel: ObservableObject {
         githubAuthorizationStatus = status
         githubAuthorizationCode = nil
         discoveredGitHubRepos = []
+    }
+
+    private func applyGitHubFailure(_ error: Error, fallbackStatus: String) {
+        let recovery = (error as? GitHubDeviceAuthClientError)?.recovery
+            ?? GitHubConnectionRecovery(
+                status: fallbackStatus,
+                message: NeonDiffRedactor.redact(error.localizedDescription),
+                action: .retry
+            )
+        githubRecovery = recovery
+        githubAuthorizationStatus = recovery.status
+        github.installationState = recovery.status
+        lastError = recovery.message
+        logText = recovery.message
     }
 
     private func readGitHubStoredDate(account: String) -> Date? {
