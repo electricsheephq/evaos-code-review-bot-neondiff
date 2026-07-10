@@ -65,11 +65,21 @@ Preview binds to that revision, and Apply fails closed
 if the config changed before the write. A
 successful Apply returns the next revision, which becomes the compare-and-swap
 guard for the one-shot rollback.
+The native client accepts patch success only from an `ok=true`, `config patch`
+envelope whose lowercase SHA-256 revisions match the requested operation.
+Preview additionally requires `dryRun=true` and `wrote=false`; Apply and rollback
+require `dryRun=false` plus a typed write result. Malformed, mismatched, failed,
+or transport-ambiguous responses clear all loaded, preview, and rollback
+authorization until the config is loaded again.
 Live `config patch` writers also hold one exclusive sibling lock across stable
 read, validation, revision check, temp-file write, and atomic rename. A second
 writer fails closed. Every existing sibling lock fails closed; the CLI never
 deletes a lock it did not create. The error identifies a live owner when one can
 be verified, or reports the exact stale/corrupt lock path for manual recovery.
+If an atomic config write commits but owned-lock cleanup fails, the CLI preserves
+`ok`, `wrote`, and revision proof and adds an actionable `warning` with the exact
+lock path. The native Policy pane surfaces that warning instead of reporting the
+committed write as a failure.
 Existing config paths are canonicalized through `realpath` before the sibling
 lock is chosen, so symlink aliases to the same physical file share one writer
 lock.

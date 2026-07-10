@@ -334,15 +334,22 @@ final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         let snapshot = currentControlCenterSnapshot
+        let operation = ControlCenterOperation.preview(
+            snapshot: snapshot,
+            baseline: baseline,
+            expectedRevision: expectedRevision
+        )
+        guard beginControlCenterOperation(operation) else { return }
         do {
             try writeControlCenterPatch(snapshot.settings, to: controlCenterPatchPath)
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
             controlCenterStatus = lastError ?? "Control-center patch generation failed."
+            isControlCenterOperationInProgress = false
             return
         }
         runControlCenterPatch(
-            operation: .preview(snapshot: snapshot, baseline: baseline, expectedRevision: expectedRevision),
+            operation: operation,
             arguments: [
                 "config", "patch", "--config", configPath, "--input", controlCenterPatchPath.path,
                 "--dry-run", "true", "--expected-revision", expectedRevision
@@ -362,15 +369,22 @@ final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Preview the current control-center settings before Apply."
             return
         }
+        let operation = ControlCenterOperation.apply(
+            snapshot: snapshot,
+            baseline: baseline,
+            expectedRevision: expectedRevision
+        )
+        guard beginControlCenterOperation(operation) else { return }
         do {
             try writeControlCenterPatch(snapshot.settings, to: controlCenterPatchPath)
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
             controlCenterStatus = lastError ?? "Control-center patch generation failed."
+            isControlCenterOperationInProgress = false
             return
         }
         runControlCenterPatch(
-            operation: .apply(snapshot: snapshot, baseline: baseline, expectedRevision: expectedRevision),
+            operation: operation,
             arguments: [
                 "config", "patch", "--config", configPath, "--input", controlCenterPatchPath.path,
                 "--dry-run", "false", "--confirm", "true", "--expected-revision", expectedRevision
@@ -388,15 +402,21 @@ final class NeonDiffDesktopModel: ObservableObject {
             lastError = "No applied control-center change is available to roll back."
             return
         }
+        let operation = ControlCenterOperation.rollback(
+            snapshot: rollback,
+            expectedRevision: expectedRevision
+        )
+        guard beginControlCenterOperation(operation) else { return }
         do {
             try writeControlCenterPatch(rollback.settings, to: controlCenterRollbackPath)
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
             controlCenterStatus = lastError ?? "Control-center rollback generation failed."
+            isControlCenterOperationInProgress = false
             return
         }
         runControlCenterPatch(
-            operation: .rollback(snapshot: rollback, expectedRevision: expectedRevision),
+            operation: operation,
             arguments: [
                 "config", "patch", "--config", configPath, "--input", controlCenterRollbackPath.path,
                 "--dry-run", "false", "--confirm", "true", "--expected-revision", expectedRevision
@@ -686,7 +706,9 @@ final class NeonDiffDesktopModel: ObservableObject {
                         self.isConfigInspectInProgress = false
                     }
                     if controlCenterOperation != nil {
-                        self.controlCenterStatus = self.lastError ?? "Control-center command failed."
+                        self.invalidateControlCenterAfterPatchFailure(
+                            self.lastError ?? "Control-center command failed before a response was received."
+                        )
                         self.isControlCenterOperationInProgress = false
                     }
                 }
@@ -762,10 +784,17 @@ final class NeonDiffDesktopModel: ObservableObject {
         try data.write(to: path, options: [.atomic])
     }
 
-    private func runControlCenterPatch(operation: ControlCenterOperation, arguments: [String], command: DesktopCommand) {
-        guard !isControlCenterOperationInProgress else { return }
+    private func beginControlCenterOperation(_ operation: ControlCenterOperation) -> Bool {
+        guard !isControlCenterOperationInProgress else {
+            lastError = "Another control-center operation is still running."
+            return false
+        }
         isControlCenterOperationInProgress = true
         controlCenterStatus = operation.statusText
+        return true
+    }
+
+    private func runControlCenterPatch(operation: ControlCenterOperation, arguments: [String], command: DesktopCommand) {
         runCLI(arguments: arguments, displayCommand: command, controlCenterOperation: operation)
     }
 
@@ -979,6 +1008,33 @@ final class NeonDiffDesktopModel: ObservableObject {
         logText = [result.redactedStdout, result.redactedStderr].filter { !$0.isEmpty }.joined(separator: "\n")
 
         let commandName = parseCommandName(result.stdout)
+        let parsedSnapshot = (commandName == "config inspect" || commandName == "config patch")
+            ? ConfigInspectParser.parse(
+                result.stdout,
+                providerKeyStored: keychain.containsSecret(account: providerKeyAccount),
+                licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
+                githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
+            )
+            : nil
+        var validatedPatchRevisionAfter: String?
+        if let operation = controlCenterOperation {
+            validatedPatchRevisionAfter = ConfigPatchProofValidator.revisionAfter(
+                snapshot: parsedSnapshot,
+                expectedRevision: operation.expectedRevision,
+                mode: operation.proofMode
+            )
+            guard
+                result.exitCode == 0,
+                commandName == "config patch",
+                validatedPatchRevisionAfter != nil
+            else {
+                let patchError = ConfigInspectParser.error(result.stdout, command: "config patch")
+                    ?? lastError
+                    ?? "Config patch returned an invalid or mismatched response. Reload current config before further edits."
+                invalidateControlCenterAfterPatchFailure(patchError)
+                return
+            }
+        }
         if isConfigInspectCommand && (result.exitCode != 0 || commandName != "config inspect") {
             let inspectError = ConfigInspectParser.error(result.stdout)
                 ?? lastError
@@ -987,12 +1043,6 @@ final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         if commandName == "config inspect" || commandName == "config patch" {
-            let parsedSnapshot = ConfigInspectParser.parse(
-                result.stdout,
-                providerKeyStored: keychain.containsSecret(account: providerKeyAccount),
-                licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
-                githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
-            )
             if let snapshot = parsedSnapshot {
                 if !snapshot.repos.isEmpty { repos = snapshot.repos }
                 providers = snapshot.providers
@@ -1032,88 +1082,58 @@ final class NeonDiffDesktopModel: ObservableObject {
                 invalidateControlCenterAfterInspectFailure(inspectError)
                 return
             }
-            if commandName == "config patch", let operation = controlCenterOperation {
-                let succeeded = result.exitCode == 0 && lastError == nil
+            if commandName == "config patch",
+               let operation = controlCenterOperation,
+               let revisionAfter = validatedPatchRevisionAfter {
                 switch operation {
                 case .preview(let snapshot, let baseline, let expectedRevision):
-                    if succeeded {
-                        previewedControlCenterSnapshot = snapshot
-                        previewedControlCenterBaseline = baseline
-                        previewedControlCenterExpectedRevision = expectedRevision
-                        controlCenterStatus = snapshot == currentControlCenterSnapshot
-                            ? "Preview passed. Apply is enabled for this exact settings snapshot."
-                            : "Preview passed for an earlier settings snapshot. Preview the current edits before Apply."
-                    } else {
-                        previewedControlCenterSnapshot = nil
-                        previewedControlCenterBaseline = nil
-                        previewedControlCenterExpectedRevision = nil
-                        controlCenterLoadedRevision = nil
-                        controlCenterStatus = lastError ?? "Preview failed."
-                    }
+                    previewedControlCenterSnapshot = snapshot
+                    previewedControlCenterBaseline = baseline
+                    previewedControlCenterExpectedRevision = expectedRevision
+                    controlCenterStatus = snapshot == currentControlCenterSnapshot
+                        ? "Preview passed. Apply is enabled for this exact settings snapshot."
+                        : "Preview passed for an earlier settings snapshot. Preview the current edits before Apply."
                 case .apply(let snapshot, let baseline, _):
-                    if succeeded, let revisionAfter = ConfigInspectParser.parse(
-                        result.stdout,
-                        providerKeyStored: keychain.containsSecret(account: providerKeyAccount),
-                        licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
-                        githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
-                    )?.revisionAfter {
-                        controlCenter = snapshot.settings
+                    controlCenter = snapshot.settings
+                    controlCenterLoadedSnapshot = snapshot
+                    controlCenterLoadedRevision = revisionAfter
+                    previewedControlCenterSnapshot = nil
+                    previewedControlCenterBaseline = nil
+                    previewedControlCenterExpectedRevision = nil
+                    if parsedSnapshot?.wrote == true {
                         controlCenterRollbackSnapshot = baseline
                         controlCenterRollbackExpectedRevision = revisionAfter
-                        controlCenterLoadedSnapshot = snapshot
-                        controlCenterLoadedRevision = revisionAfter
-                        previewedControlCenterSnapshot = nil
-                        previewedControlCenterBaseline = nil
-                        previewedControlCenterExpectedRevision = nil
                         controlCenterStatus = self.configPath == snapshot.configPath
                             ? "Config applied. Apply Last Rollback is now available."
                             : "Config applied to the previously selected path. Return to that path to roll back, or load the current config."
-                    } else if succeeded {
-                        controlCenterLoadedRevision = nil
-                        controlCenterRollbackSnapshot = nil
-                        controlCenterRollbackExpectedRevision = nil
-                        previewedControlCenterSnapshot = nil
-                        previewedControlCenterBaseline = nil
-                        previewedControlCenterExpectedRevision = nil
-                        lastError = "Config write returned without revision proof. Reload current config before further edits."
-                        controlCenterStatus = lastError ?? "Reload current config."
                     } else {
-                        controlCenterLoadedRevision = nil
-                        previewedControlCenterSnapshot = nil
-                        previewedControlCenterBaseline = nil
-                        previewedControlCenterExpectedRevision = nil
-                        controlCenterStatus = lastError ?? "Apply failed."
+                        if controlCenterRollbackSnapshot?.configPath != snapshot.configPath
+                            || controlCenterRollbackExpectedRevision != revisionAfter {
+                            controlCenterRollbackSnapshot = nil
+                            controlCenterRollbackExpectedRevision = nil
+                        }
+                        controlCenterStatus = "No config changes were needed."
                     }
                 case .rollback(let snapshot, _):
-                    if succeeded, let revisionAfter = ConfigInspectParser.parse(
-                        result.stdout,
-                        providerKeyStored: keychain.containsSecret(account: providerKeyAccount),
-                        licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
-                        githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
-                    )?.revisionAfter {
-                        controlCenter = snapshot.settings
-                        controlCenterLoadedSnapshot = snapshot
-                        controlCenterLoadedRevision = revisionAfter
-                        controlCenterRollbackSnapshot = nil
-                        controlCenterRollbackExpectedRevision = nil
-                        previewedControlCenterSnapshot = nil
-                        previewedControlCenterBaseline = nil
-                        previewedControlCenterExpectedRevision = nil
+                    controlCenter = snapshot.settings
+                    controlCenterLoadedSnapshot = snapshot
+                    controlCenterLoadedRevision = revisionAfter
+                    controlCenterRollbackSnapshot = nil
+                    controlCenterRollbackExpectedRevision = nil
+                    previewedControlCenterSnapshot = nil
+                    previewedControlCenterBaseline = nil
+                    previewedControlCenterExpectedRevision = nil
+                    if parsedSnapshot?.wrote == true {
                         controlCenterStatus = self.configPath == snapshot.configPath
                             ? "Rollback applied. Reload config before further edits."
                             : "Rollback applied to the previously selected path. Load the current config before further edits."
-                    } else if succeeded {
-                        controlCenterLoadedRevision = nil
-                        controlCenterRollbackSnapshot = nil
-                        controlCenterRollbackExpectedRevision = nil
-                        lastError = "Rollback returned without revision proof. Reload current config before further edits."
-                        controlCenterStatus = lastError ?? "Reload current config."
                     } else {
-                        controlCenterLoadedRevision = nil
-                        controlCenterRollbackSnapshot = nil
-                        controlCenterRollbackExpectedRevision = nil
-                        controlCenterStatus = lastError ?? "Rollback failed."
+                        controlCenterStatus = "Config was already at the rollback target. Reload before further edits."
                     }
+                }
+                if let warning = parsedSnapshot?.warning {
+                    lastError = NeonDiffRedactor.redact(warning)
+                    controlCenterStatus = lastError ?? "Config patch completed with a lock-cleanup warning."
                 }
                 isControlCenterOperationInProgress = false
             }
@@ -1140,6 +1160,16 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func invalidateControlCenterAfterInspectFailure(_ message: String) {
+        invalidateControlCenterAuthorization(message)
+        controlCenterStatus = lastError ?? "Config inspect failed."
+    }
+
+    private func invalidateControlCenterAfterPatchFailure(_ message: String) {
+        invalidateControlCenterAuthorization(message)
+        controlCenterStatus = lastError ?? "Config patch failed. Reload current config."
+    }
+
+    private func invalidateControlCenterAuthorization(_ message: String) {
         controlCenterLoadedSnapshot = nil
         controlCenterLoadedRevision = nil
         controlCenterRollbackSnapshot = nil
@@ -1148,7 +1178,6 @@ final class NeonDiffDesktopModel: ObservableObject {
         previewedControlCenterBaseline = nil
         previewedControlCenterExpectedRevision = nil
         lastError = NeonDiffRedactor.redact(message)
-        controlCenterStatus = lastError ?? "Config inspect failed."
     }
 
 }
@@ -1171,6 +1200,22 @@ private enum ControlCenterOperation: Sendable {
         case .preview: "Previewing control-center patch..."
         case .apply: "Applying validated control-center patch..."
         case .rollback: "Applying last control-center rollback..."
+        }
+    }
+
+    var expectedRevision: String {
+        switch self {
+        case .preview(_, _, let expectedRevision),
+             .apply(_, _, let expectedRevision),
+             .rollback(_, let expectedRevision):
+            expectedRevision
+        }
+    }
+
+    var proofMode: ConfigPatchProofMode {
+        switch self {
+        case .preview: .preview
+        case .apply, .rollback: .apply
         }
     }
 }

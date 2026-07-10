@@ -9,6 +9,9 @@ public struct ConfigInspectSnapshot: Equatable {
     public var revision: String?
     public var revisionBefore: String?
     public var revisionAfter: String?
+    public var warning: String?
+    public var dryRun: Bool?
+    public var wrote: Bool?
 
     public init(
         repos: [RepoMonitor],
@@ -18,7 +21,10 @@ public struct ConfigInspectSnapshot: Equatable {
         policy: DesktopControlCenterSettings = DesktopControlCenterSettings(),
         revision: String? = nil,
         revisionBefore: String? = nil,
-        revisionAfter: String? = nil
+        revisionAfter: String? = nil,
+        warning: String? = nil,
+        dryRun: Bool? = nil,
+        wrote: Bool? = nil
     ) {
         self.repos = repos
         self.providers = providers
@@ -28,15 +34,18 @@ public struct ConfigInspectSnapshot: Equatable {
         self.revision = revision
         self.revisionBefore = revisionBefore
         self.revisionAfter = revisionAfter
+        self.warning = warning
+        self.dryRun = dryRun
+        self.wrote = wrote
     }
 }
 
 public enum ConfigInspectParser {
-    public static func error(_ jsonText: String) -> String? {
+    public static func error(_ jsonText: String, command: String = "config inspect") -> String? {
         guard
             let data = jsonText.data(using: .utf8),
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            root["command"] as? String == "config inspect",
+            root["command"] as? String == command,
             root["ok"] as? Bool == false,
             let error = root["error"] as? String,
             !error.isEmpty
@@ -50,6 +59,9 @@ public enum ConfigInspectParser {
         guard
             let data = jsonText.data(using: .utf8),
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            root["ok"] as? Bool == true,
+            let command = root["command"] as? String,
+            command == "config inspect" || command == "config patch",
             let config = root["config"] as? [String: Any]
         else {
             return nil
@@ -128,13 +140,59 @@ public enum ConfigInspectParser {
             github: github,
             policy: policy,
             revision: nonEmptyString(root["revision"]),
-            revisionBefore: root["revisionBefore"] as? String,
-            revisionAfter: root["revisionAfter"] as? String
+            revisionBefore: nonEmptyString(root["revisionBefore"]),
+            revisionAfter: nonEmptyString(root["revisionAfter"]),
+            warning: nonEmptyString(root["warning"]),
+            dryRun: root["dryRun"] as? Bool,
+            wrote: root["wrote"] as? Bool
         )
     }
 
     private static func nonEmptyString(_ value: Any?) -> String? {
         guard let value = value as? String, !value.isEmpty else { return nil }
         return value
+    }
+}
+
+public enum ConfigPatchProofMode {
+    case preview
+    case apply
+}
+
+public enum ConfigPatchProofValidator {
+    public static func revisionAfter(
+        snapshot: ConfigInspectSnapshot?,
+        expectedRevision: String,
+        mode: ConfigPatchProofMode
+    ) -> String? {
+        guard
+            let snapshot,
+            snapshot.revisionBefore == expectedRevision,
+            isLowercaseSHA256(expectedRevision),
+            let revisionAfter = snapshot.revisionAfter,
+            isLowercaseSHA256(revisionAfter),
+            let dryRun = snapshot.dryRun,
+            let wrote = snapshot.wrote
+        else {
+            return nil
+        }
+        switch mode {
+        case .preview:
+            guard dryRun, !wrote, revisionAfter == expectedRevision else { return nil }
+        case .apply:
+            guard
+                !dryRun,
+                wrote ? revisionAfter != expectedRevision : revisionAfter == expectedRevision
+            else {
+                return nil
+            }
+        }
+        return revisionAfter
+    }
+
+    private static func isLowercaseSHA256(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (97...102).contains(byte)
+        }
     }
 }

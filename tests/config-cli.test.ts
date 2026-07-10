@@ -851,6 +851,45 @@ describe("desktop config CLI", () => {
     expect(JSON.parse(readFileSync(configPath, "utf8")).desktop.updateChannel).toBe("beta");
   });
 
+  it("preserves committed-write truth when owned lock cleanup fails", () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      desktop: { updateChannel: "dev" }
+    });
+    writeConfig(patchPath, { desktop: { updateChannel: "beta" } });
+    const lockPath = `${realpathSync(configPath)}.neondiff.lock`;
+    const output = patchConfigForDesktop({
+      configPath,
+      inputPath: patchPath,
+      dryRun: false,
+      confirm: true,
+      fileOps: {
+        renameSync: (from, to) => {
+          renameSync(from, to);
+        },
+        unlinkSync: (path) => {
+          if (String(path) === lockPath) throw new Error("forced lock cleanup failure");
+          unlinkSync(path);
+        }
+      }
+    });
+
+    expect(output).toMatchObject({
+      ok: true,
+      wrote: true,
+      revisionAfter: expect.stringMatching(/^[a-f0-9]{64}$/),
+      warning: expect.stringContaining(lockPath)
+    });
+    expect(JSON.parse(readFileSync(configPath, "utf8")).desktop.updateChannel).toBe("beta");
+    unlinkSync(lockPath);
+  });
+
   it("serializes live config writers and fails closed for every unowned lock state", () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");

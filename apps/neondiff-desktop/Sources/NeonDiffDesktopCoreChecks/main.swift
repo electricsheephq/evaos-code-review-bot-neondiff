@@ -512,6 +512,7 @@ do {
 let controlCenterSnapshot = ConfigInspectParser.parse(
     #"""
     {
+      "ok": true,
       "command": "config inspect",
       "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "config": {
@@ -555,6 +556,99 @@ check(
 check(
     ConfigInspectParser.parse(failedInspectJSON, providerKeyStored: false, licenseKeyStored: false) == nil,
     "failed inspect responses cannot install a config snapshot"
+)
+let expectedPatchRevision = String(repeating: "b", count: 64)
+let successfulPatchJSON = #"{"ok":true,"command":"config patch","dryRun":true,"wrote":false,"revisionBefore":"\#(expectedPatchRevision)","revisionAfter":"\#(expectedPatchRevision)","warning":"remove the owned lock","config":{"pilotRepos":[]}}"#
+let successfulPatchSnapshot = ConfigInspectParser.parse(
+    successfulPatchJSON,
+    providerKeyStored: false,
+    licenseKeyStored: false
+)
+check(successfulPatchSnapshot != nil, "successful config patch envelopes parse")
+check(successfulPatchSnapshot?.warning == "remove the owned lock", "config patch cleanup warnings remain visible to the native caller")
+check(
+    ConfigPatchProofValidator.revisionAfter(
+        snapshot: successfulPatchSnapshot,
+        expectedRevision: expectedPatchRevision,
+        mode: .preview
+    ) == expectedPatchRevision,
+    "preview proof binds both response revisions to the requested revision"
+)
+check(
+    ConfigPatchProofValidator.revisionAfter(
+        snapshot: successfulPatchSnapshot,
+        expectedRevision: expectedPatchRevision,
+        mode: .apply
+    ) == nil,
+    "an Apply operation rejects a preview-shaped dry-run envelope"
+)
+let appliedRevision = String(repeating: "c", count: 64)
+let successfulApplySnapshot = ConfigInspectParser.parse(
+    #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"\#(expectedPatchRevision)","revisionAfter":"\#(appliedRevision)","config":{"pilotRepos":[]}}"#,
+    providerKeyStored: false,
+    licenseKeyStored: false
+)
+check(
+    ConfigPatchProofValidator.revisionAfter(
+        snapshot: successfulApplySnapshot,
+        expectedRevision: expectedPatchRevision,
+        mode: .apply
+    ) == appliedRevision,
+    "Apply proof requires a typed live-write envelope and accepts its new SHA-256 revision"
+)
+let contradictoryNoOpSnapshot = ConfigInspectParser.parse(
+    #"{"ok":true,"command":"config patch","dryRun":false,"wrote":false,"revisionBefore":"\#(expectedPatchRevision)","revisionAfter":"\#(appliedRevision)","config":{"pilotRepos":[]}}"#,
+    providerKeyStored: false,
+    licenseKeyStored: false
+)
+check(
+    ConfigPatchProofValidator.revisionAfter(
+        snapshot: contradictoryNoOpSnapshot,
+        expectedRevision: expectedPatchRevision,
+        mode: .apply
+    ) == nil,
+    "a no-op Apply cannot claim a changed revision"
+)
+let contradictoryWriteSnapshot = ConfigInspectParser.parse(
+    #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"\#(expectedPatchRevision)","revisionAfter":"\#(expectedPatchRevision)","config":{"pilotRepos":[]}}"#,
+    providerKeyStored: false,
+    licenseKeyStored: false
+)
+check(
+    ConfigPatchProofValidator.revisionAfter(
+        snapshot: contradictoryWriteSnapshot,
+        expectedRevision: expectedPatchRevision,
+        mode: .apply
+    ) == nil,
+    "a reported Apply write must advance the content revision"
+)
+check(
+    ConfigPatchProofValidator.revisionAfter(
+        snapshot: successfulApplySnapshot,
+        expectedRevision: expectedPatchRevision.uppercased(),
+        mode: .apply
+    ) == nil,
+    "uppercase or otherwise malformed revisions cannot authorize Apply"
+)
+check(
+    ConfigInspectParser.parse(
+        #"{"ok":true,"command":"daemon status","revisionBefore":"\#(expectedPatchRevision)","revisionAfter":"\#(expectedPatchRevision)","config":{"pilotRepos":[]}}"#,
+        providerKeyStored: false,
+        licenseKeyStored: false
+    ) == nil,
+    "wrong-command envelopes cannot authorize a config patch"
+)
+check(
+    ConfigPatchProofValidator.revisionAfter(
+        snapshot: ConfigInspectParser.parse(
+            #"{"ok":true,"command":"config patch","revisionBefore":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","revisionAfter":"\#(expectedPatchRevision)","config":{"pilotRepos":[]}}"#,
+            providerKeyStored: false,
+            licenseKeyStored: false
+        ),
+        expectedRevision: expectedPatchRevision,
+        mode: .apply
+    ) == nil,
+    "mismatched patch revision proof fails closed"
 )
 
 var desiredControlCenter = DesktopControlCenterSettings()

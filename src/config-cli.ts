@@ -112,6 +112,7 @@ export interface ConfigPatchResult {
   revisionAfter?: string;
   config?: unknown;
   error?: string;
+  warning?: string;
 }
 
 interface FlattenedPatch {
@@ -223,11 +224,22 @@ export function patchConfigForDesktop(input: {
   } catch (error) {
     return failedPatch(input, configPath, inputPath, error instanceof Error ? error.message : String(error));
   }
+  const result = patchConfigForDesktopUnlocked(input, configPath, inputPath);
   try {
-    return patchConfigForDesktopUnlocked(input, configPath, inputPath);
-  } finally {
     releaseLock();
+  } catch (error) {
+    const lockPath = `${configPath}.neondiff.lock`;
+    const outcome = result.ok && result.wrote ? "config write committed" : "config patch completed";
+    return {
+      ...result,
+      warning: redactSecrets(
+        `${outcome}, but failed to release owned lock ${lockPath}: `
+        + `${error instanceof Error ? error.message : String(error)}; `
+        + "verify no NeonDiff config patch is running, then remove this lock and retry"
+      )
+    };
   }
+  return result;
 }
 
 function patchConfigForDesktopUnlocked(
