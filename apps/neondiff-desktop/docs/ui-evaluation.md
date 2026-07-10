@@ -39,7 +39,7 @@ these arguments may be treated as an executable user-interface test path.
 `DesktopEvaluationEvidenceManifest` binds a capture packet to:
 
 - repository and exact 40-character source SHA;
-- absolute app artifact path, build identity, and artifact SHA-256;
+- packet-relative app artifact path, build identity, and artifact SHA-256;
 - fixture catalog SHA-256;
 - macOS, Xcode, Swift, architecture, and backing scale;
 - test count, duration, and `.xcresult` SHA-256;
@@ -52,10 +52,12 @@ these arguments may be treated as an executable user-interface test path.
 - an explicit proof boundary and typed unresolved P2/P3 findings.
 
 The manifest allows the same fixture at different canonical sizes but rejects a
-duplicate `(fixture, appearance, size, scale)` case. It rejects unknown fields,
-malformed hashes, non-canonical sizes, unsafe evidence paths, failed scans,
-golden results below the specified thresholds, unresolved P0/P1 findings, and
-empty proof boundaries. Canonical packets belong in the dated external evidence
+duplicate `(fixture, appearance, size, scale)` case. Test count and capture-case
+count are recorded independently. It rejects unknown fields, malformed hashes,
+non-canonical sizes, unsafe evidence paths, failed scans, out-of-range metrics,
+and empty proof boundaries. It deliberately records below-threshold goldens and
+typed P0/P1 findings truthfully; the GA gate, not the evidence decoder, stops
+progression on those results. Canonical packets belong in the dated external evidence
 directory and CI artifacts; raw screenshots, AX trees, and geometry output do
 not belong in the repository.
 

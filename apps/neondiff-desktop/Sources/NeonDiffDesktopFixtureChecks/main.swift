@@ -224,7 +224,7 @@ let validManifest = Data(
       "repository": "electricsheephq/evaos-code-review-bot-neondiff",
       "headSHA": "ddbd45066473b833fcc8984dca0716ca9ef81e6d",
       "artifact": {
-        "path": "/Applications/NeonDiffDesktop.app",
+        "path": "artifacts/NeonDiffDesktop.app",
         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "buildIdentity": "NeonDiffDesktop 1.1.0 fixture candidate"
       },
@@ -237,7 +237,7 @@ let validManifest = Data(
         "backingScale": 2.0
       },
       "testSummary": {
-        "testCount": 2,
+        "testCount": 7,
         "durationSeconds": 4.25,
         "xcresultSHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       },
@@ -296,7 +296,7 @@ do {
 
 let unsafeManifestPath = Data(
     String(decoding: validManifest, as: UTF8.self)
-        .replacingOccurrences(of: "/Applications/NeonDiffDesktop.app", with: "/Users/example/NeonDiffDesktop.app")
+        .replacingOccurrences(of: "artifacts/NeonDiffDesktop.app", with: "/Users/example/NeonDiffDesktop.app")
         .utf8
 )
 do {
@@ -317,5 +317,18 @@ do {
 } catch {
     check(!error.localizedDescription.isEmpty, "manifest secret failure is diagnostic")
 }
+
+let failingRunManifest = Data(
+    String(decoding: validManifest, as: UTF8.self)
+        .replacingOccurrences(of: #""ssim": 0.999"#, with: #""ssim": 0.8"#)
+        .replacingOccurrences(
+            of: #""unresolvedFindings": []"#,
+            with: #""unresolvedFindings": [{"id":"layout-drift","severity":"P0","owner":"desktop-team","recordedAt":"2026-07-11T00:00:00Z","reason":"Baseline records the blocking drift for remediation."}]"#
+        )
+        .utf8
+)
+let failingManifest = try DesktopEvaluationEvidenceManifest.decode(data: failingRunManifest)
+check(failingManifest.unresolvedFindings.first?.severity == .p0, "manifest truthfully records blocking findings")
+check(failingManifest.cases.first?.goldenMetrics.ssim == 0.8, "manifest truthfully records below-threshold goldens")
 
 print("NeonDiffDesktop fixture checks passed")
