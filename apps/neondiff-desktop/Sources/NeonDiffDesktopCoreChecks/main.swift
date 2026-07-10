@@ -35,6 +35,66 @@ func checkedValue<T>(_ value: T?, _ message: String) -> T {
     return value
 }
 
+final class InMemoryProviderSecretStore: DesktopSecretStoring {
+    var secrets: [String: String] = [:]
+
+    func setSecret(_ secret: String, account: String) throws {
+        secrets[account] = secret
+    }
+
+    func readSecret(account: String) throws -> String? {
+        secrets[account]
+    }
+
+    func containsSecret(account: String) -> Bool {
+        secrets[account] != nil
+    }
+
+    func deleteSecret(account: String) throws {
+        secrets.removeValue(forKey: account)
+    }
+}
+
+final class FakeProviderVerificationCLI: NeonDiffCLIClienting {
+    var result: CLIRunResult
+    private(set) var arguments: [String] = []
+    private(set) var standardInput: Data?
+    private(set) var timeout: TimeInterval?
+
+    init(result: CLIRunResult) {
+        self.result = result
+    }
+
+    func run(arguments: [String], timeout: TimeInterval) throws -> CLIRunResult {
+        fatalError("provider verification must use the standard-input overload")
+    }
+
+    func run(arguments: [String], standardInput: Data?, timeout: TimeInterval) throws -> CLIRunResult {
+        self.arguments = arguments
+        self.standardInput = standardInput
+        self.timeout = timeout
+        return result
+    }
+
+    func launchDetached(arguments: [String]) throws -> CLILaunchResult {
+        fatalError("provider verification never launches detached")
+    }
+}
+
+@discardableResult
+func captureProviderVerificationFailure(
+    _ message: String,
+    _ operation: () throws -> Void
+) -> Error {
+    do {
+        try operation()
+        fputs("check failed: \(message) did not fail\n", stderr)
+        exit(1)
+    } catch {
+        return error
+    }
+}
+
 var providerFlow = OnboardingFlow()
 check(providerFlow.currentStep == .welcome, "flow starts at welcome")
 providerFlow.advance()
@@ -74,6 +134,15 @@ try """
 let localCLI = packageBin.appendingPathComponent("neondiff")
 try """
 #!/usr/bin/env bash
+if [[ "$1" == "stdin-check" ]]; then
+  IFS= read -r input || true
+  if [[ "$input" == "fixture-provider-value" ]]; then
+    printf '{"ok":true,"receivedBytes":22}\\n'
+    exit 0
+  fi
+  printf '{"ok":false}\\n'
+  exit 2
+fi
 printf '{"command":"%s","args":%d}\\n' "$1" "$#"
 """.write(to: localCLI, atomically: true, encoding: .utf8)
 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: localCLI.path)
@@ -90,6 +159,16 @@ check(
     NeonDiffCLIResolver.resolveExecutablePath("neondiff", workingDirectory: tempRoot)?.standardizedFileURL == localCLI.standardizedFileURL,
     "local package CLI is preferred over GUI PATH fallback"
 )
+
+let standardInputCLI = NeonDiffCLIClient(executablePath: localCLI.path, workingDirectory: tempRoot)
+let standardInputResult = try standardInputCLI.run(
+    arguments: ["stdin-check"],
+    standardInput: Data("fixture-provider-value".utf8),
+    timeout: 5
+)
+check(standardInputResult.exitCode == 0, "CLI standard-input transport reaches the bounded child process")
+check(standardInputResult.stdout.contains("\"receivedBytes\":22"), "CLI standard-input transport returns only redacted metadata")
+check(!standardInputResult.stdout.contains("fixture-provider-value"), "CLI output never echoes standard input")
 
 final class GitHubFixtureURLProtocol: URLProtocol {
     static var requests: [URLRequest] = []
@@ -714,5 +793,193 @@ check(
     DesktopControlCenterPatchBuilder.validationError(for: invalidControlCenter)?.contains("comments per cycle") == true,
     "native validation blocks issue comment caps above issue caps"
 )
+
+let providerSecretAccount = "provider/glm/api-key"
+let fixtureProviderSecret = "fixture-provider-value"
+let healthyProviderVerificationJSON = #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:00:00.000Z","providerId":"zcode-glm","state":"healthy","mode":"openai_compatible_models","detail":"Verified Z.AI GLM with a redacted /models check.","redacted":true,"keySource":"submitted","check":{"providerId":"zcode-glm","ok":true,"adapter":"openai-compatible","enabled":true,"model":"glm-4.5","authMode":"api-key-env","smokeAttempted":true,"readMode":"openai_compatible_models","apiKeyEnv":"Z_AI_API_KEY","modelCount":4},"troubleshooting":[]}"#
+let providerSecretStore = InMemoryProviderSecretStore()
+try providerSecretStore.setSecret(fixtureProviderSecret, account: providerSecretAccount)
+let fakeProviderCLI = FakeProviderVerificationCLI(
+    result: CLIRunResult(exitCode: 0, stdout: healthyProviderVerificationJSON, stderr: "")
+)
+let providerVerificationService = ProviderVerificationService(
+    keychain: providerSecretStore,
+    cli: fakeProviderCLI
+)
+let providerVerificationArguments = [
+    "providers", "verify", "--api-key-stdin", "true", "--allow-remote-smoke", "true", "--json"
+]
+let providerVerification = try providerVerificationService.verify(
+    account: providerSecretAccount,
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    !fakeProviderCLI.arguments.joined(separator: " ").contains(fixtureProviderSecret),
+    "provider secret never enters argv"
+)
+check(
+    fakeProviderCLI.standardInput == Data(fixtureProviderSecret.utf8),
+    "provider secret is supplied only on stdin"
+)
+check(fakeProviderCLI.timeout == 15, "provider verification preserves the bounded process timeout")
+check(providerVerification.state == .healthy, "only a healthy exact envelope parses as verified")
+check(providerVerification.isVerified, "healthy exact provider verification is the only verified pass")
+check(providerVerification.command == "providers verify", "provider verification preserves the strict command discriminator")
+check(providerVerification.providerId == "zcode-glm", "provider verification preserves redacted provider metadata")
+check(
+    !String(reflecting: providerVerification).contains(fixtureProviderSecret),
+    "provider verification snapshot retains no provider secret"
+)
+
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 1,
+    stdout: #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:01:00.000Z","providerId":"github-copilot","state":"configured_unverified","mode":"metadata_only","detail":"Provider metadata passed; API-key verification is not applicable.","redacted":true,"troubleshooting":["Choose an API-key provider for a live check."]}"#,
+    stderr: ""
+)
+let configuredProviderVerification = try providerVerificationService.verify(
+    account: providerSecretAccount,
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    configuredProviderVerification.state == .configuredUnverified && !configuredProviderVerification.isVerified,
+    "configured_unverified remains a visible typed non-success outcome"
+)
+
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 1,
+    stdout: #"{"ok":false,"command":"providers verify","checkedAt":"2026-07-10T12:02:00.000Z","providerId":"zcode-glm","state":"blocked","mode":"openai_compatible_models","detail":"Provider verification failed.","redacted":true,"troubleshooting":["Check provider credentials."]}"#,
+    stderr: "provider verification did not prove health"
+)
+let blockedProviderVerification = try providerVerificationService.verify(
+    account: providerSecretAccount,
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    blockedProviderVerification.state == .blocked && !blockedProviderVerification.isVerified,
+    "blocked remains a visible typed non-success outcome"
+)
+
+let invalidProviderVerificationResults: [(String, CLIRunResult)] = [
+    (
+        "wrong command",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: healthyProviderVerificationJSON.replacingOccurrences(of: "providers verify", with: "dashboard verify-provider"),
+            stderr: ""
+        )
+    ),
+    (
+        "unredacted envelope",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: healthyProviderVerificationJSON.replacingOccurrences(of: #""redacted":true"#, with: #""redacted":false"#),
+            stderr: ""
+        )
+    ),
+    ("malformed JSON", CLIRunResult(exitCode: 0, stdout: "{not-json", stderr: "")),
+    (
+        "healthy result with nonzero exit",
+        CLIRunResult(exitCode: 1, stdout: healthyProviderVerificationJSON, stderr: "")
+    ),
+    (
+        "nonhealthy result with zero exit",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: #"{"ok":false,"command":"providers verify","checkedAt":"2026-07-10T12:02:00.000Z","providerId":"zcode-glm","state":"blocked","mode":"openai_compatible_models","detail":"Provider verification failed.","redacted":true,"troubleshooting":[]}"#,
+            stderr: ""
+        )
+    ),
+    (
+        "blocked result claiming ok",
+        CLIRunResult(
+            exitCode: 1,
+            stdout: #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:02:00.000Z","providerId":"zcode-glm","state":"blocked","mode":"openai_compatible_models","detail":"Provider verification failed.","redacted":true,"troubleshooting":[]}"#,
+            stderr: ""
+        )
+    ),
+    (
+        "unknown mode",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: healthyProviderVerificationJSON.replacingOccurrences(of: "openai_compatible_models", with: "raw_response"),
+            stderr: ""
+        )
+    ),
+    (
+        "secret-like field",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: healthyProviderVerificationJSON.replacingOccurrences(of: #""troubleshooting":[]"#, with: #""apiKey":"[REDACTED]","troubleshooting":[]"#),
+            stderr: ""
+        )
+    )
+]
+for (message, result) in invalidProviderVerificationResults {
+    fakeProviderCLI.result = result
+    let failure = captureProviderVerificationFailure(message) {
+        _ = try providerVerificationService.verify(
+            account: providerSecretAccount,
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(
+        !failure.localizedDescription.contains(fixtureProviderSecret),
+        "provider verification failures never echo the provider secret"
+    )
+}
+
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 1,
+    stdout: healthyProviderVerificationJSON.replacingOccurrences(
+        of: "Verified Z.AI GLM with a redacted /models check.",
+        with: fixtureProviderSecret
+    ),
+    stderr: ""
+)
+let stdoutLeakFailure = captureProviderVerificationFailure("secret in serialized stdout") {
+    _ = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !stdoutLeakFailure.localizedDescription.contains(fixtureProviderSecret),
+    "serialized provider output containing the submitted secret is rejected without echo"
+)
+
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON,
+    stderr: "transport failed for \(fixtureProviderSecret)"
+)
+let stderrLeakFailure = captureProviderVerificationFailure("secret in stderr") {
+    _ = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !stderrLeakFailure.localizedDescription.contains(fixtureProviderSecret),
+    "provider stderr containing the submitted secret is rejected without echo"
+)
+
+let missingProviderSecretStore = InMemoryProviderSecretStore()
+let missingProviderSecretService = ProviderVerificationService(
+    keychain: missingProviderSecretStore,
+    cli: fakeProviderCLI
+)
+_ = captureProviderVerificationFailure("missing Keychain provider secret") {
+    _ = try missingProviderSecretService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
 
 print("NeonDiffDesktopCoreChecks passed")

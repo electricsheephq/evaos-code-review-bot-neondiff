@@ -5,6 +5,12 @@ public struct CLIRunResult: Equatable {
     public var stdout: String
     public var stderr: String
 
+    public init(exitCode: Int32, stdout: String, stderr: String) {
+        self.exitCode = exitCode
+        self.stdout = stdout
+        self.stderr = stderr
+    }
+
     public var redactedStdout: String { NeonDiffRedactor.redact(stdout) }
     public var redactedStderr: String { NeonDiffRedactor.redact(stderr) }
 }
@@ -24,18 +30,26 @@ public struct CLILaunchResult: Equatable {
 public enum NeonDiffCLIError: Error, LocalizedError {
     case timedOut
     case launchFailed(String)
+    case standardInputTooLarge(maxBytes: Int)
 
     public var errorDescription: String? {
         switch self {
         case .timedOut: "NeonDiff CLI command timed out"
         case .launchFailed(let message): message
+        case .standardInputTooLarge(let maxBytes): "NeonDiff CLI standard input exceeds the \(maxBytes)-byte limit"
         }
     }
 }
 
 public protocol NeonDiffCLIClienting {
-    func run(arguments: [String], timeout: TimeInterval) throws -> CLIRunResult
+    func run(arguments: [String], standardInput: Data?, timeout: TimeInterval) throws -> CLIRunResult
     func launchDetached(arguments: [String]) throws -> CLILaunchResult
+}
+
+public extension NeonDiffCLIClienting {
+    func run(arguments: [String], timeout: TimeInterval = 15) throws -> CLIRunResult {
+        try run(arguments: arguments, standardInput: nil, timeout: timeout)
+    }
 }
 
 public final class NeonDiffCLIClient: NeonDiffCLIClienting {
@@ -47,7 +61,16 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         self.workingDirectory = workingDirectory
     }
 
-    public func run(arguments: [String], timeout: TimeInterval = 15) throws -> CLIRunResult {
+    public func run(
+        arguments: [String],
+        standardInput: Data?,
+        timeout: TimeInterval = 15
+    ) throws -> CLIRunResult {
+        let maximumStandardInputBytes = 64 * 1024
+        if let standardInput, standardInput.count > maximumStandardInputBytes {
+            throw NeonDiffCLIError.standardInputTooLarge(maxBytes: maximumStandardInputBytes)
+        }
+
         let process = Process()
         if let resolvedExecutable = NeonDiffCLIResolver.resolveExecutablePath(executablePath, workingDirectory: workingDirectory) {
             process.executableURL = resolvedExecutable
@@ -63,8 +86,10 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
 
         let stdout = Pipe()
         let stderr = Pipe()
+        let stdin = standardInput.map { _ in Pipe() }
         process.standardOutput = stdout
         process.standardError = stderr
+        process.standardInput = stdin
 
         let outputLock = NSLock()
         var stdoutData = Data()
@@ -90,7 +115,19 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         do {
             try process.run()
         } catch {
+            try? stdin?.fileHandleForWriting.close()
             throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(error.localizedDescription)")
+        }
+
+        if let standardInput, let stdin {
+            do {
+                try stdin.fileHandleForWriting.write(contentsOf: standardInput)
+                try stdin.fileHandleForWriting.close()
+            } catch {
+                process.terminate()
+                try? stdin.fileHandleForWriting.close()
+                throw NeonDiffCLIError.launchFailed("Failed to send bounded standard input to the NeonDiff CLI")
+            }
         }
 
         if finished.wait(timeout: .now() + timeout) == .timedOut {
