@@ -4,31 +4,55 @@ import {
   canonicalSensitiveCookieRule
 } from "./generated-secret-rules.js";
 
-const SECRET_PATTERNS = canonicalSecretRules.map(
-  (rule) => new RegExp(rule.source, rule.ignoreCase ? "gi" : "g")
-);
+const SECRET_PATTERNS = canonicalSecretRules.map((rule) => ({
+  id: rule.id,
+  pattern: new RegExp(rule.source, rule.ignoreCase ? "gi" : "g")
+}));
+const NAMED_CREDENTIAL_RULE = SECRET_PATTERNS.find((rule) => rule.id === "named-credential");
+const OTHER_SECRET_PATTERNS = SECRET_PATTERNS.filter((rule) => rule.id !== "named-credential");
 const COOKIE_HEADER_PREFIX = canonicalSensitiveCookieRule.prefix;
 const SENSITIVE_COOKIE_NAME_PATTERN = new RegExp(
-  canonicalSensitiveCookieRule.sensitiveNameSource,
-  "i"
+  canonicalSensitiveCookieRule.sensitiveNameSource
 );
 const MAX_COOKIE_ATTRIBUTE_SCAN = canonicalSensitiveCookieRule.maximumAttributes;
 
 export function containsSecretLikeText(input: string): boolean {
+  if (NAMED_CREDENTIAL_RULE) {
+    NAMED_CREDENTIAL_RULE.pattern.lastIndex = 0;
+    if (NAMED_CREDENTIAL_RULE.pattern.test(input)) return true;
+  }
   const safeInput = protectSafeEnvVarNames(input);
-  return containsSensitiveCookieHeader(safeInput) || SECRET_PATTERNS.some((pattern) => {
+  return containsSensitiveCookieHeader(safeInput) || OTHER_SECRET_PATTERNS.some(({ pattern }) => {
     pattern.lastIndex = 0;
     return pattern.test(safeInput);
   });
 }
 
 export function redactSecrets(input: string): string {
-  const protectedInput = protectSafeEnvVarNames(input);
-  const redacted = SECRET_PATTERNS.reduce(
-    (text, pattern) => text.replace(pattern, "[redacted-secret]"),
-    redactSensitiveCookieHeaders(protectedInput)
+  const namedRedacted = NAMED_CREDENTIAL_RULE
+    ? redactNamedCredentials(redactSensitiveCookieHeaders(input), NAMED_CREDENTIAL_RULE.pattern)
+    : redactSensitiveCookieHeaders(input);
+  const protectedInput = protectAllSafeEnvVarNames(namedRedacted);
+  const redacted = OTHER_SECRET_PATTERNS.reduce(
+    (text, rule) => text.replace(rule.pattern, "[redacted-secret]"),
+    protectedInput
   );
   return restoreSafeEnvVarNames(redacted);
+}
+
+function protectAllSafeEnvVarNames(input: string): string {
+  return canonicalSecretSafeLiterals.reduce((text, name, index) => {
+    const pattern = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`, "g");
+    return text.replace(pattern, `__NEONDIFF_SAFE_ENV_${index}__`);
+  }, input);
+}
+
+function redactNamedCredentials(input: string, pattern: RegExp): string {
+  return input.replace(pattern, (match, prefix: string, offset: number, whole: string) => {
+    const preservesJsonSyntax = whole[offset + match.length] === "\""
+      && (whole[offset - 1] === "\"" || /"\s*:\s*"$/.test(prefix));
+    return preservesJsonSyntax ? `${prefix}[redacted-secret]` : "[redacted-secret]";
+  });
 }
 
 export function stringifyRedactedJson(input: unknown): string {
@@ -80,8 +104,20 @@ function readSensitiveCookieHeader(line: string): string | undefined {
 function protectSafeEnvVarNames(input: string): string {
   return canonicalSecretSafeLiterals.reduce((text, name, index) => {
     const pattern = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`, "g");
-    return text.replace(pattern, `__NEONDIFF_SAFE_ENV_${index}__`);
+    return text.replace(pattern, (match, offset: number, whole: string) => {
+      const before = whole.slice(0, offset);
+      const after = whole.slice(offset + match.length);
+      return isAssignmentPosition(before, after) ? match : `__NEONDIFF_SAFE_ENV_${index}__`;
+    });
   }, input);
+}
+
+function isAssignmentPosition(before: string, after: string): boolean {
+  const whitespace = "[\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*";
+  const quote = "[\\\"'`]?";
+  const credentialName = "(?:(?:NEONDIFF[_-]PROVIDER[_-])?api[_-]?key|token|secret|password|cookie|session)";
+  return new RegExp(`^${quote}${whitespace}[:=]`).test(after)
+    || new RegExp(`${credentialName}${quote}${whitespace}[:=]${whitespace}${quote}$`, "i").test(before);
 }
 
 function restoreSafeEnvVarNames(input: string): string {

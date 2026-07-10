@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { canonicalSecretRules } from "../src/generated-secret-rules.js";
+import { canonicalSecretRules, canonicalSensitiveCookieRule } from "../src/generated-secret-rules.js";
 import { containsSecretLikeText } from "../src/secrets.js";
 import { canonicalSecretRuleCorpus } from "./generated-secret-rule-corpus.js";
 
@@ -28,4 +28,37 @@ describe("canonical secret rule parity", () => {
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   });
+
+  it("projects only runtime cookie fields into production Node output", () => {
+    expect(Object.keys(canonicalSensitiveCookieRule).sort()).toEqual([
+      "id",
+      "maximumAttributes",
+      "prefix",
+      "sensitiveNameSource"
+    ]);
+  });
+
+  it("keeps every canonical sensitive fixture out of production source, build, and npm payload", () => {
+    const result = spawnSync(process.execPath, ["scripts/check-secret-rule-release.mjs", "--build", "--pack"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  }, 30_000);
+
+  it("uses regex syntax with matching ECMAScript and Foundation semantics", () => {
+    for (const rule of canonicalSecretRules) {
+      expect(rule.source, rule.id).not.toMatch(/\\[bds]/);
+      expect(rule.ignoreCase, rule.id).toBe(false);
+    }
+    expect(canonicalSensitiveCookieRule.sensitiveNameSource).not.toMatch(/\\[bds]/);
+  });
+
+  it("differentially matches every rule in Node and Foundation across boundary variants", () => {
+    const result = spawnSync(process.execPath, ["scripts/check-secret-rule-differential.mjs", "--require-swift"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  }, 60_000);
 });

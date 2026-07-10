@@ -13,7 +13,7 @@ struct CanonicalSensitiveCookieRule {
     let maximumAttributes: Int
 }
 
-enum CanonicalSecretScanner {
+@_spi(Testing) public enum CanonicalSecretScanner {
     private static let ecmaScriptWhitespace = CharacterSet(
         charactersIn: "\u{0009}\u{000A}\u{000B}\u{000C}\u{000D}\u{0020}\u{00A0}\u{1680}"
             + "\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200A}"
@@ -34,23 +34,28 @@ enum CanonicalSecretScanner {
         )
     }
     private static let sensitiveCookieNameExpression = try? NSRegularExpression(
-        pattern: CanonicalSensitiveCookieRule.generated.sensitiveNameSource,
-        options: [.caseInsensitive]
+        pattern: CanonicalSensitiveCookieRule.generated.sensitiveNameSource
     )
 
-    static func containsSecretLikeText(_ input: String) -> Bool {
+    @_spi(Testing) public static func containsSecretLikeText(_ input: String) -> Bool {
+        if let namedCredential = rules.first(where: { $0.id == "named-credential" }),
+           let expression = namedCredential.expression {
+            let rawRange = NSRange(input.startIndex..<input.endIndex, in: input)
+            if expression.firstMatch(in: input, range: rawRange) != nil { return true }
+        }
         let protected = protectSafeLiterals(input)
         if containsSensitiveCookieHeader(protected) { return true }
         let range = NSRange(protected.startIndex..<protected.endIndex, in: protected)
         return rules.contains { rule in
+            if rule.id == "named-credential" { return false }
             guard let expression = rule.expression else { return true }
             return expression.firstMatch(in: protected, range: range) != nil
         }
     }
 
     private static func containsSensitiveCookieHeader(_ input: String) -> Bool {
-        input.split(separator: "\n", omittingEmptySubsequences: false)
-            .contains { containsSensitiveCookieHeaderLine(String($0)) }
+        input.components(separatedBy: .newlines)
+            .contains { containsSensitiveCookieHeaderLine($0) }
     }
 
     private static func containsSensitiveCookieHeaderLine(_ line: String) -> Bool {
@@ -88,11 +93,31 @@ enum CanonicalSecretScanner {
                 return text
             }
             let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            return expression.stringByReplacingMatches(
-                in: text,
-                range: range,
-                withTemplate: "__NEONDIFF_SAFE_ENV_\(index)__"
-            )
+            let matches = expression.matches(in: text, range: range)
+            let mutable = NSMutableString(string: text)
+            for match in matches.reversed() {
+                let before = (text as NSString).substring(to: match.range.location)
+                let afterStart = match.range.location + match.range.length
+                let after = (text as NSString).substring(from: afterStart)
+                guard !isAssignmentPosition(before: before, after: after) else { continue }
+                mutable.replaceCharacters(in: match.range, with: "__NEONDIFF_SAFE_ENV_\(index)__")
+            }
+            return mutable as String
         }
+    }
+
+    private static func isAssignmentPosition(before: String, after: String) -> Bool {
+        let whitespace = #"[\u0009-\u000D \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*"#
+        let quote = #"[\"'`]?"#
+        let afterPattern = "^\(quote)\(whitespace)[:=]"
+        let credentialName = #"(?:(?:[Nn][Ee][Oo][Nn][Dd][Ii][Ff][Ff][_-][Pp][Rr][Oo][Vv][Ii][Dd][Ee][Rr][_-])?[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn])"#
+        let beforePattern = "\(credentialName)\(quote)\(whitespace)[:=]\(whitespace)\(quote)$"
+        return regexMatches(afterPattern, text: after) || regexMatches(beforePattern, text: before)
+    }
+
+    private static func regexMatches(_ pattern: String, text: String) -> Bool {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return true }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.firstMatch(in: text, range: range) != nil
     }
 }

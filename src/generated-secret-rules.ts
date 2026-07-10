@@ -3,106 +3,105 @@ export interface CanonicalSecretRule { readonly id: string; readonly source: str
 export const canonicalSecretRules: readonly CanonicalSecretRule[] = [
   {
     "id": "github-prefixed-token",
-    "source": "\\bgh[pousr]_[A-Za-z0-9_]{8,}\\b",
+    "source": "(?<![A-Za-z0-9_])gh[pousr]_[A-Za-z0-9_]{8,}(?![A-Za-z0-9_])",
     "ignoreCase": false
   },
   {
     "id": "github-fine-grained-token",
-    "source": "\\bgithub_pat_[A-Za-z0-9_]{8,}\\b",
+    "source": "(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{8,}(?![A-Za-z0-9_])",
     "ignoreCase": false
   },
   {
     "id": "sk-provider-key",
-    "source": "\\bsk-[A-Za-z0-9_-]{8,}\\b",
+    "source": "(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_])",
     "ignoreCase": false
   },
   {
     "id": "bearer-credential",
-    "source": "\\bBearer\\s+[A-Za-z0-9._~+/=-]{20,}\\b",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])[Bb][Ee][Aa][Rr][Ee][Rr][\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]+[A-Za-z0-9._~+/=-]{20,}(?![A-Za-z0-9_])",
+    "ignoreCase": false
   },
   {
     "id": "credential-url",
-    "source": "https?:\\/\\/[^/\\s@]+@[^/\\s]+",
-    "ignoreCase": true
+    "source": "[Hh][Tt][Tt][Pp][Ss]?:\\/\\/[^/\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF@]+@[^/\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]+",
+    "ignoreCase": false
   },
   {
     "id": "aws-access-key",
-    "source": "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b",
+    "source": "(?<![A-Za-z0-9_])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9_])",
     "ignoreCase": false
   },
   {
     "id": "slack-token",
-    "source": "\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])[Xx][Oo][Xx][baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9_])",
+    "ignoreCase": false
   },
   {
     "id": "query-credential",
-    "source": "[?&](?:access[_-]?token|auth[_-]?token|api[_-]?key|token|secret|session|cookie)=[A-Za-z0-9._~+/=-]{16,}",
-    "ignoreCase": true
+    "source": "[?&](?:[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn]|[Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee])=[A-Za-z0-9._~+/=-]{16,}",
+    "ignoreCase": false
   },
   {
     "id": "customer-id",
-    "source": "\\bcustomer[_-]?id\\b\\s*[:=]\\s*[\"']?cus_[A-Za-z0-9]{8,}",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])[Cc][Uu][Ss][Tt][Oo][Mm][Ee][Rr][_-]?[Ii][Dd](?![A-Za-z0-9_])[\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[:=][\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[\"']?[Cc][Uu][Ss]_[A-Za-z0-9]{8,}",
+    "ignoreCase": false
   },
   {
     "id": "customer-ssn",
-    "source": "\\b(?:customer|client)[_-]?ssn\\b\\s*[:=]\\s*[\"']?\\d{3}-\\d{2}-\\d{4}\\b",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])(?:[Cc][Uu][Ss][Tt][Oo][Mm][Ee][Rr]|[Cc][Ll][Ii][Ee][Nn][Tt])[_-]?[Ss][Ss][Nn](?![A-Za-z0-9_])[\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[:=][\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[\"']?[0-9]{3}-[0-9]{2}-[0-9]{4}(?![A-Za-z0-9_])",
+    "ignoreCase": false
   },
   {
     "id": "customer-phone",
-    "source": "\\b(?:customer|client)[_-]?phone\\b\\s*[:=]\\s*[\"']?\\+?\\d[\\d ().-]{7,}\\d\\b",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])(?:[Cc][Uu][Ss][Tt][Oo][Mm][Ee][Rr]|[Cc][Ll][Ii][Ee][Nn][Tt])[_-]?[Pp][Hh][Oo][Nn][Ee](?![A-Za-z0-9_])[\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[:=][\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[\"']?\\+?[0-9][0-9 ().-]{7,}[0-9](?![A-Za-z0-9_])",
+    "ignoreCase": false
   },
   {
     "id": "named-credential",
-    "source": "\\b(?:api[_-]?key|token|secret|password|cookie|session)\\b\\s*[:=]\\s*[\"']?[A-Za-z0-9._~+/=-]{16,}",
-    "ignoreCase": true
+    "source": "((?<![A-Za-z0-9_])(?:(?:[Nn][Ee][Oo][Nn][Dd][Ii][Ff][Ff][_-][Pp][Rr][Oo][Vv][Ii][Dd][Ee][Rr][_-])?[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn])(?![A-Za-z0-9_])[\"']?[\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[:=][\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[\"']?)[A-Za-z0-9._~+/=-]{16,}",
+    "ignoreCase": false
   },
   {
     "id": "neondiff-underscore-license",
-    "source": "\\b(?:NEONDIFF|NDL|LIC)_[A-Za-z0-9][A-Za-z0-9_-]{11,}\\b",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])(?:[Nn][Ee][Oo][Nn][Dd][Ii][Ff][Ff]|[Nn][Dd][Ll]|[Ll][Ii][Cc])_[A-Za-z0-9][A-Za-z0-9_-]{11,}(?![A-Za-z0-9_])",
+    "ignoreCase": false
   },
   {
     "id": "neondiff-live-license",
-    "source": "\\bnd_live_[A-Za-z0-9_-]{8,}\\b",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])[Nn][Dd]_[Ll][Ii][Vv][Ee]_[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_])",
+    "ignoreCase": false
   },
   {
     "id": "neondiff-hyphen-license",
-    "source": "(?<![A-Za-z0-9_./-])(?:[Nn][Ee][Oo][Nn][Dd][Ii][Ff][Ff]|[Nn][Dd][Ll]|[Ll][Ii][Cc])-(?=[A-Za-z0-9_-]*[A-Z0-9])[A-Za-z0-9][A-Za-z0-9_-]{11,}\\b",
+    "source": "(?<![A-Za-z0-9_./-])(?:[Nn][Ee][Oo][Nn][Dd][Ii][Ff][Ff]|[Nn][Dd][Ll]|[Ll][Ii][Cc])-(?=[A-Za-z0-9_-]*[A-Z0-9])[A-Za-z0-9][A-Za-z0-9_-]{11,}(?![A-Za-z0-9_])",
     "ignoreCase": false
   },
   {
     "id": "hyphenated-named-credential",
-    "source": "\\b[A-Za-z0-9]{3,}[-_](?:secret|token|password|cookie)[-_][A-Za-z0-9_-]{3,}\\b",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])[A-Za-z0-9]{3,}[-_](?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Oo][Oo][Kk][Ii][Ee])[-_][A-Za-z0-9_-]{3,}(?![A-Za-z0-9_])",
+    "ignoreCase": false
   },
   {
     "id": "email-address",
-    "source": "\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
-    "ignoreCase": true
+    "source": "(?<![A-Za-z0-9_])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(?![A-Za-z0-9_])",
+    "ignoreCase": false
   },
   {
     "id": "complete-private-key",
-    "source": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+    "source": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\u0000-\\uFFFF]*?-----END [A-Z ]*PRIVATE KEY-----",
     "ignoreCase": false
   },
   {
     "id": "truncated-private-key",
-    "source": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*",
+    "source": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\u0000-\\uFFFF]*",
     "ignoreCase": false
   }
 ];
 export const canonicalSensitiveCookieRule = {
   "id": "sensitive-cookie-header",
   "prefix": "cookie:",
-  "sensitiveNameSource": "(?:session|token|auth|secret|cookie)",
-  "maximumAttributes": 1000,
-  "sample": "Cookie: theme=light; session=x"
+  "sensitiveNameSource": "(?:[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Oo][Oo][Kk][Ii][Ee])",
+  "maximumAttributes": 1000
 } as const;
 export const canonicalSecretSafeLiterals: readonly string[] = [
   "NEONDIFF_GITHUB_APP_ID",

@@ -1692,6 +1692,31 @@ for fixture in CanonicalSecretRuleCorpus.benign {
     check(true, "canonical benign \(fixture.id) stays accepted across decoded keys and values")
 }
 
+let standaloneSafeLiteralReferences = [
+    "Set NEONDIFF_PROVIDER_API_KEY before running verification.",
+    "Required: `NEONDIFF_PROVIDER_API_KEY`.",
+    "Read NEONDIFF_PROVIDER_API_KEY, then continue."
+]
+for text in standaloneSafeLiteralReferences {
+    check(
+        !CanonicalSecretScanner.containsSecretLikeText(text),
+        "standalone safe environment identifier remains public-safe: \(text)"
+    )
+}
+let sensitiveSafeLiteralAssignments = [
+    "NEONDIFF_PROVIDER_API_KEY=abcdefghijklmnop",
+    "NEONDIFF_PROVIDER_API_KEY = abcdefghijklmnop",
+    #""NEONDIFF_PROVIDER_API_KEY": "abcdefghijklmnop""#,
+    "'NEONDIFF_PROVIDER_API_KEY' : 'abcdefghijklmnop'",
+    "token=NEONDIFF_PROVIDER_API_KEY"
+]
+for text in sensitiveSafeLiteralAssignments {
+    check(
+        CanonicalSecretScanner.containsSecretLikeText(text),
+        "assignment-shaped safe environment identifier remains scannable"
+    )
+}
+
 escapedSecretCLI.result = CLIRunResult(
     exitCode: 0,
     stdout: try encodedProviderEnvelope().replacingOccurrences(of: #""providerId":"zcode-glm""#, with: #""providerId":"other-provider""#),
