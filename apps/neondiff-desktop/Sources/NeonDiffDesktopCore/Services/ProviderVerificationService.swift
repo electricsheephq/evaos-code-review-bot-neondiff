@@ -75,30 +75,26 @@ public enum ProviderVerificationParser {
         _ text: String,
         forbiddenValue: String
     ) -> Bool {
-        if text.isEmpty { return false }
-        if text.contains(forbiddenValue) { return true }
-        if let decoded = try? JSONSerialization.jsonObject(
-            with: Data(text.utf8),
-            options: [.fragmentsAllowed]
-        ) {
-            return containsDecodedString(decoded, forbiddenValue: forbiddenValue)
-        }
-        var looselyDecoded = text
-        for _ in 0..<3 {
-            let next = looselyDecodeJSONEscapes(looselyDecoded)
-            if next.contains(forbiddenValue) { return true }
-            if next == looselyDecoded { break }
-            looselyDecoded = next
-        }
-        return escapedJSONBodies(forbiddenValue).contains { escapedBody in
-            !escapedBody.isEmpty && text.contains(escapedBody)
-        }
+        guard !text.isEmpty else { return false }
+        var budget = ForbiddenValueScanBudget()
+        return scanSerializedText(
+            text,
+            forbiddenValue: forbiddenValue,
+            escapedBodies: escapedJSONBodies(forbiddenValue),
+            depth: 0,
+            budget: &budget
+        )
     }
 
     public static func parse(
         result: CLIRunResult,
         forbiddenValue: String? = nil
     ) throws -> ProviderVerificationSnapshot {
+        if let forbiddenValue,
+           serializedTextContainsForbiddenValue(result.stdout, forbiddenValue: forbiddenValue)
+        {
+            throw ProviderVerificationError.secretInProcessOutput
+        }
         let data = Data(result.stdout.utf8)
         let object: Any
         do {
@@ -107,9 +103,6 @@ public enum ProviderVerificationParser {
             throw ProviderVerificationError.malformedEnvelope
         }
 
-        if let forbiddenValue, containsDecodedString(object, forbiddenValue: forbiddenValue) {
-            throw ProviderVerificationError.secretInProcessOutput
-        }
         guard let envelope = object as? [String: Any], !containsSecretLikeKey(object) else {
             throw ProviderVerificationError.invalidEnvelope
         }
@@ -207,18 +200,154 @@ public enum ProviderVerificationParser {
         return false
     }
 
-    private static func containsDecodedString(_ value: Any, forbiddenValue: String) -> Bool {
-        if let string = value as? String {
-            return string.contains(forbiddenValue)
-        }
-        if let dictionary = value as? [String: Any] {
-            return dictionary.contains { key, nestedValue in
-                key.contains(forbiddenValue)
-                    || containsDecodedString(nestedValue, forbiddenValue: forbiddenValue)
+    private struct ForbiddenValueScanBudget {
+        static let maximumDepth = 32
+        static let maximumNodes = 4_096
+        static let maximumBytes = 2 * 1024 * 1024
+
+        var remainingNodes = maximumNodes
+        var remainingBytes = maximumBytes
+
+        mutating func consumeNode(depth: Int, byteCount: Int = 0) -> Bool {
+            guard depth <= Self.maximumDepth,
+                  remainingNodes > 0,
+                  byteCount <= remainingBytes
+            else {
+                return false
             }
+            remainingNodes -= 1
+            remainingBytes -= byteCount
+            return true
+        }
+    }
+
+    private static func scanSerializedText(
+        _ text: String,
+        forbiddenValue: String,
+        escapedBodies: Set<String>,
+        depth: Int,
+        budget: inout ForbiddenValueScanBudget
+    ) -> Bool {
+        guard budget.consumeNode(depth: depth, byteCount: text.utf8.count) else { return true }
+        if text.contains(forbiddenValue) { return true }
+
+        var looselyDecoded = text
+        for _ in 0..<3 {
+            let next = looselyDecodeJSONEscapes(looselyDecoded)
+            if next.contains(forbiddenValue) { return true }
+            if next == looselyDecoded { break }
+            looselyDecoded = next
+        }
+        if escapedBodies.contains(where: { !$0.isEmpty && text.contains($0) }) {
+            return true
+        }
+        if exceedsJSONStructuralBudget(
+            text,
+            maximumDepth: ForbiddenValueScanBudget.maximumDepth,
+            maximumNodes: ForbiddenValueScanBudget.maximumNodes
+        ) {
+            return true
+        }
+        guard let decoded = try? JSONSerialization.jsonObject(
+            with: Data(text.utf8),
+            options: [.fragmentsAllowed]
+        ) else {
+            return false
+        }
+        return scanDecodedValue(
+            decoded,
+            forbiddenValue: forbiddenValue,
+            escapedBodies: escapedBodies,
+            depth: depth + 1,
+            budget: &budget
+        )
+    }
+
+    private static func scanDecodedValue(
+        _ value: Any,
+        forbiddenValue: String,
+        escapedBodies: Set<String>,
+        depth: Int,
+        budget: inout ForbiddenValueScanBudget
+    ) -> Bool {
+        if let string = value as? String {
+            return scanSerializedText(
+                string,
+                forbiddenValue: forbiddenValue,
+                escapedBodies: escapedBodies,
+                depth: depth,
+                budget: &budget
+            )
+        }
+        guard budget.consumeNode(depth: depth) else { return true }
+        if let dictionary = value as? [String: Any] {
+            for (key, nestedValue) in dictionary {
+                if scanSerializedText(
+                    key,
+                    forbiddenValue: forbiddenValue,
+                    escapedBodies: escapedBodies,
+                    depth: depth + 1,
+                    budget: &budget
+                ) || scanDecodedValue(
+                    nestedValue,
+                    forbiddenValue: forbiddenValue,
+                    escapedBodies: escapedBodies,
+                    depth: depth + 1,
+                    budget: &budget
+                ) {
+                    return true
+                }
+            }
+            return false
         }
         if let array = value as? [Any] {
-            return array.contains { containsDecodedString($0, forbiddenValue: forbiddenValue) }
+            for nestedValue in array {
+                if scanDecodedValue(
+                    nestedValue,
+                    forbiddenValue: forbiddenValue,
+                    escapedBodies: escapedBodies,
+                    depth: depth + 1,
+                    budget: &budget
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func exceedsJSONStructuralBudget(
+        _ text: String,
+        maximumDepth: Int,
+        maximumNodes: Int
+    ) -> Bool {
+        var depth = 0
+        var structuralNodes = 1
+        var insideString = false
+        var escaped = false
+        for scalar in text.unicodeScalars {
+            if insideString {
+                if escaped {
+                    escaped = false
+                } else if scalar.value == 0x5C {
+                    escaped = true
+                } else if scalar.value == 0x22 {
+                    insideString = false
+                }
+                continue
+            }
+            if scalar.value == 0x22 {
+                insideString = true
+            } else if scalar.value == 0x7B || scalar.value == 0x5B {
+                depth += 1
+                structuralNodes += 1
+                if depth > maximumDepth { return true }
+            } else if scalar.value == 0x7D || scalar.value == 0x5D {
+                depth = max(0, depth - 1)
+            } else if scalar.value == 0x2C || scalar.value == 0x3A {
+                structuralNodes += 1
+            }
+            if structuralNodes > maximumNodes { return true }
         }
         return false
     }
@@ -402,16 +531,10 @@ public final class ProviderVerificationService {
             standardInput: secretData,
             timeout: timeout
         )
-        guard
-            !ProviderVerificationParser.serializedTextContainsForbiddenValue(
-                result.stdout,
-                forbiddenValue: secret
-            ),
-            !ProviderVerificationParser.serializedTextContainsForbiddenValue(
-                result.stderr,
-                forbiddenValue: secret
-            )
-        else {
+        guard !ProviderVerificationParser.serializedTextContainsForbiddenValue(
+            result.stderr,
+            forbiddenValue: secret
+        ) else {
             throw ProviderVerificationError.secretInProcessOutput
         }
         return try ProviderVerificationParser.parse(result: result, forbiddenValue: secret)

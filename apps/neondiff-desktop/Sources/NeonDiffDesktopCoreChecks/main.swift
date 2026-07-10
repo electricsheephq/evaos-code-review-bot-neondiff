@@ -1420,6 +1420,84 @@ for (index, stderrText) in escapedSecretStderrCases.enumerated() {
     )
 }
 
+let nestedSerializedSecretEnvelope = try encodedProviderEnvelope(
+    diagnostic: ["serialized": encodedSecretLiteral]
+)
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: nestedSerializedSecretEnvelope,
+    stderr: ""
+)
+let nestedSerializedStdoutFailure = captureProviderVerificationFailure("nested serialized secret stdout") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !nestedSerializedStdoutFailure.localizedDescription.contains(escapedOperationalSecret),
+    "nested serialized stdout rejection retains no normalized secret"
+)
+
+let nestedSerializedStderrData = try JSONSerialization.data(
+    withJSONObject: ["diagnostic": ["serialized": encodedSecretLiteral]],
+    options: [.sortedKeys]
+)
+let nestedSerializedStderr = checkedValue(
+    String(data: nestedSerializedStderrData, encoding: .utf8),
+    "nested serialized stderr encodes as UTF-8"
+)
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON,
+    stderr: nestedSerializedStderr
+)
+let nestedSerializedStderrFailure = captureProviderVerificationFailure("nested serialized secret stderr") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !nestedSerializedStderrFailure.localizedDescription.contains(escapedOperationalSecret),
+    "nested serialized stderr rejection retains no normalized secret"
+)
+
+var deeplyNestedDiagnostic: Any = encodedSecretLiteral
+for _ in 0..<80 {
+    deeplyNestedDiagnostic = [deeplyNestedDiagnostic]
+}
+let deeplyNestedEnvelope = try encodedProviderEnvelope(diagnostic: deeplyNestedDiagnostic)
+escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: deeplyNestedEnvelope, stderr: "")
+let deeplyNestedFailure = captureProviderVerificationFailure("deeply nested provider diagnostic") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !deeplyNestedFailure.localizedDescription.contains(escapedOperationalSecret),
+    "deep nesting budget failure remains fixed and redacted"
+)
+
+let wideDiagnostic = Array(repeating: "bounded-safe-diagnostic", count: 5_000)
+let wideEnvelope = try encodedProviderEnvelope(diagnostic: wideDiagnostic)
+escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: wideEnvelope, stderr: "")
+let wideBudgetFailure = captureProviderVerificationFailure("provider diagnostic node budget") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !wideBudgetFailure.localizedDescription.contains(escapedOperationalSecret),
+    "node budget failure remains fixed and redacted"
+)
+
 let whitespaceOnlySecretStore = InMemoryProviderSecretStore()
 try whitespaceOnlySecretStore.setSecret(" \t\r\n ", account: providerSecretAccount)
 let whitespaceOnlySecretService = ProviderVerificationService(
