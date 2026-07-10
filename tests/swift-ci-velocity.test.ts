@@ -67,7 +67,7 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/No Swift desktop files changed/);
     expect(gate).toMatch(/swift build --target NeonDiffDesktopKeychainChecks/);
     expect(gate).toMatch(/npm run check:secret-rule-differential/);
-    expect(gate).not.toMatch(/swift run NeonDiffDesktopCoreChecks/);
+    expect(gate.match(/swift run NeonDiffDesktopCoreChecks/g)).toHaveLength(1);
     expect(gate).not.toMatch(/swift run NeonDiffDesktopKeychainChecks/);
     expect(gate).toMatch(/swift build/);
     expect(gate).toMatch(/script\/build_and_run\.sh build/);
