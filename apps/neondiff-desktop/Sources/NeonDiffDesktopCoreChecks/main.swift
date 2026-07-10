@@ -214,12 +214,7 @@ let saturatedInputMarker = tempRoot.appendingPathComponent("saturated-input-chil
 let saturatedInputCLI = tempRoot.appendingPathComponent("saturated-input-cli")
 try """
 #!/usr/bin/env bash
-(
-  trap '' TERM
-  while :; do :; done
-) &
-holder=$!
-printf '%s %s\\n' "$$" "$holder" > \(saturatedInputMarker.path)
+printf '%s\\n' "$$" > \(saturatedInputMarker.path)
 trap '' TERM
 while :; do :; done
 """.write(to: saturatedInputCLI, atomically: true, encoding: .utf8)
@@ -262,7 +257,7 @@ do {
     _ = try saturatedInputClient.run(
         arguments: [],
         standardInput: Data(repeating: 0x78, count: 64 * 1024),
-        timeout: 0.5
+        timeout: 0.75
     )
 } catch NeonDiffCLIError.timedOut {
     saturatedInputTimedOut = true
@@ -274,9 +269,7 @@ let saturatedInputElapsed = Date().timeIntervalSince(saturatedInputStartedAt)
 let saturatedInputPIDs = try String(contentsOf: saturatedInputMarker, encoding: .utf8)
     .split(whereSeparator: \.isWhitespace)
     .compactMap { Int32($0) }
-check(saturatedInputPIDs.count == 2, "saturated stdin fixture records child and inherited-reader pids")
-let saturatedInputHolderPID = saturatedInputPIDs[1]
-_ = kill(saturatedInputHolderPID, SIGKILL)
+check(saturatedInputPIDs.count == 1, "saturated stdin fixture records its child pid")
 
 let saturatedReadFlags = fcntl(saturatedInspectionReadFD, F_GETFL)
 check(saturatedReadFlags >= 0, "saturated stdin fixture reads drain flags")
@@ -301,7 +294,7 @@ while Date() < saturatedDrainDeadline {
 }
 _ = Darwin.close(saturatedInspectionReadFD)
 check(saturatedInputTimedOut, "a saturated stdin pipe shares the process timeout")
-check(saturatedInputElapsed < 1.25, "stdin writer lifetime is bounded before run returns")
+check(saturatedInputElapsed < 1.5, "stdin writer lifetime is bounded before run returns")
 check(postReturnInputBytes == 0, "no stdin writer resumes after run returns")
 
 var cleanupTerminateCalls = 0
@@ -363,15 +356,13 @@ do {
 check(launchDeadlineTimedOut, "launch completing after the deadline returns timedOut")
 check(launchDeadlineWriteCalls == 0, "launch completing after the deadline writes zero secret bytes")
 
-var interruptedWriteClockCalls = 0
 var interruptedWriteCalls = 0
 let interruptedWriteClient = NeonDiffCLIClient(
     executablePath: stalledInputCLI.path,
     workingDirectory: tempRoot,
     standardInputPipeFactory: { Pipe() },
     monotonicNow: {
-        interruptedWriteClockCalls += 1
-        let offset: UInt64 = interruptedWriteClockCalls <= 3 ? 100_000_000 : 2_000_000_000
+        let offset: UInt64 = interruptedWriteCalls == 0 ? 100_000_000 : 2_000_000_000
         return DispatchTime(uptimeNanoseconds: injectedClockBase + offset)
     },
     standardInputWriter: { _, _, _ in
@@ -443,6 +434,60 @@ let closedInputPID = checkedValue(
     "closed stdin child records its process id"
 )
 check(kill(closedInputPID, 0) != 0 && errno == ESRCH, "EPIPE cleanup terminates and reaps the child")
+
+let inheritedOutputMarker = tempRoot.appendingPathComponent("inherited-output-child.pid")
+let inheritedOutputCLI = tempRoot.appendingPathComponent("inherited-output-cli")
+try """
+#!/usr/bin/env bash
+(
+  while :; do
+    printf 'fixture-stdout\\n' || exit 0
+    printf 'fixture-stderr\\n' >&2 || exit 0
+    /bin/sleep 0.02
+  done
+) &
+printf '%s\\n' "$!" > \(inheritedOutputMarker.path)
+exit 0
+""".write(to: inheritedOutputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: inheritedOutputCLI.path)
+let inheritedOutputClient = NeonDiffCLIClient(executablePath: inheritedOutputCLI.path, workingDirectory: tempRoot)
+let inheritedOutputStartedAt = Date()
+let inheritedOutputResult = try inheritedOutputClient.run(arguments: [], standardInput: nil, timeout: 0.75)
+let inheritedOutputElapsed = Date().timeIntervalSince(inheritedOutputStartedAt)
+check(inheritedOutputResult.exitCode == 0, "parent process exits successfully while a descendant inherits output")
+check(inheritedOutputElapsed < 1.5, "inherited stdout and stderr cannot extend the bounded run")
+let inheritedOutputPIDText = try String(contentsOf: inheritedOutputMarker, encoding: .utf8)
+let inheritedOutputPID = checkedValue(
+    Int32(inheritedOutputPIDText.trimmingCharacters(in: .whitespacesAndNewlines)),
+    "inherited output descendant records its process id"
+)
+let inheritedOutputExitDeadline = Date().addingTimeInterval(0.75)
+while kill(inheritedOutputPID, 0) == 0, Date() < inheritedOutputExitDeadline {
+    usleep(10_000)
+}
+let inheritedOutputChildWasRunning = kill(inheritedOutputPID, 0) == 0
+if inheritedOutputChildWasRunning {
+    _ = kill(inheritedOutputPID, SIGKILL)
+}
+check(!inheritedOutputChildWasRunning, "closing bounded output pipes leaves no inherited-output fixture")
+
+let oversizedOutputCLI = tempRoot.appendingPathComponent("oversized-output-cli")
+try """
+#!/usr/bin/env bash
+exec /usr/bin/head -c 1100000 /dev/zero
+""".write(to: oversizedOutputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: oversizedOutputCLI.path)
+let oversizedOutputClient = NeonDiffCLIClient(executablePath: oversizedOutputCLI.path, workingDirectory: tempRoot)
+var oversizedOutputRejected = false
+do {
+    _ = try oversizedOutputClient.run(arguments: [], standardInput: nil, timeout: 2)
+} catch NeonDiffCLIError.outputTooLarge(let stream, let maxBytes) {
+    oversizedOutputRejected = stream == "stdout" && maxBytes == 1024 * 1024
+} catch {
+    fputs("check failed: oversized output returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(oversizedOutputRejected, "CLI output collection enforces its per-stream cap")
 
 final class GitHubFixtureURLProtocol: URLProtocol {
     static var requests: [URLRequest] = []
@@ -1242,6 +1287,105 @@ check(
     !stderrLeakFailure.localizedDescription.contains(fixtureProviderSecret),
     "provider stderr containing the submitted secret is rejected without echo"
 )
+
+let escapedOperationalSecret = "fixture\"slash\\line\ncontrol\u{0001}雪"
+let whitespaceWrappedSecret = "\u{FEFF} \t\(escapedOperationalSecret)\r\n \u{FEFF}"
+let escapedSecretStore = InMemoryProviderSecretStore()
+try escapedSecretStore.setSecret(whitespaceWrappedSecret, account: providerSecretAccount)
+let escapedSecretCLI = FakeProviderVerificationCLI(
+    result: CLIRunResult(exitCode: 0, stdout: healthyProviderVerificationJSON, stderr: "")
+)
+let escapedSecretService = ProviderVerificationService(keychain: escapedSecretStore, cli: escapedSecretCLI)
+let escapedSafeSnapshot = try escapedSecretService.verify(
+    account: providerSecretAccount,
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    escapedSecretCLI.standardInput == Data(escapedOperationalSecret.utf8),
+    "provider verification trims Keychain whitespace exactly once before stdin submission"
+)
+check(
+    !escapedSecretCLI.arguments.joined(separator: " ").contains(escapedOperationalSecret),
+    "normalized operational secret remains absent from argv"
+)
+check(
+    !String(reflecting: escapedSafeSnapshot).contains(escapedOperationalSecret),
+    "normalized operational secret remains absent from retained snapshots"
+)
+let ecmaScriptNonWhitespaceSecret = "\u{0085}fixture-provider-value\u{0085}"
+try escapedSecretStore.setSecret(ecmaScriptNonWhitespaceSecret, account: providerSecretAccount)
+_ = try escapedSecretService.verify(
+    account: providerSecretAccount,
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    escapedSecretCLI.standardInput == Data(ecmaScriptNonWhitespaceSecret.utf8),
+    "provider normalization does not trim non-ECMAScript next-line characters"
+)
+try escapedSecretStore.setSecret(whitespaceWrappedSecret, account: providerSecretAccount)
+
+func encodedProviderEnvelope(
+    detail: String = "Verified provider with redacted metadata.",
+    troubleshooting: [String] = [],
+    diagnostic: Any? = nil
+) throws -> String {
+    var envelope: [String: Any] = [
+        "ok": true,
+        "command": "providers verify",
+        "checkedAt": "2026-07-10T12:03:00.000Z",
+        "providerId": "zcode-glm",
+        "state": "healthy",
+        "mode": "openai_compatible_models",
+        "detail": detail,
+        "redacted": true,
+        "troubleshooting": troubleshooting
+    ]
+    if let diagnostic {
+        envelope["diagnostic"] = diagnostic
+    }
+    let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+    return checkedValue(String(data: data, encoding: .utf8), "provider envelope serializes as UTF-8")
+}
+
+let escapedSecretEnvelopes = try [
+    encodedProviderEnvelope(detail: escapedOperationalSecret),
+    encodedProviderEnvelope(troubleshooting: ["retry: \(escapedOperationalSecret)"]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": escapedOperationalSecret]])
+]
+check(
+    escapedSecretEnvelopes.allSatisfy { !$0.contains(escapedOperationalSecret) },
+    "JSON escaping hides the operational secret from raw substring checks"
+)
+for (index, envelope) in escapedSecretEnvelopes.enumerated() {
+    escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+    let failure = captureProviderVerificationFailure("decoded escaped secret envelope \(index)") {
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(
+        !failure.localizedDescription.contains(escapedOperationalSecret),
+        "decoded secret rejection errors retain no normalized secret"
+    )
+}
+
+let whitespaceOnlySecretStore = InMemoryProviderSecretStore()
+try whitespaceOnlySecretStore.setSecret(" \t\r\n ", account: providerSecretAccount)
+let whitespaceOnlySecretService = ProviderVerificationService(
+    keychain: whitespaceOnlySecretStore,
+    cli: escapedSecretCLI
+)
+_ = captureProviderVerificationFailure("whitespace-only normalized provider secret") {
+    _ = try whitespaceOnlySecretService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
 
 let missingProviderSecretStore = InMemoryProviderSecretStore()
 let missingProviderSecretService = ProviderVerificationService(

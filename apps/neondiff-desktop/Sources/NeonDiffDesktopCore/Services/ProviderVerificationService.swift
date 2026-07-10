@@ -71,7 +71,10 @@ public enum ProviderVerificationError: Error, LocalizedError {
 }
 
 public enum ProviderVerificationParser {
-    public static func parse(result: CLIRunResult) throws -> ProviderVerificationSnapshot {
+    public static func parse(
+        result: CLIRunResult,
+        forbiddenValue: String? = nil
+    ) throws -> ProviderVerificationSnapshot {
         let data = Data(result.stdout.utf8)
         let object: Any
         do {
@@ -80,6 +83,9 @@ public enum ProviderVerificationParser {
             throw ProviderVerificationError.malformedEnvelope
         }
 
+        if let forbiddenValue, containsDecodedString(object, forbiddenValue: forbiddenValue) {
+            throw ProviderVerificationError.secretInProcessOutput
+        }
         guard let envelope = object as? [String: Any], !containsSecretLikeKey(object) else {
             throw ProviderVerificationError.invalidEnvelope
         }
@@ -176,10 +182,31 @@ public enum ProviderVerificationParser {
         }
         return false
     }
+
+    private static func containsDecodedString(_ value: Any, forbiddenValue: String) -> Bool {
+        if let string = value as? String {
+            return string.contains(forbiddenValue)
+        }
+        if let dictionary = value as? [String: Any] {
+            return dictionary.contains { key, nestedValue in
+                key.contains(forbiddenValue)
+                    || containsDecodedString(nestedValue, forbiddenValue: forbiddenValue)
+            }
+        }
+        if let array = value as? [Any] {
+            return array.contains { containsDecodedString($0, forbiddenValue: forbiddenValue) }
+        }
+        return false
+    }
 }
 
 public final class ProviderVerificationService {
     private static let maximumSecretBytes = 64 * 1024
+    private static let ecmaScriptTrimCharacters = CharacterSet(
+        charactersIn: "\u{0009}\u{000A}\u{000B}\u{000C}\u{000D}\u{0020}\u{00A0}\u{1680}"
+            + "\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200A}"
+            + "\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}"
+    )
 
     private let keychain: DesktopSecretStoring
     private let cli: NeonDiffCLIClienting
@@ -194,9 +221,11 @@ public final class ProviderVerificationService {
         arguments: [String],
         timeout: TimeInterval
     ) throws -> ProviderVerificationSnapshot {
-        guard let secret = try keychain.readSecret(account: account), !secret.isEmpty else {
+        guard let storedSecret = try keychain.readSecret(account: account) else {
             throw ProviderVerificationError.missingKeychainSecret
         }
+        let secret = storedSecret.trimmingCharacters(in: Self.ecmaScriptTrimCharacters)
+        guard !secret.isEmpty else { throw ProviderVerificationError.missingKeychainSecret }
 
         let secretData = Data(secret.utf8)
         guard secretData.count <= Self.maximumSecretBytes else {
@@ -217,7 +246,7 @@ public final class ProviderVerificationService {
         guard !result.stdout.contains(secret), !result.stderr.contains(secret) else {
             throw ProviderVerificationError.secretInProcessOutput
         }
-        return try ProviderVerificationParser.parse(result: result)
+        return try ProviderVerificationParser.parse(result: result, forbiddenValue: secret)
     }
 
     private static func hasStrictStandardInputCommand(_ arguments: [String]) -> Bool {
