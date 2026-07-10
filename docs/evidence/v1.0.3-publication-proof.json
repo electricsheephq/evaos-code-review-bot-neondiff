@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-07-10T09:41:31Z",
+  "releaseVersion": "v1.0.3",
+  "releaseSourceSha": "5411365f73f0093b085eda056fe55c4cec4779d3",
+  "annotatedTagObjectSha": "bba2afcc32e9d085aeed970ab06288766e620b9e",
+  "github": {
+    "releaseUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.3",
+    "publishedAt": "2026-07-09T22:41:38Z",
+    "nonPrerelease": true,
+    "publishWorkflowUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29055263065",
+    "mainCiUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29055091896",
+    "codeqlUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29055091327"
+  },
+  "npm": {
+    "packageUrl": "https://www.npmjs.com/package/neondiff/v/1.0.3",
+    "packageVersion": "1.0.3",
+    "latest": "1.0.3",
+    "releaseCandidatePresent": false,
+    "gitHead": "5411365f73f0093b085eda056fe55c4cec4779d3",
+    "shasum": "99e9e74402ffe602f81584b1adf5e9b8d0b22e59",
+    "integrity": "sha512-zkoatWQEq1ymbIEtCUTmbC5+ZWCplRlsJyiECLQQlXMMNn1QmsfTQ0M1Yqknn8UAYFD47zhtU1etsg/Qk+tSYQ==",
+    "provenanceAttestationUrl": "https://registry.npmjs.org/-/npm/v1/attestations/neondiff@1.0.3"
+  },
+  "installedPackage": {
+    "binaryVersion": "1.0.3",
+    "evidenceRootId": "neondiff-ga/2026-07-10/v1.0.3/install-smoke",
+    "isolatedPrefixRef": "prefix",
+    "previewSmokeRef": "dashboard-preview-smoke/preview-smoke.json",
+    "browserProofRefs": [
+      "dashboard-installed-1.0.3.png",
+      "dashboard-installed-1.0.3-provider-verified-viewport.png"
+    ],
+    "artifacts": [
+      {
+        "kind": "installed-cli",
+        "ref": "prefix/lib/node_modules/neondiff/dist/src/cli.js",
+        "sha256": "f0274f200f451f9bab1ae7b1cc710589fb9d3a446bd45a41698f40b2634f7b69"
+      },
+      {
+        "kind": "preview-smoke",
+        "ref": "dashboard-preview-smoke/preview-smoke.json",
+        "sha256": "048bc1b5f542aafbd02015c998ddf5f61b4c2864e9bf35f32b6af24adf83ff96"
+      },
+      {
+        "kind": "browser-dashboard",
+        "ref": "dashboard-installed-1.0.3.png",
+        "sha256": "5ed63505149832fba630173ea72b915e6d94b120ff1e012dd9d6fb45bb6d17ff"
+      },
+      {
+        "kind": "provider-verification-viewport",
+        "ref": "dashboard-installed-1.0.3-provider-verified-viewport.png",
+        "sha256": "74a36839276d715588b0f3700909ab07650d2d63d64a5977c2a6c67740b503d2"
+      }
+    ],
+    "providerVerification": {
+      "ok": true,
+      "mode": "metadata_only",
+      "result": "configured_unverified",
+      "provider": "zcode-glm",
+      "redacted": true
+    },
+    "browserConsoleErrors": 0,
+    "browserConsoleWarnings": 0
+  },
+  "proofBoundary": {
+    "allowed": [
+      "real non-prerelease GitHub Release v1.0.3",
+      "public npm package neondiff@1.0.3 with signed provenance",
+      "installed CLI and local browser dashboard flow for neondiff@1.0.3"
+    ],
+    "forbidden": [
+      "signed or notarized Mac distribution",
+      "Sparkle or appcast readiness",
+      "browser and native UI parity",
+      "v1.1 customer readiness"
+    ]
+  }
+}

@@ -173,7 +173,121 @@ jobs:
             --expected-predecessor "$EXPECTED_PREDECESSOR" \
             --npm-tag "$NPM_TAG"
           npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"
-          test "$(npm view neondiff "dist-tags.$NPM_TAG")" = "$PACKAGE_VERSION"
-          if [ "$(npm view neondiff dist-tags.release-candidate 2>/dev/null || true)" = "$PACKAGE_VERSION" ]; then
-            npm dist-tag rm neondiff release-candidate
-          fi
+          # BEGIN POST_PROMOTION_CONFIRMATION
+          NPM_CONFIRM_ATTEMPTS="${NPM_CONFIRM_ATTEMPTS:-12}" \
+          NPM_CONFIRM_DELAY_MS="${NPM_CONFIRM_DELAY_MS:-5000}" \
+          NPM_CONFIRM_TIMEOUT_MS="${NPM_CONFIRM_TIMEOUT_MS:-15000}" \
+          NPM_CONFIRM_PACKAGE="${NPM_CONFIRM_PACKAGE:-neondiff}" \
+          NPM_CONFIRM_TAG="${NPM_CONFIRM_TAG:-$NPM_TAG}" \
+          NPM_CONFIRM_VERSION="${NPM_CONFIRM_VERSION:-$PACKAGE_VERSION}" \
+          NPM_CONFIRM_OUTPUT="${NPM_CONFIRM_OUTPUT:-post-promotion-channel.json}" \
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { renameSync, rmSync, writeFileSync } from "node:fs";
+
+          const attempts = Number(process.env.NPM_CONFIRM_ATTEMPTS);
+          const delayMs = Number(process.env.NPM_CONFIRM_DELAY_MS);
+          const timeoutMs = Number(process.env.NPM_CONFIRM_TIMEOUT_MS);
+          const packageName = process.env.NPM_CONFIRM_PACKAGE;
+          const npmTag = process.env.NPM_CONFIRM_TAG;
+          const expectedVersion = process.env.NPM_CONFIRM_VERSION;
+          const outputPath = process.env.NPM_CONFIRM_OUTPUT;
+          if (!Number.isInteger(attempts) || attempts < 1 || attempts > 100) throw new Error("invalid npm confirmation attempt count");
+          if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 60000) throw new Error("invalid npm confirmation delay");
+          if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw new Error("invalid npm confirmation timeout");
+          if (!packageName || !npmTag || !expectedVersion || !outputPath) throw new Error("missing npm confirmation input");
+
+          const temporaryPath = `${outputPath}.tmp`;
+          rmSync(outputPath, { force: true });
+          rmSync(temporaryPath, { force: true });
+          const writeResult = (distTags, quarantineCleanup) => {
+            writeFileSync(temporaryPath, `${JSON.stringify({ distTags, quarantineCleanup })}\n`, { encoding: "utf8", mode: 0o600 });
+            renameSync(temporaryPath, outputPath);
+          };
+          let promotionConfirmed = false;
+          let promotionTags = {};
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+              const raw = execFileSync("npm", ["view", packageName, "dist-tags", "--json"], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+                timeout: timeoutMs
+              });
+              const tags = JSON.parse(raw);
+              if (tags && !Array.isArray(tags) && typeof tags === "object" && tags[npmTag] === expectedVersion) {
+                promotionConfirmed = true;
+                promotionTags = tags;
+                break;
+              }
+            } catch {
+              // Registry, timeout, and JSON failures remain retryable until the bounded attempt count is exhausted.
+            }
+            if (attempt < attempts && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+          if (!promotionConfirmed) {
+            console.error(`npm dist-tag did not converge to the promoted package after ${attempts} attempts`);
+            process.exit(1);
+          }
+
+          let lastTags = promotionTags;
+          let removalAttempted = false;
+          let removalAccepted = false;
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+              const raw = execFileSync("npm", ["view", packageName, "dist-tags", "--json"], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+                timeout: timeoutMs
+              });
+              const tags = JSON.parse(raw);
+              if (!tags || Array.isArray(tags) || typeof tags !== "object") throw new Error("invalid npm dist-tag response");
+              lastTags = tags;
+              const quarantineVersion = tags["release-candidate"];
+              if (quarantineVersion === undefined) {
+                writeResult(tags, {
+                  state: "confirmed_absent",
+                  observedVersion: null,
+                  removalAttempted,
+                  removalAccepted
+                });
+                process.exit(0);
+              }
+              if (quarantineVersion !== expectedVersion) {
+                console.error(`::warning::refusing to remove unexpected release-candidate version ${quarantineVersion}`);
+                writeResult(tags, {
+                  state: "unexpected_owner",
+                  observedVersion: quarantineVersion,
+                  removalAttempted,
+                  removalAccepted
+                });
+                process.exit(0);
+              }
+              if (!removalAttempted) {
+                removalAttempted = true;
+                try {
+                  execFileSync("npm", ["dist-tag", "rm", packageName, "release-candidate"], {
+                    stdio: ["ignore", "ignore", "pipe"],
+                    timeout: timeoutMs
+                  });
+                  removalAccepted = true;
+                } catch {
+                  // The removal may still have reached the registry; bounded reads below determine the recorded state.
+                }
+              }
+            } catch {
+              // Registry, timeout, and JSON failures remain retryable for state recording.
+            }
+            if (attempt < attempts && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+          const observedVersion = lastTags["release-candidate"] ?? null;
+          const cleanupState = removalAccepted ? "pending_registry_convergence" : "removal_unconfirmed";
+          console.error(`::warning::release-candidate cleanup remains unconfirmed after ${attempts} attempts`);
+          writeResult(lastTags, {
+            state: cleanupState,
+            observedVersion,
+            removalAttempted,
+            removalAccepted
+          });
+          process.exit(0);
+          NODE
+          # END POST_PROMOTION_CONFIRMATION
