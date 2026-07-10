@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { canonicalSecretRuleCorpus, canonicalSecretRules } from "../src/generated-secret-rules.js";
+import { canonicalSecretRules } from "../src/generated-secret-rules.js";
 import { containsSecretLikeText } from "../src/secrets.js";
+import { canonicalSecretRuleCorpus } from "./generated-secret-rule-corpus.js";
 
 describe("canonical secret rule parity", () => {
   it("keeps every canonical sensitive and benign corpus case bound to Node production behavior", () => {
