@@ -23,11 +23,11 @@ struct ProviderSettingsView: View {
                         .disabled(model.isProviderVerificationInProgress)
                         Button { model.verifyProviderKey() } label: {
                             Label(
-                                model.isProviderVerificationInProgress ? "Verifying…" : "Verify API Key",
+                                model.providerVerificationButtonTitle,
                                 systemImage: "checkmark.shield"
                             )
                         }
-                        .disabled(!model.providers.providerKeyStored || model.isProviderVerificationInProgress)
+                        .disabled(!model.canVerifyProviderKey)
                         OperatorBadge(
                             text: model.providers.providerKeyStored ? "Stored in Keychain" : "Not Stored",
                             color: model.providers.providerKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary

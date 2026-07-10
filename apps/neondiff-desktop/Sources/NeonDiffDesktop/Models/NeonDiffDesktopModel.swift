@@ -5,12 +5,27 @@ import NeonDiffDesktopCore
 @MainActor
 final class NeonDiffDesktopModel: ObservableObject {
     @Published var selectedSection: DesktopSection = .overview
-    @Published var configPath: String
-    @Published var cliPath: String
+    @Published var configPath: String {
+        didSet {
+            guard configPath != oldValue else { return }
+            invalidateProviderVerificationContext()
+        }
+    }
+    @Published var cliPath: String {
+        didSet {
+            guard cliPath != oldValue else { return }
+            invalidateProviderVerificationContext()
+        }
+    }
     @Published var launchdLabel: String
     @Published var status: DaemonStatus = .unknown
     @Published var repos: [RepoMonitor] = []
-    @Published var providers = ProviderSettings()
+    @Published var providers = ProviderSettings() {
+        didSet {
+            guard providers != oldValue else { return }
+            invalidateProviderVerificationContext()
+        }
+    }
     @Published var license = LicenseStatus()
     @Published var controlCenter = DesktopControlCenterSettings()
     @Published var controlCenterStatus = "Load current config before editing."
@@ -43,6 +58,11 @@ final class NeonDiffDesktopModel: ObservableObject {
     private let keychain: DesktopSecretStoring
     private let githubAuthClient: GitHubDesktopAuthenticating
     private let providerVerificationService: ProviderVerificationService?
+    private var providerVerificationTask: Task<Void, Never>?
+    private var providerVerificationRequestGeneration: UInt64 = 0
+    private var providerVerificationContextGeneration: UInt64 = 0
+    private var activeProviderVerificationRequestGeneration: UInt64?
+    private var providerKeyRevision: UInt64 = 0
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var githubRepositoryRefreshGate = GitHubLatestRequestGate()
@@ -192,6 +212,14 @@ final class NeonDiffDesktopModel: ObservableObject {
             && !isControlCenterOperationInProgress
             && !isConfigPatchInProgress
             && !isConfigInspectInProgress
+    }
+
+    var canVerifyProviderKey: Bool {
+        providers.providerKeyStored && !isProviderVerificationInProgress
+    }
+
+    var providerVerificationButtonTitle: String {
+        isProviderVerificationInProgress ? "Verifying…" : "Verify API Key"
     }
 
     private var currentControlCenterSnapshot: DesktopControlCenterSnapshot {
@@ -601,9 +629,9 @@ final class NeonDiffDesktopModel: ObservableObject {
         do {
             try keychain.setSecret(pendingProviderKey, account: providerKeyAccount)
             pendingProviderKey = ""
+            providerKeyRevision &+= 1
+            invalidateProviderVerificationContext(status: "Stored key changed. Verify it when ready.")
             providers.providerKeyStored = true
-            providerVerification = nil
-            providerVerificationStatus = "Stored key changed. Verify it when ready."
             onboardingFlow.providerKeyStored = true
             lastError = nil
         } catch {
@@ -629,6 +657,10 @@ final class NeonDiffDesktopModel: ObservableObject {
             "--json"
         ]
         let executablePath = cliPath
+        let requestContext = currentProviderVerificationContext
+        let requestContextGeneration = providerVerificationContextGeneration
+        providerVerificationRequestGeneration &+= 1
+        let requestGeneration = providerVerificationRequestGeneration
         let service = providerVerificationService ?? ProviderVerificationService(
             keychain: keychain,
             cli: NeonDiffCLIClient(
@@ -640,10 +672,11 @@ final class NeonDiffDesktopModel: ObservableObject {
         providerVerification = nil
         providerVerificationStatus = "Verifying the stored API key…"
         isProviderVerificationInProgress = true
+        activeProviderVerificationRequestGeneration = requestGeneration
         lastError = nil
         lastCommandLine = "\(shellQuote(executablePath)) providers verify --config \(shellQuote(configPath)) --api-key-stdin true --allow-remote-smoke true --json < [secure Keychain input]"
 
-        Task { [weak self] in
+        providerVerificationTask = Task { [weak self] in
             let outcome = await Task.detached(priority: .userInitiated) {
                 Result {
                     try service.verify(
@@ -655,7 +688,21 @@ final class NeonDiffDesktopModel: ObservableObject {
             }.value
 
             guard let self else { return }
+            let wasCancelled = Task.isCancelled
+            guard self.activeProviderVerificationRequestGeneration == requestGeneration else { return }
+            self.providerVerificationTask = nil
+            self.activeProviderVerificationRequestGeneration = nil
             self.isProviderVerificationInProgress = false
+            guard
+                !wasCancelled,
+                self.providerVerificationContextGeneration == requestContextGeneration,
+                self.currentProviderVerificationContext == requestContext
+            else {
+                self.providerVerification = nil
+                self.providerVerificationStatus = "Provider or config changed during verification. Verify again."
+                self.lastError = nil
+                return
+            }
             switch outcome {
             case .success(let snapshot):
                 self.providerVerification = snapshot
@@ -674,6 +721,27 @@ final class NeonDiffDesktopModel: ObservableObject {
                 self.lastError = "Provider verification failed without retaining provider output."
             }
         }
+    }
+
+    private var currentProviderVerificationContext: ProviderVerificationRequestContext {
+        ProviderVerificationRequestContext(
+            configPath: configPath,
+            cliPath: cliPath,
+            providers: providers,
+            loadedConfigRevision: controlCenterLoadedRevision,
+            providerKeyRevision: providerKeyRevision
+        )
+    }
+
+    private func invalidateProviderVerificationContext(
+        status: String = "Provider or config changed. Verify the stored key again."
+    ) {
+        providerVerificationContextGeneration &+= 1
+        if isProviderVerificationInProgress {
+            providerVerificationTask?.cancel()
+        }
+        providerVerification = nil
+        providerVerificationStatus = status
     }
 
     func storeLicenseKey() {
@@ -1116,6 +1184,18 @@ final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         if commandName == "config inspect" || commandName == "config patch" {
+            if result.exitCode == 0,
+               commandName == "config inspect",
+               let inspectedRevision = parsedSnapshot?.revision,
+               inspectedRevision != controlCenterLoadedRevision {
+                invalidateProviderVerificationContext(status: "Config changed. Verify the stored provider key again.")
+            }
+            if result.exitCode == 0,
+               commandName == "config patch",
+               parsedSnapshot?.dryRun == false,
+               parsedSnapshot?.wrote == true {
+                invalidateProviderVerificationContext(status: "Config changed. Verify the stored provider key again.")
+            }
             if let snapshot = parsedSnapshot {
                 if !snapshot.repos.isEmpty { repos = snapshot.repos }
                 providers = snapshot.providers
@@ -1222,6 +1302,22 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
+    func applyCLIResultForTesting(
+        _ result: CLIRunResult,
+        fallbackCommand: String,
+        configPath: String,
+        launchdLabel: String,
+        isConfigInspectCommand: Bool
+    ) {
+        applyCLIResult(
+            result,
+            fallbackCommand: fallbackCommand,
+            configPath: configPath,
+            launchdLabel: launchdLabel,
+            isConfigInspectCommand: isConfigInspectCommand
+        )
+    }
+
     private func parseCommandName(_ jsonText: String) -> String? {
         guard
             let data = jsonText.data(using: .utf8),
@@ -1253,6 +1349,14 @@ final class NeonDiffDesktopModel: ObservableObject {
         lastError = NeonDiffRedactor.redact(message)
     }
 
+}
+
+private struct ProviderVerificationRequestContext: Equatable {
+    let configPath: String
+    let cliPath: String
+    let providers: ProviderSettings
+    let loadedConfigRevision: String?
+    let providerKeyRevision: UInt64
 }
 
 private enum ControlCenterOperation: Sendable {
