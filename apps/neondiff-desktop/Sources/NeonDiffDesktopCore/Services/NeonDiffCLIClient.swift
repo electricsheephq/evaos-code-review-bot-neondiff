@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public struct CLIRunResult: Equatable {
     public var exitCode: Int32
@@ -66,6 +67,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         standardInput: Data?,
         timeout: TimeInterval = 15
     ) throws -> CLIRunResult {
+        let deadline = DispatchTime.now() + max(timeout, 0)
         let maximumStandardInputBytes = 64 * 1024
         if let standardInput, standardInput.count > maximumStandardInputBytes {
             throw NeonDiffCLIError.standardInputTooLarge(maxBytes: maximumStandardInputBytes)
@@ -109,29 +111,85 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             outputLock.unlock()
         }
 
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
+        let stateChanged = DispatchSemaphore(value: 0)
+        let terminationObserved = DispatchSemaphore(value: 0)
+        let inputWriterDone = DispatchSemaphore(value: 0)
+        let stateLock = NSLock()
+        var processFinished = false
+        var inputWriterFinished = standardInput == nil
+        var inputWriteFailed = false
+        process.terminationHandler = { _ in
+            stateLock.lock()
+            processFinished = true
+            stateLock.unlock()
+            terminationObserved.signal()
+            stateChanged.signal()
+        }
 
         do {
             try process.run()
         } catch {
             try? stdin?.fileHandleForWriting.close()
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
             throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(error.localizedDescription)")
         }
 
         if let standardInput, let stdin {
-            do {
-                try stdin.fileHandleForWriting.write(contentsOf: standardInput)
-                try stdin.fileHandleForWriting.close()
-            } catch {
-                process.terminate()
-                try? stdin.fileHandleForWriting.close()
-                throw NeonDiffCLIError.launchFailed("Failed to send bounded standard input to the NeonDiff CLI")
+            DispatchQueue.global(qos: .userInitiated).async {
+                var failed = false
+                do {
+                    try stdin.fileHandleForWriting.write(contentsOf: standardInput)
+                    try stdin.fileHandleForWriting.close()
+                } catch {
+                    failed = true
+                    try? stdin.fileHandleForWriting.close()
+                }
+                stateLock.lock()
+                inputWriteFailed = failed
+                inputWriterFinished = true
+                stateLock.unlock()
+                inputWriterDone.signal()
+                stateChanged.signal()
             }
         }
 
-        if finished.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
+        while true {
+            stateLock.lock()
+            let processFinishedSnapshot = processFinished
+            let inputWriterFinishedSnapshot = inputWriterFinished
+            let inputWriteFailedSnapshot = inputWriteFailed
+            stateLock.unlock()
+
+            if inputWriteFailedSnapshot {
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                terminateAndReap(process, terminationObserved: terminationObserved)
+                throw NeonDiffCLIError.launchFailed("Failed to send bounded standard input to the NeonDiff CLI")
+            }
+            if processFinishedSnapshot && inputWriterFinishedSnapshot {
+                break
+            }
+            if stateChanged.wait(timeout: deadline) == .timedOut {
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                terminateAndReap(process, terminationObserved: terminationObserved)
+                try? stdin?.fileHandleForWriting.close()
+                if standardInput != nil {
+                    _ = inputWriterDone.wait(timeout: .now() + 1)
+                }
+                try? stdout.fileHandleForReading.close()
+                try? stderr.fileHandleForReading.close()
+                throw NeonDiffCLIError.timedOut
+            }
+        }
+
+        if standardInput != nil {
+            _ = inputWriterDone.wait(timeout: .now())
+        }
+
+        if process.isRunning {
+            terminateAndReap(process, terminationObserved: terminationObserved)
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
             throw NeonDiffCLIError.timedOut
@@ -194,6 +252,24 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             executablePath: resolvedExecutable.path,
             arguments: arguments
         )
+    }
+}
+
+private func terminateAndReap(_ process: Process, terminationObserved: DispatchSemaphore) {
+    if process.isRunning {
+        process.terminate()
+    }
+    if terminationObserved.wait(timeout: .now() + 0.1) == .success {
+        return
+    }
+    if process.isRunning {
+        _ = kill(process.processIdentifier, SIGKILL)
+    }
+    if terminationObserved.wait(timeout: .now() + 1) == .timedOut {
+        if process.isRunning {
+            _ = kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
     }
 }
 

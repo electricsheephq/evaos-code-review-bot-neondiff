@@ -1,5 +1,6 @@
 import Foundation
 import NeonDiffDesktopCore
+import Darwin
 
 @discardableResult
 func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
@@ -169,6 +170,45 @@ let standardInputResult = try standardInputCLI.run(
 check(standardInputResult.exitCode == 0, "CLI standard-input transport reaches the bounded child process")
 check(standardInputResult.stdout.contains("\"receivedBytes\":22"), "CLI standard-input transport returns only redacted metadata")
 check(!standardInputResult.stdout.contains("fixture-provider-value"), "CLI output never echoes standard input")
+
+let stalledInputMarker = tempRoot.appendingPathComponent("stalled-input-child.pid")
+let stalledInputCLI = tempRoot.appendingPathComponent("stalled-input-cli")
+try """
+#!/usr/bin/env bash
+printf '%s\\n' "$$" > \(stalledInputMarker.path)
+trap '' TERM
+while :; do :; done
+""".write(to: stalledInputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stalledInputCLI.path)
+
+let stalledInputClient = NeonDiffCLIClient(executablePath: stalledInputCLI.path, workingDirectory: tempRoot)
+let stalledInputStartedAt = Date()
+var stalledInputTimedOut = false
+do {
+    _ = try stalledInputClient.run(
+        arguments: [],
+        standardInput: Data(repeating: 0x78, count: 64 * 1024),
+        timeout: 0.75
+    )
+} catch NeonDiffCLIError.timedOut {
+    stalledInputTimedOut = true
+} catch {
+    fputs("check failed: stalled stdin returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+let stalledInputElapsed = Date().timeIntervalSince(stalledInputStartedAt)
+check(stalledInputTimedOut, "a child that never drains maximum-size stdin returns timedOut")
+check(stalledInputElapsed < 2, "stdin delivery and process execution share the configured deadline")
+let stalledInputPIDText = try String(contentsOf: stalledInputMarker, encoding: .utf8)
+let stalledInputPID = checkedValue(
+    Int32(stalledInputPIDText.trimmingCharacters(in: .whitespacesAndNewlines)),
+    "stalled stdin child records its process id"
+)
+let stalledInputChildWasRunning = kill(stalledInputPID, 0) == 0
+if stalledInputChildWasRunning {
+    _ = kill(stalledInputPID, SIGKILL)
+}
+check(!stalledInputChildWasRunning, "timed-out stdin child is terminated and reaped")
 
 final class GitHubFixtureURLProtocol: URLProtocol {
     static var requests: [URLRequest] = []
