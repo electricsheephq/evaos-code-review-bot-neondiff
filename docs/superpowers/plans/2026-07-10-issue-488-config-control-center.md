@@ -46,7 +46,7 @@ Commit Slice A, open its PR, and shepherd current-head CI plus bot/human review.
 
 ## Slice A Proof
 
-- 21 focused config CLI tests cover bounded paths, revision-bound preview/apply, stable/structured inspect reads, content-sensitive revisions, symlink-alias lock convergence, competing-writer rejection, and live/dead/invalid-owner stale-lock behavior.
+- 23 focused config CLI tests cover bounded paths, revision-bound preview/apply, stable/structured inspect reads, content-sensitive revisions, truthful post-commit results, symlink-alias lock convergence, same-process and child-process writer rejection, and live/dead/invalid-owner stale-lock behavior.
 - TypeScript build, Swift core checks/smoke, Swift build, unsigned bundle check, actionlint, secret scan, public-claims scan, and `git diff --check` pass.
 - Two independent read-only reviews are clean after resolving mutable-snapshot, config-path, inspect-ordering, rollback-file, external-drift, and stale-lock liveness findings.
 - Visible unsigned dev-app proof:

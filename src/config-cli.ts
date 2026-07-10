@@ -301,8 +301,7 @@ function patchConfigForDesktopUnlocked(
       if (liveRevision !== revisionBefore) {
         return failedPatch(input, configPath, inputPath, "config changed while applying patch; reload and preview again");
       }
-      writeConfigAtomic(configPath, next, input.fileOps);
-      revisionAfter = readStableConfigSnapshot(configPath, input.fileOps).revision;
+      revisionAfter = writeConfigAtomic(configPath, next, input.fileOps);
     } catch (error) {
       return failedPatch(input, configPath, inputPath, `failed to write config atomically: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -438,6 +437,14 @@ function configMetadataForPath(configPath: string, fileOps?: Partial<ConfigFileO
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 }
 
+function configRevision(text: string): string {
+  return createHash("sha256")
+    .update(String(Buffer.byteLength(text)))
+    .update("\0")
+    .update(text)
+    .digest("hex");
+}
+
 function readStableConfigSnapshot(configPath: string, fileOps?: Partial<ConfigFileOps>): { value: unknown; revision: string } {
   const ops = { ...defaultConfigFileOps, ...fileOps };
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -445,13 +452,7 @@ function readStableConfigSnapshot(configPath: string, fileOps?: Partial<ConfigFi
     const text = ops.readFileSync(configPath, "utf8");
     const metadataAfter = configMetadataForPath(configPath, fileOps);
     if (metadataBefore !== metadataAfter) continue;
-    const revision = createHash("sha256")
-      .update(metadataAfter)
-      .update("\0")
-      .update(String(Buffer.byteLength(text)))
-      .update("\0")
-      .update(text)
-      .digest("hex");
+    const revision = configRevision(text);
     return { value: JSON.parse(text), revision };
   }
   throw new Error("config changed while reading; retry after the other writer finishes");
@@ -532,7 +533,7 @@ function validateCandidateConfig(candidate: unknown): string | undefined {
   }
 }
 
-function writeConfigAtomic(configPath: string, value: unknown, fileOps?: Partial<ConfigFileOps>): void {
+function writeConfigAtomic(configPath: string, value: unknown, fileOps?: Partial<ConfigFileOps>): string {
   const ops = { ...defaultConfigFileOps, ...fileOps };
   ops.mkdirSync(dirname(configPath), { recursive: true });
   const mode = ops.existsSync(configPath) ? ops.statSync(configPath).mode & 0o777 : 0o600;
@@ -547,6 +548,7 @@ function writeConfigAtomic(configPath: string, value: unknown, fileOps?: Partial
     fd = undefined;
     ops.chmodSync(tempPath, mode);
     ops.renameSync(tempPath, configPath);
+    return configRevision(data);
   } catch (error) {
     if (fd !== undefined) {
       try {

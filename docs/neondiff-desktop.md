@@ -59,9 +59,9 @@ it converges on the fully-old or fully-new file during an in-flight writer.
 Preview, Apply, and rollback each carry an immutable settings snapshot and config path,
 so edits or target-path changes made while the CLI is running cannot authorize
 or relabel a different operation.
-The inspect response includes a secret-safe SHA-256 revision token over file
-identity/version metadata plus length-delimited file bytes; the token exposes no
-raw config values. Policy Preview binds to that revision, and Apply fails closed
+The inspect response includes a secret-safe SHA-256 revision token over the
+length-delimited file bytes; the token exposes no raw config values. Policy
+Preview binds to that revision, and Apply fails closed
 if the config changed before the write. A
 successful Apply returns the next revision, which becomes the compare-and-swap
 guard for the one-shot rollback.
@@ -81,6 +81,12 @@ close external config editors before Apply; the Policy pane shows this boundary
 next to the mutation controls. The revision check rejects external drift
 observed before the lock-held pre-commit read, but it does not claim a universal
 filesystem transaction against non-participating writers.
+
+If a crash leaves an old lock with an invalid or unverifiable owner, the CLI
+keeps failing closed instead of guessing. Verify that no NeonDiff `config patch`
+process is running, resolve the config's canonical path, then remove only its
+`<config-realpath>.neondiff.lock` sibling before retrying Load and Preview. Never
+remove a lock whose recorded PID is still alive.
 
 The PR review allowlist remains `pilotRepos` in the Repos pane. The Policy pane
 edits only `issueEnrichment.allowlist` plus bounded review, daemon, cap, lease,

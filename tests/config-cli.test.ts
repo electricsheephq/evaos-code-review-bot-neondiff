@@ -809,6 +809,48 @@ describe("desktop config CLI", () => {
     expect(readdirSync(root).filter((name) => name.includes(".tmp"))).toEqual([]);
   });
 
+  it("reports a committed write truthfully without post-rename metadata I/O", () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      desktop: { updateChannel: "dev" }
+    });
+    writeConfig(patchPath, { desktop: { updateChannel: "beta" } });
+    let committed = false;
+    const injectedStatSync = ((path: Parameters<typeof statSync>[0], options?: unknown) => {
+      if (committed && String(path) === configPath) {
+        throw new Error("post-commit config metadata unavailable");
+      }
+      return statSync(path, options as never);
+    }) as unknown as typeof statSync;
+
+    const output = patchConfigForDesktop({
+      configPath,
+      inputPath: patchPath,
+      dryRun: false,
+      confirm: true,
+      fileOps: {
+        statSync: injectedStatSync,
+        renameSync: (from, to) => {
+          renameSync(from, to);
+          committed = true;
+        }
+      }
+    });
+
+    expect(output).toMatchObject({
+      ok: true,
+      wrote: true,
+      revisionAfter: expect.stringMatching(/^[a-f0-9]{64}$/)
+    });
+    expect(JSON.parse(readFileSync(configPath, "utf8")).desktop.updateChannel).toBe("beta");
+  });
+
   it("serializes live config writers and recovers a bounded stale lock", () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
@@ -931,6 +973,40 @@ describe("desktop config CLI", () => {
     expect(recovered).toMatchObject({ ok: true, wrote: true });
     expect(JSON.parse(readFileSync(configPath, "utf8")).desktop.updateChannel).toBe("stable");
     expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("rejects a separate CLI process while a live owner holds the config lock", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const patchPath = join(root, "patch.json");
+    const lockPath = `${configPath}.neondiff.lock`;
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      desktop: { updateChannel: "dev" }
+    });
+    writeConfig(patchPath, { desktop: { updateChannel: "beta" } });
+    const fd = openSync(lockPath, "wx", 0o600);
+    try {
+      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, startedAt: "fixture" })}\n`);
+    } finally {
+      closeSync(fd);
+    }
+
+    const result = await runConfig([
+      "config", "patch", "--config", configPath, "--input", patchPath,
+      "--dry-run", "false", "--confirm", "true"
+    ]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      wrote: false,
+      error: expect.stringContaining("another config patch is running")
+    });
+    expect(JSON.parse(readFileSync(configPath, "utf8")).desktop.updateChannel).toBe("dev");
+    unlinkSync(lockPath);
   });
 
   it("rejects empty object patches with a clear message", async () => {
