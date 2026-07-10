@@ -42,10 +42,20 @@ neondiff daemon status --config config.local.json --launchd-label com.example.ne
 neondiff daemon start --config config.local.json --launchd-label com.example.neondiff --dry-run true
 neondiff daemon stop --config config.local.json --launchd-label com.example.neondiff --dry-run true
 neondiff dashboard --config config.local.json --launchd-label com.example.neondiff --open true
-neondiff providers verify --config config.local.json --api-key-stdin true --allow-remote-smoke true --json
+neondiff providers verify --config config.local.json --provider <saved-provider-id> --expected-config-revision <sha256> --api-key-stdin true --allow-remote-smoke true --json
 ```
 
 The native Providers pane passes the stored key only on standard input. For a hosted provider, the explicit Verify click is also the user's consent to the bounded remote smoke request; no hosted verification runs automatically. The CLI delegates to the existing hardened provider-smoke implementation and returns a strict redacted envelope. Only an exact successful `healthy` envelope is shown as verified. `configured_unverified` (metadata only) and `blocked` remain visible non-success states, and malformed, contradictory, timed-out, or transport-failed results clear any previous verified state.
+
+The pane maps `providers.defaultProviderId` and the selected saved registry
+entry (enabled state, adapter, auth mode, base URL, and model). The legacy
+desktop endpoint is not verification authority. Any edit, Preview-only state,
+apply in progress, or external revision change disables Verify. A successful
+Apply/readback enables it only for an enabled `openai-compatible` +
+`api-key-env` target. Context changes cancel the tracked child operation; the
+pane remains in `Cancelling…` until the sole process owner closes its pipes,
+terminates if needed, and reaps the child. A second verification or config edit
+cannot start during that cleanup.
 
 The debug-only `NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE=provider-verification` launch fixture bypasses Keychain reads and injects fixed redacted metadata for unsigned screenshot evidence. It makes no provider request and is not compiled into release builds.
 

@@ -109,6 +109,10 @@ pre-checkout blocker. Unknown or unreadable visibility is never public-free
 evidence; confirm the App installation scope, selected repositories, and
 permissions before widening provider/model settings.
 
+GitHub App credentials and provider BYOK are separate lanes. The desktop stores
+provider BYOK in Keychain and verifies only an already applied saved provider
+registry target; it never puts that key in GitHub App settings or config.
+
 For public/private entitlement proof, keep the GitHub doctor JSON and the review
 evidence path together. The proof packet should show `visibility_result`,
 `visibility_source`, `license_gate_decision`, and `pre_checkout_gate_result`.

@@ -121,6 +121,10 @@ neondiff doctor --config config.local.json --json
 The local HTML dashboard is the first-run setup surface. It shows license status,
 GitHub App status, daemon status, and provider readiness, and its provider card
 includes a `Verify API Key` control that reports redacted pass/fail output.
+The native Providers pane reads and edits the saved `providers` registry, not
+the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview, and
+Apply the exact selected provider before Verify is enabled; verification pins
+both the provider ID and inspected config revision.
 
 Create or install the GitHub App before expecting PR reviews to run. The App
 must be installed on the same selected repositories listed in `pilotRepos`; see
