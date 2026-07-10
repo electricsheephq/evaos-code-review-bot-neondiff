@@ -110,7 +110,10 @@ public enum ProviderVerificationParser {
         guard let envelope = object as? [String: Any] else {
             throw ProviderVerificationError.invalidEnvelope
         }
-        if containsSecretLikeKey(object) || containsCredentialShapedMaterial(object) {
+        if containsSecretLikeKey(object)
+            || containsCredentialShapedMaterial(object)
+            || containsCanonicalRedactorSensitiveMaterial(object)
+        {
             throw ProviderVerificationError.secretInProcessOutput
         }
         guard
@@ -272,6 +275,42 @@ public enum ProviderVerificationParser {
         #"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"#,
         #"\b(?:api[_ -]?key|authorization|credential|password|secret|token)\s*[:=]\s*[^\s,;]{10,}"#
     ]
+
+    private static func containsCanonicalRedactorSensitiveMaterial(_ value: Any) -> Bool {
+        var budget = CredentialScanBudget()
+        return containsCanonicalRedactorSensitiveMaterial(value, depth: 0, budget: &budget)
+    }
+
+    private static func containsCanonicalRedactorSensitiveMaterial(
+        _ value: Any,
+        depth: Int,
+        budget: inout CredentialScanBudget
+    ) -> Bool {
+        guard budget.consume(depth: depth) else { return true }
+        if let string = value as? String {
+            guard budget.consume(depth: depth, bytes: string.utf8.count) else { return true }
+            return NeonDiffRedactor.redact(string) != string
+        }
+        if let dictionary = value as? [String: Any] {
+            for (key, nested) in dictionary {
+                guard budget.consume(depth: depth + 1, bytes: key.utf8.count),
+                      NeonDiffRedactor.redact(key) == key
+                else {
+                    return true
+                }
+                if containsCanonicalRedactorSensitiveMaterial(nested, depth: depth + 1, budget: &budget) {
+                    return true
+                }
+            }
+        } else if let array = value as? [Any] {
+            for nested in array {
+                if containsCanonicalRedactorSensitiveMaterial(nested, depth: depth + 1, budget: &budget) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
 
     private struct ForbiddenValueScanBudget {
         static let maximumDepth = 32

@@ -1560,6 +1560,17 @@ _ = try escapedSecretService.verify(
 )
 check(true, "benign redacted provider metadata remains accepted")
 
+check(
+    ProviderKeychainAccount.account(providerId: "zcode-glm") == "provider/zcode-glm/api-key",
+    "provider Keychain account is scoped to a validated provider id"
+)
+for invalidProviderId in ["", ".", "..", "../provider", "provider/key", "sk-1234567890abcdef"] {
+    check(
+        ProviderKeychainAccount.account(providerId: invalidProviderId) == nil,
+        "invalid or secret-shaped provider id fails closed for Keychain account derivation"
+    )
+}
+
 let credentialShapedEnvelopes = try [
     encodedProviderEnvelope(detail: "Bearer " + "gh" + "p_" + String(repeating: "1", count: 36)),
     encodedProviderEnvelope(troubleshooting: ["api_key=" + "sk-" + "proj-" + String(repeating: "2", count: 20)]),
@@ -1579,6 +1590,48 @@ for (index, envelope) in credentialShapedEnvelopes.enumerated() {
     check(failure.localizedDescription == ProviderVerificationError.secretInProcessOutput.localizedDescription, "credential-shaped output fails with a fixed redacted error")
     check(!failure.localizedDescription.contains("1234567890"), "credential rejection error contains no credential fragment")
 }
+
+let canonicalRedactorSensitiveEnvelopes = try [
+    encodedProviderEnvelope(detail: "See https://operator:provider-password@example.com/v1/models"),
+    encodedProviderEnvelope(troubleshooting: ["Retry https://example.com/callback?access_token=abcdefghijklmnop"]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "cookie=abcdefghijklmnop"]]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "session: abcdefghijklmnop"]]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "license=abcdefghijklmnop"]]),
+    encodedProviderEnvelope(diagnostic: ["https://operator:provider-password@example.com": "benign value"])
+]
+for (index, envelope) in canonicalRedactorSensitiveEnvelopes.enumerated() {
+    escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+    let failure = captureProviderVerificationFailure("canonical-redactor-sensitive envelope \(index)") {
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(
+        failure.localizedDescription == ProviderVerificationError.secretInProcessOutput.localizedDescription,
+        "canonical redactor changes reject detail, troubleshooting, and nested output with a fixed error"
+    )
+    check(!failure.localizedDescription.contains("abcdefghijklmnop"), "canonical redactor rejection exposes no credential fragment")
+}
+
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: try encodedProviderEnvelope(
+        detail: "Provider metadata endpoint is healthy.",
+        troubleshooting: ["Retry after confirming the saved provider selection."],
+        diagnostic: ["nested": ["message": "modelCount=4; mode=metadata_only"]]
+    ),
+    stderr: ""
+)
+_ = try escapedSecretService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(true, "canonical redactor leaves benign detail, troubleshooting, and nested metadata accepted")
 
 escapedSecretCLI.result = CLIRunResult(
     exitCode: 0,

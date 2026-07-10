@@ -24,6 +24,9 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var providers = ProviderSettings() {
         didSet {
             guard providers != oldValue else { return }
+            if providers.selectedProviderId != oldValue.selectedProviderId {
+                refreshSelectedProviderKeyState()
+            }
             invalidateProviderVerificationContext()
         }
     }
@@ -102,7 +105,8 @@ final class NeonDiffDesktopModel: ObservableObject {
         self.launchdLabel = userDefaults.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
         #if DEBUG
         let providerKeyStored = visualProofFixtureEnabled
-            || keychain.containsSecret(account: providerKeyAccount)
+            || ProviderKeychainAccount.account(providerId: providers.selectedProviderId)
+                .map(keychain.containsSecret(account:)) == true
         let githubUserTokenStored = visualProofFixtureEnabled
             ? false
             : keychain.containsSecret(account: githubUserTokenAccount)
@@ -110,7 +114,8 @@ final class NeonDiffDesktopModel: ObservableObject {
             ? false
             : keychain.containsSecret(account: githubRefreshTokenAccount)
         #else
-        let providerKeyStored = keychain.containsSecret(account: providerKeyAccount)
+        let providerKeyStored = ProviderKeychainAccount.account(providerId: providers.selectedProviderId)
+            .map(keychain.containsSecret(account:)) == true
         let githubUserTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
         let githubRefreshTokenStored = keychain.containsSecret(account: githubRefreshTokenAccount)
         #endif
@@ -761,13 +766,43 @@ final class NeonDiffDesktopModel: ObservableObject {
             lastError = providerVerificationSafetyLatchMessage
             return
         }
+        guard let account = selectedProviderKeyAccount else {
+            providers.providerKeyStored = false
+            onboardingFlow.providerKeyStored = false
+            lastError = "Select a valid provider before storing an API key."
+            return
+        }
         do {
-            try keychain.setSecret(pendingProviderKey, account: providerKeyAccount)
+            try keychain.setSecret(pendingProviderKey, account: account)
             pendingProviderKey = ""
             providerKeyRevision &+= 1
             invalidateProviderVerificationContext(status: "Stored key changed. Verify it when ready.")
             providers.providerKeyStored = true
             onboardingFlow.providerKeyStored = true
+            lastError = nil
+        } catch {
+            lastError = NeonDiffRedactor.redact(error.localizedDescription)
+        }
+    }
+
+    func clearProviderKey() {
+        guard providerVerificationSafetyLatchMessage == nil else {
+            lastError = providerVerificationSafetyLatchMessage
+            return
+        }
+        guard let account = selectedProviderKeyAccount else {
+            providers.providerKeyStored = false
+            onboardingFlow.providerKeyStored = false
+            lastError = "Select a valid provider before clearing an API key."
+            return
+        }
+        do {
+            try keychain.deleteSecret(account: account)
+            pendingProviderKey = ""
+            providerKeyRevision &+= 1
+            invalidateProviderVerificationContext(status: "Stored key cleared. Store a key before verification.")
+            providers.providerKeyStored = false
+            onboardingFlow.providerKeyStored = false
             lastError = nil
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
@@ -782,7 +817,10 @@ final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         guard !isProviderVerificationInProgress else { return }
-        guard providers.providerKeyStored, keychain.containsSecret(account: providerKeyAccount) else {
+        guard let providerKeyAccount = selectedProviderKeyAccount,
+              providers.providerKeyStored,
+              keychain.containsSecret(account: providerKeyAccount)
+        else {
             providerVerification = nil
             providerVerificationStatus = "Store a provider API key in Keychain before verification."
             lastError = "Provider verification requires a stored Keychain item."
@@ -895,6 +933,16 @@ final class NeonDiffDesktopModel: ObservableObject {
             loadedConfigRevision: controlCenterLoadedRevision,
             providerKeyRevision: providerKeyRevision
         )
+    }
+
+    private var selectedProviderKeyAccount: String? {
+        ProviderKeychainAccount.account(providerId: providers.selectedProviderId)
+    }
+
+    private func refreshSelectedProviderKeyState() {
+        let stored = selectedProviderKeyAccount.map(keychain.containsSecret(account:)) == true
+        providers.providerKeyStored = stored
+        onboardingFlow.providerKeyStored = stored
     }
 
     private func invalidateProviderVerificationContext(
@@ -1342,14 +1390,20 @@ final class NeonDiffDesktopModel: ObservableObject {
         logText = [result.redactedStdout, result.redactedStderr].filter { !$0.isEmpty }.joined(separator: "\n")
 
         let commandName = parseCommandName(result.stdout)
-        let parsedSnapshot = (commandName == "config inspect" || commandName == "config patch")
+        var parsedSnapshot = (commandName == "config inspect" || commandName == "config patch")
             ? ConfigInspectParser.parse(
                 result.stdout,
-                providerKeyStored: keychain.containsSecret(account: providerKeyAccount),
+                providerKeyStored: false,
                 licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
                 githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
             )
             : nil
+        if var snapshot = parsedSnapshot {
+            snapshot.providers.providerKeyStored = ProviderKeychainAccount.account(
+                providerId: snapshot.providers.selectedProviderId
+            ).map(keychain.containsSecret(account:)) == true
+            parsedSnapshot = snapshot
+        }
         var validatedPatchRevisionAfter: String?
         let providerPatchProof = pendingProviderPatchProof
         var validatedProviderRevisionAfter: String?
@@ -1705,7 +1759,6 @@ private enum GitHubDesktopAuthorizationStateError: LocalizedError {
     }
 }
 
-private let providerKeyAccount = "provider/glm/api-key"
 private let licenseKeyAccount = "license/default"
 private let githubUserTokenAccount = "github/user-access-token"
 private let githubRefreshTokenAccount = "github/user-refresh-token"

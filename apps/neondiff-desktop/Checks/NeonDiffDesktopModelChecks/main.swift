@@ -106,9 +106,10 @@ final class ControlledProviderVerificationCLI: NeonDiffCLIClienting {
 struct ModelFixture {
     let model: NeonDiffDesktopModel
     let cli: ControlledProviderVerificationCLI
+    let keychain: ModelCheckSecretStore
 }
 
-let providerAccount = "provider/glm/api-key"
+let providerAccount = "provider/zcode-glm/api-key"
 let fixtureSecret = "fixture-provider-value"
 let healthyJSON = #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:00:00.000Z","providerId":"zcode-glm","state":"healthy","mode":"openai_compatible_models","detail":"Verified with redacted metadata.","redacted":true,"troubleshooting":[]}"#
 let loadedRevision = String(repeating: "a", count: 64)
@@ -134,7 +135,7 @@ func makeFixture(result: CLIRunResult, blocked: Bool = false) throws -> ModelFix
         launchdLabel: model.launchdLabel,
         isConfigInspectCommand: true
     )
-    return ModelFixture(model: model, cli: cli)
+    return ModelFixture(model: model, cli: cli, keychain: keychain)
 }
 
 func healthySnapshot() -> ProviderVerificationSnapshot {
@@ -172,12 +173,89 @@ struct NeonDiffDesktopModelChecks {
         try await checkProviderMutationRejectsStaleResult()
         try await checkConfigMutationRejectsStaleResult()
         try await checkKeyMutationRejectsStaleResult()
+        try await checkProviderScopedKeyIsolation()
+        try checkProviderKeyClearAndInvalidIdentifierFailClosed()
         try await checkFailuresClearPriorState()
         try await checkWrongProviderHealthyRejected()
         try await checkCleanupTimeoutLatchesRestartRequirement()
         try checkDirtyApplyReadbackGate()
         try checkSuccessfulConfigWriteInvalidatesPriorState()
         print("NeonDiffDesktopModelChecks passed")
+    }
+
+    @MainActor
+    private static func checkProviderScopedKeyIsolation() async throws {
+        let fixture = try makeFixture(result: CLIRunResult(exitCode: 0, stdout: healthyJSON, stderr: ""))
+        let providerB = ProviderRegistryTarget(
+            id: "provider-b",
+            displayName: "Provider B",
+            enabled: true,
+            adapter: "openai-compatible",
+            authMode: "api-key-env",
+            baseUrl: "https://provider-b.example/v1",
+            model: "provider-b-model"
+        )
+        fixture.model.providers.registryTargets.append(providerB)
+        fixture.model.providers.selectedProviderId = providerB.id
+        check(!fixture.model.providers.providerKeyStored, "selecting provider B does not reuse provider A's key state")
+
+        let previewBJSON = #"{"ok":true,"command":"config patch","dryRun":true,"wrote":false,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"provider-b","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://provider.example/v1","model":"fixture-model","authMode":"api-key-env"},"provider-b":{"enabled":true,"adapter":"openai-compatible","displayName":"Provider B","baseUrl":"https://provider-b.example/v1","model":"provider-b-model","authMode":"api-key-env"}}}}}"#
+        let appliedBJSON = #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"provider-b","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://provider.example/v1","model":"fixture-model","authMode":"api-key-env"},"provider-b":{"enabled":true,"adapter":"openai-compatible","displayName":"Provider B","baseUrl":"https://provider-b.example/v1","model":"provider-b-model","authMode":"api-key-env"}}}}}"#
+        fixture.model.applyProviderPatchResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: previewBJSON, stderr: ""),
+            mode: .preview
+        )
+        fixture.model.applyProviderPatchResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: appliedBJSON, stderr: ""),
+            mode: .apply
+        )
+        check(fixture.model.providers.selectedProviderId == providerB.id, "apply/readback selects provider B")
+        check(!fixture.model.providers.providerKeyStored, "applied provider B remains missing until B key is stored")
+        check(!fixture.model.canVerifyProviderKey, "provider B Verify stays disabled without a B-scoped key")
+        let callsBeforeMissingBVerify = fixture.cli.callCount
+        fixture.model.verifyProviderKey()
+        check(fixture.cli.callCount == callsBeforeMissingBVerify, "provider B cannot launch verification with provider A's key")
+
+        let providerBSecret = "fixture-provider-b-value"
+        fixture.model.pendingProviderKey = providerBSecret
+        fixture.model.storeProviderKey()
+        check(fixture.keychain.values["provider/provider-b/api-key"] == providerBSecret, "provider B key is stored under the B-scoped account")
+        check(fixture.keychain.values[providerAccount] == fixtureSecret, "storing provider B preserves provider A's scoped key")
+        check(fixture.model.providers.providerKeyStored, "provider B stored state refreshes after explicit storage")
+        check(fixture.model.canVerifyProviderKey, "provider B Verify enables after B key storage")
+
+        fixture.cli.result = CLIRunResult(
+            exitCode: 0,
+            stdout: healthyJSON.replacingOccurrences(of: "zcode-glm", with: "provider-b"),
+            stderr: ""
+        )
+        fixture.model.verifyProviderKey()
+        await waitUntil("provider B verification completes") { !fixture.model.isProviderVerificationInProgress }
+        check(fixture.cli.arguments.contains("provider-b"), "provider B verification stays bound to provider B")
+        check(fixture.cli.standardInput == Data(providerBSecret.utf8), "provider B verification receives only B's scoped key")
+        check(fixture.model.providerVerification?.providerId == "provider-b", "provider B result installs only for B")
+    }
+
+    @MainActor
+    private static func checkProviderKeyClearAndInvalidIdentifierFailClosed() throws {
+        let fixture = try makeFixture(result: CLIRunResult(exitCode: 0, stdout: healthyJSON, stderr: ""))
+        fixture.model.clearProviderKey()
+        check(fixture.keychain.values[providerAccount] == nil, "Clear Key deletes only the selected provider account")
+        check(!fixture.model.providers.providerKeyStored, "Clear Key refreshes selected-provider state")
+        check(!fixture.model.canVerifyProviderKey, "Clear Key disables Verify")
+
+        fixture.keychain.values["provider/glm/api-key"] = "legacy-unscoped-value"
+        let callsBeforeLegacyVerify = fixture.cli.callCount
+        fixture.model.verifyProviderKey()
+        check(fixture.cli.callCount == callsBeforeLegacyVerify, "legacy unscoped key is never auto-sent to the selected provider")
+        check(!fixture.model.providers.providerKeyStored, "legacy unscoped key cannot restore scoped stored state")
+
+        fixture.model.providers.selectedProviderId = "../provider-b"
+        fixture.model.pendingProviderKey = "must-not-store"
+        fixture.model.storeProviderKey()
+        check(!fixture.keychain.values.values.contains("must-not-store"), "invalid provider id cannot create a Keychain item")
+        check(!fixture.model.providers.providerKeyStored, "invalid provider id remains fail closed")
+        check(fixture.model.lastError == "Select a valid provider before storing an API key.", "invalid provider id reports a fixed non-secret error")
     }
 
     @MainActor

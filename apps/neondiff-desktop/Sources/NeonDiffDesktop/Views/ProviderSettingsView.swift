@@ -43,6 +43,10 @@ struct ProviderSettingsView: View {
                             Label("Store Key", systemImage: "key.fill")
                         }
                         .disabled(!model.canEditProviderConfiguration)
+                        Button(role: .destructive) { model.clearProviderKey() } label: {
+                            Label("Clear Key", systemImage: "key.slash")
+                        }
+                        .disabled(!model.canEditProviderConfiguration || !model.providers.providerKeyStored)
                         Button { model.verifyProviderKey() } label: {
                             Label(
                                 model.providerVerificationButtonTitle,
