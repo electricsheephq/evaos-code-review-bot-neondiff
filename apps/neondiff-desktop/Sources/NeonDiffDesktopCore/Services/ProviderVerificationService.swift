@@ -15,6 +15,7 @@ public struct ProviderVerificationSnapshot: Equatable, Sendable {
     public let mode: String
     public let detail: String
     public let troubleshooting: [String]
+    public let configRevision: String?
 
     public var isVerified: Bool {
         ok && state == .healthy
@@ -28,7 +29,8 @@ public struct ProviderVerificationSnapshot: Equatable, Sendable {
         state: ProviderVerificationState,
         mode: String,
         detail: String,
-        troubleshooting: [String]
+        troubleshooting: [String],
+        configRevision: String? = nil
     ) {
         self.ok = ok
         self.command = command
@@ -38,6 +40,7 @@ public struct ProviderVerificationSnapshot: Equatable, Sendable {
         self.mode = mode
         self.detail = detail
         self.troubleshooting = troubleshooting
+        self.configRevision = configRevision
     }
 }
 
@@ -50,6 +53,7 @@ public enum ProviderVerificationError: Error, LocalizedError {
     case malformedEnvelope
     case invalidEnvelope
     case providerMismatch
+    case configRevisionMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -69,6 +73,8 @@ public enum ProviderVerificationError: Error, LocalizedError {
             "Provider verification returned an invalid redacted result"
         case .providerMismatch:
             "Provider verification returned a result for a different provider"
+        case .configRevisionMismatch:
+            "Provider verification returned a result for a different config revision"
         }
     }
 }
@@ -92,6 +98,7 @@ public enum ProviderVerificationParser {
     public static func parse(
         result: CLIRunResult,
         expectedProviderId: String,
+        expectedConfigRevision: String? = nil,
         forbiddenValue: String? = nil
     ) throws -> ProviderVerificationSnapshot {
         if let forbiddenValue,
@@ -132,6 +139,15 @@ public enum ProviderVerificationParser {
         guard providerId == expectedProviderId else {
             throw ProviderVerificationError.providerMismatch
         }
+        let configRevision = nonEmptyString(envelope["configRevision"])
+        if let configRevision, !Self.isConfigRevision(configRevision) {
+            throw ProviderVerificationError.invalidEnvelope
+        }
+        if let expectedConfigRevision {
+            guard Self.isConfigRevision(expectedConfigRevision), configRevision == expectedConfigRevision else {
+                throw ProviderVerificationError.configRevisionMismatch
+            }
+        }
 
         switch state {
         case .healthy:
@@ -156,8 +172,15 @@ public enum ProviderVerificationParser {
             state: state,
             mode: mode,
             detail: detail,
-            troubleshooting: troubleshooting
+            troubleshooting: troubleshooting,
+            configRevision: configRevision
         )
+    }
+
+    private static func isConfigRevision(_ value: String) -> Bool {
+        value.count == 64 && value.utf8.allSatisfy { byte in
+            (0x30...0x39).contains(byte) || (0x61...0x66).contains(byte)
+        }
     }
 
     private static func strictBoolean(_ value: Any?) -> Bool? {
@@ -561,6 +584,7 @@ public final class ProviderVerificationService {
     public func verify(
         account: String,
         expectedProviderId: String,
+        expectedConfigRevision: String? = nil,
         arguments: [String],
         timeout: TimeInterval
     ) throws -> ProviderVerificationSnapshot {
@@ -595,6 +619,7 @@ public final class ProviderVerificationService {
         return try ProviderVerificationParser.parse(
             result: result,
             expectedProviderId: expectedProviderId,
+            expectedConfigRevision: expectedConfigRevision,
             forbiddenValue: secret
         )
     }
@@ -602,6 +627,7 @@ public final class ProviderVerificationService {
     public func verifyCancellable(
         account: String,
         expectedProviderId: String,
+        expectedConfigRevision: String? = nil,
         arguments: [String],
         timeout: TimeInterval
     ) async throws -> ProviderVerificationSnapshot {
@@ -638,6 +664,7 @@ public final class ProviderVerificationService {
         return try ProviderVerificationParser.parse(
             result: result,
             expectedProviderId: expectedProviderId,
+            expectedConfigRevision: expectedConfigRevision,
             forbiddenValue: secret
         )
     }

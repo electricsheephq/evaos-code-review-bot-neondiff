@@ -7,6 +7,7 @@ const sourcePath = join(root, "shared/canonical-secret-rules.json");
 const nodePath = join(root, "src/generated-secret-rules.ts");
 const nodeCorpusPath = join(root, "tests/generated-secret-rule-corpus.ts");
 const swiftPath = join(root, "apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/CanonicalSecretRules.generated.swift");
+const swiftCorpusPath = join(root, "apps/neondiff-desktop/Sources/NeonDiffDesktopCoreChecks/CanonicalSecretRuleCorpus.generated.swift");
 const source = JSON.parse(readFileSync(sourcePath, "utf8"));
 const ASCII_LEFT_BOUNDARY = "(?<![A-Za-z0-9_])";
 const ASCII_RIGHT_BOUNDARY = "(?![A-Za-z0-9_])";
@@ -109,9 +110,10 @@ const swiftFixtureText = (fixture) => fixture.sampleParts
 const swift = `${banner}import Foundation\n\n`+
   `extension CanonicalSecretRule {\n    static let generated: [CanonicalSecretRule] = [\n${runtimeRules.map((rule) => `        CanonicalSecretRule(id: ${swiftString(rule.id)}, source: ${swiftString(rule.source)}, ignoreCase: ${rule.ignoreCase}),`).join("\n")}\n    ]\n}\n\n`+
   `extension CanonicalSensitiveCookieRule {\n    static let generated = CanonicalSensitiveCookieRule(id: ${swiftString(runtimeCookieRule.id)}, prefix: ${swiftString(runtimeCookieRule.prefix)}, sensitiveNameSource: ${swiftString(runtimeCookieRule.sensitiveNameSource)}, maximumAttributes: ${runtimeCookieRule.maximumAttributes})\n}\n\n`+
-  `enum CanonicalSecretSafeLiterals {\n    static let generated = [${source.safeLiterals.map(swiftString).join(", ")}]\n}\n\n#if DEBUG\n@_spi(Testing) public enum CanonicalSecretRuleCorpus {\n    public static let ruleIDs = [${[...source.rules.map((rule) => rule.id), source.cookieHeader.id].map(swiftString).join(", ")}]\n    public static let sensitive: [(id: String, text: String)] = [\n${[...source.rules, source.cookieHeader].map((fixture) => `        (${swiftString(fixture.id)}, ${swiftFixtureText(fixture)}),`).join("\n")}\n    ]\n    public static let benign: [(id: String, text: String)] = [\n${source.benign.map((fixture) => `        (${swiftString(fixture.id)}, ${swiftString(fixture.text)}),`).join("\n")}\n    ]\n}\n#endif\n`;
+  `enum CanonicalSecretSafeLiterals {\n    static let generated = [${source.safeLiterals.map(swiftString).join(", ")}]\n}\n`;
+const swiftCorpus = `${banner}import Foundation\n\nenum CanonicalSecretRuleCorpus {\n    static let ruleIDs = [${[...source.rules.map((rule) => rule.id), source.cookieHeader.id].map(swiftString).join(", ")}]\n    static let sensitive: [(id: String, text: String)] = [\n${[...source.rules, source.cookieHeader].map((fixture) => `        (${swiftString(fixture.id)}, ${swiftFixtureText(fixture)}),`).join("\n")}\n    ]\n    static let benign: [(id: String, text: String)] = [\n${source.benign.map((fixture) => `        (${swiftString(fixture.id)}, ${swiftString(fixture.text)}),`).join("\n")}\n    ]\n}\n`;
 
-const outputs = [[nodePath, node], [nodeCorpusPath, nodeCorpus], [swiftPath, swift]];
+const outputs = [[nodePath, node], [nodeCorpusPath, nodeCorpus], [swiftPath, swift], [swiftCorpusPath, swiftCorpus]];
 const checkNode = process.argv.includes("--check-node");
 const checkAll = process.argv.includes("--check");
 if (checkNode || checkAll) {

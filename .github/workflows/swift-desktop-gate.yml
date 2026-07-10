@@ -129,7 +129,29 @@ jobs:
 
       - name: Swift build
         working-directory: apps/neondiff-desktop
-        run: swift build
+        run: |
+          swift build -c debug --product NeonDiffDesktop
+          swift build -c release --product NeonDiffDesktop
+
+      - name: Swift core and model checks
+        working-directory: apps/neondiff-desktop
+        run: |
+          swift run NeonDiffDesktopCoreChecks
+          ./scripts/run-model-checks.sh
+
+      - name: Secret corpus production-artifact boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          debug_bin="$(cd apps/neondiff-desktop && swift build -c debug --show-bin-path)"
+          release_bin="$(cd apps/neondiff-desktop && swift build -c release --show-bin-path)"
+          npm run check:secret-corpus-boundary -- \
+            "$debug_bin/NeonDiffDesktop" \
+            "$release_bin/NeonDiffDesktop" \
+            "$debug_bin/NeonDiffDesktopCore.build" \
+            "$release_bin/NeonDiffDesktopCore.build" \
+            "$debug_bin/Modules/NeonDiffDesktopCore.swiftmodule" \
+            "$release_bin/Modules/NeonDiffDesktopCore.swiftmodule"
 
       - name: Build app bundle
         working-directory: apps/neondiff-desktop

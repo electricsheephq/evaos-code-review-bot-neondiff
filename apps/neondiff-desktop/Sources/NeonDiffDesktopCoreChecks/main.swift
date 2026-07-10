@@ -1304,6 +1304,45 @@ check(
     "provider verification presentation metadata retains no provider secret"
 )
 
+let stableConfigRevision = String(repeating: "d", count: 64)
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON.replacingOccurrences(
+        of: #""troubleshooting":[]"#,
+        with: #""troubleshooting":[],"configRevision":"\#(stableConfigRevision)""#
+    ),
+    stderr: ""
+)
+let revisionBoundVerification = try providerVerificationService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    expectedConfigRevision: stableConfigRevision,
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    revisionBoundVerification.configRevision == stableConfigRevision,
+    "provider verification preserves the exact stable config revision"
+)
+let revisionMismatchFailure = captureProviderVerificationFailure("config revision mismatch") {
+    _ = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        expectedConfigRevision: String(repeating: "e", count: 64),
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    revisionMismatchFailure is ProviderVerificationError,
+    "provider verification fails closed when the CLI result is from a different config revision"
+)
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON,
+    stderr: ""
+)
+
 var retainedProviderVerification: ProviderVerificationSnapshot? = providerVerification
 fakeProviderCLI.result = CLIRunResult(
     exitCode: 0,

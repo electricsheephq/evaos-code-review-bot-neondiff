@@ -111,8 +111,8 @@ struct ModelFixture {
 
 let providerAccount = "provider/zcode-glm/api-key"
 let fixtureSecret = "fixture-provider-value"
-let healthyJSON = #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:00:00.000Z","providerId":"zcode-glm","state":"healthy","mode":"openai_compatible_models","detail":"Verified with redacted metadata.","redacted":true,"troubleshooting":[]}"#
 let loadedRevision = String(repeating: "a", count: 64)
+let healthyJSON = #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:00:00.000Z","providerId":"zcode-glm","state":"healthy","mode":"openai_compatible_models","detail":"Verified with redacted metadata.","redacted":true,"troubleshooting":[],"configRevision":"\#(loadedRevision)"}"#
 let providerConfigInspectJSON = #"{"ok":true,"command":"config inspect","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"pilotRepos":[],"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://provider.example/v1","model":"fixture-model","authMode":"api-key-env"}}},"desktop":{}}}"#
 
 @MainActor
@@ -180,6 +180,7 @@ struct NeonDiffDesktopModelChecks {
         try await checkWrongProviderHealthyRejected()
         try await checkCleanupTimeoutLatchesRestartRequirement()
         try checkDirtyApplyReadbackGate()
+        try checkProviderPatchProofOwnershipAcrossOverlap()
         try checkSuccessfulConfigWriteInvalidatesPriorState()
         print("NeonDiffDesktopModelChecks passed")
     }
@@ -244,7 +245,9 @@ struct NeonDiffDesktopModelChecks {
 
         fixture.cli.result = CLIRunResult(
             exitCode: 0,
-            stdout: healthyJSON.replacingOccurrences(of: "zcode-glm", with: "provider-b"),
+            stdout: healthyJSON
+                .replacingOccurrences(of: "zcode-glm", with: "provider-b")
+                .replacingOccurrences(of: loadedRevision, with: String(repeating: "b", count: 64)),
             stderr: ""
         )
         fixture.model.verifyProviderKey()
@@ -376,7 +379,7 @@ struct NeonDiffDesktopModelChecks {
     private static func checkStructuredNonhealthyResults() async throws {
         let fixture = try makeFixture(result: CLIRunResult(
             exitCode: 1,
-            stdout: #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:01:00.000Z","providerId":"zcode-glm","state":"configured_unverified","mode":"metadata_only","detail":"Metadata only.","redacted":true,"troubleshooting":["Choose an API-key provider."]}"#,
+            stdout: #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:01:00.000Z","providerId":"zcode-glm","state":"configured_unverified","mode":"metadata_only","detail":"Metadata only.","redacted":true,"troubleshooting":["Choose an API-key provider."],"configRevision":"\#(loadedRevision)"}"#,
             stderr: ""
         ))
         fixture.model.verifyProviderKey()
@@ -386,7 +389,7 @@ struct NeonDiffDesktopModelChecks {
 
         fixture.cli.result = CLIRunResult(
             exitCode: 1,
-            stdout: #"{"ok":false,"command":"providers verify","checkedAt":"2026-07-10T12:02:00.000Z","providerId":"zcode-glm","state":"blocked","mode":"openai_compatible_models","detail":"Provider verification failed.","redacted":true,"troubleshooting":["Check provider credentials."]}"#,
+            stdout: #"{"ok":false,"command":"providers verify","checkedAt":"2026-07-10T12:02:00.000Z","providerId":"zcode-glm","state":"blocked","mode":"openai_compatible_models","detail":"Provider verification failed.","redacted":true,"troubleshooting":["Check provider credentials."],"configRevision":"\#(loadedRevision)"}"#,
             stderr: "provider verification did not prove health"
         )
         fixture.model.verifyProviderKey()
@@ -473,5 +476,30 @@ struct NeonDiffDesktopModelChecks {
         )
         check(fixture.model.providerVerification == nil, "successful live config write invalidates prior verification")
         check(fixture.model.providerVerificationStatus.contains("changed"), "successful live config write explains invalidation")
+    }
+
+    @MainActor
+    private static func checkProviderPatchProofOwnershipAcrossOverlap() throws {
+        let fixture = try makeFixture(result: CLIRunResult(exitCode: 0, stdout: healthyJSON, stderr: ""))
+        fixture.model.providers.selectedProviderBaseUrl = "https://owned-proof.example/v1"
+        fixture.model.stageProviderPatchProofForTesting(mode: .preview)
+        check(fixture.model.isConfigPatchInProgress, "provider patch proof records an active owning invocation")
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: #"{"ok":true,"command":"daemon status","state":"running"}"#, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false
+        )
+        fixture.model.attemptOverlappingProviderPatchForTesting()
+        check(fixture.model.isConfigPatchInProgress, "an unrelated completion and rejected overlap cannot consume the active provider proof")
+
+        let previewJSON = #"{"ok":true,"command":"config patch","dryRun":true,"wrote":false,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://owned-proof.example/v1","model":"fixture-model","authMode":"api-key-env"}}}}}"#
+        fixture.model.applyStagedProviderPatchResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: previewJSON, stderr: "")
+        )
+        check(!fixture.model.isConfigPatchInProgress, "only the owning provider patch response completes the operation")
+        check(fixture.model.canApplyProviderConfig, "the owning provider patch response consumes its exact proof")
     }
 }

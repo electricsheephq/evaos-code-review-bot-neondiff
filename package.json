@@ -37,7 +37,7 @@
     "node": ">=26"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/prepare-build-output.mjs && tsc -p tsconfig.build.json",
     "postbuild": "chmod +x dist/src/cli.js && node scripts/generate-secret-rules.mjs --check-node",
     "cli": "tsx src/cli.ts",
     "test": "vitest run",
@@ -47,6 +47,7 @@
     "check:public-claims": "node scripts/check-public-claims.mjs",
     "check:secrets": "node scripts/check-secret-scan.mjs",
     "check:secret-rule-differential": "node scripts/generate-secret-rules.mjs --check && node scripts/check-secret-rule-differential.mjs --require-swift",
+    "check:secret-corpus-boundary": "node scripts/generate-secret-rules.mjs --check && node scripts/check-secret-corpus-boundary.mjs",
     "eval:offline": "tsx src/cli.ts eval-offline",
     "eval:suite": "tsx src/cli.ts eval-suite",
     "eval:sticky-vs-cold": "tsx src/cli.ts eval-sticky-vs-cold",

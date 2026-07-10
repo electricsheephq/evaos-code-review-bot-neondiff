@@ -99,6 +99,7 @@ export interface ProviderApiKeyVerificationResult {
   keySource?: "submitted" | "env";
   check?: Omit<ProviderDoctorCheck, "error"> & { error?: string };
   troubleshooting: string[];
+  configRevision?: string;
 }
 
 export interface LocalDashboardPreviewSmokeResult {

@@ -68,6 +68,7 @@ export async function runProvidersVerifyCommand(
   }
 
   let config: BotConfig;
+  let initialConfigRevision: string | undefined;
   if (expectedConfigRevision !== undefined) {
     if (!/^[a-f0-9]{64}$/.test(expectedConfigRevision)) {
       throw new Error("--expected-config-revision must be a lowercase SHA-256 value");
@@ -87,6 +88,11 @@ export async function runProvidersVerifyCommand(
       };
     }
     config = loaded.config;
+    initialConfigRevision = loaded.revision;
+  } else if (configPath) {
+    const loaded = dependencies.loadConfigAtRevision(configPath);
+    config = loaded.config;
+    initialConfigRevision = loaded.revision;
   } else {
     config = dependencies.loadConfig(configPath);
   }
@@ -101,9 +107,50 @@ export async function runProvidersVerifyCommand(
       ? false
       : parseBooleanValue(input.allowRemoteSmoke, "--allow-remote-smoke")
   });
+  if (configPath && initialConfigRevision !== undefined) {
+    let finalRevision: string;
+    try {
+      finalRevision = dependencies.loadConfigAtRevision(configPath).revision;
+    } catch {
+      return configRevisionDriftResult(
+        providerId ?? config.providers!.defaultProviderId,
+        initialConfigRevision
+      );
+    }
+    if (finalRevision !== initialConfigRevision) {
+      return configRevisionDriftResult(
+        providerId ?? config.providers!.defaultProviderId,
+        finalRevision
+      );
+    }
+  }
+  const output = initialConfigRevision === undefined
+    ? result
+    : { ...result, configRevision: initialConfigRevision };
   return {
-    output: result,
-    exitCode: result.ok && result.state === "healthy" ? 0 : 1
+    output,
+    exitCode: output.ok && output.state === "healthy" ? 0 : 1
+  };
+}
+
+function configRevisionDriftResult(
+  providerId: string,
+  configRevision: string
+): ProvidersVerifyCommandExecution {
+  return {
+    output: {
+      ok: false,
+      command: "providers verify",
+      checkedAt: new Date().toISOString(),
+      providerId,
+      state: "blocked",
+      mode: "metadata_only",
+      detail: "Config changed during provider verification; reload and verify again.",
+      redacted: true,
+      troubleshooting: ["Reload current config before retrying provider verification."],
+      configRevision
+    },
+    exitCode: 1
   };
 }
 

@@ -815,6 +815,100 @@ exit 1
     expect(snapshotLoads).toBe(1);
   });
 
+  it("fails closed when config changes while provider verification is pending", async () => {
+    const expectedRevision = "a".repeat(64);
+    const changedRevision = "b".repeat(64);
+    let releaseVerification!: () => void;
+    const verificationGate = new Promise<void>((resolve) => { releaseVerification = resolve; });
+    let snapshotLoads = 0;
+    const execution = runProvidersVerifyCommand({
+      configPath: "fixture-config.json",
+      providerId: "openai-compatible",
+      expectedConfigRevision: expectedRevision,
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "true",
+      stdin: Readable.from(["fixture-provider-value\n"])
+    }, {
+      loadConfigAtRevision: () => ({
+        revision: snapshotLoads++ === 0 ? expectedRevision : changedRevision,
+        config: {
+          providers: {
+            defaultProviderId: "openai-compatible",
+            providers: { "openai-compatible": {} }
+          }
+        } as unknown as ReturnType<typeof import("../src/config.js").loadConfig>
+      }),
+      verifyProviderApiKey: async () => {
+        await verificationGate;
+        return {
+          ok: true,
+          command: "providers verify",
+          checkedAt: "2026-07-10T00:00:00.000Z",
+          providerId: "openai-compatible",
+          state: "healthy",
+          mode: "openai_compatible_models",
+          detail: "Verified hosted provider with redacted metadata.",
+          redacted: true,
+          troubleshooting: []
+        };
+      }
+    });
+    await Promise.resolve();
+    releaseVerification();
+    const result = await execution;
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toMatchObject({
+      ok: false,
+      state: "blocked",
+      redacted: true,
+      configRevision: changedRevision
+    });
+    expect(JSON.stringify(result.output)).not.toContain("fixture-provider-value");
+    expect(snapshotLoads).toBe(2);
+  });
+
+  it("returns the stable config revision with an unchanged healthy verification", async () => {
+    const expectedRevision = "c".repeat(64);
+    let snapshotLoads = 0;
+    const result = await runProvidersVerifyCommand({
+      configPath: "fixture-config.json",
+      providerId: "openai-compatible",
+      expectedConfigRevision: expectedRevision,
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "true",
+      stdin: Readable.from(["fixture-provider-value\n"])
+    }, {
+      loadConfigAtRevision: () => {
+        snapshotLoads += 1;
+        return {
+          revision: expectedRevision,
+          config: {
+            providers: {
+              defaultProviderId: "openai-compatible",
+              providers: { "openai-compatible": {} }
+            }
+          } as unknown as ReturnType<typeof import("../src/config.js").loadConfig>
+        };
+      },
+      verifyProviderApiKey: async () => ({
+        ok: true,
+        command: "providers verify",
+        checkedAt: "2026-07-10T00:00:00.000Z",
+        providerId: "openai-compatible",
+        state: "healthy",
+        mode: "openai_compatible_models",
+        detail: "Verified hosted provider with redacted metadata.",
+        redacted: true,
+        troubleshooting: []
+      })
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toMatchObject({ state: "healthy", configRevision: expectedRevision });
+    expect(snapshotLoads).toBe(2);
+  });
+
   it("keeps configured-unverified hosted verification non-success", async () => {
     const result = await runProvidersVerifyCommand({
       configPath: undefined,

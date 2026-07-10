@@ -891,6 +891,7 @@ final class NeonDiffDesktopModel: ObservableObject {
                 outcome = .success(try await service.verifyCancellable(
                     account: providerKeyAccount,
                     expectedProviderId: providerId,
+                    expectedConfigRevision: expectedRevision,
                     arguments: arguments,
                     timeout: 15
                 ))
@@ -1032,11 +1033,12 @@ final class NeonDiffDesktopModel: ObservableObject {
     private func runCLI(
         arguments: [String],
         displayCommand: DesktopCommand,
-        controlCenterOperation: ControlCenterOperation? = nil
+        controlCenterOperation: ControlCenterOperation? = nil,
+        providerPatchProof: PendingProviderPatchProof? = nil
     ) {
         if let providerVerificationSafetyLatchMessage {
             lastError = providerVerificationSafetyLatchMessage
-            pendingProviderPatchProof = nil
+            clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
             if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
             return
         }
@@ -1045,7 +1047,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         if (isConfigPatchCommand || isConfigInspectCommand)
             && (isProviderVerificationInProgress || isProviderVerificationCancelling) {
             lastError = "Wait for provider verification cleanup before changing config."
-            pendingProviderPatchProof = nil
+            clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
             if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
             return
         }
@@ -1055,7 +1057,6 @@ final class NeonDiffDesktopModel: ObservableObject {
                 controlCenterStatus = lastError ?? "Control-center command deferred."
                 isControlCenterOperationInProgress = false
             }
-            pendingProviderPatchProof = nil
             return
         }
         if isConfigInspectCommand && (isConfigPatchInProgress || isConfigInspectInProgress) {
@@ -1080,19 +1081,20 @@ final class NeonDiffDesktopModel: ObservableObject {
                         configPath: configPath,
                         launchdLabel: launchdLabel,
                         isConfigInspectCommand: isConfigInspectCommand,
-                        controlCenterOperation: controlCenterOperation
+                        controlCenterOperation: controlCenterOperation,
+                        providerPatchProof: providerPatchProof
                     )
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
                     if isConfigInspectCommand { self.isConfigInspectInProgress = false }
                     if controlCenterOperation != nil { self.isControlCenterOperationInProgress = false }
-                    if isConfigPatchCommand { self.pendingProviderPatchProof = nil }
+                    self.clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
                 }
             } catch {
                 await MainActor.run {
                     self.lastError = NeonDiffRedactor.redact(error.localizedDescription)
                     self.logText = self.lastError ?? "Unknown CLI error"
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
-                    if isConfigPatchCommand { self.pendingProviderPatchProof = nil }
+                    self.clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
                     if isConfigInspectCommand {
                         self.invalidateProviderConfigAuthorization()
                         self.invalidateControlCenterAfterInspectFailure(self.lastError ?? "Config inspect failed.")
@@ -1110,6 +1112,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func runProviderConfigPatch(dryRun: Bool) {
+        guard !isConfigPatchInProgress, !isConfigInspectInProgress else {
+            lastError = "Another config operation is still running."
+            return
+        }
         guard let expectedRevision = dryRun ? providerLoadedRevision : previewedProviderExpectedRevision else {
             lastError = "Load current config before changing provider settings."
             return
@@ -1131,15 +1137,21 @@ final class NeonDiffDesktopModel: ObservableObject {
             dryRun ? "true" : "false"
         ]
         arguments.append(contentsOf: ["--expected-revision", expectedRevision])
-        pendingProviderPatchProof = PendingProviderPatchProof(
+        let proof = PendingProviderPatchProof(
+            id: UUID(),
             snapshot: currentProviderConfigurationSnapshot,
             expectedRevision: expectedRevision,
             mode: dryRun ? .preview : .apply
         )
+        pendingProviderPatchProof = proof
         if !dryRun {
             arguments.append(contentsOf: ["--confirm", "true"])
         }
-        runCLI(arguments: arguments, displayCommand: dryRun ? providerPatchPreviewCommand : providerPatchApplyCommand)
+        runCLI(
+            arguments: arguments,
+            displayCommand: dryRun ? providerPatchPreviewCommand : providerPatchApplyCommand,
+            providerPatchProof: proof
+        )
     }
 
     private var providerPatchPath: URL {
@@ -1400,8 +1412,13 @@ final class NeonDiffDesktopModel: ObservableObject {
         configPath: String,
         launchdLabel: String,
         isConfigInspectCommand: Bool,
-        controlCenterOperation: ControlCenterOperation? = nil
+        controlCenterOperation: ControlCenterOperation? = nil,
+        providerPatchProof: PendingProviderPatchProof? = nil
     ) {
+        if let providerPatchProof,
+           pendingProviderPatchProof?.id != providerPatchProof.id {
+            return
+        }
         let redactedStdout = result.redactedStdout.trimmingCharacters(in: .whitespacesAndNewlines)
         let redactedStderr = result.redactedStderr.trimmingCharacters(in: .whitespacesAndNewlines)
         lastError = result.exitCode == 0 ? nil : (redactedStderr.isEmpty ? redactedStdout : redactedStderr)
@@ -1423,7 +1440,6 @@ final class NeonDiffDesktopModel: ObservableObject {
             parsedSnapshot = snapshot
         }
         var validatedPatchRevisionAfter: String?
-        let providerPatchProof = pendingProviderPatchProof
         var validatedProviderRevisionAfter: String?
         if let providerPatchProof {
             validatedProviderRevisionAfter = ConfigPatchProofValidator.revisionAfter(
@@ -1552,7 +1568,7 @@ final class NeonDiffDesktopModel: ObservableObject {
                     previewedProviderExpectedRevision = nil
                     providerVerificationStatus = "Provider config applied and read back. Verification is enabled for eligible targets."
                 }
-                pendingProviderPatchProof = nil
+                clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
             }
             if commandName == "config patch",
                let operation = controlCenterOperation,
@@ -1642,17 +1658,52 @@ final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         pendingProviderPatchProof = PendingProviderPatchProof(
+            id: UUID(),
             snapshot: currentProviderConfigurationSnapshot,
             expectedRevision: expectedRevision,
             mode: mode
         )
+        let proof = pendingProviderPatchProof
         applyCLIResult(
             result,
             fallbackCommand: "neondiff config patch",
             configPath: configPath,
             launchdLabel: launchdLabel,
-            isConfigInspectCommand: false
+            isConfigInspectCommand: false,
+            providerPatchProof: proof
         )
+    }
+
+    func stageProviderPatchProofForTesting(mode: ConfigPatchProofMode) {
+        guard !isConfigPatchInProgress, !isConfigInspectInProgress else { return }
+        guard let expectedRevision = mode == .preview ? providerLoadedRevision : previewedProviderExpectedRevision else {
+            return
+        }
+        pendingProviderPatchProof = PendingProviderPatchProof(
+            id: UUID(),
+            snapshot: currentProviderConfigurationSnapshot,
+            expectedRevision: expectedRevision,
+            mode: mode
+        )
+        isConfigPatchInProgress = true
+    }
+
+    func applyStagedProviderPatchResultForTesting(_ result: CLIRunResult) {
+        let proof = pendingProviderPatchProof
+        applyCLIResult(
+            result,
+            fallbackCommand: "neondiff config patch",
+            configPath: configPath,
+            launchdLabel: launchdLabel,
+            isConfigInspectCommand: false,
+            providerPatchProof: proof
+        )
+        clearPendingProviderPatchProof(ifOwnedBy: proof)
+        isConfigPatchInProgress = false
+    }
+
+    func attemptOverlappingProviderPatchForTesting() {
+        runProviderConfigPatch(dryRun: true)
     }
 
     private func parseCommandName(_ jsonText: String) -> String? {
@@ -1675,6 +1726,11 @@ final class NeonDiffDesktopModel: ObservableObject {
         providerLoadedRevision = nil
         previewedProviderSnapshot = nil
         previewedProviderExpectedRevision = nil
+        pendingProviderPatchProof = nil
+    }
+
+    private func clearPendingProviderPatchProof(ifOwnedBy proof: PendingProviderPatchProof?) {
+        guard let proof, pendingProviderPatchProof?.id == proof.id else { return }
         pendingProviderPatchProof = nil
     }
 
@@ -1723,6 +1779,7 @@ private struct ProviderConfigurationSnapshot: Equatable, Sendable {
 }
 
 private struct PendingProviderPatchProof: Sendable {
+    let id: UUID
     let snapshot: ProviderConfigurationSnapshot
     let expectedRevision: String
     let mode: ConfigPatchProofMode
