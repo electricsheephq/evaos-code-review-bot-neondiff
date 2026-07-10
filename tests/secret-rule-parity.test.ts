@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { canonicalSecretRules, canonicalSensitiveCookieRule } from "../src/generated-secret-rules.js";
 import { containsSecretLikeText } from "../src/secrets.js";
@@ -61,4 +62,17 @@ describe("canonical secret rule parity", () => {
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   }, 60_000);
+
+  it("drives both production scanners with independently expected differential cases", () => {
+    const differential = readFileSync("scripts/check-secret-rule-differential.mjs", "utf8");
+    const swiftRunner = readFileSync("scripts/secret-rule-foundation-runner.swift", "utf8");
+
+    expect(differential).toContain("dist/src/secrets.js");
+    expect(differential).toContain("CanonicalSecretScanner.swift");
+    expect(differential).toContain("expected");
+    expect(differential).not.toContain("function nodeMatches");
+    expect(differential).not.toContain("function matchesCookie");
+    expect(swiftRunner).toContain("CanonicalSecretScanner.containsSecretLikeText");
+    expect(swiftRunner).not.toContain("NSRegularExpression");
+  });
 });

@@ -38,7 +38,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "postbuild": "chmod +x dist/src/cli.js && node scripts/generate-secret-rules.mjs --check",
+    "postbuild": "chmod +x dist/src/cli.js && node scripts/generate-secret-rules.mjs --check-node",
     "cli": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -46,6 +46,7 @@
     "dashboard:preview-smoke": "tsx src/cli.ts dashboard --config config.example.json --preview-smoke true --output-dir runtime/dashboard-preview-smoke",
     "check:public-claims": "node scripts/check-public-claims.mjs",
     "check:secrets": "node scripts/check-secret-scan.mjs",
+    "check:secret-rule-differential": "node scripts/generate-secret-rules.mjs --check && node scripts/check-secret-rule-differential.mjs --require-swift",
     "eval:offline": "tsx src/cli.ts eval-offline",
     "eval:suite": "tsx src/cli.ts eval-suite",
     "eval:sticky-vs-cold": "tsx src/cli.ts eval-sticky-vs-cold",

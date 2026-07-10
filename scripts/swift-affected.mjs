@@ -12,7 +12,11 @@ const SWIFT_ROOT_FILES = new Set([
   "Package.resolved",
   "apps/neondiff-desktop/Package.swift",
   "apps/neondiff-desktop/Package.resolved",
-  "apps/neondiff-desktop/script/build_and_run.sh"
+  "apps/neondiff-desktop/script/build_and_run.sh",
+  "shared/canonical-secret-rules.json",
+  "scripts/generate-secret-rules.mjs",
+  "scripts/check-secret-rule-differential.mjs",
+  "scripts/secret-rule-foundation-runner.swift"
 ]);
 
 const SWIFT_WORKFLOW_FILES = new Set([

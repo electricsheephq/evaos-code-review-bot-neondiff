@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("Linux daemon packaging", () => {
@@ -69,4 +72,43 @@ describe("Linux daemon packaging", () => {
       expect(packlistGuard).toContain(file);
     }
   });
+
+  it("keeps the normal Node and Docker build independent from Swift tooling", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const postbuild = packageJson.scripts?.postbuild ?? "";
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+    const scriptsCopy = dockerfile.indexOf("COPY scripts ./scripts");
+    const sharedCopy = dockerfile.indexOf("COPY shared ./shared");
+    const buildRun = dockerfile.indexOf("RUN npm run build");
+    const corpusCleanup = dockerfile.indexOf("rm -rf scripts shared");
+    const runtimeCopy = dockerfile.indexOf("COPY --from=build /app /app");
+
+    expect(postbuild).toContain("generate-secret-rules.mjs --check-node");
+    expect(postbuild).not.toMatch(/swift|differential/i);
+    expect(scriptsCopy).toBeGreaterThanOrEqual(0);
+    expect(sharedCopy).toBeGreaterThanOrEqual(0);
+    expect(scriptsCopy).toBeLessThan(buildRun);
+    expect(sharedCopy).toBeLessThan(buildRun);
+    expect(corpusCleanup).toBeGreaterThan(buildRun);
+    expect(corpusCleanup).toBeLessThan(runtimeCopy);
+
+    const temporary = mkdtempSync(join(tmpdir(), "neondiff-node-build-contract-"));
+    const swiftMarker = join(temporary, "swiftc-invoked");
+    const fakeSwift = join(temporary, "swiftc");
+    writeFileSync(fakeSwift, `#!/bin/sh\n: > ${JSON.stringify(swiftMarker)}\nexit 91\n`);
+    chmodSync(fakeSwift, 0o755);
+    try {
+      const result = spawnSync("npm", ["run", "build"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${temporary}${delimiter}${process.env.PATH ?? ""}` }
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(existsSync(swiftMarker)).toBe(false);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

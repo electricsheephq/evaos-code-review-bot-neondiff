@@ -1,5 +1,4 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -37,11 +36,34 @@ function foldAsciiCase(sourcePattern) {
     }
   }
   if (escaped) output += "\\";
-  return output.replace(/\[([^\]]*)\]/g, (whole, content) =>
-    content.includes("A-Z") && !content.includes("a-z")
-      ? `[${content.replace("A-Z", "A-Za-z")}]`
-      : whole
-  );
+  return output.replace(/\[([^\]]*)\]/g, (_whole, content) => `[${foldAsciiCharacterClass(content)}]`);
+}
+
+function foldAsciiCharacterClass(content) {
+  const negated = content.startsWith("^");
+  const body = negated ? content.slice(1) : content;
+  let additions = "";
+  if (body.includes("A-Z") && !body.includes("a-z")) additions += "a-z";
+  if (body.includes("a-z") && !body.includes("A-Z")) additions += "A-Z";
+  for (let index = 0; index < body.length; index += 1) {
+    const character = body[index];
+    if (character === "\\") {
+      if (body[index + 1] === "u" && /^[0-9A-Fa-f]{4}$/.test(body.slice(index + 2, index + 6))) {
+        index += 5;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+    if (!/[A-Za-z]/.test(character) || body[index - 1] === "-" || body[index + 1] === "-") {
+      continue;
+    }
+    const counterpart = character === character.toLowerCase()
+      ? character.toUpperCase()
+      : character.toLowerCase();
+    if (!body.includes(counterpart) && !additions.includes(counterpart)) additions += counterpart;
+  }
+  return `${negated ? "^" : ""}${additions}${body}`;
 }
 
 function normalizePattern(rule) {
@@ -90,18 +112,17 @@ const swift = `${banner}import Foundation\n\n`+
   `enum CanonicalSecretSafeLiterals {\n    static let generated = [${source.safeLiterals.map(swiftString).join(", ")}]\n}\n\n#if DEBUG\n@_spi(Testing) public enum CanonicalSecretRuleCorpus {\n    public static let ruleIDs = [${[...source.rules.map((rule) => rule.id), source.cookieHeader.id].map(swiftString).join(", ")}]\n    public static let sensitive: [(id: String, text: String)] = [\n${[...source.rules, source.cookieHeader].map((fixture) => `        (${swiftString(fixture.id)}, ${swiftFixtureText(fixture)}),`).join("\n")}\n    ]\n    public static let benign: [(id: String, text: String)] = [\n${source.benign.map((fixture) => `        (${swiftString(fixture.id)}, ${swiftString(fixture.text)}),`).join("\n")}\n    ]\n}\n#endif\n`;
 
 const outputs = [[nodePath, node], [nodeCorpusPath, nodeCorpus], [swiftPath, swift]];
-if (process.argv.includes("--check")) {
-  const stale = outputs.filter(([path, expected]) => {
+const checkNode = process.argv.includes("--check-node");
+const checkAll = process.argv.includes("--check");
+if (checkNode || checkAll) {
+  const checkOutputs = checkNode ? [[nodePath, node]] : outputs;
+  const stale = checkOutputs.filter(([path, expected]) => {
     try { return readFileSync(path, "utf8") !== expected; } catch { return true; }
   });
   if (stale.length > 0) {
     console.error(`Generated secret rules are stale: ${stale.map(([path]) => path.slice(root.length + 1)).join(", ")}`);
     process.exit(1);
   }
-  execFileSync(process.execPath, [join(root, "scripts/check-secret-rule-differential.mjs"), "--require-swift"], {
-    cwd: root,
-    stdio: "inherit"
-  });
 } else {
   for (const [path, content] of outputs) writeFileSync(path, content);
 }

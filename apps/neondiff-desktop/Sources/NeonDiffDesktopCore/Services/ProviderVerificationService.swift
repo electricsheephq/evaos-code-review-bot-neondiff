@@ -110,7 +110,7 @@ public enum ProviderVerificationParser {
         guard let envelope = object as? [String: Any] else {
             throw ProviderVerificationError.invalidEnvelope
         }
-        if containsSecretLikeKey(object) || containsCanonicalSecretLikeMaterial(object) {
+        if containsSecretLikeMaterial(object) {
             throw ProviderVerificationError.secretInProcessOutput
         }
         guard
@@ -183,33 +183,6 @@ public enum ProviderVerificationParser {
         return strings
     }
 
-    private static func containsSecretLikeKey(_ value: Any) -> Bool {
-        if let dictionary = value as? [String: Any] {
-            for (key, nestedValue) in dictionary {
-                let normalized = key
-                    .lowercased()
-                    .filter { $0.isLetter || $0.isNumber }
-                if normalized == "apikey"
-                    || normalized == "authorization"
-                    || normalized == "credential"
-                    || normalized == "credentials"
-                    || normalized.contains("password")
-                    || normalized.hasSuffix("secret")
-                    || normalized == "token"
-                    || normalized.hasSuffix("token")
-                {
-                    return true
-                }
-                if containsSecretLikeKey(nestedValue) { return true }
-            }
-            return false
-        }
-        if let array = value as? [Any] {
-            return array.contains(where: containsSecretLikeKey)
-        }
-        return false
-    }
-
     private struct CredentialScanBudget {
         static let maximumDepth = 32
         static let maximumNodes = 4_096
@@ -226,12 +199,18 @@ public enum ProviderVerificationParser {
         }
     }
 
-    private static func containsCanonicalSecretLikeMaterial(_ value: Any) -> Bool {
-        var budget = CredentialScanBudget()
-        return containsCanonicalSecretLikeMaterial(value, depth: 0, budget: &budget)
+    @_spi(Testing) public static func decodedOutputContainsSecretLikeMaterialForTesting(
+        _ value: Any
+    ) -> Bool {
+        containsSecretLikeMaterial(value)
     }
 
-    private static func containsCanonicalSecretLikeMaterial(
+    private static func containsSecretLikeMaterial(_ value: Any) -> Bool {
+        var budget = CredentialScanBudget()
+        return containsSecretLikeMaterial(value, depth: 0, budget: &budget)
+    }
+
+    private static func containsSecretLikeMaterial(
         _ value: Any,
         depth: Int,
         budget: inout CredentialScanBudget
@@ -244,20 +223,35 @@ public enum ProviderVerificationParser {
         if let dictionary = value as? [String: Any] {
             for (key, nested) in dictionary {
                 guard budget.consume(depth: depth + 1, bytes: key.utf8.count) else { return true }
-                if CanonicalSecretScanner.containsSecretLikeText(key)
-                    || containsCanonicalSecretLikeMaterial(nested, depth: depth + 1, budget: &budget)
+                if isSecretLikeKey(key)
+                    || CanonicalSecretScanner.containsSecretLikeText(key)
+                    || containsSecretLikeMaterial(nested, depth: depth + 1, budget: &budget)
                 {
                     return true
                 }
             }
         } else if let array = value as? [Any] {
             for nested in array {
-                if containsCanonicalSecretLikeMaterial(nested, depth: depth + 1, budget: &budget) {
+                if containsSecretLikeMaterial(nested, depth: depth + 1, budget: &budget) {
                     return true
                 }
             }
         }
         return false
+    }
+
+    private static func isSecretLikeKey(_ key: String) -> Bool {
+        let normalized = key
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+        return normalized == "apikey"
+            || normalized == "authorization"
+            || normalized == "credential"
+            || normalized == "credentials"
+            || normalized.contains("password")
+            || normalized.hasSuffix("secret")
+            || normalized == "token"
+            || normalized.hasSuffix("token")
     }
 
     private struct ForbiddenValueScanBudget {

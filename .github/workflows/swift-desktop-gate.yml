@@ -108,6 +108,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build Node scanner
+        run: npm run build
+
+      - name: Node and Foundation secret-rule differential
+        run: npm run check:secret-rule-differential
+
       - name: Build Swift Keychain checks target
         working-directory: apps/neondiff-desktop
         run: swift build --target NeonDiffDesktopKeychainChecks

@@ -9,7 +9,7 @@ extension CanonicalSecretRule {
         CanonicalSecretRule(id: "bearer-credential", source: "(?<![A-Za-z0-9_])[Bb][Ee][Aa][Rr][Ee][Rr][\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]+[A-Za-z0-9._~+/=-]{20,}(?![A-Za-z0-9_])", ignoreCase: false),
         CanonicalSecretRule(id: "credential-url", source: "[Hh][Tt][Tt][Pp][Ss]?://[^/\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF@]+@[^/\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]+", ignoreCase: false),
         CanonicalSecretRule(id: "aws-access-key", source: "(?<![A-Za-z0-9_])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9_])", ignoreCase: false),
-        CanonicalSecretRule(id: "slack-token", source: "(?<![A-Za-z0-9_])[Xx][Oo][Xx][baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9_])", ignoreCase: false),
+        CanonicalSecretRule(id: "slack-token", source: "(?<![A-Za-z0-9_])[Xx][Oo][Xx][BAPRSbaprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9_])", ignoreCase: false),
         CanonicalSecretRule(id: "query-credential", source: "[?&](?:[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Tt][Oo][Kk][Ee][Nn]|[Aa][Uu][Tt][Hh][_-]?[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee])=[A-Za-z0-9._~+/=-]{16,}", ignoreCase: false),
         CanonicalSecretRule(id: "customer-id", source: "(?<![A-Za-z0-9_])[Cc][Uu][Ss][Tt][Oo][Mm][Ee][Rr][_-]?[Ii][Dd](?![A-Za-z0-9_])[\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[:=][\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[\"']?[Cc][Uu][Ss]_[A-Za-z0-9]{8,}", ignoreCase: false),
         CanonicalSecretRule(id: "customer-ssn", source: "(?<![A-Za-z0-9_])(?:[Cc][Uu][Ss][Tt][Oo][Mm][Ee][Rr]|[Cc][Ll][Ii][Ee][Nn][Tt])[_-]?[Ss][Ss][Nn](?![A-Za-z0-9_])[\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[:=][\\u0009-\\u000D \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*[\"']?[0-9]{3}-[0-9]{2}-[0-9]{4}(?![A-Za-z0-9_])", ignoreCase: false),
@@ -19,7 +19,7 @@ extension CanonicalSecretRule {
         CanonicalSecretRule(id: "neondiff-live-license", source: "(?<![A-Za-z0-9_])[Nn][Dd]_[Ll][Ii][Vv][Ee]_[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_])", ignoreCase: false),
         CanonicalSecretRule(id: "neondiff-hyphen-license", source: "(?<![A-Za-z0-9_./-])(?:[Nn][Ee][Oo][Nn][Dd][Ii][Ff][Ff]|[Nn][Dd][Ll]|[Ll][Ii][Cc])-(?=[A-Za-z0-9_-]*[A-Z0-9])[A-Za-z0-9][A-Za-z0-9_-]{11,}(?![A-Za-z0-9_])", ignoreCase: false),
         CanonicalSecretRule(id: "hyphenated-named-credential", source: "(?<![A-Za-z0-9_])[A-Za-z0-9]{3,}[-_](?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Oo][Oo][Kk][Ii][Ee])[-_][A-Za-z0-9_-]{3,}(?![A-Za-z0-9_])", ignoreCase: false),
-        CanonicalSecretRule(id: "email-address", source: "(?<![A-Za-z0-9_])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(?![A-Za-z0-9_])", ignoreCase: false),
+        CanonicalSecretRule(id: "email-address", source: "(?<![A-Za-z0-9_])[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(?![A-Za-z0-9_])", ignoreCase: false),
         CanonicalSecretRule(id: "complete-private-key", source: "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\u0000-\\uFFFF]*?-----END [A-Z ]*PRIVATE KEY-----", ignoreCase: false),
         CanonicalSecretRule(id: "truncated-private-key", source: "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\u0000-\\uFFFF]*", ignoreCase: false),
     ]

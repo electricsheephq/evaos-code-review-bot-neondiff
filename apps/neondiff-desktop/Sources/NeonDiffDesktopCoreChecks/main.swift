@@ -1890,6 +1890,55 @@ check(
     "node budget failure remains fixed and redacted"
 )
 
+var deepSensitiveKeyDiagnostic: Any = ["api" + "Key": "[REDACTED]"]
+for _ in 0..<31 {
+    deepSensitiveKeyDiagnostic = ["nested": deepSensitiveKeyDiagnostic]
+}
+check(
+    ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(deepSensitiveKeyDiagnostic),
+    "sensitive key names are detected at the bounded depth limit"
+)
+
+var benignDepthLimitDiagnostic: Any = "bounded-safe-diagnostic"
+for _ in 0..<31 {
+    benignDepthLimitDiagnostic = ["nested": benignDepthLimitDiagnostic]
+}
+check(
+    !ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(benignDepthLimitDiagnostic),
+    "benign output is accepted at the bounded depth limit"
+)
+benignDepthLimitDiagnostic = ["nested": benignDepthLimitDiagnostic]
+benignDepthLimitDiagnostic = ["nested": benignDepthLimitDiagnostic]
+check(
+    ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(benignDepthLimitDiagnostic),
+    "benign output beyond the depth limit fails closed"
+)
+
+var wideSensitiveKeyDiagnostic: [String: Any] = [:]
+for index in 0..<4_090 {
+    wideSensitiveKeyDiagnostic["field-\(index)"] = "safe"
+}
+wideSensitiveKeyDiagnostic["access" + "Token"] = "[REDACTED]"
+check(
+    ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(wideSensitiveKeyDiagnostic),
+    "wide output containing a sensitive key fails closed within the node budget"
+)
+
+let benignWideDiagnostic = Dictionary(
+    uniqueKeysWithValues: (0..<128).map { ("field-\($0)", "safe") }
+)
+check(
+    !ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(benignWideDiagnostic),
+    "benign wide output below the node limit remains accepted"
+)
+let overLimitBenignWideDiagnostic = Dictionary(
+    uniqueKeysWithValues: (0..<4_200).map { ("field-\($0)", "safe") }
+)
+check(
+    ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(overLimitBenignWideDiagnostic),
+    "benign wide output beyond the node limit fails closed"
+)
+
 let whitespaceOnlySecretStore = InMemoryProviderSecretStore()
 try whitespaceOnlySecretStore.setSecret(" \t\r\n ", account: providerSecretAccount)
 let whitespaceOnlySecretService = ProviderVerificationService(

@@ -33,7 +33,7 @@ export const canonicalSecretRules: readonly CanonicalSecretRule[] = [
   },
   {
     "id": "slack-token",
-    "source": "(?<![A-Za-z0-9_])[Xx][Oo][Xx][baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9_])",
+    "source": "(?<![A-Za-z0-9_])[Xx][Oo][Xx][BAPRSbaprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9_])",
     "ignoreCase": false
   },
   {
@@ -83,7 +83,7 @@ export const canonicalSecretRules: readonly CanonicalSecretRule[] = [
   },
   {
     "id": "email-address",
-    "source": "(?<![A-Za-z0-9_])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(?![A-Za-z0-9_])",
+    "source": "(?<![A-Za-z0-9_])[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(?![A-Za-z0-9_])",
     "ignoreCase": false
   },
   {
