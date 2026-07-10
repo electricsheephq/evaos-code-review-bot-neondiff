@@ -1373,6 +1373,53 @@ for (index, envelope) in escapedSecretEnvelopes.enumerated() {
     )
 }
 
+let encodedSecretLiteralData = try JSONSerialization.data(
+    withJSONObject: escapedOperationalSecret,
+    options: [.fragmentsAllowed]
+)
+let encodedSecretLiteral = checkedValue(
+    String(data: encodedSecretLiteralData, encoding: .utf8),
+    "normalized provider secret serializes as a JSON string"
+)
+let encodedSecretStderrData = try JSONSerialization.data(
+    withJSONObject: ["diagnostic": ["nested": escapedOperationalSecret]],
+    options: [.sortedKeys]
+)
+let encodedSecretStderr = checkedValue(
+    String(data: encodedSecretStderrData, encoding: .utf8),
+    "nested provider stderr serializes as UTF-8"
+)
+let alternateEscapedSecretLiteral = encodedSecretLiteral
+    .replacingOccurrences(of: "\\n", with: "\\u000a")
+    .replacingOccurrences(of: "雪", with: "\\u96ea")
+let escapedSecretStderrCases = [
+    encodedSecretStderr,
+    "provider diagnostic payload: \(encodedSecretLiteral)",
+    "provider diagnostic payload: \(alternateEscapedSecretLiteral)"
+]
+check(
+    escapedSecretStderrCases.allSatisfy { !$0.contains(escapedOperationalSecret) },
+    "JSON escaping hides the normalized secret from raw stderr substring checks"
+)
+for (index, stderrText) in escapedSecretStderrCases.enumerated() {
+    escapedSecretCLI.result = CLIRunResult(
+        exitCode: 0,
+        stdout: healthyProviderVerificationJSON,
+        stderr: stderrText
+    )
+    let failure = captureProviderVerificationFailure("escaped normalized secret stderr \(index)") {
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(
+        !failure.localizedDescription.contains(escapedOperationalSecret),
+        "escaped stderr rejection errors retain no normalized secret"
+    )
+}
+
 let whitespaceOnlySecretStore = InMemoryProviderSecretStore()
 try whitespaceOnlySecretStore.setSecret(" \t\r\n ", account: providerSecretAccount)
 let whitespaceOnlySecretService = ProviderVerificationService(

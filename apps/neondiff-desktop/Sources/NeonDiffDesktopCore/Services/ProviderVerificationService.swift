@@ -71,6 +71,30 @@ public enum ProviderVerificationError: Error, LocalizedError {
 }
 
 public enum ProviderVerificationParser {
+    static func serializedTextContainsForbiddenValue(
+        _ text: String,
+        forbiddenValue: String
+    ) -> Bool {
+        if text.isEmpty { return false }
+        if text.contains(forbiddenValue) { return true }
+        if let decoded = try? JSONSerialization.jsonObject(
+            with: Data(text.utf8),
+            options: [.fragmentsAllowed]
+        ) {
+            return containsDecodedString(decoded, forbiddenValue: forbiddenValue)
+        }
+        var looselyDecoded = text
+        for _ in 0..<3 {
+            let next = looselyDecodeJSONEscapes(looselyDecoded)
+            if next.contains(forbiddenValue) { return true }
+            if next == looselyDecoded { break }
+            looselyDecoded = next
+        }
+        return escapedJSONBodies(forbiddenValue).contains { escapedBody in
+            !escapedBody.isEmpty && text.contains(escapedBody)
+        }
+    }
+
     public static func parse(
         result: CLIRunResult,
         forbiddenValue: String? = nil
@@ -198,6 +222,141 @@ public enum ProviderVerificationParser {
         }
         return false
     }
+
+    private static func escapedJSONBodies(_ value: String) -> Set<String> {
+        var bodies: Set<String> = []
+        if let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
+           let literal = String(data: data, encoding: .utf8),
+           literal.count >= 2
+        {
+            bodies.insert(String(literal.dropFirst().dropLast()))
+        }
+        for escapeNonASCII in [false, true] {
+            for uppercaseHex in [false, true] {
+                for escapeSlash in [false, true] {
+                    bodies.insert(jsonEscapedBody(
+                        value,
+                        escapeNonASCII: escapeNonASCII,
+                        uppercaseHex: uppercaseHex,
+                        escapeSlash: escapeSlash
+                    ))
+                }
+            }
+        }
+        return bodies
+    }
+
+    private static func jsonEscapedBody(
+        _ value: String,
+        escapeNonASCII: Bool,
+        uppercaseHex: Bool,
+        escapeSlash: Bool
+    ) -> String {
+        var escaped = ""
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
+            case 0x08: escaped += "\\b"
+            case 0x09: escaped += "\\t"
+            case 0x0A: escaped += "\\n"
+            case 0x0C: escaped += "\\f"
+            case 0x0D: escaped += "\\r"
+            case 0x22: escaped += "\\\""
+            case 0x2F where escapeSlash: escaped += "\\/"
+            case 0x5C: escaped += "\\\\"
+            case 0x00...0x1F:
+                escaped += unicodeEscape(scalar.value, uppercaseHex: uppercaseHex)
+            case 0x80... where escapeNonASCII:
+                if scalar.value <= 0xFFFF {
+                    escaped += unicodeEscape(scalar.value, uppercaseHex: uppercaseHex)
+                } else {
+                    let supplementary = scalar.value - 0x10000
+                    let high = 0xD800 + (supplementary >> 10)
+                    let low = 0xDC00 + (supplementary & 0x3FF)
+                    escaped += unicodeEscape(high, uppercaseHex: uppercaseHex)
+                    escaped += unicodeEscape(low, uppercaseHex: uppercaseHex)
+                }
+            default:
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return escaped
+    }
+
+    private static func unicodeEscape(_ value: UInt32, uppercaseHex: Bool) -> String {
+        let format = uppercaseHex ? "\\u%04X" : "\\u%04x"
+        return String(format: format, value)
+    }
+
+    private static func looselyDecodeJSONEscapes(_ value: String) -> String {
+        let scalars = Array(value.unicodeScalars)
+        var output = ""
+        var index = 0
+        while index < scalars.count {
+            guard scalars[index].value == 0x5C, index + 1 < scalars.count else {
+                output.unicodeScalars.append(scalars[index])
+                index += 1
+                continue
+            }
+
+            let escaped = scalars[index + 1].value
+            let mapped: UInt32?
+            switch escaped {
+            case 0x22, 0x2F, 0x5C: mapped = escaped
+            case 0x62: mapped = 0x08
+            case 0x66: mapped = 0x0C
+            case 0x6E: mapped = 0x0A
+            case 0x72: mapped = 0x0D
+            case 0x74: mapped = 0x09
+            default: mapped = nil
+            }
+            if let mapped, let scalar = Unicode.Scalar(mapped) {
+                output.unicodeScalars.append(scalar)
+                index += 2
+                continue
+            }
+
+            if escaped == 0x75, let first = jsonHexValue(scalars, start: index + 2) {
+                if (0xD800...0xDBFF).contains(first),
+                   index + 11 < scalars.count,
+                   scalars[index + 6].value == 0x5C,
+                   scalars[index + 7].value == 0x75,
+                   let second = jsonHexValue(scalars, start: index + 8),
+                   (0xDC00...0xDFFF).contains(second)
+                {
+                    let codePoint = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
+                    if let scalar = Unicode.Scalar(codePoint) {
+                        output.unicodeScalars.append(scalar)
+                        index += 12
+                        continue
+                    }
+                } else if let scalar = Unicode.Scalar(first) {
+                    output.unicodeScalars.append(scalar)
+                    index += 6
+                    continue
+                }
+            }
+
+            output.unicodeScalars.append(scalars[index])
+            index += 1
+        }
+        return output
+    }
+
+    private static func jsonHexValue(_ scalars: [Unicode.Scalar], start: Int) -> UInt32? {
+        guard start + 3 < scalars.count else { return nil }
+        var value: UInt32 = 0
+        for scalar in scalars[start..<(start + 4)] {
+            let digit: UInt32
+            switch scalar.value {
+            case 0x30...0x39: digit = scalar.value - 0x30
+            case 0x41...0x46: digit = scalar.value - 0x41 + 10
+            case 0x61...0x66: digit = scalar.value - 0x61 + 10
+            default: return nil
+            }
+            value = (value << 4) | digit
+        }
+        return value
+    }
 }
 
 public final class ProviderVerificationService {
@@ -243,7 +402,16 @@ public final class ProviderVerificationService {
             standardInput: secretData,
             timeout: timeout
         )
-        guard !result.stdout.contains(secret), !result.stderr.contains(secret) else {
+        guard
+            !ProviderVerificationParser.serializedTextContainsForbiddenValue(
+                result.stdout,
+                forbiddenValue: secret
+            ),
+            !ProviderVerificationParser.serializedTextContainsForbiddenValue(
+                result.stderr,
+                forbiddenValue: secret
+            )
+        else {
             throw ProviderVerificationError.secretInProcessOutput
         }
         return try ProviderVerificationParser.parse(result: result, forbiddenValue: secret)
