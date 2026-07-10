@@ -1,8 +1,8 @@
 # NeonDiff Desktop GA UX Evaluation And Modernization
 
-Status: proposed execution contract  
-Tracker: [#514](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/514)  
-Milestone: [v1.1 — Real Mac Desktop Launch](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/milestone/11)
+- Status: proposed execution contract
+- Tracker: [#514](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/514)
+- Milestone: [v1.1 — Real Mac Desktop Launch](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/milestone/11)
 
 ## Goal
 
