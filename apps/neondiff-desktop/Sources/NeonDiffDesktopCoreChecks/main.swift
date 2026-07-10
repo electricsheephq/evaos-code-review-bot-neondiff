@@ -1,5 +1,5 @@
 import Foundation
-import NeonDiffDesktopCore
+@_spi(Testing) import NeonDiffDesktopCore
 import Darwin
 
 @discardableResult
@@ -209,6 +209,100 @@ if stalledInputChildWasRunning {
     _ = kill(stalledInputPID, SIGKILL)
 }
 check(!stalledInputChildWasRunning, "timed-out stdin child is terminated and reaped")
+
+let saturatedInputMarker = tempRoot.appendingPathComponent("saturated-input-child.pids")
+let saturatedInputCLI = tempRoot.appendingPathComponent("saturated-input-cli")
+try """
+#!/usr/bin/env bash
+(
+  trap '' TERM
+  while :; do :; done
+) &
+holder=$!
+printf '%s %s\\n' "$$" "$holder" > \(saturatedInputMarker.path)
+trap '' TERM
+while :; do :; done
+""".write(to: saturatedInputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: saturatedInputCLI.path)
+
+let saturatedInputPipe = Pipe()
+let saturatedWriteFD = saturatedInputPipe.fileHandleForWriting.fileDescriptor
+let saturatedReadFD = saturatedInputPipe.fileHandleForReading.fileDescriptor
+let saturatedInspectionReadFD = dup(saturatedReadFD)
+check(saturatedInspectionReadFD >= 0, "saturated stdin fixture duplicates its inspection reader")
+let saturatedWriteFlags = fcntl(saturatedWriteFD, F_GETFL)
+check(saturatedWriteFlags >= 0, "saturated stdin fixture reads pipe flags")
+check(fcntl(saturatedWriteFD, F_SETFL, saturatedWriteFlags | O_NONBLOCK) == 0, "saturated stdin fixture enables nonblocking fill")
+let saturatedSentinel = [UInt8](repeating: 0xA5, count: 4 * 1024)
+var saturatedBytes = 0
+while true {
+    let written = saturatedSentinel.withUnsafeBytes { bytes in
+        Darwin.write(saturatedWriteFD, bytes.baseAddress, bytes.count)
+    }
+    if written > 0 {
+        saturatedBytes += written
+        continue
+    }
+    if written == -1 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+        break
+    }
+    check(false, "saturated stdin fixture fills the pipe to EAGAIN")
+}
+check(saturatedBytes > 0, "saturated stdin fixture preloads the pipe")
+check(fcntl(saturatedWriteFD, F_SETFL, saturatedWriteFlags) == 0, "saturated stdin fixture restores blocking writes")
+
+let saturatedInputClient = NeonDiffCLIClient(
+    executablePath: saturatedInputCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { saturatedInputPipe }
+)
+let saturatedInputStartedAt = Date()
+var saturatedInputTimedOut = false
+do {
+    _ = try saturatedInputClient.run(
+        arguments: [],
+        standardInput: Data(repeating: 0x78, count: 64 * 1024),
+        timeout: 0.5
+    )
+} catch NeonDiffCLIError.timedOut {
+    saturatedInputTimedOut = true
+} catch {
+    fputs("check failed: saturated stdin returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+let saturatedInputElapsed = Date().timeIntervalSince(saturatedInputStartedAt)
+let saturatedInputPIDs = try String(contentsOf: saturatedInputMarker, encoding: .utf8)
+    .split(whereSeparator: \.isWhitespace)
+    .compactMap { Int32($0) }
+check(saturatedInputPIDs.count == 2, "saturated stdin fixture records child and inherited-reader pids")
+let saturatedInputHolderPID = saturatedInputPIDs[1]
+_ = kill(saturatedInputHolderPID, SIGKILL)
+
+let saturatedReadFlags = fcntl(saturatedInspectionReadFD, F_GETFL)
+check(saturatedReadFlags >= 0, "saturated stdin fixture reads drain flags")
+check(fcntl(saturatedInspectionReadFD, F_SETFL, saturatedReadFlags | O_NONBLOCK) == 0, "saturated stdin fixture enables nonblocking drain")
+var postReturnInputBytes = 0
+var drainBuffer = [UInt8](repeating: 0, count: 4 * 1024)
+let saturatedDrainDeadline = Date().addingTimeInterval(1)
+while Date() < saturatedDrainDeadline {
+    let count = drainBuffer.withUnsafeMutableBytes { bytes in
+        Darwin.read(saturatedInspectionReadFD, bytes.baseAddress, bytes.count)
+    }
+    if count > 0 {
+        postReturnInputBytes += drainBuffer.prefix(count).filter { $0 == 0x78 }.count
+        continue
+    }
+    if count == 0 { break }
+    if errno == EAGAIN || errno == EWOULDBLOCK {
+        usleep(10_000)
+        continue
+    }
+    check(false, "saturated stdin fixture drains without read errors")
+}
+_ = Darwin.close(saturatedInspectionReadFD)
+check(saturatedInputTimedOut, "a saturated stdin pipe shares the process timeout")
+check(saturatedInputElapsed < 1.25, "stdin writer lifetime is bounded before run returns")
+check(postReturnInputBytes == 0, "no stdin writer resumes after run returns")
 
 final class GitHubFixtureURLProtocol: URLProtocol {
     static var requests: [URLRequest] = []

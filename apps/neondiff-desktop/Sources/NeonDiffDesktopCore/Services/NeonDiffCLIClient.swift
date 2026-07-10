@@ -56,10 +56,22 @@ public extension NeonDiffCLIClienting {
 public final class NeonDiffCLIClient: NeonDiffCLIClienting {
     private let executablePath: String
     private let workingDirectory: URL?
+    private let standardInputPipeFactory: () -> Pipe
 
     public init(executablePath: String, workingDirectory: URL? = nil) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
+        self.standardInputPipeFactory = { Pipe() }
+    }
+
+    @_spi(Testing) public init(
+        executablePath: String,
+        workingDirectory: URL? = nil,
+        standardInputPipeFactory: @escaping () -> Pipe
+    ) {
+        self.executablePath = executablePath
+        self.workingDirectory = workingDirectory
+        self.standardInputPipeFactory = standardInputPipeFactory
     }
 
     public func run(
@@ -88,10 +100,23 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
 
         let stdout = Pipe()
         let stderr = Pipe()
-        let stdin = standardInput.map { _ in Pipe() }
+        let stdin = standardInput.map { _ in standardInputPipeFactory() }
         process.standardOutput = stdout
         process.standardError = stderr
         process.standardInput = stdin
+
+        let stdinWriteHandle = stdin?.fileHandleForWriting
+        if let stdinWriteHandle {
+            let descriptor = stdinWriteHandle.fileDescriptor
+            let flags = fcntl(descriptor, F_GETFL)
+            guard flags >= 0,
+                  fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0,
+                  fcntl(descriptor, F_SETNOSIGPIPE, 1) == 0
+            else {
+                try? stdinWriteHandle.close()
+                throw NeonDiffCLIError.launchFailed("Failed to configure bounded NeonDiff CLI standard input")
+            }
+        }
 
         let outputLock = NSLock()
         var stdoutData = Data()
@@ -113,11 +138,8 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
 
         let stateChanged = DispatchSemaphore(value: 0)
         let terminationObserved = DispatchSemaphore(value: 0)
-        let inputWriterDone = DispatchSemaphore(value: 0)
         let stateLock = NSLock()
         var processFinished = false
-        var inputWriterFinished = standardInput == nil
-        var inputWriteFailed = false
         process.terminationHandler = { _ in
             stateLock.lock()
             processFinished = true
@@ -135,64 +157,94 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(error.localizedDescription)")
         }
 
-        if let standardInput, let stdin {
-            DispatchQueue.global(qos: .userInitiated).async {
-                var failed = false
-                do {
-                    try stdin.fileHandleForWriting.write(contentsOf: standardInput)
-                    try stdin.fileHandleForWriting.close()
-                } catch {
-                    failed = true
-                    try? stdin.fileHandleForWriting.close()
-                }
-                stateLock.lock()
-                inputWriteFailed = failed
-                inputWriterFinished = true
-                stateLock.unlock()
-                inputWriterDone.signal()
-                stateChanged.signal()
-            }
+        var inputOffset = 0
+        var inputClosed = standardInput == nil
+
+        func closeStandardInput() {
+            guard !inputClosed, let stdinWriteHandle else { return }
+            inputClosed = true
+            try? stdinWriteHandle.close()
+        }
+
+        if standardInput?.isEmpty == true {
+            closeStandardInput()
         }
 
         while true {
             stateLock.lock()
             let processFinishedSnapshot = processFinished
-            let inputWriterFinishedSnapshot = inputWriterFinished
-            let inputWriteFailedSnapshot = inputWriteFailed
             stateLock.unlock()
 
-            if inputWriteFailedSnapshot {
+            if processFinishedSnapshot && inputClosed {
+                break
+            }
+            if processFinishedSnapshot {
+                closeStandardInput()
                 stdout.fileHandleForReading.readabilityHandler = nil
                 stderr.fileHandleForReading.readabilityHandler = nil
                 terminateAndReap(process, terminationObserved: terminationObserved)
                 throw NeonDiffCLIError.launchFailed("Failed to send bounded standard input to the NeonDiff CLI")
             }
-            if processFinishedSnapshot && inputWriterFinishedSnapshot {
-                break
+
+            if !inputClosed, let standardInput, let stdinWriteHandle {
+                let remainingCount = standardInput.count - inputOffset
+                let written = standardInput.withUnsafeBytes { bytes -> Int in
+                    guard let baseAddress = bytes.baseAddress else { return 0 }
+                    return Darwin.write(
+                        stdinWriteHandle.fileDescriptor,
+                        baseAddress.advanced(by: inputOffset),
+                        remainingCount
+                    )
+                }
+                if written > 0 {
+                    inputOffset += written
+                    if inputOffset == standardInput.count {
+                        closeStandardInput()
+                    }
+                    continue
+                }
+                if written == -1 && errno == EINTR {
+                    continue
+                }
+                if written != -1 || (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    closeStandardInput()
+                    stdout.fileHandleForReading.readabilityHandler = nil
+                    stderr.fileHandleForReading.readabilityHandler = nil
+                    terminateAndReap(process, terminationObserved: terminationObserved)
+                    throw NeonDiffCLIError.launchFailed("Failed to send bounded standard input to the NeonDiff CLI")
+                }
             }
-            if stateChanged.wait(timeout: deadline) == .timedOut {
+
+            let now = DispatchTime.now()
+            if now >= deadline {
+                closeStandardInput()
                 stdout.fileHandleForReading.readabilityHandler = nil
                 stderr.fileHandleForReading.readabilityHandler = nil
                 terminateAndReap(process, terminationObserved: terminationObserved)
-                try? stdin?.fileHandleForWriting.close()
-                if standardInput != nil {
-                    _ = inputWriterDone.wait(timeout: .now() + 1)
-                }
                 try? stdout.fileHandleForReading.close()
                 try? stderr.fileHandleForReading.close()
                 throw NeonDiffCLIError.timedOut
             }
-        }
 
-        if standardInput != nil {
-            _ = inputWriterDone.wait(timeout: .now())
-        }
-
-        if process.isRunning {
-            terminateAndReap(process, terminationObserved: terminationObserved)
-            stdout.fileHandleForReading.readabilityHandler = nil
-            stderr.fileHandleForReading.readabilityHandler = nil
-            throw NeonDiffCLIError.timedOut
+            if inputClosed {
+                _ = stateChanged.wait(timeout: deadline)
+            } else if let stdinWriteHandle {
+                let remainingNanoseconds = deadline.uptimeNanoseconds - now.uptimeNanoseconds
+                let remainingMilliseconds = max(1, Int((remainingNanoseconds + 999_999) / 1_000_000))
+                var writable = pollfd(
+                    fd: stdinWriteHandle.fileDescriptor,
+                    events: Int16(POLLOUT),
+                    revents: 0
+                )
+                let pollResult = Darwin.poll(&writable, 1, Int32(min(remainingMilliseconds, 10)))
+                if pollResult == -1 && errno != EINTR {
+                    closeStandardInput()
+                    stdout.fileHandleForReading.readabilityHandler = nil
+                    stderr.fileHandleForReading.readabilityHandler = nil
+                    terminateAndReap(process, terminationObserved: terminationObserved)
+                    throw NeonDiffCLIError.launchFailed("Failed while waiting to send bounded standard input to the NeonDiff CLI")
+                }
+            }
         }
 
         stdout.fileHandleForReading.readabilityHandler = nil
