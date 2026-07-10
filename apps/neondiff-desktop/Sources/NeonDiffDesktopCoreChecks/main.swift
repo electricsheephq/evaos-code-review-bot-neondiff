@@ -304,6 +304,146 @@ check(saturatedInputTimedOut, "a saturated stdin pipe shares the process timeout
 check(saturatedInputElapsed < 1.25, "stdin writer lifetime is bounded before run returns")
 check(postReturnInputBytes == 0, "no stdin writer resumes after run returns")
 
+var cleanupTerminateCalls = 0
+var cleanupKillCalls = 0
+var cleanupWaitCalls = 0
+var cleanupFailedBoundedly = false
+do {
+    try NeonDiffProcessCleanup.terminateAndReap(
+        isRunning: { true },
+        terminate: { cleanupTerminateCalls += 1 },
+        kill: { cleanupKillCalls += 1 },
+        waitForTermination: { _ in
+            cleanupWaitCalls += 1
+            return .timedOut
+        }
+    )
+} catch NeonDiffCLIError.cleanupTimedOut {
+    cleanupFailedBoundedly = true
+} catch {
+    fputs("check failed: bounded cleanup returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(cleanupFailedBoundedly, "unobserved process cleanup returns an explicit bounded error")
+check(cleanupTerminateCalls == 1, "bounded process cleanup sends TERM once")
+check(cleanupKillCalls == 1, "bounded process cleanup escalates to SIGKILL once")
+check(cleanupWaitCalls == 2, "bounded process cleanup performs only its two bounded waits")
+
+let injectedClockBase = DispatchTime.now().uptimeNanoseconds
+var launchDeadlineClockCalls = 0
+var launchDeadlineWriteCalls = 0
+let launchDeadlineClient = NeonDiffCLIClient(
+    executablePath: stalledInputCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { Pipe() },
+    monotonicNow: {
+        launchDeadlineClockCalls += 1
+        return DispatchTime(
+            uptimeNanoseconds: injectedClockBase + (launchDeadlineClockCalls == 1 ? 0 : 2_000_000_000)
+        )
+    },
+    standardInputWriter: { _, _, _ in
+        launchDeadlineWriteCalls += 1
+        return 0
+    }
+)
+var launchDeadlineTimedOut = false
+do {
+    _ = try launchDeadlineClient.run(
+        arguments: [],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 1
+    )
+} catch NeonDiffCLIError.timedOut {
+    launchDeadlineTimedOut = true
+} catch {
+    fputs("check failed: post-launch deadline returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(launchDeadlineTimedOut, "launch completing after the deadline returns timedOut")
+check(launchDeadlineWriteCalls == 0, "launch completing after the deadline writes zero secret bytes")
+
+var interruptedWriteClockCalls = 0
+var interruptedWriteCalls = 0
+let interruptedWriteClient = NeonDiffCLIClient(
+    executablePath: stalledInputCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { Pipe() },
+    monotonicNow: {
+        interruptedWriteClockCalls += 1
+        let offset: UInt64 = interruptedWriteClockCalls <= 3 ? 100_000_000 : 2_000_000_000
+        return DispatchTime(uptimeNanoseconds: injectedClockBase + offset)
+    },
+    standardInputWriter: { _, _, _ in
+        interruptedWriteCalls += 1
+        errno = EINTR
+        return -1
+    }
+)
+var interruptedWriteTimedOut = false
+do {
+    _ = try interruptedWriteClient.run(
+        arguments: [],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 1
+    )
+} catch NeonDiffCLIError.timedOut {
+    interruptedWriteTimedOut = true
+} catch {
+    fputs("check failed: interrupted stdin deadline returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(interruptedWriteTimedOut, "EINTR retry observes the original absolute deadline")
+check(interruptedWriteCalls == 1, "deadline is rechecked before retrying an interrupted secret write")
+
+let closedInputMarker = tempRoot.appendingPathComponent("closed-input-child.pid")
+let closedInputCLI = tempRoot.appendingPathComponent("closed-input-cli")
+try """
+#!/usr/bin/env bash
+exec 0<&-
+printf '%s\\n' "$$" > \(closedInputMarker.path)
+trap '' TERM
+while :; do :; done
+""".write(to: closedInputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: closedInputCLI.path)
+var closedInputClockCalls = 0
+let closedInputClient = NeonDiffCLIClient(
+    executablePath: closedInputCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { Pipe() },
+    monotonicNow: {
+        closedInputClockCalls += 1
+        if closedInputClockCalls > 1 {
+            let markerDeadline = Date().addingTimeInterval(1)
+            while !FileManager.default.fileExists(atPath: closedInputMarker.path), Date() < markerDeadline {
+                usleep(1_000)
+            }
+        }
+        return DispatchTime.now()
+    }
+)
+var closedInputFailedSafely = false
+do {
+    _ = try closedInputClient.run(
+        arguments: [],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 2
+    )
+} catch NeonDiffCLIError.launchFailed(let message) {
+    closedInputFailedSafely = true
+    check(!message.contains("fixture-provider-value"), "EPIPE failure never echoes submitted stdin")
+} catch {
+    fputs("check failed: closed stdin returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(closedInputFailedSafely, "child-closes-stdin EPIPE is handled without SIGPIPE termination")
+let closedInputPIDText = try String(contentsOf: closedInputMarker, encoding: .utf8)
+let closedInputPID = checkedValue(
+    Int32(closedInputPIDText.trimmingCharacters(in: .whitespacesAndNewlines)),
+    "closed stdin child records its process id"
+)
+check(kill(closedInputPID, 0) != 0 && errno == ESRCH, "EPIPE cleanup terminates and reaps the child")
+
 final class GitHubFixtureURLProtocol: URLProtocol {
     static var requests: [URLRequest] = []
     static var requestBodies: [String] = []

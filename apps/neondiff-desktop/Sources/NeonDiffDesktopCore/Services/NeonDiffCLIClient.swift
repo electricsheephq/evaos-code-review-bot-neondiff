@@ -30,12 +30,14 @@ public struct CLILaunchResult: Equatable {
 
 public enum NeonDiffCLIError: Error, LocalizedError {
     case timedOut
+    case cleanupTimedOut
     case launchFailed(String)
     case standardInputTooLarge(maxBytes: Int)
 
     public var errorDescription: String? {
         switch self {
         case .timedOut: "NeonDiff CLI command timed out"
+        case .cleanupTimedOut: "NeonDiff CLI process cleanup did not complete within the bounded termination window"
         case .launchFailed(let message): message
         case .standardInputTooLarge(let maxBytes): "NeonDiff CLI standard input exceeds the \(maxBytes)-byte limit"
         }
@@ -57,21 +59,33 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
     private let executablePath: String
     private let workingDirectory: URL?
     private let standardInputPipeFactory: () -> Pipe
+    private let monotonicNow: () -> DispatchTime
+    private let standardInputWriter: (Int32, UnsafeRawPointer?, Int) -> Int
 
     public init(executablePath: String, workingDirectory: URL? = nil) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
         self.standardInputPipeFactory = { Pipe() }
+        self.monotonicNow = { DispatchTime.now() }
+        self.standardInputWriter = { descriptor, buffer, count in
+            Darwin.write(descriptor, buffer, count)
+        }
     }
 
     @_spi(Testing) public init(
         executablePath: String,
         workingDirectory: URL? = nil,
-        standardInputPipeFactory: @escaping () -> Pipe
+        standardInputPipeFactory: @escaping () -> Pipe,
+        monotonicNow: @escaping () -> DispatchTime = { DispatchTime.now() },
+        standardInputWriter: @escaping (Int32, UnsafeRawPointer?, Int) -> Int = { descriptor, buffer, count in
+            Darwin.write(descriptor, buffer, count)
+        }
     ) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
         self.standardInputPipeFactory = standardInputPipeFactory
+        self.monotonicNow = monotonicNow
+        self.standardInputWriter = standardInputWriter
     }
 
     public func run(
@@ -79,7 +93,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         standardInput: Data?,
         timeout: TimeInterval = 15
     ) throws -> CLIRunResult {
-        let deadline = DispatchTime.now() + max(timeout, 0)
+        let deadline = monotonicNow() + max(timeout, 0)
         let maximumStandardInputBytes = 64 * 1024
         if let standardInput, standardInput.count > maximumStandardInputBytes {
             throw NeonDiffCLIError.standardInputTooLarge(maxBytes: maximumStandardInputBytes)
@@ -166,11 +180,27 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             try? stdinWriteHandle.close()
         }
 
+        func failAtDeadline() throws -> Never {
+            closeStandardInput()
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
+            defer {
+                try? stdout.fileHandleForReading.close()
+                try? stderr.fileHandleForReading.close()
+            }
+            try terminateAndReap(process, terminationObserved: terminationObserved)
+            throw NeonDiffCLIError.timedOut
+        }
+
         if standardInput?.isEmpty == true {
             closeStandardInput()
         }
 
         while true {
+            if monotonicNow() >= deadline {
+                try failAtDeadline()
+            }
+
             stateLock.lock()
             let processFinishedSnapshot = processFinished
             stateLock.unlock()
@@ -182,15 +212,18 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
                 closeStandardInput()
                 stdout.fileHandleForReading.readabilityHandler = nil
                 stderr.fileHandleForReading.readabilityHandler = nil
-                terminateAndReap(process, terminationObserved: terminationObserved)
+                try terminateAndReap(process, terminationObserved: terminationObserved)
                 throw NeonDiffCLIError.launchFailed("Failed to send bounded standard input to the NeonDiff CLI")
             }
 
             if !inputClosed, let standardInput, let stdinWriteHandle {
+                if monotonicNow() >= deadline {
+                    try failAtDeadline()
+                }
                 let remainingCount = standardInput.count - inputOffset
                 let written = standardInput.withUnsafeBytes { bytes -> Int in
                     guard let baseAddress = bytes.baseAddress else { return 0 }
-                    return Darwin.write(
+                    return standardInputWriter(
                         stdinWriteHandle.fileDescriptor,
                         baseAddress.advanced(by: inputOffset),
                         remainingCount
@@ -210,26 +243,20 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
                     closeStandardInput()
                     stdout.fileHandleForReading.readabilityHandler = nil
                     stderr.fileHandleForReading.readabilityHandler = nil
-                    terminateAndReap(process, terminationObserved: terminationObserved)
+                    try terminateAndReap(process, terminationObserved: terminationObserved)
                     throw NeonDiffCLIError.launchFailed("Failed to send bounded standard input to the NeonDiff CLI")
                 }
             }
 
-            let now = DispatchTime.now()
-            if now >= deadline {
-                closeStandardInput()
-                stdout.fileHandleForReading.readabilityHandler = nil
-                stderr.fileHandleForReading.readabilityHandler = nil
-                terminateAndReap(process, terminationObserved: terminationObserved)
-                try? stdout.fileHandleForReading.close()
-                try? stderr.fileHandleForReading.close()
-                throw NeonDiffCLIError.timedOut
+            let waitNow = monotonicNow()
+            if waitNow >= deadline {
+                try failAtDeadline()
             }
 
             if inputClosed {
                 _ = stateChanged.wait(timeout: deadline)
             } else if let stdinWriteHandle {
-                let remainingNanoseconds = deadline.uptimeNanoseconds - now.uptimeNanoseconds
+                let remainingNanoseconds = deadline.uptimeNanoseconds - waitNow.uptimeNanoseconds
                 let remainingMilliseconds = max(1, Int((remainingNanoseconds + 999_999) / 1_000_000))
                 var writable = pollfd(
                     fd: stdinWriteHandle.fileDescriptor,
@@ -241,7 +268,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
                     closeStandardInput()
                     stdout.fileHandleForReading.readabilityHandler = nil
                     stderr.fileHandleForReading.readabilityHandler = nil
-                    terminateAndReap(process, terminationObserved: terminationObserved)
+                    try terminateAndReap(process, terminationObserved: terminationObserved)
                     throw NeonDiffCLIError.launchFailed("Failed while waiting to send bounded standard input to the NeonDiff CLI")
                 }
             }
@@ -307,22 +334,35 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
     }
 }
 
-private func terminateAndReap(_ process: Process, terminationObserved: DispatchSemaphore) {
-    if process.isRunning {
-        process.terminate()
-    }
-    if terminationObserved.wait(timeout: .now() + 0.1) == .success {
-        return
-    }
-    if process.isRunning {
-        _ = kill(process.processIdentifier, SIGKILL)
-    }
-    if terminationObserved.wait(timeout: .now() + 1) == .timedOut {
-        if process.isRunning {
-            _ = kill(process.processIdentifier, SIGKILL)
+@_spi(Testing) public enum NeonDiffProcessCleanup {
+    public static func terminateAndReap(
+        isRunning: () -> Bool,
+        terminate: () -> Void,
+        kill: () -> Void,
+        waitForTermination: (DispatchTime) -> DispatchTimeoutResult
+    ) throws {
+        if isRunning() {
+            terminate()
         }
-        process.waitUntilExit()
+        if waitForTermination(.now() + 0.1) == .success {
+            return
+        }
+        if isRunning() {
+            kill()
+        }
+        guard waitForTermination(.now() + 1) == .success else {
+            throw NeonDiffCLIError.cleanupTimedOut
+        }
     }
+}
+
+private func terminateAndReap(_ process: Process, terminationObserved: DispatchSemaphore) throws {
+    try NeonDiffProcessCleanup.terminateAndReap(
+        isRunning: { process.isRunning },
+        terminate: { process.terminate() },
+        kill: { _ = Darwin.kill(process.processIdentifier, SIGKILL) },
+        waitForTermination: { deadline in terminationObserved.wait(timeout: deadline) }
+    )
 }
 
 public enum NeonDiffCLIResolver {
