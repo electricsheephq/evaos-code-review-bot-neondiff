@@ -23,7 +23,11 @@ a pixel-matching requirement.
 - Signed desktop blockers: #116 and #449
 - Child execution issues: #515 through #524
 - Evidence root:
-  `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/<date>/ga-ux/`
+  `<local-evidence-root>/neondiff-v1.1/<date>/ga-ux/`
+
+`<local-evidence-root>` is a contributor-selected, ignored artifact directory.
+CI uploads the matching manifest and public-safe artifacts through the workflow
+rather than depending on a workstation path.
 
 GitHub issues, PRs, checks, releases, and milestone #11 are execution truth.
 This document defines the product and proof contract; it does not replace the
