@@ -216,6 +216,9 @@ export function patchConfigForDesktop(input: {
     return failedPatch(input, configPath, inputPath, "--expected-revision must be a lowercase SHA-256 value");
   }
 
+  // Read-only previews stay lock-free. Every live write acquires the writer lock;
+  // when an expected revision is supplied, it is re-checked inside that lock
+  // before the atomic rename.
   if (input.dryRun) return patchConfigForDesktopUnlocked(input, configPath, inputPath);
 
   let releaseLock: (() => void) | undefined;
@@ -229,11 +232,13 @@ export function patchConfigForDesktop(input: {
     releaseLock();
   } catch (error) {
     const lockPath = `${configPath}.neondiff.lock`;
-    const outcome = result.ok && result.wrote ? "config write committed" : "config patch completed";
+    const outcome = result.ok
+      ? result.wrote ? "config write committed, but" : "config patch succeeded without a write, but"
+      : "config patch failed, and";
     return {
       ...result,
       warning: redactSecrets(
-        `${outcome}, but failed to release owned lock ${lockPath}: `
+        `${outcome} failed to release owned lock ${lockPath}: `
         + `${error instanceof Error ? error.message : String(error)}; `
         + "verify no NeonDiff config patch is running, then remove this lock and retry"
       )

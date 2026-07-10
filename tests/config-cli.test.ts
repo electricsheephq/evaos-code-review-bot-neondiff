@@ -470,6 +470,7 @@ describe("desktop config CLI", () => {
     });
     expect(output.config.pilotRepos).toEqual(["owner/review-repo"]);
     expect(output.config.issueEnrichment.allowlist).toEqual(["owner/issues-repo"]);
+    expect(output.changedPaths).not.toContain("pilotRepos");
 
     const inspected = await runConfig(["config", "inspect", "--config", configPath]);
     expect(inspected.revision).toMatch(/^[a-f0-9]{64}$/);
@@ -701,6 +702,7 @@ describe("desktop config CLI", () => {
     const invalidPatchPath = join(root, "invalid-repo-selector-patch.json");
     writeConfig(configPath, {
       pilotRepos: ["owner/existing"],
+      issueEnrichment: { allowlist: ["owner/issues-only"] },
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
       evidenceDir: join(root, "evidence")
@@ -722,6 +724,8 @@ describe("desktop config CLI", () => {
       changedPaths: ["pilotRepos"]
     });
     expect(output.config.pilotRepos).toEqual(["owner/existing", "owner/next-repo"]);
+    expect(output.config.issueEnrichment.allowlist).toEqual(["owner/issues-only"]);
+    expect(output.changedPaths).not.toContain("issueEnrichment.allowlist");
     expect(readFileSync(configPath, "utf8")).toBe(before);
 
     const rejected = await runConfig(["config", "patch", "--config", configPath, "--input", invalidPatchPath]);
@@ -920,6 +924,27 @@ describe("desktop config CLI", () => {
       warning: expect.stringContaining(lockPath)
     });
     expect(JSON.parse(readFileSync(configPath, "utf8")).desktop.updateChannel).toBe("beta");
+    unlinkSync(lockPath);
+
+    writeConfig(patchPath, {});
+    const failedOutput = patchConfigForDesktop({
+      configPath,
+      inputPath: patchPath,
+      dryRun: false,
+      confirm: true,
+      fileOps: {
+        unlinkSync: (path) => {
+          if (String(path) === lockPath) throw new Error("forced lock cleanup failure");
+          unlinkSync(path);
+        }
+      }
+    });
+    expect(failedOutput).toMatchObject({
+      ok: false,
+      wrote: false,
+      error: "patch input did not contain any leaf settings",
+      warning: expect.stringContaining("config patch failed, and failed to release owned lock")
+    });
     unlinkSync(lockPath);
   });
 
