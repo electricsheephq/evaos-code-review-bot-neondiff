@@ -30,6 +30,17 @@ public struct DesktopEvaluationFixtureCatalog: Equatable, Sendable {
         if let unknown = root.keys.sorted().first(where: { !["schemaVersion", "entries"].contains($0) }) {
             throw DesktopEvaluationFixtureError.unknownField(path: "catalog", field: unknown)
         }
+        guard let rawEntries = root["entries"] as? [Any] else {
+            throw DesktopEvaluationFixtureError.invalidValue("catalog entries")
+        }
+        for (index, value) in rawEntries.enumerated() {
+            guard let entry = value as? [String: Any] else {
+                throw DesktopEvaluationFixtureError.invalidValue("catalog.entries[\(index)]")
+            }
+            if let unknown = entry.keys.sorted().first(where: { !["id", "file"].contains($0) }) {
+                throw DesktopEvaluationFixtureError.unknownField(path: "catalog.entries[\(index)]", field: unknown)
+            }
+        }
         let document: Document
         do {
             document = try JSONDecoder().decode(Document.self, from: data)

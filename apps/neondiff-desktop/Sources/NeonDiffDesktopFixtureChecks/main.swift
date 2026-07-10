@@ -129,6 +129,16 @@ let unsupportedActionFixture = Data(
 )
 expectFixtureFailure("unsupported expected action", data: unsupportedActionFixture)
 
+let unknownContentSizeFieldFixture = Data(
+    String(decoding: validFixture, as: UTF8.self)
+        .replacingOccurrences(
+            of: #""disableAnimations": true"#,
+            with: #""disableAnimations": true, "contentSize": {"width": 1280, "height": 800, "scale": 2}"#
+        )
+        .utf8
+)
+expectFixtureFailure("unknown content-size field", data: unknownContentSizeFieldFixture)
+
 let secretFixture = Data(
     String(decoding: validFixture, as: UTF8.self)
         .replacingOccurrences(of: "Fixture log: no live process was contacted.", with: "sk-fixture-secret-must-never-load")
@@ -206,6 +216,11 @@ let duplicateCatalogURL = temporaryCatalogRoot.appendingPathComponent("duplicate
 try #"{"schemaVersion":1,"entries":[{"id":"providers-verified","file":"providers-verified.json"},{"id":"providers-verified","file":"providers-verified.json"}]}"#
     .write(to: duplicateCatalogURL, atomically: true, encoding: .utf8)
 expectCatalogFailure("duplicate catalog entry", url: duplicateCatalogURL)
+
+let unknownEntryCatalogURL = temporaryCatalogRoot.appendingPathComponent("unknown-entry-catalog.json")
+try #"{"schemaVersion":1,"entries":[{"id":"providers-verified","file":"providers-verified.json","sha256":"unexpected"}]}"#
+    .write(to: unknownEntryCatalogURL, atomically: true, encoding: .utf8)
+expectCatalogFailure("unknown catalog entry field", url: unknownEntryCatalogURL)
 
 let symlinkCatalogRoot = temporaryCatalogRoot.appendingPathComponent("symlink", isDirectory: true)
 try FileManager.default.createDirectory(at: symlinkCatalogRoot, withIntermediateDirectories: true)

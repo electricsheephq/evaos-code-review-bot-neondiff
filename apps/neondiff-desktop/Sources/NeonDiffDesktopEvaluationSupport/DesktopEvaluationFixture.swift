@@ -283,7 +283,11 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
     private static func validateShape(_ root: [String: Any]) throws {
         try requireOnly(root, allowed: ["schemaVersion", "id", "surface", "environment", "state", "scriptedOutcomes", "expectedActions", "safeCopy"], path: "root")
         try requireObject(root["surface"], allowed: ["section", "onboardingStep"], path: "surface")
-        try requireObject(root["environment"], allowed: ["clock", "locale", "appearance", "disableAnimations", "contentSize"], path: "environment")
+        let environment = try object(root["environment"], path: "environment")
+        try requireOnly(environment, allowed: ["clock", "locale", "appearance", "disableAnimations", "contentSize"], path: "environment")
+        if let contentSize = environment["contentSize"], !(contentSize is NSNull) {
+            try requireObject(contentSize, allowed: ["width", "height"], path: "environment.contentSize")
+        }
         let state = try object(root["state"], path: "state")
         try requireOnly(state, allowed: ["health", "runtimeReady", "repositories", "provider", "license", "github", "logText"], path: "state")
         if let repositories = state["repositories"] as? [Any] {

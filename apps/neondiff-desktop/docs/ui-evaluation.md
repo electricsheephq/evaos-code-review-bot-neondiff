@@ -49,7 +49,7 @@ these arguments may be treated as an executable user-interface test path.
 - SSIM, changed-pixel percentage, largest changed-region percentage, and mask
   version per golden;
 - passing secret and release-boundary scans;
-- an explicit proof boundary and typed unresolved P2/P3 findings.
+- an explicit proof boundary and typed unresolved P0-P3 findings.
 
 The manifest allows the same fixture at different canonical sizes but rejects a
 duplicate `(fixture, appearance, size, scale)` case. Test count and capture-case
