@@ -975,8 +975,7 @@ describe("desktop config CLI", () => {
       error: expect.stringContaining(lockPath)
     });
 
-    unlinkSync(lockPath);
-    writeFileSync(lockPath, "", { flag: "wx", mode: 0o600 });
+    writeFileSync(lockPath, "");
     const emptyLockRejected = patchConfigForDesktop({
       configPath,
       inputPath: secondPatchPath,
