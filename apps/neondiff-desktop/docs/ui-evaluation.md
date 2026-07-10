@@ -41,14 +41,21 @@ these arguments may be treated as an executable user-interface test path.
 - repository and exact 40-character source SHA;
 - absolute app artifact path, build identity, and artifact SHA-256;
 - fixture catalog SHA-256;
-- fixture, surface, onboarding step, and canonical content size per case;
+- macOS, Xcode, Swift, architecture, and backing scale;
+- test count, duration, and `.xcresult` SHA-256;
+- fixture, surface, onboarding step, appearance, requested content size, and
+  actual window/content frames per case;
 - screenshot, accessibility-tree, and geometry artifact paths and SHA-256s;
+- SSIM, changed-pixel percentage, largest changed-region percentage, and mask
+  version per golden;
 - passing secret and release-boundary scans;
-- an explicit proof boundary.
+- an explicit proof boundary and typed unresolved P2/P3 findings.
 
-The manifest rejects unknown fields, duplicate fixture cases, malformed hashes,
-non-canonical sizes, unsafe relative evidence paths, failed scans, and empty
-proof boundaries. Canonical packets belong in the dated external evidence
+The manifest allows the same fixture at different canonical sizes but rejects a
+duplicate `(fixture, appearance, size, scale)` case. It rejects unknown fields,
+malformed hashes, non-canonical sizes, unsafe evidence paths, failed scans,
+golden results below the specified thresholds, unresolved P0/P1 findings, and
+empty proof boundaries. Canonical packets belong in the dated external evidence
 directory and CI artifacts; raw screenshots, AX trees, and geometry output do
 not belong in the repository.
 
@@ -62,14 +69,16 @@ npx vitest run tests/desktop-evaluation-boundary.test.ts tests/swift-ci-velocity
 swift build --package-path apps/neondiff-desktop -c release --product NeonDiffDesktop
 release_bin="$(swift build --package-path apps/neondiff-desktop -c release --show-bin-path)"
 npm run check:desktop-fixture-boundary -- "$release_bin/NeonDiffDesktop"
-apps/neondiff-desktop/script/build_and_run.sh build
-npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist/NeonDiffDesktop.app
+NEONDIFF_DESKTOP_DIST_DIR="$PWD/apps/neondiff-desktop/dist-release" \
+  apps/neondiff-desktop/script/build_and_run.sh release-bundle-check
+npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist-release/NeonDiffDesktop.app
 ```
 
 The Swift desktop gate runs the fixture checks whenever evaluation sources or
-catalog files change. It also scans the release executable and staged app
-bundle for UI-test flags, fixture types, and the evaluation marker. Any match
-fails the gate.
+catalog files change. It keeps the normal debug bundle separate, stages an
+explicit release bundle under `dist-release`, and scans only the release
+executable/bundle for UI-test flags, fixture types, and the evaluation marker.
+Any match fails the gate.
 
 ## Remaining #515 Capture Matrix
 

@@ -115,6 +115,20 @@ let unsupportedFixtureVersion = Data(
 )
 expectFixtureFailure("unsupported fixture schema", data: unsupportedFixtureVersion)
 
+let unsupportedHealthFixture = Data(
+    String(decoding: validFixture, as: UTF8.self)
+        .replacingOccurrences(of: #""health": "healthy""#, with: #""health": "healty""#)
+        .utf8
+)
+expectFixtureFailure("unsupported health state", data: unsupportedHealthFixture)
+
+let unsupportedActionFixture = Data(
+    String(decoding: validFixture, as: UTF8.self)
+        .replacingOccurrences(of: "verify-provider", with: "verify-provider-typo")
+        .utf8
+)
+expectFixtureFailure("unsupported expected action", data: unsupportedActionFixture)
+
 let secretFixture = Data(
     String(decoding: validFixture, as: UTF8.self)
         .replacingOccurrences(of: "Fixture log: no live process was contacted.", with: "sk-fixture-secret-must-never-load")
@@ -215,26 +229,58 @@ let validManifest = Data(
         "buildIdentity": "NeonDiffDesktop 1.1.0 fixture candidate"
       },
       "catalogSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "platform": {
+        "macOSVersion": "26.4",
+        "xcodeVersion": "26.0",
+        "swiftVersion": "6.2.4",
+        "architecture": "arm64",
+        "backingScale": 2.0
+      },
+      "testSummary": {
+        "testCount": 2,
+        "durationSeconds": 4.25,
+        "xcresultSHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
       "cases": [
         {
           "fixtureId": "tab-overview",
           "section": "overview",
           "onboardingStep": null,
-          "contentSize": {"width": 1280, "height": 800},
-          "screenshot": {"path": "tab-overview.png", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
-          "accessibility": {"path": "tab-overview.ax.json", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
-          "geometry": {"path": "tab-overview.geometry.json", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+          "appearance": "dark",
+          "requestedContentSize": {"width": 1040, "height": 680},
+          "actualWindowFrame": {"x": 20, "y": 20, "width": 1040, "height": 680},
+          "actualContentFrame": {"x": 0, "y": 0, "width": 1040, "height": 680},
+          "screenshot": {"path": "tab-overview-1040x680.png", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+          "accessibility": {"path": "tab-overview-1040x680.ax.json", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+          "geometry": {"path": "tab-overview-1040x680.geometry.json", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+          "goldenMetrics": {"ssim": 0.999, "changedPixelPercent": 0.1, "largestChangedRegionPercent": 0.05, "maskVersion": "v1"},
+          "expectedState": "healthy"
+        },
+        {
+          "fixtureId": "tab-overview",
+          "section": "overview",
+          "onboardingStep": null,
+          "appearance": "dark",
+          "requestedContentSize": {"width": 1280, "height": 800},
+          "actualWindowFrame": {"x": 20, "y": 20, "width": 1280, "height": 800},
+          "actualContentFrame": {"x": 0, "y": 0, "width": 1280, "height": 800},
+          "screenshot": {"path": "tab-overview-1280x800.png", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+          "accessibility": {"path": "tab-overview-1280x800.ax.json", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+          "geometry": {"path": "tab-overview-1280x800.geometry.json", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+          "goldenMetrics": {"ssim": 0.999, "changedPixelPercent": 0.1, "largestChangedRegionPercent": 0.05, "maskVersion": "v1"},
           "expectedState": "healthy"
         }
       ],
       "scans": {"secretScanPassed": true, "releaseBoundaryPassed": true},
-      "proofBoundary": "Deterministic source-build baseline only; not signed, notarized, or GA proof."
+      "proofBoundary": "Deterministic source-build baseline only; not signed, notarized, or GA proof.",
+      "unresolvedFindings": []
     }
     """#.utf8
 )
 let manifest = try DesktopEvaluationEvidenceManifest.decode(data: validManifest)
 check(manifest.headSHA == "ddbd45066473b833fcc8984dca0716ca9ef81e6d", "manifest pins exact source SHA")
-check(manifest.cases.first?.contentSize == DesktopEvaluationContentSize(width: 1280, height: 800), "manifest pins case geometry")
+check(manifest.cases.count == 2, "manifest permits one fixture at two canonical sizes")
+check(manifest.cases.last?.requestedContentSize == DesktopEvaluationContentSize(width: 1280, height: 800), "manifest pins requested case geometry")
 
 let invalidManifestHash = Data(
     String(decoding: validManifest, as: UTF8.self)
@@ -246,6 +292,30 @@ do {
     check(false, "manifest rejects malformed artifact hashes")
 } catch {
     check(!error.localizedDescription.isEmpty, "manifest hash failure is diagnostic")
+}
+
+let unsafeManifestPath = Data(
+    String(decoding: validManifest, as: UTF8.self)
+        .replacingOccurrences(of: "/Applications/NeonDiffDesktop.app", with: "/Users/example/NeonDiffDesktop.app")
+        .utf8
+)
+do {
+    _ = try DesktopEvaluationEvidenceManifest.decode(data: unsafeManifestPath)
+    check(false, "manifest rejects author-machine artifact paths")
+} catch {
+    check(!error.localizedDescription.isEmpty, "manifest path failure is diagnostic")
+}
+
+let unsafeManifestSecret = Data(
+    String(decoding: validManifest, as: UTF8.self)
+        .replacingOccurrences(of: "Deterministic source-build baseline only", with: "ghp_fixture_secret_material")
+        .utf8
+)
+do {
+    _ = try DesktopEvaluationEvidenceManifest.decode(data: unsafeManifestSecret)
+    check(false, "manifest rejects secret-shaped text")
+} catch {
+    check(!error.localizedDescription.isEmpty, "manifest secret failure is diagnostic")
 }
 
 print("NeonDiffDesktop fixture checks passed")

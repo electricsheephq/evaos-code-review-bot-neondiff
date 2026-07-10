@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const MAX_FILES = 20_000;
 const MAX_FILE_BYTES = 128 * 1024 * 1024;
@@ -18,18 +18,38 @@ const FORBIDDEN_MARKERS = [
 
 function collectFiles(inputPaths) {
   const files = [];
-  const pending = inputPaths.map((path) => resolve(path));
-  while (pending.length > 0) {
-    const path = pending.pop();
+  const pending = inputPaths.map((inputPath) => {
+    const path = resolve(inputPath);
     const stat = lstatSync(path);
-    if (stat.isSymbolicLink()) continue;
+    const root = realpathSync(stat.isDirectory() ? path : dirname(path));
+    return { path, root };
+  });
+  const visitedDirectories = new Set();
+  const visitedFiles = new Set();
+  while (pending.length > 0) {
+    const { path, root } = pending.pop();
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) {
+      const target = realpathSync(path);
+      const targetRelativePath = relative(root, target);
+      if (targetRelativePath === ".." || targetRelativePath.startsWith(`..${sep}`) || isAbsolute(targetRelativePath)) {
+        throw new Error(`symlink escapes artifact root: ${path}`);
+      }
+      pending.push({ path: target, root });
+      continue;
+    }
+    const realPath = realpathSync(path);
     if (stat.isDirectory()) {
-      for (const entry of readdirSync(path)) pending.push(resolve(path, entry));
+      if (visitedDirectories.has(realPath)) continue;
+      visitedDirectories.add(realPath);
+      for (const entry of readdirSync(realPath)) pending.push({ path: resolve(realPath, entry), root });
       continue;
     }
     if (!stat.isFile()) continue;
+    if (visitedFiles.has(realPath)) continue;
+    visitedFiles.add(realPath);
     if (stat.size > MAX_FILE_BYTES) throw new Error(`artifact file exceeds scan bound: ${path}`);
-    files.push({ path, size: stat.size });
+    files.push({ path: realPath, size: stat.size });
     if (files.length > MAX_FILES) throw new Error("artifact file count exceeds scan bound");
   }
   return files.sort((left, right) => left.path.localeCompare(right.path));

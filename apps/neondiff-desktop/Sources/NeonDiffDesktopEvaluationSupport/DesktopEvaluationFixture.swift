@@ -33,6 +33,80 @@ public enum DesktopEvaluationAppearance: String, Codable, Sendable {
     case system
 }
 
+public enum DesktopEvaluationHealth: String, Codable, Sendable {
+    case unknown
+    case healthy
+    case degraded
+    case offline
+}
+
+public enum DesktopEvaluationRepositoryProfile: String, Codable, Sendable {
+    case standard = "default"
+    case strict
+}
+
+public enum DesktopEvaluationProviderAdapter: String, Codable, Sendable {
+    case openAICompatible = "openai-compatible"
+    case zcode
+}
+
+public enum DesktopEvaluationProviderAuthMode: String, Codable, Sendable {
+    case none
+    case apiKeyEnvironment = "api-key-env"
+    case zcodeAppConfig = "zcode-app-config"
+}
+
+public enum DesktopEvaluationProviderVerification: String, Codable, Sendable {
+    case healthy
+    case configuredUnverified = "configured_unverified"
+    case blocked
+    case dirty
+    case inProgress = "in_progress"
+}
+
+public enum DesktopEvaluationLicenseEntitlement: String, Codable, Sendable {
+    case notActivated = "not activated"
+    case publicRepositories = "public repositories"
+    case activePrivate = "active private"
+    case privateBlocked = "private blocked"
+}
+
+public enum DesktopEvaluationUpdateChannel: String, Codable, Sendable {
+    case dev
+    case beta
+    case stable
+}
+
+public enum DesktopEvaluationGitHubConnection: String, Codable, Sendable {
+    case disconnected
+    case deviceCode = "device_code"
+    case connected
+    case recovery
+}
+
+public enum DesktopEvaluationAction: String, Codable, Sendable {
+    case refreshStatus = "refresh-status"
+    case refreshRepositories = "refresh-repositories"
+    case verifyProvider = "verify-provider"
+    case inspectLicense = "inspect-license"
+    case copyRedactedLog = "copy-redacted-log"
+    case previewPolicy = "preview-policy"
+    case inspectSettings = "inspect-settings"
+    case choosePublicSetup = "choose-public-setup"
+    case choosePrivateSetup = "choose-private-setup"
+    case chooseProvider = "choose-provider"
+    case checkDaemon = "check-daemon"
+    case continuePublicSetup = "continue-public-setup"
+    case activatePrivateLicense = "activate-private-license"
+    case finishOnboarding = "finish-onboarding"
+}
+
+public enum DesktopEvaluationOutcomeResult: String, Codable, Sendable {
+    case success
+    case failure
+    case cancelled
+}
+
 public struct DesktopEvaluationContentSize: Codable, Equatable, Hashable, Sendable {
     public let width: Int
     public let height: Int
@@ -68,35 +142,35 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
     public struct RepositoryState: Codable, Equatable, Sendable {
         public let name: String
         public let enabled: Bool
-        public let profile: String
+        public let profile: DesktopEvaluationRepositoryProfile
         public let lastReview: String
     }
 
     public struct ProviderState: Codable, Equatable, Sendable {
         public let id: String
         public let displayName: String
-        public let adapter: String
-        public let authMode: String
+        public let adapter: DesktopEvaluationProviderAdapter
+        public let authMode: DesktopEvaluationProviderAuthMode
         public let baseURL: String
         public let model: String
         public let credentialPresent: Bool
-        public let verification: String
+        public let verification: DesktopEvaluationProviderVerification
     }
 
     public struct LicenseState: Codable, Equatable, Sendable {
-        public let entitlement: String
+        public let entitlement: DesktopEvaluationLicenseEntitlement
         public let credentialPresent: Bool
-        public let updateChannel: String
+        public let updateChannel: DesktopEvaluationUpdateChannel
     }
 
     public struct GitHubState: Codable, Equatable, Sendable {
-        public let connection: String
+        public let connection: DesktopEvaluationGitHubConnection
         public let login: String?
         public let repositoryCount: Int
     }
 
     public struct State: Codable, Equatable, Sendable {
-        public let health: String
+        public let health: DesktopEvaluationHealth
         public let runtimeReady: Bool?
         public let repositories: [RepositoryState]
         public let provider: ProviderState?
@@ -106,8 +180,8 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
     }
 
     public struct ScriptedOutcome: Codable, Equatable, Sendable {
-        public let action: String
-        public let result: String
+        public let action: DesktopEvaluationAction
+        public let result: DesktopEvaluationOutcomeResult
         public let delayMilliseconds: Int
     }
 
@@ -117,7 +191,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
     public let environment: Environment
     public let state: State
     public let scriptedOutcomes: [ScriptedOutcome]
-    public let expectedActions: [String]
+    public let expectedActions: [DesktopEvaluationAction]
     public let safeCopy: [String]
 
     public static func decode(data: Data) throws -> DesktopEvaluationFixture {
@@ -134,7 +208,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
             throw DesktopEvaluationFixtureError.invalidJSON
         }
         try validateShape(root)
-        try validateSafeContent(object)
+        try validatePublicSafeContent(object)
 
         let fixture: DesktopEvaluationFixture
         do {
@@ -169,9 +243,34 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
         guard state.github.repositoryCount >= 0 else {
             throw DesktopEvaluationFixtureError.invalidValue("github.repositoryCount")
         }
+        guard state.repositories.count <= 100,
+              scriptedOutcomes.count <= 50,
+              expectedActions.count <= 50,
+              safeCopy.count <= 100 else {
+            throw DesktopEvaluationFixtureError.invalidValue("collection limit")
+        }
         for repository in state.repositories {
-            guard repository.name.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil else {
+            guard repository.name.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil,
+                  ISO8601DateFormatter().date(from: repository.lastReview) != nil else {
                 throw DesktopEvaluationFixtureError.invalidValue("repository.name")
+            }
+        }
+        if let provider = state.provider {
+            guard provider.id.range(of: #"^[a-z0-9][a-z0-9-]{0,63}$"#, options: .regularExpression) != nil,
+                  !provider.displayName.isEmpty,
+                  provider.displayName.utf8.count <= 128,
+                  !provider.model.isEmpty,
+                  provider.model.utf8.count <= 256,
+                  let url = URL(string: provider.baseURL),
+                  ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  url.user == nil,
+                  url.password == nil else {
+                throw DesktopEvaluationFixtureError.invalidValue("provider")
+            }
+        }
+        if let login = state.github.login {
+            guard login.range(of: #"^[A-Za-z0-9-]{1,39}$"#, options: .regularExpression) != nil else {
+                throw DesktopEvaluationFixtureError.invalidValue("github.login")
             }
         }
         for outcome in scriptedOutcomes {
@@ -221,7 +320,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
         }
     }
 
-    private static func validateSafeContent(_ value: Any, path: String = "root") throws {
+    static func validatePublicSafeContent(_ value: Any, path: String = "root") throws {
         if let string = value as? String {
             guard string.utf8.count <= 4096 else {
                 throw DesktopEvaluationFixtureError.unsafeContent("oversized string at \(path)")
@@ -236,13 +335,13 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
         }
         if let array = value as? [Any] {
             for (index, item) in array.enumerated() {
-                try validateSafeContent(item, path: "\(path)[\(index)]")
+                try validatePublicSafeContent(item, path: "\(path)[\(index)]")
             }
             return
         }
         if let object = value as? [String: Any] {
             for (key, item) in object {
-                try validateSafeContent(item, path: "\(path).\(key)")
+                try validatePublicSafeContent(item, path: "\(path).\(key)")
             }
         }
     }

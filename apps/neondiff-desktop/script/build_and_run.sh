@@ -8,6 +8,16 @@ MIN_SYSTEM_VERSION="14.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUILD_CONFIGURATION="${NEONDIFF_DESKTOP_BUILD_CONFIGURATION:-debug}"
+case "$MODE" in
+  release-build|release-bundle-check)
+    BUILD_CONFIGURATION="release"
+    ;;
+esac
+if [ "$BUILD_CONFIGURATION" != "debug" ] && [ "$BUILD_CONFIGURATION" != "release" ]; then
+  echo "NEONDIFF_DESKTOP_BUILD_CONFIGURATION must be debug or release" >&2
+  exit 2
+fi
 
 # preflight: run the credential doctor (reports signing/notarization/Sparkle
 # credential presence) and exit before any build. Additive, read-only mode —
@@ -16,7 +26,7 @@ if [ "$MODE" = "preflight" ] || [ "$MODE" = "--preflight" ]; then
   exec "$SCRIPT_DIR/preflight-credentials.sh" "${@:2}"
 fi
 
-DIST_DIR="$ROOT_DIR/dist"
+DIST_DIR="${NEONDIFF_DESKTOP_DIST_DIR:-$ROOT_DIR/dist}"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
@@ -40,8 +50,8 @@ if [ -x "$APP_BINARY" ]; then
 fi
 
 cd "$ROOT_DIR"
-swift build --product "$APP_NAME"
-BUILD_DIR="$(swift build --show-bin-path)"
+swift build -c "$BUILD_CONFIGURATION" --product "$APP_NAME"
+BUILD_DIR="$(swift build -c "$BUILD_CONFIGURATION" --show-bin-path)"
 BUILD_BINARY="$BUILD_DIR/$APP_NAME"
 
 rm -rf "$APP_BUNDLE"
@@ -108,7 +118,7 @@ open_app() {
 }
 
 case "$MODE" in
-  build)
+  build|release-build)
     ;;
   run)
     open_app
@@ -129,7 +139,7 @@ case "$MODE" in
     sleep 1
     pgrep -x "$APP_NAME" >/dev/null
     ;;
-  --bundle-check|bundle-check)
+  --bundle-check|bundle-check|release-bundle-check)
     /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
     otool -L "$APP_BINARY"
     if otool -L "$APP_BINARY" | grep -q "Sparkle.framework"; then
@@ -138,7 +148,7 @@ case "$MODE" in
     fi
     ;;
   *)
-    echo "usage: $0 [build|run|--debug|--logs|--telemetry|--verify|--bundle-check|preflight]" >&2
+    echo "usage: $0 [build|release-build|run|--debug|--logs|--telemetry|--verify|--bundle-check|release-bundle-check|preflight]" >&2
     exit 2
     ;;
 esac

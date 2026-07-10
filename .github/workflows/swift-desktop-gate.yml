@@ -166,10 +166,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          NEONDIFF_DESKTOP_DIST_DIR="$PWD/apps/neondiff-desktop/dist-release" \
+            apps/neondiff-desktop/script/build_and_run.sh release-bundle-check
           release_bin="$(cd apps/neondiff-desktop && swift build -c release --show-bin-path)"
           npm run check:desktop-fixture-boundary -- \
             "$release_bin/NeonDiffDesktop" \
-            "apps/neondiff-desktop/dist/NeonDiffDesktop.app"
+            "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app"
 
   swift-desktop-gate:
     name: Swift desktop gate
