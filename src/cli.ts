@@ -53,7 +53,7 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
-import { runLocalDashboardPreviewSmoke, startLocalDashboardServer } from "./local-dashboard.js";
+import { runLocalDashboardPreviewSmoke, startLocalDashboardServer, verifyProviderApiKey } from "./local-dashboard.js";
 import {
   assertOutcomeLedgerOutputDirEmpty,
   readOutcomeLedgerInput,
@@ -102,6 +102,7 @@ import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js"
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
+import { readSecretFromStdin } from "./secret-stdin.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
 import {
   buildRetiredFailedHeadError,
@@ -273,7 +274,37 @@ async function main(): Promise<void> {
       if (!result.ok) process.exitCode = 1;
       return;
     }
-    throw new Error("providers subcommand must be one of: list, doctor");
+    if (action === "verify") {
+      const providerId = args.provider ? parseSingleArg(args.provider, "--provider") : undefined;
+      if (providerId && !isProviderId(providerId)) {
+        console.log(stringifyProviderOutput({
+          ok: false,
+          command: "providers verify",
+          error: "--provider must be a stable provider identifier"
+        }));
+        process.exitCode = 1;
+        return;
+      }
+      if (args["api-key-stdin"] === undefined) {
+        throw new Error("providers verify requires --api-key-stdin true");
+      }
+      const apiKeyStdin = parseBooleanArg(args["api-key-stdin"], "--api-key-stdin");
+      if (!apiKeyStdin) throw new Error("providers verify requires --api-key-stdin true");
+      const apiKey = await readSecretFromStdin(process.stdin);
+      const result = await verifyProviderApiKey({
+        command: "providers verify",
+        config,
+        ...(providerId ? { providerId } : {}),
+        apiKey,
+        allowRemoteSmoke: args["allow-remote-smoke"] === undefined
+          ? false
+          : parseBooleanArg(args["allow-remote-smoke"], "--allow-remote-smoke")
+      });
+      console.log(stringifyRedactedJson(result));
+      if (!result.ok || result.state !== "healthy") process.exitCode = 1;
+      return;
+    }
+    throw new Error("providers subcommand must be one of: list, doctor, verify");
   }
 
   if (command === "license") {
@@ -3233,11 +3264,13 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     ]
   },
   providers: {
-    description: "Inspect the provider registry: `providers list` or `providers doctor`.",
+    description: "Inspect or verify the provider registry: `providers list`, `providers doctor`, or `providers verify`.",
     flags: [
       { name: "--config", description: "Path to the config file." },
-      { name: "--provider", description: "Scope providers doctor to a single provider id." },
-      { name: "--smoke", description: "true to run a live smoke check in providers doctor." }
+      { name: "--provider", description: "Scope providers doctor or verify to a single provider id." },
+      { name: "--smoke", description: "true to run a live smoke check in providers doctor." },
+      { name: "--api-key-stdin", description: "Must be true for providers verify; reads the submitted key from bounded stdin." },
+      { name: "--allow-remote-smoke", description: "true to consent to hosted provider verification." }
     ]
   },
   dashboard: {
@@ -3282,6 +3315,7 @@ function buildHelp(command?: string) {
         "dashboard",
         "providers list",
         "providers doctor",
+        "providers verify",
         "doctor",
         "doctor github",
         "daemon start",
@@ -3355,6 +3389,7 @@ function buildHelp(command?: string) {
       "neondiff providers list --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
+      "neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --json",
       "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",

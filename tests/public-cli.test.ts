@@ -45,6 +45,7 @@ describe("public NeonDiff CLI surface", () => {
       "dashboard",
       "providers list",
       "providers doctor",
+      "providers verify",
       "doctor",
       "doctor github",
       "daemon start",
@@ -64,6 +65,7 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("neondiff providers list --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json");
+    expect(output.examples).toContain("neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --json");
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
@@ -588,6 +590,82 @@ exit 1
           })
         ]
       });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("verifies a provider key from stdin without serializing the submitted value", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-verify-cli-"));
+    roots.push(root);
+    const fixtureSecret = "fixture-provider-value";
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (
+        request.method === "GET" &&
+        url.pathname === "/v1/models" &&
+        request.headers.authorization === `Bearer ${fixtureSecret}`
+      ) {
+        response.end(JSON.stringify({ data: [{ id: "fixture-review-model" }] }));
+        return;
+      }
+      response.statusCode = 401;
+      response.end(JSON.stringify({ message: "unauthorized" }));
+    });
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        providers: {
+          defaultProviderId: "fixture-openai",
+          providers: {
+            "fixture-openai": {
+              enabled: true,
+              adapter: "openai-compatible",
+              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              model: "fixture-review-model",
+              authMode: "api-key-env",
+              apiKeyEnv: "FIXTURE_PROVIDER_API_KEY",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: true,
+                streaming: false
+              }
+            }
+          }
+        }
+      })}\n`);
+
+      const result = await runCliWithStdin([
+        "providers",
+        "verify",
+        "--config",
+        configPath,
+        "--provider",
+        "fixture-openai",
+        "--api-key-stdin",
+        "true"
+      ], `${fixtureSecret}\n`);
+      const output = JSON.parse(result.stdout);
+
+      expect(output).toMatchObject({
+        ok: true,
+        command: "providers verify",
+        redacted: true,
+        providerId: "fixture-openai",
+        state: "healthy",
+        mode: "openai_compatible_models"
+      });
+      expect(JSON.stringify(output)).not.toContain(fixtureSecret);
+      expect(result.stdout).not.toContain(fixtureSecret);
+      expect(result.stderr).not.toContain(fixtureSecret);
     } finally {
       await closeServer(server);
     }
@@ -3034,6 +3112,38 @@ async function runCli(args: string[], options: { cwd?: string; timeout?: number;
     timeout: options.timeout ?? 15_000,
     killSignal: "SIGTERM",
     maxBuffer: 1024 * 1024
+  });
+}
+
+function runCliWithStdin(
+  args: string[],
+  stdin: string,
+  options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {}
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(process.execPath, [tsxCliPath, join(repoRoot, "src/cli.ts"), ...args], {
+      cwd: options.cwd ?? repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NEONDIFF_GITHUB_APP_ID: "",
+        NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: "",
+        EVAOS_REVIEW_BOT_APP_ID: "",
+        EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
+        GITHUB_TOKEN: "",
+        ...options.env
+      },
+      timeout: options.timeout ?? 15_000,
+      killSignal: "SIGTERM",
+      maxBuffer: 1024 * 1024
+    }, (error, stdout, stderr) => {
+      if (error) {
+        reject(Object.assign(error, { stdout, stderr }));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+    child.stdin?.end(stdin);
   });
 }
 
