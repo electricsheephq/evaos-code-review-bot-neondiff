@@ -80,6 +80,11 @@ final class NeonDiffDesktopModel: ObservableObject {
         githubAuthClient: GitHubDesktopAuthenticating = GitHubDeviceAuthClient(),
         providerVerificationService: ProviderVerificationService? = nil
     ) {
+        #if DEBUG
+        let visualProofFixtureEnabled = ProcessInfo.processInfo.environment[
+            "NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE"
+        ] == "provider-verification"
+        #endif
         self.userDefaults = userDefaults
         self.keychain = keychain
         self.githubAuthClient = githubAuthClient
@@ -87,11 +92,28 @@ final class NeonDiffDesktopModel: ObservableObject {
         self.configPath = userDefaults.string(forKey: "neondiff.configPath") ?? "config.local.json"
         self.cliPath = userDefaults.string(forKey: "neondiff.cliPath") ?? "neondiff"
         self.launchdLabel = userDefaults.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
+        #if DEBUG
+        let providerKeyStored = visualProofFixtureEnabled
+            || keychain.containsSecret(account: providerKeyAccount)
+        let githubUserTokenStored = visualProofFixtureEnabled
+            ? false
+            : keychain.containsSecret(account: githubUserTokenAccount)
+        let githubRefreshTokenStored = visualProofFixtureEnabled
+            ? false
+            : keychain.containsSecret(account: githubRefreshTokenAccount)
+        #else
         let providerKeyStored = keychain.containsSecret(account: providerKeyAccount)
         let githubUserTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
         let githubRefreshTokenStored = keychain.containsSecret(account: githubRefreshTokenAccount)
+        #endif
         self.providers.providerKeyStored = providerKeyStored
+        #if DEBUG
+        self.license.keyStored = visualProofFixtureEnabled
+            ? false
+            : keychain.containsSecret(account: licenseKeyAccount)
+        #else
         self.license.keyStored = keychain.containsSecret(account: licenseKeyAccount)
+        #endif
         self.github.userTokenStored = githubUserTokenStored
         if githubUserTokenStored {
             self.github.installationState = "authorization stored; verify"
@@ -106,6 +128,30 @@ final class NeonDiffDesktopModel: ObservableObject {
         self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
         self.isOnboardingPresented = !userDefaults.bool(forKey: onboardingCompletedKey)
         self.lastCommandLine = statusCommand.commandLine
+
+        #if DEBUG
+        if visualProofFixtureEnabled {
+            selectedSection = .providers
+            configPath = "/tmp/neondiff-visual-proof/config.local.json"
+            cliPath = "neondiff"
+            providers.zcodeModel = "glm-5"
+            providers.zcodeCliPath = "/usr/local/bin/zcode"
+            providers.zcodeAppConfigPath = "~/.config/zcode/config.json"
+            providers.openAICompatibleEndpoint = "https://api.z.ai/api/coding/paas/v4"
+            providerVerification = ProviderVerificationSnapshot(
+                ok: true,
+                command: "providers verify",
+                providerId: "zcode-glm",
+                checkedAt: "2026-07-10T12:00:00Z",
+                state: .healthy,
+                mode: "openai_compatible_models",
+                detail: "Provider responded with compatible model metadata. No secret value is retained.",
+                troubleshooting: []
+            )
+            providerVerificationStatus = "Verified from redacted fixture metadata. No hosted request was made."
+            isOnboardingPresented = false
+        }
+        #endif
     }
 
     var statusCommand: DesktopCommand {
