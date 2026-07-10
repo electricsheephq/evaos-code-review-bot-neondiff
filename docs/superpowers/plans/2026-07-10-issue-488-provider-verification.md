@@ -191,7 +191,7 @@ check(fakeCLI.standardInput == Data("fixture-provider-value".utf8),
 check(snapshot.state == .healthy, "only a healthy exact envelope parses as verified")
 ```
 
-Also reject wrong command, `redacted != true`, malformed JSON, nonzero exit, `configured_unverified`, and any serialized output containing the fixture secret.
+Reject wrong command, `redacted != true`, malformed JSON, inconsistent exit/status fields, and any serialized output containing the fixture secret. Parse `configured_unverified` and `blocked` as visible typed non-success outcomes.
 
 - [ ] **Step 2: Run core checks and confirm compile failures**
 
@@ -226,6 +226,7 @@ public enum ProviderVerificationState: String, Equatable, Sendable {
 }
 
 public struct ProviderVerificationSnapshot: Equatable, Sendable {
+    public let ok: Bool
     public let command: String
     public let providerId: String
     public let checkedAt: String
@@ -233,10 +234,12 @@ public struct ProviderVerificationSnapshot: Equatable, Sendable {
     public let mode: String
     public let detail: String
     public let troubleshooting: [String]
+
+    public var isVerified: Bool { ok && state == .healthy }
 }
 ```
 
-Require `command == "providers verify"`, `redacted == true`, non-empty provider/time/detail, known state/mode, and no secret-like keys.
+Require `command == "providers verify"`, `redacted == true`, non-empty provider/time/detail, known state/mode, no secret-like keys, and consistency between process exit, `ok`, and `healthy`. Structured `blocked` and `configured_unverified` envelopes remain parseable with `isVerified == false`; malformed or contradictory envelopes throw.
 
 - [ ] **Step 5: Implement the Keychain-to-stdin service**
 
