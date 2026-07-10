@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {"id":"tab-overview","file":"tab-overview.json"},
+    {"id":"tab-repos","file":"tab-repos.json"},
+    {"id":"tab-providers","file":"tab-providers.json"},
+    {"id":"tab-license","file":"tab-license.json"},
+    {"id":"tab-logs","file":"tab-logs.json"},
+    {"id":"tab-policy","file":"tab-policy.json"},
+    {"id":"tab-settings","file":"tab-settings.json"},
+    {"id":"onboarding-welcome","file":"onboarding-welcome.json"},
+    {"id":"onboarding-provider","file":"onboarding-provider.json"},
+    {"id":"onboarding-daemon","file":"onboarding-daemon.json"},
+    {"id":"onboarding-license","file":"onboarding-license.json"},
+    {"id":"onboarding-done","file":"onboarding-done.json"}
+  ]
+}

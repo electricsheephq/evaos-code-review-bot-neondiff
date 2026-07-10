@@ -137,6 +137,7 @@ jobs:
         working-directory: apps/neondiff-desktop
         run: |
           swift run NeonDiffDesktopCoreChecks
+          swift run NeonDiffDesktopFixtureChecks
           ./scripts/run-model-checks.sh
 
       - name: Secret corpus production-artifact boundary
@@ -160,6 +161,15 @@ jobs:
       - name: Bundle check
         working-directory: apps/neondiff-desktop
         run: script/build_and_run.sh bundle-check
+
+      - name: Evaluation fixture production-artifact boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_bin="$(cd apps/neondiff-desktop && swift build -c release --show-bin-path)"
+          npm run check:desktop-fixture-boundary -- \
+            "$release_bin/NeonDiffDesktop" \
+            "apps/neondiff-desktop/dist/NeonDiffDesktop.app"
 
   swift-desktop-gate:
     name: Swift desktop gate

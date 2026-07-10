@@ -37,6 +37,13 @@ Use that unsigned bundle for dev smoke and bundle-resource proof only. Signed,
 notarized, appcast, and installed-app visual proof belong to the Mac release
 runbook after source behavior is already proven.
 
+The deterministic fixture catalog, strict evidence-manifest contract, canonical
+content sizes, and production-artifact exclusion gate are documented in
+[Desktop UI Evaluation](../apps/neondiff-desktop/docs/ui-evaluation.md). The
+launch arguments in that document are a tested contract under issue #515; they
+are not a supported app launch path until the DEBUG-only model/composition seam
+lands and a launched-app smoke proves it.
+
 ## CLI Contract
 
 The desktop uses these JSON-first CLI surfaces:
