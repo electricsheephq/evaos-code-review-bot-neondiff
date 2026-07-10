@@ -531,6 +531,15 @@ check(controlCenterSnapshot?.revision == String(repeating: "a", count: 64), "con
 check(controlCenterSnapshot?.policy.reviewMaxActiveRuns == 2, "config inspect parses review concurrency")
 check(controlCenterSnapshot?.policy.issueAllowlist == ["owner/issues-repo"], "issue-enrichment allowlist remains separate from review repos")
 check(controlCenterSnapshot?.repos.map(\.name) == ["owner/review-repo"], "PR review allowlist remains in the repo selector")
+let failedInspectJSON = #"{"ok":false,"command":"config inspect","error":"config changed while reading; retry"}"#
+check(
+    ConfigInspectParser.error(failedInspectJSON) == "config changed while reading; retry",
+    "structured inspect failures expose a bounded retry message"
+)
+check(
+    ConfigInspectParser.parse(failedInspectJSON, providerKeyStored: false, licenseKeyStored: false) == nil,
+    "failed inspect responses cannot install a config snapshot"
+)
 
 var desiredControlCenter = DesktopControlCenterSettings()
 desiredControlCenter.pollIntervalMs = 120_000

@@ -32,6 +32,20 @@ public struct ConfigInspectSnapshot: Equatable {
 }
 
 public enum ConfigInspectParser {
+    public static func error(_ jsonText: String) -> String? {
+        guard
+            let data = jsonText.data(using: .utf8),
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            root["command"] as? String == "config inspect",
+            root["ok"] as? Bool == false,
+            let error = root["error"] as? String,
+            !error.isEmpty
+        else {
+            return nil
+        }
+        return error
+    }
+
     public static func parse(_ jsonText: String, providerKeyStored: Bool, licenseKeyStored: Bool, githubUserTokenStored: Bool = false) -> ConfigInspectSnapshot? {
         guard
             let data = jsonText.data(using: .utf8),

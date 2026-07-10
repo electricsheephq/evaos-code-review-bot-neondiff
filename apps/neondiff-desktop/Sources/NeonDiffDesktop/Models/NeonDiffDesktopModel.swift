@@ -669,6 +669,7 @@ final class NeonDiffDesktopModel: ObservableObject {
                         fallbackCommand: displayCommand.commandLine,
                         configPath: configPath,
                         launchdLabel: launchdLabel,
+                        isConfigInspectCommand: isConfigInspectCommand,
                         controlCenterOperation: controlCenterOperation
                     )
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
@@ -680,7 +681,10 @@ final class NeonDiffDesktopModel: ObservableObject {
                     self.lastError = NeonDiffRedactor.redact(error.localizedDescription)
                     self.logText = self.lastError ?? "Unknown CLI error"
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
-                    if isConfigInspectCommand { self.isConfigInspectInProgress = false }
+                    if isConfigInspectCommand {
+                        self.invalidateControlCenterAfterInspectFailure(self.lastError ?? "Config inspect failed.")
+                        self.isConfigInspectInProgress = false
+                    }
                     if controlCenterOperation != nil {
                         self.controlCenterStatus = self.lastError ?? "Control-center command failed."
                         self.isControlCenterOperationInProgress = false
@@ -966,6 +970,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         fallbackCommand: String,
         configPath: String,
         launchdLabel: String,
+        isConfigInspectCommand: Bool,
         controlCenterOperation: ControlCenterOperation? = nil
     ) {
         let redactedStdout = result.redactedStdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -974,13 +979,21 @@ final class NeonDiffDesktopModel: ObservableObject {
         logText = [result.redactedStdout, result.redactedStderr].filter { !$0.isEmpty }.joined(separator: "\n")
 
         let commandName = parseCommandName(result.stdout)
+        if isConfigInspectCommand && (result.exitCode != 0 || commandName != "config inspect") {
+            let inspectError = ConfigInspectParser.error(result.stdout)
+                ?? lastError
+                ?? "Config inspect returned an invalid response."
+            invalidateControlCenterAfterInspectFailure(inspectError)
+            return
+        }
         if commandName == "config inspect" || commandName == "config patch" {
-            if let snapshot = ConfigInspectParser.parse(
+            let parsedSnapshot = ConfigInspectParser.parse(
                 result.stdout,
                 providerKeyStored: keychain.containsSecret(account: providerKeyAccount),
                 licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
                 githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
-            ) {
+            )
+            if let snapshot = parsedSnapshot {
                 if !snapshot.repos.isEmpty { repos = snapshot.repos }
                 providers = snapshot.providers
                 license = snapshot.license
@@ -1011,6 +1024,13 @@ final class NeonDiffDesktopModel: ObservableObject {
                         controlCenterStatus = "Config loaded from a previous path. Reload the current config before editing."
                     }
                 }
+            }
+            if commandName == "config inspect", result.exitCode != 0 || parsedSnapshot == nil {
+                let inspectError = ConfigInspectParser.error(result.stdout)
+                    ?? lastError
+                    ?? "Config inspect returned an invalid response."
+                invalidateControlCenterAfterInspectFailure(inspectError)
+                return
             }
             if commandName == "config patch", let operation = controlCenterOperation {
                 let succeeded = result.exitCode == 0 && lastError == nil
@@ -1117,6 +1137,18 @@ final class NeonDiffDesktopModel: ObservableObject {
             return nil
         }
         return root["command"] as? String
+    }
+
+    private func invalidateControlCenterAfterInspectFailure(_ message: String) {
+        controlCenterLoadedSnapshot = nil
+        controlCenterLoadedRevision = nil
+        controlCenterRollbackSnapshot = nil
+        controlCenterRollbackExpectedRevision = nil
+        previewedControlCenterSnapshot = nil
+        previewedControlCenterBaseline = nil
+        previewedControlCenterExpectedRevision = nil
+        lastError = NeonDiffRedactor.redact(message)
+        controlCenterStatus = lastError ?? "Config inspect failed."
     }
 
 }

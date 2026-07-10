@@ -154,6 +154,7 @@ async function main(): Promise<void> {
     if (configAction === "inspect") {
       const result = inspectConfigForDesktop(args.config ? parseSingleArg(args.config, "--config") : undefined);
       console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exitCode = 1;
       return;
     }
     if (configAction === "patch") {

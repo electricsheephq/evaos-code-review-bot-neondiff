@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -107,7 +107,7 @@ describe("desktop config CLI", () => {
     let injectedWrite = false;
     const hookedReadFileSync = ((path: Parameters<typeof readFileSync>[0], options?: unknown) => {
       const text = readFileSync(path, options as BufferEncoding);
-      if (!injectedWrite && path === configPath) {
+      if (!injectedWrite) {
         injectedWrite = true;
         writeConfig(configPath, { ...JSON.parse(text), pollIntervalMs: 120_000 });
       }
@@ -119,6 +119,57 @@ describe("desktop config CLI", () => {
     expect(injectedWrite).toBe(true);
     expect((inspected.config as { pollIntervalMs: number }).pollIntervalMs).toBe(120_000);
     expect(inspected.revision).toBe(current.revision);
+  });
+
+  it("returns a structured inspect failure when a stable snapshot cannot be obtained", () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      pollIntervalMs: 90_000,
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+
+    let pollIntervalMs = 90_000;
+    const hookedReadFileSync = ((path: Parameters<typeof readFileSync>[0], options?: unknown) => {
+      const text = readFileSync(path, options as BufferEncoding);
+      pollIntervalMs += 1_000;
+      writeConfig(configPath, { ...JSON.parse(text), pollIntervalMs });
+      return text;
+    }) as typeof readFileSync;
+    const inspected = inspectConfigForDesktop(configPath, { readFileSync: hookedReadFileSync });
+
+    expect(inspected).toMatchObject({
+      ok: false,
+      command: "config inspect",
+      revision: "",
+      error: expect.stringContaining("config changed while reading")
+    });
+    expect(inspected.config).toBeUndefined();
+  });
+
+  it("changes the revision when content changes even with fixed metadata", () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      pollIntervalMs: 90_000,
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+    const fixedStat = statSync(configPath, { bigint: true });
+    const fixedStatSync = (() => fixedStat) as unknown as typeof statSync;
+    const before = inspectConfigForDesktop(configPath, { statSync: fixedStatSync });
+    const current = JSON.parse(readFileSync(configPath, "utf8"));
+    writeConfig(configPath, { ...current, pollIntervalMs: 91_000 });
+    const after = inspectConfigForDesktop(configPath, { statSync: fixedStatSync });
+
+    expect(before.ok).toBe(true);
+    expect(after.ok).toBe(true);
+    expect(after.revision).not.toBe(before.revision);
   });
 
   it("dry-runs whitelisted non-secret patches without writing", async () => {
@@ -763,6 +814,9 @@ describe("desktop config CLI", () => {
     const firstPatchPath = join(root, "first-patch.json");
     const secondPatchPath = join(root, "second-patch.json");
     const lockPath = `${configPath}.neondiff.lock`;
+    const aliasDirectory = join(root, "alias");
+    symlinkSync(".", aliasDirectory, "dir");
+    const aliasConfigPath = join(aliasDirectory, "config.json");
     writeConfig(configPath, {
       pilotRepos: ["owner/repo"],
       workRoot: join(root, "runtime"),
@@ -783,7 +837,7 @@ describe("desktop config CLI", () => {
 
     let competingResult: ReturnType<typeof patchConfigForDesktop> | undefined;
     const firstResult = patchConfigForDesktop({
-      configPath,
+      configPath: aliasConfigPath,
       inputPath: firstPatchPath,
       dryRun: false,
       confirm: true,
@@ -819,6 +873,20 @@ describe("desktop config CLI", () => {
       confirm: true
     });
     expect(liveOwnerRejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("another config patch is running")
+    });
+
+    unlinkSync(lockPath);
+    writeFixtureLock(Number.NaN);
+    utimesSync(lockPath, staleTime, staleTime);
+    const invalidOwnerRejected = patchConfigForDesktop({
+      configPath,
+      inputPath: secondPatchPath,
+      dryRun: false,
+      confirm: true
+    });
+    expect(invalidOwnerRejected).toMatchObject({
       ok: false,
       error: expect.stringContaining("another config patch is running")
     });

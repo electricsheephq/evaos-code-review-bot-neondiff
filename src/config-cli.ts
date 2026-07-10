@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -86,14 +87,15 @@ const PROVIDER_CAPABILITY_PATTERN =
   new RegExp(`^providers\\.providers\\.(${CONFIG_NAME_SEGMENT_PATTERN})\\.capabilities\\.(?:review|jsonOutput|local|streaming)$`);
 
 export interface ConfigInspectResult {
-  ok: true;
+  ok: boolean;
   command: "config inspect";
   configPath?: string;
   exists: boolean;
   source: "file" | "defaults";
   revision: string;
   editablePaths: string[];
-  config: unknown;
+  config?: unknown;
+  error?: string;
 }
 
 export interface ConfigPatchResult {
@@ -146,20 +148,36 @@ const defaultConfigFileOps: ConfigFileOps = {
 
 export function inspectConfigForDesktop(configPath?: string, fileOps?: Partial<ConfigFileOps>): ConfigInspectResult {
   const ops = { ...defaultConfigFileOps, ...fileOps };
-  const resolvedConfigPath = configPath ? resolve(configPath) : undefined;
-  const exists = resolvedConfigPath ? ops.existsSync(resolvedConfigPath) : false;
-  const snapshot = exists && resolvedConfigPath ? readStableConfigSnapshot(resolvedConfigPath, fileOps) : undefined;
-  const config = snapshot ? loadConfigFromObject(snapshot.value) : loadConfig();
-  return {
-    ok: true,
-    command: "config inspect",
-    ...(resolvedConfigPath ? { configPath: resolvedConfigPath } : {}),
-    exists,
-    source: exists ? "file" : "defaults",
-    revision: snapshot?.revision ?? "",
-    editablePaths: editablePatchPaths(),
-    config: redactConfigObject(config)
-  };
+  const requestedConfigPath = configPath ? resolve(configPath) : undefined;
+  let resolvedConfigPath = requestedConfigPath;
+  let exists = requestedConfigPath ? ops.existsSync(requestedConfigPath) : false;
+  try {
+    if (requestedConfigPath && exists) resolvedConfigPath = realpathSync(requestedConfigPath);
+    exists = resolvedConfigPath ? ops.existsSync(resolvedConfigPath) : false;
+    const snapshot = exists && resolvedConfigPath ? readStableConfigSnapshot(resolvedConfigPath, fileOps) : undefined;
+    const config = snapshot ? loadConfigFromObject(snapshot.value) : loadConfig();
+    return {
+      ok: true,
+      command: "config inspect",
+      ...(resolvedConfigPath ? { configPath: resolvedConfigPath } : {}),
+      exists,
+      source: exists ? "file" : "defaults",
+      revision: snapshot?.revision ?? "",
+      editablePaths: editablePatchPaths(),
+      config: redactConfigObject(config)
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      command: "config inspect",
+      ...(resolvedConfigPath ? { configPath: resolvedConfigPath } : {}),
+      exists,
+      source: exists ? "file" : "defaults",
+      revision: "",
+      editablePaths: editablePatchPaths(),
+      error: redactSecrets(error instanceof Error ? error.message : String(error))
+    };
+  }
 }
 
 export function patchConfigForDesktop(input: {
@@ -170,8 +188,14 @@ export function patchConfigForDesktop(input: {
   expectedRevision?: string;
   fileOps?: Partial<ConfigFileOps>;
 }): ConfigPatchResult {
-  const configPath = resolve(input.configPath);
+  const requestedConfigPath = resolve(input.configPath);
   const inputPath = resolve(input.inputPath);
+  let configPath = requestedConfigPath;
+  try {
+    if (existsSync(requestedConfigPath)) configPath = realpathSync(requestedConfigPath);
+  } catch (error) {
+    return failedPatch(input, requestedConfigPath, inputPath, `failed to resolve config path: ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (!existsSync(configPath)) {
     return failedPatch(input, configPath, inputPath, "config file does not exist");
   }
@@ -270,12 +294,12 @@ function patchConfigForDesktopUnlocked(
 
   if (!input.dryRun && changedPaths.length > 0) {
     try {
-      const liveRevision = configRevisionForPath(configPath, input.fileOps);
+      const liveRevision = readStableConfigSnapshot(configPath, input.fileOps).revision;
       if (liveRevision !== revisionBefore) {
         return failedPatch(input, configPath, inputPath, "config changed while applying patch; reload and preview again");
       }
       writeConfigAtomic(configPath, next, input.fileOps);
-      revisionAfter = configRevisionForPath(configPath, input.fileOps);
+      revisionAfter = readStableConfigSnapshot(configPath, input.fileOps).revision;
     } catch (error) {
       return failedPatch(input, configPath, inputPath, `failed to write config atomically: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -405,21 +429,27 @@ function deepEqual(left: unknown, right: unknown): boolean {
   return false;
 }
 
-function configRevisionForPath(configPath: string, fileOps?: Partial<ConfigFileOps>): string {
+function configMetadataForPath(configPath: string, fileOps?: Partial<ConfigFileOps>): string {
   const ops = { ...defaultConfigFileOps, ...fileOps };
   const stat = ops.statSync(configPath, { bigint: true });
-  const identity = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
-  return createHash("sha256").update(identity).digest("hex");
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 }
 
 function readStableConfigSnapshot(configPath: string, fileOps?: Partial<ConfigFileOps>): { value: unknown; revision: string } {
   const ops = { ...defaultConfigFileOps, ...fileOps };
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const revisionBefore = configRevisionForPath(configPath, fileOps);
+    const metadataBefore = configMetadataForPath(configPath, fileOps);
     const text = ops.readFileSync(configPath, "utf8");
-    const revisionAfter = configRevisionForPath(configPath, fileOps);
-    if (revisionBefore !== revisionAfter) continue;
-    return { value: JSON.parse(text), revision: revisionAfter };
+    const metadataAfter = configMetadataForPath(configPath, fileOps);
+    if (metadataBefore !== metadataAfter) continue;
+    const revision = createHash("sha256")
+      .update(metadataAfter)
+      .update("\0")
+      .update(String(Buffer.byteLength(text)))
+      .update("\0")
+      .update(text)
+      .digest("hex");
+    return { value: JSON.parse(text), revision };
   }
   throw new Error("config changed while reading; retry after the other writer finishes");
 }
