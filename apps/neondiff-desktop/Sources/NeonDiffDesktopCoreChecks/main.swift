@@ -58,6 +58,7 @@ final class InMemoryProviderSecretStore: DesktopSecretStoring {
 
 final class FakeProviderVerificationCLI: NeonDiffCLIClienting {
     var result: CLIRunResult
+    var error: Error?
     private(set) var arguments: [String] = []
     private(set) var standardInput: Data?
     private(set) var timeout: TimeInterval?
@@ -74,12 +75,17 @@ final class FakeProviderVerificationCLI: NeonDiffCLIClienting {
         self.arguments = arguments
         self.standardInput = standardInput
         self.timeout = timeout
+        if let error { throw error }
         return result
     }
 
     func launchDetached(arguments: [String]) throws -> CLILaunchResult {
         fatalError("provider verification never launches detached")
     }
+}
+
+enum FixtureProviderTransportError: Error {
+    case unavailable
 }
 
 @discardableResult
@@ -1150,6 +1156,47 @@ check(
     !String(reflecting: providerVerification).contains(fixtureProviderSecret),
     "provider verification snapshot retains no provider secret"
 )
+check(
+    !providerVerification.detail.contains(fixtureProviderSecret)
+        && providerVerification.troubleshooting.allSatisfy { !$0.contains(fixtureProviderSecret) },
+    "provider verification presentation metadata retains no provider secret"
+)
+
+var retainedProviderVerification: ProviderVerificationSnapshot? = providerVerification
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON.replacingOccurrences(
+        of: "providers verify",
+        with: "dashboard verify-provider"
+    ),
+    stderr: ""
+)
+do {
+    retainedProviderVerification = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+    check(false, "wrong-command verification must fail")
+} catch {
+    retainedProviderVerification = nil
+}
+check(retainedProviderVerification == nil, "wrong-command failure clears a prior provider result")
+
+retainedProviderVerification = providerVerification
+fakeProviderCLI.error = FixtureProviderTransportError.unavailable
+do {
+    retainedProviderVerification = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+    check(false, "transport verification must fail")
+} catch {
+    retainedProviderVerification = nil
+}
+check(retainedProviderVerification == nil, "transport failure clears a prior provider result")
+fakeProviderCLI.error = nil
 
 fakeProviderCLI.result = CLIRunResult(
     exitCode: 1,

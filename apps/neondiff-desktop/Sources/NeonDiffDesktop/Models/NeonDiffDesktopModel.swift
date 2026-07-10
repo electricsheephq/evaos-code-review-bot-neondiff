@@ -32,6 +32,9 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var dashboardProcessIdentifier: Int32?
     @Published var pendingRepoName = ""
     @Published var pendingProviderKey = ""
+    @Published var providerVerification: ProviderVerificationSnapshot?
+    @Published var providerVerificationStatus = "Verify the stored API key when ready."
+    @Published var isProviderVerificationInProgress = false
     @Published var pendingLicenseKey = ""
     @Published var onboardingFlow = OnboardingFlow()
     @Published var isOnboardingPresented = false
@@ -39,6 +42,7 @@ final class NeonDiffDesktopModel: ObservableObject {
     private let userDefaults: UserDefaults
     private let keychain: DesktopSecretStoring
     private let githubAuthClient: GitHubDesktopAuthenticating
+    private let providerVerificationService: ProviderVerificationService?
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var githubRepositoryRefreshGate = GitHubLatestRequestGate()
@@ -53,11 +57,13 @@ final class NeonDiffDesktopModel: ObservableObject {
     init(
         userDefaults: UserDefaults = .standard,
         keychain: DesktopSecretStoring = KeychainSecretStore(),
-        githubAuthClient: GitHubDesktopAuthenticating = GitHubDeviceAuthClient()
+        githubAuthClient: GitHubDesktopAuthenticating = GitHubDeviceAuthClient(),
+        providerVerificationService: ProviderVerificationService? = nil
     ) {
         self.userDefaults = userDefaults
         self.keychain = keychain
         self.githubAuthClient = githubAuthClient
+        self.providerVerificationService = providerVerificationService
         self.configPath = userDefaults.string(forKey: "neondiff.configPath") ?? "config.local.json"
         self.cliPath = userDefaults.string(forKey: "neondiff.cliPath") ?? "neondiff"
         self.launchdLabel = userDefaults.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
@@ -596,10 +602,77 @@ final class NeonDiffDesktopModel: ObservableObject {
             try keychain.setSecret(pendingProviderKey, account: providerKeyAccount)
             pendingProviderKey = ""
             providers.providerKeyStored = true
+            providerVerification = nil
+            providerVerificationStatus = "Stored key changed. Verify it when ready."
             onboardingFlow.providerKeyStored = true
             lastError = nil
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
+        }
+    }
+
+    func verifyProviderKey() {
+        guard !isProviderVerificationInProgress else { return }
+        guard providers.providerKeyStored, keychain.containsSecret(account: providerKeyAccount) else {
+            providerVerification = nil
+            providerVerificationStatus = "Store a provider API key in Keychain before verification."
+            lastError = "Provider verification requires a stored Keychain item."
+            return
+        }
+
+        persistLocalSettings()
+        let arguments = [
+            "providers", "verify",
+            "--config", configPath,
+            "--api-key-stdin", "true",
+            "--allow-remote-smoke", "true",
+            "--json"
+        ]
+        let executablePath = cliPath
+        let service = providerVerificationService ?? ProviderVerificationService(
+            keychain: keychain,
+            cli: NeonDiffCLIClient(
+                executablePath: executablePath,
+                workingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
+            )
+        )
+
+        providerVerification = nil
+        providerVerificationStatus = "Verifying the stored API key…"
+        isProviderVerificationInProgress = true
+        lastError = nil
+        lastCommandLine = "\(shellQuote(executablePath)) providers verify --config \(shellQuote(configPath)) --api-key-stdin true --allow-remote-smoke true --json < [secure Keychain input]"
+
+        Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                Result {
+                    try service.verify(
+                        account: providerKeyAccount,
+                        arguments: arguments,
+                        timeout: 15
+                    )
+                }
+            }.value
+
+            guard let self else { return }
+            self.isProviderVerificationInProgress = false
+            switch outcome {
+            case .success(let snapshot):
+                self.providerVerification = snapshot
+                self.lastError = nil
+                switch snapshot.state {
+                case .healthy:
+                    self.providerVerificationStatus = "Provider API key verified."
+                case .configuredUnverified:
+                    self.providerVerificationStatus = "Provider is configured but not verified."
+                case .blocked:
+                    self.providerVerificationStatus = "Provider verification was blocked."
+                }
+            case .failure:
+                self.providerVerification = nil
+                self.providerVerificationStatus = "Verification failed safely. Confirm the stored key, provider config, and NeonDiff CLI, then retry."
+                self.lastError = "Provider verification failed without retaining provider output."
+            }
         }
     }
 
