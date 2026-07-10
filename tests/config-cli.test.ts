@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -772,6 +772,14 @@ describe("desktop config CLI", () => {
     });
     writeConfig(firstPatchPath, { desktop: { updateChannel: "beta" } });
     writeConfig(secondPatchPath, { desktop: { updateChannel: "stable" } });
+    const writeFixtureLock = (pid: number) => {
+      const fd = openSync(lockPath, "wx", 0o600);
+      try {
+        writeFileSync(fd, `${JSON.stringify({ pid, startedAt: "fixture" })}\n`);
+      } finally {
+        closeSync(fd);
+      }
+    };
 
     let competingResult: ReturnType<typeof patchConfigForDesktop> | undefined;
     const firstResult = patchConfigForDesktop({
@@ -801,7 +809,7 @@ describe("desktop config CLI", () => {
     expect(JSON.parse(readFileSync(configPath, "utf8")).desktop.updateChannel).toBe("beta");
     expect(existsSync(lockPath)).toBe(false);
 
-    writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: "fixture" })}\n`, { mode: 0o600 });
+    writeFixtureLock(process.pid);
     const staleTime = new Date(Date.now() - 10 * 60 * 1_000);
     utimesSync(lockPath, staleTime, staleTime);
     const liveOwnerRejected = patchConfigForDesktop({
@@ -815,7 +823,8 @@ describe("desktop config CLI", () => {
       error: expect.stringContaining("another config patch is running")
     });
 
-    writeFileSync(lockPath, `${JSON.stringify({ pid: 2_147_483_647, startedAt: "fixture" })}\n`, { mode: 0o600 });
+    unlinkSync(lockPath);
+    writeFixtureLock(2_147_483_647);
     utimesSync(lockPath, staleTime, staleTime);
     const recovered = patchConfigForDesktop({
       configPath,
