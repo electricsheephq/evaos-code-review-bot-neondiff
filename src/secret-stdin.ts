@@ -9,6 +9,13 @@ export async function readSecretFromStdin(
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error("provider secret stdin timeout must be a positive number");
   }
+  if (
+    stream.listenerCount("data") > 0 ||
+    stream.listenerCount("readable") > 0 ||
+    (stream as NodeJS.ReadableStream & { readableFlowing?: boolean | null }).readableFlowing === true
+  ) {
+    throw new Error("provider secret stdin already has an existing consumer");
+  }
 
   return new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -26,11 +33,23 @@ export async function readSecretFromStdin(
       stream.removeListener("end", onEnd);
       stream.removeListener("error", onError);
     };
+    const closeOwnedStream = (): void => {
+      const ownedStream = stream as NodeJS.ReadableStream & {
+        destroyed?: boolean;
+        destroy?: () => void;
+      };
+      if (typeof ownedStream.destroy === "function") {
+        if (ownedStream.destroyed !== true) ownedStream.destroy();
+        return;
+      }
+      stream.pause();
+    };
     const fail = (error: Error): void => {
       if (settled) return;
       settled = true;
       cleanup();
       clearBufferedSecret();
+      closeOwnedStream();
       reject(error);
     };
     const onData = (chunk: unknown): void => {

@@ -696,6 +696,24 @@ exit 1
     });
   });
 
+  it("exits providers verify after the bounded stdin deadline even when the parent keeps the pipe open", async () => {
+    const startedAt = Date.now();
+    const result = await runCliWithOpenStdin([
+      "providers",
+      "verify",
+      "--provider",
+      "openai-compatible",
+      "--api-key-stdin",
+      "true"
+    ], "partial-fixture-provider-value");
+
+    expect(result.error).toBeTruthy();
+    expect(result.stderr).toContain("provider secret stdin timed out after 5000ms");
+    expect(result.stderr).not.toContain("partial-fixture-provider-value");
+    expect(Date.now() - startedAt).toBeLessThan(7_500);
+    expect(result.error?.killed).not.toBe(true);
+  }, 10_000);
+
   it("wires explicit hosted remote-smoke consent to a healthy exit zero", async () => {
     const fixtureSecret = "fixture-provider-value";
     let verifierInput: ProviderApiKeyVerificationInput | undefined;
@@ -3250,6 +3268,42 @@ function runCliWithStdin(
       resolve({ stdout, stderr });
     });
     child.stdin?.end(stdin);
+  });
+}
+
+function runCliWithOpenStdin(
+  args: string[],
+  stdin: string
+): Promise<{
+  error: (Error & { killed?: boolean; signal?: NodeJS.Signals | null }) | null;
+  stdout: string;
+  stderr: string;
+}> {
+  return new Promise((resolve) => {
+    const child = execFile(process.execPath, [tsxCliPath, join(repoRoot, "src/cli.ts"), ...args], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NEONDIFF_GITHUB_APP_ID: "",
+        NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: "",
+        EVAOS_REVIEW_BOT_APP_ID: "",
+        EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
+        GITHUB_TOKEN: ""
+      },
+      timeout: 8_000,
+      killSignal: "SIGTERM",
+      maxBuffer: 1024 * 1024
+    }, (error, stdout, stderr) => {
+      child.stdin?.destroy();
+      resolve({
+        error: error as (Error & { killed?: boolean; signal?: NodeJS.Signals | null }) | null,
+        stdout,
+        stderr
+      });
+    });
+    child.stdin?.on("error", () => undefined);
+    child.stdin?.write(stdin);
   });
 }
 

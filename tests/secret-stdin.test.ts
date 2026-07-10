@@ -32,16 +32,9 @@ describe("readSecretFromStdin", () => {
     expect(stream.destroyed).toBe(false);
   });
 
-  it("times out an abandoned pipe and removes only its own listeners without echoing buffered input", async () => {
+  it("times out an abandoned owned pipe, clears listeners, and closes the stream without echoing buffered input", async () => {
     const stream = new PassThrough();
     const fixtureSecret = "fixture-provider-value";
-    const existingDataListener = () => undefined;
-    stream.on("data", existingDataListener);
-    const baseline = {
-      data: stream.listenerCount("data"),
-      end: stream.listenerCount("end"),
-      error: stream.listenerCount("error")
-    };
 
     const pending = readSecretFromStdin(stream, 64, 10);
     stream.write(fixtureSecret);
@@ -56,14 +49,51 @@ describe("readSecretFromStdin", () => {
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toContain("timed out");
     expect((failure as Error).message).not.toContain(fixtureSecret);
-    expect(stream.listenerCount("data")).toBe(baseline.data);
-    expect(stream.listenerCount("end")).toBe(baseline.end);
-    expect(stream.listenerCount("error")).toBe(baseline.error);
+    expect(stream.listenerCount("data")).toBe(0);
+    expect(stream.listenerCount("end")).toBe(0);
+    expect(stream.listenerCount("error")).toBe(0);
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it("rejects a stream with an existing consumer without changing its lifecycle", async () => {
+    const stream = new PassThrough();
+    const existingDataListener = () => undefined;
+    stream.on("data", existingDataListener);
+
+    await expect(readSecretFromStdin(stream, 64, 10)).rejects.toThrow("existing consumer");
+
     expect(stream.listeners("data")).toContain(existingDataListener);
     expect(stream.destroyed).toBe(false);
 
     stream.off("data", existingDataListener);
     stream.end();
+  });
+
+  it("does not take ownership of an already-flowing stream", async () => {
+    const stream = new PassThrough();
+    stream.resume();
+
+    await expect(readSecretFromStdin(stream, 64, 10)).rejects.toThrow("existing consumer");
+
+    expect(stream.readableFlowing).toBe(true);
+    expect(stream.destroyed).toBe(false);
+    stream.destroy();
+  });
+
+  it("does not emit a later transport error after timeout closes an owned stream", async () => {
+    const stream = new PassThrough();
+    let laterErrorEvents = 0;
+    stream.on("error", () => {
+      laterErrorEvents += 1;
+    });
+
+    await expect(readSecretFromStdin(stream, 64, 10)).rejects.toThrow("timed out");
+    expect(stream.destroyed).toBe(true);
+
+    stream.destroy(new Error("late transport failure with fixture-provider-value"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(laterErrorEvents).toBe(0);
   });
 
   it("clears the deadline after successful EOF", async () => {
