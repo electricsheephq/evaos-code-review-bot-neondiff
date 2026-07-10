@@ -442,7 +442,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = [
             "-lc",
-            "\(commandLine) >/dev/null 2>&1 & pid=$!; sleep 0.25; if kill -0 \"$pid\" 2>/dev/null; then echo \"$pid\"; else wait \"$pid\"; exit $?; fi"
+            "\(commandLine) >/dev/null 2>&1 & pid=$!; echo \"$pid\"; sleep 0.25; if kill -0 \"$pid\" 2>/dev/null; then exit 0; else wait \"$pid\"; exit $?; fi"
         ]
         process.environment = guiSafeEnvironment()
         if let workingDirectory {

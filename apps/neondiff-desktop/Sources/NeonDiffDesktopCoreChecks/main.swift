@@ -851,6 +851,10 @@ check(
     "GitHub API requests use the user access token authorization header"
 )
 
+let shortLivedLaunchClient = NeonDiffCLIClient(executablePath: "/usr/bin/true", workingDirectory: tempRoot)
+let shortLivedLaunchResult = try shortLivedLaunchClient.launchDetached(arguments: [])
+check(shortLivedLaunchResult.processIdentifier > 0, "detached launcher reports a pid for a successful short-lived command")
+
 let launchMarker = tempRoot.appendingPathComponent("dashboard-launch-marker.txt")
 let launchScript = tempRoot.appendingPathComponent("dashboard-launcher")
 try """
