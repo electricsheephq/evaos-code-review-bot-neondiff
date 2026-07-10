@@ -96,13 +96,14 @@ describe("desktop config CLI", () => {
   it("retries inspect when the config changes during its stable read", () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
-    writeConfig(configPath, {
+    const config = {
       pilotRepos: ["owner/repo"],
       pollIntervalMs: 90_000,
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
       evidenceDir: join(root, "evidence")
-    });
+    };
+    writeConfig(configPath, config);
 
     let injectedWrite = false;
     const hookedReadFileSync = ((path: Parameters<typeof readFileSync>[0], options?: unknown) => {
@@ -153,18 +154,18 @@ describe("desktop config CLI", () => {
   it("changes the revision when content changes even with fixed metadata", () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
-    writeConfig(configPath, {
+    const config = {
       pilotRepos: ["owner/repo"],
       pollIntervalMs: 90_000,
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
       evidenceDir: join(root, "evidence")
-    });
+    };
+    writeConfig(configPath, config);
     const fixedStat = statSync(configPath, { bigint: true });
     const fixedStatSync = (() => fixedStat) as unknown as typeof statSync;
     const before = inspectConfigForDesktop(configPath, { statSync: fixedStatSync });
-    const current = JSON.parse(readFileSync(configPath, "utf8"));
-    writeConfig(configPath, { ...current, pollIntervalMs: 91_000 });
+    writeConfig(configPath, { ...config, pollIntervalMs: 91_000 });
     const after = inspectConfigForDesktop(configPath, { statSync: fixedStatSync });
 
     expect(before.ok).toBe(true);
