@@ -15,6 +15,7 @@ const SWIFT_ROOT_FILES = new Set([
   "apps/neondiff-desktop/script/build_and_run.sh",
   "shared/canonical-secret-rules.json",
   "scripts/generate-secret-rules.mjs",
+  "scripts/check-secret-corpus-boundary.mjs",
   "scripts/check-secret-rule-differential.mjs",
   "scripts/secret-rule-foundation-runner.swift"
 ]);

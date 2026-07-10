@@ -26,6 +26,7 @@ describe("Swift CI velocity policy", () => {
     expect(swiftAffected([
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ContentView.swift",
       "shared/canonical-secret-rules.json",
+      "scripts/check-secret-corpus-boundary.mjs",
       "scripts/check-secret-rule-differential.mjs",
       ".github/workflows/swift-desktop-gate.yml"
     ])).toMatchObject({
@@ -33,6 +34,7 @@ describe("Swift CI velocity policy", () => {
       matched: [
         "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ContentView.swift",
         "shared/canonical-secret-rules.json",
+        "scripts/check-secret-corpus-boundary.mjs",
         "scripts/check-secret-rule-differential.mjs",
         ".github/workflows/swift-desktop-gate.yml"
       ]

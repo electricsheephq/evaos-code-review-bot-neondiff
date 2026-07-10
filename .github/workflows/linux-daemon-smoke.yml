@@ -52,6 +52,10 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx vitest run tests/linux-packaging.test.ts --pool=forks --maxWorkers=1
+      - name: Build production Docker image
+        run: docker build --tag neondiff-ci:${{ github.sha }} .
+      - name: Smoke production Docker entrypoint
+        run: docker run --rm neondiff-ci:${{ github.sha }} --help
       - name: Verify Linux daemon command guidance
         run: |
           set -euo pipefail

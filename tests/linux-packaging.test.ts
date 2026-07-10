@@ -50,6 +50,8 @@ describe("Linux daemon packaging", () => {
     expect(linuxSmokeWorkflow).toContain("NEONDIFF_TEST_PLATFORM: linux");
     expect(linuxSmokeWorkflow).toContain("tests/linux-packaging.test.ts");
     expect(linuxSmokeWorkflow).toContain("node dist/src/cli.js daemon status");
+    expect(linuxSmokeWorkflow).toContain("docker build --tag neondiff-ci:${{ github.sha }} .");
+    expect(linuxSmokeWorkflow).toContain("docker run --rm neondiff-ci:${{ github.sha }} --help");
     expect(linuxSmokeWorkflow).toContain("out.command !== \"daemon status\"");
     expect(linuxSmokeWorkflow).toContain("typeof out.error !== \"string\"");
   });
