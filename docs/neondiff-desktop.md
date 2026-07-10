@@ -14,6 +14,7 @@ the same local HTML dashboard used by the CLI.
   deeper browser-first setup surface.
 - No signing, notarization, Sparkle appcast, downloadable artifact, TCC, Mac-control, or customer-control proof is claimed here.
 - Provider and license keys are stored in macOS Keychain under a NeonDiff-specific service and are never written to config files.
+- Native provider verification starts only from an explicit **Verify API Key** click. The stored provider key is read from Keychain for that operation and sent to the child CLI only through bounded standard input; it never enters argv, process environment, config, command previews, stdout/stderr, logs, screenshots, or evidence.
 
 ## Local Commands
 
@@ -41,7 +42,14 @@ neondiff daemon status --config config.local.json --launchd-label com.example.ne
 neondiff daemon start --config config.local.json --launchd-label com.example.neondiff --dry-run true
 neondiff daemon stop --config config.local.json --launchd-label com.example.neondiff --dry-run true
 neondiff dashboard --config config.local.json --launchd-label com.example.neondiff --open true
+neondiff providers verify --config config.local.json --api-key-stdin true --allow-remote-smoke true --json
 ```
+
+The native Providers pane passes the stored key only on standard input. For a hosted provider, the explicit Verify click is also the user's consent to the bounded remote smoke request; no hosted verification runs automatically. The CLI delegates to the existing hardened provider-smoke implementation and returns a strict redacted envelope. Only an exact successful `healthy` envelope is shown as verified. `configured_unverified` (metadata only) and `blocked` remain visible non-success states, and malformed, contradictory, timed-out, or transport-failed results clear any previous verified state.
+
+The debug-only `NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE=provider-verification` launch fixture bypasses Keychain reads and injects fixed redacted metadata for unsigned screenshot evidence. It makes no provider request and is not compiled into release builds.
+
+The current `run-model-checks.sh` compile harness is temporary proof while this workstation has Command Line Tools but not full Xcode. The long-term test architecture is to install full Xcode, extract `NeonDiffDesktopModel` into an importable `NeonDiffDesktopAppCore` library target, make the app depend on that target, and add a Swift Testing/XCTest target. That architecture and Xcode installation are follow-up work, not part of this Slice B branch.
 
 `config patch` writes only whitelisted non-secret fields, defaults to dry-run, and requires `--confirm true` for live writes. Direct CLI callers may make an intentional confirmation-only write without `--expected-revision`; that path is serialized and re-reads under the writer lock, but it is not bound to an earlier Preview. The native Policy control center always supplies the inspected revision for Preview, Apply, and rollback.
 Patch inputs use nested JSON object shape for editable paths. For example, the advertised `zcode.cliPath` path is supplied as `{ "zcode": { "cliPath": "/path/to/neondiff" } }`; flat dotted keys such as `{ "zcode.cliPath": "/path/to/neondiff" }` are rejected to avoid ambiguous profile keys.
@@ -158,7 +166,9 @@ neondiff dashboard --config config.local.json --launchd-label com.electricsheeph
 neondiff dashboard --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --open true
 ```
 
-The dashboard owns first-run setup and readiness display for provider API key
-verification, license status, GitHub App status, daemon status, and provider
-readiness. The Swift app only launches that browser-first surface and shows the
-redacted command/status locally.
+The dashboard remains the deeper browser-first setup and readiness surface for
+license status, GitHub App status, daemon status, and provider readiness. The
+Swift Providers pane now also offers the explicit, Keychain-backed verification
+action described above and retains only its redacted result metadata. Neither
+surface proves signed/notarized distribution, Sparkle/appcast delivery,
+browser/native parity, customer readiness, or v1.1 release completion.
