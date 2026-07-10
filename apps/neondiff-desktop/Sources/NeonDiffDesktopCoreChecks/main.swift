@@ -19,6 +19,22 @@ func checkedAsync<T>(_ message: String, _ operation: () async throws -> T) async
     }
 }
 
+func checkedCast<T>(_ value: Any, _ message: String) -> T {
+    guard let value = value as? T else {
+        fputs("check failed: \(message)\n", stderr)
+        exit(1)
+    }
+    return value
+}
+
+func checkedValue<T>(_ value: T?, _ message: String) -> T {
+    guard let value else {
+        fputs("check failed: \(message)\n", stderr)
+        exit(1)
+    }
+    return value
+}
+
 var providerFlow = OnboardingFlow()
 check(providerFlow.currentStep == .welcome, "flow starts at welcome")
 providerFlow.advance()
@@ -555,14 +571,20 @@ desiredControlCenter.issueMaxCommentsPerCycle = 1
 
 check(DesktopControlCenterPatchBuilder.validationError(for: desiredControlCenter) == nil, "valid control-center settings pass native validation")
 let desiredPatchData = try DesktopControlCenterPatchBuilder.data(for: desiredControlCenter)
-let desiredPatch = try JSONSerialization.jsonObject(with: desiredPatchData) as! [String: Any]
+let desiredPatch: [String: Any] = checkedCast(
+    try JSONSerialization.jsonObject(with: desiredPatchData),
+    "desired control-center patch must serialize to a JSON object"
+)
 check(desiredPatch["pilotRepos"] == nil, "control-center patch never couples issue enrichment to the PR allowlist")
 let desiredIssuePatch = desiredPatch["issueEnrichment"] as? [String: Any]
 check(desiredIssuePatch?["allowlist"] as? [String] == ["owner/issues-repo"], "control-center patch writes only the issue-enrichment allowlist")
 
-let rollbackSettings = controlCenterSnapshot!.policy
+let rollbackSettings = checkedValue(controlCenterSnapshot, "control-center fixture must parse").policy
 let rollbackPatchData = try DesktopControlCenterPatchBuilder.data(for: rollbackSettings)
-let rollbackPatch = try JSONSerialization.jsonObject(with: rollbackPatchData) as! [String: Any]
+let rollbackPatch: [String: Any] = checkedCast(
+    try JSONSerialization.jsonObject(with: rollbackPatchData),
+    "rollback control-center patch must serialize to a JSON object"
+)
 let rollbackIssuePatch = rollbackPatch["issueEnrichment"] as? [String: Any]
 check(rollbackPatch["pollIntervalMs"] as? Int == 120_000, "rollback patch preserves the loaded daemon baseline")
 check(rollbackIssuePatch?["allowlist"] as? [String] == ["owner/issues-repo"], "rollback patch preserves the loaded issue allowlist")
