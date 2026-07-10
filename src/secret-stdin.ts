@@ -3,6 +3,9 @@ export async function readSecretFromStdin(
   maxBytes = 64 * 1024,
   timeoutMs = 5_000
 ): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("provider secret stdin maxBytes must be a positive safe integer");
+  }
   if ((stream as NodeJS.ReadableStream & { isTTY?: boolean }).isTTY === true) {
     throw new Error("provider secret stdin must be piped; interactive TTY input is not supported");
   }

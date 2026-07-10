@@ -1,6 +1,7 @@
 import { loadConfig, type BotConfig } from "./config.js";
 import {
   verifyProviderApiKey,
+  isLoopbackProvider,
   type ProviderApiKeyVerificationInput,
   type ProviderApiKeyVerificationResult
 } from "./local-dashboard.js";
@@ -47,34 +48,42 @@ export async function runProvidersVerifyCommand(
   dependencyOverrides: Partial<ProvidersVerifyCommandDependencies> = {}
 ): Promise<ProvidersVerifyCommandExecution> {
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
-  const configPath = parseOptionalSingleValue(input.configPath, "--config");
-  const providerId = parseOptionalSingleValue(input.providerId, "--provider");
-  const expectedConfigRevision = parseOptionalSingleValue(
-    input.expectedConfigRevision,
-    "--expected-config-revision"
-  );
-  if (providerId && !isProviderId(providerId)) {
-    return {
-      output: {
-        ok: false,
-        command: "providers verify",
-        error: "--provider must be a stable provider identifier"
-      },
-      exitCode: 1
-    };
+  let configPath: string | undefined;
+  let providerId: string | undefined;
+  let expectedConfigRevision: string | undefined;
+  let apiKeyStdin: boolean;
+  let allowRemoteSmoke: boolean;
+  try {
+    configPath = parseOptionalSingleValue(input.configPath, "--config");
+    providerId = parseOptionalSingleValue(input.providerId, "--provider");
+    expectedConfigRevision = parseOptionalSingleValue(
+      input.expectedConfigRevision,
+      "--expected-config-revision"
+    );
+    apiKeyStdin = input.apiKeyStdin === undefined
+      ? false
+      : parseBooleanValue(input.apiKeyStdin, "--api-key-stdin");
+    allowRemoteSmoke = input.allowRemoteSmoke === undefined
+      ? false
+      : parseBooleanValue(input.allowRemoteSmoke, "--allow-remote-smoke");
+  } catch (error) {
+    return commandError(error instanceof Error ? error.message : "Invalid providers verify input");
   }
-  if (input.apiKeyStdin === undefined || !parseBooleanValue(input.apiKeyStdin, "--api-key-stdin")) {
-    throw new Error("providers verify requires --api-key-stdin true");
+  if (providerId && !isProviderId(providerId)) {
+    return commandError("--provider must be a stable provider identifier");
+  }
+  if (!apiKeyStdin) {
+    return commandError("providers verify requires --api-key-stdin true");
   }
 
   let config: BotConfig;
   let initialConfigRevision: string | undefined;
   if (expectedConfigRevision !== undefined) {
     if (!/^[a-f0-9]{64}$/.test(expectedConfigRevision)) {
-      throw new Error("--expected-config-revision must be a lowercase SHA-256 value");
+      return commandError("--expected-config-revision must be a lowercase SHA-256 value");
     }
     if (!configPath) {
-      throw new Error("--expected-config-revision requires --config");
+      return commandError("--expected-config-revision requires --config");
     }
     const loaded = dependencies.loadConfigAtRevision(configPath);
     if (loaded.revision !== expectedConfigRevision) {
@@ -97,15 +106,38 @@ export async function runProvidersVerifyCommand(
     config = dependencies.loadConfig(configPath);
   }
 
+  const selectedProviderId = providerId ?? config.providers!.defaultProviderId;
+  const selectedProvider = config.providers!.providers[selectedProviderId];
+  if (
+    selectedProvider?.adapter === "openai-compatible" &&
+    selectedProvider.authMode === "api-key-env" &&
+    !isLoopbackProvider(selectedProvider.baseUrl) &&
+    !allowRemoteSmoke
+  ) {
+    return {
+      output: {
+        ok: false,
+        command: "providers verify",
+        checkedAt: new Date().toISOString(),
+        providerId: selectedProviderId,
+        state: "configured_unverified",
+        mode: "metadata_only",
+        detail: "Hosted provider verification requires explicit --allow-remote-smoke true consent before stdin is read.",
+        redacted: true,
+        troubleshooting: ["Retry with explicit hosted-smoke consent to read the submitted key and run verification."],
+        ...(initialConfigRevision ? { configRevision: initialConfigRevision } : {})
+      },
+      exitCode: 1
+    };
+  }
+
   const apiKey = await dependencies.readSecretFromStdin(input.stdin);
   const result = await dependencies.verifyProviderApiKey({
     command: "providers verify",
     config,
     ...(providerId ? { providerId } : {}),
     apiKey,
-    allowRemoteSmoke: input.allowRemoteSmoke === undefined
-      ? false
-      : parseBooleanValue(input.allowRemoteSmoke, "--allow-remote-smoke")
+    allowRemoteSmoke
   });
   if (configPath && initialConfigRevision !== undefined) {
     let finalRevision: string;
@@ -130,6 +162,13 @@ export async function runProvidersVerifyCommand(
   return {
     output,
     exitCode: output.ok && output.state === "healthy" ? 0 : 1
+  };
+}
+
+function commandError(error: string): ProvidersVerifyCommandExecution {
+  return {
+    output: { ok: false, command: "providers verify", error },
+    exitCode: 1
   };
 }
 

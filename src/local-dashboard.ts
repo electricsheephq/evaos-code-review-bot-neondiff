@@ -930,7 +930,7 @@ function displayProviderName(providerId: string, registry: ProviderRegistryConfi
   return registry.providers[providerId]?.displayName ?? providerId;
 }
 
-function isLoopbackProvider(baseUrl: string | undefined): boolean {
+export function isLoopbackProvider(baseUrl: string | undefined): boolean {
   if (!baseUrl) return false;
   try {
     const parsed = new URL(baseUrl);

@@ -3253,7 +3253,8 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--provider", description: "Scope providers doctor or verify to a single provider id." },
       { name: "--smoke", description: "true to run a live smoke check in providers doctor." },
       { name: "--api-key-stdin", description: "Must be true for providers verify; reads the submitted key from bounded stdin." },
-      { name: "--allow-remote-smoke", description: "true to consent to hosted provider verification." }
+      { name: "--allow-remote-smoke", description: "true to consent to hosted provider verification." },
+      { name: "--expected-config-revision", description: "Lowercase SHA-256 config revision to pin before stdin is read." }
     ]
   },
   dashboard: {
@@ -3372,7 +3373,7 @@ function buildHelp(command?: string) {
       "neondiff providers list --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
-      "neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --json",
+      "neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --allow-remote-smoke true --json",
       "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",

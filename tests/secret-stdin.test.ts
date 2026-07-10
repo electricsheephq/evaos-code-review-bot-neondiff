@@ -13,6 +13,19 @@ describe("readSecretFromStdin", () => {
     await expect(readSecretFromStdin(Readable.from(["x".repeat(65)]), 64)).rejects.toThrow("64 bytes");
   });
 
+  it("rejects unsafe byte limits before attaching stream listeners", async () => {
+    for (const limit of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 1.5]) {
+      const stream = new PassThrough();
+      await expect(readSecretFromStdin(stream, limit, 25)).rejects.toThrow(
+        "maxBytes must be a positive safe integer"
+      );
+      expect(stream.listenerCount("data")).toBe(0);
+      expect(stream.listenerCount("end")).toBe(0);
+      expect(stream.listenerCount("error")).toBe(0);
+      expect(stream.destroyed).toBe(false);
+    }
+  });
+
   it("rejects an interactive TTY immediately without attaching stream listeners", async () => {
     const stream = new PassThrough() as PassThrough & { isTTY?: boolean };
     stream.isTTY = true;

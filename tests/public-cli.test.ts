@@ -68,7 +68,11 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("neondiff providers list --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json");
-    expect(output.examples).toContain("neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --json");
+    expect(output.examples).toContain("neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --allow-remote-smoke true --json");
+    const providersHelp = JSON.parse((await runCli(["providers", "--help"])).stdout);
+    expect(providersHelp.usage.flags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--expected-config-revision" })
+    ]));
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
@@ -681,7 +685,8 @@ exit 1
       "--provider",
       "openai-compatible"
     ])).rejects.toMatchObject({
-      stderr: expect.stringContaining("providers verify requires --api-key-stdin true")
+      stdout: expect.stringContaining("providers verify requires --api-key-stdin true"),
+      stderr: ""
     });
 
     await expect(runCli([
@@ -692,7 +697,26 @@ exit 1
       "--api-key-stdin",
       "false"
     ])).rejects.toMatchObject({
-      stderr: expect.stringContaining("providers verify requires --api-key-stdin true")
+      stdout: expect.stringContaining("providers verify requires --api-key-stdin true"),
+      stderr: ""
+    });
+  });
+
+  it("returns a redacted JSON envelope for malformed verification revisions", async () => {
+    await expect(runCli([
+      "providers",
+      "verify",
+      "--config",
+      "config.example.json",
+      "--provider",
+      "openai-compatible",
+      "--api-key-stdin",
+      "true",
+      "--expected-config-revision",
+      "not-a-revision"
+    ])).rejects.toMatchObject({
+      stdout: expect.stringContaining("expected-config-revision must be a lowercase SHA-256 value"),
+      stderr: ""
     });
   });
 
@@ -704,13 +728,16 @@ exit 1
       "--provider",
       "openai-compatible",
       "--api-key-stdin",
+      "true",
+      "--allow-remote-smoke",
       "true"
     ], "partial-fixture-provider-value");
 
     expect(result.error).toBeTruthy();
     expect(result.stderr).toContain("provider secret stdin timed out after 5000ms");
+    expect(result.stdout).not.toContain("partial-fixture-provider-value");
     expect(result.stderr).not.toContain("partial-fixture-provider-value");
-    expect(Date.now() - startedAt).toBeLessThan(7_500);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(5_000);
     expect(result.error?.killed).not.toBe(true);
   }, 10_000);
 
@@ -910,6 +937,8 @@ exit 1
   });
 
   it("keeps configured-unverified hosted verification non-success", async () => {
+    let stdinReads = 0;
+    let providerCalls = 0;
     const result = await runProvidersVerifyCommand({
       configPath: undefined,
       providerId: "openai-compatible",
@@ -917,23 +946,29 @@ exit 1
       allowRemoteSmoke: "false",
       stdin: Readable.from(["fixture-provider-value\n"])
     }, {
-      loadConfig: () => ({ providers: { defaultProviderId: "openai-compatible", providers: {} } }) as unknown as ReturnType<typeof import("../src/config.js").loadConfig>,
-      verifyProviderApiKey: async () => ({
-        ok: false,
-        command: "providers verify",
-        checkedAt: "2026-07-10T00:00:00.000Z",
-        providerId: "openai-compatible",
-        state: "configured_unverified",
-        mode: "metadata_only",
-        detail: "Hosted smoke was not run.",
-        redacted: true,
-        keySource: "submitted",
-        troubleshooting: ["Explicit remote consent is required."]
-      })
+      loadConfig: () => ({ providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            adapter: "openai-compatible",
+            authMode: "api-key-env",
+            baseUrl: "https://gateway.example.test/v1"
+          }
+        }
+      } }) as unknown as ReturnType<typeof import("../src/config.js").loadConfig>,
+      readSecretFromStdin: async () => {
+        stdinReads += 1;
+        return "must-not-be-read";
+      },
+      verifyProviderApiKey: async () => {
+        providerCalls += 1;
+        throw new Error("provider must not run without consent");
+      }
     });
 
     expect(result.exitCode).toBe(1);
     expect(result.output).toMatchObject({ ok: false, state: "configured_unverified", redacted: true });
+    expect({ stdinReads, providerCalls }).toEqual({ stdinReads: 0, providerCalls: 0 });
   });
 
   it("fails hosted remote smoke through the public CLI without explicit remote opt-in", async () => {
