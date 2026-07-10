@@ -976,7 +976,7 @@ describe("desktop config CLI", () => {
     });
 
     unlinkSync(lockPath);
-    closeSync(openSync(lockPath, "wx", 0o600));
+    writeFileSync(lockPath, "", { flag: "wx", mode: 0o600 });
     const emptyLockRejected = patchConfigForDesktop({
       configPath,
       inputPath: secondPatchPath,
