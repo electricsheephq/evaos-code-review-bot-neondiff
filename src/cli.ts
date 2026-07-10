@@ -165,7 +165,7 @@ async function main(): Promise<void> {
         inputPath: parseSingleArg(args.input, "--input"),
         dryRun: args["dry-run"] !== "false",
         confirm: args.confirm === "true",
-        expectedRevision: args["expected-revision"]
+        expectedRevision: args["expected-revision"] !== undefined
           ? parseSingleArg(args["expected-revision"], "--expected-revision")
           : undefined
       });

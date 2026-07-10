@@ -151,6 +151,29 @@ describe("desktop config CLI", () => {
     expect(inspected.config).toBeUndefined();
   });
 
+  it("retries a transient torn JSON read before failing closed", () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"],
+      pollIntervalMs: 90_000,
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    });
+    let reads = 0;
+    const hookedReadFileSync = ((path: Parameters<typeof readFileSync>[0], options?: unknown) => {
+      reads += 1;
+      return reads === 1 ? "{" : readFileSync(path, options as BufferEncoding);
+    }) as typeof readFileSync;
+
+    const inspected = inspectConfigForDesktop(configPath, { readFileSync: hookedReadFileSync });
+
+    expect(inspected.ok).toBe(true);
+    expect(reads).toBe(2);
+    expect((inspected.config as { pollIntervalMs: number }).pollIntervalMs).toBe(90_000);
+  });
+
   it("changes the revision when content changes even with fixed metadata", () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
@@ -345,6 +368,16 @@ describe("desktop config CLI", () => {
       error: expect.stringContaining("requires --confirm true")
     });
 
+    const emptyRevisionRejected = await runConfig([
+      "config", "patch", "--config", configPath, "--input", patchPath,
+      "--dry-run", "false", "--confirm", "true", "--expected-revision", ""
+    ]);
+    expect(emptyRevisionRejected).toMatchObject({
+      ok: false,
+      wrote: false,
+      error: expect.stringContaining("lowercase SHA-256")
+    });
+
     const output = await runConfig([
       "config",
       "patch",
@@ -447,7 +480,7 @@ describe("desktop config CLI", () => {
     expect(previewed).toMatchObject({
       ok: true,
       revisionBefore: inspected.revision,
-      revisionAfter: expect.stringMatching(/^[a-f0-9]{64}$/)
+      revisionAfter: inspected.revision
     });
     writeConfig(configPath, {
       pilotRepos: ["owner/review-repo"],
@@ -973,7 +1006,7 @@ describe("desktop config CLI", () => {
     });
     expect(liveOwnerRejected).toMatchObject({
       ok: false,
-      error: expect.stringContaining(`owned by live PID ${process.pid}`)
+      error: expect.stringContaining(`records PID ${process.pid}, which is currently in use`)
     });
 
     unlinkSync(lockPath);

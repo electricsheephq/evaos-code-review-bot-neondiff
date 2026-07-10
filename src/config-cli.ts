@@ -462,14 +462,20 @@ function configRevision(text: string): string {
 
 function readStableConfigSnapshot(configPath: string, fileOps?: Partial<ConfigFileOps>): { value: unknown; revision: string } {
   const ops = { ...defaultConfigFileOps, ...fileOps };
+  let lastParseError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const metadataBefore = configMetadataForPath(configPath, fileOps);
     const text = ops.readFileSync(configPath, "utf8");
     const metadataAfter = configMetadataForPath(configPath, fileOps);
     if (metadataBefore !== metadataAfter) continue;
     const revision = configRevision(text);
-    return { value: JSON.parse(text), revision };
+    try {
+      return { value: JSON.parse(text), revision };
+    } catch (error) {
+      lastParseError = error;
+    }
   }
+  if (lastParseError !== undefined) throw lastParseError;
   throw new Error("config changed while reading; retry after the other writer finishes");
 }
 
@@ -505,7 +511,7 @@ function acquireConfigPatchLock(configPath: string, fileOps?: Partial<ConfigFile
     if (code === "EEXIST") {
       const ownerPid = readConfigLockOwnerPid(lockPath, ops);
       const owner = ownerPid !== undefined && isProcessAlive(ownerPid)
-        ? `owned by live PID ${ownerPid}`
+        ? `records PID ${ownerPid}, which is currently in use (PID reuse is possible)`
         : "stale, corrupt, or owned by an unavailable process";
       throw new Error(
         `another config patch is running or left lock ${lockPath} (${owner}); `

@@ -43,7 +43,7 @@ neondiff daemon stop --config config.local.json --launchd-label com.example.neon
 neondiff dashboard --config config.local.json --launchd-label com.example.neondiff --open true
 ```
 
-`config patch` writes only whitelisted non-secret fields, defaults to dry-run, and requires `--confirm true` for live writes.
+`config patch` writes only whitelisted non-secret fields, defaults to dry-run, and requires `--confirm true` for live writes. Direct CLI callers may make an intentional confirmation-only write without `--expected-revision`; that path is serialized and re-reads under the writer lock, but it is not bound to an earlier Preview. The native Policy control center always supplies the inspected revision for Preview, Apply, and rollback.
 Patch inputs use nested JSON object shape for editable paths. For example, the advertised `zcode.cliPath` path is supplied as `{ "zcode": { "cliPath": "/path/to/neondiff" } }`; flat dotted keys such as `{ "zcode.cliPath": "/path/to/neondiff" }` are rejected to avoid ambiguous profile keys.
 
 The native Policy pane is a bounded configuration control center for daemon
@@ -95,8 +95,10 @@ filesystem transaction against non-participating writers.
 If a crash leaves an old, empty, or malformed lock, the CLI keeps failing closed
 instead of guessing. Verify that no NeonDiff `config patch`
 process is running, resolve the config's canonical path, then remove only its
-`<config-realpath>.neondiff.lock` sibling before retrying Load and Preview. Never
-remove a lock whose recorded PID is still alive.
+`<config-realpath>.neondiff.lock` sibling before retrying Load and Preview. A PID
+record is a conservative liveness signal, not owner identity: macOS can recycle
+PIDs. If the recorded PID is in use, confirm that process is actually the active
+NeonDiff config patch before deciding whether the sibling lock is stale.
 
 The PR review allowlist remains `pilotRepos` in the Repos pane. The Policy pane
 edits only `issueEnrichment.allowlist` plus bounded review, daemon, cap, lease,
