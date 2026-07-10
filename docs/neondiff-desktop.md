@@ -36,7 +36,7 @@ The desktop uses these JSON-first CLI surfaces:
 
 ```bash
 neondiff config inspect --config config.local.json
-neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true
+neondiff config patch --config config.local.json --input desktop-patch.json --dry-run true --expected-revision <sha256>
 neondiff daemon status --config config.local.json --launchd-label com.example.neondiff
 neondiff daemon start --config config.local.json --launchd-label com.example.neondiff --dry-run true
 neondiff daemon stop --config config.local.json --launchd-label com.example.neondiff --dry-run true
@@ -45,6 +45,35 @@ neondiff dashboard --config config.local.json --launchd-label com.example.neondi
 
 `config patch` writes only whitelisted non-secret fields, defaults to dry-run, and requires `--confirm true` for live writes.
 Patch inputs use nested JSON object shape for editable paths. For example, the advertised `zcode.cliPath` path is supplied as `{ "zcode": { "cliPath": "/path/to/neondiff" } }`; flat dotted keys such as `{ "zcode.cliPath": "/path/to/neondiff" }` are rejected to avoid ambiguous profile keys.
+
+The native Policy pane is a bounded configuration control center for daemon
+polling, PR review policy, and issue-enrichment policy. It loads current values
+through `config inspect`, validates them natively, and requires a successful
+dry-run Preview of the exact settings snapshot before Apply is enabled. Apply
+uses the CLI's canonical validation and confirmation contract. The app keeps one
+in-memory, non-secret baseline so the most recent Apply can be reversed with an
+explicit rollback patch; reopening or reloading the app clears that rollback.
+All config patches are serialized so provider, repository, and policy writes
+cannot race one another. Inspect is serialized with patching as well. Preview,
+Apply, and rollback each carry an immutable settings snapshot and config path,
+so edits or target-path changes made while the CLI is running cannot authorize
+or relabel a different operation.
+The inspect response includes a secret-safe SHA-256 revision token derived from
+file identity/version metadata, never config values. Policy Preview binds to
+that revision, and Apply fails closed if the config changed before the write. A
+successful Apply returns the next revision, which becomes the compare-and-swap
+guard for the one-shot rollback.
+Live `config patch` writers also hold one exclusive sibling lock across stable
+read, validation, revision check, temp-file write, and atomic rename. A second
+writer fails closed. A lock older than five minutes is recovered before one
+bounded retry only when its recorded owner PID is no longer alive; old locks
+owned by live or unverifiable processes remain fail-closed.
+
+The PR review allowlist remains `pilotRepos` in the Repos pane. The Policy pane
+edits only `issueEnrichment.allowlist` plus bounded review, daemon, cap, lease,
+cooldown, burst, and lookback settings. Neither preview nor rollback can alter
+provider/license secrets, GitHub tokens, working directories, commands, or the
+separate PR review allowlist.
 
 The ZCode defaults in `config.example.json` are developer-machine paths. On any non-author workstation or packaged desktop install, set explicit local values for `zcode.cliPath`, `zcode.appConfigPath`, and `zcode.model` before relying on daemon controls.
 

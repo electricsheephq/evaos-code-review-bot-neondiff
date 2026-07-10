@@ -493,4 +493,101 @@ do {
     check(false, "GitHub client must expose a typed, actionable failure")
 }
 
+let controlCenterSnapshot = ConfigInspectParser.parse(
+    #"""
+    {
+      "command": "config inspect",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "config": {
+        "pilotRepos": ["owner/review-repo"],
+        "pollIntervalMs": 120000,
+        "skipDrafts": false,
+        "reviewConcurrency": { "maxActiveRuns": 2, "leaseTtlMs": 600000 },
+        "reviewGate": { "maxInlineComments": 12 },
+        "issueEnrichment": {
+          "enabled": true,
+          "postIssueComment": false,
+          "allowlist": ["owner/issues-repo"],
+          "maxIssuesPerCycle": 4,
+          "maxCommentsPerCycle": 1,
+          "globalMaxIssuesPerCycle": 4,
+          "globalMaxCommentsPerCycle": 1,
+          "maxActiveRuns": 1,
+          "leaseTtlMs": 900000,
+          "cooldownMs": 3600000,
+          "burstWindowMs": 3600000,
+          "maxIssuesPerBurst": 8,
+          "lookbackMs": 600000,
+          "processExistingOpenIssuesOnActivation": false
+        }
+      }
+    }
+    """#,
+    providerKeyStored: false,
+    licenseKeyStored: false
+)
+check(controlCenterSnapshot?.policy.pollIntervalMs == 120_000, "config inspect parses daemon poll interval")
+check(controlCenterSnapshot?.revision == String(repeating: "a", count: 64), "config inspect preserves the compare-and-swap revision")
+check(controlCenterSnapshot?.policy.reviewMaxActiveRuns == 2, "config inspect parses review concurrency")
+check(controlCenterSnapshot?.policy.issueAllowlist == ["owner/issues-repo"], "issue-enrichment allowlist remains separate from review repos")
+check(controlCenterSnapshot?.repos.map(\.name) == ["owner/review-repo"], "PR review allowlist remains in the repo selector")
+
+var desiredControlCenter = DesktopControlCenterSettings()
+desiredControlCenter.pollIntervalMs = 120_000
+desiredControlCenter.skipDrafts = false
+desiredControlCenter.reviewMaxActiveRuns = 2
+desiredControlCenter.reviewLeaseTtlMs = 600_000
+desiredControlCenter.maxInlineComments = 12
+desiredControlCenter.issueEnrichmentEnabled = true
+desiredControlCenter.issuePostComment = false
+desiredControlCenter.issueAllowlist = ["owner/issues-repo"]
+desiredControlCenter.issueMaxIssuesPerCycle = 4
+desiredControlCenter.issueMaxCommentsPerCycle = 1
+
+check(DesktopControlCenterPatchBuilder.validationError(for: desiredControlCenter) == nil, "valid control-center settings pass native validation")
+let desiredPatchData = try DesktopControlCenterPatchBuilder.data(for: desiredControlCenter)
+let desiredPatch = try JSONSerialization.jsonObject(with: desiredPatchData) as! [String: Any]
+check(desiredPatch["pilotRepos"] == nil, "control-center patch never couples issue enrichment to the PR allowlist")
+let desiredIssuePatch = desiredPatch["issueEnrichment"] as? [String: Any]
+check(desiredIssuePatch?["allowlist"] as? [String] == ["owner/issues-repo"], "control-center patch writes only the issue-enrichment allowlist")
+
+let rollbackSettings = controlCenterSnapshot!.policy
+let rollbackPatchData = try DesktopControlCenterPatchBuilder.data(for: rollbackSettings)
+let rollbackPatch = try JSONSerialization.jsonObject(with: rollbackPatchData) as! [String: Any]
+let rollbackIssuePatch = rollbackPatch["issueEnrichment"] as? [String: Any]
+check(rollbackPatch["pollIntervalMs"] as? Int == 120_000, "rollback patch preserves the loaded daemon baseline")
+check(rollbackIssuePatch?["allowlist"] as? [String] == ["owner/issues-repo"], "rollback patch preserves the loaded issue allowlist")
+check(rollbackPatch["pilotRepos"] == nil, "rollback patch cannot modify the separate PR review allowlist")
+
+let previewSnapshot = DesktopControlCenterSnapshot(
+    settings: desiredControlCenter,
+    configPath: "/tmp/config-a.json"
+)
+var editedAfterPreview = desiredControlCenter
+editedAfterPreview.pollIntervalMs += 1_000
+check(
+    previewSnapshot != DesktopControlCenterSnapshot(settings: editedAfterPreview, configPath: "/tmp/config-a.json"),
+    "an edit made after preview cannot match the immutable preview snapshot"
+)
+check(
+    previewSnapshot != DesktopControlCenterSnapshot(settings: desiredControlCenter, configPath: "/tmp/config-b.json"),
+    "a preview for one config path cannot authorize a different config target"
+)
+let revisionBoundCommand = NeonDiffCommandBuilder.configPatch(
+    cliPath: "/tmp/neondiff",
+    configPath: "/tmp/config-a.json",
+    inputPath: "/tmp/patch.json",
+    dryRun: false,
+    expectedRevision: String(repeating: "a", count: 64)
+)
+check(revisionBoundCommand.commandLine.contains("--expected-revision"), "live control-center commands expose their revision guard")
+
+var invalidControlCenter = desiredControlCenter
+invalidControlCenter.issueMaxIssuesPerCycle = 1
+invalidControlCenter.issueMaxCommentsPerCycle = 2
+check(
+    DesktopControlCenterPatchBuilder.validationError(for: invalidControlCenter)?.contains("comments per cycle") == true,
+    "native validation blocks issue comment caps above issue caps"
+)
+
 print("NeonDiffDesktopCoreChecks passed")

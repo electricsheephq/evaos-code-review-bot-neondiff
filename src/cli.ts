@@ -163,7 +163,10 @@ async function main(): Promise<void> {
         configPath: parseSingleArg(args.config, "--config"),
         inputPath: parseSingleArg(args.input, "--input"),
         dryRun: args["dry-run"] !== "false",
-        confirm: args.confirm === "true"
+        confirm: args.confirm === "true",
+        expectedRevision: args["expected-revision"]
+          ? parseSingleArg(args["expected-revision"], "--expected-revision")
+          : undefined
       });
       console.log(JSON.stringify(result, null, 2));
       if (!result.ok) process.exitCode = 1;

@@ -11,6 +11,7 @@ import {
   unlinkSync,
   writeFileSync
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { loadConfig, loadConfigFromObject, type RepoProfileConfig } from "./config.js";
 import { isApiKeyEnvName } from "./providers.js";
@@ -34,11 +35,30 @@ const REPO_PROFILE_DESKTOP_SAFE_FIELDS = [
 
 const REPO_PROFILE_DESKTOP_SAFE_FIELD_PATTERN = REPO_PROFILE_DESKTOP_SAFE_FIELDS.join("|");
 const CONFIG_NAME_SEGMENT_PATTERN = "[A-Za-z0-9_.-]+";
+const CONFIG_REVISION_PATTERN = /^[a-f0-9]{64}$/;
 
 const EXACT_PATCH_PATHS = new Set([
   "pilotRepos",
+  "pollIntervalMs",
   "skipDrafts",
   "canaryPulls",
+  "reviewConcurrency.maxActiveRuns",
+  "reviewConcurrency.leaseTtlMs",
+  "reviewGate.maxInlineComments",
+  "issueEnrichment.enabled",
+  "issueEnrichment.postIssueComment",
+  "issueEnrichment.allowlist",
+  "issueEnrichment.maxIssuesPerCycle",
+  "issueEnrichment.maxCommentsPerCycle",
+  "issueEnrichment.globalMaxIssuesPerCycle",
+  "issueEnrichment.globalMaxCommentsPerCycle",
+  "issueEnrichment.maxActiveRuns",
+  "issueEnrichment.leaseTtlMs",
+  "issueEnrichment.cooldownMs",
+  "issueEnrichment.burstWindowMs",
+  "issueEnrichment.maxIssuesPerBurst",
+  "issueEnrichment.lookbackMs",
+  "issueEnrichment.processExistingOpenIssuesOnActivation",
   "zcode.cliPath",
   "zcode.appConfigPath",
   "zcode.model",
@@ -71,6 +91,7 @@ export interface ConfigInspectResult {
   configPath?: string;
   exists: boolean;
   source: "file" | "defaults";
+  revision: string;
   editablePaths: string[];
   config: unknown;
 }
@@ -84,6 +105,8 @@ export interface ConfigPatchResult {
   wrote: boolean;
   changedPaths: string[];
   noopPaths: string[];
+  revisionBefore?: string;
+  revisionAfter?: string;
   config?: unknown;
   error?: string;
 }
@@ -100,6 +123,7 @@ type ConfigFileOps = {
   fsyncSync: typeof fsyncSync;
   mkdirSync: typeof mkdirSync;
   openSync: typeof openSync;
+  readFileSync: typeof readFileSync;
   renameSync: typeof renameSync;
   statSync: typeof statSync;
   unlinkSync: typeof unlinkSync;
@@ -113,21 +137,26 @@ const defaultConfigFileOps: ConfigFileOps = {
   fsyncSync,
   mkdirSync,
   openSync,
+  readFileSync,
   renameSync,
   statSync,
   unlinkSync,
   writeFileSync
 };
 
-export function inspectConfigForDesktop(configPath?: string): ConfigInspectResult {
+export function inspectConfigForDesktop(configPath?: string, fileOps?: Partial<ConfigFileOps>): ConfigInspectResult {
+  const ops = { ...defaultConfigFileOps, ...fileOps };
   const resolvedConfigPath = configPath ? resolve(configPath) : undefined;
-  const config = loadConfig(resolvedConfigPath);
+  const exists = resolvedConfigPath ? ops.existsSync(resolvedConfigPath) : false;
+  const snapshot = exists && resolvedConfigPath ? readStableConfigSnapshot(resolvedConfigPath, fileOps) : undefined;
+  const config = snapshot ? loadConfigFromObject(snapshot.value) : loadConfig();
   return {
     ok: true,
     command: "config inspect",
     ...(resolvedConfigPath ? { configPath: resolvedConfigPath } : {}),
-    exists: resolvedConfigPath ? existsSync(resolvedConfigPath) : false,
-    source: resolvedConfigPath && existsSync(resolvedConfigPath) ? "file" : "defaults",
+    exists,
+    source: exists ? "file" : "defaults",
+    revision: snapshot?.revision ?? "",
     editablePaths: editablePatchPaths(),
     config: redactConfigObject(config)
   };
@@ -138,6 +167,7 @@ export function patchConfigForDesktop(input: {
   inputPath: string;
   dryRun: boolean;
   confirm: boolean;
+  expectedRevision?: string;
   fileOps?: Partial<ConfigFileOps>;
 }): ConfigPatchResult {
   const configPath = resolve(input.configPath);
@@ -151,17 +181,54 @@ export function patchConfigForDesktop(input: {
   if (!input.dryRun && !input.confirm) {
     return failedPatch(input, configPath, inputPath, "config patch with --dry-run false requires --confirm true");
   }
+  if (input.expectedRevision !== undefined && !CONFIG_REVISION_PATTERN.test(input.expectedRevision)) {
+    return failedPatch(input, configPath, inputPath, "--expected-revision must be a lowercase SHA-256 value");
+  }
+
+  if (input.dryRun) return patchConfigForDesktopUnlocked(input, configPath, inputPath);
+
+  let releaseLock: (() => void) | undefined;
+  try {
+    releaseLock = acquireConfigPatchLock(configPath, input.fileOps);
+  } catch (error) {
+    return failedPatch(input, configPath, inputPath, error instanceof Error ? error.message : String(error));
+  }
+  try {
+    return patchConfigForDesktopUnlocked(input, configPath, inputPath);
+  } finally {
+    releaseLock();
+  }
+}
+
+function patchConfigForDesktopUnlocked(
+  input: {
+    configPath: string;
+    inputPath: string;
+    dryRun: boolean;
+    confirm: boolean;
+    expectedRevision?: string;
+    fileOps?: Partial<ConfigFileOps>;
+  },
+  configPath: string,
+  inputPath: string
+): ConfigPatchResult {
 
   let current: unknown;
   let patch: unknown;
+  let revisionBefore: string;
   try {
-    current = JSON.parse(readFileSync(configPath, "utf8"));
+    const snapshot = readStableConfigSnapshot(configPath, input.fileOps);
+    current = snapshot.value;
+    revisionBefore = snapshot.revision;
     patch = JSON.parse(readFileSync(inputPath, "utf8"));
   } catch (error) {
     return failedPatch(input, configPath, inputPath, `invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!isRecord(current)) {
     return failedPatch(input, configPath, inputPath, "config file must contain a JSON object");
+  }
+  if (input.expectedRevision !== undefined && input.expectedRevision !== revisionBefore) {
+    return failedPatch(input, configPath, inputPath, "config changed since preview; reload and preview again");
   }
   if (!isRecord(patch)) {
     return failedPatch(input, configPath, inputPath, "patch input must contain a JSON object");
@@ -196,13 +263,19 @@ export function patchConfigForDesktop(input: {
     setNestedValue(next, entry.path, entry.value);
   }
   const changedPaths = changed.map((entry) => entry.path.join("."));
+  let revisionAfter = revisionBefore;
 
   const validationError = validateCandidateConfig(next);
   if (validationError) return failedPatch(input, configPath, inputPath, validationError);
 
   if (!input.dryRun && changedPaths.length > 0) {
     try {
+      const liveRevision = configRevisionForPath(configPath, input.fileOps);
+      if (liveRevision !== revisionBefore) {
+        return failedPatch(input, configPath, inputPath, "config changed while applying patch; reload and preview again");
+      }
       writeConfigAtomic(configPath, next, input.fileOps);
+      revisionAfter = configRevisionForPath(configPath, input.fileOps);
     } catch (error) {
       return failedPatch(input, configPath, inputPath, `failed to write config atomically: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -217,6 +290,8 @@ export function patchConfigForDesktop(input: {
     wrote: !input.dryRun && changedPaths.length > 0,
     changedPaths,
     noopPaths,
+    revisionBefore,
+    revisionAfter,
     config: redactConfigObject(next)
   };
 }
@@ -328,6 +403,91 @@ function deepEqual(left: unknown, right: unknown): boolean {
     return leftKeys.every((key) => deepEqual(left[key], right[key]));
   }
   return false;
+}
+
+function configRevisionForPath(configPath: string, fileOps?: Partial<ConfigFileOps>): string {
+  const ops = { ...defaultConfigFileOps, ...fileOps };
+  const stat = ops.statSync(configPath, { bigint: true });
+  const identity = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  return createHash("sha256").update(identity).digest("hex");
+}
+
+function readStableConfigSnapshot(configPath: string, fileOps?: Partial<ConfigFileOps>): { value: unknown; revision: string } {
+  const ops = { ...defaultConfigFileOps, ...fileOps };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const revisionBefore = configRevisionForPath(configPath, fileOps);
+    const text = ops.readFileSync(configPath, "utf8");
+    const revisionAfter = configRevisionForPath(configPath, fileOps);
+    if (revisionBefore !== revisionAfter) continue;
+    return { value: JSON.parse(text), revision: revisionAfter };
+  }
+  throw new Error("config changed while reading; retry after the other writer finishes");
+}
+
+function acquireConfigPatchLock(configPath: string, fileOps?: Partial<ConfigFileOps>): () => void {
+  const ops = { ...defaultConfigFileOps, ...fileOps };
+  const lockPath = `${configPath}.neondiff.lock`;
+  const staleAfterMs = 5 * 60 * 1_000;
+  let fd: number | undefined;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let createdLock = false;
+    try {
+      fd = ops.openSync(lockPath, "wx", 0o600);
+      createdLock = true;
+      ops.writeFileSync(fd, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`);
+      ops.fsyncSync(fd);
+      const lockInode = ops.statSync(lockPath).ino;
+      ops.closeSync(fd);
+      fd = undefined;
+      return () => {
+        if (ops.existsSync(lockPath) && ops.statSync(lockPath).ino === lockInode) {
+          ops.unlinkSync(lockPath);
+        }
+      };
+    } catch (error) {
+      if (fd !== undefined) {
+        try { ops.closeSync(fd); } catch { /* cleanup below */ }
+        fd = undefined;
+      }
+      if (createdLock && ops.existsSync(lockPath)) {
+        try { ops.unlinkSync(lockPath); } catch { /* surface the original acquisition failure */ }
+      }
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST" && attempt === 0) {
+        const ageMs = Date.now() - ops.statSync(lockPath).mtimeMs;
+        const ownerPid = readConfigLockOwnerPid(lockPath, ops);
+        if (ageMs > staleAfterMs && ownerPid !== undefined && !isProcessAlive(ownerPid)) {
+          ops.unlinkSync(lockPath);
+          continue;
+        }
+      }
+      throw new Error(code === "EEXIST"
+        ? "another config patch is running; retry after it finishes"
+        : `failed to acquire config patch lock: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error("another config patch is running; retry after it finishes");
+}
+
+function readConfigLockOwnerPid(lockPath: string, ops: ConfigFileOps): number | undefined {
+  try {
+    const payload = JSON.parse(ops.readFileSync(lockPath, "utf8")) as { pid?: unknown };
+    return typeof payload.pid === "number" && Number.isSafeInteger(payload.pid) && payload.pid > 0
+      ? payload.pid
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 function validateCandidateConfig(candidate: unknown): string | undefined {
