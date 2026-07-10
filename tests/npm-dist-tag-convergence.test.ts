@@ -66,7 +66,13 @@ process.stdout.write(JSON.stringify(tags));
   return binDir;
 }
 
-function runWorkflowBlock(root: string, mode: "converge" | "stale" | "hang" | "unexpected", attempts: number, convergeAt = attempts) {
+function runWorkflowBlock(
+  root: string,
+  mode: "converge" | "stale" | "hang" | "unexpected",
+  attempts: number,
+  convergeAt = attempts,
+  cleanupConvergeAt = 2
+) {
   const binDir = writeFakeNpm(root);
   const counterPath = join(root, "view-counter.txt");
   const cleanupCounterPath = join(root, "cleanup-counter.txt");
@@ -91,7 +97,7 @@ function runWorkflowBlock(root: string, mode: "converge" | "stale" | "hang" | "u
       NPM_CONFIRM_OUTPUT: outputPath,
       FAKE_NPM_VIEW_COUNTER: counterPath,
       FAKE_NPM_CLEANUP_COUNTER: cleanupCounterPath,
-      FAKE_NPM_CLEANUP_CONVERGE_AT: "2",
+      FAKE_NPM_CLEANUP_CONVERGE_AT: String(cleanupConvergeAt),
       FAKE_NPM_RM_COUNTER: rmCounterPath,
       FAKE_NPM_RM_MARKER: rmMarkerPath,
       FAKE_NPM_MODE: mode,
@@ -109,8 +115,16 @@ describe("npm dist-tag convergence confirmation", () => {
     expect(result.status).toBe(0);
     expect(Number(readFileSync(counterPath, "utf8"))).toBeGreaterThan(3);
     expect(readFileSync(cleanupCounterPath, "utf8")).toBe("2");
-    expect(Number(readFileSync(rmCounterPath, "utf8"))).toBeGreaterThanOrEqual(1);
-    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({ latest: "1.0.3" });
+    expect(readFileSync(rmCounterPath, "utf8")).toBe("1");
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      distTags: { latest: "1.0.3" },
+      quarantineCleanup: {
+        state: "confirmed_absent",
+        observedVersion: null,
+        removalAttempted: true,
+        removalAccepted: true
+      }
+    });
   });
 
   it("fails closed after the bounded attempt count when the tag never converges", () => {
@@ -133,14 +147,39 @@ describe("npm dist-tag convergence confirmation", () => {
     expect(result.stderr).toContain("npm dist-tag did not converge to the promoted package after 2 attempts");
   });
 
-  it("fails closed without removing a quarantine tag owned by another version", () => {
+  it("preserves and records a quarantine tag owned by another version without failing promotion", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-dist-tag-unexpected-"));
     const { outputPath, result, rmCounterPath } = runWorkflowBlock(root, "unexpected", 2);
 
-    expect(result.status).toBe(1);
-    expect(existsSync(outputPath)).toBe(false);
+    expect(result.status).toBe(0);
     expect(existsSync(rmCounterPath)).toBe(false);
-    expect(result.stderr).toContain("refusing to remove unexpected release-candidate version 9.9.9");
+    expect(result.stderr).toContain("::warning::refusing to remove unexpected release-candidate version 9.9.9");
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+      quarantineCleanup: {
+        state: "unexpected_owner",
+        observedVersion: "9.9.9",
+        removalAttempted: false,
+        removalAccepted: false
+      }
+    });
+  });
+
+  it("warns and records cleanup lag without failing a confirmed promotion", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dist-tag-cleanup-lag-"));
+    const { outputPath, result, rmCounterPath } = runWorkflowBlock(root, "converge", 2, 1, 99);
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(rmCounterPath, "utf8")).toBe("1");
+    expect(result.stderr).toContain("::warning::release-candidate cleanup remains unconfirmed after 2 attempts");
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+      distTags: { latest: "1.0.3", "release-candidate": "1.0.3" },
+      quarantineCleanup: {
+        state: "pending_registry_convergence",
+        observedVersion: "1.0.3",
+        removalAttempted: true,
+        removalAccepted: true
+      }
+    });
   });
 
   it("derives the workflow block indentation from its marker", () => {
