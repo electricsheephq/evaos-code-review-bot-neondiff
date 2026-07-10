@@ -9,7 +9,6 @@ Close the remaining functional acceptance gap in the released GitHub desktop onb
 - Issue: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/487
 - Milestone: #11 `v1.1 — Real Mac Desktop Launch`
 - Base: `origin/main` at `7bed4f0f54675739f1c702e181e0d1352132c1e9`
-- Worktree: `/Volumes/LEXAR/repos/worktrees/evaos-code-review-bot-neondiff/487-github-onboarding-errors`
 - Branch: `codex/487-github-onboarding-errors`
 
 ## Scope
