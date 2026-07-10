@@ -975,12 +975,21 @@ describe("desktop config CLI", () => {
       error: expect.stringContaining(lockPath)
     });
 
-    writeFileSync(lockPath, "");
+    const existingLockOpenSync = (() => {
+      throw Object.assign(new Error("fixture lock already exists"), { code: "EEXIST" });
+    }) as typeof openSync;
+    const emptyLockReadFileSync = ((path: Parameters<typeof readFileSync>[0], options?: unknown) => (
+      path === lockPath ? "" : readFileSync(path, options as never)
+    )) as typeof readFileSync;
     const emptyLockRejected = patchConfigForDesktop({
       configPath,
       inputPath: secondPatchPath,
       dryRun: false,
-      confirm: true
+      confirm: true,
+      fileOps: {
+        openSync: existingLockOpenSync,
+        readFileSync: emptyLockReadFileSync
+      }
     });
     expect(emptyLockRejected).toMatchObject({
       ok: false,
