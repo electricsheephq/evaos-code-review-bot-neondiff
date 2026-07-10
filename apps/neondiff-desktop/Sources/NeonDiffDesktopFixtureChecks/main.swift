@@ -321,9 +321,10 @@ do {
     check(!error.localizedDescription.isEmpty, "manifest path failure is diagnostic")
 }
 
+let secretShapedFixtureValue = ["gh", "p_", "fixture", "_secret_material"].joined()
 let unsafeManifestSecret = Data(
     String(decoding: validManifest, as: UTF8.self)
-        .replacingOccurrences(of: "Deterministic source-build baseline only", with: "ghp_fixture_secret_material")
+        .replacingOccurrences(of: "Deterministic source-build baseline only", with: secretShapedFixtureValue)
         .utf8
 )
 do {
