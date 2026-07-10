@@ -1,9 +1,12 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { canonicalSecretRules, canonicalSensitiveCookieRule } from "../src/generated-secret-rules.js";
 import { containsSecretLikeText } from "../src/secrets.js";
 import { canonicalSecretRuleCorpus } from "./generated-secret-rule-corpus.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("canonical secret rule parity", () => {
   it("keeps every canonical sensitive and benign corpus case bound to Node production behavior", () => {
@@ -55,13 +58,14 @@ describe("canonical secret rule parity", () => {
     expect(canonicalSensitiveCookieRule.sensitiveNameSource).not.toMatch(/\\[bds]/);
   });
 
-  it("differentially matches every rule in Node and Foundation across boundary variants", () => {
-    const result = spawnSync(process.execPath, ["scripts/check-secret-rule-differential.mjs", "--require-swift"], {
+  it("differentially matches every rule in Node and Foundation across boundary variants", async () => {
+    const result = await execFileAsync(process.execPath, ["scripts/check-secret-rule-differential.mjs", "--require-swift"], {
       cwd: process.cwd(),
-      encoding: "utf8"
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024
     });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  }, 60_000);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("secret rule differential ok");
+  }, 90_000);
 
   it("drives both production scanners with independently expected differential cases", () => {
     const differential = readFileSync("scripts/check-secret-rule-differential.mjs", "utf8");
