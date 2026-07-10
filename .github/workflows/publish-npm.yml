@@ -200,6 +200,7 @@ jobs:
           const temporaryPath = `${outputPath}.tmp`;
           rmSync(outputPath, { force: true });
           rmSync(temporaryPath, { force: true });
+          let promotionConfirmed = false;
           for (let attempt = 1; attempt <= attempts; attempt += 1) {
             try {
               const raw = execFileSync("npm", ["view", packageName, "dist-tags", "--json"], {
@@ -209,20 +210,49 @@ jobs:
               });
               const tags = JSON.parse(raw);
               if (tags && !Array.isArray(tags) && typeof tags === "object" && tags[npmTag] === expectedVersion) {
-                writeFileSync(temporaryPath, `${JSON.stringify(tags)}\n`, { encoding: "utf8", mode: 0o600 });
-                renameSync(temporaryPath, outputPath);
-                process.exit(0);
+                promotionConfirmed = true;
+                break;
               }
             } catch {
               // Registry, timeout, and JSON failures remain retryable until the bounded attempt count is exhausted.
             }
             if (attempt < attempts && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
+          if (!promotionConfirmed) {
+            console.error(`npm dist-tag did not converge to the promoted package after ${attempts} attempts`);
+            process.exit(1);
+          }
+
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+              const raw = execFileSync("npm", ["view", packageName, "dist-tags", "--json"], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+                timeout: timeoutMs
+              });
+              const tags = JSON.parse(raw);
+              if (!tags || Array.isArray(tags) || typeof tags !== "object") throw new Error("invalid npm dist-tag response");
+              const quarantineVersion = tags["release-candidate"];
+              if (quarantineVersion === undefined) {
+                writeFileSync(temporaryPath, `${JSON.stringify(tags)}\n`, { encoding: "utf8", mode: 0o600 });
+                renameSync(temporaryPath, outputPath);
+                process.exit(0);
+              }
+              if (quarantineVersion !== expectedVersion) {
+                console.error(`refusing to remove unexpected release-candidate version ${quarantineVersion}`);
+                process.exit(1);
+              }
+              execFileSync("npm", ["dist-tag", "rm", packageName, "release-candidate"], {
+                stdio: ["ignore", "ignore", "ignore"],
+                timeout: timeoutMs
+              });
+            } catch {
+              // Retry until absence is confirmed; a timed-out removal may still have reached the registry.
+            }
+            if (attempt < attempts && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
           rmSync(temporaryPath, { force: true });
-          console.error(`npm dist-tag did not converge to the promoted package after ${attempts} attempts`);
+          console.error(`release-candidate did not disappear after ${attempts} attempts`);
           process.exit(1);
           NODE
           # END POST_PROMOTION_CONFIRMATION
-          if [ "$(npm view neondiff dist-tags.release-candidate 2>/dev/null || true)" = "$PACKAGE_VERSION" ]; then
-            npm dist-tag rm neondiff release-candidate
-          fi

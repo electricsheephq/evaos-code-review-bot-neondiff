@@ -189,9 +189,11 @@ describe("NeonDiff public release readiness", () => {
       };
       installedPackage?: {
         binaryVersion?: string;
-        previewSmokePath?: string;
-        browserProofPaths?: string[];
-        artifacts?: Array<{ kind?: string; path?: string; sha256?: string }>;
+        evidenceRootId?: string;
+        isolatedPrefixRef?: string;
+        previewSmokeRef?: string;
+        browserProofRefs?: string[];
+        artifacts?: Array<{ kind?: string; ref?: string; sha256?: string }>;
         providerVerification?: { ok?: boolean; mode?: string; result?: string };
       };
       proofBoundary?: { allowed?: string[]; forbidden?: string[] };
@@ -218,30 +220,33 @@ describe("NeonDiff public release readiness", () => {
       }
     });
     expect(publicationProof.npm?.provenanceAttestationUrl).toMatch(/^https:\/\/registry\.npmjs\.org\//);
-    expect(publicationProof.installedPackage?.previewSmokePath).toMatch(/dashboard-preview-smoke\/preview-smoke\.json$/);
-    expect(publicationProof.installedPackage?.browserProofPaths).toHaveLength(2);
+    expect(publicationProof.installedPackage?.evidenceRootId).toBe("neondiff-ga/2026-07-10/v1.0.3/install-smoke");
+    expect(publicationProof.installedPackage?.isolatedPrefixRef).toBe("prefix");
+    expect(publicationProof.installedPackage?.previewSmokeRef).toBe("dashboard-preview-smoke/preview-smoke.json");
+    expect(publicationProof.installedPackage?.browserProofRefs).toHaveLength(2);
     expect(publicationProof.installedPackage?.artifacts).toEqual([
       {
         kind: "installed-cli",
-        path: "/Volumes/LEXAR/Codex/evidence/neondiff-ga/2026-07-10/v1.0.3/install-smoke/prefix/lib/node_modules/neondiff/dist/src/cli.js",
+        ref: "prefix/lib/node_modules/neondiff/dist/src/cli.js",
         sha256: "f0274f200f451f9bab1ae7b1cc710589fb9d3a446bd45a41698f40b2634f7b69"
       },
       {
         kind: "preview-smoke",
-        path: "/Volumes/LEXAR/Codex/evidence/neondiff-ga/2026-07-10/v1.0.3/install-smoke/dashboard-preview-smoke/preview-smoke.json",
+        ref: "dashboard-preview-smoke/preview-smoke.json",
         sha256: "048bc1b5f542aafbd02015c998ddf5f61b4c2864e9bf35f32b6af24adf83ff96"
       },
       {
         kind: "browser-dashboard",
-        path: "/Volumes/LEXAR/Codex/evidence/neondiff-ga/2026-07-10/v1.0.3/install-smoke/dashboard-installed-1.0.3.png",
+        ref: "dashboard-installed-1.0.3.png",
         sha256: "5ed63505149832fba630173ea72b915e6d94b120ff1e012dd9d6fb45bb6d17ff"
       },
       {
         kind: "provider-verification-viewport",
-        path: "/Volumes/LEXAR/Codex/evidence/neondiff-ga/2026-07-10/v1.0.3/install-smoke/dashboard-installed-1.0.3-provider-verified-viewport.png",
+        ref: "dashboard-installed-1.0.3-provider-verified-viewport.png",
         sha256: "74a36839276d715588b0f3700909ab07650d2d63d64a5977c2a6c67740b503d2"
       }
     ]);
+    expect(JSON.stringify(publicationProof)).not.toContain("/Volumes/");
     expect(publicationProof.proofBoundary?.allowed).toContain("installed CLI and local browser dashboard flow for neondiff@1.0.3");
     expect(publicationProof.proofBoundary?.forbidden).toEqual(
       expect.arrayContaining([
