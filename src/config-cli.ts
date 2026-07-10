@@ -2,6 +2,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -122,6 +123,7 @@ type ConfigFileOps = {
   chmodSync: typeof chmodSync;
   closeSync: typeof closeSync;
   existsSync: typeof existsSync;
+  fstatSync: typeof fstatSync;
   fsyncSync: typeof fsyncSync;
   mkdirSync: typeof mkdirSync;
   openSync: typeof openSync;
@@ -137,6 +139,7 @@ const defaultConfigFileOps: ConfigFileOps = {
   chmodSync,
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -199,10 +202,10 @@ export function patchConfigForDesktop(input: {
   } catch (error) {
     return failedPatch(input, requestedConfigPath, inputPath, `failed to resolve config path: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!existsSync(configPath)) {
+  if (!ops.existsSync(configPath)) {
     return failedPatch(input, configPath, inputPath, "config file does not exist");
   }
-  if (!existsSync(inputPath)) {
+  if (!ops.existsSync(inputPath)) {
     return failedPatch(input, configPath, inputPath, "patch input file does not exist");
   }
   if (!input.dryRun && !input.confirm) {
@@ -461,47 +464,44 @@ function readStableConfigSnapshot(configPath: string, fileOps?: Partial<ConfigFi
 function acquireConfigPatchLock(configPath: string, fileOps?: Partial<ConfigFileOps>): () => void {
   const ops = { ...defaultConfigFileOps, ...fileOps };
   const lockPath = `${configPath}.neondiff.lock`;
-  const staleAfterMs = 5 * 60 * 1_000;
   let fd: number | undefined;
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let createdLock = false;
-    try {
-      fd = ops.openSync(lockPath, "wx", 0o600);
-      createdLock = true;
-      ops.writeFileSync(fd, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`);
-      ops.fsyncSync(fd);
-      const lockInode = ops.statSync(lockPath).ino;
-      ops.closeSync(fd);
+  let createdLock = false;
+  let lockInode: number | undefined;
+  try {
+    fd = ops.openSync(lockPath, "wx", 0o600);
+    createdLock = true;
+    lockInode = ops.fstatSync(fd).ino;
+    ops.writeFileSync(fd, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`);
+    ops.fsyncSync(fd);
+    ops.closeSync(fd);
+    fd = undefined;
+    return () => {
+      if (ops.existsSync(lockPath) && ops.statSync(lockPath).ino === lockInode) {
+        ops.unlinkSync(lockPath);
+      }
+    };
+  } catch (error) {
+    if (fd !== undefined) {
+      try { ops.closeSync(fd); } catch { /* cleanup below */ }
       fd = undefined;
-      return () => {
-        if (ops.existsSync(lockPath) && ops.statSync(lockPath).ino === lockInode) {
-          ops.unlinkSync(lockPath);
-        }
-      };
-    } catch (error) {
-      if (fd !== undefined) {
-        try { ops.closeSync(fd); } catch { /* cleanup below */ }
-        fd = undefined;
-      }
-      if (createdLock && ops.existsSync(lockPath)) {
-        try { ops.unlinkSync(lockPath); } catch { /* surface the original acquisition failure */ }
-      }
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EEXIST" && attempt === 0) {
-        const ageMs = Date.now() - ops.statSync(lockPath).mtimeMs;
-        const ownerPid = readConfigLockOwnerPid(lockPath, ops);
-        if (ageMs > staleAfterMs && ownerPid !== undefined && !isProcessAlive(ownerPid)) {
-          ops.unlinkSync(lockPath);
-          continue;
-        }
-      }
-      throw new Error(code === "EEXIST"
-        ? "another config patch is running; retry after it finishes"
-        : `failed to acquire config patch lock: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (createdLock && lockInode !== undefined && ops.existsSync(lockPath)
+      && ops.statSync(lockPath).ino === lockInode) {
+      try { ops.unlinkSync(lockPath); } catch { /* surface the original acquisition failure */ }
+    }
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
+      const ownerPid = readConfigLockOwnerPid(lockPath, ops);
+      const owner = ownerPid !== undefined && isProcessAlive(ownerPid)
+        ? `owned by live PID ${ownerPid}`
+        : "stale, corrupt, or owned by an unavailable process";
+      throw new Error(
+        `another config patch is running or left lock ${lockPath} (${owner}); `
+        + "verify no NeonDiff config patch is running, then remove this lock and retry"
+      );
+    }
+    throw new Error(`failed to acquire config patch lock: ${error instanceof Error ? error.message : String(error)}`);
   }
-  throw new Error("another config patch is running; retry after it finishes");
 }
 
 function readConfigLockOwnerPid(lockPath: string, ops: ConfigFileOps): number | undefined {

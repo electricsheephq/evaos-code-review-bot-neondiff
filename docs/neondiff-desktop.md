@@ -67,9 +67,9 @@ successful Apply returns the next revision, which becomes the compare-and-swap
 guard for the one-shot rollback.
 Live `config patch` writers also hold one exclusive sibling lock across stable
 read, validation, revision check, temp-file write, and atomic rename. A second
-writer fails closed. A lock older than five minutes is recovered before one
-bounded retry only when its recorded owner PID is no longer alive; old locks
-owned by live or unverifiable processes remain fail-closed.
+writer fails closed. Every existing sibling lock fails closed; the CLI never
+deletes a lock it did not create. The error identifies a live owner when one can
+be verified, or reports the exact stale/corrupt lock path for manual recovery.
 Existing config paths are canonicalized through `realpath` before the sibling
 lock is chosen, so symlink aliases to the same physical file share one writer
 lock.
@@ -82,8 +82,8 @@ next to the mutation controls. The revision check rejects external drift
 observed before the lock-held pre-commit read, but it does not claim a universal
 filesystem transaction against non-participating writers.
 
-If a crash leaves an old lock with an invalid or unverifiable owner, the CLI
-keeps failing closed instead of guessing. Verify that no NeonDiff `config patch`
+If a crash leaves an old, empty, or malformed lock, the CLI keeps failing closed
+instead of guessing. Verify that no NeonDiff `config patch`
 process is running, resolve the config's canonical path, then remove only its
 `<config-realpath>.neondiff.lock` sibling before retrying Load and Preview. Never
 remove a lock whose recorded PID is still alive.

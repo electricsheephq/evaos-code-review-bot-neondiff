@@ -851,7 +851,7 @@ describe("desktop config CLI", () => {
     expect(JSON.parse(readFileSync(configPath, "utf8")).desktop.updateChannel).toBe("beta");
   });
 
-  it("serializes live config writers and recovers a bounded stale lock", () => {
+  it("serializes live config writers and fails closed for every unowned lock state", () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
     const firstPatchPath = join(root, "first-patch.json");
@@ -934,7 +934,7 @@ describe("desktop config CLI", () => {
     });
     expect(liveOwnerRejected).toMatchObject({
       ok: false,
-      error: expect.stringContaining("another config patch is running")
+      error: expect.stringContaining(`owned by live PID ${process.pid}`)
     });
 
     unlinkSync(lockPath);
@@ -948,7 +948,7 @@ describe("desktop config CLI", () => {
     });
     expect(invalidOwnerRejected).toMatchObject({
       ok: false,
-      error: expect.stringContaining("another config patch is running")
+      error: expect.stringContaining("stale, corrupt, or owned by an unavailable process")
     });
 
     unlinkSync(lockPath);
@@ -961,9 +961,34 @@ describe("desktop config CLI", () => {
     });
     expect(freshDeadOwnerRejected).toMatchObject({
       ok: false,
-      error: expect.stringContaining("another config patch is running")
+      error: expect.stringContaining("verify no NeonDiff config patch is running")
     });
     utimesSync(lockPath, staleTime, staleTime);
+    const staleDeadOwnerRejected = patchConfigForDesktop({
+      configPath,
+      inputPath: secondPatchPath,
+      dryRun: false,
+      confirm: true
+    });
+    expect(staleDeadOwnerRejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining(lockPath)
+    });
+
+    unlinkSync(lockPath);
+    closeSync(openSync(lockPath, "wx", 0o600));
+    const emptyLockRejected = patchConfigForDesktop({
+      configPath,
+      inputPath: secondPatchPath,
+      dryRun: false,
+      confirm: true
+    });
+    expect(emptyLockRejected).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("then remove this lock and retry")
+    });
+
+    unlinkSync(lockPath);
     const recovered = patchConfigForDesktop({
       configPath,
       inputPath: secondPatchPath,
