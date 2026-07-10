@@ -75,6 +75,12 @@ surface. Each fixture records the selected tab or onboarding step, fixed clock
 and locale, runtime/GitHub/provider/license state, scripted outcomes, delays,
 expected actions, and safe public copy.
 
+PR #513 is a hard baseline prerequisite because it adds the provider
+verification states required by this matrix. #515 captures its canonical
+pre-redesign baseline only from an exact `main` SHA that contains #513. Existing
+issue-488 captures remain labeled historical pre-merge evidence; they do not
+substitute for the canonical post-merge baseline.
+
 The launch contract is:
 
 ```text
@@ -130,7 +136,12 @@ Canonical content sizes:
 
 Record `NSWindow.frame`, `contentLayoutRect`, chrome, sidebar, detail header,
 major sections, action rows, scroll viewports/content, and bottom sentinels
-after two idle run-loop turns.
+only after the fixture reports explicit quiescence: all scripted delays,
+observable tasks, sheets, titlebar configuration, and state insertions are
+complete. Then sample frames every 100ms and require three consecutive
+unchanged samples within a five-second timeout. Timeout, missing quiescence, or
+late frame change fails the scenario; two idle run-loop turns alone are not a
+settled-state signal.
 
 ### Phase 4: Redesign The Product Flow
 
