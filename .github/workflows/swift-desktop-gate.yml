@@ -108,13 +108,50 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build Node scanner
+        run: npm run build
+
+      - name: Node and Foundation secret-rule differential
+        run: npm run check:secret-rule-differential
+
       - name: Build Swift Keychain checks target
         working-directory: apps/neondiff-desktop
         run: swift build --target NeonDiffDesktopKeychainChecks
 
       - name: Swift build
         working-directory: apps/neondiff-desktop
-        run: swift build
+        run: |
+          swift build -c debug --product NeonDiffDesktop
+          swift build -c release --product NeonDiffDesktop
+
+      - name: Swift core and model checks
+        working-directory: apps/neondiff-desktop
+        run: |
+          swift run NeonDiffDesktopCoreChecks
+          ./scripts/run-model-checks.sh
+
+      - name: Secret corpus production-artifact boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          debug_bin="$(cd apps/neondiff-desktop && swift build -c debug --show-bin-path)"
+          release_bin="$(cd apps/neondiff-desktop && swift build -c release --show-bin-path)"
+          npm run check:secret-corpus-boundary -- \
+            "$debug_bin/NeonDiffDesktop" \
+            "$release_bin/NeonDiffDesktop" \
+            "$debug_bin/NeonDiffDesktopCore.build" \
+            "$release_bin/NeonDiffDesktopCore.build" \
+            "$debug_bin/Modules/NeonDiffDesktopCore.swiftmodule" \
+            "$release_bin/Modules/NeonDiffDesktopCore.swiftmodule"
 
       - name: Build app bundle
         working-directory: apps/neondiff-desktop

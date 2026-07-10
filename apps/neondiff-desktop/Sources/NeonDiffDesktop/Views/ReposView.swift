@@ -261,5 +261,6 @@ struct ReposView: View {
             }
         }
         .padding(24)
+        .disabled(!model.canEditProviderConfiguration)
     }
 }

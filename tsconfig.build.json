@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "services/license-api/src/**/*.ts"],
+  "exclude": ["tests/**/*"]
+}

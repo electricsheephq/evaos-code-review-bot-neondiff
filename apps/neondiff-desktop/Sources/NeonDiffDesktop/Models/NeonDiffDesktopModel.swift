@@ -5,12 +5,31 @@ import NeonDiffDesktopCore
 @MainActor
 final class NeonDiffDesktopModel: ObservableObject {
     @Published var selectedSection: DesktopSection = .overview
-    @Published var configPath: String
-    @Published var cliPath: String
+    @Published var configPath: String {
+        didSet {
+            guard configPath != oldValue else { return }
+            invalidateProviderConfigAuthorization()
+            invalidateProviderVerificationContext()
+        }
+    }
+    @Published var cliPath: String {
+        didSet {
+            guard cliPath != oldValue else { return }
+            invalidateProviderVerificationContext()
+        }
+    }
     @Published var launchdLabel: String
     @Published var status: DaemonStatus = .unknown
     @Published var repos: [RepoMonitor] = []
-    @Published var providers = ProviderSettings()
+    @Published var providers = ProviderSettings() {
+        didSet {
+            guard providers != oldValue else { return }
+            if providers.selectedProviderId != oldValue.selectedProviderId {
+                refreshSelectedProviderKeyState()
+            }
+            invalidateProviderVerificationContext()
+        }
+    }
     @Published var license = LicenseStatus()
     @Published var controlCenter = DesktopControlCenterSettings()
     @Published var controlCenterStatus = "Load current config before editing."
@@ -32,6 +51,11 @@ final class NeonDiffDesktopModel: ObservableObject {
     @Published var dashboardProcessIdentifier: Int32?
     @Published var pendingRepoName = ""
     @Published var pendingProviderKey = ""
+    @Published var providerVerification: ProviderVerificationSnapshot?
+    @Published var providerVerificationStatus = "Verify the stored API key when ready."
+    @Published var isProviderVerificationInProgress = false
+    @Published var isProviderVerificationCancelling = false
+    @Published private(set) var providerVerificationSafetyLatchMessage: String?
     @Published var pendingLicenseKey = ""
     @Published var onboardingFlow = OnboardingFlow()
     @Published var isOnboardingPresented = false
@@ -39,6 +63,12 @@ final class NeonDiffDesktopModel: ObservableObject {
     private let userDefaults: UserDefaults
     private let keychain: DesktopSecretStoring
     private let githubAuthClient: GitHubDesktopAuthenticating
+    private let providerVerificationService: ProviderVerificationService?
+    private var providerVerificationTask: Task<Void, Never>?
+    private var providerVerificationRequestGeneration: UInt64 = 0
+    private var providerVerificationContextGeneration: UInt64 = 0
+    private var activeProviderVerificationRequestGeneration: UInt64?
+    private var providerKeyRevision: UInt64 = 0
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var githubRepositoryRefreshGate = GitHubLatestRequestGate()
@@ -49,23 +79,54 @@ final class NeonDiffDesktopModel: ObservableObject {
     private var controlCenterLoadedRevision: String?
     private var controlCenterRollbackExpectedRevision: String?
     private var previewedControlCenterExpectedRevision: String?
+    private var providerLoadedSnapshot: ProviderConfigurationSnapshot?
+    private var providerLoadedRevision: String?
+    private var previewedProviderSnapshot: ProviderConfigurationSnapshot?
+    private var previewedProviderExpectedRevision: String?
+    private var pendingProviderPatchProof: PendingProviderPatchProof?
 
     init(
         userDefaults: UserDefaults = .standard,
         keychain: DesktopSecretStoring = KeychainSecretStore(),
-        githubAuthClient: GitHubDesktopAuthenticating = GitHubDeviceAuthClient()
+        githubAuthClient: GitHubDesktopAuthenticating = GitHubDeviceAuthClient(),
+        providerVerificationService: ProviderVerificationService? = nil
     ) {
+        #if DEBUG
+        let visualProofFixtureEnabled = ProcessInfo.processInfo.environment[
+            "NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE"
+        ] == "provider-verification"
+        #endif
         self.userDefaults = userDefaults
         self.keychain = keychain
         self.githubAuthClient = githubAuthClient
+        self.providerVerificationService = providerVerificationService
         self.configPath = userDefaults.string(forKey: "neondiff.configPath") ?? "config.local.json"
         self.cliPath = userDefaults.string(forKey: "neondiff.cliPath") ?? "neondiff"
         self.launchdLabel = userDefaults.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
-        let providerKeyStored = keychain.containsSecret(account: providerKeyAccount)
+        #if DEBUG
+        let providerKeyStored = visualProofFixtureEnabled
+            || ProviderKeychainAccount.account(providerId: providers.selectedProviderId)
+                .map(keychain.containsSecret(account:)) == true
+        let githubUserTokenStored = visualProofFixtureEnabled
+            ? false
+            : keychain.containsSecret(account: githubUserTokenAccount)
+        let githubRefreshTokenStored = visualProofFixtureEnabled
+            ? false
+            : keychain.containsSecret(account: githubRefreshTokenAccount)
+        #else
+        let providerKeyStored = ProviderKeychainAccount.account(providerId: providers.selectedProviderId)
+            .map(keychain.containsSecret(account:)) == true
         let githubUserTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
         let githubRefreshTokenStored = keychain.containsSecret(account: githubRefreshTokenAccount)
+        #endif
         self.providers.providerKeyStored = providerKeyStored
+        #if DEBUG
+        self.license.keyStored = visualProofFixtureEnabled
+            ? false
+            : keychain.containsSecret(account: licenseKeyAccount)
+        #else
         self.license.keyStored = keychain.containsSecret(account: licenseKeyAccount)
+        #endif
         self.github.userTokenStored = githubUserTokenStored
         if githubUserTokenStored {
             self.github.installationState = "authorization stored; verify"
@@ -80,6 +141,48 @@ final class NeonDiffDesktopModel: ObservableObject {
         self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
         self.isOnboardingPresented = !userDefaults.bool(forKey: onboardingCompletedKey)
         self.lastCommandLine = statusCommand.commandLine
+
+        #if DEBUG
+        if visualProofFixtureEnabled {
+            selectedSection = .providers
+            configPath = "/tmp/neondiff-visual-proof/config.local.json"
+            cliPath = "neondiff"
+            providers.zcodeModel = "glm-5"
+            providers.zcodeCliPath = "/usr/local/bin/zcode"
+            providers.zcodeAppConfigPath = "~/.config/zcode/config.json"
+            providers.openAICompatibleEndpoint = "https://legacy-endpoint.invalid/v1"
+            providers.selectedProviderId = "zcode-glm"
+            providers.registryTargets = [
+                ProviderRegistryTarget(
+                    id: "zcode-glm",
+                    displayName: "Z.AI GLM",
+                    enabled: true,
+                    adapter: "openai-compatible",
+                    authMode: "api-key-env",
+                    baseUrl: "https://api.z.ai/api/coding/paas/v4",
+                    model: "glm-5"
+                )
+            ]
+            providers.providerKeyStored = true
+            providerLoadedSnapshot = ProviderConfigurationSnapshot(
+                providers: providers,
+                configPath: configPath
+            )
+            providerLoadedRevision = String(repeating: "a", count: 64)
+            providerVerification = ProviderVerificationSnapshot(
+                ok: true,
+                command: "providers verify",
+                providerId: "zcode-glm",
+                checkedAt: "2026-07-10T12:00:00Z",
+                state: .healthy,
+                mode: "openai_compatible_models",
+                detail: "Provider responded with compatible model metadata. No secret value is retained.",
+                troubleshooting: []
+            )
+            providerVerificationStatus = "Verified from redacted fixture metadata. No hosted request was made."
+            isOnboardingPresented = false
+        }
+        #endif
     }
 
     var statusCommand: DesktopCommand {
@@ -115,11 +218,22 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     var providerPatchPreviewCommand: DesktopCommand {
-        NeonDiffCommandBuilder.configPatch(cliPath: cliPath, configPath: configPath, inputPath: providerPatchPath.path)
+        NeonDiffCommandBuilder.configPatch(
+            cliPath: cliPath,
+            configPath: configPath,
+            inputPath: providerPatchPath.path,
+            expectedRevision: providerLoadedRevision
+        )
     }
 
     var providerPatchApplyCommand: DesktopCommand {
-        NeonDiffCommandBuilder.configPatch(cliPath: cliPath, configPath: configPath, inputPath: providerPatchPath.path, dryRun: false)
+        NeonDiffCommandBuilder.configPatch(
+            cliPath: cliPath,
+            configPath: configPath,
+            inputPath: providerPatchPath.path,
+            dryRun: false,
+            expectedRevision: previewedProviderExpectedRevision
+        )
     }
 
     var repoSelectionPatchPreviewCommand: DesktopCommand {
@@ -188,6 +302,51 @@ final class NeonDiffDesktopModel: ObservableObject {
             && !isConfigInspectInProgress
     }
 
+    var canVerifyProviderKey: Bool {
+        providers.providerKeyStored
+            && providers.selectedRegistryTarget?.isAPIKeyVerificationEligible == true
+            && providerLoadedRevision != nil
+            && providerLoadedSnapshot == currentProviderConfigurationSnapshot
+            && previewedProviderSnapshot == nil
+            && !isProviderVerificationInProgress
+            && !isProviderVerificationCancelling
+            && providerVerificationSafetyLatchMessage == nil
+            && !isConfigPatchInProgress
+            && !isConfigInspectInProgress
+    }
+
+    var canEditProviderConfiguration: Bool {
+        !isProviderVerificationInProgress
+            && !isProviderVerificationCancelling
+            && providerVerificationSafetyLatchMessage == nil
+    }
+
+    var canPreviewProviderConfig: Bool {
+        canEditProviderConfiguration
+            && providerLoadedSnapshot?.configPath == configPath
+            && providerLoadedRevision != nil
+            && providerLoadedSnapshot != nil
+            && providerLoadedSnapshot != currentProviderConfigurationSnapshot
+            && !isConfigPatchInProgress
+            && !isConfigInspectInProgress
+    }
+
+    var canApplyProviderConfig: Bool {
+        canEditProviderConfiguration
+            && previewedProviderSnapshot == currentProviderConfigurationSnapshot
+            && previewedProviderExpectedRevision == providerLoadedRevision
+            && !isConfigPatchInProgress
+            && !isConfigInspectInProgress
+    }
+
+    var providerVerificationButtonTitle: String {
+        isProviderVerificationCancelling ? "Cancelling…" : (isProviderVerificationInProgress ? "Verifying…" : "Verify API Key")
+    }
+
+    private var currentProviderConfigurationSnapshot: ProviderConfigurationSnapshot {
+        ProviderConfigurationSnapshot(providers: providers, configPath: configPath)
+    }
+
     private var currentControlCenterSnapshot: DesktopControlCenterSnapshot {
         DesktopControlCenterSnapshot(settings: controlCenter, configPath: configPath)
     }
@@ -211,6 +370,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func persistLocalSettings() {
+        guard providerVerificationSafetyLatchMessage == nil else {
+            lastError = providerVerificationSafetyLatchMessage
+            return
+        }
         userDefaults.set(configPath, forKey: "neondiff.configPath")
         userDefaults.set(cliPath, forKey: "neondiff.cliPath")
         userDefaults.set(launchdLabel, forKey: "neondiff.launchdLabel")
@@ -236,6 +399,11 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func launchDashboard(openBrowser: Bool) {
+        guard providerVerificationSafetyLatchMessage == nil else {
+            lastError = providerVerificationSafetyLatchMessage
+            dashboardLaunchStatus = "restart required"
+            return
+        }
         persistLocalSettings()
         let command = openBrowser ? dashboardCommand : dashboardServerCommand
         lastCommandLine = command.commandLine
@@ -300,11 +468,15 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func inspectConfig() {
-        guard !isConfigPatchInProgress, !isConfigInspectInProgress else { return }
+        guard canEditProviderConfiguration, !isConfigPatchInProgress, !isConfigInspectInProgress else { return }
         runCLI(arguments: ["config", "inspect", "--config", configPath], displayCommand: configInspectCommand)
     }
 
     func addPendingIssueRepo() {
+        guard canEditProviderConfiguration else {
+            lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
+            return
+        }
         let repo = pendingIssueRepoName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isValidRepoName(repo) else {
             lastError = "Enter an issue-enrichment repository as owner/repo."
@@ -320,6 +492,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func removeIssueRepo(_ repo: String) {
+        guard canEditProviderConfiguration else {
+            lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
+            return
+        }
         controlCenter.issueAllowlist.removeAll { $0.caseInsensitiveCompare(repo) == .orderedSame }
         controlCenterStatus = "Issue-enrichment allowlist changed locally; Preview is required before Apply."
     }
@@ -426,14 +602,26 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func previewProviderConfigPatch() {
+        guard canPreviewProviderConfig else {
+            lastError = "Load current config, make a provider change, then preview it."
+            return
+        }
         runProviderConfigPatch(dryRun: true)
     }
 
     func applyProviderConfigPatch() {
+        guard canApplyProviderConfig else {
+            lastError = "Preview this exact provider configuration before applying it."
+            return
+        }
         runProviderConfigPatch(dryRun: false)
     }
 
     func addPendingRepoToAllowlist() {
+        guard canEditProviderConfiguration else {
+            lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
+            return
+        }
         let repoName = pendingRepoName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isValidRepoName(repoName) else {
             lastError = "Enter a GitHub repository as owner/repo."
@@ -592,14 +780,203 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     func storeProviderKey() {
+        guard providerVerificationSafetyLatchMessage == nil else {
+            lastError = providerVerificationSafetyLatchMessage
+            return
+        }
+        guard let account = selectedProviderKeyAccount else {
+            providers.providerKeyStored = false
+            onboardingFlow.providerKeyStored = false
+            lastError = "Select a valid provider before storing an API key."
+            return
+        }
         do {
-            try keychain.setSecret(pendingProviderKey, account: providerKeyAccount)
+            try keychain.setSecret(pendingProviderKey, account: account)
             pendingProviderKey = ""
+            providerKeyRevision &+= 1
+            invalidateProviderVerificationContext(status: "Stored key changed. Verify it when ready.")
             providers.providerKeyStored = true
             onboardingFlow.providerKeyStored = true
             lastError = nil
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
+        }
+    }
+
+    func clearProviderKey() {
+        guard providerVerificationSafetyLatchMessage == nil else {
+            lastError = providerVerificationSafetyLatchMessage
+            return
+        }
+        guard let account = selectedProviderKeyAccount else {
+            providers.providerKeyStored = false
+            onboardingFlow.providerKeyStored = false
+            lastError = "Select a valid provider before clearing an API key."
+            return
+        }
+        do {
+            try keychain.deleteSecret(account: account)
+            pendingProviderKey = ""
+            providerKeyRevision &+= 1
+            invalidateProviderVerificationContext(status: "Stored key cleared. Store a key before verification.")
+            providers.providerKeyStored = false
+            onboardingFlow.providerKeyStored = false
+            lastError = nil
+        } catch {
+            lastError = NeonDiffRedactor.redact(error.localizedDescription)
+        }
+    }
+
+    func verifyProviderKey() {
+        if let providerVerificationSafetyLatchMessage {
+            providerVerification = nil
+            providerVerificationStatus = providerVerificationSafetyLatchMessage
+            lastError = providerVerificationSafetyLatchMessage
+            return
+        }
+        guard !isProviderVerificationInProgress else { return }
+        guard let providerKeyAccount = selectedProviderKeyAccount,
+              providers.providerKeyStored,
+              keychain.containsSecret(account: providerKeyAccount)
+        else {
+            providerVerification = nil
+            providerVerificationStatus = "Store a provider API key in Keychain before verification."
+            lastError = "Provider verification requires a stored Keychain item."
+            return
+        }
+
+        persistLocalSettings()
+        guard let providerId = providers.selectedRegistryTarget?.id,
+              let expectedRevision = providerLoadedRevision,
+              canVerifyProviderKey
+        else {
+            providerVerification = nil
+            providerVerificationStatus = "Apply and reload an eligible saved provider before verification."
+            lastError = "Provider verification requires an applied openai-compatible api-key-env provider."
+            return
+        }
+        let arguments = [
+            "providers", "verify",
+            "--config", configPath,
+            "--provider", providerId,
+            "--expected-config-revision", expectedRevision,
+            "--api-key-stdin", "true",
+            "--allow-remote-smoke", "true",
+            "--json"
+        ]
+        let executablePath = cliPath
+        let requestContext = currentProviderVerificationContext
+        let requestContextGeneration = providerVerificationContextGeneration
+        providerVerificationRequestGeneration &+= 1
+        let requestGeneration = providerVerificationRequestGeneration
+        let service = providerVerificationService ?? ProviderVerificationService(
+            keychain: keychain,
+            cli: NeonDiffCLIClient(
+                executablePath: executablePath,
+                workingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
+            )
+        )
+
+        providerVerification = nil
+        providerVerificationStatus = "Verifying the stored API key…"
+        isProviderVerificationInProgress = true
+        isProviderVerificationCancelling = false
+        activeProviderVerificationRequestGeneration = requestGeneration
+        lastError = nil
+        lastCommandLine = "\(shellQuote(executablePath)) providers verify --config \(shellQuote(configPath)) --provider \(shellQuote(providerId)) --expected-config-revision \(shellQuote(expectedRevision)) --api-key-stdin true --allow-remote-smoke true --json < [secure Keychain input]"
+
+        providerVerificationTask = Task { [weak self] in
+            let outcome: Result<ProviderVerificationSnapshot, Error>
+            do {
+                outcome = .success(try await service.verifyCancellable(
+                    account: providerKeyAccount,
+                    expectedProviderId: providerId,
+                    expectedConfigRevision: expectedRevision,
+                    arguments: arguments,
+                    timeout: 15
+                ))
+            } catch {
+                outcome = .failure(error)
+            }
+
+            guard let self else { return }
+            let wasCancelled = Task.isCancelled
+            guard self.activeProviderVerificationRequestGeneration == requestGeneration else { return }
+            self.providerVerificationTask = nil
+            self.activeProviderVerificationRequestGeneration = nil
+            self.isProviderVerificationInProgress = false
+            self.isProviderVerificationCancelling = false
+            if case .failure(NeonDiffCLIError.cleanupTimedOut) = outcome {
+                let message = "Provider verification process cleanup could not be proven. Restart NeonDiff before any further provider, config, or CLI operation."
+                self.providerVerificationSafetyLatchMessage = message
+                self.providerVerification = nil
+                self.providerVerificationStatus = message
+                self.lastError = message
+                return
+            }
+            guard
+                !wasCancelled,
+                self.providerVerificationContextGeneration == requestContextGeneration,
+                self.currentProviderVerificationContext == requestContext
+            else {
+                self.providerVerification = nil
+                self.providerVerificationStatus = "Provider or config changed during verification. Verify again."
+                self.lastError = nil
+                return
+            }
+            switch outcome {
+            case .success(let snapshot):
+                self.providerVerification = snapshot
+                self.lastError = nil
+                switch snapshot.state {
+                case .healthy:
+                    self.providerVerificationStatus = "Provider API key verified."
+                case .configuredUnverified:
+                    self.providerVerificationStatus = "Provider is configured but not verified."
+                case .blocked:
+                    self.providerVerificationStatus = "Provider verification was blocked."
+                }
+            case .failure:
+                self.providerVerification = nil
+                self.providerVerificationStatus = "Verification failed safely. Confirm the stored key, provider config, and NeonDiff CLI, then retry."
+                self.lastError = "Provider verification failed without retaining provider output."
+            }
+        }
+    }
+
+    private var currentProviderVerificationContext: ProviderVerificationRequestContext {
+        ProviderVerificationRequestContext(
+            configPath: configPath,
+            cliPath: cliPath,
+            providers: providers,
+            loadedConfigRevision: controlCenterLoadedRevision,
+            providerKeyRevision: providerKeyRevision
+        )
+    }
+
+    private var selectedProviderKeyAccount: String? {
+        ProviderKeychainAccount.account(providerId: providers.selectedProviderId)
+    }
+
+    private func refreshSelectedProviderKeyState() {
+        let stored = selectedProviderKeyAccount.map(keychain.containsSecret(account:)) == true
+        providers.providerKeyStored = stored
+        onboardingFlow.providerKeyStored = stored
+    }
+
+    private func invalidateProviderVerificationContext(
+        status: String = "Provider or config changed. Verify the stored key again."
+    ) {
+        providerVerificationContextGeneration &+= 1
+        let isCancellingActiveRequest = isProviderVerificationInProgress
+        if isCancellingActiveRequest {
+            isProviderVerificationCancelling = true
+            providerVerificationStatus = "Cancelling provider verification safely…"
+            providerVerificationTask?.cancel()
+        }
+        providerVerification = nil
+        if !isCancellingActiveRequest {
+            providerVerificationStatus = status
         }
     }
 
@@ -656,10 +1033,24 @@ final class NeonDiffDesktopModel: ObservableObject {
     private func runCLI(
         arguments: [String],
         displayCommand: DesktopCommand,
-        controlCenterOperation: ControlCenterOperation? = nil
+        controlCenterOperation: ControlCenterOperation? = nil,
+        providerPatchProof: PendingProviderPatchProof? = nil
     ) {
+        if let providerVerificationSafetyLatchMessage {
+            lastError = providerVerificationSafetyLatchMessage
+            clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
+            if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
+            return
+        }
         let isConfigPatchCommand = arguments.count >= 2 && arguments[0] == "config" && arguments[1] == "patch"
         let isConfigInspectCommand = arguments.count >= 2 && arguments[0] == "config" && arguments[1] == "inspect"
+        if (isConfigPatchCommand || isConfigInspectCommand)
+            && (isProviderVerificationInProgress || isProviderVerificationCancelling) {
+            lastError = "Wait for provider verification cleanup before changing config."
+            clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
+            if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
+            return
+        }
         if isConfigPatchCommand && (isConfigPatchInProgress || isConfigInspectInProgress) {
             lastError = "Another config operation is still running."
             if controlCenterOperation != nil {
@@ -690,18 +1081,22 @@ final class NeonDiffDesktopModel: ObservableObject {
                         configPath: configPath,
                         launchdLabel: launchdLabel,
                         isConfigInspectCommand: isConfigInspectCommand,
-                        controlCenterOperation: controlCenterOperation
+                        controlCenterOperation: controlCenterOperation,
+                        providerPatchProof: providerPatchProof
                     )
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
                     if isConfigInspectCommand { self.isConfigInspectInProgress = false }
                     if controlCenterOperation != nil { self.isControlCenterOperationInProgress = false }
+                    self.clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
                 }
             } catch {
                 await MainActor.run {
                     self.lastError = NeonDiffRedactor.redact(error.localizedDescription)
                     self.logText = self.lastError ?? "Unknown CLI error"
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
+                    self.clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
                     if isConfigInspectCommand {
+                        self.invalidateProviderConfigAuthorization()
                         self.invalidateControlCenterAfterInspectFailure(self.lastError ?? "Config inspect failed.")
                         self.isConfigInspectInProgress = false
                     }
@@ -717,6 +1112,14 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func runProviderConfigPatch(dryRun: Bool) {
+        guard !isConfigPatchInProgress, !isConfigInspectInProgress else {
+            lastError = "Another config operation is still running."
+            return
+        }
+        guard let expectedRevision = dryRun ? providerLoadedRevision : previewedProviderExpectedRevision else {
+            lastError = "Load current config before changing provider settings."
+            return
+        }
         do {
             try writeProviderPatch()
         } catch {
@@ -733,10 +1136,22 @@ final class NeonDiffDesktopModel: ObservableObject {
             "--dry-run",
             dryRun ? "true" : "false"
         ]
+        arguments.append(contentsOf: ["--expected-revision", expectedRevision])
+        let proof = PendingProviderPatchProof(
+            id: UUID(),
+            snapshot: currentProviderConfigurationSnapshot,
+            expectedRevision: expectedRevision,
+            mode: dryRun ? .preview : .apply
+        )
+        pendingProviderPatchProof = proof
         if !dryRun {
             arguments.append(contentsOf: ["--confirm", "true"])
         }
-        runCLI(arguments: arguments, displayCommand: dryRun ? providerPatchPreviewCommand : providerPatchApplyCommand)
+        runCLI(
+            arguments: arguments,
+            displayCommand: dryRun ? providerPatchPreviewCommand : providerPatchApplyCommand,
+            providerPatchProof: proof
+        )
     }
 
     private var providerPatchPath: URL {
@@ -763,18 +1178,7 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     private func writeProviderPatch() throws {
         try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
-        let patch: [String: Any] = [
-            "zcode": [
-                "cliPath": providers.zcodeCliPath,
-                "appConfigPath": providers.zcodeAppConfigPath,
-                "model": providers.zcodeModel
-            ],
-            "desktop": [
-                "openAICompatibleEndpoint": providers.openAICompatibleEndpoint,
-                "updateChannel": license.updateChannel
-            ]
-        ]
-        let data = try JSONSerialization.data(withJSONObject: patch, options: [.prettyPrinted, .sortedKeys])
+        let data = try ProviderRegistryPatchBuilder.data(for: providers)
         try data.write(to: providerPatchPath, options: [.atomic])
     }
 
@@ -785,6 +1189,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func beginControlCenterOperation(_ operation: ControlCenterOperation) -> Bool {
+        guard canEditProviderConfiguration else {
+            lastError = "Wait for provider verification cleanup before changing config."
+            return false
+        }
         guard !isControlCenterOperationInProgress else {
             lastError = "Another control-center operation is still running."
             return false
@@ -799,6 +1207,10 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func runRepoSelectionPatch(dryRun: Bool) {
+        guard canEditProviderConfiguration else {
+            lastError = "Wait for provider verification cleanup before changing config."
+            return
+        }
         do {
             try writeRepoSelectionPatch()
         } catch {
@@ -1000,23 +1412,52 @@ final class NeonDiffDesktopModel: ObservableObject {
         configPath: String,
         launchdLabel: String,
         isConfigInspectCommand: Bool,
-        controlCenterOperation: ControlCenterOperation? = nil
+        controlCenterOperation: ControlCenterOperation? = nil,
+        providerPatchProof: PendingProviderPatchProof? = nil
     ) {
+        if let providerPatchProof,
+           pendingProviderPatchProof?.id != providerPatchProof.id {
+            return
+        }
         let redactedStdout = result.redactedStdout.trimmingCharacters(in: .whitespacesAndNewlines)
         let redactedStderr = result.redactedStderr.trimmingCharacters(in: .whitespacesAndNewlines)
         lastError = result.exitCode == 0 ? nil : (redactedStderr.isEmpty ? redactedStdout : redactedStderr)
         logText = [result.redactedStdout, result.redactedStderr].filter { !$0.isEmpty }.joined(separator: "\n")
 
         let commandName = parseCommandName(result.stdout)
-        let parsedSnapshot = (commandName == "config inspect" || commandName == "config patch")
+        var parsedSnapshot = (commandName == "config inspect" || commandName == "config patch")
             ? ConfigInspectParser.parse(
                 result.stdout,
-                providerKeyStored: keychain.containsSecret(account: providerKeyAccount),
+                providerKeyStored: false,
                 licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
                 githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
             )
             : nil
+        if var snapshot = parsedSnapshot {
+            snapshot.providers.providerKeyStored = ProviderKeychainAccount.account(
+                providerId: snapshot.providers.selectedProviderId
+            ).map(keychain.containsSecret(account:)) == true
+            parsedSnapshot = snapshot
+        }
         var validatedPatchRevisionAfter: String?
+        var validatedProviderRevisionAfter: String?
+        if let providerPatchProof {
+            validatedProviderRevisionAfter = ConfigPatchProofValidator.revisionAfter(
+                snapshot: parsedSnapshot,
+                expectedRevision: providerPatchProof.expectedRevision,
+                mode: providerPatchProof.mode
+            )
+            guard result.exitCode == 0,
+                  commandName == "config patch",
+                  validatedProviderRevisionAfter != nil
+            else {
+                invalidateProviderConfigAuthorization()
+                lastError = ConfigInspectParser.error(result.stdout, command: "config patch")
+                    ?? lastError
+                    ?? "Provider patch returned an invalid or stale response. Reload current config."
+                return
+            }
+        }
         if let operation = controlCenterOperation {
             validatedPatchRevisionAfter = ConfigPatchProofValidator.revisionAfter(
                 snapshot: parsedSnapshot,
@@ -1039,10 +1480,28 @@ final class NeonDiffDesktopModel: ObservableObject {
             let inspectError = ConfigInspectParser.error(result.stdout)
                 ?? lastError
                 ?? "Config inspect returned an invalid response."
+            invalidateProviderConfigAuthorization()
             invalidateControlCenterAfterInspectFailure(inspectError)
             return
         }
         if commandName == "config inspect" || commandName == "config patch" {
+            if result.exitCode == 0,
+               commandName == "config inspect",
+               let inspectedRevision = parsedSnapshot?.revision,
+               inspectedRevision != controlCenterLoadedRevision {
+                invalidateProviderVerificationContext(status: "Config changed. Verify the stored provider key again.")
+            }
+            if result.exitCode == 0,
+               commandName == "config patch",
+               parsedSnapshot?.dryRun == false,
+               parsedSnapshot?.wrote == true {
+                invalidateProviderVerificationContext(status: "Config changed. Verify the stored provider key again.")
+            }
+            if result.exitCode == 0,
+               commandName == "config patch",
+               providerPatchProof == nil {
+                invalidateProviderConfigAuthorization()
+            }
             if let snapshot = parsedSnapshot {
                 if !snapshot.repos.isEmpty { repos = snapshot.repos }
                 providers = snapshot.providers
@@ -1057,6 +1516,13 @@ final class NeonDiffDesktopModel: ObservableObject {
                 }
                 github = parsedGitHub
                 if commandName == "config inspect" {
+                    providerLoadedSnapshot = ProviderConfigurationSnapshot(
+                        providers: snapshot.providers,
+                        configPath: configPath
+                    )
+                    providerLoadedRevision = snapshot.revision
+                    previewedProviderSnapshot = nil
+                    previewedProviderExpectedRevision = nil
                     controlCenter = snapshot.policy
                     controlCenterLoadedSnapshot = DesktopControlCenterSnapshot(
                         settings: snapshot.policy,
@@ -1079,8 +1545,30 @@ final class NeonDiffDesktopModel: ObservableObject {
                 let inspectError = ConfigInspectParser.error(result.stdout)
                     ?? lastError
                     ?? "Config inspect returned an invalid response."
+                invalidateProviderConfigAuthorization()
                 invalidateControlCenterAfterInspectFailure(inspectError)
                 return
+            }
+            if commandName == "config patch",
+               let providerPatchProof,
+               let revisionAfter = validatedProviderRevisionAfter,
+               let snapshot = parsedSnapshot {
+                switch providerPatchProof.mode {
+                case .preview:
+                    previewedProviderSnapshot = providerPatchProof.snapshot
+                    previewedProviderExpectedRevision = providerPatchProof.expectedRevision
+                    providerVerificationStatus = "Provider preview passed. Apply this exact configuration before verification."
+                case .apply:
+                    providerLoadedSnapshot = ProviderConfigurationSnapshot(
+                        providers: snapshot.providers,
+                        configPath: configPath
+                    )
+                    providerLoadedRevision = revisionAfter
+                    previewedProviderSnapshot = nil
+                    previewedProviderExpectedRevision = nil
+                    providerVerificationStatus = "Provider config applied and read back. Verification is enabled for eligible targets."
+                }
+                clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
             }
             if commandName == "config patch",
                let operation = controlCenterOperation,
@@ -1149,6 +1637,75 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
+    func applyCLIResultForTesting(
+        _ result: CLIRunResult,
+        fallbackCommand: String,
+        configPath: String,
+        launchdLabel: String,
+        isConfigInspectCommand: Bool
+    ) {
+        applyCLIResult(
+            result,
+            fallbackCommand: fallbackCommand,
+            configPath: configPath,
+            launchdLabel: launchdLabel,
+            isConfigInspectCommand: isConfigInspectCommand
+        )
+    }
+
+    func applyProviderPatchResultForTesting(_ result: CLIRunResult, mode: ConfigPatchProofMode) {
+        guard let expectedRevision = mode == .preview ? providerLoadedRevision : previewedProviderExpectedRevision else {
+            return
+        }
+        pendingProviderPatchProof = PendingProviderPatchProof(
+            id: UUID(),
+            snapshot: currentProviderConfigurationSnapshot,
+            expectedRevision: expectedRevision,
+            mode: mode
+        )
+        let proof = pendingProviderPatchProof
+        applyCLIResult(
+            result,
+            fallbackCommand: "neondiff config patch",
+            configPath: configPath,
+            launchdLabel: launchdLabel,
+            isConfigInspectCommand: false,
+            providerPatchProof: proof
+        )
+    }
+
+    func stageProviderPatchProofForTesting(mode: ConfigPatchProofMode) {
+        guard !isConfigPatchInProgress, !isConfigInspectInProgress else { return }
+        guard let expectedRevision = mode == .preview ? providerLoadedRevision : previewedProviderExpectedRevision else {
+            return
+        }
+        pendingProviderPatchProof = PendingProviderPatchProof(
+            id: UUID(),
+            snapshot: currentProviderConfigurationSnapshot,
+            expectedRevision: expectedRevision,
+            mode: mode
+        )
+        isConfigPatchInProgress = true
+    }
+
+    func applyStagedProviderPatchResultForTesting(_ result: CLIRunResult) {
+        let proof = pendingProviderPatchProof
+        applyCLIResult(
+            result,
+            fallbackCommand: "neondiff config patch",
+            configPath: configPath,
+            launchdLabel: launchdLabel,
+            isConfigInspectCommand: false,
+            providerPatchProof: proof
+        )
+        clearPendingProviderPatchProof(ifOwnedBy: proof)
+        isConfigPatchInProgress = false
+    }
+
+    func attemptOverlappingProviderPatchForTesting() {
+        runProviderConfigPatch(dryRun: true)
+    }
+
     private func parseCommandName(_ jsonText: String) -> String? {
         guard
             let data = jsonText.data(using: .utf8),
@@ -1162,6 +1719,19 @@ final class NeonDiffDesktopModel: ObservableObject {
     private func invalidateControlCenterAfterInspectFailure(_ message: String) {
         invalidateControlCenterAuthorization(message)
         controlCenterStatus = lastError ?? "Config inspect failed."
+    }
+
+    private func invalidateProviderConfigAuthorization() {
+        providerLoadedSnapshot = nil
+        providerLoadedRevision = nil
+        previewedProviderSnapshot = nil
+        previewedProviderExpectedRevision = nil
+        pendingProviderPatchProof = nil
+    }
+
+    private func clearPendingProviderPatchProof(ifOwnedBy proof: PendingProviderPatchProof?) {
+        guard let proof, pendingProviderPatchProof?.id == proof.id else { return }
+        pendingProviderPatchProof = nil
     }
 
     private func invalidateControlCenterAfterPatchFailure(_ message: String) {
@@ -1180,6 +1750,39 @@ final class NeonDiffDesktopModel: ObservableObject {
         lastError = NeonDiffRedactor.redact(message)
     }
 
+}
+
+private struct ProviderVerificationRequestContext: Equatable {
+    let configPath: String
+    let cliPath: String
+    let providers: ProviderSettings
+    let loadedConfigRevision: String?
+    let providerKeyRevision: UInt64
+}
+
+private struct ProviderConfigurationSnapshot: Equatable, Sendable {
+    let configPath: String
+    let zcodeModel: String
+    let zcodeCliPath: String
+    let zcodeAppConfigPath: String
+    let selectedProviderId: String
+    let registryTargets: [ProviderRegistryTarget]
+
+    init(providers: ProviderSettings, configPath: String) {
+        self.configPath = configPath
+        zcodeModel = providers.zcodeModel
+        zcodeCliPath = providers.zcodeCliPath
+        zcodeAppConfigPath = providers.zcodeAppConfigPath
+        selectedProviderId = providers.selectedProviderId
+        registryTargets = providers.registryTargets
+    }
+}
+
+private struct PendingProviderPatchProof: Sendable {
+    let id: UUID
+    let snapshot: ProviderConfigurationSnapshot
+    let expectedRevision: String
+    let mode: ConfigPatchProofMode
 }
 
 private enum ControlCenterOperation: Sendable {
@@ -1231,7 +1834,6 @@ private enum GitHubDesktopAuthorizationStateError: LocalizedError {
     }
 }
 
-private let providerKeyAccount = "provider/glm/api-key"
 private let licenseKeyAccount = "license/default"
 private let githubUserTokenAccount = "github/user-access-token"
 private let githubRefreshTokenAccount = "github/user-refresh-token"

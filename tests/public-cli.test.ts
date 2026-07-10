@@ -7,8 +7,11 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ProviderApiKeyVerificationInput } from "../src/local-dashboard.js";
+import { runProvidersVerifyCommand } from "../src/providers-verify-command.js";
 import { ReviewStateStore } from "../src/state.js";
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +48,7 @@ describe("public NeonDiff CLI surface", () => {
       "dashboard",
       "providers list",
       "providers doctor",
+      "providers verify",
       "doctor",
       "doctor github",
       "daemon start",
@@ -64,6 +68,11 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("neondiff providers list --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --json");
     expect(output.examples).toContain("neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json");
+    expect(output.examples).toContain("neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --allow-remote-smoke true --json");
+    const providersHelp = JSON.parse((await runCli(["providers", "--help"])).stdout);
+    expect(providersHelp.usage.flags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--expected-config-revision" })
+    ]));
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
@@ -591,6 +600,375 @@ exit 1
     } finally {
       await closeServer(server);
     }
+  });
+
+  it("verifies a provider key from stdin without serializing the submitted value", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-verify-cli-"));
+    roots.push(root);
+    const fixtureSecret = "fixture-provider-value";
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (
+        request.method === "GET" &&
+        url.pathname === "/v1/models" &&
+        request.headers.authorization === `Bearer ${fixtureSecret}`
+      ) {
+        response.end(JSON.stringify({ data: [{ id: "fixture-review-model" }] }));
+        return;
+      }
+      response.statusCode = 401;
+      response.end(JSON.stringify({ message: "unauthorized" }));
+    });
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        providers: {
+          defaultProviderId: "fixture-openai",
+          providers: {
+            "fixture-openai": {
+              enabled: true,
+              adapter: "openai-compatible",
+              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              model: "fixture-review-model",
+              authMode: "api-key-env",
+              apiKeyEnv: "FIXTURE_PROVIDER_API_KEY",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: true,
+                streaming: false
+              }
+            }
+          }
+        }
+      })}\n`);
+
+      const result = await runCliWithStdin([
+        "providers",
+        "verify",
+        "--config",
+        configPath,
+        "--provider",
+        "fixture-openai",
+        "--api-key-stdin",
+        "true"
+      ], `${fixtureSecret}\n`);
+      const output = JSON.parse(result.stdout);
+
+      expect(output).toMatchObject({
+        ok: true,
+        command: "providers verify",
+        redacted: true,
+        providerId: "fixture-openai",
+        state: "healthy",
+        mode: "openai_compatible_models"
+      });
+      expect(JSON.stringify(output)).not.toContain(fixtureSecret);
+      expect(result.stdout).not.toContain(fixtureSecret);
+      expect(result.stderr).not.toContain(fixtureSecret);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("requires the providers verify stdin flag to be present and true", async () => {
+    await expect(runCli([
+      "providers",
+      "verify",
+      "--provider",
+      "openai-compatible"
+    ])).rejects.toMatchObject({
+      stdout: expect.stringContaining("providers verify requires --api-key-stdin true"),
+      stderr: ""
+    });
+
+    await expect(runCli([
+      "providers",
+      "verify",
+      "--provider",
+      "openai-compatible",
+      "--api-key-stdin",
+      "false"
+    ])).rejects.toMatchObject({
+      stdout: expect.stringContaining("providers verify requires --api-key-stdin true"),
+      stderr: ""
+    });
+  });
+
+  it("returns a redacted JSON envelope for malformed verification revisions", async () => {
+    await expect(runCli([
+      "providers",
+      "verify",
+      "--config",
+      "config.example.json",
+      "--provider",
+      "openai-compatible",
+      "--api-key-stdin",
+      "true",
+      "--expected-config-revision",
+      "not-a-revision"
+    ])).rejects.toMatchObject({
+      stdout: expect.stringContaining("expected-config-revision must be a lowercase SHA-256 value"),
+      stderr: ""
+    });
+  });
+
+  it("exits providers verify after the bounded stdin deadline even when the parent keeps the pipe open", async () => {
+    const startedAt = Date.now();
+    const result = await runCliWithOpenStdin([
+      "providers",
+      "verify",
+      "--provider",
+      "openai-compatible",
+      "--api-key-stdin",
+      "true",
+      "--allow-remote-smoke",
+      "true"
+    ], "partial-fixture-provider-value");
+
+    expect(result.error).toBeTruthy();
+    expect(result.stderr).toContain("provider secret stdin timed out after 5000ms");
+    expect(result.stdout).not.toContain("partial-fixture-provider-value");
+    expect(result.stderr).not.toContain("partial-fixture-provider-value");
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(5_000);
+    expect(result.error?.killed).not.toBe(true);
+  }, 10_000);
+
+  it("wires explicit hosted remote-smoke consent to a healthy exit zero", async () => {
+    const fixtureSecret = "fixture-provider-value";
+    let verifierInput: ProviderApiKeyVerificationInput | undefined;
+    const result = await runProvidersVerifyCommand({
+      configPath: undefined,
+      providerId: "openai-compatible",
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "true",
+      stdin: Readable.from([`${fixtureSecret}\n`])
+    }, {
+      loadConfig: () => ({
+        providers: {
+          defaultProviderId: "openai-compatible",
+          providers: {
+            "openai-compatible": {
+              enabled: true,
+              adapter: "openai-compatible",
+              baseUrl: "https://gateway.example.test/v1",
+              model: "review-model",
+              authMode: "api-key-env",
+              apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY",
+              capabilities: { review: true, jsonOutput: true, local: false, streaming: false }
+            }
+          }
+        }
+      }) as unknown as ReturnType<typeof import("../src/config.js").loadConfig>,
+      verifyProviderApiKey: async (input) => {
+        verifierInput = input;
+        return {
+          ok: true,
+          command: "providers verify",
+          checkedAt: "2026-07-10T00:00:00.000Z",
+          providerId: "openai-compatible",
+          state: "healthy",
+          mode: "openai_compatible_models",
+          detail: "Verified hosted provider with a redacted models check.",
+          redacted: true,
+          keySource: "submitted",
+          troubleshooting: []
+        };
+      }
+    });
+
+    expect(verifierInput).toMatchObject({
+      command: "providers verify",
+      providerId: "openai-compatible",
+      apiKey: fixtureSecret,
+      allowRemoteSmoke: true
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toMatchObject({ ok: true, state: "healthy", redacted: true });
+    expect(JSON.stringify(result.output)).not.toContain(fixtureSecret);
+  });
+
+  it("rejects provider verification revision drift before stdin, config, or provider execution", async () => {
+    let stdinReads = 0;
+    let configLoads = 0;
+    let snapshotLoads = 0;
+    let providerCalls = 0;
+    const expectedRevision = "a".repeat(64);
+    const result = await runProvidersVerifyCommand({
+      configPath: "fixture-config.json",
+      providerId: "openai-compatible",
+      expectedConfigRevision: expectedRevision,
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "true",
+      stdin: Readable.from(["must-not-be-read\n"])
+    }, {
+      loadConfigAtRevision: () => {
+        snapshotLoads += 1;
+        return {
+          revision: "b".repeat(64),
+          config: {} as ReturnType<typeof import("../src/config.js").loadConfig>
+        };
+      },
+      readSecretFromStdin: async () => {
+        stdinReads += 1;
+        return "must-not-be-read";
+      },
+      loadConfig: () => {
+        configLoads += 1;
+        return {} as ReturnType<typeof import("../src/config.js").loadConfig>;
+      },
+      verifyProviderApiKey: async () => {
+        providerCalls += 1;
+        throw new Error("provider must not run");
+      }
+    });
+
+    expect(result).toEqual({
+      output: {
+        ok: false,
+        command: "providers verify",
+        error: "config revision changed; reload and apply provider settings before verification"
+      },
+      exitCode: 1
+    });
+    expect({ stdinReads, configLoads, providerCalls }).toEqual({ stdinReads: 0, configLoads: 0, providerCalls: 0 });
+    expect(snapshotLoads).toBe(1);
+  });
+
+  it("fails closed when config changes while provider verification is pending", async () => {
+    const expectedRevision = "a".repeat(64);
+    const changedRevision = "b".repeat(64);
+    let releaseVerification!: () => void;
+    const verificationGate = new Promise<void>((resolve) => { releaseVerification = resolve; });
+    let snapshotLoads = 0;
+    const execution = runProvidersVerifyCommand({
+      configPath: "fixture-config.json",
+      providerId: "openai-compatible",
+      expectedConfigRevision: expectedRevision,
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "true",
+      stdin: Readable.from(["fixture-provider-value\n"])
+    }, {
+      loadConfigAtRevision: () => ({
+        revision: snapshotLoads++ === 0 ? expectedRevision : changedRevision,
+        config: {
+          providers: {
+            defaultProviderId: "openai-compatible",
+            providers: { "openai-compatible": {} }
+          }
+        } as unknown as ReturnType<typeof import("../src/config.js").loadConfig>
+      }),
+      verifyProviderApiKey: async () => {
+        await verificationGate;
+        return {
+          ok: true,
+          command: "providers verify",
+          checkedAt: "2026-07-10T00:00:00.000Z",
+          providerId: "openai-compatible",
+          state: "healthy",
+          mode: "openai_compatible_models",
+          detail: "Verified hosted provider with redacted metadata.",
+          redacted: true,
+          troubleshooting: []
+        };
+      }
+    });
+    await Promise.resolve();
+    releaseVerification();
+    const result = await execution;
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toMatchObject({
+      ok: false,
+      state: "blocked",
+      redacted: true,
+      configRevision: changedRevision
+    });
+    expect(JSON.stringify(result.output)).not.toContain("fixture-provider-value");
+    expect(snapshotLoads).toBe(2);
+  });
+
+  it("returns the stable config revision with an unchanged healthy verification", async () => {
+    const expectedRevision = "c".repeat(64);
+    let snapshotLoads = 0;
+    const result = await runProvidersVerifyCommand({
+      configPath: "fixture-config.json",
+      providerId: "openai-compatible",
+      expectedConfigRevision: expectedRevision,
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "true",
+      stdin: Readable.from(["fixture-provider-value\n"])
+    }, {
+      loadConfigAtRevision: () => {
+        snapshotLoads += 1;
+        return {
+          revision: expectedRevision,
+          config: {
+            providers: {
+              defaultProviderId: "openai-compatible",
+              providers: { "openai-compatible": {} }
+            }
+          } as unknown as ReturnType<typeof import("../src/config.js").loadConfig>
+        };
+      },
+      verifyProviderApiKey: async () => ({
+        ok: true,
+        command: "providers verify",
+        checkedAt: "2026-07-10T00:00:00.000Z",
+        providerId: "openai-compatible",
+        state: "healthy",
+        mode: "openai_compatible_models",
+        detail: "Verified hosted provider with redacted metadata.",
+        redacted: true,
+        troubleshooting: []
+      })
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toMatchObject({ state: "healthy", configRevision: expectedRevision });
+    expect(snapshotLoads).toBe(2);
+  });
+
+  it("keeps configured-unverified hosted verification non-success", async () => {
+    let stdinReads = 0;
+    let providerCalls = 0;
+    const result = await runProvidersVerifyCommand({
+      configPath: undefined,
+      providerId: "openai-compatible",
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "false",
+      stdin: Readable.from(["fixture-provider-value\n"])
+    }, {
+      loadConfig: () => ({ providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            adapter: "openai-compatible",
+            authMode: "api-key-env",
+            baseUrl: "https://gateway.example.test/v1"
+          }
+        }
+      } }) as unknown as ReturnType<typeof import("../src/config.js").loadConfig>,
+      readSecretFromStdin: async () => {
+        stdinReads += 1;
+        return "must-not-be-read";
+      },
+      verifyProviderApiKey: async () => {
+        providerCalls += 1;
+        throw new Error("provider must not run without consent");
+      }
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toMatchObject({ ok: false, state: "configured_unverified", redacted: true });
+    expect({ stdinReads, providerCalls }).toEqual({ stdinReads: 0, providerCalls: 0 });
   });
 
   it("fails hosted remote smoke through the public CLI without explicit remote opt-in", async () => {
@@ -3034,6 +3412,74 @@ async function runCli(args: string[], options: { cwd?: string; timeout?: number;
     timeout: options.timeout ?? 15_000,
     killSignal: "SIGTERM",
     maxBuffer: 1024 * 1024
+  });
+}
+
+function runCliWithStdin(
+  args: string[],
+  stdin: string,
+  options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {}
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(process.execPath, [tsxCliPath, join(repoRoot, "src/cli.ts"), ...args], {
+      cwd: options.cwd ?? repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NEONDIFF_GITHUB_APP_ID: "",
+        NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: "",
+        EVAOS_REVIEW_BOT_APP_ID: "",
+        EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
+        GITHUB_TOKEN: "",
+        ...options.env
+      },
+      timeout: options.timeout ?? 15_000,
+      killSignal: "SIGTERM",
+      maxBuffer: 1024 * 1024
+    }, (error, stdout, stderr) => {
+      if (error) {
+        reject(Object.assign(error, { stdout, stderr }));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+    child.stdin?.end(stdin);
+  });
+}
+
+function runCliWithOpenStdin(
+  args: string[],
+  stdin: string
+): Promise<{
+  error: (Error & { killed?: boolean; signal?: NodeJS.Signals | null }) | null;
+  stdout: string;
+  stderr: string;
+}> {
+  return new Promise((resolve) => {
+    const child = execFile(process.execPath, [tsxCliPath, join(repoRoot, "src/cli.ts"), ...args], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NEONDIFF_GITHUB_APP_ID: "",
+        NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: "",
+        EVAOS_REVIEW_BOT_APP_ID: "",
+        EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
+        GITHUB_TOKEN: ""
+      },
+      timeout: 8_000,
+      killSignal: "SIGTERM",
+      maxBuffer: 1024 * 1024
+    }, (error, stdout, stderr) => {
+      child.stdin?.destroy();
+      resolve({
+        error: error as (Error & { killed?: boolean; signal?: NodeJS.Signals | null }) | null,
+        stdout,
+        stderr
+      });
+    });
+    child.stdin?.on("error", () => undefined);
+    child.stdin?.write(stdin);
   });
 }
 

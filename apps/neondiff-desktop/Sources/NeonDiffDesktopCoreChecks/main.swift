@@ -1,5 +1,6 @@
 import Foundation
-import NeonDiffDesktopCore
+@_spi(Testing) import NeonDiffDesktopCore
+import Darwin
 
 @discardableResult
 func check(_ condition: @autoclosure () -> Bool, _ message: String) -> Bool {
@@ -33,6 +34,80 @@ func checkedValue<T>(_ value: T?, _ message: String) -> T {
         exit(1)
     }
     return value
+}
+
+func awaitSemaphore(_ semaphore: DispatchSemaphore, timeout: DispatchTime) async -> DispatchTimeoutResult {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            continuation.resume(returning: semaphore.wait(timeout: timeout))
+        }
+    }
+}
+
+final class InMemoryProviderSecretStore: DesktopSecretStoring {
+    var secrets: [String: String] = [:]
+
+    func setSecret(_ secret: String, account: String) throws {
+        secrets[account] = secret
+    }
+
+    func readSecret(account: String) throws -> String? {
+        secrets[account]
+    }
+
+    func containsSecret(account: String) -> Bool {
+        secrets[account] != nil
+    }
+
+    func deleteSecret(account: String) throws {
+        secrets.removeValue(forKey: account)
+    }
+}
+
+final class FakeProviderVerificationCLI: NeonDiffCLIClienting {
+    var result: CLIRunResult
+    var error: Error?
+    private(set) var arguments: [String] = []
+    private(set) var standardInput: Data?
+    private(set) var timeout: TimeInterval?
+
+    init(result: CLIRunResult) {
+        self.result = result
+    }
+
+    func run(arguments: [String], timeout: TimeInterval) throws -> CLIRunResult {
+        fatalError("provider verification must use the standard-input overload")
+    }
+
+    func run(arguments: [String], standardInput: Data?, timeout: TimeInterval) throws -> CLIRunResult {
+        self.arguments = arguments
+        self.standardInput = standardInput
+        self.timeout = timeout
+        if let error { throw error }
+        return result
+    }
+
+    func launchDetached(arguments: [String]) throws -> CLILaunchResult {
+        fatalError("provider verification never launches detached")
+    }
+}
+
+enum FixtureProviderTransportError: Error {
+    case unavailable
+}
+
+@discardableResult
+func captureProviderVerificationFailure(
+    _ message: String,
+    _ operation: () throws -> Void
+) -> Error {
+    do {
+        try operation()
+        fputs("check failed: \(message) did not fail\n", stderr)
+        exit(1)
+    } catch {
+        return error
+    }
 }
 
 var providerFlow = OnboardingFlow()
@@ -74,6 +149,15 @@ try """
 let localCLI = packageBin.appendingPathComponent("neondiff")
 try """
 #!/usr/bin/env bash
+if [[ "$1" == "stdin-check" ]]; then
+  IFS= read -r input || true
+  if [[ "$input" == "fixture-provider-value" ]]; then
+    printf '{"ok":true,"receivedBytes":22}\\n'
+    exit 0
+  fi
+  printf '{"ok":false}\\n'
+  exit 2
+fi
 printf '{"command":"%s","args":%d}\\n' "$1" "$#"
 """.write(to: localCLI, atomically: true, encoding: .utf8)
 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: localCLI.path)
@@ -90,6 +174,445 @@ check(
     NeonDiffCLIResolver.resolveExecutablePath("neondiff", workingDirectory: tempRoot)?.standardizedFileURL == localCLI.standardizedFileURL,
     "local package CLI is preferred over GUI PATH fallback"
 )
+
+let standardInputCLI = NeonDiffCLIClient(executablePath: localCLI.path, workingDirectory: tempRoot)
+let standardInputResult = try standardInputCLI.run(
+    arguments: ["stdin-check"],
+    standardInput: Data("fixture-provider-value".utf8),
+    timeout: 5
+)
+check(standardInputResult.exitCode == 0, "CLI standard-input transport reaches the bounded child process")
+check(standardInputResult.stdout.contains("\"receivedBytes\":22"), "CLI standard-input transport returns only redacted metadata")
+check(!standardInputResult.stdout.contains("fixture-provider-value"), "CLI output never echoes standard input")
+
+let prelaunchEntered = DispatchSemaphore(value: 0)
+let prelaunchRelease = DispatchSemaphore(value: 0)
+var prelaunchWriteCalls = 0
+let prelaunchClient = NeonDiffCLIClient(
+    executablePath: localCLI.path,
+    workingDirectory: tempRoot,
+    standardInputWriter: { _, _, _ in
+        prelaunchWriteCalls += 1
+        return 0
+    },
+    beforeProcessLaunch: {
+        prelaunchEntered.signal()
+        _ = prelaunchRelease.wait(timeout: .now() + 2)
+    }
+)
+let prelaunchTask = Task {
+    try await prelaunchClient.runCancellable(
+        arguments: ["stdin-check"],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 5
+    )
+}
+let prelaunchGateReached = await awaitSemaphore(prelaunchEntered, timeout: .now() + 1)
+check(prelaunchGateReached == .success, "pre-launch cancellation fixture reaches its gate")
+prelaunchTask.cancel()
+prelaunchRelease.signal()
+var prelaunchCancelled = false
+do {
+    _ = try await prelaunchTask.value
+} catch NeonDiffCLIError.cancelled {
+    prelaunchCancelled = true
+} catch {
+    fputs("check failed: pre-launch cancellation returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(prelaunchCancelled, "pre-launch cancellation returns the typed cancellation result")
+check(prelaunchWriteCalls == 0, "pre-launch cancellation writes zero secret bytes")
+
+let postLaunchMarker = tempRoot.appendingPathComponent("post-launch-cancel-child.pid")
+let postLaunchCLI = tempRoot.appendingPathComponent("post-launch-cancel-cli")
+try """
+#!/usr/bin/env bash
+printf '%s\\n' "$$" > \(postLaunchMarker.path)
+trap '' TERM
+while :; do :; done
+""".write(to: postLaunchCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: postLaunchCLI.path)
+let postLaunchPipe = Pipe()
+let postLaunchInspectionFD = dup(postLaunchPipe.fileHandleForReading.fileDescriptor)
+check(postLaunchInspectionFD >= 0, "post-launch cancellation duplicates its stdin inspection descriptor")
+let postLaunchEntered = DispatchSemaphore(value: 0)
+let postLaunchRelease = DispatchSemaphore(value: 0)
+var postLaunchWriteCalls = 0
+let postLaunchClient = NeonDiffCLIClient(
+    executablePath: postLaunchCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { postLaunchPipe },
+    standardInputWriter: { descriptor, buffer, count in
+        postLaunchWriteCalls += 1
+        return Darwin.write(descriptor, buffer, count)
+    },
+    afterProcessLaunch: {
+        postLaunchEntered.signal()
+        _ = postLaunchRelease.wait(timeout: .now() + 2)
+    }
+)
+let postLaunchTask = Task {
+    try await postLaunchClient.runCancellable(
+        arguments: [],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 5
+    )
+}
+let postLaunchGateReached = await awaitSemaphore(postLaunchEntered, timeout: .now() + 1)
+check(postLaunchGateReached == .success, "post-launch cancellation fixture reaches its pre-write gate")
+postLaunchTask.cancel()
+postLaunchRelease.signal()
+var postLaunchCancelled = false
+do {
+    _ = try await postLaunchTask.value
+} catch NeonDiffCLIError.cancelled {
+    postLaunchCancelled = true
+} catch {
+    fputs("check failed: post-launch cancellation returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(postLaunchCancelled, "post-launch cancellation returns only after cleanup")
+check(postLaunchWriteCalls == 0, "post-launch pre-write cancellation writes zero secret bytes")
+let postLaunchReadFlags = fcntl(postLaunchInspectionFD, F_GETFL)
+check(postLaunchReadFlags >= 0 && fcntl(postLaunchInspectionFD, F_SETFL, postLaunchReadFlags | O_NONBLOCK) == 0, "post-launch inspection is nonblocking")
+var postLaunchBuffer = [UInt8](repeating: 0, count: 64)
+let postLaunchBytes = postLaunchBuffer.withUnsafeMutableBytes { Darwin.read(postLaunchInspectionFD, $0.baseAddress, $0.count) }
+_ = Darwin.close(postLaunchInspectionFD)
+check(postLaunchBytes <= 0, "cancelled stdin carries no provider secret bytes")
+if FileManager.default.fileExists(atPath: postLaunchMarker.path) {
+    let postLaunchPIDText = try String(contentsOf: postLaunchMarker, encoding: .utf8)
+    let postLaunchPID = checkedValue(Int32(postLaunchPIDText.trimmingCharacters(in: .whitespacesAndNewlines)), "post-launch child records its pid")
+    check(kill(postLaunchPID, 0) != 0 && errno == ESRCH, "cancelled child is terminated and reaped before return")
+} else {
+    check(postLaunchCancelled, "child cancelled before script startup still completes bounded cleanup")
+}
+
+let stalledInputMarker = tempRoot.appendingPathComponent("stalled-input-child.pid")
+let stalledInputCLI = tempRoot.appendingPathComponent("stalled-input-cli")
+try """
+#!/usr/bin/env bash
+printf '%s\\n' "$$" > \(stalledInputMarker.path)
+trap '' TERM
+while :; do :; done
+""".write(to: stalledInputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stalledInputCLI.path)
+
+let stalledInputClient = NeonDiffCLIClient(
+    executablePath: stalledInputCLI.path,
+    workingDirectory: tempRoot,
+    afterProcessLaunch: {
+        let markerDeadline = Date().addingTimeInterval(1)
+        while !FileManager.default.fileExists(atPath: stalledInputMarker.path), Date() < markerDeadline {
+            usleep(1_000)
+        }
+    }
+)
+let stalledInputStartedAt = Date()
+var stalledInputTimedOut = false
+do {
+    _ = try stalledInputClient.run(
+        arguments: [],
+        standardInput: Data(repeating: 0x78, count: 64 * 1024),
+        timeout: 1.5
+    )
+} catch NeonDiffCLIError.timedOut {
+    stalledInputTimedOut = true
+} catch {
+    fputs("check failed: stalled stdin returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+let stalledInputElapsed = Date().timeIntervalSince(stalledInputStartedAt)
+check(stalledInputTimedOut, "a child that never drains maximum-size stdin returns timedOut")
+check(stalledInputElapsed < 3, "stdin delivery and process execution share the configured deadline")
+let stalledInputPIDText = try String(contentsOf: stalledInputMarker, encoding: .utf8)
+let stalledInputPID = checkedValue(
+    Int32(stalledInputPIDText.trimmingCharacters(in: .whitespacesAndNewlines)),
+    "stalled stdin child records its process id"
+)
+let stalledInputChildWasRunning = kill(stalledInputPID, 0) == 0
+if stalledInputChildWasRunning {
+    _ = kill(stalledInputPID, SIGKILL)
+}
+check(!stalledInputChildWasRunning, "timed-out stdin child is terminated and reaped")
+
+let saturatedInputMarker = tempRoot.appendingPathComponent("saturated-input-child.pids")
+let saturatedInputCLI = tempRoot.appendingPathComponent("saturated-input-cli")
+try """
+#!/usr/bin/env bash
+printf '%s\\n' "$$" > \(saturatedInputMarker.path)
+trap '' TERM
+while :; do :; done
+""".write(to: saturatedInputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: saturatedInputCLI.path)
+
+let saturatedInputPipe = Pipe()
+let saturatedWriteFD = saturatedInputPipe.fileHandleForWriting.fileDescriptor
+let saturatedReadFD = saturatedInputPipe.fileHandleForReading.fileDescriptor
+let saturatedInspectionReadFD = dup(saturatedReadFD)
+check(saturatedInspectionReadFD >= 0, "saturated stdin fixture duplicates its inspection reader")
+let saturatedWriteFlags = fcntl(saturatedWriteFD, F_GETFL)
+check(saturatedWriteFlags >= 0, "saturated stdin fixture reads pipe flags")
+check(fcntl(saturatedWriteFD, F_SETFL, saturatedWriteFlags | O_NONBLOCK) == 0, "saturated stdin fixture enables nonblocking fill")
+let saturatedSentinel = [UInt8](repeating: 0xA5, count: 4 * 1024)
+var saturatedBytes = 0
+while true {
+    let written = saturatedSentinel.withUnsafeBytes { bytes in
+        Darwin.write(saturatedWriteFD, bytes.baseAddress, bytes.count)
+    }
+    if written > 0 {
+        saturatedBytes += written
+        continue
+    }
+    if written == -1 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+        break
+    }
+    check(false, "saturated stdin fixture fills the pipe to EAGAIN")
+}
+check(saturatedBytes > 0, "saturated stdin fixture preloads the pipe")
+check(fcntl(saturatedWriteFD, F_SETFL, saturatedWriteFlags) == 0, "saturated stdin fixture restores blocking writes")
+
+let saturatedInputClient = NeonDiffCLIClient(
+    executablePath: saturatedInputCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { saturatedInputPipe }
+)
+let saturatedInputStartedAt = Date()
+var saturatedInputTimedOut = false
+do {
+    _ = try saturatedInputClient.run(
+        arguments: [],
+        standardInput: Data(repeating: 0x78, count: 64 * 1024),
+        timeout: 0.75
+    )
+} catch NeonDiffCLIError.timedOut {
+    saturatedInputTimedOut = true
+} catch {
+    fputs("check failed: saturated stdin returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+let saturatedInputElapsed = Date().timeIntervalSince(saturatedInputStartedAt)
+let saturatedInputPIDs = try String(contentsOf: saturatedInputMarker, encoding: .utf8)
+    .split(whereSeparator: \.isWhitespace)
+    .compactMap { Int32($0) }
+check(saturatedInputPIDs.count == 1, "saturated stdin fixture records its child pid")
+
+let saturatedReadFlags = fcntl(saturatedInspectionReadFD, F_GETFL)
+check(saturatedReadFlags >= 0, "saturated stdin fixture reads drain flags")
+check(fcntl(saturatedInspectionReadFD, F_SETFL, saturatedReadFlags | O_NONBLOCK) == 0, "saturated stdin fixture enables nonblocking drain")
+var postReturnInputBytes = 0
+var drainBuffer = [UInt8](repeating: 0, count: 4 * 1024)
+let saturatedDrainDeadline = Date().addingTimeInterval(1)
+while Date() < saturatedDrainDeadline {
+    let count = drainBuffer.withUnsafeMutableBytes { bytes in
+        Darwin.read(saturatedInspectionReadFD, bytes.baseAddress, bytes.count)
+    }
+    if count > 0 {
+        postReturnInputBytes += drainBuffer.prefix(count).filter { $0 == 0x78 }.count
+        continue
+    }
+    if count == 0 { break }
+    if errno == EAGAIN || errno == EWOULDBLOCK {
+        usleep(10_000)
+        continue
+    }
+    check(false, "saturated stdin fixture drains without read errors")
+}
+_ = Darwin.close(saturatedInspectionReadFD)
+check(saturatedInputTimedOut, "a saturated stdin pipe shares the process timeout")
+check(saturatedInputElapsed < 1.5, "stdin writer lifetime is bounded before run returns")
+check(postReturnInputBytes == 0, "no stdin writer resumes after run returns")
+
+var cleanupTerminateCalls = 0
+var cleanupKillCalls = 0
+var cleanupWaitCalls = 0
+var cleanupFailedBoundedly = false
+do {
+    try NeonDiffProcessCleanup.terminateAndReap(
+        isRunning: { true },
+        terminate: { cleanupTerminateCalls += 1 },
+        kill: { cleanupKillCalls += 1 },
+        waitForTermination: { _ in
+            cleanupWaitCalls += 1
+            return .timedOut
+        }
+    )
+} catch NeonDiffCLIError.cleanupTimedOut {
+    cleanupFailedBoundedly = true
+} catch {
+    fputs("check failed: bounded cleanup returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(cleanupFailedBoundedly, "unobserved process cleanup returns an explicit bounded error")
+check(cleanupTerminateCalls == 1, "bounded process cleanup sends TERM once")
+check(cleanupKillCalls == 1, "bounded process cleanup escalates to SIGKILL once")
+check(cleanupWaitCalls == 2, "bounded process cleanup performs only its two bounded waits")
+
+let injectedClockBase = DispatchTime.now().uptimeNanoseconds
+var launchDeadlineClockCalls = 0
+var launchDeadlineWriteCalls = 0
+let launchDeadlineClient = NeonDiffCLIClient(
+    executablePath: stalledInputCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { Pipe() },
+    monotonicNow: {
+        launchDeadlineClockCalls += 1
+        return DispatchTime(
+            uptimeNanoseconds: injectedClockBase + (launchDeadlineClockCalls == 1 ? 0 : 2_000_000_000)
+        )
+    },
+    standardInputWriter: { _, _, _ in
+        launchDeadlineWriteCalls += 1
+        return 0
+    }
+)
+var launchDeadlineTimedOut = false
+do {
+    _ = try launchDeadlineClient.run(
+        arguments: [],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 1
+    )
+} catch NeonDiffCLIError.timedOut {
+    launchDeadlineTimedOut = true
+} catch {
+    fputs("check failed: post-launch deadline returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(launchDeadlineTimedOut, "launch completing after the deadline returns timedOut")
+check(launchDeadlineWriteCalls == 0, "launch completing after the deadline writes zero secret bytes")
+
+var interruptedWriteCalls = 0
+let interruptedWriteClient = NeonDiffCLIClient(
+    executablePath: stalledInputCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { Pipe() },
+    monotonicNow: {
+        let offset: UInt64 = interruptedWriteCalls == 0 ? 100_000_000 : 2_000_000_000
+        return DispatchTime(uptimeNanoseconds: injectedClockBase + offset)
+    },
+    standardInputWriter: { _, _, _ in
+        interruptedWriteCalls += 1
+        errno = EINTR
+        return -1
+    }
+)
+var interruptedWriteTimedOut = false
+do {
+    _ = try interruptedWriteClient.run(
+        arguments: [],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 1
+    )
+} catch NeonDiffCLIError.timedOut {
+    interruptedWriteTimedOut = true
+} catch {
+    fputs("check failed: interrupted stdin deadline returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(interruptedWriteTimedOut, "EINTR retry observes the original absolute deadline")
+check(interruptedWriteCalls == 1, "deadline is rechecked before retrying an interrupted secret write")
+
+let closedInputMarker = tempRoot.appendingPathComponent("closed-input-child.pid")
+let closedInputCLI = tempRoot.appendingPathComponent("closed-input-cli")
+try """
+#!/usr/bin/env bash
+exec 0<&-
+printf '%s\\n' "$$" > \(closedInputMarker.path)
+trap '' TERM
+while :; do :; done
+""".write(to: closedInputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: closedInputCLI.path)
+var closedInputClockCalls = 0
+let closedInputClient = NeonDiffCLIClient(
+    executablePath: closedInputCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { Pipe() },
+    monotonicNow: {
+        closedInputClockCalls += 1
+        if closedInputClockCalls > 1 {
+            let markerDeadline = Date().addingTimeInterval(1)
+            while !FileManager.default.fileExists(atPath: closedInputMarker.path), Date() < markerDeadline {
+                usleep(1_000)
+            }
+        }
+        return DispatchTime.now()
+    }
+)
+var closedInputFailedSafely = false
+do {
+    _ = try closedInputClient.run(
+        arguments: [],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 2
+    )
+} catch NeonDiffCLIError.launchFailed(let message) {
+    closedInputFailedSafely = true
+    check(!message.contains("fixture-provider-value"), "EPIPE failure never echoes submitted stdin")
+} catch {
+    fputs("check failed: closed stdin returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(closedInputFailedSafely, "child-closes-stdin EPIPE is handled without SIGPIPE termination")
+let closedInputPIDText = try String(contentsOf: closedInputMarker, encoding: .utf8)
+let closedInputPID = checkedValue(
+    Int32(closedInputPIDText.trimmingCharacters(in: .whitespacesAndNewlines)),
+    "closed stdin child records its process id"
+)
+check(kill(closedInputPID, 0) != 0 && errno == ESRCH, "EPIPE cleanup terminates and reaps the child")
+
+let inheritedOutputMarker = tempRoot.appendingPathComponent("inherited-output-child.pid")
+let inheritedOutputCLI = tempRoot.appendingPathComponent("inherited-output-cli")
+try """
+#!/usr/bin/env bash
+(
+  while :; do
+    printf 'fixture-stdout\\n' || exit 0
+    printf 'fixture-stderr\\n' >&2 || exit 0
+    /bin/sleep 0.02
+  done
+) &
+printf '%s\\n' "$!" > \(inheritedOutputMarker.path)
+exit 0
+""".write(to: inheritedOutputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: inheritedOutputCLI.path)
+let inheritedOutputClient = NeonDiffCLIClient(executablePath: inheritedOutputCLI.path, workingDirectory: tempRoot)
+let inheritedOutputStartedAt = Date()
+let inheritedOutputResult = try inheritedOutputClient.run(arguments: [], standardInput: nil, timeout: 0.75)
+let inheritedOutputElapsed = Date().timeIntervalSince(inheritedOutputStartedAt)
+check(inheritedOutputResult.exitCode == 0, "parent process exits successfully while a descendant inherits output")
+check(inheritedOutputElapsed < 1.5, "inherited stdout and stderr cannot extend the bounded run")
+let inheritedOutputPIDText = try String(contentsOf: inheritedOutputMarker, encoding: .utf8)
+let inheritedOutputPID = checkedValue(
+    Int32(inheritedOutputPIDText.trimmingCharacters(in: .whitespacesAndNewlines)),
+    "inherited output descendant records its process id"
+)
+let inheritedOutputExitDeadline = Date().addingTimeInterval(0.75)
+while kill(inheritedOutputPID, 0) == 0, Date() < inheritedOutputExitDeadline {
+    usleep(10_000)
+}
+let inheritedOutputChildWasRunning = kill(inheritedOutputPID, 0) == 0
+if inheritedOutputChildWasRunning {
+    _ = kill(inheritedOutputPID, SIGKILL)
+}
+check(!inheritedOutputChildWasRunning, "closing bounded output pipes leaves no inherited-output fixture")
+
+let oversizedOutputCLI = tempRoot.appendingPathComponent("oversized-output-cli")
+try """
+#!/usr/bin/env bash
+exec /usr/bin/head -c 1100000 /dev/zero
+""".write(to: oversizedOutputCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: oversizedOutputCLI.path)
+let oversizedOutputClient = NeonDiffCLIClient(executablePath: oversizedOutputCLI.path, workingDirectory: tempRoot)
+var oversizedOutputRejected = false
+do {
+    _ = try oversizedOutputClient.run(arguments: [], standardInput: nil, timeout: 2)
+} catch NeonDiffCLIError.outputTooLarge(let stream, let maxBytes) {
+    oversizedOutputRejected = stream == "stdout" && maxBytes == 1024 * 1024
+} catch {
+    fputs("check failed: oversized output returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(oversizedOutputRejected, "CLI output collection enforces its per-stream cap")
 
 final class GitHubFixtureURLProtocol: URLProtocol {
     static var requests: [URLRequest] = []
@@ -328,6 +851,10 @@ check(
     "GitHub API requests use the user access token authorization header"
 )
 
+let shortLivedLaunchClient = NeonDiffCLIClient(executablePath: "/usr/bin/true", workingDirectory: tempRoot)
+let shortLivedLaunchResult = try shortLivedLaunchClient.launchDetached(arguments: [])
+check(shortLivedLaunchResult.processIdentifier > 0, "detached launcher reports a pid for a successful short-lived command")
+
 let launchMarker = tempRoot.appendingPathComponent("dashboard-launch-marker.txt")
 let launchScript = tempRoot.appendingPathComponent("dashboard-launcher")
 try """
@@ -548,6 +1075,28 @@ check(controlCenterSnapshot?.revision == String(repeating: "a", count: 64), "con
 check(controlCenterSnapshot?.policy.reviewMaxActiveRuns == 2, "config inspect parses review concurrency")
 check(controlCenterSnapshot?.policy.issueAllowlist == ["owner/issues-repo"], "issue-enrichment allowlist remains separate from review repos")
 check(controlCenterSnapshot?.repos.map(\.name) == ["owner/review-repo"], "PR review allowlist remains in the repo selector")
+let providerRegistrySnapshot = ConfigInspectParser.parse(
+    #"{"ok":true,"command":"config inspect","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"zcode":{"model":"zcode-model","cliPath":"zcode","appConfigPath":"zcode.json"},"desktop":{"openAICompatibleEndpoint":"https://legacy.example/v1"},"providers":{"defaultProviderId":"gateway","providers":{"gateway":{"enabled":true,"adapter":"openai-compatible","displayName":"Gateway","baseUrl":"https://saved.example/v1","model":"saved-model","authMode":"api-key-env"},"disabled":{"enabled":false,"adapter":"openai-compatible","displayName":"Disabled","baseUrl":"https://disabled.example/v1","model":"disabled-model","authMode":"api-key-env"},"zcode":{"enabled":true,"adapter":"zcode","displayName":"ZCode","model":"zcode-model","authMode":"zcode-app-config"}}}}}"#,
+    providerKeyStored: true,
+    licenseKeyStored: false
+)
+check(providerRegistrySnapshot?.providers.selectedProviderId == "gateway", "config inspect maps providers.defaultProviderId")
+check(providerRegistrySnapshot?.providers.selectedRegistryTarget?.baseUrl == "https://saved.example/v1", "saved registry base URL is authoritative")
+check(providerRegistrySnapshot?.providers.openAICompatibleEndpoint == "https://legacy.example/v1", "legacy desktop endpoint remains parsed only for compatibility")
+check(providerRegistrySnapshot?.providers.selectedRegistryTarget?.isAPIKeyVerificationEligible == true, "enabled openai-compatible api-key-env target is eligible")
+check(providerRegistrySnapshot?.providers.registryTargets.first(where: { $0.id == "disabled" })?.isAPIKeyVerificationEligible == false, "disabled registry target is ineligible")
+check(providerRegistrySnapshot?.providers.registryTargets.first(where: { $0.id == "zcode" })?.isAPIKeyVerificationEligible == false, "non-compatible adapter is ineligible")
+if let providerSettings = providerRegistrySnapshot?.providers {
+    let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
+    let providerPatchText = String(data: providerPatchData, encoding: .utf8) ?? ""
+    let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
+    let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
+    let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
+    let selectedProviderPatch = providerPatchEntries?["gateway"] as? [String: Any]
+    check(selectedProviderPatch?["baseUrl"] as? String == "https://saved.example/v1", "provider patch uses the selected saved registry target")
+    check(!providerPatchText.contains("https://legacy.example/v1"), "legacy desktop endpoint cannot enter the provider registry patch")
+    check(!providerPatchText.lowercased().contains("apikey"), "provider registry patch contains no secret-bearing key field")
+}
 let failedInspectJSON = #"{"ok":false,"command":"config inspect","error":"config changed while reading; retry"}"#
 check(
     ConfigInspectParser.error(failedInspectJSON) == "config changed while reading; retry",
@@ -714,5 +1263,752 @@ check(
     DesktopControlCenterPatchBuilder.validationError(for: invalidControlCenter)?.contains("comments per cycle") == true,
     "native validation blocks issue comment caps above issue caps"
 )
+
+let providerSecretAccount = "provider/glm/api-key"
+let fixtureProviderSecret = "fixture-provider-value"
+let healthyProviderVerificationJSON = #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:00:00.000Z","providerId":"zcode-glm","state":"healthy","mode":"openai_compatible_models","detail":"Verified Z.AI GLM with a redacted /models check.","redacted":true,"keySource":"submitted","check":{"providerId":"zcode-glm","ok":true,"adapter":"openai-compatible","enabled":true,"model":"glm-4.5","authMode":"api-key-env","smokeAttempted":true,"readMode":"openai_compatible_models","apiKeyEnv":"Z_AI_API_KEY","modelCount":4},"troubleshooting":[]}"#
+let providerSecretStore = InMemoryProviderSecretStore()
+try providerSecretStore.setSecret(fixtureProviderSecret, account: providerSecretAccount)
+let fakeProviderCLI = FakeProviderVerificationCLI(
+    result: CLIRunResult(exitCode: 0, stdout: healthyProviderVerificationJSON, stderr: "")
+)
+let providerVerificationService = ProviderVerificationService(
+    keychain: providerSecretStore,
+    cli: fakeProviderCLI
+)
+let providerVerificationArguments = [
+    "providers", "verify", "--api-key-stdin", "true", "--allow-remote-smoke", "true", "--json"
+]
+let providerVerification = try providerVerificationService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    !fakeProviderCLI.arguments.joined(separator: " ").contains(fixtureProviderSecret),
+    "provider secret never enters argv"
+)
+check(
+    fakeProviderCLI.standardInput == Data(fixtureProviderSecret.utf8),
+    "provider secret is supplied only on stdin"
+)
+check(fakeProviderCLI.timeout == 15, "provider verification preserves the bounded process timeout")
+check(providerVerification.state == .healthy, "only a healthy exact envelope parses as verified")
+check(providerVerification.isVerified, "healthy exact provider verification is the only verified pass")
+check(providerVerification.command == "providers verify", "provider verification preserves the strict command discriminator")
+check(providerVerification.providerId == "zcode-glm", "provider verification preserves redacted provider metadata")
+check(
+    !String(reflecting: providerVerification).contains(fixtureProviderSecret),
+    "provider verification snapshot retains no provider secret"
+)
+check(
+    !providerVerification.detail.contains(fixtureProviderSecret)
+        && providerVerification.troubleshooting.allSatisfy { !$0.contains(fixtureProviderSecret) },
+    "provider verification presentation metadata retains no provider secret"
+)
+
+let stableConfigRevision = String(repeating: "d", count: 64)
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON.replacingOccurrences(
+        of: #""troubleshooting":[]"#,
+        with: #""troubleshooting":[],"configRevision":"\#(stableConfigRevision)""#
+    ),
+    stderr: ""
+)
+let revisionBoundVerification = try providerVerificationService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    expectedConfigRevision: stableConfigRevision,
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    revisionBoundVerification.configRevision == stableConfigRevision,
+    "provider verification preserves the exact stable config revision"
+)
+let revisionMismatchFailure = captureProviderVerificationFailure("config revision mismatch") {
+    _ = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        expectedConfigRevision: String(repeating: "e", count: 64),
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    revisionMismatchFailure is ProviderVerificationError,
+    "provider verification fails closed when the CLI result is from a different config revision"
+)
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON,
+    stderr: ""
+)
+
+var retainedProviderVerification: ProviderVerificationSnapshot? = providerVerification
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON.replacingOccurrences(
+        of: "providers verify",
+        with: "dashboard verify-provider"
+    ),
+    stderr: ""
+)
+do {
+    retainedProviderVerification = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+    check(false, "wrong-command verification must fail")
+} catch {
+    retainedProviderVerification = nil
+}
+check(retainedProviderVerification == nil, "wrong-command failure clears a prior provider result")
+
+retainedProviderVerification = providerVerification
+fakeProviderCLI.error = FixtureProviderTransportError.unavailable
+do {
+    retainedProviderVerification = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+    check(false, "transport verification must fail")
+} catch {
+    retainedProviderVerification = nil
+}
+check(retainedProviderVerification == nil, "transport failure clears a prior provider result")
+fakeProviderCLI.error = nil
+
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 1,
+    stdout: #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:01:00.000Z","providerId":"github-copilot","state":"configured_unverified","mode":"metadata_only","detail":"Provider metadata passed; API-key verification is not applicable.","redacted":true,"troubleshooting":["Choose an API-key provider for a live check."]}"#,
+    stderr: ""
+)
+let configuredProviderVerification = try providerVerificationService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "github-copilot",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    configuredProviderVerification.state == .configuredUnverified && !configuredProviderVerification.isVerified,
+    "configured_unverified remains a visible typed non-success outcome"
+)
+
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 1,
+    stdout: #"{"ok":false,"command":"providers verify","checkedAt":"2026-07-10T12:02:00.000Z","providerId":"zcode-glm","state":"blocked","mode":"openai_compatible_models","detail":"Provider verification failed.","redacted":true,"troubleshooting":["Check provider credentials."]}"#,
+    stderr: "provider verification did not prove health"
+)
+let blockedProviderVerification = try providerVerificationService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    blockedProviderVerification.state == .blocked && !blockedProviderVerification.isVerified,
+    "blocked remains a visible typed non-success outcome"
+)
+
+let invalidProviderVerificationResults: [(String, CLIRunResult)] = [
+    (
+        "wrong command",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: healthyProviderVerificationJSON.replacingOccurrences(of: "providers verify", with: "dashboard verify-provider"),
+            stderr: ""
+        )
+    ),
+    (
+        "unredacted envelope",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: healthyProviderVerificationJSON.replacingOccurrences(of: #""redacted":true"#, with: #""redacted":false"#),
+            stderr: ""
+        )
+    ),
+    ("malformed JSON", CLIRunResult(exitCode: 0, stdout: "{not-json", stderr: "")),
+    (
+        "healthy result with nonzero exit",
+        CLIRunResult(exitCode: 1, stdout: healthyProviderVerificationJSON, stderr: "")
+    ),
+    (
+        "nonhealthy result with zero exit",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: #"{"ok":false,"command":"providers verify","checkedAt":"2026-07-10T12:02:00.000Z","providerId":"zcode-glm","state":"blocked","mode":"openai_compatible_models","detail":"Provider verification failed.","redacted":true,"troubleshooting":[]}"#,
+            stderr: ""
+        )
+    ),
+    (
+        "blocked result claiming ok",
+        CLIRunResult(
+            exitCode: 1,
+            stdout: #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:02:00.000Z","providerId":"zcode-glm","state":"blocked","mode":"openai_compatible_models","detail":"Provider verification failed.","redacted":true,"troubleshooting":[]}"#,
+            stderr: ""
+        )
+    ),
+    (
+        "unknown mode",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: healthyProviderVerificationJSON.replacingOccurrences(of: "openai_compatible_models", with: "raw_response"),
+            stderr: ""
+        )
+    ),
+    (
+        "secret-like field",
+        CLIRunResult(
+            exitCode: 0,
+            stdout: healthyProviderVerificationJSON.replacingOccurrences(of: #""troubleshooting":[]"#, with: #""apiKey":"[REDACTED]","troubleshooting":[]"#),
+            stderr: ""
+        )
+    )
+]
+for (message, result) in invalidProviderVerificationResults {
+    fakeProviderCLI.result = result
+    let failure = captureProviderVerificationFailure(message) {
+        _ = try providerVerificationService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(
+        !failure.localizedDescription.contains(fixtureProviderSecret),
+        "provider verification failures never echo the provider secret"
+    )
+}
+
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 1,
+    stdout: healthyProviderVerificationJSON.replacingOccurrences(
+        of: "Verified Z.AI GLM with a redacted /models check.",
+        with: fixtureProviderSecret
+    ),
+    stderr: ""
+)
+let stdoutLeakFailure = captureProviderVerificationFailure("secret in serialized stdout") {
+    _ = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !stdoutLeakFailure.localizedDescription.contains(fixtureProviderSecret),
+    "serialized provider output containing the submitted secret is rejected without echo"
+)
+
+fakeProviderCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON,
+    stderr: "transport failed for \(fixtureProviderSecret)"
+)
+let stderrLeakFailure = captureProviderVerificationFailure("secret in stderr") {
+    _ = try providerVerificationService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !stderrLeakFailure.localizedDescription.contains(fixtureProviderSecret),
+    "provider stderr containing the submitted secret is rejected without echo"
+)
+
+let escapedOperationalSecret = "fixture\"slash\\line\ncontrol\u{0001}雪"
+let whitespaceWrappedSecret = "\u{FEFF} \t\(escapedOperationalSecret)\r\n \u{FEFF}"
+let escapedSecretStore = InMemoryProviderSecretStore()
+try escapedSecretStore.setSecret(whitespaceWrappedSecret, account: providerSecretAccount)
+let escapedSecretCLI = FakeProviderVerificationCLI(
+    result: CLIRunResult(exitCode: 0, stdout: healthyProviderVerificationJSON, stderr: "")
+)
+let escapedSecretService = ProviderVerificationService(keychain: escapedSecretStore, cli: escapedSecretCLI)
+let escapedSafeSnapshot = try escapedSecretService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    escapedSecretCLI.standardInput == Data(escapedOperationalSecret.utf8),
+    "provider verification trims Keychain whitespace exactly once before stdin submission"
+)
+check(
+    !escapedSecretCLI.arguments.joined(separator: " ").contains(escapedOperationalSecret),
+    "normalized operational secret remains absent from argv"
+)
+check(
+    !String(reflecting: escapedSafeSnapshot).contains(escapedOperationalSecret),
+    "normalized operational secret remains absent from retained snapshots"
+)
+let ecmaScriptNonWhitespaceSecret = "\u{0085}fixture-provider-value\u{0085}"
+try escapedSecretStore.setSecret(ecmaScriptNonWhitespaceSecret, account: providerSecretAccount)
+_ = try escapedSecretService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(
+    escapedSecretCLI.standardInput == Data(ecmaScriptNonWhitespaceSecret.utf8),
+    "provider normalization does not trim non-ECMAScript next-line characters"
+)
+try escapedSecretStore.setSecret(whitespaceWrappedSecret, account: providerSecretAccount)
+
+func encodedProviderEnvelope(
+    detail: String = "Verified provider with redacted metadata.",
+    troubleshooting: [String] = [],
+    diagnostic: Any? = nil
+) throws -> String {
+    var envelope: [String: Any] = [
+        "ok": true,
+        "command": "providers verify",
+        "checkedAt": "2026-07-10T12:03:00.000Z",
+        "providerId": "zcode-glm",
+        "state": "healthy",
+        "mode": "openai_compatible_models",
+        "detail": detail,
+        "redacted": true,
+        "troubleshooting": troubleshooting
+    ]
+    if let diagnostic {
+        envelope["diagnostic"] = diagnostic
+    }
+    let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+    return checkedValue(String(data: data, encoding: .utf8), "provider envelope serializes as UTF-8")
+}
+
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: try encodedProviderEnvelope(),
+    stderr: ""
+)
+_ = try escapedSecretService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(true, "benign redacted provider metadata remains accepted")
+
+check(
+    ProviderKeychainAccount.account(providerId: "zcode-glm") == "provider/zcode-glm/api-key",
+    "provider Keychain account is scoped to a validated provider id"
+)
+for invalidProviderId in ["", ".", "..", "../provider", "provider/key", "sk-1234567890abcdef"] {
+    check(
+        ProviderKeychainAccount.account(providerId: invalidProviderId) == nil,
+        "invalid or secret-shaped provider id fails closed for Keychain account derivation"
+    )
+}
+
+let credentialShapedEnvelopes = try [
+    encodedProviderEnvelope(detail: "Bearer " + "gh" + "p_" + String(repeating: "1", count: 36)),
+    encodedProviderEnvelope(troubleshooting: ["api_key=" + "sk-" + "proj-" + String(repeating: "2", count: 20)]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "github" + "_pat_" + String(repeating: "3", count: 30)]]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "-----BEGIN " + "PRIVATE" + " KEY-----"]])
+]
+for (index, envelope) in credentialShapedEnvelopes.enumerated() {
+    escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+    let failure = captureProviderVerificationFailure("credential-shaped envelope \(index)") {
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(failure.localizedDescription == ProviderVerificationError.secretInProcessOutput.localizedDescription, "credential-shaped output fails with a fixed redacted error")
+    check(!failure.localizedDescription.contains("1234567890"), "credential rejection error contains no credential fragment")
+}
+
+let canonicalRedactorSensitiveEnvelopes = try [
+    encodedProviderEnvelope(detail: "See https://operator:provider-password@example.com/v1/models"),
+    encodedProviderEnvelope(troubleshooting: ["Retry https://example.com/callback?access_token=abcdefghijklmnop"]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "cookie=abcdefghijklmnop"]]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": "session: abcdefghijklmnop"]]),
+    encodedProviderEnvelope(diagnostic: ["https://operator:provider-password@example.com": "benign value"])
+]
+for (index, envelope) in canonicalRedactorSensitiveEnvelopes.enumerated() {
+    escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+    let failure = captureProviderVerificationFailure("canonical-redactor-sensitive envelope \(index)") {
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(
+        failure.localizedDescription == ProviderVerificationError.secretInProcessOutput.localizedDescription,
+        "canonical redactor changes reject detail, troubleshooting, and nested output with a fixed error"
+    )
+    check(!failure.localizedDescription.contains("abcdefghijklmnop"), "canonical redactor rejection exposes no credential fragment")
+}
+
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: try encodedProviderEnvelope(
+        detail: "Provider metadata endpoint is healthy.",
+        troubleshooting: ["Retry after confirming the saved provider selection."],
+        diagnostic: ["nested": ["message": "modelCount=4; mode=metadata_only"]]
+    ),
+    stderr: ""
+)
+_ = try escapedSecretService.verify(
+    account: providerSecretAccount,
+    expectedProviderId: "zcode-glm",
+    arguments: providerVerificationArguments,
+    timeout: 15
+)
+check(true, "canonical redactor leaves benign detail, troubleshooting, and nested metadata accepted")
+
+check(
+    CanonicalSecretRuleCorpus.sensitive.count == CanonicalSecretRuleCorpus.ruleIDs.count,
+    "canonical Swift secret corpus covers every generated Node rule"
+)
+for fixture in CanonicalSecretRuleCorpus.sensitive {
+    let locations: [(String, Any)] = [
+        ("detail", fixture.text),
+        ("troubleshooting", [fixture.text]),
+        ("nested value", ["nested": ["message": fixture.text]]),
+        ("nested key", ["nested": [fixture.text: "public-safe fixture metadata"]])
+    ]
+    for (location, value) in locations {
+        let envelope: String
+        switch location {
+        case "detail":
+            envelope = try encodedProviderEnvelope(detail: value as! String)
+        case "troubleshooting":
+            envelope = try encodedProviderEnvelope(troubleshooting: value as! [String])
+        default:
+            envelope = try encodedProviderEnvelope(diagnostic: value)
+        }
+        escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+        let failure = captureProviderVerificationFailure("canonical \(fixture.id) in \(location)") {
+            _ = try escapedSecretService.verify(
+                account: providerSecretAccount,
+                expectedProviderId: "zcode-glm",
+                arguments: providerVerificationArguments,
+                timeout: 15
+            )
+        }
+        check(
+            failure.localizedDescription == ProviderVerificationError.secretInProcessOutput.localizedDescription,
+            "canonical \(fixture.id) fails closed in \(location) with the fixed redacted error"
+        )
+        check(
+            !failure.localizedDescription.contains(fixture.text),
+            "canonical \(fixture.id) rejection never echoes the matched text"
+        )
+    }
+}
+
+for fixture in CanonicalSecretRuleCorpus.benign {
+    let envelopes = try [
+        encodedProviderEnvelope(detail: fixture.text),
+        encodedProviderEnvelope(troubleshooting: [fixture.text]),
+        encodedProviderEnvelope(diagnostic: ["nested": ["message": fixture.text]]),
+        encodedProviderEnvelope(diagnostic: ["nested": [fixture.text: "public-safe fixture metadata"]])
+    ]
+    for envelope in envelopes {
+        escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(true, "canonical benign \(fixture.id) stays accepted across decoded keys and values")
+}
+
+let standaloneSafeLiteralReferences = [
+    "Set NEONDIFF_PROVIDER_API_KEY before running verification.",
+    "Required: `NEONDIFF_PROVIDER_API_KEY`.",
+    "Read NEONDIFF_PROVIDER_API_KEY, then continue."
+]
+for text in standaloneSafeLiteralReferences {
+    check(
+        !CanonicalSecretScanner.containsSecretLikeText(text),
+        "standalone safe environment identifier remains public-safe: \(text)"
+    )
+}
+let sensitiveSafeLiteralAssignments = [
+    "NEONDIFF_PROVIDER_API_KEY=abcdefghijklmnop",
+    "NEONDIFF_PROVIDER_API_KEY = abcdefghijklmnop",
+    #""NEONDIFF_PROVIDER_API_KEY": "abcdefghijklmnop""#,
+    "'NEONDIFF_PROVIDER_API_KEY' : 'abcdefghijklmnop'",
+    "token=NEONDIFF_PROVIDER_API_KEY"
+]
+for text in sensitiveSafeLiteralAssignments {
+    check(
+        CanonicalSecretScanner.containsSecretLikeText(text),
+        "assignment-shaped safe environment identifier remains scannable"
+    )
+}
+
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: try encodedProviderEnvelope().replacingOccurrences(of: #""providerId":"zcode-glm""#, with: #""providerId":"other-provider""#),
+    stderr: ""
+)
+let wrongProviderFailure = captureProviderVerificationFailure("wrong provider healthy envelope") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(wrongProviderFailure.localizedDescription == ProviderVerificationError.providerMismatch.localizedDescription, "wrong-provider healthy output is rejected explicitly")
+check(!wrongProviderFailure.localizedDescription.contains("other-provider"), "wrong-provider error is fixed and redacted")
+
+escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: healthyProviderVerificationJSON, stderr: "")
+
+let escapedSecretEnvelopes = try [
+    encodedProviderEnvelope(detail: escapedOperationalSecret),
+    encodedProviderEnvelope(troubleshooting: ["retry: \(escapedOperationalSecret)"]),
+    encodedProviderEnvelope(diagnostic: ["nested": ["message": escapedOperationalSecret]])
+]
+check(
+    escapedSecretEnvelopes.allSatisfy { !$0.contains(escapedOperationalSecret) },
+    "JSON escaping hides the operational secret from raw substring checks"
+)
+for (index, envelope) in escapedSecretEnvelopes.enumerated() {
+    escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
+    let failure = captureProviderVerificationFailure("decoded escaped secret envelope \(index)") {
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(
+        !failure.localizedDescription.contains(escapedOperationalSecret),
+        "decoded secret rejection errors retain no normalized secret"
+    )
+}
+
+let encodedSecretLiteralData = try JSONSerialization.data(
+    withJSONObject: escapedOperationalSecret,
+    options: [.fragmentsAllowed]
+)
+let encodedSecretLiteral = checkedValue(
+    String(data: encodedSecretLiteralData, encoding: .utf8),
+    "normalized provider secret serializes as a JSON string"
+)
+let encodedSecretStderrData = try JSONSerialization.data(
+    withJSONObject: ["diagnostic": ["nested": escapedOperationalSecret]],
+    options: [.sortedKeys]
+)
+let encodedSecretStderr = checkedValue(
+    String(data: encodedSecretStderrData, encoding: .utf8),
+    "nested provider stderr serializes as UTF-8"
+)
+let alternateEscapedSecretLiteral = encodedSecretLiteral
+    .replacingOccurrences(of: "\\n", with: "\\u000a")
+    .replacingOccurrences(of: "雪", with: "\\u96ea")
+let escapedSecretStderrCases = [
+    encodedSecretStderr,
+    "provider diagnostic payload: \(encodedSecretLiteral)",
+    "provider diagnostic payload: \(alternateEscapedSecretLiteral)"
+]
+check(
+    escapedSecretStderrCases.allSatisfy { !$0.contains(escapedOperationalSecret) },
+    "JSON escaping hides the normalized secret from raw stderr substring checks"
+)
+for (index, stderrText) in escapedSecretStderrCases.enumerated() {
+    escapedSecretCLI.result = CLIRunResult(
+        exitCode: 0,
+        stdout: healthyProviderVerificationJSON,
+        stderr: stderrText
+    )
+    let failure = captureProviderVerificationFailure("escaped normalized secret stderr \(index)") {
+        _ = try escapedSecretService.verify(
+            account: providerSecretAccount,
+            expectedProviderId: "zcode-glm",
+            arguments: providerVerificationArguments,
+            timeout: 15
+        )
+    }
+    check(
+        !failure.localizedDescription.contains(escapedOperationalSecret),
+        "escaped stderr rejection errors retain no normalized secret"
+    )
+}
+
+let nestedSerializedSecretEnvelope = try encodedProviderEnvelope(
+    diagnostic: ["serialized": encodedSecretLiteral]
+)
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: nestedSerializedSecretEnvelope,
+    stderr: ""
+)
+let nestedSerializedStdoutFailure = captureProviderVerificationFailure("nested serialized secret stdout") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !nestedSerializedStdoutFailure.localizedDescription.contains(escapedOperationalSecret),
+    "nested serialized stdout rejection retains no normalized secret"
+)
+
+let nestedSerializedStderrData = try JSONSerialization.data(
+    withJSONObject: ["diagnostic": ["serialized": encodedSecretLiteral]],
+    options: [.sortedKeys]
+)
+let nestedSerializedStderr = checkedValue(
+    String(data: nestedSerializedStderrData, encoding: .utf8),
+    "nested serialized stderr encodes as UTF-8"
+)
+escapedSecretCLI.result = CLIRunResult(
+    exitCode: 0,
+    stdout: healthyProviderVerificationJSON,
+    stderr: nestedSerializedStderr
+)
+let nestedSerializedStderrFailure = captureProviderVerificationFailure("nested serialized secret stderr") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !nestedSerializedStderrFailure.localizedDescription.contains(escapedOperationalSecret),
+    "nested serialized stderr rejection retains no normalized secret"
+)
+
+var deeplyNestedDiagnostic: Any = encodedSecretLiteral
+for _ in 0..<80 {
+    deeplyNestedDiagnostic = [deeplyNestedDiagnostic]
+}
+let deeplyNestedEnvelope = try encodedProviderEnvelope(diagnostic: deeplyNestedDiagnostic)
+escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: deeplyNestedEnvelope, stderr: "")
+let deeplyNestedFailure = captureProviderVerificationFailure("deeply nested provider diagnostic") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !deeplyNestedFailure.localizedDescription.contains(escapedOperationalSecret),
+    "deep nesting budget failure remains fixed and redacted"
+)
+
+let wideDiagnostic = Array(repeating: "bounded-safe-diagnostic", count: 5_000)
+let wideEnvelope = try encodedProviderEnvelope(diagnostic: wideDiagnostic)
+escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: wideEnvelope, stderr: "")
+let wideBudgetFailure = captureProviderVerificationFailure("provider diagnostic node budget") {
+    _ = try escapedSecretService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+check(
+    !wideBudgetFailure.localizedDescription.contains(escapedOperationalSecret),
+    "node budget failure remains fixed and redacted"
+)
+
+var deepSensitiveKeyDiagnostic: Any = ["api" + "Key": "[REDACTED]"]
+for _ in 0..<31 {
+    deepSensitiveKeyDiagnostic = ["nested": deepSensitiveKeyDiagnostic]
+}
+check(
+    ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(deepSensitiveKeyDiagnostic),
+    "sensitive key names are detected at the bounded depth limit"
+)
+
+var benignDepthLimitDiagnostic: Any = "bounded-safe-diagnostic"
+for _ in 0..<31 {
+    benignDepthLimitDiagnostic = ["nested": benignDepthLimitDiagnostic]
+}
+check(
+    !ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(benignDepthLimitDiagnostic),
+    "benign output is accepted at the bounded depth limit"
+)
+benignDepthLimitDiagnostic = ["nested": benignDepthLimitDiagnostic]
+benignDepthLimitDiagnostic = ["nested": benignDepthLimitDiagnostic]
+check(
+    ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(benignDepthLimitDiagnostic),
+    "benign output beyond the depth limit fails closed"
+)
+
+var wideSensitiveKeyDiagnostic: [String: Any] = [:]
+for index in 0..<4_090 {
+    wideSensitiveKeyDiagnostic["field-\(index)"] = "safe"
+}
+wideSensitiveKeyDiagnostic["access" + "Token"] = "[REDACTED]"
+check(
+    ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(wideSensitiveKeyDiagnostic),
+    "wide output containing a sensitive key fails closed within the node budget"
+)
+
+let benignWideDiagnostic = Dictionary(
+    uniqueKeysWithValues: (0..<128).map { ("field-\($0)", "safe") }
+)
+check(
+    !ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(benignWideDiagnostic),
+    "benign wide output below the node limit remains accepted"
+)
+let overLimitBenignWideDiagnostic = Dictionary(
+    uniqueKeysWithValues: (0..<4_200).map { ("field-\($0)", "safe") }
+)
+check(
+    ProviderVerificationParser.decodedOutputContainsSecretLikeMaterialForTesting(overLimitBenignWideDiagnostic),
+    "benign wide output beyond the node limit fails closed"
+)
+
+let whitespaceOnlySecretStore = InMemoryProviderSecretStore()
+try whitespaceOnlySecretStore.setSecret(" \t\r\n ", account: providerSecretAccount)
+let whitespaceOnlySecretService = ProviderVerificationService(
+    keychain: whitespaceOnlySecretStore,
+    cli: escapedSecretCLI
+)
+_ = captureProviderVerificationFailure("whitespace-only normalized provider secret") {
+    _ = try whitespaceOnlySecretService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
+
+let missingProviderSecretStore = InMemoryProviderSecretStore()
+let missingProviderSecretService = ProviderVerificationService(
+    keychain: missingProviderSecretStore,
+    cli: fakeProviderCLI
+)
+_ = captureProviderVerificationFailure("missing Keychain provider secret") {
+    _ = try missingProviderSecretService.verify(
+        account: providerSecretAccount,
+        expectedProviderId: "zcode-glm",
+        arguments: providerVerificationArguments,
+        timeout: 15
+    )
+}
 
 print("NeonDiffDesktopCoreChecks passed")

@@ -25,11 +25,17 @@ describe("Swift CI velocity policy", () => {
 
     expect(swiftAffected([
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ContentView.swift",
+      "shared/canonical-secret-rules.json",
+      "scripts/check-secret-corpus-boundary.mjs",
+      "scripts/check-secret-rule-differential.mjs",
       ".github/workflows/swift-desktop-gate.yml"
     ])).toMatchObject({
       affected: true,
       matched: [
         "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ContentView.swift",
+        "shared/canonical-secret-rules.json",
+        "scripts/check-secret-corpus-boundary.mjs",
+        "scripts/check-secret-rule-differential.mjs",
         ".github/workflows/swift-desktop-gate.yml"
       ]
     });
@@ -62,7 +68,8 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/scripts\/swift-affected\.mjs/);
     expect(gate).toMatch(/No Swift desktop files changed/);
     expect(gate).toMatch(/swift build --target NeonDiffDesktopKeychainChecks/);
-    expect(gate).not.toMatch(/swift run NeonDiffDesktopCoreChecks/);
+    expect(gate).toMatch(/npm run check:secret-rule-differential/);
+    expect(gate.match(/swift run NeonDiffDesktopCoreChecks/g)).toHaveLength(1);
     expect(gate).not.toMatch(/swift run NeonDiffDesktopKeychainChecks/);
     expect(gate).toMatch(/swift build/);
     expect(gate).toMatch(/script\/build_and_run\.sh build/);

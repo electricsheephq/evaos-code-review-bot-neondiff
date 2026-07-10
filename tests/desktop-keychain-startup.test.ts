@@ -42,4 +42,26 @@ describe("NeonDiff desktop Keychain startup safety", () => {
     expect(source.match(/kSecUseAuthenticationUISkip/g)).toHaveLength(2);
     expect(source).not.toContain("kSecUseAuthenticationContext");
   });
+
+  it("keeps the provider visual fixture DEBUG-only and bound to saved registry authority", () => {
+    const source = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Models/NeonDiffDesktopModel.swift",
+      "utf8"
+    );
+    const fixture = swiftBlock(source, "if visualProofFixtureEnabled {");
+    const fixtureStart = source.indexOf("if visualProofFixtureEnabled {");
+    const debugStart = source.lastIndexOf("#if DEBUG", fixtureStart);
+    const debugEnd = source.indexOf("#endif", fixtureStart);
+
+    expect(debugStart).toBeGreaterThanOrEqual(0);
+    expect(debugEnd).toBeGreaterThan(fixtureStart);
+    expect(fixture).toContain("providers.registryTargets = [");
+    expect(fixture).toContain('displayName: "Z.AI GLM"');
+    expect(fixture).toContain('authMode: "api-key-env"');
+    expect(fixture).toContain('baseUrl: "https://api.z.ai/api/coding/paas/v4"');
+    expect(fixture).toContain("providers.providerKeyStored = true");
+    expect(fixture).toContain("providerLoadedSnapshot = ProviderConfigurationSnapshot(");
+    expect(fixture).toContain("providerLoadedRevision = String(repeating:");
+    expect(fixture).toContain('providers.openAICompatibleEndpoint = "https://legacy-endpoint.invalid/v1"');
+  });
 });

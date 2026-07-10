@@ -38,6 +38,30 @@ describe("secret redaction", () => {
     expect(redactSecrets(text)).toBe(text);
   });
 
+  it("only protects safe environment names when they are standalone references", () => {
+    const benignReferences = [
+      "Set NEONDIFF_PROVIDER_API_KEY before running verification.",
+      "Required: `NEONDIFF_PROVIDER_API_KEY`.",
+      "Read NEONDIFF_PROVIDER_API_KEY, then continue."
+    ];
+    const sensitiveAssignments = [
+      "NEONDIFF_PROVIDER_API_KEY=abcdefghijklmnop",
+      "NEONDIFF_PROVIDER_API_KEY = abcdefghijklmnop",
+      "\"NEONDIFF_PROVIDER_API_KEY\": \"abcdefghijklmnop\"",
+      "'NEONDIFF_PROVIDER_API_KEY' : 'abcdefghijklmnop'",
+      "token=NEONDIFF_PROVIDER_API_KEY"
+    ];
+
+    for (const text of benignReferences) {
+      expect(containsSecretLikeText(text), text).toBe(false);
+      expect(redactSecrets(text), text).toBe(text);
+    }
+    for (const text of sensitiveAssignments) {
+      expect(containsSecretLikeText(text), text).toBe(true);
+      expect(redactSecrets(text), text).toContain("[redacted-secret]");
+    }
+  });
+
   it("redacts hyphenated license-shaped values case-insensitively", () => {
     const license = "neondiff-revocation-reason-test-123456";
     const digitPoorLicense = "NDL-XQKM-RPYB-SUTE";
@@ -137,6 +161,11 @@ describe("secret redaction", () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.message).toBe("status payload");
     expect(typeof parsed.token).toBe("string");
+
+    const safeNameKey = JSON.parse(redactSecrets(JSON.stringify({
+      NEONDIFF_PROVIDER_API_KEY: "abcdefghijklmnop"
+    })));
+    expect(safeNameKey.NEONDIFF_PROVIDER_API_KEY).toBe("[redacted-secret]");
   });
 
   it("redacts sensitive long cookie headers without scanning unbounded attribute chains", () => {

@@ -89,12 +89,32 @@ public enum ConfigInspectParser {
         let reviewConcurrency = config["reviewConcurrency"] as? [String: Any]
         let reviewGate = config["reviewGate"] as? [String: Any]
         let issueEnrichment = config["issueEnrichment"] as? [String: Any]
+        let providerRegistry = config["providers"] as? [String: Any]
+        let selectedProviderId = providerRegistry?["defaultProviderId"] as? String ?? "zcode-glm"
+        let registryEntries = providerRegistry?["providers"] as? [String: Any] ?? [:]
+        let registryTargets = registryEntries.compactMap { id, value -> ProviderRegistryTarget? in
+            guard let entry = value as? [String: Any],
+                  let adapter = entry["adapter"] as? String,
+                  let authMode = entry["authMode"] as? String
+            else { return nil }
+            return ProviderRegistryTarget(
+                id: id,
+                displayName: entry["displayName"] as? String ?? id,
+                enabled: entry["enabled"] as? Bool ?? false,
+                adapter: adapter,
+                authMode: authMode,
+                baseUrl: entry["baseUrl"] as? String ?? "",
+                model: entry["model"] as? String ?? ""
+            )
+        }.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         let providers = ProviderSettings(
             zcodeModel: zcode?["model"] as? String ?? "GLM-5.2",
             zcodeCliPath: zcode?["cliPath"] as? String ?? "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
             zcodeAppConfigPath: zcode?["appConfigPath"] as? String ?? "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
             openAICompatibleEndpoint: desktop?["openAICompatibleEndpoint"] as? String ?? "http://localhost:8000/v1",
-            providerKeyStored: providerKeyStored
+            providerKeyStored: providerKeyStored,
+            selectedProviderId: selectedProviderId,
+            registryTargets: registryTargets
         )
         let license = LicenseStatus(
             keyStored: licenseKeyStored,
@@ -154,7 +174,7 @@ public enum ConfigInspectParser {
     }
 }
 
-public enum ConfigPatchProofMode {
+public enum ConfigPatchProofMode: Equatable, Sendable {
     case preview
     case apply
 }

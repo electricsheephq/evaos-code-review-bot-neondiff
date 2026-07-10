@@ -87,6 +87,21 @@ neondiff providers doctor \
   --json
 ```
 
+The native desktop Providers pane uses this saved registry as its authority.
+It does not treat `desktop.openAICompatibleEndpoint` as a verified target.
+Preview and Apply endpoint/model changes first; the subsequent explicit Verify
+click pins `--provider` and `--expected-config-revision`, reads the key from
+Keychain, and sends it only over bounded stdin. A changed revision fails before
+the CLI reads stdin or starts provider verification.
+
+For direct CLI callers, every explicit `--config` verify loads a
+revision-bearing snapshot and rejects drift observed after provider execution,
+even when `--expected-config-revision` is omitted. Supplying
+`--expected-config-revision` adds the stronger starting precondition: the exact
+revision must match before stdin is read. Omitting `--config` uses the normal
+fallback config loader and has no filesystem revision proof; the native app
+never uses that unpinned form.
+
 The example `ollama-local` provider is disabled by default. Enable it in
 `config.local.json` or with a dry-run-verified config patch before running the
 smoke command; otherwise the doctor exits before calling `/models`. Smoke checks

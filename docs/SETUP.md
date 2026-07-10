@@ -233,6 +233,13 @@ output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing
 the submitted key.
 
+In the native Mac pane, the selected `providers.defaultProviderId` registry
+entry is the source of truth. Endpoint/model edits are dirty until a successful
+Preview and confirmed Apply/readback. Verify stays disabled until that saved
+state is current, then invokes the exact provider ID and config revision. The
+Keychain value crosses only bounded stdin; it is never added to the registry
+patch, argv, environment, logs, or evidence.
+
 The full doctor output is JSON. Check:
 
 - `ok`

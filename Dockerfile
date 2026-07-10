@@ -2,13 +2,15 @@
 FROM node:26-bookworm-slim AS build
 
 WORKDIR /app
-COPY package.json package-lock.json tsconfig.json ./
+COPY package.json package-lock.json tsconfig.json tsconfig.build.json ./
 RUN npm ci
 COPY src ./src
+COPY scripts ./scripts
+COPY shared ./shared
 COPY docs ./docs
 COPY config.example.json LICENSE.md README.md SECURITY.md CODE_OF_CONDUCT.md ./
 RUN npm run build
-RUN npm prune --omit=dev
+RUN npm prune --omit=dev && rm -rf scripts shared dist/tests
 
 # Keep runtime on Node 26 so Docker matches the published package engine.
 FROM node:26-bookworm-slim

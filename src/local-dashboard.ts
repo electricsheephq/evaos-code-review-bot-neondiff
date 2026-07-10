@@ -76,7 +76,10 @@ export interface LocalDashboardServerHandle {
   openOk: boolean;
 }
 
+type ProviderVerificationCommand = "dashboard verify-provider" | "providers verify";
+
 export interface ProviderApiKeyVerificationInput {
+  command?: ProviderVerificationCommand;
   config: BotConfig;
   providerId?: string;
   apiKey?: string;
@@ -86,7 +89,7 @@ export interface ProviderApiKeyVerificationInput {
 
 export interface ProviderApiKeyVerificationResult {
   ok: boolean;
-  command: "dashboard verify-provider";
+  command: ProviderVerificationCommand;
   checkedAt: string;
   providerId: string;
   state: LocalDashboardReadinessState;
@@ -96,6 +99,7 @@ export interface ProviderApiKeyVerificationResult {
   keySource?: "submitted" | "env";
   check?: Omit<ProviderDoctorCheck, "error"> & { error?: string };
   troubleshooting: string[];
+  configRevision?: string;
 }
 
 export interface LocalDashboardPreviewSmokeResult {
@@ -169,13 +173,14 @@ export async function buildLocalDashboardStatus(input: {
 
 export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInput): Promise<ProviderApiKeyVerificationResult> {
   const checkedAt = new Date().toISOString();
+  const command = input.command ?? "dashboard verify-provider";
   const registry = input.config.providers!;
   const providerId = input.providerId ?? registry.defaultProviderId;
   const provider = registry.providers[providerId];
   if (!provider) {
     return redactedVerification({
       ok: false,
-      command: "dashboard verify-provider",
+      command,
       checkedAt,
       providerId,
       state: "blocked",
@@ -196,7 +201,7 @@ export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInpu
     const check = result.checks[0];
     return redactedVerification({
       ok: Boolean(check?.ok),
-      command: "dashboard verify-provider",
+      command,
       checkedAt,
       providerId,
       state: check?.ok ? "configured_unverified" : "blocked",
@@ -217,7 +222,7 @@ export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInpu
   if (provider.apiKeyEnv && !env[provider.apiKeyEnv]) {
     return redactedVerification({
       ok: false,
-      command: "dashboard verify-provider",
+      command,
       checkedAt,
       providerId,
       state: "blocked",
@@ -240,7 +245,7 @@ export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInpu
     const check = result.checks[0];
     return redactedVerification({
       ok: false,
-      command: "dashboard verify-provider",
+      command,
       checkedAt,
       providerId,
       state: check?.ok ? "configured_unverified" : "blocked",
@@ -268,7 +273,7 @@ export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInpu
   const check = result.checks[0];
   return redactedVerification({
     ok: Boolean(check?.ok),
-    command: "dashboard verify-provider",
+    command,
     checkedAt,
     providerId,
     state: check?.ok ? "healthy" : "blocked",
@@ -925,7 +930,7 @@ function displayProviderName(providerId: string, registry: ProviderRegistryConfi
   return registry.providers[providerId]?.displayName ?? providerId;
 }
 
-function isLoopbackProvider(baseUrl: string | undefined): boolean {
+export function isLoopbackProvider(baseUrl: string | undefined): boolean {
   if (!baseUrl) return false;
   try {
     const parsed = new URL(baseUrl);

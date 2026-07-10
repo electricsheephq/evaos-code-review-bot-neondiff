@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
-import { loadConfig, loadConfigFromObject, type RepoProfileConfig } from "./config.js";
+import { loadConfig, loadConfigFromObject, type BotConfig, type RepoProfileConfig } from "./config.js";
 import { isApiKeyEnvName } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
@@ -457,12 +457,28 @@ function configMetadataForPath(configPath: string, fileOps?: Partial<ConfigFileO
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 }
 
-function configRevision(text: string): string {
+export function configRevision(text: string): string {
   return createHash("sha256")
     .update(String(Buffer.byteLength(text)))
     .update("\0")
     .update(text)
     .digest("hex");
+}
+
+export function readConfigRevision(configPath: string, fileOps?: Partial<ConfigFileOps>): string {
+  const resolvedConfigPath = resolve(configPath);
+  return readStableConfigSnapshot(resolvedConfigPath, fileOps).revision;
+}
+
+export function loadConfigAtRevision(
+  configPath: string,
+  fileOps?: Partial<ConfigFileOps>
+): { config: BotConfig; revision: string } {
+  const snapshot = readStableConfigSnapshot(resolve(configPath), fileOps);
+  return {
+    config: loadConfigFromObject(snapshot.value),
+    revision: snapshot.revision
+  };
 }
 
 function readStableConfigSnapshot(configPath: string, fileOps?: Partial<ConfigFileOps>): { value: unknown; revision: string } {

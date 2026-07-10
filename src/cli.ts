@@ -96,6 +96,7 @@ import {
 } from "./operator-cli.js";
 import { buildPricingOutput } from "./pricing.js";
 import { buildProviderRegistrySummary, doctorProviderRegistry, isProviderId } from "./providers.js";
+import { runProvidersVerifyCommand } from "./providers-verify-command.js";
 import { collectReleaseStatus, collectReleaseStatusWithConfig, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
@@ -234,6 +235,19 @@ async function main(): Promise<void> {
 
   if (command === "providers") {
     const action = args._[1];
+    if (action === "verify") {
+      const execution = await runProvidersVerifyCommand({
+        configPath: args.config,
+        providerId: args.provider,
+        apiKeyStdin: args["api-key-stdin"],
+        allowRemoteSmoke: args["allow-remote-smoke"],
+        expectedConfigRevision: args["expected-config-revision"],
+        stdin: process.stdin
+      });
+      console.log(stringifyProviderOutput(execution.output));
+      if (execution.exitCode !== 0) process.exitCode = execution.exitCode;
+      return;
+    }
     const config = loadConfig(args.config);
     if (action === "list") {
       console.log(stringifyProviderOutput({
@@ -273,7 +287,7 @@ async function main(): Promise<void> {
       if (!result.ok) process.exitCode = 1;
       return;
     }
-    throw new Error("providers subcommand must be one of: list, doctor");
+    throw new Error("providers subcommand must be one of: list, doctor, verify");
   }
 
   if (command === "license") {
@@ -3233,11 +3247,14 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     ]
   },
   providers: {
-    description: "Inspect the provider registry: `providers list` or `providers doctor`.",
+    description: "Inspect or verify the provider registry: `providers list`, `providers doctor`, or `providers verify`.",
     flags: [
       { name: "--config", description: "Path to the config file." },
-      { name: "--provider", description: "Scope providers doctor to a single provider id." },
-      { name: "--smoke", description: "true to run a live smoke check in providers doctor." }
+      { name: "--provider", description: "Scope providers doctor or verify to a single provider id." },
+      { name: "--smoke", description: "true to run a live smoke check in providers doctor." },
+      { name: "--api-key-stdin", description: "Must be true for providers verify; reads the submitted key from bounded stdin." },
+      { name: "--allow-remote-smoke", description: "true to consent to hosted provider verification." },
+      { name: "--expected-config-revision", description: "Lowercase SHA-256 config revision to pin before stdin is read." }
     ]
   },
   dashboard: {
@@ -3282,6 +3299,7 @@ function buildHelp(command?: string) {
         "dashboard",
         "providers list",
         "providers doctor",
+        "providers verify",
         "doctor",
         "doctor github",
         "daemon start",
@@ -3355,6 +3373,7 @@ function buildHelp(command?: string) {
       "neondiff providers list --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
+      "neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --allow-remote-smoke true --json",
       "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",

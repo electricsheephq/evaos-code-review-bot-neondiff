@@ -42,7 +42,7 @@ Expose supported NeonDiff configuration in the native desktop app without raw JS
 
 ## Exact Next Action
 
-Commit Slice A, open its PR, and shepherd current-head CI plus bot/human review. Keep #488 open for Slice B provider verification after Slice A merges.
+Prepare the Slice B PR from the isolated provider-verification worktree, then shepherd current-head CI plus bot/human review. Close #488 only after Slice B merges and both slices remain proven on `origin/main`.
 
 ## Slice A Proof
 
@@ -53,3 +53,21 @@ Commit Slice A, open its PR, and shepherd current-head CI plus bot/human review.
 - Visible unsigned dev-app proof:
   - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/config-control-center.png`
   - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/config-control-center-validation.png`
+
+## Slice B Contract And Proof
+
+- The explicit native **Verify API Key** action reads the stored provider key from Keychain only for that operation and delivers it to `neondiff providers verify` exclusively over bounded standard input. Raw key material never enters argv, process environment, config, command previews, stdout/stderr, logs, screenshots, or evidence.
+- A hosted provider smoke requires the user's explicit Verify click and `--allow-remote-smoke true`; no hosted verification runs automatically. The CLI reuses the existing hardened `verifyProviderApiKey` transport.
+- Only an exact redacted `healthy` envelope with a successful process exit is verified. `configured_unverified` is metadata-only non-success, `blocked` is non-success, and malformed or contradictory results clear any earlier verified state.
+- Unsigned visual evidence uses a debug-only redacted fixture that bypasses Keychain reads and makes no provider request. It proves the Providers-pane action/result rendering and the presence of the Slice A configuration sections, not live-provider health or packaged-app behavior.
+- Visible proof packet:
+  - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/provider-verification-full-pane.png`
+  - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/provider-verification-result.png`
+  - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/configuration-repos-pane.png`
+  - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/configuration-policy-pane.png`
+  - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/configuration-license-pane.png`
+  - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/configuration-logs-pane.png`
+  - `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/configuration-settings-pane.png`
+  - SHA-256 manifest: `/Volumes/LEXAR/Codex/evidence/neondiff-v1.1/2026-07-10/issue-488/SHA256SUMS.txt`
+- The current `run-model-checks.sh` compile harness is temporary proof because this workstation lacks full Xcode. Follow-up must install full Xcode, extract `NeonDiffDesktopModel` into an importable `NeonDiffDesktopAppCore` library target, make the app depend on that target, and add a Swift Testing/XCTest target. This Slice B branch intentionally does not perform that architecture refactor or Xcode installation.
+- Slice B does not prove signed/notarized distribution, Sparkle/appcast delivery, browser/native parity, customer readiness, or v1.1 release completion.

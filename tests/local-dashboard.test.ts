@@ -133,6 +133,39 @@ describe("local HTML dashboard", () => {
     expect(serialized).not.toMatch(/Bearer\s+/i);
   });
 
+  it("allows the public CLI discriminator without weakening verification redaction", async () => {
+    const fakeKey = "fixture-provider-value";
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            baseUrl: "https://gateway.example.test/v1",
+            model: "review-model"
+          }
+        }
+      }
+    });
+
+    const result = await verifyProviderApiKey({
+      command: "providers verify",
+      config,
+      apiKey: fakeKey,
+      allowRemoteSmoke: false,
+      env: {}
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      command: "providers verify",
+      state: "configured_unverified",
+      redacted: true,
+      keySource: "submitted"
+    });
+    expect(JSON.stringify(result)).not.toContain(fakeKey);
+  });
+
   it("performs a real loopback /models smoke check when provider verification is local", async () => {
     const modelServer = createServer((request, response) => {
       const url = new URL(request.url ?? "/", "http://localhost");
