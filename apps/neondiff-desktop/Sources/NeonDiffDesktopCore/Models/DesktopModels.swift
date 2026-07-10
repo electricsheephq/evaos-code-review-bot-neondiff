@@ -89,25 +89,94 @@ public struct RepoMonitor: Identifiable, Hashable {
     }
 }
 
+public struct ProviderRegistryTarget: Identifiable, Equatable, Sendable {
+    public var id: String
+    public var displayName: String
+    public var enabled: Bool
+    public var adapter: String
+    public var authMode: String
+    public var baseUrl: String
+    public var model: String
+
+    public init(
+        id: String,
+        displayName: String,
+        enabled: Bool,
+        adapter: String,
+        authMode: String,
+        baseUrl: String = "",
+        model: String = ""
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.enabled = enabled
+        self.adapter = adapter
+        self.authMode = authMode
+        self.baseUrl = baseUrl
+        self.model = model
+    }
+
+    public var isAPIKeyVerificationEligible: Bool {
+        enabled && adapter == "openai-compatible" && authMode == "api-key-env"
+            && !baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 public struct ProviderSettings: Equatable {
     public var zcodeModel: String
     public var zcodeCliPath: String
     public var zcodeAppConfigPath: String
     public var openAICompatibleEndpoint: String
     public var providerKeyStored: Bool
+    public var selectedProviderId: String
+    public var registryTargets: [ProviderRegistryTarget]
 
     public init(
         zcodeModel: String = "GLM-5.2",
         zcodeCliPath: String = "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
         zcodeAppConfigPath: String = "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
         openAICompatibleEndpoint: String = "http://localhost:8000/v1",
-        providerKeyStored: Bool = false
+        providerKeyStored: Bool = false,
+        selectedProviderId: String = "zcode-glm",
+        registryTargets: [ProviderRegistryTarget] = []
     ) {
         self.zcodeModel = zcodeModel
         self.zcodeCliPath = zcodeCliPath
         self.zcodeAppConfigPath = zcodeAppConfigPath
         self.openAICompatibleEndpoint = openAICompatibleEndpoint
         self.providerKeyStored = providerKeyStored
+        self.selectedProviderId = selectedProviderId
+        self.registryTargets = registryTargets
+    }
+
+    public var selectedRegistryTarget: ProviderRegistryTarget? {
+        get { registryTargets.first { $0.id == selectedProviderId } }
+        set {
+            guard let newValue else { return }
+            selectedProviderId = newValue.id
+            if let index = registryTargets.firstIndex(where: { $0.id == newValue.id }) {
+                registryTargets[index] = newValue
+            } else {
+                registryTargets.append(newValue)
+            }
+        }
+    }
+
+    public var selectedProviderBaseUrl: String {
+        get { selectedRegistryTarget?.baseUrl ?? "" }
+        set {
+            guard let index = registryTargets.firstIndex(where: { $0.id == selectedProviderId }) else { return }
+            registryTargets[index].baseUrl = newValue
+        }
+    }
+
+    public var selectedProviderModel: String {
+        get { selectedRegistryTarget?.model ?? "" }
+        set {
+            guard let index = registryTargets.firstIndex(where: { $0.id == selectedProviderId }) else { return }
+            registryTargets[index].model = newValue
+        }
     }
 }
 

@@ -6,12 +6,14 @@ import {
 } from "./local-dashboard.js";
 import { isProviderId } from "./providers.js";
 import { readSecretFromStdin } from "./secret-stdin.js";
+import { loadConfigAtRevision } from "./config-cli.js";
 
 export interface ProvidersVerifyCommandInput {
   configPath?: string | string[];
   providerId?: string | string[];
   apiKeyStdin?: string | string[];
   allowRemoteSmoke?: string | string[];
+  expectedConfigRevision?: string | string[];
   stdin: NodeJS.ReadableStream;
 }
 
@@ -19,6 +21,7 @@ export interface ProvidersVerifyCommandDependencies {
   loadConfig: (path?: string) => BotConfig;
   verifyProviderApiKey: (input: ProviderApiKeyVerificationInput) => Promise<ProviderApiKeyVerificationResult>;
   readSecretFromStdin: typeof readSecretFromStdin;
+  loadConfigAtRevision: (path: string) => { config: BotConfig; revision: string };
 }
 
 export type ProvidersVerifyCommandOutput = ProviderApiKeyVerificationResult | {
@@ -35,7 +38,8 @@ export interface ProvidersVerifyCommandExecution {
 const defaultDependencies: ProvidersVerifyCommandDependencies = {
   loadConfig,
   verifyProviderApiKey,
-  readSecretFromStdin
+  readSecretFromStdin,
+  loadConfigAtRevision
 };
 
 export async function runProvidersVerifyCommand(
@@ -45,6 +49,10 @@ export async function runProvidersVerifyCommand(
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
   const configPath = parseOptionalSingleValue(input.configPath, "--config");
   const providerId = parseOptionalSingleValue(input.providerId, "--provider");
+  const expectedConfigRevision = parseOptionalSingleValue(
+    input.expectedConfigRevision,
+    "--expected-config-revision"
+  );
   if (providerId && !isProviderId(providerId)) {
     return {
       output: {
@@ -59,7 +67,30 @@ export async function runProvidersVerifyCommand(
     throw new Error("providers verify requires --api-key-stdin true");
   }
 
-  const config = dependencies.loadConfig(configPath);
+  let config: BotConfig;
+  if (expectedConfigRevision !== undefined) {
+    if (!/^[a-f0-9]{64}$/.test(expectedConfigRevision)) {
+      throw new Error("--expected-config-revision must be a lowercase SHA-256 value");
+    }
+    if (!configPath) {
+      throw new Error("--expected-config-revision requires --config");
+    }
+    const loaded = dependencies.loadConfigAtRevision(configPath);
+    if (loaded.revision !== expectedConfigRevision) {
+      return {
+        output: {
+          ok: false,
+          command: "providers verify",
+          error: "config revision changed; reload and apply provider settings before verification"
+        },
+        exitCode: 1
+      };
+    }
+    config = loaded.config;
+  } else {
+    config = dependencies.loadConfig(configPath);
+  }
+
   const apiKey = await dependencies.readSecretFromStdin(input.stdin);
   const result = await dependencies.verifyProviderApiKey({
     command: "providers verify",

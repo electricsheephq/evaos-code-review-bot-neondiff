@@ -540,6 +540,44 @@ public final class ProviderVerificationService {
         return try ProviderVerificationParser.parse(result: result, forbiddenValue: secret)
     }
 
+    public func verifyCancellable(
+        account: String,
+        arguments: [String],
+        timeout: TimeInterval
+    ) async throws -> ProviderVerificationSnapshot {
+        try Task.checkCancellation()
+        guard let storedSecret = try keychain.readSecret(account: account) else {
+            throw ProviderVerificationError.missingKeychainSecret
+        }
+        try Task.checkCancellation()
+        let secret = storedSecret.trimmingCharacters(in: Self.ecmaScriptTrimCharacters)
+        guard !secret.isEmpty else { throw ProviderVerificationError.missingKeychainSecret }
+        let secretData = Data(secret.utf8)
+        guard secretData.count <= Self.maximumSecretBytes else {
+            throw ProviderVerificationError.secretTooLarge(maxBytes: Self.maximumSecretBytes)
+        }
+        guard Self.hasStrictStandardInputCommand(arguments) else {
+            throw ProviderVerificationError.invalidArguments
+        }
+        guard !arguments.contains(where: { $0.contains(secret) }) else {
+            throw ProviderVerificationError.secretInArguments
+        }
+        try Task.checkCancellation()
+        let result = try await cli.runCancellable(
+            arguments: arguments,
+            standardInput: secretData,
+            timeout: timeout
+        )
+        try Task.checkCancellation()
+        guard !ProviderVerificationParser.serializedTextContainsForbiddenValue(
+            result.stderr,
+            forbiddenValue: secret
+        ) else {
+            throw ProviderVerificationError.secretInProcessOutput
+        }
+        return try ProviderVerificationParser.parse(result: result, forbiddenValue: secret)
+    }
+
     private static func hasStrictStandardInputCommand(_ arguments: [String]) -> Bool {
         guard arguments.count >= 4, Array(arguments.prefix(2)) == ["providers", "verify"] else {
             return false

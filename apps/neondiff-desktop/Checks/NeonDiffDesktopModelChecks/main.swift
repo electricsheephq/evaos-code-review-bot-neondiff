@@ -32,6 +32,7 @@ final class ControlledProviderVerificationCLI: NeonDiffCLIClienting {
     private var storedResult: CLIRunResult
     private var storedError: Error?
     private var storedBlocksUntilReleased = false
+    private var storedReleased = false
 
     init(result: CLIRunResult) {
         storedResult = result
@@ -57,6 +58,7 @@ final class ControlledProviderVerificationCLI: NeonDiffCLIClienting {
     }
 
     func release() {
+        lock.withLock { storedReleased = true }
         releaseGate.signal()
     }
 
@@ -76,6 +78,26 @@ final class ControlledProviderVerificationCLI: NeonDiffCLIClienting {
         }
     }
 
+    func runCancellable(arguments: [String], standardInput: Data?, timeout: TimeInterval) async throws -> CLIRunResult {
+        let shouldBlock = lock.withLock { () -> Bool in
+            storedCallCount += 1
+            storedArguments = arguments
+            storedStandardInput = standardInput
+            return storedBlocksUntilReleased
+        }
+        if shouldBlock {
+            while !lock.withLock({ storedReleased }) {
+                try Task.checkCancellation()
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+        try Task.checkCancellation()
+        return try lock.withLock {
+            if let storedError { throw storedError }
+            return storedResult
+        }
+    }
+
     func launchDetached(arguments: [String]) throws -> CLILaunchResult {
         fatalError("provider verification must not launch a detached process")
     }
@@ -89,6 +111,8 @@ struct ModelFixture {
 let providerAccount = "provider/glm/api-key"
 let fixtureSecret = "fixture-provider-value"
 let healthyJSON = #"{"ok":true,"command":"providers verify","checkedAt":"2026-07-10T12:00:00.000Z","providerId":"zcode-glm","state":"healthy","mode":"openai_compatible_models","detail":"Verified with redacted metadata.","redacted":true,"troubleshooting":[]}"#
+let loadedRevision = String(repeating: "a", count: 64)
+let providerConfigInspectJSON = #"{"ok":true,"command":"config inspect","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"pilotRepos":[],"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://provider.example/v1","model":"fixture-model","authMode":"api-key-env"}}},"desktop":{}}}"#
 
 @MainActor
 func makeFixture(result: CLIRunResult, blocked: Bool = false) throws -> ModelFixture {
@@ -102,6 +126,13 @@ func makeFixture(result: CLIRunResult, blocked: Bool = false) throws -> ModelFix
         userDefaults: defaults,
         keychain: keychain,
         providerVerificationService: service
+    )
+    model.applyCLIResultForTesting(
+        CLIRunResult(exitCode: 0, stdout: providerConfigInspectJSON, stderr: ""),
+        fallbackCommand: "config inspect",
+        configPath: model.configPath,
+        launchdLabel: model.launchdLabel,
+        isConfigInspectCommand: true
     )
     return ModelFixture(model: model, cli: cli)
 }
@@ -142,8 +173,34 @@ struct NeonDiffDesktopModelChecks {
         try await checkConfigMutationRejectsStaleResult()
         try await checkKeyMutationRejectsStaleResult()
         try await checkFailuresClearPriorState()
+        try checkDirtyApplyReadbackGate()
         try checkSuccessfulConfigWriteInvalidatesPriorState()
         print("NeonDiffDesktopModelChecks passed")
+    }
+
+    @MainActor
+    private static func checkDirtyApplyReadbackGate() throws {
+        let fixture = try makeFixture(result: CLIRunResult(exitCode: 0, stdout: healthyJSON, stderr: ""))
+        check(fixture.model.canVerifyProviderKey, "saved loaded eligible provider enables Verify")
+        fixture.model.providers.selectedProviderBaseUrl = "https://edited.example/v1"
+        check(!fixture.model.canVerifyProviderKey, "dirty provider edits disable Verify")
+        check(fixture.model.canPreviewProviderConfig, "dirty provider edit enables preview")
+
+        let previewJSON = #"{"ok":true,"command":"config patch","dryRun":true,"wrote":false,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://edited.example/v1","model":"fixture-model","authMode":"api-key-env"}}}}}"#
+        fixture.model.applyProviderPatchResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: previewJSON, stderr: ""),
+            mode: .preview
+        )
+        check(!fixture.model.canVerifyProviderKey, "preview-only provider settings cannot be verified")
+        check(fixture.model.canApplyProviderConfig, "exact successful preview enables Apply")
+
+        let afterRevision = String(repeating: "b", count: 64)
+        let applyJSON = #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"\#(afterRevision)","config":{"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://edited.example/v1","model":"fixture-model","authMode":"api-key-env"}}}}}"#
+        fixture.model.applyProviderPatchResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: applyJSON, stderr: ""),
+            mode: .apply
+        )
+        check(fixture.model.canVerifyProviderKey, "exact live apply/readback enables Verify")
     }
 
     @MainActor
@@ -163,7 +220,8 @@ struct NeonDiffDesktopModelChecks {
         await waitUntil("healthy verification completes") { !fixture.model.isProviderVerificationInProgress }
         check(fixture.cli.callCount == 1, "concurrent Verify clicks launch one operation")
         check(fixture.cli.arguments == [
-            "providers", "verify", "--config", "config.local.json", "--api-key-stdin", "true",
+            "providers", "verify", "--config", "config.local.json", "--provider", "zcode-glm",
+            "--expected-config-revision", loadedRevision, "--api-key-stdin", "true",
             "--allow-remote-smoke", "true", "--json"
         ], "Verify uses the exact stdin and explicit hosted-consent arguments")
         check(!fixture.cli.arguments.joined().contains(fixtureSecret), "provider secret stays out of argv")
@@ -203,10 +261,17 @@ struct NeonDiffDesktopModelChecks {
         fixture.model.verifyProviderKey()
         await waitUntil("provider mutation fixture starts") { fixture.cli.callCount == 1 }
         fixture.model.providers.zcodeModel = "changed-model"
+        check(fixture.model.isProviderVerificationCancelling, "context mutation keeps verification busy while cleanup runs")
+        check(fixture.model.providerVerificationButtonTitle == "Cancelling…", "cancellation exposes a redacted busy state")
+        check(fixture.model.providerVerificationStatus.contains("Cancelling"), "cancellation status remains visible until cleanup completes")
+        check(!fixture.model.canEditProviderConfiguration, "provider/config editors remain disabled during cleanup")
+        fixture.model.verifyProviderKey()
+        check(fixture.cli.callCount == 1, "cancelling verification cannot launch a second process")
         fixture.cli.release()
         await waitUntil("provider mutation fixture completes") { !fixture.model.isProviderVerificationInProgress }
         check(fixture.model.providerVerification == nil, "provider mutation rejects stale healthy completion")
         check(fixture.model.providerVerificationStatus.contains("changed"), "provider mutation explains invalidation")
+        check(!fixture.model.isProviderVerificationCancelling, "cancellation clears only after the async operation terminates")
     }
 
     @MainActor

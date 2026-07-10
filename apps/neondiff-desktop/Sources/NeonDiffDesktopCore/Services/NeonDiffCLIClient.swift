@@ -30,6 +30,7 @@ public struct CLILaunchResult: Equatable {
 
 public enum NeonDiffCLIError: Error, LocalizedError {
     case timedOut
+    case cancelled
     case cleanupTimedOut
     case launchFailed(String)
     case standardInputTooLarge(maxBytes: Int)
@@ -38,6 +39,7 @@ public enum NeonDiffCLIError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .timedOut: "NeonDiff CLI command timed out"
+        case .cancelled: "NeonDiff CLI command was cancelled after bounded process cleanup"
         case .cleanupTimedOut: "NeonDiff CLI process cleanup did not complete within the bounded termination window"
         case .launchFailed(let message): message
         case .standardInputTooLarge(let maxBytes): "NeonDiff CLI standard input exceeds the \(maxBytes)-byte limit"
@@ -48,6 +50,7 @@ public enum NeonDiffCLIError: Error, LocalizedError {
 
 public protocol NeonDiffCLIClienting {
     func run(arguments: [String], standardInput: Data?, timeout: TimeInterval) throws -> CLIRunResult
+    func runCancellable(arguments: [String], standardInput: Data?, timeout: TimeInterval) async throws -> CLIRunResult
     func launchDetached(arguments: [String]) throws -> CLILaunchResult
 }
 
@@ -55,14 +58,30 @@ public extension NeonDiffCLIClienting {
     func run(arguments: [String], timeout: TimeInterval = 15) throws -> CLIRunResult {
         try run(arguments: arguments, standardInput: nil, timeout: timeout)
     }
+
+    func runCancellable(arguments: [String], standardInput: Data?, timeout: TimeInterval) async throws -> CLIRunResult {
+        try Task.checkCancellation()
+        return try run(arguments: arguments, standardInput: standardInput, timeout: timeout)
+    }
 }
 
-public final class NeonDiffCLIClient: NeonDiffCLIClienting {
+public final class NeonDiffCLICancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    public init() {}
+    public func cancel() { lock.withLock { cancelled = true } }
+    public var isCancelled: Bool { lock.withLock { cancelled } }
+}
+
+public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable {
     private let executablePath: String
     private let workingDirectory: URL?
     private let standardInputPipeFactory: () -> Pipe
     private let monotonicNow: () -> DispatchTime
     private let standardInputWriter: (Int32, UnsafeRawPointer?, Int) -> Int
+    private let beforeProcessLaunch: () -> Void
+    private let afterProcessLaunch: () -> Void
 
     public init(executablePath: String, workingDirectory: URL? = nil) {
         self.executablePath = executablePath
@@ -72,22 +91,28 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         self.standardInputWriter = { descriptor, buffer, count in
             Darwin.write(descriptor, buffer, count)
         }
+        self.beforeProcessLaunch = {}
+        self.afterProcessLaunch = {}
     }
 
     @_spi(Testing) public init(
         executablePath: String,
         workingDirectory: URL? = nil,
-        standardInputPipeFactory: @escaping () -> Pipe,
+        standardInputPipeFactory: @escaping () -> Pipe = { Pipe() },
         monotonicNow: @escaping () -> DispatchTime = { DispatchTime.now() },
         standardInputWriter: @escaping (Int32, UnsafeRawPointer?, Int) -> Int = { descriptor, buffer, count in
             Darwin.write(descriptor, buffer, count)
-        }
+        },
+        beforeProcessLaunch: @escaping () -> Void = {},
+        afterProcessLaunch: @escaping () -> Void = {}
     ) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
         self.standardInputPipeFactory = standardInputPipeFactory
         self.monotonicNow = monotonicNow
         self.standardInputWriter = standardInputWriter
+        self.beforeProcessLaunch = beforeProcessLaunch
+        self.afterProcessLaunch = afterProcessLaunch
     }
 
     public func run(
@@ -95,6 +120,42 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         standardInput: Data?,
         timeout: TimeInterval = 15
     ) throws -> CLIRunResult {
+        try run(arguments: arguments, standardInput: standardInput, timeout: timeout, cancellation: nil)
+    }
+
+    public func runCancellable(
+        arguments: [String],
+        standardInput: Data?,
+        timeout: TimeInterval = 15
+    ) async throws -> CLIRunResult {
+        let cancellation = NeonDiffCLICancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async { [self] in
+                    do {
+                        continuation.resume(returning: try run(
+                            arguments: arguments,
+                            standardInput: standardInput,
+                            timeout: timeout,
+                            cancellation: cancellation
+                        ))
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    private func run(
+        arguments: [String],
+        standardInput: Data?,
+        timeout: TimeInterval,
+        cancellation: NeonDiffCLICancellation?
+    ) throws -> CLIRunResult {
+        if cancellation?.isCancelled == true { throw NeonDiffCLIError.cancelled }
         let deadline = monotonicNow() + max(timeout, 0)
         let maximumStandardInputBytes = 64 * 1024
         if let standardInput, standardInput.count > maximumStandardInputBytes {
@@ -160,6 +221,13 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             stateChanged.signal()
         }
 
+        beforeProcessLaunch()
+        if cancellation?.isCancelled == true {
+            try? stdinWriteHandle?.close()
+            try? stdout.fileHandleForReading.close()
+            try? stderr.fileHandleForReading.close()
+            throw NeonDiffCLIError.cancelled
+        }
         do {
             try process.run()
         } catch {
@@ -168,6 +236,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             try? stderr.fileHandleForReading.close()
             throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(error.localizedDescription)")
         }
+        afterProcessLaunch()
 
         var inputOffset = 0
         var inputClosed = standardInput == nil
@@ -196,19 +265,29 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             throw NeonDiffCLIError.timedOut
         }
 
+        func failIfCancelled() throws {
+            guard cancellation?.isCancelled == true else { return }
+            closeStandardInput()
+            closeOutputHandles()
+            try terminateAndReap(process, terminationObserved: terminationObserved)
+            throw NeonDiffCLIError.cancelled
+        }
+
         func drainOutput(
             handle: FileHandle,
             stream: String,
             data: inout Data,
             reachedEnd: inout Bool
         ) throws {
+            try failIfCancelled()
             guard !reachedEnd else { return }
             switch drainNonblockingOutput(
                 descriptor: handle.fileDescriptor,
                 data: &data,
                 maxBytes: maximumOutputBytes,
                 deadline: deadline,
-                monotonicNow: monotonicNow
+                monotonicNow: monotonicNow,
+                isCancelled: { cancellation?.isCancelled == true }
             ) {
             case .open:
                 return
@@ -216,6 +295,9 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
                 reachedEnd = true
             case .deadlineExceeded:
                 try failAtDeadline()
+            case .cancelled:
+                try failIfCancelled()
+                throw NeonDiffCLIError.cancelled
             case .tooLarge:
                 closeStandardInput()
                 closeOutputHandles()
@@ -234,6 +316,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
         }
 
         while true {
+            try failIfCancelled()
             if monotonicNow() >= deadline {
                 try failAtDeadline()
             }
@@ -266,6 +349,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             }
 
             if !inputClosed, let standardInput, let stdinWriteHandle {
+                try failIfCancelled()
                 if monotonicNow() >= deadline {
                     try failAtDeadline()
                 }
@@ -279,6 +363,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
                     )
                 }
                 if written > 0 {
+                    try failIfCancelled()
                     inputOffset += written
                     if inputOffset == standardInput.count {
                         closeStandardInput()
@@ -297,6 +382,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
             }
 
             let waitNow = monotonicNow()
+            try failIfCancelled()
             if waitNow >= deadline {
                 try failAtDeadline()
             }
@@ -319,6 +405,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting {
                 let pollResult = descriptors.withUnsafeMutableBufferPointer { buffer in
                     Darwin.poll(buffer.baseAddress, nfds_t(buffer.count), Int32(min(remainingMilliseconds, 10)))
                 }
+                try failIfCancelled()
                 if pollResult == -1 && errno != EINTR {
                     closeStandardInput()
                     closeOutputHandles()
@@ -397,6 +484,7 @@ private enum NeonDiffOutputDrainResult {
     case deadlineExceeded
     case tooLarge
     case failed
+    case cancelled
 }
 
 private func drainNonblockingOutput(
@@ -404,10 +492,12 @@ private func drainNonblockingOutput(
     data: inout Data,
     maxBytes: Int,
     deadline: DispatchTime,
-    monotonicNow: () -> DispatchTime
+    monotonicNow: () -> DispatchTime,
+    isCancelled: () -> Bool
 ) -> NeonDiffOutputDrainResult {
     var buffer = [UInt8](repeating: 0, count: 16 * 1024)
     while true {
+        if isCancelled() { return .cancelled }
         if monotonicNow() >= deadline {
             return .deadlineExceeded
         }

@@ -12,15 +12,28 @@ struct ProviderSettingsView: View {
                     OperatorTextField(title: "CLI Path", text: $model.providers.zcodeCliPath)
                     OperatorTextField(title: "App Config Path", text: $model.providers.zcodeAppConfigPath)
                 }
+                .disabled(!model.canEditProviderConfiguration)
 
-                OperatorSection("OpenAI-Compatible Endpoint") {
-                    OperatorTextField(title: "Endpoint", text: $model.providers.openAICompatibleEndpoint)
+                OperatorSection("Saved Provider Registry") {
+                    Picker("Provider", selection: $model.providers.selectedProviderId) {
+                        ForEach(model.providers.registryTargets) { target in
+                            Text("\(target.displayName) (\(target.id))").tag(target.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    OperatorTextField(title: "Endpoint", text: $model.providers.selectedProviderBaseUrl)
+                    OperatorTextField(title: "Model", text: $model.providers.selectedProviderModel)
+                    if let target = model.providers.selectedRegistryTarget {
+                        Text("\(target.adapter) · \(target.authMode) · \(target.enabled ? "enabled" : "disabled")")
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                    }
                     OperatorTextField(title: "Provider API Key", text: $model.pendingProviderKey, secure: true)
                     HStack(spacing: 10) {
                         Button { model.storeProviderKey() } label: {
                             Label("Store Key", systemImage: "key.fill")
                         }
-                        .disabled(model.isProviderVerificationInProgress)
+                        .disabled(!model.canEditProviderConfiguration)
                         Button { model.verifyProviderKey() } label: {
                             Label(
                                 model.providerVerificationButtonTitle,
@@ -41,6 +54,7 @@ struct ProviderSettingsView: View {
                         ProviderVerificationResultCard(snapshot: verification)
                     }
                 }
+                .disabled(!model.canEditProviderConfiguration)
 
                 OperatorSection("CLI Equivalent") {
                     OperatorCommandText(text: model.providerPatchPreviewCommand.commandLine, lineLimit: 5)
@@ -48,14 +62,17 @@ struct ProviderSettingsView: View {
                         Button { model.previewProviderConfigPatch() } label: {
                             Label("Preview Patch", systemImage: "eye")
                         }
+                        .disabled(!model.canPreviewProviderConfig)
                         Button { model.applyProviderConfigPatch() } label: {
                             Label("Apply Patch", systemImage: "checkmark.square")
                         }
+                        .disabled(!model.canApplyProviderConfig)
                         Button { model.copyCommand(model.providerPatchPreviewCommand) } label: {
                             Label("Copy Patch Command", systemImage: "doc.on.doc")
                         }
                     }
                 }
+                .disabled(!model.canEditProviderConfiguration)
             }
             .padding(24)
         }

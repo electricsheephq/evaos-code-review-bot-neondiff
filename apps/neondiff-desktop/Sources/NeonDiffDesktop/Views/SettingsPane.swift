@@ -15,6 +15,7 @@ struct SettingsPane: View {
                         Label("Save Local Settings", systemImage: "externaldrive.badge.checkmark")
                     }
                 }
+                .disabled(!model.canEditProviderConfiguration)
 
                 OperatorSection("Commands") {
                     OperatorCommandText(text: model.dashboardCommand.commandLine, lineLimit: 5)

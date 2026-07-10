@@ -768,6 +768,53 @@ exit 1
     expect(JSON.stringify(result.output)).not.toContain(fixtureSecret);
   });
 
+  it("rejects provider verification revision drift before stdin, config, or provider execution", async () => {
+    let stdinReads = 0;
+    let configLoads = 0;
+    let snapshotLoads = 0;
+    let providerCalls = 0;
+    const expectedRevision = "a".repeat(64);
+    const result = await runProvidersVerifyCommand({
+      configPath: "fixture-config.json",
+      providerId: "openai-compatible",
+      expectedConfigRevision: expectedRevision,
+      apiKeyStdin: "true",
+      allowRemoteSmoke: "true",
+      stdin: Readable.from(["must-not-be-read\n"])
+    }, {
+      loadConfigAtRevision: () => {
+        snapshotLoads += 1;
+        return {
+          revision: "b".repeat(64),
+          config: {} as ReturnType<typeof import("../src/config.js").loadConfig>
+        };
+      },
+      readSecretFromStdin: async () => {
+        stdinReads += 1;
+        return "must-not-be-read";
+      },
+      loadConfig: () => {
+        configLoads += 1;
+        return {} as ReturnType<typeof import("../src/config.js").loadConfig>;
+      },
+      verifyProviderApiKey: async () => {
+        providerCalls += 1;
+        throw new Error("provider must not run");
+      }
+    });
+
+    expect(result).toEqual({
+      output: {
+        ok: false,
+        command: "providers verify",
+        error: "config revision changed; reload and apply provider settings before verification"
+      },
+      exitCode: 1
+    });
+    expect({ stdinReads, configLoads, providerCalls }).toEqual({ stdinReads: 0, configLoads: 0, providerCalls: 0 });
+    expect(snapshotLoads).toBe(1);
+  });
+
   it("keeps configured-unverified hosted verification non-success", async () => {
     const result = await runProvidersVerifyCommand({
       configPath: undefined,

@@ -241,6 +241,7 @@ async function main(): Promise<void> {
         providerId: args.provider,
         apiKeyStdin: args["api-key-stdin"],
         allowRemoteSmoke: args["allow-remote-smoke"],
+        expectedConfigRevision: args["expected-config-revision"],
         stdin: process.stdin
       });
       console.log(stringifyProviderOutput(execution.output));

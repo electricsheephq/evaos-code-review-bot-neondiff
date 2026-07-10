@@ -36,6 +36,14 @@ func checkedValue<T>(_ value: T?, _ message: String) -> T {
     return value
 }
 
+func awaitSemaphore(_ semaphore: DispatchSemaphore, timeout: DispatchTime) async -> DispatchTimeoutResult {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            continuation.resume(returning: semaphore.wait(timeout: timeout))
+        }
+    }
+}
+
 final class InMemoryProviderSecretStore: DesktopSecretStoring {
     var secrets: [String: String] = [:]
 
@@ -177,6 +185,108 @@ check(standardInputResult.exitCode == 0, "CLI standard-input transport reaches t
 check(standardInputResult.stdout.contains("\"receivedBytes\":22"), "CLI standard-input transport returns only redacted metadata")
 check(!standardInputResult.stdout.contains("fixture-provider-value"), "CLI output never echoes standard input")
 
+let prelaunchEntered = DispatchSemaphore(value: 0)
+let prelaunchRelease = DispatchSemaphore(value: 0)
+var prelaunchWriteCalls = 0
+let prelaunchClient = NeonDiffCLIClient(
+    executablePath: localCLI.path,
+    workingDirectory: tempRoot,
+    standardInputWriter: { _, _, _ in
+        prelaunchWriteCalls += 1
+        return 0
+    },
+    beforeProcessLaunch: {
+        prelaunchEntered.signal()
+        _ = prelaunchRelease.wait(timeout: .now() + 2)
+    }
+)
+let prelaunchTask = Task {
+    try await prelaunchClient.runCancellable(
+        arguments: ["stdin-check"],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 5
+    )
+}
+let prelaunchGateReached = await awaitSemaphore(prelaunchEntered, timeout: .now() + 1)
+check(prelaunchGateReached == .success, "pre-launch cancellation fixture reaches its gate")
+prelaunchTask.cancel()
+prelaunchRelease.signal()
+var prelaunchCancelled = false
+do {
+    _ = try await prelaunchTask.value
+} catch NeonDiffCLIError.cancelled {
+    prelaunchCancelled = true
+} catch {
+    fputs("check failed: pre-launch cancellation returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(prelaunchCancelled, "pre-launch cancellation returns the typed cancellation result")
+check(prelaunchWriteCalls == 0, "pre-launch cancellation writes zero secret bytes")
+
+let postLaunchMarker = tempRoot.appendingPathComponent("post-launch-cancel-child.pid")
+let postLaunchCLI = tempRoot.appendingPathComponent("post-launch-cancel-cli")
+try """
+#!/usr/bin/env bash
+printf '%s\\n' "$$" > \(postLaunchMarker.path)
+trap '' TERM
+while :; do :; done
+""".write(to: postLaunchCLI, atomically: true, encoding: .utf8)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: postLaunchCLI.path)
+let postLaunchPipe = Pipe()
+let postLaunchInspectionFD = dup(postLaunchPipe.fileHandleForReading.fileDescriptor)
+check(postLaunchInspectionFD >= 0, "post-launch cancellation duplicates its stdin inspection descriptor")
+let postLaunchEntered = DispatchSemaphore(value: 0)
+let postLaunchRelease = DispatchSemaphore(value: 0)
+var postLaunchWriteCalls = 0
+let postLaunchClient = NeonDiffCLIClient(
+    executablePath: postLaunchCLI.path,
+    workingDirectory: tempRoot,
+    standardInputPipeFactory: { postLaunchPipe },
+    standardInputWriter: { descriptor, buffer, count in
+        postLaunchWriteCalls += 1
+        return Darwin.write(descriptor, buffer, count)
+    },
+    afterProcessLaunch: {
+        postLaunchEntered.signal()
+        _ = postLaunchRelease.wait(timeout: .now() + 2)
+    }
+)
+let postLaunchTask = Task {
+    try await postLaunchClient.runCancellable(
+        arguments: [],
+        standardInput: Data("fixture-provider-value".utf8),
+        timeout: 5
+    )
+}
+let postLaunchGateReached = await awaitSemaphore(postLaunchEntered, timeout: .now() + 1)
+check(postLaunchGateReached == .success, "post-launch cancellation fixture reaches its pre-write gate")
+postLaunchTask.cancel()
+postLaunchRelease.signal()
+var postLaunchCancelled = false
+do {
+    _ = try await postLaunchTask.value
+} catch NeonDiffCLIError.cancelled {
+    postLaunchCancelled = true
+} catch {
+    fputs("check failed: post-launch cancellation returned wrong error: \(NeonDiffRedactor.redact(error.localizedDescription))\n", stderr)
+    exit(1)
+}
+check(postLaunchCancelled, "post-launch cancellation returns only after cleanup")
+check(postLaunchWriteCalls == 0, "post-launch pre-write cancellation writes zero secret bytes")
+let postLaunchReadFlags = fcntl(postLaunchInspectionFD, F_GETFL)
+check(postLaunchReadFlags >= 0 && fcntl(postLaunchInspectionFD, F_SETFL, postLaunchReadFlags | O_NONBLOCK) == 0, "post-launch inspection is nonblocking")
+var postLaunchBuffer = [UInt8](repeating: 0, count: 64)
+let postLaunchBytes = postLaunchBuffer.withUnsafeMutableBytes { Darwin.read(postLaunchInspectionFD, $0.baseAddress, $0.count) }
+_ = Darwin.close(postLaunchInspectionFD)
+check(postLaunchBytes <= 0, "cancelled stdin carries no provider secret bytes")
+if FileManager.default.fileExists(atPath: postLaunchMarker.path) {
+    let postLaunchPIDText = try String(contentsOf: postLaunchMarker, encoding: .utf8)
+    let postLaunchPID = checkedValue(Int32(postLaunchPIDText.trimmingCharacters(in: .whitespacesAndNewlines)), "post-launch child records its pid")
+    check(kill(postLaunchPID, 0) != 0 && errno == ESRCH, "cancelled child is terminated and reaped before return")
+} else {
+    check(postLaunchCancelled, "child cancelled before script startup still completes bounded cleanup")
+}
+
 let stalledInputMarker = tempRoot.appendingPathComponent("stalled-input-child.pid")
 let stalledInputCLI = tempRoot.appendingPathComponent("stalled-input-cli")
 try """
@@ -187,14 +297,23 @@ while :; do :; done
 """.write(to: stalledInputCLI, atomically: true, encoding: .utf8)
 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stalledInputCLI.path)
 
-let stalledInputClient = NeonDiffCLIClient(executablePath: stalledInputCLI.path, workingDirectory: tempRoot)
+let stalledInputClient = NeonDiffCLIClient(
+    executablePath: stalledInputCLI.path,
+    workingDirectory: tempRoot,
+    afterProcessLaunch: {
+        let markerDeadline = Date().addingTimeInterval(1)
+        while !FileManager.default.fileExists(atPath: stalledInputMarker.path), Date() < markerDeadline {
+            usleep(1_000)
+        }
+    }
+)
 let stalledInputStartedAt = Date()
 var stalledInputTimedOut = false
 do {
     _ = try stalledInputClient.run(
         arguments: [],
         standardInput: Data(repeating: 0x78, count: 64 * 1024),
-        timeout: 0.75
+        timeout: 1.5
     )
 } catch NeonDiffCLIError.timedOut {
     stalledInputTimedOut = true
@@ -204,7 +323,7 @@ do {
 }
 let stalledInputElapsed = Date().timeIntervalSince(stalledInputStartedAt)
 check(stalledInputTimedOut, "a child that never drains maximum-size stdin returns timedOut")
-check(stalledInputElapsed < 2, "stdin delivery and process execution share the configured deadline")
+check(stalledInputElapsed < 3, "stdin delivery and process execution share the configured deadline")
 let stalledInputPIDText = try String(contentsOf: stalledInputMarker, encoding: .utf8)
 let stalledInputPID = checkedValue(
     Int32(stalledInputPIDText.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -952,6 +1071,28 @@ check(controlCenterSnapshot?.revision == String(repeating: "a", count: 64), "con
 check(controlCenterSnapshot?.policy.reviewMaxActiveRuns == 2, "config inspect parses review concurrency")
 check(controlCenterSnapshot?.policy.issueAllowlist == ["owner/issues-repo"], "issue-enrichment allowlist remains separate from review repos")
 check(controlCenterSnapshot?.repos.map(\.name) == ["owner/review-repo"], "PR review allowlist remains in the repo selector")
+let providerRegistrySnapshot = ConfigInspectParser.parse(
+    #"{"ok":true,"command":"config inspect","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"zcode":{"model":"zcode-model","cliPath":"zcode","appConfigPath":"zcode.json"},"desktop":{"openAICompatibleEndpoint":"https://legacy.example/v1"},"providers":{"defaultProviderId":"gateway","providers":{"gateway":{"enabled":true,"adapter":"openai-compatible","displayName":"Gateway","baseUrl":"https://saved.example/v1","model":"saved-model","authMode":"api-key-env"},"disabled":{"enabled":false,"adapter":"openai-compatible","displayName":"Disabled","baseUrl":"https://disabled.example/v1","model":"disabled-model","authMode":"api-key-env"},"zcode":{"enabled":true,"adapter":"zcode","displayName":"ZCode","model":"zcode-model","authMode":"zcode-app-config"}}}}}"#,
+    providerKeyStored: true,
+    licenseKeyStored: false
+)
+check(providerRegistrySnapshot?.providers.selectedProviderId == "gateway", "config inspect maps providers.defaultProviderId")
+check(providerRegistrySnapshot?.providers.selectedRegistryTarget?.baseUrl == "https://saved.example/v1", "saved registry base URL is authoritative")
+check(providerRegistrySnapshot?.providers.openAICompatibleEndpoint == "https://legacy.example/v1", "legacy desktop endpoint remains parsed only for compatibility")
+check(providerRegistrySnapshot?.providers.selectedRegistryTarget?.isAPIKeyVerificationEligible == true, "enabled openai-compatible api-key-env target is eligible")
+check(providerRegistrySnapshot?.providers.registryTargets.first(where: { $0.id == "disabled" })?.isAPIKeyVerificationEligible == false, "disabled registry target is ineligible")
+check(providerRegistrySnapshot?.providers.registryTargets.first(where: { $0.id == "zcode" })?.isAPIKeyVerificationEligible == false, "non-compatible adapter is ineligible")
+if let providerSettings = providerRegistrySnapshot?.providers {
+    let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
+    let providerPatchText = String(data: providerPatchData, encoding: .utf8) ?? ""
+    let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
+    let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
+    let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
+    let selectedProviderPatch = providerPatchEntries?["gateway"] as? [String: Any]
+    check(selectedProviderPatch?["baseUrl"] as? String == "https://saved.example/v1", "provider patch uses the selected saved registry target")
+    check(!providerPatchText.contains("https://legacy.example/v1"), "legacy desktop endpoint cannot enter the provider registry patch")
+    check(!providerPatchText.lowercased().contains("apikey"), "provider registry patch contains no secret-bearing key field")
+}
 let failedInspectJSON = #"{"ok":false,"command":"config inspect","error":"config changed while reading; retry"}"#
 check(
     ConfigInspectParser.error(failedInspectJSON) == "config changed while reading; retry",
