@@ -13,6 +13,7 @@ import {
 import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
+import { deflateSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
 const roots: string[] = [];
@@ -39,6 +40,40 @@ function tree(path: string, directory = false) {
 
 function writeJSON(path: string, value: unknown) {
   writeFileSync(path, `${JSON.stringify(value)}\n`);
+}
+
+function crc32(data: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data = Buffer.alloc(0)) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBytes.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), 8 + data.length);
+  return chunk;
+}
+
+function completePng(width: number, height: number) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 1; // one-bit grayscale keeps deterministic fixtures compact
+  const rowBytes = Math.ceil(width / 8);
+  const raw = Buffer.alloc(height * (rowBytes + 1));
+  return Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND")
+  ]);
 }
 
 function packetFixture() {
@@ -122,6 +157,7 @@ process.exit(99);
   });
 
   const skippedImages: string[] = [];
+  const validatedImages: Array<{ path: string; width: number; height: number }> = [];
   let firstScreenshot = "";
   for (const entry of entries) {
     for (const size of ["1040x680", "1280x800"]) {
@@ -132,7 +168,7 @@ process.exit(99);
       const accessibility = join(directory, "accessibility.json");
       const geometry = join(directory, "geometry.json");
       const readiness = join(directory, "readiness.json");
-      writeFileSync(screenshot, `png-${entry.id}-${size}`);
+      writeFileSync(screenshot, completePng(width * 2, (height + 32) * 2));
       writeJSON(accessibility, { identifier: `neondiff.fixture.${entry.id}` });
       writeJSON(geometry, {
         schemaVersion: 1,
@@ -169,12 +205,15 @@ process.exit(99);
       writeJSON(join(directory, "capture.json"), capture);
       writeJSON(join(directory, "case.json"), { fixtureId: entry.id, size });
       skippedImages.push(relative(packet, screenshot));
+      validatedImages.push({ path: relative(packet, screenshot), width: width * 2, height: (height + 32) * 2 });
       if (!firstScreenshot) firstScreenshot = screenshot;
     }
   }
   writeJSON(join(packet, "validation", "packet-safety-scan.json"), {
     ok: true,
     skippedImages,
+    validatedImages,
+    invalidImages: [],
     findings: [],
     sensitiveFiles: []
   });
@@ -197,7 +236,7 @@ function rewriteManifest(packet: string, mutate: (manifest: any) => void) {
   writeJSON(path, manifest);
 }
 
-describe("desktop evaluation packet integrity", () => {
+describe("desktop evaluation packet integrity", { timeout: 30_000 }, () => {
   it("recomputes referenced bytes and rejects post-capture tampering", () => {
     const value = packetFixture();
     expect(verify(value.packet).status).toBe(0);
@@ -290,6 +329,17 @@ describe("desktop evaluation packet integrity", () => {
     const result = verify(value.packet);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/readiness/i);
+  });
+
+  it("binds manifest frame summaries to hashed geometry evidence", () => {
+    const value = packetFixture();
+    rewriteManifest(value.packet, (manifest) => {
+      manifest.cases[0].actualContentFrame.height -= 1;
+      manifest.cases[0].actualWindowFrame.x += 1;
+    });
+    const result = verify(value.packet);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/frame summary|geometry/i);
   });
 
   it("requires a structural AX identifier rather than matching arbitrary text", () => {
@@ -406,6 +456,81 @@ describe("desktop evaluation packet integrity", () => {
     const unsafe = scan();
     expect(unsafe.status).toBe(1);
     expect(JSON.parse(unsafe.stdout).findings).toEqual(expect.arrayContaining([expect.objectContaining({ pattern: "github_token" })]));
+
+    const canonical = packetFixture();
+    writeFileSync(
+      join(canonical.packet, "cases", "fixture-00", "1040x680", "accessibility.json"),
+      `Bearer ${"a".repeat(24)}`
+    );
+    const canonicalUnsafe = spawnSync("node", ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", canonical.packet], { encoding: "utf8" });
+    expect(canonicalUnsafe.status).toBe(1);
+    expect(JSON.parse(canonicalUnsafe.stdout).findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ pattern: "canonical_secret" })])
+    );
+
+    const disguised = packetFixture();
+    writeFileSync(join(disguised.packet, "cases", "fixture-00", "SPARKLE-LICENSE.txt"), "customer@example.com");
+    const disguisedUnsafe = spawnSync("node", ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", disguised.packet], { encoding: "utf8" });
+    expect(disguisedUnsafe.status).toBe(1);
+    expect(JSON.parse(disguisedUnsafe.stdout).findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ pattern: "canonical_secret" })])
+    );
+
+    const forgedLicense = packetFixture();
+    const forgedPath = join(
+      forgedLicense.packet,
+      "artifacts",
+      "NeonDiffDesktop.app",
+      "Contents",
+      "Resources",
+      "NeonDiffDesktop_NeonDiffDesktop.bundle"
+    );
+    mkdirSync(forgedPath, { recursive: true });
+    writeFileSync(join(forgedPath, "SPARKLE-LICENSE.txt"), "Copyright (c) 2026 Customer Records <customer.private@example.com>");
+    const forgedUnsafe = spawnSync("node", ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", forgedLicense.packet], { encoding: "utf8" });
+    expect(forgedUnsafe.status).toBe(1);
+    expect(JSON.parse(forgedUnsafe.stdout).findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ pattern: "canonical_secret" })])
+    );
+  });
+
+  it("rejects a hash-consistent screenshot that is not PNG image evidence", () => {
+    const value = packetFixture();
+    const manifestPath = join(value.packet, "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const item = manifest.cases[0];
+    const screenshotPath = join(value.packet, item.screenshot.path);
+    writeFileSync(screenshotPath, "renamed text is not screenshot evidence");
+    item.screenshot.sha256 = sha256(screenshotPath);
+    const size = `${item.requestedContentSize.width}x${item.requestedContentSize.height}`;
+    const capturePath = join(value.packet, "cases", item.fixtureId, size, "capture.json");
+    const capture = JSON.parse(readFileSync(capturePath, "utf8"));
+    capture.screenshot.sha256 = item.screenshot.sha256;
+    writeJSON(capturePath, capture);
+    writeJSON(manifestPath, manifest);
+    const result = verify(value.packet);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/PNG|image/i);
+  });
+
+  it("rejects a hash-consistent truncated PNG header without image data", () => {
+    const value = packetFixture();
+    const manifestPath = join(value.packet, "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const item = manifest.cases[0];
+    const screenshotPath = join(value.packet, item.screenshot.path);
+    const truncated = completePng(1, 1).subarray(0, 24);
+    writeFileSync(screenshotPath, truncated);
+    item.screenshot.sha256 = sha256(screenshotPath);
+    const size = `${item.requestedContentSize.width}x${item.requestedContentSize.height}`;
+    const capturePath = join(value.packet, "cases", item.fixtureId, size, "capture.json");
+    const capture = JSON.parse(readFileSync(capturePath, "utf8"));
+    capture.screenshot.sha256 = item.screenshot.sha256;
+    writeJSON(capturePath, capture);
+    writeJSON(manifestPath, manifest);
+    const result = verify(value.packet);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/PNG|image/i);
   });
 
   it("rejects unaccounted binary files outside the exact screenshot set", () => {

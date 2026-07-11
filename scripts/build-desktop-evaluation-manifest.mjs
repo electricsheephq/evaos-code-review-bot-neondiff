@@ -5,6 +5,7 @@ import { lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { assertPacketRoot, packetEntry } from "./shared/packet-paths.mjs";
 import { canonicalDesktopEvaluationFixtureJSON, decodeDesktopEvaluationFixtureData } from "./shared/desktop-evaluation-fixture-validator.mjs";
+import { readDesktopInfoPlistIdentity } from "./shared/desktop-info-plist.mjs";
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -135,6 +136,7 @@ if (JSON.stringify(directoryIds) !== JSON.stringify([...fixtureById.keys()].sort
 const requiredSizes = ["1040x680", "1280x800"];
 const cases = [];
 const scales = new Set();
+const expectedValidatedImages = [];
 for (const fixtureId of directoryIds) {
   const fixture = fixtureById.get(fixtureId);
   const sizes = readdirSync(join(caseRoot, fixtureId)).sort();
@@ -215,12 +217,20 @@ for (const fixtureId of directoryIds) {
       visualBaseline: { status: "captured-no-reference" },
       expectedState: fixture.state.health
     });
+    expectedValidatedImages.push({
+      path: packetPath(screenshotPath),
+      width: geometry.screenshotPixels.width,
+      height: geometry.screenshotPixels.height
+    });
   }
 }
 if (scales.size !== 1) fail("capture packet backing scale is inconsistent");
 const expectedImages = cases.map((item) => item.screenshot.path).sort();
 if (!Array.isArray(packetSecretScan.skippedImages)
   || JSON.stringify([...packetSecretScan.skippedImages].sort()) !== JSON.stringify(expectedImages)
+  || JSON.stringify([...(packetSecretScan.validatedImages ?? [])].sort((left, right) => left.path.localeCompare(right.path)))
+    !== JSON.stringify(expectedValidatedImages.sort((left, right) => left.path.localeCompare(right.path)))
+  || (packetSecretScan.invalidImages?.length ?? 0) !== 0
   || (packetSecretScan.unsupportedBinaryFiles?.length ?? 0) !== 0
   || (packetSecretScan.unsupportedEntries?.length ?? 0) !== 0) {
   fail("packet secret scan did not account for every screenshot");
@@ -228,9 +238,7 @@ if (!Array.isArray(packetSecretScan.skippedImages)
 
 const appTreeHash = treeHash(app);
 const fixturesTreeHash = treeHash(fixturesDirectory, true);
-const plist = join(app, "Contents", "Info.plist");
-const shortVersion = execFileSync("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleShortVersionString", plist], { encoding: "utf8" }).trim();
-const buildVersion = execFileSync("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleVersion", plist], { encoding: "utf8" }).trim();
+const { shortVersion, buildVersion } = readDesktopInfoPlistIdentity(app);
 const recordedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 const manifest = {
   schemaVersion: 2,

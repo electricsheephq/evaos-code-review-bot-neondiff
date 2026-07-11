@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { isAbsolute, posix, resolve } from "node:path";
-import { binarySecretScanExtension, scanSecretText } from "./shared/secret-patterns.mjs";
+import { binarySecretScanExtension, scanCanonicalSecretText, scanSecretText } from "./shared/secret-patterns.mjs";
+import { readCompletePngDimensions } from "./shared/png-evidence.mjs";
 import { assertPacketRoot } from "./shared/packet-paths.mjs";
 import { walkDescriptorTree } from "./shared/safe-fs.mjs";
 
@@ -13,6 +14,8 @@ const packet = assertPacketRoot(resolve(process.argv[flagIndex + 1]));
 
 const findings = [];
 const skippedImages = [];
+const validatedImages = [];
+const invalidImages = [];
 const skippedArtifactBinaries = [];
 const skippedArtifactSymlinks = [];
 const unsupportedBinaryFiles = [];
@@ -26,6 +29,12 @@ const artifactRoot = "artifacts/NeonDiffDesktop.app";
 
 function isWithin(root, candidate) {
   return candidate === root || candidate.startsWith(`${root}/`);
+}
+
+function looksBinary(data) {
+  const magic = data.subarray(0, 4).toString("hex");
+  return ["7f454c46", "feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe", "bebafeca"].includes(magic)
+    || data.subarray(0, Math.min(data.length, 8192)).includes(0);
 }
 
 const entries = [];
@@ -72,9 +81,19 @@ for (const entry of entries) {
     }
     if (entry.type === "directory") continue;
     if (/((^|\/)\.env(?:\.|$)|\.(?:pem|key|sqlite|db)$)/.test(rel)) sensitiveFiles.push(rel);
+    if (rel.startsWith(`${artifactRoot}/`) && looksBinary(entry.data)) {
+      skippedArtifactBinaries.push(rel);
+      continue;
+    }
     if (binarySecretScanExtension.test(rel)) {
       if (/^cases\/[a-z0-9][a-z0-9-]{0,63}\/(?:1040x680|1280x800)\/screenshot\.png$/.test(rel)) {
-        skippedImages.push(rel);
+        try {
+          const dimensions = readCompletePngDimensions(entry.data);
+          skippedImages.push(rel);
+          validatedImages.push({ path: rel, ...dimensions });
+        } catch {
+          invalidImages.push(rel);
+        }
       } else if (rel.startsWith("artifacts/NeonDiffDesktop.app/")) {
         skippedArtifactBinaries.push(rel);
       } else {
@@ -86,15 +105,19 @@ for (const entry of entries) {
     scannedBytes += entry.stat.size;
     if (scannedFiles > maxFiles || scannedBytes > maxBytes) throw new Error("packet text scan bound exceeded");
     findings.push(...scanSecretText(rel, entry.data.toString("utf8")));
+    findings.push(...scanCanonicalSecretText(rel, entry.data.toString("utf8")));
 }
 const result = {
   ok: findings.length === 0
+    && invalidImages.length === 0
     && sensitiveFiles.length === 0
     && unsupportedBinaryFiles.length === 0
     && unsupportedEntries.length === 0,
   scannedFiles,
   scannedBytes,
   skippedImages,
+  validatedImages,
+  invalidImages,
   skippedArtifactBinaries,
   skippedArtifactSymlinks,
   unsupportedBinaryFiles,

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertPacketRoot, packetRelativeEntry } from "./shared/packet-paths.mjs";
 import { canonicalDesktopEvaluationFixtureJSON, decodeDesktopEvaluationFixtureData, decodeDesktopEvaluationPublicSafeJSON } from "./shared/desktop-evaluation-fixture-validator.mjs";
+import { readDesktopInfoPlistIdentity } from "./shared/desktop-info-plist.mjs";
 
 const flagIndex = process.argv.indexOf("--packet");
 if (flagIndex < 0 || !process.argv[flagIndex + 1] || process.argv.length !== 4) {
@@ -114,9 +115,7 @@ if (manifest.artifact.hashAlgorithm !== "sha256-tree-v1"
   || appHash.sha256 !== manifest.artifact.sha256) {
   fail("app artifact tree hash mismatch");
 }
-const plist = resolve(app, "Contents", "Info.plist");
-const shortVersion = execFileSync("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleShortVersionString", plist], { encoding: "utf8" }).trim();
-const buildVersion = execFileSync("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleVersion", plist], { encoding: "utf8" }).trim();
+const { shortVersion, buildVersion } = readDesktopInfoPlistIdentity(app);
 if (manifest.artifact.buildIdentity !== `NeonDiffDesktop ${shortVersion} (${buildVersion}); debug SwiftPM bundle`) {
   fail("artifact build identity disagrees with Info.plist");
 }
@@ -232,6 +231,7 @@ const requiredSizes = ["1040x680", "1280x800"];
 const expectedKeys = new Set([...fixtureById.keys()].flatMap((fixtureId) => requiredSizes.map((size) => `${fixtureId}|${size}`)));
 const seenKeys = new Set();
 const expectedImages = [];
+const expectedValidatedImages = [];
 for (const item of manifest.cases) {
   exactKeys(item, ["fixtureId", "section", "onboardingStep", "appearance", "requestedContentSize", "actualWindowFrame", "actualContentFrame", "screenshot", "accessibility", "geometry", "readiness", "visualBaseline", "expectedState"], "manifest case");
   const fixture = fixtureById.get(item.fixtureId);
@@ -303,6 +303,12 @@ for (const item of manifest.cases) {
     || !sameNumber(geometry.appWindowFrame?.height, geometry.cgWindowBounds?.height)) {
     fail(`case geometry is invalid: ${key}`);
   }
+  for (const dimension of ["x", "y", "width", "height"]) {
+    if (!sameNumber(item.actualWindowFrame?.[dimension], geometry.appWindowFrame?.[dimension])
+      || !sameNumber(item.actualContentFrame?.[dimension], geometry.appContentFrame?.[dimension])) {
+      fail(`manifest frame summary disagrees with geometry evidence: ${key}`);
+    }
+  }
   if (geometry.accessibilityTruncated !== false
     || !Number.isInteger(geometry.accessibilityNodeCount)
     || geometry.accessibilityNodeCount < 1
@@ -313,12 +319,22 @@ for (const item of manifest.cases) {
     || !sameNumber(geometry.screenshotPixels?.height, geometry.appWindowFrame.height * geometry.backingScale, 1)) {
     fail(`screenshot pixel geometry is invalid: ${key}`);
   }
+  expectedValidatedImages.push({
+    path: expectedPaths.screenshot,
+    width: geometry.screenshotPixels.width,
+    height: geometry.screenshotPixels.height
+  });
 }
 if (seenKeys.size !== expectedKeys.size || [...expectedKeys].some((key) => !seenKeys.has(key))) {
   fail("manifest case matrix is incomplete");
 }
 if (JSON.stringify([...(packetScan.skippedImages ?? [])].sort()) !== JSON.stringify(expectedImages.sort())) {
   fail("packet secret scan did not account for the exact screenshot set");
+}
+const sortImages = (images) => [...images].sort((left, right) => left.path.localeCompare(right.path));
+if ((packetScan.invalidImages?.length ?? 0) !== 0
+  || JSON.stringify(sortImages(packetScan.validatedImages ?? [])) !== JSON.stringify(sortImages(expectedValidatedImages))) {
+  fail("packet secret scan did not validate the exact PNG image dimensions");
 }
 
 let freshScan;
@@ -328,13 +344,21 @@ try {
     ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", packet],
     { encoding: "utf8" }
   ));
-} catch {
+} catch (error) {
+  try {
+    const report = JSON.parse(error?.stdout ?? "");
+    if ((report.invalidImages?.length ?? 0) > 0) fail("fresh packet PNG image validation failed");
+  } catch (parseError) {
+    if (parseError instanceof Error && parseError.message.includes("PNG image")) throw parseError;
+  }
   fail("fresh packet secret scan failed");
 }
 if (freshScan.ok !== true
   || (freshScan.unsupportedBinaryFiles?.length ?? 0) !== 0
   || (freshScan.unsupportedEntries?.length ?? 0) !== 0
-  || JSON.stringify([...freshScan.skippedImages].sort()) !== JSON.stringify(expectedImages.sort())) {
+  || (freshScan.invalidImages?.length ?? 0) !== 0
+  || JSON.stringify([...freshScan.skippedImages].sort()) !== JSON.stringify(expectedImages.sort())
+  || JSON.stringify(sortImages(freshScan.validatedImages ?? [])) !== JSON.stringify(sortImages(expectedValidatedImages))) {
   fail("fresh packet secret scan does not corroborate the manifest");
 }
 
