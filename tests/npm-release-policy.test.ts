@@ -251,12 +251,16 @@ describe("npm release policy", () => {
     const workflow = readFileSync(join(repoRoot, ".github", "workflows", "publish-npm.yml"), "utf8");
     const packIndex = workflow.indexOf('npm pack --json --pack-destination "$PACK_DIR" > pack.json');
     const readinessIndex = workflow.indexOf("node scripts/check-public-release-ready.mjs");
-    const publishIndex = workflow.indexOf('npm publish --provenance');
+    const publishIndex = workflow.indexOf('npm publish "$STAGING_ROOT/package" --provenance');
 
     expect(packIndex).toBeGreaterThan(-1);
     expect(readinessIndex).toBeGreaterThan(packIndex);
     expect(publishIndex).toBeGreaterThan(readinessIndex);
     expect(workflow.match(/node scripts\/check-public-release-ready\.mjs/g)).toHaveLength(2);
+    expect(workflow).toContain('tar -xzf "$PACK_TARBALL" -C "$STAGING_ROOT"');
+    expect(workflow).toContain('printf \'%s\\n\' "$EXPECTED_GIT_HEAD" > "$STAGING_ROOT/package/.git/HEAD"');
+    expect(workflow).toContain('chmod -R a-w "$STAGING_ROOT/package"');
+    expect(workflow).not.toMatch(/^\s*npm publish --provenance/m);
   });
 
   it("allows only absent, identical, or manifest-declared predecessor channel values", () => {

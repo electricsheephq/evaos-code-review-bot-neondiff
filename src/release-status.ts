@@ -533,6 +533,7 @@ export function readPublicReleaseManifestStatus(input: {
   manifestPath: string;
   expectedVersion?: string;
   verifyRollbackRefs?: boolean;
+  allowStaleActivationProof?: boolean;
   now?: Date;
 }): PublicReleaseStatus {
   const absolutePath = resolve(input.cwd, input.manifestPath);
@@ -689,6 +690,7 @@ export function readPublicReleaseManifestStatus(input: {
           cwd: input.cwd,
           proofPath: licenseActivationProofPath,
           expectedReleaseVersion: expectedVersion,
+          allowStaleProof: input.allowStaleActivationProof === true,
           now: input.now
         })
       : { ok: true, detail: "" };
@@ -1086,6 +1088,7 @@ function validateMandatoryActivationProofPath(input: {
   cwd: string;
   proofPath?: string;
   expectedReleaseVersion?: string;
+  allowStaleProof?: boolean;
   now?: Date;
 }): { ok: boolean; detail: string } {
   if (!input.proofPath) {
@@ -1148,8 +1151,11 @@ function validateMandatoryActivationProofPath(input: {
     failures.push(`releaseVersion must match ${input.expectedReleaseVersion}`);
   }
   const observedAt = readString(proof.observedAt);
-  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
-  if (observedAt) {
+  const observedAtFailures = validateLicenseProofObservedAt(observedAt, input.now);
+  failures.push(...(input.allowStaleProof
+    ? observedAtFailures.filter((failure) => !failure.startsWith("observedAt must be no older than"))
+    : observedAtFailures));
+  if (observedAt && !input.allowStaleProof) {
     const observedAtMs = Date.parse(observedAt);
     const effectiveNow = input.now ?? new Date();
     if (!Number.isNaN(observedAtMs) && effectiveNow.getTime() - observedAtMs > 24 * 60 * 60 * 1_000) {
@@ -1217,7 +1223,7 @@ function validateMandatoryActivationProofPath(input: {
     ["activate", { outcome: "succeeded", statusCode: 200 }],
     ["validate_active", { outcome: "succeeded", statusCode: 200 }],
     ["deactivate", { outcome: "succeeded", statusCode: 200 }],
-    ["validate_denied", { outcome: "denied", statusCode: 403 }]
+    ["validate_denied", { outcome: "denied", statusCode: 409 }]
   ]);
   const lifecycleSteps = Array.isArray(productionLifecycle.steps) ? productionLifecycle.steps : [];
   const lifecycleById = new Map<string, Record<string, unknown>>();
@@ -1253,6 +1259,8 @@ function validateMandatoryActivationProofPath(input: {
   const requiredAllowedScenarioIds = new Set(["public_active", "private_active"]);
   const requiredDeniedScenarioIds = new Set([
     "unknown_repo",
+    "public_denied",
+    "private_denied",
     "missing_key",
     "missing_api_url",
     "offline",
@@ -1273,7 +1281,7 @@ function validateMandatoryActivationProofPath(input: {
   for (const rawScenario of scenarios) {
     const scenario = asRecord(rawScenario);
     const id = readString(scenario.id);
-    const unexpectedScenarioKeys = collectUnexpectedKeys(scenario, new Set(["id", "expected", "actual", "sideEffects", "resultSha256"]));
+    const unexpectedScenarioKeys = collectUnexpectedKeys(scenario, new Set(["id", "visibility", "expected", "actual", "sideEffects", "resultSha256"]));
     if (unexpectedScenarioKeys.length) failures.push(`unexpected matrix scenario fields: ${unexpectedScenarioKeys.join(", ")}`);
     if (!id || scenarioIds.has(id)) {
       failures.push("matrix.scenarios must have unique named scenarios");
@@ -1287,6 +1295,14 @@ function validateMandatoryActivationProofPath(input: {
     }
     if (scenario.expected !== expectedOutcome) failures.push(`matrix.${id}.expected must be ${expectedOutcome}`);
     if (scenario.actual !== expectedOutcome) failures.push(`matrix.${id}.actual must be ${expectedOutcome}`);
+    const expectedVisibility = id === "public_active" || id === "public_denied"
+      ? "public"
+      : id === "private_active" || id === "private_denied"
+        ? "private"
+        : id === "unknown_repo"
+          ? "unknown"
+          : "not_applicable";
+    if (scenario.visibility !== expectedVisibility) failures.push(`matrix.${id}.visibility must be ${expectedVisibility}`);
     requireSha256(scenario.resultSha256, `matrix.${id}.resultSha256`);
     const sideEffects = asRecord(scenario.sideEffects);
     const unexpectedSideEffectKeys = collectUnexpectedKeys(sideEffects, new Set(["providerCalls", "checkoutCalls", "worktreeWrites", "reviewPosts"]));
@@ -1440,7 +1456,7 @@ function validateMandatoryActivationProofPath(input: {
   for (const rawRecord of matrixArtifactRecords) {
     const record = asRecord(rawRecord);
     const id = readString(record.id);
-    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "expected", "actual", "sideEffects"]));
+    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "visibility", "expected", "actual", "sideEffects"]));
     if (unexpectedRecordKeys.length) failures.push(`unexpected no-bypass-matrix record fields: ${unexpectedRecordKeys.join(", ")}`);
     if (!id || matrixArtifactById.has(id)) failures.push("no-bypass-matrix records must have unique ids");
     else matrixArtifactById.set(id, record);
@@ -1454,7 +1470,7 @@ function validateMandatoryActivationProofPath(input: {
       failures.push(`no-bypass-matrix artifact must include ${id}`);
       continue;
     }
-    if (record.expected !== scenario.expected || record.actual !== scenario.actual || JSON.stringify(record.sideEffects) !== JSON.stringify(scenario.sideEffects)) {
+    if (record.visibility !== scenario.visibility || record.expected !== scenario.expected || record.actual !== scenario.actual || JSON.stringify(record.sideEffects) !== JSON.stringify(scenario.sideEffects)) {
       failures.push(`no-bypass-matrix artifact record ${id} must match the aggregate proof`);
     }
     if (scenario.resultSha256 !== digestRecord(record)) failures.push(`matrix.${id}.resultSha256 must match its artifact record`);

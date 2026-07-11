@@ -545,6 +545,8 @@ describe("beta release status", () => {
     const packIntegrity = `sha512-${"Y".repeat(86)}==`;
     const deniedScenarioIds = [
       "unknown_repo",
+      "public_denied",
+      "private_denied",
       "missing_key",
       "missing_api_url",
       "offline",
@@ -565,13 +567,19 @@ describe("beta release status", () => {
       { id: "issue", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "issued" } },
       { id: "activate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "active", source: "api" } },
       { id: "validate_active", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "active", source: "api" } },
-      { id: "deactivate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "revoked" } },
-      { id: "validate_denied", outcome: "denied", statusCode: 403, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "revoked" } }
+      { id: "deactivate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "deactivated" } },
+      { id: "validate_denied", outcome: "denied", statusCode: 409, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "scope_mismatch" } }
     ];
     const scenarioRecords = [
-      { id: "public_active", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
-      { id: "private_active", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
-      ...deniedScenarioIds.map((id) => ({ id, expected: "denied", actual: "denied", sideEffects: zeroSideEffects }))
+      { id: "public_active", visibility: "public", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
+      { id: "private_active", visibility: "private", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
+      ...deniedScenarioIds.map((id) => ({
+        id,
+        visibility: id === "public_denied" ? "public" : id === "private_denied" ? "private" : id === "unknown_repo" ? "unknown" : "not_applicable",
+        expected: "denied",
+        actual: "denied",
+        sideEffects: zeroSideEffects
+      }))
     ];
     const installUpgradeRecord = { freshInstallPassed: true, upgradedFromVersion: "1.0.3", upgradePassed: true };
     const dashboardRecord = {
@@ -732,6 +740,14 @@ describe("beta release status", () => {
     });
     expect(staleWithoutInjectedClock.licenseApi.ok).toBe(false);
     expect(staleWithoutInjectedClock.licenseApi.detail).toContain("observedAt must be no older than 24 hours for mandatory activation proof");
+    const immutableRecovery = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z"),
+      allowStaleActivationProof: true
+    });
+    expect(immutableRecovery.licenseApi.ok).toBe(true);
 
     const lifecycleArtifact = artifacts.find((artifact) => artifact.kind === "production-lifecycle")!;
     writeFileSync(join(root, lifecycleArtifact.ref), `${JSON.stringify({ evidenceKind: "production-lifecycle", redacted: true, tampered: true })}\n`);

@@ -22,6 +22,7 @@ describe("license lifecycle smoke", () => {
     const packIntegrity = `sha512-${"Y".repeat(86)}==`;
     const runnerCalls: Array<{ args: string[]; stdin?: string }> = [];
     let validateAfterDeactivation = false;
+    let localRemoved = false;
 
     const result = await runLicenseLifecycleSmoke({
       releaseVersion: "v1.0.4",
@@ -47,8 +48,8 @@ describe("license lifecycle smoke", () => {
           }), { status: 200, headers: { "content-type": "application/json" } });
         }
         if (path === "/v1/license/validate" && validateAfterDeactivation) {
-          return new Response(JSON.stringify({ status: "revoked", detail: "license is revoked" }), {
-            status: 403,
+          return new Response(JSON.stringify({ status: "scope_mismatch", detail: "machine is not activated" }), {
+            status: 409,
             headers: { "content-type": "application/json" }
           });
         }
@@ -61,12 +62,16 @@ describe("license lifecycle smoke", () => {
           expect(stdin).toBe(`${rawKey}\n`);
           return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "active", source: "api" }), stderr: "" };
         }
-        if (args[1] === "status") {
+        if (args[1] === "status" && !localRemoved) {
           return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "active", source: "api" }), stderr: "" };
         }
         if (args[1] === "deactivate") {
           validateAfterDeactivation = true;
-          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "revoked", source: "api" }), stderr: "" };
+          localRemoved = true;
+          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "deactivated", apiNotified: true }), stderr: "" };
+        }
+        if (args[1] === "status" && localRemoved) {
+          return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "missing", source: "none" }), stderr: "" };
         }
         throw new Error("unexpected candidate command");
       }
@@ -74,7 +79,7 @@ describe("license lifecycle smoke", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(runnerCalls).toHaveLength(3);
+    expect(runnerCalls).toHaveLength(4);
     expect(runnerCalls[0]?.args).toEqual([
       "license", "activate", "--config", "/isolated/config.local.json", "--license-key-stdin", "true", "--json"
     ]);
@@ -83,6 +88,9 @@ describe("license lifecycle smoke", () => {
     ]);
     expect(runnerCalls[2]?.args).toEqual([
       "license", "deactivate", "--config", "/isolated/config.local.json", "--notify-api", "true", "--json"
+    ]);
+    expect(runnerCalls[3]?.args).toEqual([
+      "license", "status", "--config", "/isolated/config.local.json", "--json"
     ]);
     expect(result.artifact).toMatchObject({
       evidenceKind: "production-lifecycle",
@@ -94,8 +102,8 @@ describe("license lifecycle smoke", () => {
         { id: "issue", outcome: "succeeded", statusCode: 200, redactedResponse: { status: "issued" } },
         { id: "activate", outcome: "succeeded", statusCode: 200, redactedResponse: { status: "active", source: "api" } },
         { id: "validate_active", outcome: "succeeded", statusCode: 200, redactedResponse: { status: "active", source: "api" } },
-        { id: "deactivate", outcome: "succeeded", statusCode: 200, redactedResponse: { status: "revoked" } },
-        { id: "validate_denied", outcome: "denied", statusCode: 403, redactedResponse: { status: "revoked" } }
+        { id: "deactivate", outcome: "succeeded", statusCode: 200, redactedResponse: { status: "deactivated" } },
+        { id: "validate_denied", outcome: "denied", statusCode: 409, redactedResponse: { status: "scope_mismatch" } }
       ]
     });
     expect(result.lifecycle.steps).toEqual(result.artifact.records.map((record) => ({
@@ -130,5 +138,75 @@ describe("license lifecycle smoke", () => {
     });
     expect(result).toMatchObject({ ok: false, errorCode: "confirm_live_lifecycle_required" });
     expect(called).toBe(false);
+  });
+
+  it("accepts future stable release versions covered by the v1.0.4+ gate", async () => {
+    const result = await runLicenseLifecycleSmoke({
+      releaseVersion: "v1.0.5",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      issuanceSecret: "fixture-secret",
+      candidateCliPath: "/isolated/prefix/bin/neondiff",
+      configPath: "/isolated/config.local.json",
+      confirmLiveLifecycle: true,
+      fetchImpl: async () => new Response(JSON.stringify({ status: "server" }), { status: 500 }),
+      runCandidateCommand: async () => {
+        throw new Error("candidate must not run after failed issuance");
+      }
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: "issuance_failed" });
+  });
+
+  it("confirms local removal and remote revocation after a post-activation failure", async () => {
+    const rawKey = ["nd", "live", "cleanupFixture123456"].join("_");
+    let remoteRevoked = false;
+    let localRemoved = false;
+    const result = await runLicenseLifecycleSmoke({
+      releaseVersion: "v1.0.4",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      issuanceSecret: "fixture-secret",
+      candidateCliPath: "/isolated/prefix/bin/neondiff",
+      configPath: "/isolated/config.local.json",
+      confirmLiveLifecycle: true,
+      randomId: () => "c".repeat(32),
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/v1/admin/licenses/issue") {
+          return new Response(JSON.stringify({ status: "issued", replayed: false, licenseKey: rawKey }), { status: 200 });
+        }
+        if (path === "/v1/license/deactivate") {
+          remoteRevoked = true;
+          return new Response(JSON.stringify({ status: "revoked" }), { status: 200 });
+        }
+        if (path === "/v1/license/validate") {
+          return new Response(JSON.stringify({ status: remoteRevoked ? "scope_mismatch" : "active" }), { status: remoteRevoked ? 409 : 200 });
+        }
+        throw new Error("unexpected path");
+      },
+      runCandidateCommand: async ({ args }) => {
+        if (args[1] === "activate") return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "active", source: "api" }), stderr: "" };
+        if (args[1] === "status" && !localRemoved) return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "server" }), stderr: "" };
+        if (args[1] === "deactivate" && args.includes("false")) {
+          localRemoved = true;
+          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "deactivated" }), stderr: "" };
+        }
+        if (args[1] === "status" && localRemoved) return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "missing" }), stderr: "" };
+        throw new Error("unexpected cleanup command");
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: "candidate_failed",
+      cleanup: { localState: "confirmed_removed", remoteState: "confirmed_deactivated" }
+    });
+    expect(localRemoved).toBe(true);
+    expect(remoteRevoked).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(rawKey);
   });
 });

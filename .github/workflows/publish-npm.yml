@@ -125,13 +125,18 @@ jobs:
           CANDIDATE_HEAD="$(node -p "require('./docs/public-release-manifest.json').source.candidateHeadBeforeReleaseMetadata")"
           RELEASE_HEAD="$(git rev-parse HEAD)"
           PACK_TARBALL="$PACK_DIR/neondiff-$PACKAGE_VERSION.tgz"
+          PACKAGE_ALREADY_EXISTS=false
+          if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            PACKAGE_ALREADY_EXISTS=true
+          fi
           node scripts/check-public-release-ready.mjs \
             --manifest docs/public-release-manifest.json \
             --expected-version "v$PACKAGE_VERSION" \
             --candidate-head "$CANDIDATE_HEAD" \
             --release-head "$RELEASE_HEAD" \
             --pack pack.json \
-            --tarball "$PACK_TARBALL"
+            --tarball "$PACK_TARBALL" \
+            --existing-package-recovery "$PACKAGE_ALREADY_EXISTS"
 
       - name: Publish or verify existing package
         if: steps.package_release.outputs.should_publish == 'true'
@@ -147,17 +152,33 @@ jobs:
             echo "::error::reviewed npm tarball is missing"
             exit 1
           }
+          STAGING_ROOT="$RUNNER_TEMP/neondiff-reviewed-stage"
+          STAGED_PACK_DIR="$RUNNER_TEMP/neondiff-reviewed-stage-pack"
+          rm -rf "$STAGING_ROOT" "$STAGED_PACK_DIR"
+          mkdir -p "$STAGING_ROOT" "$STAGED_PACK_DIR"
+          tar -xzf "$PACK_TARBALL" -C "$STAGING_ROOT"
+          mkdir -p "$STAGING_ROOT/package/.git"
+          printf '%s\n' "$EXPECTED_GIT_HEAD" > "$STAGING_ROOT/package/.git/HEAD"
+          npm pack "$STAGING_ROOT/package" --json --pack-destination "$STAGED_PACK_DIR" > "$RUNNER_TEMP/staged-pack.json"
+          node scripts/check-packlist.mjs "$RUNNER_TEMP/staged-pack.json"
+          STAGED_TARBALL="$STAGED_PACK_DIR/neondiff-$PACKAGE_VERSION.tgz"
+          PACKAGE_ALREADY_EXISTS=false
+          if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            PACKAGE_ALREADY_EXISTS=true
+          fi
           node scripts/check-public-release-ready.mjs \
             --manifest docs/public-release-manifest.json \
             --expected-version "v$PACKAGE_VERSION" \
             --candidate-head "$CANDIDATE_HEAD" \
             --release-head "$EXPECTED_GIT_HEAD" \
-            --pack pack.json \
-            --tarball "$PACK_TARBALL"
+            --pack "$RUNNER_TEMP/staged-pack.json" \
+            --tarball "$STAGED_TARBALL" \
+            --existing-package-recovery "$PACKAGE_ALREADY_EXISTS"
+          chmod -R a-w "$STAGING_ROOT/package"
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             echo "neondiff@$PACKAGE_VERSION already exists; verifying reviewed tarball identity"
           else
-            npm publish --provenance --access public --tag "release-candidate"
+            npm publish "$STAGING_ROOT/package" --provenance --access public --tag "release-candidate"
           fi
           rm -f remote-package.json registry-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do

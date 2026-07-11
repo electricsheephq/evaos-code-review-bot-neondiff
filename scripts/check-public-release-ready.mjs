@@ -37,17 +37,22 @@ const candidateHead = args.get("candidate-head");
 const releaseHead = args.get("release-head");
 const packPath = args.get("pack");
 const tarballPath = args.get("tarball");
+const existingPackageRecovery = args.get("existing-package-recovery") ?? "false";
 if (!manifestPath || !expectedVersion || !candidateHead || !releaseHead || !packPath || !tarballPath) {
   fail("required arguments: --manifest --expected-version --candidate-head --release-head --pack --tarball");
 }
 if (!/^[a-f0-9]{40}$/.test(candidateHead)) fail("candidate head must be a full lowercase Git SHA");
 if (!/^[a-f0-9]{40}$/.test(releaseHead)) fail("release head must be a full lowercase Git SHA");
+if (existingPackageRecovery !== "true" && existingPackageRecovery !== "false") {
+  fail("--existing-package-recovery must be true or false");
+}
 
 const cwd = process.cwd();
 const status = readPublicReleaseManifestStatus({
   cwd,
   manifestPath,
-  expectedVersion
+  expectedVersion,
+  allowStaleActivationProof: existingPackageRecovery === "true"
 });
 if (!status.ok) fail("public release manifest is blocked; run release-status locally for redacted gate details");
 const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
@@ -100,6 +105,7 @@ process.stdout.write(`${JSON.stringify({
   version: expectedVersion,
   candidateHead,
   releaseHead,
+  existingPackageRecovery: existingPackageRecovery === "true",
   packShasum: pack.shasum,
   packIntegrity: pack.integrity,
   activationProofPath

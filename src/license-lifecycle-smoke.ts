@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { hostname, platform } from "node:os";
 
 const API_TIMEOUT_MS = 15_000;
 const CLI_TIMEOUT_MS = 20_000;
@@ -57,8 +58,13 @@ export type LicenseLifecycleSmokeResult =
         | "invalid_input"
         | "issuance_failed"
         | "candidate_failed"
-        | "post_deactivation_validation_failed";
+        | "post_deactivation_validation_failed"
+        | "cleanup_unresolved";
       detail: string;
+      cleanup?: {
+        localState: "not_applicable" | "confirmed_removed" | "unresolved";
+        remoteState: "not_applicable" | "confirmed_deactivated" | "unresolved";
+      };
       proofBoundary: string;
     };
 
@@ -93,7 +99,12 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
     .update(`${input.releaseVersion}:${input.candidateHead}:${input.packShasum}:${observedAt}:${randomId()}`)
     .digest("hex");
   let rawKey: string | undefined;
-  let deactivated = false;
+  let licenseFingerprint: string | undefined;
+  let candidateActivated = false;
+  let localState: "not_applicable" | "confirmed_removed" | "unresolved" = "not_applicable";
+  let remoteState: "not_applicable" | "confirmed_deactivated" | "unresolved" = "not_applicable";
+  let executionFailure: Extract<LicenseLifecycleSmokeResult, { ok: false }> | undefined;
+  let lifecycleSucceeded = false;
   const records: LifecycleRecord[] = [];
 
   try {
@@ -103,7 +114,13 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
       externalCheckoutId: `lifecycle-${harnessRunId.slice(0, 32)}`
     }, input.issuanceSecret);
     rawKey = readIssuedKey(issuance);
-    if (!rawKey) return failure("issuance_failed", "production issuance did not return one valid disposable key", boundary);
+    if (!rawKey) {
+      executionFailure = failure("issuance_failed", "production issuance did not return one valid disposable key", boundary);
+      throw new Error("issuance failed");
+    }
+    licenseFingerprint = `sha256:${createHash("sha256").update(rawKey).digest("hex")}`;
+    localState = "unresolved";
+    remoteState = "unresolved";
     records.push(record("issue", "succeeded", issuance.statusCode, input.apiBaseUrl, { status: "issued" }));
 
     const activate = await runCandidateJson(runCandidate, {
@@ -112,8 +129,10 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
       stdin: `${rawKey}\n`
     });
     if (!activate.ok || activate.body.status !== "active" || activate.body.source !== "api") {
-      return failure("candidate_failed", "candidate activation did not return active API state", boundary);
+      executionFailure = failure("candidate_failed", "candidate activation did not return active API state", boundary);
+      throw new Error("candidate activation failed");
     }
+    candidateActivated = true;
     records.push(record("activate", "succeeded", 200, input.apiBaseUrl, { status: "active", source: "api" }));
 
     const activeStatus = await runCandidateJson(runCandidate, {
@@ -121,7 +140,8 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
       args: ["license", "status", "--config", input.configPath, "--refresh", "true", "--json"]
     });
     if (!activeStatus.ok || activeStatus.body.status !== "active" || activeStatus.body.source !== "api") {
-      return failure("candidate_failed", "candidate refresh did not return active API state", boundary);
+      executionFailure = failure("candidate_failed", "candidate refresh did not return active API state", boundary);
+      throw new Error("candidate refresh failed");
     }
     records.push(record("validate_active", "succeeded", 200, input.apiBaseUrl, { status: "active", source: "api" }));
 
@@ -130,67 +150,114 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
       args: ["license", "deactivate", "--config", input.configPath, "--notify-api", "true", "--json"]
     });
     if (!deactivate.ok || deactivate.body.status !== "revoked" && deactivate.body.status !== "deactivated") {
-      return failure("candidate_failed", "candidate deactivation did not complete", boundary);
+      executionFailure = failure("candidate_failed", "candidate deactivation did not complete", boundary);
+      throw new Error("candidate deactivation failed");
     }
-    deactivated = true;
-    records.push(record("deactivate", "succeeded", 200, input.apiBaseUrl, { status: "revoked" }));
+    records.push(record("deactivate", "succeeded", 200, input.apiBaseUrl, { status: "deactivated" }));
+
+    const localMissing = await runCandidateJsonAnyExit(runCandidate, {
+      executable: input.candidateCliPath,
+      args: ["license", "status", "--config", input.configPath, "--json"]
+    });
+    if (localMissing.body.status !== "missing") {
+      executionFailure = failure("candidate_failed", "candidate local key/cache removal was not confirmed", boundary);
+      throw new Error("local cleanup failed");
+    }
+    localState = "confirmed_removed";
 
     const denied = await postJson(fetchImpl, `${input.apiBaseUrl}/v1/license/validate`, {
       licenseKey: rawKey,
-      machineId: `release-smoke-${harnessRunId.slice(0, 24)}`
+      machineId: localMachineId()
     });
-    if (denied.statusCode !== 403 || denied.body.status !== "revoked") {
-      return failure("post_deactivation_validation_failed", "post-deactivation validation did not fail closed as revoked", boundary);
+    if (denied.statusCode !== 409 || denied.body.status !== "scope_mismatch") {
+      executionFailure = failure("post_deactivation_validation_failed", "same-machine validation did not fail closed after deactivation", boundary);
+      throw new Error("remote cleanup failed");
     }
-    records.push(record("validate_denied", "denied", 403, input.apiBaseUrl, { status: "revoked" }));
-
-    const licenseFingerprint = `sha256:${createHash("sha256").update(rawKey).digest("hex")}`;
-    const artifact: ProductionLifecycleArtifact = {
-      evidenceKind: "production-lifecycle",
-      releaseVersion: input.releaseVersion,
-      candidateHead: input.candidateHead,
-      packShasum: input.packShasum,
-      packIntegrity: input.packIntegrity,
-      harnessRunId,
-      records
-    };
-    return {
-      ok: true,
-      command: "license-lifecycle-smoke",
-      observedAt,
-      licenseFingerprint,
-      artifact,
-      lifecycle: {
-        apiBaseUrl: input.apiBaseUrl,
-        licenseFingerprint,
-        steps: records.map((item) => ({
-          ...item,
-          responseSha256: createHash("sha256").update(JSON.stringify(item.redactedResponse)).digest("hex")
-        }))
-      },
-      proofBoundary: boundary
-    };
+    remoteState = "confirmed_deactivated";
+    records.push(record("validate_denied", "denied", 409, input.apiBaseUrl, { status: "scope_mismatch" }));
+    lifecycleSucceeded = true;
   } catch {
-    return failure("candidate_failed", "lifecycle execution failed before redacted proof completed", boundary);
+    executionFailure ??= failure("candidate_failed", "lifecycle execution failed before redacted proof completed", boundary);
   } finally {
-    if (rawKey && !deactivated) {
-      try {
-        await postJson(fetchImpl, `${input.apiBaseUrl}/v1/license/deactivate`, {
-          licenseKey: rawKey,
-          machineId: `release-smoke-cleanup-${harnessRunId.slice(0, 24)}`
-        });
-      } catch {
-        // The caller receives a failed result and must treat cleanup as unresolved.
+    if (rawKey) {
+      if (candidateActivated && localState !== "confirmed_removed") {
+        try {
+          await runCandidateJsonAnyExit(runCandidate, {
+            executable: input.candidateCliPath,
+            args: ["license", "deactivate", "--config", input.configPath, "--notify-api", "false", "--json"]
+          });
+          const missing = await runCandidateJsonAnyExit(runCandidate, {
+            executable: input.candidateCliPath,
+            args: ["license", "status", "--config", input.configPath, "--json"]
+          });
+          if (missing.body.status === "missing") localState = "confirmed_removed";
+        } catch {
+          localState = "unresolved";
+        }
+      } else if (!candidateActivated) {
+        localState = "not_applicable";
+      }
+      if (remoteState !== "confirmed_deactivated") {
+        for (let attempt = 0; attempt < 3 && remoteState !== "confirmed_deactivated"; attempt += 1) {
+          try {
+            await postJson(fetchImpl, `${input.apiBaseUrl}/v1/license/deactivate`, {
+              licenseKey: rawKey,
+              machineId: localMachineId()
+            });
+            const denied = await postJson(fetchImpl, `${input.apiBaseUrl}/v1/license/validate`, {
+              licenseKey: rawKey,
+              machineId: localMachineId()
+            });
+            if (denied.statusCode === 409 && denied.body.status === "scope_mismatch") {
+              remoteState = "confirmed_deactivated";
+            }
+          } catch {
+            remoteState = "unresolved";
+          }
+        }
       }
     }
     rawKey = undefined;
   }
+
+  const cleanup = { localState, remoteState };
+  if (executionFailure || !lifecycleSucceeded) {
+    return { ...(executionFailure ?? failure("candidate_failed", "lifecycle execution failed", boundary)), cleanup };
+  }
+  if (localState !== "confirmed_removed" || remoteState !== "confirmed_deactivated" || !licenseFingerprint) {
+    return { ...failure("cleanup_unresolved", "lifecycle cleanup could not be confirmed", boundary), cleanup };
+  }
+  const artifact: ProductionLifecycleArtifact = {
+    evidenceKind: "production-lifecycle",
+    releaseVersion: input.releaseVersion,
+    candidateHead: input.candidateHead,
+    packShasum: input.packShasum,
+    packIntegrity: input.packIntegrity,
+    harnessRunId,
+    records
+  };
+  return {
+    ok: true,
+    command: "license-lifecycle-smoke",
+    observedAt,
+    licenseFingerprint,
+    artifact,
+    lifecycle: {
+      apiBaseUrl: input.apiBaseUrl,
+      licenseFingerprint,
+      steps: records.map((item) => ({
+        ...item,
+        responseSha256: createHash("sha256").update(JSON.stringify(item.redactedResponse)).digest("hex")
+      }))
+    },
+    proofBoundary: boundary
+  };
 }
 
 function isValidInput(input: LicenseLifecycleSmokeInput): boolean {
   try {
     const url = new URL(input.apiBaseUrl);
-    return input.releaseVersion === "v1.0.4"
+    return isStableVersionAtLeastV104(input.releaseVersion)
       && /^[a-f0-9]{40}$/.test(input.candidateHead)
       && /^[a-f0-9]{40}$/.test(input.packShasum)
       && /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(input.packIntegrity)
@@ -201,6 +268,21 @@ function isValidInput(input: LicenseLifecycleSmokeInput): boolean {
   } catch {
     return false;
   }
+}
+
+function isStableVersionAtLeastV104(version: string): boolean {
+  const match = version.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return false;
+  const actual = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const minimum = [1, 0, 4];
+  for (let index = 0; index < actual.length; index += 1) {
+    if (actual[index] !== minimum[index]) return actual[index] > minimum[index];
+  }
+  return true;
+}
+
+function localMachineId(): string {
+  return createHash("sha256").update(`${platform()}:${hostname()}`).digest("hex").slice(0, 24);
 }
 
 function record(
@@ -257,6 +339,22 @@ async function runCandidateJson(
     return { ok: true, body: parsed as Record<string, unknown> };
   } catch {
     return { ok: false, body: {} };
+  }
+}
+
+async function runCandidateJsonAnyExit(
+  runner: (request: CandidateCommandRequest) => Promise<CandidateCommandResult>,
+  request: CandidateCommandRequest
+): Promise<{ exitCode: number; body: Record<string, unknown> }> {
+  const result = await runner(request);
+  if (Buffer.byteLength(result.stdout) > MAX_OUTPUT_BYTES) return { exitCode: result.exitCode, body: {} };
+  try {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { exitCode: result.exitCode, body: parsed as Record<string, unknown> }
+      : { exitCode: result.exitCode, body: {} };
+  } catch {
+    return { exitCode: result.exitCode, body: {} };
   }
 }
 
