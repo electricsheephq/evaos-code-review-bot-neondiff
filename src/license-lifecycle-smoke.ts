@@ -168,7 +168,7 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
       executable: input.candidateCliPath,
       args: ["license", "deactivate", "--config", input.configPath, "--notify-api", "true", "--json"]
     });
-    if (!deactivate.ok || deactivate.body.status !== "revoked" && deactivate.body.status !== "deactivated") {
+    if (!deactivate.ok || (deactivate.body.status !== "revoked" && deactivate.body.status !== "deactivated")) {
       executionFailure = failure("candidate_failed", "candidate deactivation did not complete", boundary);
       throw new Error("candidate deactivation failed");
     }

@@ -297,4 +297,58 @@ describe("license lifecycle smoke", () => {
     expect(localRemoved).toBe(true);
     expect(remoteRevoked).toBe(true);
   });
+
+  it("rejects an active response from the deactivation command", async () => {
+    const rawKey = ["nd", "live", "activeDeactivationFixture"].join("_");
+    let localRemoved = false;
+    const result = await runLicenseLifecycleSmoke({
+      releaseVersion: "v1.0.4",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
+      candidateCliPath: "/isolated/prefix/bin/neondiff",
+      configPath: "/isolated/config.local.json",
+      confirmLiveLifecycle: true,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/v1/admin/licenses/issue") {
+          return new Response(JSON.stringify({ status: "issued", licenseKey: rawKey }), { status: 200 });
+        }
+        if (path === "/v1/license/deactivate") {
+          return new Response(JSON.stringify({ status: "deactivated" }), { status: 200 });
+        }
+        if (path === "/v1/license/validate") {
+          return new Response(JSON.stringify({ status: "scope_mismatch" }), { status: 409 });
+        }
+        throw new Error("unexpected API path");
+      },
+      runCandidateCommand: async ({ args }) => {
+        if (args[1] === "activate") {
+          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "active", source: "api" }), stderr: "" };
+        }
+        if (args[1] === "status" && args.includes("true")) {
+          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "active", source: "api" }), stderr: "" };
+        }
+        if (args[1] === "deactivate" && args.includes("true")) {
+          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "active" }), stderr: "" };
+        }
+        if (args[1] === "deactivate" && args.includes("false")) {
+          localRemoved = true;
+          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "deactivated" }), stderr: "" };
+        }
+        if (args[1] === "status" && localRemoved) {
+          return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "missing" }), stderr: "" };
+        }
+        throw new Error("unexpected candidate command");
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: "candidate_failed",
+      cleanup: { localState: "confirmed_removed", remoteState: "confirmed_deactivated" }
+    });
+  });
 });
