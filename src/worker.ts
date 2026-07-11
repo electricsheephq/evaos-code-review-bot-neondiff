@@ -292,16 +292,6 @@ export function assertExpectedReviewPrHead(input: {
 
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
-  const licenseAdmission = await requireActiveProductionLicense({
-    operation: "review_discovery",
-    config: config.license!
-  });
-  if (!licenseAdmission.ok) {
-    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
-  }
-  const github = new GitHubApi(config.github);
-  const state = new ReviewStateStore(config.statePath);
-  const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   const result: RunOnceResult = {
     reposScanned: 0,
     pullsSeen: 0,
@@ -323,16 +313,29 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     baselinedExisting: 0,
     policySkips: []
   };
+  const repos = options.repo ? [options.repo] : listReposToScan(config);
+  const admittedRepos = repos.filter((repo) => {
+    result.reposScanned += 1;
+    const repoPolicy = resolveRepoProfile(config, repo);
+    if (repoPolicy.allowed) return true;
+    result.skippedPolicy += 1;
+    result.policySkips.push({ repo, reason: repoPolicy.reason });
+    return false;
+  });
+  if (admittedRepos.length === 0) return result;
+
+  const licenseAdmission = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!licenseAdmission.ok) {
+    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  }
+  const github = new GitHubApi(config.github);
+  const state = new ReviewStateStore(config.statePath);
+  const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   try {
-    const repos = options.repo ? [options.repo] : listReposToScan(config);
-    for (const repo of repos) {
-      result.reposScanned += 1;
-      const repoPolicy = resolveRepoProfile(config, repo);
-      if (!repoPolicy.allowed) {
-        result.skippedPolicy += 1;
-        result.policySkips.push({ repo, reason: repoPolicy.reason });
-        continue;
-      }
+    for (const repo of admittedRepos) {
       const pulls = options.pullNumber
         ? [await github.getPull(repo, options.pullNumber)]
         : await github.listOpenPulls(repo);

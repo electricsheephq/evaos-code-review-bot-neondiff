@@ -6,22 +6,20 @@ NeonDiff is source-available commercial software. The source is available for
 inspection, contribution, and self-hosted evaluation, but this repository is not
 published under an open-source license.
 
-Public open-source repositories are free. Private and commercial repository
-review requires a paid NeonDiff license.
+Supported review of public, private, internal, or unknown repositories requires
+an active API-backed NeonDiff license.
 
-## Free Public-Repository Grant
+## Source Evaluation Grant
 
-You may use, copy, modify, and run NeonDiff without a paid NeonDiff license when
-all reviewed repositories are public open-source repositories.
+You may inspect, copy, and modify NeonDiff source for evaluation and contribution.
+This grant does not authorize supported repository review, redistribution, or a
+hosted service without an active NeonDiff entitlement or written permission.
 
-This free grant covers local review of public open-source pull requests with
-your own GitHub App installation, your own provider keys, and your own local
-worker.
-
-## Paid Private And Commercial Use
+## Paid Supported Review And Commercial Use
 
 You need an active paid NeonDiff license for:
 
+- reviewing public repositories through the supported distribution;
 - reviewing private, internal, or otherwise non-public repositories;
 - reviewing commercial or proprietary code;
 - using NeonDiff in a company, client, agency, or consulting workflow;
@@ -29,7 +27,7 @@ You need an active paid NeonDiff license for:
   packages, or managed update channels; and
 - enabling paid-support, private-repo entitlement, or auto-update features.
 
-Private-repository entitlement checks are implemented separately from pricing.
+Repository entitlement checks are implemented separately from pricing.
 Exact prices, support tiers, and marketplace terms live in the product/pricing
 trackers and public purchase surfaces.
 

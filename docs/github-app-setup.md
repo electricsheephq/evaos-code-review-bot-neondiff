@@ -116,11 +116,10 @@ registry target; it never puts that key in GitHub App settings or config.
 For public/private entitlement proof, keep the GitHub doctor JSON and the review
 evidence path together. The proof packet should show `visibility_result`,
 `visibility_source`, `license_gate_decision`, and `pre_checkout_gate_result`.
-Public repos with no license may pass this gate, then fail later if no provider
-is configured. Private repos without an active private entitlement, expired or
-revoked entitlements, and unknown visibility must block before checkout,
-provider calls, or GitHub review posting. A provider API key alone is not
-private-repo entitlement evidence.
+Public repos with no license fail this gate, as do private repos without an
+active private entitlement, expired or revoked entitlements, and unknown
+visibility. Every denial must happen before checkout, provider calls, or GitHub
+review posting. A provider API key alone is not repository entitlement evidence.
 
 ## First Review Path
 

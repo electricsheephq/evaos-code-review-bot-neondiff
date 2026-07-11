@@ -16,6 +16,7 @@ import {
 import type { RecordIssueEnrichmentInput, RecordIssueEnrichmentRepoWatermarkInput } from "../src/state.js";
 import { buildReviewLensContext } from "../src/worker.js";
 import { buildReviewPrompt } from "../src/zcode.js";
+import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -299,6 +300,7 @@ describe("review lens integration surfaces", () => {
       config,
       state: inertIssueEnrichmentState(),
       github: inertIssueEnrichmentGithub(),
+      licenseAdmission: await createTestLicenseAdmission({ operation: "issue_enrichment", scope: "private" }),
       dryRun: true,
       checkedAt: "2026-07-09T00:00:00.000Z"
     })).resolves.toMatchObject({
