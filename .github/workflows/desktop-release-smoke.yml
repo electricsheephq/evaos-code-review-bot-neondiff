@@ -29,6 +29,9 @@ jobs:
       - name: Run desktop Core tests with nonzero discovery
         run: scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests
 
+      - name: Run desktop AppCore tests with nonzero discovery
+        run: scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests
+
       - name: Build desktop Keychain checks
         run: swift build --target NeonDiffDesktopKeychainChecks
 

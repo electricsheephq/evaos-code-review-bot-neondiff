@@ -289,6 +289,10 @@ in the local/release-smoke lane because hosted macOS runners can kill
 Security.framework-linked helpers after a successful build unless the runner
 has a known-good interactive session.
 
+The tag-triggered `desktop-release-smoke.yml` lane uses the same required-suite
+runner for both Core and AppCore before it builds and checksums the unsigned app
+artifact. That lane still does not execute Keychain helpers or visible UI.
+
 Swift CodeQL is a release/security gate, not the PR iteration loop. The durable
 policy lives in `docs/swift-codeql-policy.md`: the checked-in path-aware Swift
 CodeQL workflow runs only by `workflow_dispatch` and weekly schedule, keeps SARIF

@@ -200,8 +200,9 @@ describe("Swift CI velocity policy", () => {
     expect(betaRunbook).toMatch(/Fast Iteration And Batched Release Validation/);
     expect(betaRunbook).toMatch(/preview server\/browser\s+smoke/);
     expect(betaRunbook).toMatch(/Swift desktop gate/);
-    expect(betaRunbook).toMatch(/requires nonzero `NeonDiffDesktopCoreTests`/);
-    expect(betaRunbook).toMatch(/`NeonDiffDesktopAppCoreTests`/);
+    expect(betaRunbook).toMatch(
+      /requires nonzero `NeonDiffDesktopCoreTests` and\s+`NeonDiffDesktopAppCoreTests` execution/
+    );
     expect(betaRunbook).toMatch(/`NeonDiffDesktopFixtureChecks`/);
     expect(betaRunbook).toMatch(/`NeonDiffDesktopKeychainChecks`/);
     expect(betaRunbook).toMatch(/docs\/swift-codeql-policy\.md/);
@@ -221,8 +222,9 @@ describe("Swift CI velocity policy", () => {
 
     expect(macRunbook).toMatch(/Fast Desktop Iteration Before Release/);
     expect(macRunbook).toMatch(/swift run NeonDiffDesktopCoreSmoke/);
-    expect(macRunbook).toMatch(/requires nonzero execution of\s+`NeonDiffDesktopCoreTests`/);
-    expect(macRunbook).toMatch(/`NeonDiffDesktopAppCoreTests`/);
+    expect(macRunbook).toMatch(
+      /requires nonzero execution of\s+`NeonDiffDesktopCoreTests` and `NeonDiffDesktopAppCoreTests`/
+    );
     expect(macRunbook).toMatch(/`NeonDiffDesktopFixtureChecks`/);
     expect(macRunbook).toMatch(/script\/build_and_run\.sh bundle-check/);
     expect(macRunbook).toMatch(/path-aware Swift\s+CodeQL workflow is a release\/security scan/);

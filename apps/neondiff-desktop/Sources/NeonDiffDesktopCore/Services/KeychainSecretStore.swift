@@ -35,15 +35,17 @@ public enum KeychainSecretError: Error, LocalizedError {
 
 public final class KeychainSecretStore: DesktopSecretStoring {
     public let service: String
-    private let accessLock = NSLock()
+    private let lockRegistry = NSLock()
+    private var accountLocks: [String: NSLock] = [:]
 
     public init(service: String = "com.electricsheephq.NeonDiffDesktop.secrets") {
         self.service = service
     }
 
     public func setSecret(_ secret: String, account: String) throws {
-        accessLock.lock()
-        defer { accessLock.unlock() }
+        let lock = accountLock(for: account)
+        lock.lock()
+        defer { lock.unlock() }
         let data = Data(secret.utf8)
         let query = baseQuery(account: account)
         SecItemDelete(query as CFDictionary)
@@ -60,8 +62,9 @@ public final class KeychainSecretStore: DesktopSecretStoring {
     }
 
     public func readSecret(account: String, allowUserInteraction: Bool) throws -> String? {
-        accessLock.lock()
-        defer { accessLock.unlock() }
+        let lock = accountLock(for: account)
+        lock.lock()
+        defer { lock.unlock() }
         let query = Self.query(
             service: service,
             account: account,
@@ -80,15 +83,17 @@ public final class KeychainSecretStore: DesktopSecretStoring {
     }
 
     public func containsSecret(account: String) -> Bool {
-        accessLock.lock()
-        defer { accessLock.unlock() }
+        let lock = accountLock(for: account)
+        lock.lock()
+        defer { lock.unlock() }
         let query = Self.query(service: service, account: account, operation: .contains)
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     public func deleteSecret(account: String) throws {
-        accessLock.lock()
-        defer { accessLock.unlock() }
+        let lock = accountLock(for: account)
+        lock.lock()
+        defer { lock.unlock() }
         let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainSecretError.unexpectedStatus(status)
@@ -97,6 +102,15 @@ public final class KeychainSecretStore: DesktopSecretStoring {
 
     private func baseQuery(account: String) -> [String: Any] {
         Self.baseQuery(service: service, account: account)
+    }
+
+    private func accountLock(for account: String) -> NSLock {
+        lockRegistry.withLock {
+            if let lock = accountLocks[account] { return lock }
+            let lock = NSLock()
+            accountLocks[account] = lock
+            return lock
+        }
     }
 
     @_spi(Testing) public static func query(

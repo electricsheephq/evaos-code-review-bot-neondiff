@@ -41,9 +41,9 @@ describe("NeonDiff desktop Keychain startup safety", () => {
     expect(source).not.toContain("noninteractiveContext");
     expect(source.match(/kSecUseAuthenticationUISkip/g)).toHaveLength(2);
     expect(source).not.toContain("kSecUseAuthenticationContext");
-    expect(source).toContain("private let accessLock = NSLock()");
-    expect(source.match(/accessLock\.lock\(\)/g)).toHaveLength(4);
-    expect(source.match(/accessLock\.unlock\(\)/g)).toHaveLength(4);
+    expect(source).toContain("private let lockRegistry = NSLock()");
+    expect(source).toContain("private var accountLocks: [String: NSLock] = [:]");
+    expect(source.match(/accountLock\(for: account\)/g)).toHaveLength(4);
   });
 
   it("keeps the provider visual fixture DEBUG-only and bound to saved registry authority", () => {
