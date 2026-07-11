@@ -149,6 +149,7 @@ git commit -m "test(desktop): add AppCore and Swift test targets"
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/Dependencies/DesktopClock.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/Dependencies/DesktopFileWriting.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/Dependencies/DesktopProviderVerifying.swift`
+- Create: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/FoundationProviderVerifier.swift`
 - Create: `apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests/Support/RecordingDesktopDependencies.swift`
 - Create: `apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests/DesktopAppDependenciesTests.swift`
 
@@ -273,6 +274,8 @@ chmod +x scripts/run-swift-tests.sh
 test -x scripts/run-swift-tests.sh
 ```
 
+Also implement `FoundationProviderVerifier` in the executable adapters. Its initializer requires the same `DesktopSecretStoring` instance later passed to `DesktopAppDependencies`. For every `verify` call it constructs `ProviderVerificationService` with a fresh `NeonDiffCLIClient` using that call's `executablePath` and `NeonDiffCLIResolver.defaultWorkingDirectory()`, then forwards to `verifyCancellable`. It stores no secret or CLI client and therefore cannot remain bound to an earlier `cliPath`.
+
 - [ ] **Step 4: Implement bounded deterministic fakes under Tests only**
 
 `TemporaryFileWriter.write` must standardize the destination URL and require it to remain below the injected root. Recording errors expose fixed messages and never interpolate stdin or secret values.
@@ -294,6 +297,7 @@ Expected: tests pass and `rg` returns no matches.
 
 ```bash
 git add apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore \
+  apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/FoundationProviderVerifier.swift \
   apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests \
   apps/neondiff-desktop/scripts/run-swift-tests.sh
 git commit -m "refactor(desktop): define injectable AppCore dependencies"
@@ -310,7 +314,6 @@ git commit -m "refactor(desktop): define injectable AppCore dependencies"
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/AppKitURLOpener.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/FoundationDesktopCLIExecutor.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/FoundationDesktopDashboardLauncher.swift`
-- Create: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/FoundationProviderVerifier.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/UserDefaultsDesktopPreferences.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/ContinuousDesktopClock.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/ApplicationSupportFileWriter.swift`
