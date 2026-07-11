@@ -5,8 +5,20 @@ import NeonDiffDesktopCore
 @MainActor
 enum NeonDiffDesktopCompositionRoot {
     static func makeModel() -> NeonDiffDesktopModel {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment[
+            "NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE"
+        ] == "provider-verification" {
+            let model = NeonDiffDesktopModel(
+                dependencies: VisualProofDesktopDependencies.make()
+            )
+            model.applyProviderVerificationVisualProofFixture()
+            return model
+        }
+        #endif
+
         let keychain = KeychainSecretStore()
-        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+        return NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: AppKitClipboard(),
             urlOpener: AppKitURLOpener(),
             cli: FoundationDesktopCLIExecutor(),
@@ -18,13 +30,5 @@ enum NeonDiffDesktopCompositionRoot {
             secretStore: keychain,
             githubAuthenticator: GitHubDeviceAuthClient()
         ))
-        #if DEBUG
-        if ProcessInfo.processInfo.environment[
-            "NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE"
-        ] == "provider-verification" {
-            model.applyProviderVerificationVisualProofFixture()
-        }
-        #endif
-        return model
     }
 }
