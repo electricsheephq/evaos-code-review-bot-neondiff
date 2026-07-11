@@ -53,7 +53,9 @@ import NeonDiffDesktopCore
     }
 
     @Test func CLIAndDashboardAreDistinctCapabilities() async throws {
-        let recorder = RecordingDesktopDependencies()
+        let recorder = RecordingDesktopDependencies(
+            root: fixtureURL("/fixture/recording-dependencies", directory: true)
+        )
 
         _ = try await recorder.cli.run(
             executablePath: "fixture-neondiff",

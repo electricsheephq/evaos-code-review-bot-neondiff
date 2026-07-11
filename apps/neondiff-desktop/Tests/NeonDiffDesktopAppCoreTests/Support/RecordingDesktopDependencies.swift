@@ -327,7 +327,7 @@ struct RecordingDesktopDependencies {
     let githubAuthenticator: StubGitHubAuthenticator
     let dependencies: DesktopAppDependencies
 
-    init(root: URL = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)) {
+    init(root: URL) {
         clipboard = RecordingClipboard()
         urlOpener = RecordingURLOpener()
         cli = RecordingCLIExecutor()
