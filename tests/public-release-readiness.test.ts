@@ -656,7 +656,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish.indexOf("npm-release-policy.mjs verify-pack")).toBeLessThan(
       publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
     );
-    expect(publish).toMatch(/default:\s*v1\.0\.3/);
+    expect(publish).toMatch(/default:\s*v1\.0\.4/);
     expect(publish).not.toMatch(/default:\s*v0\.4\.30-beta\.1/);
 
     const governance = read("docs/release-governance.md");

@@ -397,6 +397,369 @@ describe("beta release status", () => {
     expect(manifest.ok).toBe(false);
   });
 
+  it("fails stable v1.0.4 release readiness without mandatory activation and no-bypass proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-v1.0.4-activation-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.4.md"), "# v1.0.4\n");
+    writeChangelogHead(root, "1.0.4", "docs/releases/v1.0.4.md");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-07-12T00:00:00.000Z"
+    });
+    const issuanceProofPath = writeLicenseIssuanceProof(root, {
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-07-12T00:01:00.000Z"
+    });
+    const authenticatedIssuanceProofPath = writeAuthenticatedLicenseIssuanceProof(root, {
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-07-12T00:02:00.000Z"
+    });
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.4",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.4",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.4.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath,
+        checkoutIssuanceRequiredForThisRelease: true,
+        checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue",
+        checkoutIssuanceProofPath: issuanceProofPath,
+        checkoutIssuanceAuthenticatedProofPath: authenticatedIssuanceProofPath,
+        checkoutIssuanceState: "ready",
+        checkoutIssuanceTrackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532"
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.4",
+          rollback: "git reset --hard refs/tags/v1.0.3"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.4",
+          rollback: "git reset --hard refs/tags/v1.0.3"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+
+    expect(manifest.licenseApi.ok).toBe(false);
+    expect(manifest.licenseApi.detail).toContain("missing mandatory activation proof path");
+    expect(manifest.ok).toBe(false);
+  });
+
+  it("rejects an activation proof that does not prove lifecycle, bypass denial, and zero denied side effects", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-release-manifest-v1.0.4-invalid-activation-proof-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    mkdirSync(join(root, "docs", "evidence"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.4.md"), "# v1.0.4\n");
+    writeChangelogHead(root, "1.0.4", "docs/releases/v1.0.4.md");
+    const healthProofPath = writeLicenseHealthProof(root, {
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-07-12T00:00:00.000Z"
+    });
+    const issuanceProofPath = writeLicenseIssuanceProof(root, {
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-07-12T00:01:00.000Z"
+    });
+    const authenticatedIssuanceProofPath = writeAuthenticatedLicenseIssuanceProof(root, {
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-07-12T00:02:00.000Z"
+    });
+    const activationProofPath = "docs/evidence/v1.0.4-mandatory-activation.json";
+    writeFileSync(join(root, activationProofPath), "{}\n");
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.4",
+      releaseLevel: "stable",
+      docs: {
+        version: "v1.0.4",
+        setupPath: "docs/SETUP.md",
+        releaseNotesPath: "docs/releases/v1.0.4.md"
+      },
+      licenseApi: {
+        requiredForThisRelease: true,
+        state: "healthy",
+        healthUrl: "https://license.example/healthz",
+        healthProofPath,
+        checkoutIssuanceRequiredForThisRelease: true,
+        checkoutIssuanceUrl: "https://license.example/v1/admin/licenses/issue",
+        checkoutIssuanceProofPath: issuanceProofPath,
+        checkoutIssuanceAuthenticatedProofPath: authenticatedIssuanceProofPath,
+        checkoutIssuanceState: "ready",
+        checkoutIssuanceTrackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532",
+        activationProofPath
+      },
+      updateChannels: {
+        cli: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.4",
+          rollback: "git reset --hard refs/tags/v1.0.3"
+        },
+        daemon: {
+          requiredForThisRelease: true,
+          state: "source_checkout",
+          version: "v1.0.4",
+          rollback: "git reset --hard refs/tags/v1.0.3"
+        }
+      }
+    }));
+
+    const manifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+
+    expect(manifest.licenseApi.ok).toBe(false);
+    expect(manifest.licenseApi.detail).toContain("evidenceKind must be mandatory_activation_no_bypass");
+    expect(manifest.licenseApi.detail).toContain("productionLifecycle.steps must include activate");
+    expect(manifest.licenseApi.detail).toContain("matrix.bypassAllowedCases must be zero");
+    expect(manifest.licenseApi.detail).toContain("matrix.scenarios must include offline");
+    expect(manifest.licenseApi.detail).toContain("desktop.usefulWorkBlocked must be true");
+    expect(manifest.ok).toBe(false);
+
+    const digestRecord = (record: unknown) => createHash("sha256").update(JSON.stringify(record)).digest("hex");
+    const harnessRunId = "d".repeat(64);
+    const sourceHead = "a".repeat(40);
+    const packShasum = "b".repeat(40);
+    const packIntegrity = `sha512-${"Y".repeat(86)}==`;
+    const deniedScenarioIds = [
+      "unknown_repo",
+      "missing_key",
+      "missing_api_url",
+      "offline",
+      "timeout",
+      "forged_cache",
+      "mismatched_cache",
+      "disabled_policy_attempt",
+      "fake_api",
+      "rate_limited",
+      "server_error",
+      "malformed_response",
+      "revoked",
+      "expired",
+      "dashboard_provider_pre_activation"
+    ];
+    const zeroSideEffects = { providerCalls: 0, checkoutCalls: 0, worktreeWrites: 0, reviewPosts: 0 };
+    const lifecycleRecords = [
+      { id: "issue", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev" },
+      { id: "activate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev" },
+      { id: "validate_active", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev" },
+      { id: "deactivate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev" },
+      { id: "validate_denied", outcome: "denied", statusCode: 403, apiBaseUrl: "https://neondiff-license.fly.dev" }
+    ];
+    const scenarioRecords = [
+      { id: "public_active", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
+      { id: "private_active", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
+      ...deniedScenarioIds.map((id) => ({ id, expected: "denied", actual: "denied", sideEffects: zeroSideEffects }))
+    ];
+    const installUpgradeRecord = { freshInstallPassed: true, upgradedFromVersion: "1.0.3", upgradePassed: true };
+    const dashboardRecord = {
+      setupBlockedBeforeActivation: true,
+      providerBlockedBeforeActivation: true,
+      activatedStatusVisible: true
+    };
+    const desktopRecord = { brokerUnavailable: true, usefulWorkBlocked: true };
+    const artifactRecords: Record<string, unknown[]> = {
+      "production-lifecycle": lifecycleRecords,
+      "no-bypass-matrix": scenarioRecords,
+      dashboard: [dashboardRecord],
+      desktop: [desktopRecord],
+      "install-upgrade": [installUpgradeRecord]
+    };
+    const artifacts = Object.entries(artifactRecords).map(([kind, records]) => {
+      const ref = `docs/evidence/v1.0.4-${kind}.json`;
+      const payload = `${JSON.stringify({
+        evidenceKind: kind,
+        releaseVersion: "v1.0.4",
+        candidateHead: sourceHead,
+        packShasum,
+        packIntegrity,
+        harnessRunId,
+        records
+      })}\n`;
+      writeFileSync(join(root, ref), payload);
+      return { kind, ref, sha256: createHash("sha256").update(payload).digest("hex") };
+    });
+    const validProof = {
+      evidenceKind: "mandatory_activation_no_bypass",
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-07-12T00:03:00.000Z",
+      harness: {
+        name: "neondiff-license-lifecycle-smoke",
+        version: 1,
+        sourceHead,
+        runId: harnessRunId
+      },
+      installedCandidate: {
+        packageVersion: "1.0.4",
+        binaryVersion: "1.0.4",
+        sourceHead,
+        packShasum,
+        packIntegrity,
+        installSource: "npm_pack_tarball"
+      },
+      productionLifecycle: {
+        apiBaseUrl: "https://neondiff-license.fly.dev",
+        licenseFingerprint: `sha256:${"c".repeat(64)}`,
+        steps: lifecycleRecords.map((record) => ({ ...record, responseSha256: digestRecord(record) }))
+      },
+      matrix: {
+        bypassAllowedCases: 0,
+        scenarios: scenarioRecords.map((record) => ({ ...record, resultSha256: digestRecord(record) }))
+      },
+      installUpgrade: {
+        ...installUpgradeRecord,
+        resultSha256: digestRecord(installUpgradeRecord)
+      },
+      dashboard: {
+        ...dashboardRecord,
+        resultSha256: digestRecord(dashboardRecord)
+      },
+      desktop: {
+        ...desktopRecord,
+        resultSha256: digestRecord(desktopRecord)
+      },
+      redaction: {
+        rawLicenseKeyAbsent: true,
+        bearerTokenAbsent: true,
+        privatePathsAbsent: true
+      },
+      artifacts
+    };
+    writeFileSync(join(root, activationProofPath), JSON.stringify(validProof));
+
+    const validManifest = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+
+    expect(validManifest.licenseApi.ok).toBe(true);
+    expect(validManifest.licenseApi.detail).toContain(`validated mandatory activation proof ${activationProofPath}`);
+    expect(validManifest.ok).toBe(true);
+
+    writeFileSync(join(root, activationProofPath), JSON.stringify({
+      ...validProof,
+      matrix: {
+        ...validProof.matrix,
+        scenarios: validProof.matrix.scenarios.filter((scenario) => scenario.id !== "rate_limited")
+      }
+    }));
+    const missingScenario = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+    expect(missingScenario.licenseApi.ok).toBe(false);
+    expect(missingScenario.licenseApi.detail).toContain("matrix.scenarios must include rate_limited");
+
+    for (const scenario of validProof.matrix.scenarios) {
+      writeFileSync(join(root, activationProofPath), JSON.stringify({
+        ...validProof,
+        matrix: {
+          ...validProof.matrix,
+          scenarios: validProof.matrix.scenarios.filter((candidate) => candidate.id !== scenario.id)
+        }
+      }));
+      const missingRequiredScenario = readPublicReleaseManifestStatus({
+        cwd: root,
+        manifestPath: "public-release.json",
+        expectedVersion: "v1.0.4",
+        now: new Date("2026-07-12T01:00:00.000Z")
+      });
+      expect(missingRequiredScenario.licenseApi.ok, scenario.id).toBe(false);
+      expect(missingRequiredScenario.licenseApi.detail).toContain(`matrix.scenarios must include ${scenario.id}`);
+    }
+
+    const offlineScenario = validProof.matrix.scenarios.find((scenario) => scenario.id === "offline")!;
+    writeFileSync(join(root, activationProofPath), JSON.stringify({
+      ...validProof,
+      matrix: {
+        ...validProof.matrix,
+        scenarios: validProof.matrix.scenarios.map((scenario) => scenario.id === "offline"
+          ? { ...offlineScenario, sideEffects: { ...zeroSideEffects, providerCalls: 1 } }
+          : scenario)
+      }
+    }));
+    const nonzeroDeniedSideEffect = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+    expect(nonzeroDeniedSideEffect.licenseApi.ok).toBe(false);
+    expect(nonzeroDeniedSideEffect.licenseApi.detail).toContain("matrix.offline.sideEffects.providerCalls must be zero");
+
+    writeFileSync(join(root, activationProofPath), JSON.stringify({
+      ...validProof,
+      observedAt: "2026-07-10T00:03:00.000Z"
+    }));
+    const staleActivationProof = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+    expect(staleActivationProof.licenseApi.ok).toBe(false);
+    expect(staleActivationProof.licenseApi.detail).toContain("observedAt must be no older than 24 hours for mandatory activation proof");
+    const staleWithoutInjectedClock = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4"
+    });
+    expect(staleWithoutInjectedClock.licenseApi.ok).toBe(false);
+    expect(staleWithoutInjectedClock.licenseApi.detail).toContain("observedAt must be no older than 24 hours for mandatory activation proof");
+
+    const lifecycleArtifact = artifacts.find((artifact) => artifact.kind === "production-lifecycle")!;
+    writeFileSync(join(root, lifecycleArtifact.ref), `${JSON.stringify({ evidenceKind: "production-lifecycle", redacted: true, tampered: true })}\n`);
+    writeFileSync(join(root, activationProofPath), JSON.stringify(validProof));
+    const tamperedArtifact = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+    expect(tamperedArtifact.licenseApi.ok).toBe(false);
+    expect(tamperedArtifact.licenseApi.detail).toContain("artifacts.production-lifecycle.sha256 must match the referenced artifact");
+
+    writeFileSync(join(root, activationProofPath), JSON.stringify({
+      ...validProof,
+      unexpectedSecret: ["ghp", "1234567890abcdefghijklmnopqrstuvwxyz"].join("_")
+    }));
+    const secretBearingProof = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+    expect(secretBearingProof.licenseApi.ok).toBe(false);
+    expect(secretBearingProof.licenseApi.detail).toContain("unexpected proof fields: unexpectedSecret");
+    expect(secretBearingProof.licenseApi.detail).toContain("proof contains secret-like text");
+  });
+
   it("fails the public docs gate when CHANGELOG head lags the manifest version", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-changelog-drift-"));
     roots.push(root);

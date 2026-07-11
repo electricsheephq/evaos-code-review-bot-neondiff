@@ -9,7 +9,7 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v1.0.3
+        default: v1.0.4
 
 concurrency:
   group: publish-npm-neondiff
@@ -116,8 +116,22 @@ jobs:
         if: steps.package_release.outputs.should_publish == 'true'
         run: |
           npx vitest run tests/public-release-readiness.test.ts --pool=forks --maxWorkers=1
-          npm pack --dry-run --json > pack.json
+          PACK_DIR="$RUNNER_TEMP/neondiff-reviewed-pack"
+          rm -rf "$PACK_DIR"
+          mkdir -p "$PACK_DIR"
+          npm pack --json --pack-destination "$PACK_DIR" > pack.json
           node scripts/check-packlist.mjs pack.json
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          CANDIDATE_HEAD="$(node -p "require('./docs/public-release-manifest.json').source.candidateHeadBeforeReleaseMetadata")"
+          RELEASE_HEAD="$(git rev-parse HEAD)"
+          PACK_TARBALL="$PACK_DIR/neondiff-$PACKAGE_VERSION.tgz"
+          node scripts/check-public-release-ready.mjs \
+            --manifest docs/public-release-manifest.json \
+            --expected-version "v$PACKAGE_VERSION" \
+            --candidate-head "$CANDIDATE_HEAD" \
+            --release-head "$RELEASE_HEAD" \
+            --pack pack.json \
+            --tarball "$PACK_TARBALL"
 
       - name: Publish or verify existing package
         if: steps.package_release.outputs.should_publish == 'true'
@@ -127,6 +141,19 @@ jobs:
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           EXPECTED_GIT_HEAD="$(git rev-list -n 1 "$RELEASE_TAG")"
+          CANDIDATE_HEAD="$(node -p "require('./docs/public-release-manifest.json').source.candidateHeadBeforeReleaseMetadata")"
+          PACK_TARBALL="$RUNNER_TEMP/neondiff-reviewed-pack/neondiff-$PACKAGE_VERSION.tgz"
+          test -f "$PACK_TARBALL" || {
+            echo "::error::reviewed npm tarball is missing"
+            exit 1
+          }
+          node scripts/check-public-release-ready.mjs \
+            --manifest docs/public-release-manifest.json \
+            --expected-version "v$PACKAGE_VERSION" \
+            --candidate-head "$CANDIDATE_HEAD" \
+            --release-head "$EXPECTED_GIT_HEAD" \
+            --pack pack.json \
+            --tarball "$PACK_TARBALL"
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             echo "neondiff@$PACKAGE_VERSION already exists; verifying reviewed tarball identity"
           else
