@@ -54,7 +54,7 @@ struct ProviderSettingsView: View {
                                 systemImage: "checkmark.shield"
                             )
                         }
-                        .disabled(!model.canVerifyProviderKey)
+                        .disabled(!model.canVerifyProviderKey || !model.productionUsefulWorkAvailable)
                         OperatorBadge(
                             text: model.providers.providerKeyStored ? "Stored in Keychain" : "Not Stored",
                             color: model.providers.providerKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary
@@ -63,6 +63,11 @@ struct ProviderSettingsView: View {
                     Text(model.providerVerificationStatus)
                         .font(.caption)
                         .foregroundStyle(NeonDiffTheme.textSecondary)
+                    if !model.productionUsefulWorkAvailable {
+                        Text(model.productionActivationBoundaryMessage)
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.warning)
+                    }
 
                     if let verification = model.providerVerification {
                         ProviderVerificationResultCard(snapshot: verification)

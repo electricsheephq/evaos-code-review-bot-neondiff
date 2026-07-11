@@ -1,6 +1,13 @@
 import Foundation
 import NeonDiffDesktopCore
 
+package struct DesktopProductionBoundary: Sendable {
+    package let nativeActivationBrokerVerified: Bool
+
+    package static let quarantined = DesktopProductionBoundary(nativeActivationBrokerVerified: false)
+    package static let testVerified = DesktopProductionBoundary(nativeActivationBrokerVerified: true)
+}
+
 package struct DesktopAppDependencies {
     package let clipboard: any DesktopClipboard
     package let urlOpener: any DesktopURLOpener
@@ -12,6 +19,7 @@ package struct DesktopAppDependencies {
     package let providerVerifier: any DesktopProviderVerifying
     package let secretStore: any DesktopSecretStoring
     package let githubAuthenticator: any GitHubDesktopAuthenticating
+    package let productionBoundary: DesktopProductionBoundary
 
     package init(
         clipboard: any DesktopClipboard,
@@ -23,7 +31,8 @@ package struct DesktopAppDependencies {
         fileWriter: any DesktopFileWriting,
         providerVerifier: any DesktopProviderVerifying,
         secretStore: any DesktopSecretStoring,
-        githubAuthenticator: any GitHubDesktopAuthenticating
+        githubAuthenticator: any GitHubDesktopAuthenticating,
+        productionBoundary: DesktopProductionBoundary
     ) {
         self.clipboard = clipboard
         self.urlOpener = urlOpener
@@ -35,5 +44,6 @@ package struct DesktopAppDependencies {
         self.providerVerifier = providerVerifier
         self.secretStore = secretStore
         self.githubAuthenticator = githubAuthenticator
+        self.productionBoundary = productionBoundary
     }
 }

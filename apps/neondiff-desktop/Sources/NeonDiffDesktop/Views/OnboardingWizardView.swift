@@ -111,7 +111,7 @@ struct OnboardingWizardView: View {
                 }
                 .pickerStyle(.segmented)
 
-                Text("Public repositories can be reviewed without a NeonDiff license. Private repositories stay locked until the hosted license service is deployed and activation succeeds.")
+                Text("All repository review work requires live API-backed activation. This desktop build cannot yet prove the native activation broker, so onboarding cannot complete.")
                     .operatorBodyText()
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -191,15 +191,18 @@ struct OnboardingWizardView: View {
                         Button { model.startDaemon() } label: {
                             Label("Start/Restart", systemImage: "play.circle")
                         }
+                        .disabled(!model.productionUsefulWorkAvailable)
                         Button { model.stopDaemon() } label: {
                             Label("Stop", systemImage: "stop.circle")
                         }
+                        .disabled(!model.productionUsefulWorkAvailable)
                     }
 
                     HStack(spacing: 10) {
                         Button { model.previewStartDaemon() } label: {
                             Label("Preview Start", systemImage: "eye")
                         }
+                        .disabled(!model.productionUsefulWorkAvailable)
                         Button { model.copyCommand(model.statusCommand) } label: {
                             Label("Copy Status", systemImage: "doc.on.doc")
                         }
@@ -210,6 +213,9 @@ struct OnboardingWizardView: View {
                     text: model.onboardingFlow.daemonBootstrapChecked ? "Checked" : "Check Required",
                     color: model.onboardingFlow.daemonBootstrapChecked ? NeonDiffTheme.accent : NeonDiffTheme.warning
                 )
+                Text(model.productionActivationBoundaryMessage)
+                    .operatorBodyText()
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if !model.repos.isEmpty {
@@ -230,20 +236,16 @@ struct OnboardingWizardView: View {
 
                 HStack(spacing: 10) {
                     Button { model.activateLicenseForOnboarding() } label: {
-                        Label("Store / Check", systemImage: "key")
+                        Label("Activation Unavailable", systemImage: "lock.shield")
                     }
-                    Button {
-                        model.onboardingFlow.mode = .publicReposOnly
-                    } label: {
-                        Label("Use Public Repos", systemImage: "lock.open")
-                    }
+                    .disabled(!model.productionUsefulWorkAvailable)
                     OperatorBadge(
-                        text: model.onboardingFlow.licenseActivation == .activated ? "Activated" : "Service Pending",
+                        text: model.onboardingFlow.licenseActivation == .activated ? "Activated" : "Activation Required",
                         color: model.onboardingFlow.licenseActivation == .activated ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary
                     )
                 }
 
-                Text("Private repository activation is parked until the hosted license service from #327 is deployed. The wizard does not fake activation; public-repo setup can finish now.")
+                Text(model.productionActivationBoundaryMessage)
                     .operatorBodyText()
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -17,9 +17,9 @@ import Darwin
     publicFlow.currentStep = .license
     publicFlow.mode = .publicReposOnly
     publicFlow.licenseActivation = .servicePending
-    context.expect(publicFlow.canAdvance, "public repo path can finish while license service is pending")
+    context.expect(!publicFlow.canAdvance, "public repo path also requires verified activation")
     publicFlow.advance()
-    context.expect(publicFlow.currentStep == .done, "public repo path finishes from license step")
+    context.expect(publicFlow.currentStep == .license, "public repo path remains blocked at license step")
 
     var privateFlow = OnboardingFlow(providerKeyStored: true)
     privateFlow.currentStep = .license
