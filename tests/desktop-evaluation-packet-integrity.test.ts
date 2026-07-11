@@ -363,6 +363,22 @@ describe("desktop evaluation packet integrity", () => {
     expect(result.stderr).toMatch(/symlink/);
   });
 
+  it("allows accounted app-bundle symlinks that resolve inside the artifact root", () => {
+    const value = packetFixture();
+    const framework = join(value.packet, "artifacts", "NeonDiffDesktop.app", "Contents", "Frameworks", "Fixture.framework");
+    mkdirSync(join(framework, "Versions", "A"), { recursive: true });
+    writeFileSync(join(framework, "Versions", "A", "Fixture"), "fixture framework binary");
+    symlinkSync("A", join(framework, "Versions", "Current"));
+    symlinkSync("Versions/Current/Fixture", join(framework, "Fixture"));
+
+    const scan = spawnSync("node", ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", value.packet], { encoding: "utf8" });
+    expect(scan.status, `${scan.stderr}\n${scan.stdout}`).toBe(0);
+    expect(JSON.parse(scan.stdout).skippedArtifactSymlinks).toEqual([
+      "artifacts/NeonDiffDesktop.app/Contents/Frameworks/Fixture.framework/Fixture",
+      "artifacts/NeonDiffDesktop.app/Contents/Frameworks/Fixture.framework/Versions/Current"
+    ]);
+  });
+
   it("scans packet text after capture and accounts for skipped images", () => {
     const value = packetFixture();
     const scan = () => spawnSync("node", ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", value.packet], { encoding: "utf8" });
