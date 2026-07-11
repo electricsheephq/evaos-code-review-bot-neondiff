@@ -53,9 +53,11 @@ these arguments may be treated as an executable user-interface test path.
 
 The manifest allows the same fixture at different canonical sizes but rejects a
 duplicate `(fixture, appearance, size, scale)` case. Test count and capture-case
-count are recorded independently. It rejects unknown fields, malformed hashes,
-non-canonical sizes, unsafe evidence paths, failed scans, out-of-range metrics,
-and empty proof boundaries. It deliberately records below-threshold goldens and
+count are recorded independently. It requires at least one capture case and a
+unique packet-relative path for every screenshot, AX tree, and geometry file.
+It rejects unknown fields, malformed hashes, non-canonical sizes, URL-like or
+ambiguous evidence paths, failed scans, out-of-range metrics, and empty proof
+boundaries. It deliberately records below-threshold goldens and
 typed P0/P1 findings truthfully; the GA gate, not the evidence decoder, stops
 progression on those results. Canonical packets belong in the dated external evidence
 directory and CI artifacts; raw screenshots, AX trees, and geometry output do

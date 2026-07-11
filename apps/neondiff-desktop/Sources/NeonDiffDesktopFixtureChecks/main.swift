@@ -41,6 +41,24 @@ func expectCatalogFailure(_ message: String, url: URL) {
     }
 }
 
+func expectManifestFailure(_ message: String, data: Data) {
+    do {
+        _ = try DesktopEvaluationEvidenceManifest.decode(data: data)
+        fputs("check failed: \(message) did not fail\n", stderr)
+        exit(1)
+    } catch {
+        check(!error.localizedDescription.isEmpty, "\(message) returns a bounded diagnostic")
+    }
+}
+
+func mutatedManifest(_ data: Data, _ mutate: (inout [String: Any]) -> Void) throws -> Data {
+    guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw DesktopEvaluationFixtureError.invalidJSON
+    }
+    mutate(&object)
+    return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
 let validFixture = Data(
     #"""
     {
@@ -346,5 +364,31 @@ let failingRunManifest = Data(
 let failingManifest = try DesktopEvaluationEvidenceManifest.decode(data: failingRunManifest)
 check(failingManifest.unresolvedFindings.first?.severity == .p0, "manifest truthfully records blocking findings")
 check(failingManifest.cases.first?.goldenMetrics.ssim == 0.8, "manifest truthfully records below-threshold goldens")
+
+let emptyCasesManifest = try mutatedManifest(validManifest) { object in
+    object["cases"] = []
+}
+expectManifestFailure("manifest without capture cases", data: emptyCasesManifest)
+
+let URLArtifactManifest = try mutatedManifest(validManifest) { object in
+    var artifact = object["artifact"] as! [String: Any]
+    artifact["path"] = "https://example.com/NeonDiffDesktop.app"
+    object["artifact"] = artifact
+}
+expectManifestFailure("URL-like packet path", data: URLArtifactManifest)
+
+let emptySegmentManifest = try mutatedManifest(validManifest) { object in
+    var artifact = object["artifact"] as! [String: Any]
+    artifact["path"] = "artifacts//NeonDiffDesktop.app"
+    object["artifact"] = artifact
+}
+expectManifestFailure("empty packet path segment", data: emptySegmentManifest)
+
+let duplicateEvidencePathManifest = try mutatedManifest(validManifest) { object in
+    var cases = object["cases"] as! [[String: Any]]
+    cases[1]["screenshot"] = cases[0]["screenshot"]
+    object["cases"] = cases
+}
+expectManifestFailure("reused evidence artifact path", data: duplicateEvidencePathManifest)
 
 print("NeonDiffDesktop fixture checks passed")
