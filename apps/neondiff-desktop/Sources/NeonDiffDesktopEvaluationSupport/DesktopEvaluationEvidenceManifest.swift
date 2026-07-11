@@ -158,7 +158,7 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
             }
             for evidence in [item.screenshot, item.accessibility, item.geometry] {
                 guard Self.isSafeRelativePath(evidence.path),
-                      evidencePaths.insert(evidence.path).inserted,
+                      evidencePaths.insert(Self.canonicalPacketPath(evidence.path)).inserted,
                       Self.isHash(evidence.sha256) else {
                     throw DesktopEvaluationFixtureError.invalidValue("manifest evidence file")
                 }
@@ -209,8 +209,21 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
             !segment.isEmpty
                 && segment != "."
                 && segment != ".."
-                && segment.range(of: #"^[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil
+                && segment.utf8.allSatisfy(Self.isSafePathByte)
         }
+    }
+
+    private static func isSafePathByte(_ byte: UInt8) -> Bool {
+        (byte >= 48 && byte <= 57)
+            || (byte >= 65 && byte <= 90)
+            || (byte >= 97 && byte <= 122)
+            || [45, 46, 95].contains(byte)
+    }
+
+    private static func canonicalPacketPath(_ value: String) -> String {
+        String(decoding: value.utf8.map { byte in
+            byte >= 65 && byte <= 90 ? byte + 32 : byte
+        }, as: UTF8.self)
     }
 
     private static func isValidFrame(_ frame: Frame) -> Bool {
