@@ -20,6 +20,7 @@ import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { buildLicenseGateForPull, reviewPull } from "../src/worker.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -1375,6 +1376,30 @@ describe("license activation and entitlement cache", () => {
     expect(githubReads).toBe(0);
     expect(existsSync(join(root, "evidence"))).toBe(false);
     expect(existsSync(join(root, "work"))).toBe(false);
+    state.close();
+  });
+
+  it("records blocked-on-proof readiness for an admitted pull with unknown visibility", async () => {
+    const root = mkRoot(roots);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const pull = pullSummary(8, "unknown-visibility-head");
+    const status = await reviewPull({
+      config: minimalConfig(root),
+      github: {} as GitHubApi,
+      state,
+      repo: "owner/unknown",
+      pull,
+      dryRun: true,
+      useZCode: false,
+      licenseAdmission: testLicenseAdmission,
+      budget: new ReviewRunBudget(1)
+    });
+
+    expect(status).toBe("skipped_license_gate");
+    expect(state.getReviewReadiness("owner/unknown", 8, "unknown-visibility-head")).toMatchObject({
+      state: "blocked_on_proof",
+      reason: expect.stringContaining("visibility is unknown")
+    });
     state.close();
   });
 

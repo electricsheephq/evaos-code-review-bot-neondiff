@@ -181,7 +181,8 @@ evaos-review-bot status --config config.local.json
 - `daemon --config <config.json> --dry-run true --once true`: runs one
   daemon cycle and exits. This is intended for deterministic local smoke tests
   and operator diagnostics; omit `--once true` for the normal long-running
-  worker loop.
+  worker loop. A denied activation or failed cycle exits nonzero so launchd,
+  CI, and operator scripts must not treat a handled cycle failure as healthy.
 
 ## Common Operator Flows
 

@@ -125,7 +125,8 @@ describe("production useful-work admission", () => {
 
   it("authorizes only repository visibilities covered by the opaque admission", async () => {
     const result = await requireActiveProductionLicense({
-      operation: "review_discovery",
+      operation: "review_cycle",
+      visibility: "public",
       config: fixtureConfig(),
       fetchImpl: (async () => new Response(JSON.stringify({
         status: "active",
@@ -208,5 +209,39 @@ describe("production useful-work admission", () => {
       now: new Date("2026-07-11T00:00:00.000Z")
     });
     expect(result).toMatchObject({ ok: true, admission: { repoVisibilityScope: "private" } });
+  });
+
+  it("rejects discovery when the active entitlement cannot cover private repositories", async () => {
+    for (const operation of ["review_discovery", "daemon_cycle"] as const) {
+      const result = await requireActiveProductionLicense({
+        operation,
+        config: fixtureConfig(),
+        fetchImpl: (async () => new Response(JSON.stringify({
+          status: "active",
+          expiresAt: "2026-08-01T00:00:00.000Z",
+          repoVisibilityScope: "public",
+          privateRepoAllowed: false,
+          updateEntitlement: true
+        }), { status: 200 })) as typeof fetch,
+        now: new Date("2026-07-11T00:00:00.000Z")
+      });
+      expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
+    }
+  });
+
+  it("rejects issue enrichment when private repository access is explicitly denied", async () => {
+    const result = await requireActiveProductionLicense({
+      operation: "issue_enrichment",
+      config: fixtureConfig(),
+      fetchImpl: (async () => new Response(JSON.stringify({
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "all",
+        privateRepoAllowed: false,
+        updateEntitlement: true
+      }), { status: 200 })) as typeof fetch,
+      now: new Date("2026-07-11T00:00:00.000Z")
+    });
+    expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
   });
 });

@@ -609,7 +609,9 @@ export async function runLocalDashboardPreviewSmoke(input: {
     const settledUiState = {
       htmlLoaded: htmlResponse.ok && html.includes("NeonDiff Dashboard"),
       statusApiLoaded: statusResponse.ok,
-      providerVerifyRouteLoaded: providerVerifyResponse.status === 200 || providerVerifyResponse.status === 422,
+      providerVerifyRouteLoaded: providerVerifyResponse.status === 200
+        || providerVerifyResponse.status === 403
+        || providerVerifyResponse.status === 422,
       controlsRendered,
       statusScriptRendered,
       providerVerifyStatus: providerVerifyResponse.status

@@ -319,6 +319,24 @@ describe("local HTML dashboard", () => {
     expect(serialized).not.toContain(fakeKey);
     expect(serialized).not.toContain("preview-smoke-route");
   });
+
+  it("treats an activation-blocked provider route as loaded in setup-safe preview smoke", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-dashboard-preview-blocked-"));
+    const smoke = await runLocalDashboardPreviewSmoke({
+      config: loadConfigFromObject({}),
+      configPath: join(outputDir, "config.local.json"),
+      configExists: false,
+      outputDir
+    });
+
+    expect(smoke).toMatchObject({
+      ok: true,
+      settledUiState: {
+        providerVerifyRouteLoaded: true,
+        providerVerifyStatus: 403
+      }
+    });
+  });
 });
 
 async function listen(server: Server): Promise<void> {

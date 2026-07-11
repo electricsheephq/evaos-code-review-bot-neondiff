@@ -51,9 +51,10 @@ type ProductionLicenseAdmissionInput = {
 
 export function authorizeAdmissionForVisibility(
   admission: ProductionLicenseAdmission,
-  visibility: "public" | "private" | "unknown"
+  visibility: "public" | "private" | "unknown",
+  expectedOperation?: ProductionLicenseOperation
 ): { ok: true } | { ok: false; decision: RedactedLicenseDecision } {
-  if (!isAuthenticProductionLicenseAdmission(admission)) {
+  if (!isAuthenticProductionLicenseAdmission(admission, expectedOperation)) {
     return {
       ok: false,
       decision: {
@@ -137,16 +138,17 @@ export async function requireActiveProductionLicense(
       }
     };
   }
-  if (input.operation === "issue_enrichment"
-    && admission.repoVisibilityScope !== "private"
-    && admission.repoVisibilityScope !== "all") {
+  if ((input.operation === "review_discovery"
+      || input.operation === "daemon_cycle"
+      || input.operation === "issue_enrichment")
+    && !admission.privateRepoAllowed) {
     return {
       ok: false,
       decision: {
         status: "scope_mismatch",
         checkedAt: admission.checkedAt,
         classification: "scope_mismatch",
-        detail: "issue enrichment requires an active entitlement covering private repository work"
+        detail: `${input.operation} requires an active entitlement covering private repository work`
       }
     };
   }

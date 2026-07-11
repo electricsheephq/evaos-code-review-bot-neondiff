@@ -154,7 +154,7 @@ async function main(): Promise<void> {
     dryRun: args["dry-run"] !== "false"
   });
   if (commandLicensePolicy.mode === "requires_license"
-    && COMMAND_USAGE[command]
+    && isKnownCLICommand(command)
     && !deferCommandAdmissionUntilValidated(command)) {
     await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
   }
@@ -2222,8 +2222,7 @@ async function main(): Promise<void> {
     if (daemonAction === "start" || daemonAction === "stop" || daemonAction === "status") {
       if (daemonAction === "start"
         && args["dry-run"] === "false"
-        && args.confirm === "true"
-        && (!args.plist || args["allow-external-plist"] === "true")) {
+        && args.confirm === "true") {
         await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
       }
       const result = runDaemonControlCommandSafely(daemonAction, args);
@@ -3503,6 +3502,13 @@ function buildHelp(command?: string) {
       ]
     }
   };
+}
+
+function isKnownCLICommand(command: string): boolean {
+  const groups = buildHelp().commands;
+  return Object.values(groups)
+    .flat()
+    .some((entry) => entry.split(" ", 1)[0] === command);
 }
 
 function stringifyProviderOutput(input: unknown): string {

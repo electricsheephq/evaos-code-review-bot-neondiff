@@ -16,7 +16,11 @@ const HEAD_D = "d".repeat(40);
 const HEAD_F = "f".repeat(40);
 const SELF_REPO_CURRENT = "electricsheephq/evaos-code-review-bot-neondiff";
 const SELF_REPO_LEGACY = "electricsheephq/evaos-code-review-bot";
-const publicOnlyTestLicenseAdmission = await createTestLicenseAdmission({ scope: "public", privateRepoAllowed: false });
+const publicOnlyTestLicenseAdmission = await createTestLicenseAdmission({
+  operation: "review_cycle",
+  scope: "public",
+  privateRepoAllowed: false
+});
 const reviewPull = (input: ReviewPullInput) => reviewPullImpl({
   ...input,
   pull: testVisiblePull(input.pull),
@@ -40,7 +44,7 @@ describe("provider-aware review scheduler", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("does not enqueue or mutate a private pull under a public-only admission", async () => {
+  it("rejects a wrong-operation public token before scheduled work", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-license-scope-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/private-repo"]);
@@ -48,7 +52,7 @@ describe("provider-aware review scheduler", () => {
     const privatePull = pull("org/private-repo", 1, "private-head", "base", { visibility: "private" });
     let reviewCalls = 0;
 
-    const result = await runScheduledCycleWithDeps({
+    await expect(runScheduledCycleWithDeps({
       config,
       github: githubFromMap(new Map([["org/private-repo", [privatePull]]])),
       state,
@@ -58,9 +62,8 @@ describe("provider-aware review scheduler", () => {
         reviewCalls += 1;
         return "reviewed";
       }
-    });
+    })).rejects.toThrow(/review-discovery admission is required/i);
 
-    expect(result.skippedLicenseGate).toBe(1);
     expect(reviewCalls).toBe(0);
     expect(state.listReviewQueueJobs()).toEqual([]);
     expect(state.getReviewReadiness("org/private-repo", 1, "private-head")).toBeUndefined();

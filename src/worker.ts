@@ -1233,11 +1233,24 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
   if (!input.licenseAdmission) return "skipped_license_gate";
+  const visibility = visibilityFromPullSummary(pull);
   const visibilityDecision = authorizeAdmissionForVisibility(
     input.licenseAdmission,
-    visibilityFromPullSummary(pull)
+    visibility,
+    "review_discovery"
   );
-  if (!visibilityDecision.ok) return "skipped_license_gate";
+  if (!visibilityDecision.ok) {
+    if (visibility === "unknown") {
+      state.recordReviewReadiness({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        state: "blocked_on_proof",
+        reason: visibilityDecision.decision.detail
+      });
+    }
+    return "skipped_license_gate";
+  }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
   if (

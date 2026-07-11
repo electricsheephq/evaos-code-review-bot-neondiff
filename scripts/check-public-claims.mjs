@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 
 const paths = [
   "README.md",
+  "LICENSE.md",
   "docs/SETUP.md",
+  "docs/setup-validation.md",
+  "docs/neondiff-desktop.md",
   "docs/github-app-setup.md",
   "docs/providers.md",
   "docs/license-boundary.md",
@@ -37,6 +40,13 @@ const forbiddenClaims = [
   /\bpublic launch is complete\b/i
 ];
 
+const retiredFreeClaims = [
+  /public(?: open-source)? repositor(?:y|ies) (?:are|is) free/i,
+  /free (?:for|on) public repositor(?:y|ies)/i,
+  /public repos? with no license (?:may )?(?:pass|run|review)/i,
+  /PUBLIC · FREE/
+];
+
 let failed = false;
 const combined = paths.map((path) => readFileSync(path, "utf8")).join("\n\n");
 
@@ -60,6 +70,16 @@ for (const path of paths) {
         console.error(`${path}: forbidden public claims phrase outside boundary language: ${match}`);
         failed = true;
       }
+    }
+  }
+}
+
+for (const path of paths.filter((path) => !path.startsWith("docs/releases/"))) {
+  const text = readFileSync(path, "utf8");
+  for (const pattern of retiredFreeClaims) {
+    if (pattern.test(text)) {
+      console.error(`${path}: retired public-free claim remains: ${pattern}`);
+      failed = true;
     }
   }
 }

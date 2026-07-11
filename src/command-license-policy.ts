@@ -33,6 +33,7 @@ const setupSafeCommands = new Set([
   "outcome-scorecard",
   "outcome-observe",
   "calibration-aggregate",
+  "calibration-promote",
   "badge",
   "checkout-issuance-smoke",
   "doctor",

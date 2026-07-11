@@ -14,6 +14,7 @@ import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
 import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
 import {
   authorizeAdmissionForVisibility,
+  isAuthenticProductionLicenseAdmission,
   requireActiveProductionLicense,
   type ProductionLicenseAdmission
 } from "./license-admission.js";
@@ -141,6 +142,9 @@ export async function runScheduledCycleWithDeps(input: {
   clock?: () => Date;
 }): Promise<ScheduledRunResult> {
   if (!input.licenseAdmission) throw new Error("production license admission is required for scheduled review cycles");
+  if (!isAuthenticProductionLicenseAdmission(input.licenseAdmission, "review_discovery")) {
+    throw new Error("production review-discovery admission is required for scheduled review cycles");
+  }
   const config = input.config;
   const scheduler = config.reviewScheduler;
   if (!scheduler?.enabled) {
@@ -171,7 +175,8 @@ export async function runScheduledCycleWithDeps(input: {
     const admittedPulls = pulls.filter((pull) => {
       const decision = authorizeAdmissionForVisibility(
         input.licenseAdmission!,
-        schedulerPullVisibility(pull)
+        schedulerPullVisibility(pull),
+        "review_discovery"
       );
       if (decision.ok) return true;
       result.skippedLicenseGate += 1;

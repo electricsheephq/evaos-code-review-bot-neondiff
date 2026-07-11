@@ -735,6 +735,49 @@ exit 1
     }
   });
 
+  it("applies default-deny admission to useful commands without scoped help metadata", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-default-deny-cli-"));
+    roots.push(root);
+    let githubRequests = 0;
+    const server = createServer((_request: IncomingMessage, response: ServerResponse) => {
+      githubRequests += 1;
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({}));
+    });
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        github: {
+          token: "fixture-github-token",
+          apiBaseUrl: `http://127.0.0.1:${address.port}`
+        }
+      })}\n`);
+
+      const result = await runCli([
+        "build-github-related-context-packet",
+        "--config", configPath,
+        "--repo", "acme/demo",
+        "--pr", "1",
+        "--output-dir", join(root, "packet")
+      ]).then(
+        () => { throw new Error("context packet unexpectedly bypassed activation"); },
+        (error: unknown) => error as { stdout: string; stderr: string }
+      );
+
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("license missing");
+      expect(githubRequests).toBe(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("requires the providers verify stdin flag to be present and true", async () => {
     await expect(runCli([
       "providers",
@@ -3405,7 +3448,7 @@ exit 1
     });
   });
 
-  it("requires an explicit override for live daemon mutation with an external plist", async () => {
+  it("requires activation before confirmed live daemon mutation with an external plist", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-external-"));
     roots.push(root);
     const plistPath = join(root, "com.example.neondiff.plist");
@@ -3423,7 +3466,24 @@ exit 1
       "--confirm",
       "true"
     ], { env: darwinDaemonEnv })).rejects.toMatchObject({
-      stdout: expect.stringContaining("requires --allow-external-plist true")
+      stderr: expect.stringContaining("license missing")
+    });
+  });
+
+  it("blocks a confirmed live daemon start with an internal plist before launchctl", async () => {
+    await expect(runCli([
+      "daemon",
+      "start",
+      "--launchd-label",
+      "com.example.neondiff",
+      "--plist",
+      join(repoRoot, "package.json"),
+      "--dry-run",
+      "false",
+      "--confirm",
+      "true"
+    ], { env: darwinDaemonEnv })).rejects.toMatchObject({
+      stderr: expect.stringContaining("license missing")
     });
   });
 
