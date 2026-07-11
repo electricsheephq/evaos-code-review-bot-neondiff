@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the executable-source model compile harness with importable application logic, deterministic dependency seams, and real Core/AppCore tests now, then add a genuinely hosted UI-test target when full Xcode is available, without changing native behavior or weakening release-artifact boundaries.
+**Goal:** Replace the executable-source model compile harness with importable application logic, deterministic dependency seams, and real Core/AppCore tests now, then add a genuinely hosted UI-test target when full Xcode is available, while preserving existing behavior except for the separately tracked false-success correction in #530 and without weakening release-artifact boundaries.
 
 **Architecture:** Keep data models, parsers, command builders, Keychain contracts, and provider/GitHub clients in `NeonDiffDesktopCore`. Add `NeonDiffDesktopAppCore` above Core for `NeonDiffDesktopModel`, its operation coordinators, and dependency protocols. Keep AppKit/SwiftUI views, Sparkle, concrete OS adapters, and the production composition root in the `NeonDiffDesktop` executable. SwiftPM test targets prove Core and AppCore behavior without browser, Keychain, network, live CLI, or live filesystem mutation. A separately hosted XCUITest target is created and run only after full Xcode is installed and selected; Command Line Tools builds are not hosted-UI evidence.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Preserve the native SwiftUI application. Do not replace it with the HTML dashboard or a WebView.
-- This is an architecture and testability change, not a visual redesign. Before/after behavior and public copy remain identical.
+- This is an architecture and testability change, not a visual redesign. The only intentional behavior/public-copy change is #530: failed clipboard or URL adapter calls must no longer report success and instead show fixed, non-secret manual-recovery guidance.
 - Provider verification remains explicit-click only. Provider keys remain in Keychain and travel only over bounded stdin.
 - Preview, confirmed Apply, exact config revision, readback, stale-response, cleanup-latch, and single-owner operation gates remain fail closed.
 - Unit tests use only in-memory or temporary-directory fakes. They must not open a browser, write the pasteboard, invoke a live CLI, read the user's defaults, contact GitHub/providers, or mutate live Keychain/config/daemon/posting state.
@@ -216,7 +216,7 @@ Keychain and GitHub service interfaces continue to come from Core. `DesktopAppDe
 
 Test that:
 
-- `RecordingClipboard` records exactly one redacted string, returns a scripted Bool, and never touches `NSPasteboard`; the model preserves current status behavior when the Bool is false.
+- `RecordingClipboard` records exactly one redacted string, returns a scripted Bool, and never touches `NSPasteboard`; under #530, the model reports a fixed, non-secret failure status when the Bool is false and clears it after a successful retry.
 - `RecordingURLOpener` records the URL and can return `false`.
 - `RecordingCLIExecutor` records executable, argv, bounded stdin, timeout, and scripted result.
 - `RecordingDashboardLauncher` records only detached launches.
