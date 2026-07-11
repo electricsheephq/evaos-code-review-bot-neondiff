@@ -137,12 +137,14 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
         }
         guard testSummary.testCount > 0,
               testSummary.testCount <= 100_000,
+              !cases.isEmpty,
               testSummary.durationSeconds >= 0,
               testSummary.durationSeconds.isFinite,
               Self.isHash(testSummary.xcresultSHA256) else {
             throw DesktopEvaluationFixtureError.invalidValue("manifest test summary")
         }
         var caseIdentities = Set<String>()
+        var evidencePaths = Set<String>()
         for item in cases {
             let identity = "\(item.fixtureId)|\(item.appearance.rawValue)|\(item.requestedContentSize.width)x\(item.requestedContentSize.height)|\(platform.backingScale)"
             guard caseIdentities.insert(identity).inserted,
@@ -155,7 +157,9 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
                 throw DesktopEvaluationFixtureError.invalidValue("manifest case")
             }
             for evidence in [item.screenshot, item.accessibility, item.geometry] {
-                guard Self.isSafeRelativePath(evidence.path), Self.isHash(evidence.sha256) else {
+                guard Self.isSafeRelativePath(evidence.path),
+                      evidencePaths.insert(evidence.path).inserted,
+                      Self.isHash(evidence.sha256) else {
                     throw DesktopEvaluationFixtureError.invalidValue("manifest evidence file")
                 }
             }
@@ -197,10 +201,16 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
     }
 
     private static func isSafeRelativePath(_ value: String) -> Bool {
-        !value.isEmpty
-            && !value.hasPrefix("/")
-            && !value.split(separator: "/", omittingEmptySubsequences: false).contains("..")
-            && value.utf8.count <= 512
+        guard !value.isEmpty, !value.hasPrefix("/"), value.utf8.count <= 512 else {
+            return false
+        }
+        let segments = value.split(separator: "/", omittingEmptySubsequences: false)
+        return segments.allSatisfy { segment in
+            !segment.isEmpty
+                && segment != "."
+                && segment != ".."
+                && segment.range(of: #"^[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil
+        }
     }
 
     private static func isValidFrame(_ frame: Frame) -> Bool {
