@@ -33,7 +33,10 @@ const setupSafeCommands = new Set([
   "outcome-scorecard",
   "outcome-observe",
   "calibration-aggregate",
-  "badge"
+  "badge",
+  "checkout-issuance-smoke",
+  "doctor",
+  "retire-failed"
 ]);
 
 export function classifyCommandLicensePolicy(input: {

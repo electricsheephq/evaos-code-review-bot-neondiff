@@ -123,6 +123,7 @@ import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 import { parsePositiveInteger } from "./cli-args.js";
 import { readSecretFromStdin } from "./secret-stdin.js";
+import { classifyCommandLicensePolicy, type CommandLicensePolicy } from "./command-license-policy.js";
 
 const LAUNCHCTL_TIMEOUT_MS = 15_000;
 const PLUTIL_TIMEOUT_MS = 5_000;
@@ -144,6 +145,18 @@ async function main(): Promise<void> {
   if (isHelpRequested(args)) {
     console.log(JSON.stringify(buildHelp(command), null, 2));
     return;
+  }
+
+  const commandLicensePolicy = classifyCommandLicensePolicy({
+    command,
+    subcommand: args._[1],
+    smoke: command === "providers" && args._[1] === "doctor" && args.smoke === "true",
+    dryRun: args["dry-run"] !== "false"
+  });
+  if (commandLicensePolicy.mode === "requires_license"
+    && COMMAND_USAGE[command]
+    && !deferCommandAdmissionUntilValidated(command)) {
+    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
   }
 
   if (command === "init") {
@@ -1126,6 +1139,7 @@ async function main(): Promise<void> {
     if (Array.isArray(args.issue)) throw new Error("--issue must be provided once for build-enrichment-comment");
     const repo = parseSingleArg(args.repo, "--repo");
     const config = loadConfig(args.config);
+    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config, config);
     const github = new GitHubApi(config.github);
     const repoPolicy = resolveRepoProfile(config, repo);
     const enrichmentConfig = config.enrichment!;
@@ -1477,6 +1491,7 @@ async function main(): Promise<void> {
     });
     const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
     const commentId = parsePositiveInteger(parseSingleArg(args["comment-id"], "--comment-id"), "--comment-id");
+    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
     const trustedAuthors = parseCsv(args["trusted-authors"]);
     const worktreeCleanArg = args["worktree-clean"];
     const worktreeCleanExplicit = worktreeCleanArg !== undefined;
@@ -2205,6 +2220,12 @@ async function main(): Promise<void> {
   if (command === "daemon") {
     const daemonAction = args._[1];
     if (daemonAction === "start" || daemonAction === "stop" || daemonAction === "status") {
+      if (daemonAction === "start"
+        && args["dry-run"] === "false"
+        && args.confirm === "true"
+        && (!args.plist || args["allow-external-plist"] === "true")) {
+        await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+      }
       const result = runDaemonControlCommandSafely(daemonAction, args);
       console.log(stringifyRedactedJson(result));
       if (!result.ok) process.exitCode = 1;
@@ -3558,6 +3579,37 @@ function shouldUseOperatorDashboard(args: ParsedArgs): boolean {
     "include-history",
     "limit"
   ].some((key) => args[key] !== undefined);
+}
+
+const admissionAfterValidationCommands = new Set([
+  "providers",
+  "daemon",
+  "issue-enrichment-run",
+  "issue-enrichment-scan",
+  "review-pr",
+  "run-once",
+  "retry-failed",
+  "retry-provider-cooldowns",
+  "finishing-touch-dry-run",
+  "build-enrichment-comment"
+]);
+
+function deferCommandAdmissionUntilValidated(command: string): boolean {
+  return admissionAfterValidationCommands.has(command);
+}
+
+async function requireClassifiedCommandAdmission(
+  policy: CommandLicensePolicy,
+  configPath?: string,
+  loadedConfig?: BotConfig
+): Promise<void> {
+  if (policy.mode === "setup_safe") return;
+  const config = loadedConfig ?? loadConfig(configPath);
+  const operation = policy.operation === "review_cycle" ? "review_discovery" : policy.operation;
+  const admission = await requireActiveProductionLicense({ operation, config: config.license! });
+  if (!admission.ok) {
+    throw new Error(`license ${admission.decision.status}: ${admission.decision.detail}`);
+  }
 }
 
 function parseArgs(argv: string[]): ParsedArgs {

@@ -14,14 +14,14 @@ const paths = [
 
 const required = [
   /source-available/i,
-  /public open-source repositor(?:y|ies).*free/i,
+  /API-backed activation is required/i,
   /private.*commercial.*paid|paid.*private.*commercial/i,
   /\$100\/(?:year|yr)/i,
   /7-day trial/i,
   /30-day trial/i,
   /legacy lifetime licenses? remain honored/i,
   /org_yearly_support/i,
-  /NEONDIFF_LICENSE_KEY/,
+  /--license-key-stdin true/,
   /nd_live_/
 ];
 

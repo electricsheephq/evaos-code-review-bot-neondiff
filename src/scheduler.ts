@@ -12,7 +12,11 @@ import {
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
 import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
-import { requireActiveProductionLicense, type ProductionLicenseAdmission } from "./license-admission.js";
+import {
+  authorizeAdmissionForVisibility,
+  requireActiveProductionLicense,
+  type ProductionLicenseAdmission
+} from "./license-admission.js";
 import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import {
   buildReviewStatusMarker,
@@ -164,17 +168,27 @@ export async function runScheduledCycleWithDeps(input: {
       ? [await input.github.getPull(repo, input.options.pullNumber)]
       : await input.github.listOpenPulls(repo);
     result.pullsSeen += pulls.length;
+    const admittedPulls = pulls.filter((pull) => {
+      const decision = authorizeAdmissionForVisibility(
+        input.licenseAdmission!,
+        schedulerPullVisibility(pull)
+      );
+      if (decision.ok) return true;
+      result.skippedLicenseGate += 1;
+      result.skippedPolicy += 1;
+      return false;
+    });
     const activation = activateRepoForNewOnlyReview({
       config,
       state: input.state,
       repo,
-      pulls,
+      pulls: admittedPulls,
       scopedPullNumber: input.options.pullNumber,
       now
     });
     result.baselinedExisting += activation.baselined;
 
-    for (const pull of pulls) {
+    for (const pull of admittedPulls) {
       const enqueueStatus = await enqueuePullIfEligible({
         config,
         github: input.github,
@@ -279,6 +293,13 @@ export async function runScheduledCycleWithDeps(input: {
   await observeScheduledOutcomes({ config, github: input.github, state: input.state, now });
 
   return result;
+}
+
+function schedulerPullVisibility(pull: PullRequestSummary): "public" | "private" | "unknown" {
+  const repo = pull.base.repo;
+  if (repo.private === true || repo.visibility === "private" || repo.visibility === "internal") return "private";
+  if (repo.private === false || repo.visibility === "public") return "public";
+  return "unknown";
 }
 
 /**

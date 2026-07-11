@@ -2,7 +2,12 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { authorizeAdmissionForVisibility, requireActiveProductionLicense } from "../src/license-admission.js";
+import {
+  authorizeAdmissionForVisibility,
+  isAuthenticProductionLicenseAdmission,
+  requireActiveProductionLicense,
+  type ProductionLicenseAdmission
+} from "../src/license-admission.js";
 import type { LicenseConfig } from "../src/license.js";
 
 const roots: string[] = [];
@@ -34,6 +39,24 @@ function fixtureConfig(): LicenseConfig {
 }
 
 describe("production useful-work admission", () => {
+  it("rejects a structurally forged admission token", () => {
+    const forged = Object.freeze({
+      kind: "production-license-admission",
+      operation: "review_discovery",
+      checkedAt: "2026-07-11T00:00:00.000Z",
+      fingerprint: "forged",
+      repoVisibilityScope: "all",
+      privateRepoAllowed: true,
+      updateEntitlement: true
+    }) as ProductionLicenseAdmission;
+
+    expect(isAuthenticProductionLicenseAdmission(forged)).toBe(false);
+    expect(authorizeAdmissionForVisibility(forged, "public")).toMatchObject({
+      ok: false,
+      decision: { status: "invalid" }
+    });
+  });
+
   it("ignores weakening config and creates an opaque admission only from live canonical validation", async () => {
     const urls: string[] = [];
     const result = await requireActiveProductionLicense({
@@ -156,7 +179,7 @@ describe("production useful-work admission", () => {
     expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
   });
 
-  it("requires all-repository scope for issue enrichment discovery", async () => {
+  it("rejects public-only scope for issue enrichment discovery", async () => {
     const result = await requireActiveProductionLicense({
       operation: "issue_enrichment",
       config: fixtureConfig(),
@@ -169,5 +192,21 @@ describe("production useful-work admission", () => {
       now: new Date("2026-07-11T00:00:00.000Z")
     });
     expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
+  });
+
+  it("accepts the ordinary paid private scope for issue enrichment discovery", async () => {
+    const result = await requireActiveProductionLicense({
+      operation: "issue_enrichment",
+      config: fixtureConfig(),
+      fetchImpl: (async () => new Response(JSON.stringify({
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        privateRepoAllowed: true,
+        updateEntitlement: true
+      }), { status: 200 })) as typeof fetch,
+      now: new Date("2026-07-11T00:00:00.000Z")
+    });
+    expect(result).toMatchObject({ ok: true, admission: { repoVisibilityScope: "private" } });
   });
 });

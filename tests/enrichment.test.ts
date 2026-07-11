@@ -18,10 +18,11 @@ import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
-import { testLicenseAdmission } from "./helpers/license-admission.js";
+import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 
+const issueEnrichmentTestAdmission = await createTestLicenseAdmission({ operation: "issue_enrichment" });
 const runIssueEnrichmentCycle = (input: Parameters<typeof runIssueEnrichmentCycleImpl>[0]) =>
-  runIssueEnrichmentCycleImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission });
+  runIssueEnrichmentCycleImpl({ ...input, licenseAdmission: input.licenseAdmission ?? issueEnrichmentTestAdmission });
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);

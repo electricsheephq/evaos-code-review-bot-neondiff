@@ -28,8 +28,8 @@ If you are a coding agent working in this repository:
 ## Source-Available Product Boundary
 
 - NeonDiff is source-available beta software.
-- Public open-source repos are free.
-- Private and commercial repos require a paid license.
+- API-backed activation is required for supported public, private, internal, and unknown repository work.
+- Active individual, organization, trial, or legacy entitlements govern supported use and update access.
 - License keys support paid/private usage and update entitlement.
 - Exact license text, public/private grants, and commercial terms are governed
   by https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/104. Public beta

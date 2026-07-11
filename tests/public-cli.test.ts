@@ -13,23 +13,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ProviderApiKeyVerificationInput } from "../src/local-dashboard.js";
 import { runProvidersVerifyCommand } from "../src/providers-verify-command.js";
 import { ReviewStateStore } from "../src/state.js";
+import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 const repoRoot = process.cwd();
 const darwinDaemonEnv = { NEONDIFF_TEST_PLATFORM: "darwin" };
+const providerVerificationAdmission = await createTestLicenseAdmission({ operation: "provider_verify" });
 const admittedProviderVerification = async () => ({
   ok: true as const,
-  admission: {
-    kind: "production-license-admission" as const,
-    operation: "provider_verify" as const,
-    checkedAt: "2026-07-11T00:00:00.000Z",
-    fingerprint: "fixture-fingerprint",
-    repoVisibilityScope: "all" as const,
-    privateRepoAllowed: true,
-    updateEntitlement: true
-  }
+  admission: providerVerificationAdmission
 });
 
 describe("public NeonDiff CLI surface", () => {
@@ -223,6 +217,7 @@ exit 1
           token: fakeToken,
           apiBaseUrl: `http://127.0.0.1:${address.port}`
         },
+        license: activatedLicenseTestConfig(root),
         gitnexusContext: {
           enabled: true,
           packetVersion: "gitnexus-context-packet-v0.1",
@@ -236,7 +231,7 @@ exit 1
           generatedPathPatterns: []
         }
       }));
-      const env = { PATH: `${binDir}:${process.env.PATH ?? ""}` };
+      const env = { PATH: `${binDir}:${process.env.PATH ?? ""}`, ...activatedLicenseTestEnv() };
       let markdownFailure: unknown;
       try {
         await runCli([
@@ -301,8 +296,14 @@ exit 1
   });
 
   it("prints finishing-touch dry-run output as a default-off draft-only contract", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-finishing-touch-license-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ license: activatedLicenseTestConfig(root) }));
     const { stdout } = await runCli([
       "finishing-touch-dry-run",
+      "--config",
+      configPath,
       "--repo",
       "electricsheephq/evaos-code-review-bot",
       "--pr",
@@ -321,7 +322,7 @@ exit 1
       "@neondiff changelog draft",
       "--generated-at",
       "2026-07-03T00:00:00.000Z"
-    ]);
+    ], { env: activatedLicenseTestEnv() });
     const output = JSON.parse(stdout);
 
     expect(output).toMatchObject({
@@ -365,11 +366,17 @@ exit 1
   });
 
   it("omits failed finishing-touch drafts and secret-bearing triggers from CLI stdout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-finishing-touch-redaction-license-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ license: activatedLicenseTestConfig(root) }));
     const secretLikeToken = "ghp_fake_token";
     let failure: unknown;
     try {
       await runCli([
         "finishing-touch-dry-run",
+        "--config",
+        configPath,
         "--repo",
         "electricsheephq/evaos-code-review-bot",
         "--pr",
@@ -390,7 +397,7 @@ exit 1
         `@evaos-code-review-bot changelog draft ${secretLikeToken}`,
         "--generated-at",
         "2026-07-03T00:00:00.000Z"
-      ]);
+      ], { env: activatedLicenseTestEnv() });
     } catch (error) {
       failure = error;
     }
@@ -432,16 +439,13 @@ exit 1
       command: "pricing",
       product: "NeonDiff",
       currency: "USD",
-      publicOpenSourceReposFree: true,
+      publicOpenSourceReposFree: false,
+      activationRequiredForSupportedReview: true,
       providerCosts: {
         model: "BYOK or local provider",
         includedHostedModelCredits: false
       },
       entitlementShape: {
-        freeOss: {
-          repoVisibilityScope: "public",
-          requiresPaidLicense: false
-        },
         paidSupport: {
           repoVisibilityScope: "private",
           requiresPaidLicense: true,
@@ -459,12 +463,6 @@ exit 1
       }
     });
     expect(output.plans).toEqual([
-      expect.objectContaining({
-        id: "free_oss",
-        displayPrice: "$0",
-        requiresPaidLicense: false,
-        providerCreditsIncluded: false
-      }),
       expect.objectContaining({
         id: "monthly_support",
         displayPrice: "$1/mo",
@@ -3477,6 +3475,29 @@ async function runCli(args: string[], options: { cwd?: string; timeout?: number;
     killSignal: "SIGTERM",
     maxBuffer: 1024 * 1024
   });
+}
+
+function activatedLicenseTestConfig(root: string) {
+  const keyPath = join(root, "fixture-license.key");
+  writeFileSync(keyPath, `${["nd", "live", "fixturepubliccli0123456789"].join("_")}\n`, { mode: 0o600 });
+  return {
+    enabled: true,
+    apiBaseUrl: "https://neondiff-license.fly.dev",
+    cachePath: join(root, "fixture-entitlement.json"),
+    storageBackend: "file",
+    keyPath,
+    requestTimeoutMs: 1_000,
+    offlineGraceMs: 0,
+    publicReposFree: false,
+    privateReposRequireEntitlement: true,
+    updateEntitlementRequiresLicense: true
+  };
+}
+
+function activatedLicenseTestEnv(): NodeJS.ProcessEnv {
+  return {
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${join(repoRoot, "tests", "helpers", "mock-production-license-api.mjs")}`.trim()
+  };
 }
 
 function runCliWithStdin(

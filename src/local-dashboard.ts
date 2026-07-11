@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import type { BotConfig } from "./config.js";
 import { getLicenseStatus, type LicenseStatusResult } from "./license.js";
-import { requireActiveProductionLicense } from "./license-admission.js";
+import { isAuthenticProductionLicenseAdmission, requireActiveProductionLicense } from "./license-admission.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import {
   doctorProviderRegistry,
@@ -696,6 +696,17 @@ export async function startLocalDashboardServer(input: {
             state: "blocked",
             redacted: true,
             detail: `license ${admission.decision.status}: ${admission.decision.detail}`,
+            troubleshooting: ["Activate NeonDiff with the canonical license service before provider verification."]
+          }));
+          return;
+        }
+        if (!isAuthenticProductionLicenseAdmission(admission.admission, "provider_verify")) {
+          writeResponse(response, 403, "application/json; charset=utf-8", stringifyRedactedJson({
+            ok: false,
+            command: "dashboard verify-provider",
+            state: "blocked",
+            redacted: true,
+            detail: "license invalid: production admission proof is not authentic",
             troubleshooting: ["Activate NeonDiff with the canonical license service before provider verification."]
           }));
           return;

@@ -41,6 +41,13 @@ live activation for public/private/internal/unknown repository work, and grants
 zero offline cache authority in v1.0.4. User or legacy config cannot disable
 enforcement, restore a public-free path, redirect the API, or enable grace.
 
+This boundary applies to the official supported package and future official
+desktop distribution. Public source, forks, caches, clones, edited installed
+JavaScript, and already-downloaded artifacts cannot be recalled or technically
+prevented from running. The npm package exposes the CLI binary but no supported
+library or subpath import API; that packaging boundary is not DRM and does not
+change the public-source limitation.
+
 ## Review Gate Proof Matrix
 
 The license gate is separate from provider setup. A provider API key or local

@@ -2,6 +2,8 @@ import { getLicenseStatus, type LicenseConfig, type RepoVisibilityScope } from "
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { productionLicenseSecretReader, type LicenseSecretReader } from "./license-secret-store.js";
 
+const mintedProductionAdmissions = new WeakSet<object>();
+
 export type ProductionLicenseOperation =
   | "review_discovery"
   | "review_cycle"
@@ -28,6 +30,14 @@ export interface RedactedLicenseDecision {
   detail: string;
 }
 
+export function isAuthenticProductionLicenseAdmission(
+  admission: ProductionLicenseAdmission,
+  operation?: ProductionLicenseOperation
+): boolean {
+  return mintedProductionAdmissions.has(admission)
+    && (operation === undefined || admission.operation === operation);
+}
+
 type ProductionLicenseAdmissionInput = {
   config: LicenseConfig;
   repo?: string;
@@ -43,6 +53,17 @@ export function authorizeAdmissionForVisibility(
   admission: ProductionLicenseAdmission,
   visibility: "public" | "private" | "unknown"
 ): { ok: true } | { ok: false; decision: RedactedLicenseDecision } {
+  if (!isAuthenticProductionLicenseAdmission(admission)) {
+    return {
+      ok: false,
+      decision: {
+        status: "invalid",
+        checkedAt: new Date(0).toISOString(),
+        classification: "invalid",
+        detail: "production license admission was not minted by live validation"
+      }
+    };
+  }
   const covered = visibility === "public"
     ? admission.repoVisibilityScope === "public"
       || admission.repoVisibilityScope === "private"
@@ -104,6 +125,7 @@ export async function requireActiveProductionLicense(
       && (entitlement.repoVisibilityScope === "private" || entitlement.repoVisibilityScope === "all"),
     updateEntitlement: entitlement.updateEntitlement
   });
+  mintedProductionAdmissions.add(admission);
   if (input.operation === "update_check" && !admission.updateEntitlement) {
     return {
       ok: false,
@@ -115,14 +137,16 @@ export async function requireActiveProductionLicense(
       }
     };
   }
-  if (input.operation === "issue_enrichment" && admission.repoVisibilityScope !== "all") {
+  if (input.operation === "issue_enrichment"
+    && admission.repoVisibilityScope !== "private"
+    && admission.repoVisibilityScope !== "all") {
     return {
       ok: false,
       decision: {
         status: "scope_mismatch",
         checkedAt: admission.checkedAt,
         classification: "scope_mismatch",
-        detail: "issue enrichment requires an active entitlement covering all repository visibility scopes"
+        detail: "issue enrichment requires an active entitlement covering private repository work"
       }
     };
   }

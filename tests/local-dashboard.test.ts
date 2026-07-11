@@ -12,11 +12,12 @@ import {
   startLocalDashboardServer,
   verifyProviderApiKey
 } from "../src/local-dashboard.js";
-import { testLicenseAdmission } from "./helpers/license-admission.js";
+import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 
+const providerVerificationAdmission = await createTestLicenseAdmission({ operation: "provider_verify" });
 const admittedProviderVerification = async () => ({
   ok: true as const,
-  admission: Object.freeze({ ...testLicenseAdmission, operation: "provider_verify" as const })
+  admission: providerVerificationAdmission
 });
 
 describe("local HTML dashboard", () => {

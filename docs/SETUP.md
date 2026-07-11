@@ -13,16 +13,15 @@ for the support-tier pricing contract.
 - npm
 - GitHub App credentials for the repos you want to review
 - a provider/model path available on the machine running the worker
-- optional NeonDiff license key for private or commercial repo use
+- NeonDiff license key for API-backed activation before supported review work
 
-Public open-source repos are free. Private and commercial repos require a paid
-support license: $1/month or $10/year for individuals, or $100/year for
-organizations. Individual plans include a 7-day trial, organization plans include
-a 30-day trial, and legacy lifetime licenses remain honored for existing holders
-but are no longer sold. Paid support includes private repo review, commercial
-usage, and auto-updates. Provider/model costs remain external through your own
-provider key or local model; NeonDiff does not include hosted model credits,
-unlimited SaaS inference, or bundled provider tokens.
+API-backed activation is required for supported public, private, internal, and
+unknown repository review. Support licenses cost $1/month or $10/year for
+individuals, or $100/year for organizations. Individual plans include a 7-day
+trial, organization plans include a 30-day trial, and legacy lifetime licenses
+remain honored for existing holders but are no longer sold. Provider/model costs
+remain external through your own provider key or local model; NeonDiff does not
+include hosted model credits, unlimited SaaS inference, or bundled provider tokens.
 
 ## 1. Install NeonDiff
 
