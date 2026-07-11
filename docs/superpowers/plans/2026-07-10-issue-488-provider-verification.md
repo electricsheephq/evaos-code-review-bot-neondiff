@@ -167,7 +167,7 @@ git commit -m "feat(providers): verify API keys from bounded stdin"
 **Files:**
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/ProviderVerificationService.swift`
 - Modify: `apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/NeonDiffCLIClient.swift`
-- Modify: `apps/neondiff-desktop/Sources/NeonDiffDesktopCoreChecks/main.swift`
+- Modify: `apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/Support/ProviderVerificationScenarios.swift`
 
 **Interfaces:**
 - Produces: `NeonDiffCLIClienting.run(arguments:standardInput:timeout:)`.
@@ -195,7 +195,7 @@ Reject wrong command, `redacted != true`, malformed JSON, inconsistent exit/stat
 
 - [ ] **Step 2: Run core checks and confirm compile failures**
 
-Run: `swift run --package-path apps/neondiff-desktop NeonDiffDesktopCoreChecks`
+Run: `cd apps/neondiff-desktop && scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests`
 
 Expected: FAIL because the new overload and service types do not exist.
 
@@ -263,7 +263,7 @@ Do not retain the secret on the service or snapshot.
 - [ ] **Step 6: Run focused Swift proof**
 
 ```bash
-swift run --package-path apps/neondiff-desktop NeonDiffDesktopCoreChecks
+(cd apps/neondiff-desktop && scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests)
 swift run --package-path apps/neondiff-desktop NeonDiffDesktopCoreSmoke
 swift build --package-path apps/neondiff-desktop
 ```
@@ -273,7 +273,7 @@ Expected: checks print pass/`ok:true`; build exits 0.
 - [ ] **Step 7: Commit Task 2**
 
 ```bash
-git add apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/NeonDiffCLIClient.swift apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/ProviderVerificationService.swift apps/neondiff-desktop/Sources/NeonDiffDesktopCoreChecks/main.swift
+git add apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/NeonDiffCLIClient.swift apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/ProviderVerificationService.swift apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/Support/ProviderVerificationScenarios.swift
 git commit -m "feat(desktop): bridge Keychain provider verification over stdin"
 ```
 
@@ -282,7 +282,7 @@ git commit -m "feat(desktop): bridge Keychain provider verification over stdin"
 **Files:**
 - Modify: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Models/NeonDiffDesktopModel.swift`
 - Modify: `apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ProviderSettingsView.swift`
-- Modify: `apps/neondiff-desktop/Sources/NeonDiffDesktopCoreChecks/main.swift`
+- Modify: `apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/Support/ProviderVerificationScenarios.swift`
 
 **Interfaces:**
 - Consumes: `ProviderVerificationService` and `ProviderVerificationSnapshot`.
@@ -317,7 +317,7 @@ Render provider ID, state badge, checked time, mode, redacted detail, and troubl
 - [ ] **Step 4: Run native checks and build**
 
 ```bash
-swift run --package-path apps/neondiff-desktop NeonDiffDesktopCoreChecks
+(cd apps/neondiff-desktop && scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests)
 swift run --package-path apps/neondiff-desktop NeonDiffDesktopCoreSmoke
 swift build --package-path apps/neondiff-desktop
 ```
@@ -325,7 +325,7 @@ swift build --package-path apps/neondiff-desktop
 - [ ] **Step 5: Commit Task 3**
 
 ```bash
-git add apps/neondiff-desktop/Sources/NeonDiffDesktop/Models/NeonDiffDesktopModel.swift apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ProviderSettingsView.swift apps/neondiff-desktop/Sources/NeonDiffDesktopCoreChecks/main.swift
+git add apps/neondiff-desktop/Sources/NeonDiffDesktop/Models/NeonDiffDesktopModel.swift apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ProviderSettingsView.swift apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/Support/ProviderVerificationScenarios.swift
 git commit -m "feat(desktop): add redacted Verify API Key action"
 ```
 
@@ -349,7 +349,7 @@ Document that only `healthy` is verified, hosted calls require explicit click co
 ```bash
 npm test
 npm run build
-swift run --package-path apps/neondiff-desktop NeonDiffDesktopCoreChecks
+(cd apps/neondiff-desktop && scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests)
 swift run --package-path apps/neondiff-desktop NeonDiffDesktopCoreSmoke
 swift build --package-path apps/neondiff-desktop
 npm run check:secrets

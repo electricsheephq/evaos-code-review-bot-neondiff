@@ -568,7 +568,7 @@ git commit -m "test(desktop): migrate model harness to AppCore tests"
 ### Task 5: Migrate Core checks into `NeonDiffDesktopCoreTests`
 
 **Files:**
-- Split assertions from: `apps/neondiff-desktop/Sources/NeonDiffDesktopCoreChecks/main.swift`
+- Split assertions from the retired monolithic Core checks entrypoint.
 - Create: `apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/CommandBuilderTests.swift`
 - Create: `apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/ConfigParsingTests.swift`
 - Create: `apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/GitHubDeviceAuthTests.swift`
@@ -576,14 +576,14 @@ git commit -m "test(desktop): migrate model harness to AppCore tests"
 - Create: `apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/ProviderVerificationServiceTests.swift`
 - Create: `apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/RedactorTests.swift`
 - Create: `apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/CoreChecksMigrationLedgerTests.swift`
-- Delete after complete migration: `apps/neondiff-desktop/Sources/NeonDiffDesktopCoreChecks/main.swift`
+- Delete the retired monolithic Core checks entrypoint after complete migration.
 - Modify: `apps/neondiff-desktop/Package.swift`
 - Modify: `.github/workflows/swift-desktop-gate.yml`
 
 - [ ] **Step 1: Inventory CoreChecks assertions and group them by public API**
 
 ```bash
-rg -n 'check\(' Sources/NeonDiffDesktopCoreChecks/main.swift \
+rg -n 'context\.expect\(' Tests/NeonDiffDesktopCoreTests/Support/*.swift \
   > "$TMPDIR/neondiff-core-check-assertions.txt"
 ```
 
@@ -613,13 +613,13 @@ scripts/run-swift-tests.sh --filter CoreChecksMigrationLedgerTests
 scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests
 ```
 
-After both pass, remove `NeonDiffDesktopCoreChecks` from `Package.swift` and replace its workflow command with `scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests`.
+After both pass, remove the retired monolithic executable target from `Package.swift` and replace its workflow command with `scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests`.
 
 - [ ] **Step 5: Commit Task 5**
 
 ```bash
 git add apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests \
-  apps/neondiff-desktop/Sources/NeonDiffDesktopCoreChecks/main.swift \
+  apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/Support \
   apps/neondiff-desktop/Package.swift \
   .github/workflows/swift-desktop-gate.yml
 git commit -m "test(desktop): migrate Core checks to Swift tests"

@@ -26,8 +26,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build desktop core checks
-        run: swift build --target NeonDiffDesktopCoreChecks
+      - name: Run desktop Core tests with nonzero discovery
+        shell: bash
+        run: |
+          core_test_output="$(mktemp)"
+          trap 'rm -f "$core_test_output"' EXIT
+          scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests | tee "$core_test_output"
+          grep -Eq 'Test run with [1-9][0-9]* tests?' "$core_test_output"
 
       - name: Build desktop Keychain checks
         run: swift build --target NeonDiffDesktopKeychainChecks

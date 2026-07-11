@@ -6,6 +6,8 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+const retiredCoreChecksTarget = ["NeonDiffDesktopCore", "Checks"].join("");
+
 describe("NeonDiff desktop release-smoke pipeline", () => {
   it("defines an unsigned macOS release-smoke workflow with the required desktop gates", () => {
     const workflowPath = ".github/workflows/desktop-release-smoke.yml";
@@ -41,7 +43,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(job?.defaults?.run?.["working-directory"]).toBe("apps/neondiff-desktop");
 
     for (const command of [
-      "swift build --target NeonDiffDesktopCoreChecks",
+      "scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests",
       "swift build --target NeonDiffDesktopKeychainChecks",
       "swift run NeonDiffDesktopAppcastChecks",
       "script/build_and_run.sh build",
@@ -52,8 +54,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     }
 
     expect(workflow).not.toContain("NeonDiffDesktopCoreSmoke");
-    expect(workflow).not.toContain("swift run NeonDiffDesktopCoreChecks");
+    expect(workflow).not.toContain(retiredCoreChecksTarget);
     expect(workflow).not.toContain("swift run NeonDiffDesktopKeychainChecks");
+    expect(workflow).toMatch(/grep -Eq ['"]Test run with \[1-9\]\[0-9\]\* tests\?['"]/);
     expect(workflow).toContain("unsigned");
     expect(workflow).toMatch(/macOS 15 Keychain contract compilation/);
     expect(workflow).toMatch(/persist-credentials:\s*false/);
@@ -122,7 +125,8 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(docs).toMatch(/unsigned/i);
     expect(docs).toMatch(/non-release proof/i);
     expect(docs).toMatch(/customer-not-ready/i);
-    expect(docs).toMatch(/NeonDiffDesktopCoreChecks/);
+    expect(docs).toMatch(/NeonDiffDesktopCoreTests/);
+    expect(docs).not.toContain(retiredCoreChecksTarget);
     expect(docs).toMatch(/NeonDiffDesktopKeychainChecks/);
     expect(docs).toMatch(/Keychain/i);
     expect(docs).toMatch(/artifact_sha256/i);

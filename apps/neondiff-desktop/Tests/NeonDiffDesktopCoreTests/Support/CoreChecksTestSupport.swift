@@ -74,13 +74,17 @@ func awaitSemaphore(_ semaphore: DispatchSemaphore, timeout: DispatchTime) async
 func captureProviderVerificationFailure(
     _ message: String,
     _ operation: () throws -> Void
-) -> Error {
+) throws -> Error {
+    var capturedError: Error?
     do {
         try operation()
-        return CoreChecksTestSupportError.expectedFailureMissing(message)
     } catch {
-        return error
+        capturedError = error
     }
+    guard let capturedError else {
+        throw CoreChecksTestSupportError.expectedFailureMissing(message)
+    }
+    return capturedError
 }
 
 final class CoreCLIFixture {

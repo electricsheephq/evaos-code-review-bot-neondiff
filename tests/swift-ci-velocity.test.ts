@@ -6,6 +6,8 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+const retiredCoreChecksTarget = ["NeonDiffDesktopCore", "Checks"].join("");
+
 function swiftAffected(files: string[]): { affected: boolean; matched: string[]; files: string[] } {
   return JSON.parse(execFileSync("node", ["scripts/swift-affected.mjs", "--files", ...files], { encoding: "utf8" }));
 }
@@ -71,7 +73,8 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/No Swift desktop files changed/);
     expect(gate).toMatch(/swift build --target NeonDiffDesktopKeychainChecks/);
     expect(gate).toMatch(/npm run check:secret-rule-differential/);
-    expect(gate.match(/swift run NeonDiffDesktopCoreChecks/g)).toHaveLength(1);
+    expect(gate.match(/scripts\/run-swift-tests\.sh --filter NeonDiffDesktopCoreTests/g)).toHaveLength(1);
+    expect(gate).not.toContain(retiredCoreChecksTarget);
     expect(gate.match(/swift run NeonDiffDesktopFixtureChecks/g)).toHaveLength(1);
     expect(gate).not.toMatch(/swift run NeonDiffDesktopKeychainChecks/);
     expect(gate).toMatch(/swift build/);
@@ -176,7 +179,7 @@ describe("Swift CI velocity policy", () => {
     expect(betaRunbook).toMatch(/Fast Iteration And Batched Release Validation/);
     expect(betaRunbook).toMatch(/preview server\/browser\s+smoke/);
     expect(betaRunbook).toMatch(/Swift desktop gate/);
-    expect(betaRunbook).toMatch(/compiles `NeonDiffDesktopCoreChecks`/);
+    expect(betaRunbook).toMatch(/runs `NeonDiffDesktopCoreTests`/);
     expect(betaRunbook).toMatch(/`NeonDiffDesktopKeychainChecks`/);
     expect(betaRunbook).toMatch(/docs\/swift-codeql-policy\.md/);
     expect(betaRunbook).toMatch(/must not contain `swift`/);
@@ -195,8 +198,8 @@ describe("Swift CI velocity policy", () => {
 
     expect(macRunbook).toMatch(/Fast Desktop Iteration Before Release/);
     expect(macRunbook).toMatch(/swift run NeonDiffDesktopCoreSmoke/);
-    expect(macRunbook).toMatch(/compile the Swift core checks/);
-    expect(macRunbook).toMatch(/Execute `NeonDiffDesktopCoreChecks`/);
+    expect(macRunbook).toMatch(/run the Swift Core tests/);
+    expect(macRunbook).toMatch(/Run\s+`NeonDiffDesktopCoreTests`/);
     expect(macRunbook).toMatch(/script\/build_and_run\.sh bundle-check/);
     expect(macRunbook).toMatch(/path-aware Swift\s+CodeQL workflow is a release\/security scan/);
     expect(macRunbook).toMatch(/weekly schedule or manual dispatch\s+against the intended release ref/);

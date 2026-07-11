@@ -22,10 +22,10 @@ function swiftBlock(source: string, declaration: string): string {
 describe("NeonDiff desktop Keychain startup safety", () => {
   it("uses metadata-only secret presence checks during model initialization", () => {
     const source = readFileSync(
-      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Models/NeonDiffDesktopModel.swift",
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/Models/NeonDiffDesktopModel.swift",
       "utf8"
     );
-    const initializer = swiftBlock(source, "init(\n");
+    const initializer = swiftBlock(source, "package init(dependencies:");
     expect(initializer).toContain("containsSecret(");
     expect(initializer).not.toContain("readSecret(");
     expect(initializer).not.toContain("storedDate(");
@@ -45,11 +45,12 @@ describe("NeonDiff desktop Keychain startup safety", () => {
 
   it("keeps the provider visual fixture DEBUG-only and bound to saved registry authority", () => {
     const source = readFileSync(
-      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Models/NeonDiffDesktopModel.swift",
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/Models/NeonDiffDesktopModel.swift",
       "utf8"
     );
-    const fixture = swiftBlock(source, "if visualProofFixtureEnabled {");
-    const fixtureStart = source.indexOf("if visualProofFixtureEnabled {");
+    const fixtureDeclaration = "package func applyProviderVerificationVisualProofFixture()";
+    const fixture = swiftBlock(source, fixtureDeclaration);
+    const fixtureStart = source.indexOf(fixtureDeclaration);
     const debugStart = source.lastIndexOf("#if DEBUG", fixtureStart);
     const debugEnd = source.indexOf("#endif", fixtureStart);
 

@@ -26,7 +26,7 @@ import Darwin
     ]
     for (index, envelope) in credentialShapedEnvelopes.enumerated() {
         escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
-        let failure = captureProviderVerificationFailure("credential-shaped envelope \(index)") {
+        let failure = try captureProviderVerificationFailure("credential-shaped envelope \(index)") {
             _ = try escapedSecretService.verify(
                 account: providerSecretAccount,
                 expectedProviderId: "zcode-glm",
@@ -47,7 +47,7 @@ import Darwin
     ]
     for (index, envelope) in canonicalRedactorSensitiveEnvelopes.enumerated() {
         escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
-        let failure = captureProviderVerificationFailure("canonical-redactor-sensitive envelope \(index)") {
+        let failure = try captureProviderVerificationFailure("canonical-redactor-sensitive envelope \(index)") {
             _ = try escapedSecretService.verify(
                 account: providerSecretAccount,
                 expectedProviderId: "zcode-glm",
@@ -101,7 +101,7 @@ import Darwin
                 envelope = try encodedProviderEnvelope(diagnostic: value)
             }
             escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
-            let failure = captureProviderVerificationFailure("canonical \(fixture.id) in \(location)") {
+            let failure = try captureProviderVerificationFailure("canonical \(fixture.id) in \(location)") {
                 _ = try escapedSecretService.verify(
                     account: providerSecretAccount,
                     expectedProviderId: "zcode-glm",

@@ -69,7 +69,7 @@ import Darwin
         revisionBoundVerification.configRevision == stableConfigRevision,
         "provider verification preserves the exact stable config revision"
     )
-    let revisionMismatchFailure = captureProviderVerificationFailure("config revision mismatch") {
+    let revisionMismatchFailure = try captureProviderVerificationFailure("config revision mismatch") {
         _ = try providerVerificationService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -215,7 +215,7 @@ import Darwin
     ]
     for (message, result) in invalidProviderVerificationResults {
         fakeProviderCLI.result = result
-        let failure = captureProviderVerificationFailure(message) {
+        let failure = try captureProviderVerificationFailure(message) {
             _ = try providerVerificationService.verify(
                 account: providerSecretAccount,
                 expectedProviderId: "zcode-glm",
@@ -237,7 +237,7 @@ import Darwin
         ),
         stderr: ""
     )
-    let stdoutLeakFailure = captureProviderVerificationFailure("secret in serialized stdout") {
+    let stdoutLeakFailure = try captureProviderVerificationFailure("secret in serialized stdout") {
         _ = try providerVerificationService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -255,7 +255,7 @@ import Darwin
         stdout: healthyProviderVerificationJSON,
         stderr: "transport failed for \(fixtureProviderSecret)"
     )
-    let stderrLeakFailure = captureProviderVerificationFailure("secret in stderr") {
+    let stderrLeakFailure = try captureProviderVerificationFailure("secret in stderr") {
         _ = try providerVerificationService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -358,7 +358,7 @@ import Darwin
         stdout: try encodedProviderEnvelope().replacingOccurrences(of: #""providerId":"zcode-glm""#, with: #""providerId":"other-provider""#),
         stderr: ""
     )
-    let wrongProviderFailure = captureProviderVerificationFailure("wrong provider healthy envelope") {
+    let wrongProviderFailure = try captureProviderVerificationFailure("wrong provider healthy envelope") {
         _ = try escapedSecretService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -382,7 +382,7 @@ import Darwin
     )
     for (index, envelope) in escapedSecretEnvelopes.enumerated() {
         escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: envelope, stderr: "")
-        let failure = captureProviderVerificationFailure("decoded escaped secret envelope \(index)") {
+        let failure = try captureProviderVerificationFailure("decoded escaped secret envelope \(index)") {
             _ = try escapedSecretService.verify(
                 account: providerSecretAccount,
                 expectedProviderId: "zcode-glm",
@@ -430,7 +430,7 @@ import Darwin
             stdout: healthyProviderVerificationJSON,
             stderr: stderrText
         )
-        let failure = captureProviderVerificationFailure("escaped normalized secret stderr \(index)") {
+        let failure = try captureProviderVerificationFailure("escaped normalized secret stderr \(index)") {
             _ = try escapedSecretService.verify(
                 account: providerSecretAccount,
                 expectedProviderId: "zcode-glm",
@@ -452,7 +452,7 @@ import Darwin
         stdout: nestedSerializedSecretEnvelope,
         stderr: ""
     )
-    let nestedSerializedStdoutFailure = captureProviderVerificationFailure("nested serialized secret stdout") {
+    let nestedSerializedStdoutFailure = try captureProviderVerificationFailure("nested serialized secret stdout") {
         _ = try escapedSecretService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -478,7 +478,7 @@ import Darwin
         stdout: healthyProviderVerificationJSON,
         stderr: nestedSerializedStderr
     )
-    let nestedSerializedStderrFailure = captureProviderVerificationFailure("nested serialized secret stderr") {
+    let nestedSerializedStderrFailure = try captureProviderVerificationFailure("nested serialized secret stderr") {
         _ = try escapedSecretService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -497,7 +497,7 @@ import Darwin
     }
     let deeplyNestedEnvelope = try encodedProviderEnvelope(diagnostic: deeplyNestedDiagnostic)
     escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: deeplyNestedEnvelope, stderr: "")
-    let deeplyNestedFailure = captureProviderVerificationFailure("deeply nested provider diagnostic") {
+    let deeplyNestedFailure = try captureProviderVerificationFailure("deeply nested provider diagnostic") {
         _ = try escapedSecretService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -513,7 +513,7 @@ import Darwin
     let wideDiagnostic = Array(repeating: "bounded-safe-diagnostic", count: 5_000)
     let wideEnvelope = try encodedProviderEnvelope(diagnostic: wideDiagnostic)
     escapedSecretCLI.result = CLIRunResult(exitCode: 0, stdout: wideEnvelope, stderr: "")
-    let wideBudgetFailure = captureProviderVerificationFailure("provider diagnostic node budget") {
+    let wideBudgetFailure = try captureProviderVerificationFailure("provider diagnostic node budget") {
         _ = try escapedSecretService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -581,7 +581,7 @@ import Darwin
         keychain: whitespaceOnlySecretStore,
         cli: escapedSecretCLI
     )
-    _ = captureProviderVerificationFailure("whitespace-only normalized provider secret") {
+    _ = try captureProviderVerificationFailure("whitespace-only normalized provider secret") {
         _ = try whitespaceOnlySecretService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
@@ -595,7 +595,7 @@ import Darwin
         keychain: missingProviderSecretStore,
         cli: escapedSecretCLI
     )
-    _ = captureProviderVerificationFailure("missing Keychain provider secret") {
+    _ = try captureProviderVerificationFailure("missing Keychain provider secret") {
         _ = try missingProviderSecretService.verify(
             account: providerSecretAccount,
             expectedProviderId: "zcode-glm",
