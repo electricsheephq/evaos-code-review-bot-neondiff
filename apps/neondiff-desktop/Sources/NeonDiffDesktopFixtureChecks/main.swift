@@ -391,4 +391,43 @@ let duplicateEvidencePathManifest = try mutatedManifest(validManifest) { object 
 }
 expectManifestFailure("reused evidence artifact path", data: duplicateEvidencePathManifest)
 
+let lineTerminatedEvidencePathManifest = try mutatedManifest(validManifest) { object in
+    var cases = object["cases"] as! [[String: Any]]
+    var screenshot = cases[0]["screenshot"] as! [String: Any]
+    screenshot["path"] = "tab-overview-1040x680.png\n"
+    cases[0]["screenshot"] = screenshot
+    object["cases"] = cases
+}
+expectManifestFailure("line-terminated evidence artifact path", data: lineTerminatedEvidencePathManifest)
+
+for lineSeparator in ["\r", "\r\n", "\u{2028}", "\u{2029}"] {
+    let separatedPathManifest = try mutatedManifest(validManifest) { object in
+        var artifact = object["artifact"] as! [String: Any]
+        artifact["path"] = "artifacts/NeonDiffDesktop.app\(lineSeparator)"
+        object["artifact"] = artifact
+    }
+    expectManifestFailure("line-separated artifact packet path", data: separatedPathManifest)
+}
+
+let caseAliasedEvidencePathManifest = try mutatedManifest(validManifest) { object in
+    var cases = object["cases"] as! [[String: Any]]
+    var screenshot = cases[1]["screenshot"] as! [String: Any]
+    screenshot["path"] = "TAB-OVERVIEW-1040X680.PNG"
+    cases[1]["screenshot"] = screenshot
+    object["cases"] = cases
+}
+expectManifestFailure("case-aliased evidence artifact path", data: caseAliasedEvidencePathManifest)
+
+let directoryCaseAliasedEvidencePathManifest = try mutatedManifest(validManifest) { object in
+    var cases = object["cases"] as! [[String: Any]]
+    var firstScreenshot = cases[0]["screenshot"] as! [String: Any]
+    firstScreenshot["path"] = "captures/tab.png"
+    cases[0]["screenshot"] = firstScreenshot
+    var secondGeometry = cases[1]["geometry"] as! [String: Any]
+    secondGeometry["path"] = "CAPTURES/TAB.PNG"
+    cases[1]["geometry"] = secondGeometry
+    object["cases"] = cases
+}
+expectManifestFailure("directory and cross-role case-aliased evidence path", data: directoryCaseAliasedEvidencePathManifest)
+
 print("NeonDiffDesktop fixture checks passed")
