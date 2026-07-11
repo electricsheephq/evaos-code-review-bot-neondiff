@@ -150,9 +150,12 @@ describe("Swift CI velocity policy", () => {
     expect(existsSync(runnerPath)).toBe(true);
 
     const runner = read(runnerPath);
-    expect(runner).toContain('--xunit-output "$result_file"');
-    expect(runner).toContain("/usr/bin/xmllint --xpath 'string(sum(/testsuites/testsuite/@tests))'");
+    expect(runner).toContain("scripts/run-swift-tests.sh list");
+    expect(runner).toContain('awk -v prefix="${suite}."');
     expect(runner).toContain('--filter "^${suite}\\."');
+    expect(runner).toContain("CoreChecksMigrationLedgerTests");
+    expect(runner).toContain("ModelHarnessMigrationLedgerTests");
+    expect(runner).toContain('--skip "^${suite}\\.${ledger_suite}"');
     expect(runner).not.toContain("| tee");
   });
 
