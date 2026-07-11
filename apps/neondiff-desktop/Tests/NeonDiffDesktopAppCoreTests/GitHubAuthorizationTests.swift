@@ -117,11 +117,50 @@ import NeonDiffDesktopCore
         fixture.model.githubAuthorizationCode = code
 
         fixture.model.copyGitHubUserCode()
+        #expect(fixture.model.githubAuthorizationStatus == "device code copy failed")
+        #expect(fixture.model.lastError == "Could not copy the GitHub device code. Copy it manually and retry.")
+
         fixture.model.openGitHubDeviceVerification()
+        #expect(fixture.model.githubAuthorizationStatus == "verification page open failed")
+        #expect(fixture.model.lastError == "Could not open the GitHub verification page. Open the shown URL manually.")
+
+        fixture.model.openGitHubAppInstallation()
+        #expect(fixture.model.githubAuthorizationStatus == "App installation page open failed")
+        #expect(fixture.model.lastError == "Could not open the GitHub App installation page. Open it manually in your browser.")
 
         #expect(!fixture.clipboard.result)
         #expect(fixture.clipboard.strings == ["ABCD-EFGH"])
         #expect(!fixture.urlOpener.result)
-        #expect(fixture.urlOpener.urls == [code.verificationURI])
+        #expect(fixture.urlOpener.urls == [code.verificationURI, fixture.model.githubAppInstallURL])
+    }
+
+    @Test func clipboardAndURLOpenSuccessPreservesExistingStatusSemantics() {
+        let code = GitHubDeviceAuthorizationCode(
+            deviceCode: "fixture-device-code",
+            userCode: "ABCD-EFGH",
+            verificationURI: fixtureURL("https://github.com/login/device"),
+            expiresAt: fixtureDate(secondsSince1970: 2_000_000),
+            intervalSeconds: 5
+        )
+
+        let copyFixture = ModelDependencyFixture()
+        copyFixture.model.githubAuthorizationCode = code
+        copyFixture.model.lastError = "stale failure"
+        copyFixture.model.copyGitHubUserCode()
+        #expect(copyFixture.model.githubAuthorizationStatus == "code copied")
+        #expect(copyFixture.model.lastError == nil)
+
+        let verificationFixture = ModelDependencyFixture()
+        verificationFixture.model.githubAuthorizationCode = code
+        verificationFixture.model.lastError = "stale failure"
+        verificationFixture.model.openGitHubDeviceVerification()
+        #expect(verificationFixture.model.githubAuthorizationStatus == "verification page opened")
+        #expect(verificationFixture.model.lastError == nil)
+
+        let installationFixture = ModelDependencyFixture()
+        installationFixture.model.lastError = "stale failure"
+        installationFixture.model.openGitHubAppInstallation()
+        #expect(installationFixture.model.githubAuthorizationStatus == "App installation page opened")
+        #expect(installationFixture.model.lastError == nil)
     }
 }

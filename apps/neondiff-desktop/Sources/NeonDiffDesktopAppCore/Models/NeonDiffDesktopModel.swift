@@ -667,19 +667,34 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func copyGitHubUserCode() {
         guard let userCode = githubAuthorizationCode?.userCode else { return }
-        _ = dependencies.clipboard.write(userCode)
+        guard dependencies.clipboard.write(userCode) else {
+            githubAuthorizationStatus = "device code copy failed"
+            lastError = "Could not copy the GitHub device code. Copy it manually and retry."
+            return
+        }
         githubAuthorizationStatus = "code copied"
+        lastError = nil
     }
 
     package func openGitHubDeviceVerification() {
         guard let verificationURI = githubAuthorizationCode?.verificationURI else { return }
-        _ = dependencies.urlOpener.open(verificationURI)
+        guard dependencies.urlOpener.open(verificationURI) else {
+            githubAuthorizationStatus = "verification page open failed"
+            lastError = "Could not open the GitHub verification page. Open the shown URL manually."
+            return
+        }
         githubAuthorizationStatus = "verification page opened"
+        lastError = nil
     }
 
     package func openGitHubAppInstallation() {
-        _ = dependencies.urlOpener.open(githubAppInstallURL)
+        guard dependencies.urlOpener.open(githubAppInstallURL) else {
+            githubAuthorizationStatus = "App installation page open failed"
+            lastError = "Could not open the GitHub App installation page. Open it manually in your browser."
+            return
+        }
         githubAuthorizationStatus = "App installation page opened"
+        lastError = nil
     }
 
     package func performGitHubRecoveryAction() {

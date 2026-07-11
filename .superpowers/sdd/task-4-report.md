@@ -57,3 +57,35 @@ Complete. The obsolete compile harness and runner are removed only after the mig
 - No GitHub, release, runtime, customer, or source-of-truth state was mutated.
 - No live Keychain prompts or ambient OS integrations were exercised.
 - The only remaining concern is the unavailable nested advisory-review conclusion noted above; code/test/build/diff/secret gates are green.
+
+## Important review follow-up on `54a0d35`
+
+This section supersedes the original report's statements that no AppCore model source changed and that ledger enforcement used source comments. All three Important findings were fixed with the smallest authorized model surface plus test-only ledger changes.
+
+### False clipboard and URL results
+
+- Root cause: `copyGitHubUserCode`, `openGitHubDeviceVerification`, and `openGitHubAppInstallation` discarded the injected dependency's `Bool` result and always reported success.
+- Red proof: `scripts/run-swift-tests.sh --filter GitHubAuthorizationTests` failed with 9 issues covering false-result status/error handling and stale-error clearing on success.
+- Fix: false results now install fixed, non-secret `githubAuthorizationStatus` and `lastError` messages; successful retries preserve the prior success statuses and clear stale errors.
+- Green proof: `GitHubAuthorizationTests` passed 6 tests in 1 suite.
+
+### Execution-backed in-memory migration ledger
+
+- Removed all `#filePath`, `String(contentsOf:)`, source-file loading, comment matching, and source regex behavior from the migration ledger.
+- Each of the 14 named scenario tests now creates a `LegacyModelHarnessAssertionContext` tied to its actual `#function`.
+- Every one of the 85 legacy conditions executes through `legacy.expect`, which records its exact scenario/message mapping and executes a real Swift Testing `#expect`.
+- Each scenario defers an exact-once completeness check, rejecting missing, duplicated, or unmapped assertion calls.
+- `ModelHarnessMigrationLedgerTests` directly invokes all 14 named scenario tests under a task-local aggregate and verifies 14 scenario executions plus 85 total/85 unique assertion executions.
+- Fault-injection proof: temporarily removing one mapped call made the focused ledger fail with 84/85 executions and named the missing `visual fixture selects the saved registry provider` mapping; restoring the call returned the ledger to green.
+
+### Follow-up validation
+
+- `scripts/run-swift-tests.sh list`: 40 package tests discovered, including 39 AppCore tests.
+- `scripts/run-swift-tests.sh --filter GitHubAuthorizationTests`: 6 passed.
+- `scripts/run-swift-tests.sh --filter ModelHarnessMigrationLedgerTests`: 1 passed; it executed all 14 legacy scenarios and all 85 mappings.
+- Migrated suites: `ProviderVisualFixtureTests` 1 passed; `ProviderKeyScopingTests` 2 passed; `ProviderVerificationStateMachineTests` 8 passed; `ProviderConfigurationPatchTests` 3 passed.
+- `scripts/run-swift-tests.sh --filter NeonDiffDesktopAppCoreTests`: 39 tests in 11 suites passed.
+- `swift build -c debug --product NeonDiffDesktop`: passed.
+- `swift build -c release --product NeonDiffDesktop`: passed.
+- `npm run check:secrets`: passed across 573 tracked files.
+- `git diff --check`: passed.
