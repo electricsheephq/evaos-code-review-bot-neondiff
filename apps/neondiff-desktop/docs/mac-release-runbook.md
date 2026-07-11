@@ -44,11 +44,14 @@ release lane.
   and batch remaining feedback before the next push.
 
 The CI `Swift desktop gate` is intentionally always-reporting. It should say
-`not affected` for non-desktop PRs, and it should compile the Swift core checks
-target, run Swift build, app bundle build, and bundle check for
-desktop-affecting PRs. Execute `NeonDiffDesktopCoreChecks`, run
-`NeonDiffDesktopCoreSmoke`, and click through the visible UI in the local or
-release-smoke lane where an interactive session exists. The path-aware Swift
+`not affected` for non-desktop PRs, and it should run the Swift Core/AppCore
+tests, fixture checks, Swift build, app bundle build, and bundle check for
+desktop-affecting PRs. The hosted gate requires nonzero execution of
+`NeonDiffDesktopCoreTests` and `NeonDiffDesktopAppCoreTests` through
+`scripts/run-required-swift-test-suite.sh`, and runs
+`NeonDiffDesktopFixtureChecks`. Run `NeonDiffDesktopCoreSmoke` and click through
+the visible UI in the local or release-smoke lane where an interactive session
+exists. The path-aware Swift
 CodeQL workflow is a release/security scan. It should run for
 desktop/signing/appcast/release paths through weekly schedule or manual dispatch
 against the intended release ref; it should not be the inner product iteration

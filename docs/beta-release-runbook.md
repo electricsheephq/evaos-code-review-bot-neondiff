@@ -280,13 +280,18 @@ change, the product-behavior proof is missing even when `swift build`,
 
 Remote CI should keep a stable, always-reporting `Swift desktop gate` check.
 That check passes quickly with an explicit `not affected` result on non-desktop
-changes, and compiles `NeonDiffDesktopCoreChecks` plus
-`NeonDiffDesktopKeychainChecks`, runs `swift build`, app bundle build, and bundle
-check only when Swift desktop paths changed or when manually dispatched. Keep
-both check executables, `NeonDiffDesktopCoreSmoke`, and visible UI clicks in the
-local/release-smoke lane because hosted macOS runners can kill
+changes, requires nonzero `NeonDiffDesktopCoreTests` and
+`NeonDiffDesktopAppCoreTests` execution, runs `NeonDiffDesktopFixtureChecks`,
+compiles `NeonDiffDesktopKeychainChecks`, and runs `swift build`, app bundle
+build, and bundle check only when Swift desktop paths changed or when manually dispatched. Keep
+the Keychain check executable, `NeonDiffDesktopCoreSmoke`, and visible UI clicks
+in the local/release-smoke lane because hosted macOS runners can kill
 Security.framework-linked helpers after a successful build unless the runner
 has a known-good interactive session.
+
+The tag-triggered `desktop-release-smoke.yml` lane uses the same required-suite
+runner for both Core and AppCore before it builds and checksums the unsigned app
+artifact. That lane still does not execute Keychain helpers or visible UI.
 
 Swift CodeQL is a release/security gate, not the PR iteration loop. The durable
 policy lives in `docs/swift-codeql-policy.md`: the checked-in path-aware Swift

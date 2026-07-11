@@ -3,8 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { assertSwiftCorpusBoundary } from "./shared/swift-corpus-boundary.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+assertSwiftCorpusBoundary(root);
 const canonical = JSON.parse(readFileSync(join(root, "shared/canonical-secret-rules.json"), "utf8"));
 const productionNodeScanner = join(root, "dist/src/secrets.js");
 if (!existsSync(productionNodeScanner)) {

@@ -9,16 +9,30 @@ let package = Package(
     products: [
         .executable(name: "NeonDiffDesktop", targets: ["NeonDiffDesktop"]),
         .executable(name: "NeonDiffDesktopCoreSmoke", targets: ["NeonDiffDesktopCoreSmoke"]),
-        .library(name: "NeonDiffDesktopCore", targets: ["NeonDiffDesktopCore"])
+        .library(name: "NeonDiffDesktopCore", targets: ["NeonDiffDesktopCore"]),
+        .library(name: "NeonDiffDesktopAppCore", targets: ["NeonDiffDesktopAppCore"])
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0")
     ],
     targets: [
         .target(name: "NeonDiffDesktopCore"),
+        .target(
+            name: "NeonDiffDesktopAppCore",
+            dependencies: ["NeonDiffDesktopCore"]
+        ),
+        .testTarget(
+            name: "NeonDiffDesktopCoreTests",
+            dependencies: ["NeonDiffDesktopCore"]
+        ),
+        .testTarget(
+            name: "NeonDiffDesktopAppCoreTests",
+            dependencies: ["NeonDiffDesktopAppCore", "NeonDiffDesktopCore"]
+        ),
         .executableTarget(
             name: "NeonDiffDesktop",
             dependencies: [
+                "NeonDiffDesktopAppCore",
                 "NeonDiffDesktopCore",
                 .product(name: "Sparkle", package: "Sparkle")
             ],
@@ -31,10 +45,6 @@ let package = Package(
         ),
         .executableTarget(
             name: "NeonDiffDesktopCoreSmoke",
-            dependencies: ["NeonDiffDesktopCore"]
-        ),
-        .executableTarget(
-            name: "NeonDiffDesktopCoreChecks",
             dependencies: ["NeonDiffDesktopCore"]
         ),
         .executableTarget(

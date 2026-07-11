@@ -13,7 +13,11 @@ const FORBIDDEN_MARKERS = [
   "NEONDIFF_DESKTOP_EVALUATION_FIXTURE_V1",
   "DesktopEvaluationFixture",
   "DesktopEvaluationFixtureCatalog",
-  "DesktopEvaluationEvidenceManifest"
+  "DesktopEvaluationEvidenceManifest",
+  "RecordingDesktopDependencies",
+  "NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE",
+  "VisualProofDesktopDependencies",
+  "VisualProofSecretStore"
 ];
 
 function collectFiles(inputPaths) {

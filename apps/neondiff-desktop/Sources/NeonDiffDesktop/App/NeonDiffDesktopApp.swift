@@ -1,12 +1,17 @@
 import AppKit
 import SwiftUI
+import NeonDiffDesktopAppCore
 import NeonDiffDesktopCore
 
 @main
 struct NeonDiffDesktopApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var model = NeonDiffDesktopModel()
+    @StateObject private var model: NeonDiffDesktopModel
     @StateObject private var updateController = NeonUpdateController()
+
+    init() {
+        _model = StateObject(wrappedValue: NeonDiffDesktopCompositionRoot.makeModel())
+    }
 
     var body: some Scene {
         WindowGroup("NeonDiff Desktop") {

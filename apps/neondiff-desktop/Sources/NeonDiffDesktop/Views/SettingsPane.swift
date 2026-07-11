@@ -1,4 +1,5 @@
 import SwiftUI
+import NeonDiffDesktopAppCore
 
 struct SettingsPane: View {
     @ObservedObject var model: NeonDiffDesktopModel

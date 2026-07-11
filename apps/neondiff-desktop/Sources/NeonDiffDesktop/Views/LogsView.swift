@@ -1,4 +1,5 @@
 import SwiftUI
+import NeonDiffDesktopAppCore
 
 struct LogsView: View {
     @ObservedObject var model: NeonDiffDesktopModel

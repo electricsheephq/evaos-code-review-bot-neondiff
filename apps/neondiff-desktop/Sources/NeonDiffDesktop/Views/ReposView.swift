@@ -1,4 +1,5 @@
 import SwiftUI
+import NeonDiffDesktopAppCore
 import NeonDiffDesktopCore
 
 struct ReposView: View {

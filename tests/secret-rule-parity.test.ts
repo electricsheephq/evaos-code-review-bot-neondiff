@@ -1,5 +1,7 @@
 import { execFile, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { canonicalSecretRules, canonicalSensitiveCookieRule } from "../src/generated-secret-rules.js";
@@ -7,6 +9,7 @@ import { containsSecretLikeText } from "../src/secrets.js";
 import { canonicalSecretRuleCorpus } from "./generated-secret-rule-corpus.js";
 
 const execFileAsync = promisify(execFile);
+const compiledSwiftCorpusPath = "apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/Support/CanonicalSecretRuleCorpus.generated.swift";
 
 describe("canonical secret rule parity", () => {
   it("keeps every canonical sensitive and benign corpus case bound to Node production behavior", () => {
@@ -31,6 +34,59 @@ describe("canonical secret rule parity", () => {
       encoding: "utf8"
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
+  it("owns the compiled Swift test corpus and detects drift before regeneration", () => {
+    const generator = readFileSync("scripts/generate-secret-rules.mjs", "utf8");
+    expect(generator).toContain(compiledSwiftCorpusPath);
+
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "neondiff-secret-generator-"));
+    try {
+      for (const directory of [
+        "scripts",
+        "shared",
+        "src",
+        "tests",
+        "apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services",
+        "apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/Support"
+      ]) mkdirSync(join(temporaryRoot, directory), { recursive: true });
+
+      writeFileSync(join(temporaryRoot, "scripts/generate-secret-rules.mjs"), generator);
+      writeFileSync(
+        join(temporaryRoot, "shared/canonical-secret-rules.json"),
+        readFileSync("shared/canonical-secret-rules.json")
+      );
+
+      const generate = spawnSync(process.execPath, ["scripts/generate-secret-rules.mjs"], {
+        cwd: temporaryRoot,
+        encoding: "utf8"
+      });
+      expect(generate.status, `${generate.stdout}\n${generate.stderr}`).toBe(0);
+
+      const corpusPath = join(temporaryRoot, compiledSwiftCorpusPath);
+      writeFileSync(corpusPath, `${readFileSync(corpusPath, "utf8")}\n// injected drift\n`);
+
+      const stale = spawnSync(process.execPath, ["scripts/generate-secret-rules.mjs", "--check"], {
+        cwd: temporaryRoot,
+        encoding: "utf8"
+      });
+      expect(stale.status).not.toBe(0);
+      expect(stale.stderr).toContain(compiledSwiftCorpusPath);
+
+      const regenerate = spawnSync(process.execPath, ["scripts/generate-secret-rules.mjs"], {
+        cwd: temporaryRoot,
+        encoding: "utf8"
+      });
+      expect(regenerate.status, `${regenerate.stdout}\n${regenerate.stderr}`).toBe(0);
+
+      const fresh = spawnSync(process.execPath, ["scripts/generate-secret-rules.mjs", "--check"], {
+        cwd: temporaryRoot,
+        encoding: "utf8"
+      });
+      expect(fresh.status, `${fresh.stdout}\n${fresh.stderr}`).toBe(0);
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
   });
 
   it("projects only runtime cookie fields into production Node output", () => {

@@ -133,12 +133,12 @@ jobs:
           swift build -c debug --product NeonDiffDesktop
           swift build -c release --product NeonDiffDesktop
 
-      - name: Swift core and model checks
+      - name: Swift core and AppCore tests
         working-directory: apps/neondiff-desktop
         run: |
-          swift run NeonDiffDesktopCoreChecks
+          scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests
           swift run NeonDiffDesktopFixtureChecks
-          ./scripts/run-model-checks.sh
+          scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests
 
       - name: Secret corpus production-artifact boundary
         shell: bash
@@ -151,8 +151,12 @@ jobs:
             "$release_bin/NeonDiffDesktop" \
             "$debug_bin/NeonDiffDesktopCore.build" \
             "$release_bin/NeonDiffDesktopCore.build" \
+            "$debug_bin/NeonDiffDesktopAppCore.build" \
+            "$release_bin/NeonDiffDesktopAppCore.build" \
             "$debug_bin/Modules/NeonDiffDesktopCore.swiftmodule" \
-            "$release_bin/Modules/NeonDiffDesktopCore.swiftmodule"
+            "$release_bin/Modules/NeonDiffDesktopCore.swiftmodule" \
+            "$debug_bin/Modules/NeonDiffDesktopAppCore.swiftmodule" \
+            "$release_bin/Modules/NeonDiffDesktopAppCore.swiftmodule"
 
       - name: Build app bundle
         working-directory: apps/neondiff-desktop
@@ -171,6 +175,10 @@ jobs:
           release_bin="$(cd apps/neondiff-desktop && swift build -c release --show-bin-path)"
           npm run check:desktop-fixture-boundary -- \
             "$release_bin/NeonDiffDesktop" \
+            "$release_bin/NeonDiffDesktopCore.build" \
+            "$release_bin/NeonDiffDesktopAppCore.build" \
+            "$release_bin/Modules/NeonDiffDesktopCore.swiftmodule" \
+            "$release_bin/Modules/NeonDiffDesktopAppCore.swiftmodule" \
             "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app"
 
   swift-desktop-gate:
