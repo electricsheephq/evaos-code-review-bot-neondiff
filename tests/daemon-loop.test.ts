@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runDaemonCycle as runDaemonCycleImpl, type RunDaemonCycleOptions } from "../src/daemon.js";
 import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
+import type { ProductionLicenseAdmission } from "../src/license-admission.js";
 
 const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
   ...input,
@@ -8,6 +9,42 @@ const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
 });
 
 describe("daemon cycle resilience", () => {
+  it("threads one cycle validation bundle into review, retry, and enrichment work", async () => {
+    const daemonCycle = { operation: "daemon_cycle" } as ProductionLicenseAdmission;
+    const reviewDiscovery = { operation: "review_discovery" } as ProductionLicenseAdmission;
+    const issueEnrichment = { operation: "issue_enrichment" } as ProductionLicenseAdmission;
+    const seen: unknown[] = [];
+
+    const result = await runDaemonCycleImpl({
+      cycle: 1,
+      dryRun: true,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      issueEnrichmentEnabled: true,
+      admitDaemonCycleImpl: async () => ({ daemonCycle, reviewDiscovery, issueEnrichment }),
+      runOnceImpl: async (options) => {
+        seen.push(options.licenseAdmission);
+        return successfulRunOnceResult();
+      },
+      retryProviderCooldownsImpl: async (options) => {
+        seen.push(options.licenseAdmission);
+        return successfulRetryResult();
+      },
+      issueEnrichmentCycleImpl: async (options) => {
+        seen.push(options.licenseAdmission);
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: () => undefined,
+      stderr: () => undefined
+    });
+
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual([reviewDiscovery, reviewDiscovery, issueEnrichment]);
+  });
+
   it("denies a cycle before heartbeat, review, retry, or enrichment work", async () => {
     const calls = { heartbeat: 0, review: 0, retry: 0, enrichment: 0 };
     const stderr: string[] = [];
@@ -367,6 +404,30 @@ function successfulRunOnceResult() {
     skippedStaleHead: 0,
     baselinedExisting: 0,
     policySkips: []
+  };
+}
+
+function successfulRetryResult() {
+  return {
+    ok: true as const,
+    checkedAt: "2026-07-01T00:00:00.000Z",
+    dryRun: true,
+    expiredOnly: true,
+    limit: 1,
+    candidates: 0,
+    attempted: 0,
+    results: [],
+    summary: {
+      reviewed: 0,
+      dryRun: 0,
+      remainedCooldown: 0,
+      failed: 0,
+      skippedStaleHead: 0,
+      skippedProcessed: 0,
+      skippedClosed: 0,
+      skippedCapacity: 0,
+      other: 0
+    }
   };
 }
 

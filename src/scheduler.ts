@@ -108,12 +108,17 @@ export interface SchedulerGitHubApi {
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
   const config = loadConfig(options.configPath);
-  const licenseAdmission = await requireActiveProductionLicense({
-    operation: "review_discovery",
-    config: config.license!
-  });
-  if (!licenseAdmission.ok) {
-    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  let licenseAdmission = options.licenseAdmission;
+  if (licenseAdmission && !isAuthenticProductionLicenseAdmission(licenseAdmission, "review_discovery")) {
+    throw new Error("production review-discovery admission is required for scheduled review cycles");
+  }
+  if (!licenseAdmission) {
+    const result = await requireActiveProductionLicense({
+      operation: "review_discovery",
+      config: config.license!
+    });
+    if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
+    licenseAdmission = result.admission;
   }
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
@@ -123,7 +128,7 @@ export async function runScheduledCycle(options: RunOnceOptions): Promise<Schedu
       github,
       state,
       options,
-      licenseAdmission: licenseAdmission.admission,
+      licenseAdmission,
       reviewPullImpl: reviewPull
     });
   } finally {

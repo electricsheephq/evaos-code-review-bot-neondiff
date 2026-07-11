@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
+  requireActiveDaemonCycleAdmissions,
   requireActiveProductionLicense,
   type ProductionLicenseAdmission
 } from "../src/license-admission.js";
@@ -39,6 +40,32 @@ function fixtureConfig(): LicenseConfig {
 }
 
 describe("production useful-work admission", () => {
+  it("mints the daemon operation bundle from one live API validation", async () => {
+    let fetchCalls = 0;
+    const result = await requireActiveDaemonCycleAdmissions({
+      config: fixtureConfig(),
+      fetchImpl: (async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({
+          status: "active",
+          expiresAt: "2026-08-01T00:00:00.000Z",
+          repoVisibilityScope: "private",
+          privateRepoAllowed: true,
+          updateEntitlement: true
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+      now: new Date("2026-07-11T00:00:00.000Z")
+    });
+
+    expect(fetchCalls).toBe(1);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected active daemon admission bundle");
+    expect(isAuthenticProductionLicenseAdmission(result.admissions.daemonCycle, "daemon_cycle")).toBe(true);
+    expect(isAuthenticProductionLicenseAdmission(result.admissions.reviewDiscovery, "review_discovery")).toBe(true);
+    expect(isAuthenticProductionLicenseAdmission(result.admissions.issueEnrichment, "issue_enrichment")).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(key());
+  });
+
   it("rejects a structurally forged admission token", () => {
     const forged = Object.freeze({
       kind: "production-license-admission",

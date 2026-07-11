@@ -30,6 +30,7 @@ describe("default-deny command license policy", () => {
     [{ command: "status", coverageBacked: true }, "review_discovery"],
     [{ command: "runtime-inventory", coverageBacked: true }, "review_discovery"],
     [{ command: "queue", coverageBacked: true }, "review_discovery"],
+    [{ command: "why", coverageBacked: true }, "review_discovery"],
     [{ command: "dashboard", coverageBacked: true }, "review_discovery"],
     [{ command: "release-status", coverageBacked: true }, "review_discovery"],
     [{ command: "retry-failed" }, "review_cycle"],

@@ -794,6 +794,7 @@ exit 1
         ["status", "--config", configPath],
         ["runtime-inventory", "--config", configPath],
         ["queue", "--config", configPath],
+        ["why", "--repo", "acme/demo", "--pr", "1", "--config", configPath],
         ["dashboard", "--operator", "true", "--config", configPath],
         ["release-status", "--coverage", "true", "--config", configPath]
       ]) {

@@ -38,16 +38,24 @@ export function isAuthenticProductionLicenseAdmission(
     && (operation === undefined || admission.operation === operation);
 }
 
-type ProductionLicenseAdmissionInput = {
+type ProductionLicenseValidationInput = {
   config: LicenseConfig;
   repo?: string;
   now?: Date;
   fetchImpl?: typeof fetch;
   secretReader?: LicenseSecretReader;
-} & (
+};
+
+type ProductionLicenseAdmissionInput = ProductionLicenseValidationInput & (
   | { operation: "review_cycle"; visibility: "public" | "private" | "unknown" }
   | { operation: Exclude<ProductionLicenseOperation, "review_cycle">; visibility?: never }
 );
+
+export interface DaemonCycleAdmissions {
+  daemonCycle: ProductionLicenseAdmission;
+  reviewDiscovery: ProductionLicenseAdmission;
+  issueEnrichment: ProductionLicenseAdmission;
+}
 
 export function authorizeAdmissionForVisibility(
   admission: ProductionLicenseAdmission,
@@ -127,8 +135,7 @@ export async function requireActiveProductionLicense(
       }
     };
   }
-  const admission: ProductionLicenseAdmission = Object.freeze({
-    kind: "production-license-admission",
+  const admission = mintProductionLicenseAdmission({
     operation: input.operation,
     checkedAt: status.checkedAt,
     fingerprint: entitlement.licenseFingerprint,
@@ -137,7 +144,6 @@ export async function requireActiveProductionLicense(
       && (entitlement.repoVisibilityScope === "private" || entitlement.repoVisibilityScope === "all"),
     updateEntitlement: entitlement.updateEntitlement
   });
-  mintedProductionAdmissions.add(admission);
   if (input.operation === "update_check" && !admission.updateEntitlement) {
     return {
       ok: false,
@@ -171,4 +177,48 @@ export async function requireActiveProductionLicense(
     ok: true,
     admission
   };
+}
+
+export async function requireActiveDaemonCycleAdmissions(
+  input: ProductionLicenseValidationInput
+): Promise<
+  | { ok: true; admissions: DaemonCycleAdmissions }
+  | { ok: false; decision: RedactedLicenseDecision }
+> {
+  const daemon = await requireActiveProductionLicense({ ...input, operation: "daemon_cycle" });
+  if (!daemon.ok) return daemon;
+  const shared = daemon.admission;
+  return {
+    ok: true,
+    admissions: {
+      daemonCycle: shared,
+      reviewDiscovery: deriveProductionLicenseAdmission(shared, "review_discovery"),
+      issueEnrichment: deriveProductionLicenseAdmission(shared, "issue_enrichment")
+    }
+  };
+}
+
+function deriveProductionLicenseAdmission(
+  source: ProductionLicenseAdmission,
+  operation: ProductionLicenseOperation
+): ProductionLicenseAdmission {
+  return mintProductionLicenseAdmission({
+    operation,
+    checkedAt: source.checkedAt,
+    fingerprint: source.fingerprint,
+    repoVisibilityScope: source.repoVisibilityScope,
+    privateRepoAllowed: source.privateRepoAllowed,
+    updateEntitlement: source.updateEntitlement
+  });
+}
+
+function mintProductionLicenseAdmission(
+  input: Omit<ProductionLicenseAdmission, "kind">
+): ProductionLicenseAdmission {
+  const admission: ProductionLicenseAdmission = Object.freeze({
+    kind: "production-license-admission",
+    ...input
+  });
+  mintedProductionAdmissions.add(admission);
+  return admission;
 }

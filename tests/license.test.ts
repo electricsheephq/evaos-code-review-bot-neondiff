@@ -1360,7 +1360,7 @@ describe("license activation and entitlement cache", () => {
       throw new Error("license gate should block before GitHub review posting");
     };
 
-    const status = await reviewPull({
+    await expect(reviewPull({
       config,
       github,
       state,
@@ -1369,9 +1369,8 @@ describe("license activation and entitlement cache", () => {
       dryRun: false,
       useZCode: true,
       budget: new ReviewRunBudget(1)
-    });
+    })).rejects.toThrow("production license admission is required for pull review");
 
-    expect(status).toBe("skipped_license_gate");
     expect(state.getReviewReadiness("owner/private", 7, "private-head")).toBeUndefined();
     expect(githubReads).toBe(0);
     expect(existsSync(join(root, "evidence"))).toBe(false);

@@ -3601,7 +3601,7 @@ function shouldUseOperatorDashboard(args: ParsedArgs): boolean {
 }
 
 function isCoverageBackedCommand(command: string, args: ParsedArgs): boolean {
-  if (command === "coverage" || command === "status" || command === "runtime-inventory" || command === "queue") {
+  if (command === "coverage" || command === "status" || command === "runtime-inventory" || command === "queue" || command === "why") {
     return true;
   }
   if (command === "dashboard") return shouldUseOperatorDashboard(args);

@@ -3,7 +3,13 @@ import { loadConfig } from "./config.js";
 import { GitHubApi } from "./github.js";
 import { runIssueEnrichmentCycle, type IssueEnrichmentCycleResult } from "./issue-enrichment.js";
 import { runScheduledCycle } from "./scheduler.js";
-import { requireActiveProductionLicense } from "./license-admission.js";
+import {
+  isAuthenticProductionLicenseAdmission,
+  requireActiveDaemonCycleAdmissions,
+  requireActiveProductionLicense,
+  type DaemonCycleAdmissions,
+  type ProductionLicenseAdmission
+} from "./license-admission.js";
 import { ReviewStateStore, type DaemonHeartbeatEvent } from "./state.js";
 import { retryProviderCooldowns, runOnce, type RetryProviderCooldownsResult, type RunOnceResult } from "./worker.js";
 
@@ -21,17 +27,22 @@ export interface RunDaemonCycleOptions {
   commandsEnabled: boolean;
   reviewSchedulerEnabled?: boolean;
   issueEnrichmentEnabled?: boolean;
-  runOnceImpl?: (options: { configPath?: string; dryRun: boolean }) => Promise<RunOnceResult>;
+  runOnceImpl?: (options: { configPath?: string; dryRun: boolean; licenseAdmission?: ProductionLicenseAdmission }) => Promise<RunOnceResult>;
   retryProviderCooldownsImpl?: (options: {
     configPath?: string;
     limit?: number;
     expiredOnly?: boolean;
     dryRun: boolean;
     useZCode?: boolean;
+    licenseAdmission?: ProductionLicenseAdmission;
   }) => Promise<RetryProviderCooldownsResult>;
-  issueEnrichmentCycleImpl?: (options: { configPath?: string; dryRun: boolean }) => Promise<IssueEnrichmentCycleResult>;
+  issueEnrichmentCycleImpl?: (options: {
+    configPath?: string;
+    dryRun: boolean;
+    licenseAdmission?: ProductionLicenseAdmission;
+  }) => Promise<IssueEnrichmentCycleResult>;
   recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string) => void;
-  admitDaemonCycleImpl?: (configPath?: string) => Promise<void>;
+  admitDaemonCycleImpl?: (configPath?: string) => Promise<DaemonCycleAdmissions | void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -39,8 +50,9 @@ export interface RunDaemonCycleOptions {
 export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<DaemonCycleResult> {
   const stdout = input.stdout ?? console.log;
   const stderr = input.stderr ?? console.error;
+  let admissions: DaemonCycleAdmissions | void;
   try {
-    await (input.admitDaemonCycleImpl ?? admitDaemonCycle)(input.configPath);
+    admissions = await (input.admitDaemonCycleImpl ?? admitDaemonCycle)(input.configPath);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     stderr(formatDaemonLog({
@@ -78,7 +90,11 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   }));
 
   try {
-    const result = await runOnceImpl({ configPath: input.configPath, dryRun: input.dryRun });
+    const result = await runOnceImpl({
+      configPath: input.configPath,
+      dryRun: input.dryRun,
+      ...(admissions ? { licenseAdmission: admissions.reviewDiscovery } : {})
+    });
     try {
       if (schedulerEnabled) {
         stdout(formatDaemonLog({
@@ -93,7 +109,8 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
           dryRun: input.dryRun,
           expiredOnly: true,
           limit: 1,
-          useZCode: true
+          useZCode: true,
+          ...(admissions ? { licenseAdmission: admissions.reviewDiscovery } : {})
         });
         stdout(formatDaemonLog({
           event: "daemon_provider_cooldown_retry",
@@ -117,7 +134,8 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       try {
         const issueEnrichment = await issueEnrichmentCycleImpl({
           configPath: input.configPath,
-          dryRun: input.dryRun
+          dryRun: input.dryRun,
+          ...(admissions ? { licenseAdmission: admissions.issueEnrichment } : {})
         });
         stdout(formatDaemonLog({
           event: "daemon_issue_enrichment",
@@ -158,25 +176,34 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   }
 }
 
-async function admitDaemonCycle(configPath?: string): Promise<void> {
+async function admitDaemonCycle(configPath?: string): Promise<DaemonCycleAdmissions> {
   const config = loadConfig(configPath);
-  const admission = await requireActiveProductionLicense({
-    operation: "daemon_cycle",
+  const admission = await requireActiveDaemonCycleAdmissions({
     config: config.license!
   });
   if (!admission.ok) {
     throw new Error(`license ${admission.decision.status}: ${admission.decision.detail}`);
   }
+  return admission.admissions;
 }
 
-async function runIssueEnrichmentCycleFromConfig(input: { configPath?: string; dryRun: boolean }): Promise<IssueEnrichmentCycleResult> {
+async function runIssueEnrichmentCycleFromConfig(input: {
+  configPath?: string;
+  dryRun: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
+}): Promise<IssueEnrichmentCycleResult> {
   const config = loadConfig(input.configPath);
-  const licenseAdmission = await requireActiveProductionLicense({
-    operation: "issue_enrichment",
-    config: config.license!
-  });
-  if (!licenseAdmission.ok) {
-    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  let licenseAdmission = input.licenseAdmission;
+  if (licenseAdmission && !isAuthenticProductionLicenseAdmission(licenseAdmission, "issue_enrichment")) {
+    throw new Error("production issue-enrichment admission is required");
+  }
+  if (!licenseAdmission) {
+    const result = await requireActiveProductionLicense({
+      operation: "issue_enrichment",
+      config: config.license!
+    });
+    if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
+    licenseAdmission = result.admission;
   }
   const state = new ReviewStateStore(config.statePath);
   try {
@@ -185,7 +212,7 @@ async function runIssueEnrichmentCycleFromConfig(input: { configPath?: string; d
       state,
       github: new GitHubApi(config.github),
       dryRun: input.dryRun,
-      licenseAdmission: licenseAdmission.admission
+      licenseAdmission
     });
   } finally {
     state.close();

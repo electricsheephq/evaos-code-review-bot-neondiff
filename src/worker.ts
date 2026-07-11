@@ -34,6 +34,7 @@ import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
   authorizeAdmissionForVisibility,
+  isAuthenticProductionLicenseAdmission,
   requireActiveProductionLicense,
   type ProductionLicenseAdmission,
   type RedactedLicenseDecision
@@ -155,6 +156,7 @@ export interface RunOnceOptions {
   pullNumber?: number;
   expectedHeadSha?: string;
   useZCode?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }
 
 export interface RunOnceResult {
@@ -325,13 +327,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   });
   if (admittedRepos.length === 0) return result;
 
-  const licenseAdmission = await requireActiveProductionLicense({
-    operation: "review_discovery",
-    config: config.license!
-  });
-  if (!licenseAdmission.ok) {
-    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
-  }
+  const licenseAdmission = await resolveReviewDiscoveryAdmission(config, options.licenseAdmission);
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
@@ -378,7 +374,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
             budget,
-            licenseAdmission: licenseAdmission.admission,
+            licenseAdmission,
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
@@ -453,15 +449,10 @@ export async function retryProviderCooldowns(options: {
   expiredOnly?: boolean;
   dryRun: boolean;
   useZCode?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryProviderCooldownsResult> {
   const config = loadConfig(options.configPath);
-  const licenseAdmission = await requireActiveProductionLicense({
-    operation: "review_discovery",
-    config: config.license!
-  });
-  if (!licenseAdmission.ok) {
-    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
-  }
+  const licenseAdmission = await resolveReviewDiscoveryAdmission(config, options.licenseAdmission);
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(1);
@@ -473,7 +464,7 @@ export async function retryProviderCooldowns(options: {
       budget,
       options,
       reviewPullImpl: reviewPull,
-      licenseAdmission: licenseAdmission.admission
+      licenseAdmission
     });
   } finally {
     state.close();
@@ -1233,7 +1224,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
-  if (!input.licenseAdmission) return "skipped_license_gate";
+  if (!input.licenseAdmission) throw new Error("production license admission is required for pull review");
   const visibility = visibilityFromPullSummary(pull);
   const visibilityDecision = authorizeAdmissionForVisibility(
     input.licenseAdmission,
@@ -1822,6 +1813,24 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   } finally {
     releaseReviewCapacity();
   }
+}
+
+async function resolveReviewDiscoveryAdmission(
+  config: BotConfig,
+  provided?: ProductionLicenseAdmission
+): Promise<ProductionLicenseAdmission> {
+  if (provided) {
+    if (!isAuthenticProductionLicenseAdmission(provided, "review_discovery")) {
+      throw new Error("production review-discovery admission is required");
+    }
+    return provided;
+  }
+  const result = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
+  return result.admission;
 }
 
 async function reconcileProcessedHeadAfterDirectReviewSafely(input: {
