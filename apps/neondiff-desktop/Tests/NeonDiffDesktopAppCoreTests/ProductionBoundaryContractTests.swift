@@ -35,6 +35,7 @@ import Testing
         #expect(fixture.preferences.bool(forKey: "neondiff.hasCompletedOnboarding"))
         #expect(!fixture.preferences.bool(forKey: "neondiff.hasCompletedActivationOnboarding.v2"))
         #expect(fixture.model.logText.contains("read-only setup surface"))
+        #expect(fixture.model.logText.contains("Native activation broker proof is not available"))
     }
 
     @MainActor

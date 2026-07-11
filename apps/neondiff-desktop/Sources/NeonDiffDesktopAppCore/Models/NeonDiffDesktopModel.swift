@@ -1027,7 +1027,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard !dependencies.productionBoundary.nativeActivationBrokerVerified else { return }
         isOnboardingPresented = false
         lastError = nil
-        logText = "Opened the read-only setup surface. (productionActivationBoundaryMessage)"
+        logText = "Opened the read-only setup surface. \(productionActivationBoundaryMessage)"
     }
 
     @discardableResult
