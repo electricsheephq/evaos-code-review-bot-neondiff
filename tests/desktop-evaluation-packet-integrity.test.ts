@@ -113,7 +113,13 @@ process.exit(99);
   writeFileSync(join(packet, "validation", "packet-safety-scan.ok"), "ok\n");
   writeFileSync(join(packet, "validation", "release-boundary.ok"), "ok\n");
   writeFileSync(join(packet, "validation", "release-boundary.log"), "release boundary passed\n");
-  execFileSync("node", ["scripts/capture-desktop-evaluation-platform.mjs", "--output", join(packet, "validation", "platform.json")]);
+  writeJSON(join(packet, "validation", "platform.json"), {
+    schemaVersion: 1,
+    macOSVersion: "99.1",
+    xcodeVersion: "not-installed-command-line-tools",
+    swiftVersion: "Apple Swift version fixture",
+    architecture: "arm64"
+  });
 
   const skippedImages: string[] = [];
   let firstScreenshot = "";
@@ -377,6 +383,15 @@ describe("desktop evaluation packet integrity", () => {
       "artifacts/NeonDiffDesktop.app/Contents/Frameworks/Fixture.framework/Fixture",
       "artifacts/NeonDiffDesktop.app/Contents/Frameworks/Fixture.framework/Versions/Current"
     ]);
+
+    writeFileSync(join(value.packet, "allowed.txt"), "packet sibling must not become an app link target");
+    symlinkSync(
+      "../../../../allowed.txt",
+      join(value.packet, "artifacts", "NeonDiffDesktop.app", "Contents", "Frameworks", "escape-existing")
+    );
+    const escaping = spawnSync("node", ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", value.packet], { encoding: "utf8" });
+    expect(escaping.status).not.toBe(0);
+    expect(escaping.stderr).toMatch(/escaping|unsafe/i);
   });
 
   it("scans packet text after capture and accounts for skipped images", () => {
