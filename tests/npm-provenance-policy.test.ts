@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { verifyNpmProvenanceBundle } from "../scripts/lib/npm-provenance-policy.mjs";
 
 describe("npm provenance policy", () => {
   const roots: string[] = [];
@@ -13,7 +14,7 @@ describe("npm provenance policy", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("binds a verified npm provenance payload to the reviewed tarball and release commit", () => {
+  it("binds the exact cryptographically verified bundle to the reviewed tarball and release commit", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provenance-"));
     roots.push(root);
     const bytes = Buffer.from("reviewed tarball fixture");
@@ -44,21 +45,39 @@ describe("npm provenance policy", () => {
       bundle: { dsseEnvelope: { payload: Buffer.from(JSON.stringify(payload)).toString("base64") } }
     }] }));
 
-    const run = (expectedCommit: string) => spawnSync(process.execPath, [
-      script,
-      "--attestations", attestationsPath,
-      "--expected-package", "neondiff",
-      "--expected-version", "1.0.4",
-      "--expected-integrity", integrity,
-      "--expected-repository", "electricsheephq/evaos-code-review-bot-neondiff",
-      "--expected-workflow", ".github/workflows/publish-npm.yml",
-      "--expected-tag", "v1.0.4",
-      "--expected-commit", expectedCommit
-    ], { encoding: "utf8" });
+    const document = JSON.parse(readFileSync(attestationsPath, "utf8"));
+    let verifiedBundle: unknown;
+    const result = await verifyNpmProvenanceBundle({
+      document,
+      expectedPackage: "neondiff",
+      expectedVersion: "1.0.4",
+      expectedIntegrity: integrity,
+      expectedRepository: "electricsheephq/evaos-code-review-bot-neondiff",
+      expectedWorkflow: ".github/workflows/publish-npm.yml",
+      expectedTag: "v1.0.4",
+      expectedCommit: commit
+    }, async (bundle) => { verifiedBundle = bundle; return {} as never; });
+    expect(verifiedBundle).toBe(document.attestations[0].bundle);
+    expect(result.commit).toBe(commit);
 
-    expect(run(commit).status).toBe(0);
-    const rejected = run("b".repeat(40));
-    expect(rejected.status).not.toBe(0);
-    expect(rejected.stderr).toContain("provenance git commit does not match");
+    await expect(verifyNpmProvenanceBundle({
+      document,
+      expectedPackage: "neondiff",
+      expectedVersion: "1.0.4",
+      expectedIntegrity: integrity,
+      expectedRepository: "electricsheephq/evaos-code-review-bot-neondiff",
+      expectedWorkflow: ".github/workflows/publish-npm.yml",
+      expectedTag: "v1.0.4",
+      expectedCommit: commit
+    }, async () => { throw new Error("signature rejected"); })).rejects.toThrow("signature rejected");
+
+    const unsignedRun = spawnSync(process.execPath, [
+      script, "--attestations", attestationsPath, "--expected-package", "neondiff",
+      "--expected-version", "1.0.4", "--expected-integrity", integrity,
+      "--expected-repository", "electricsheephq/evaos-code-review-bot-neondiff",
+      "--expected-workflow", ".github/workflows/publish-npm.yml", "--expected-tag", "v1.0.4",
+      "--expected-commit", commit
+    ], { encoding: "utf8" });
+    expect(unsignedRun.status).not.toBe(0);
   }, 20_000);
 });

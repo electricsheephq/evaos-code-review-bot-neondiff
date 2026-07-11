@@ -744,10 +744,19 @@ describe("beta release status", () => {
       cwd: root,
       manifestPath: "public-release.json",
       expectedVersion: "v1.0.4",
-      now: new Date("2026-08-20T01:00:00.000Z"),
-      allowStaleReleaseProof: true
+      now: new Date("2026-07-12T01:00:00.000Z"),
+      allowStaleActivationProof: true
     });
     expect(immutableRecovery.licenseApi.ok).toBe(true);
+    const expiredImmutableRecovery = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-08-20T01:00:00.000Z"),
+      allowStaleActivationProof: true
+    });
+    expect(expiredImmutableRecovery.licenseApi.ok).toBe(false);
+    expect(expiredImmutableRecovery.licenseApi.detail).toContain("observedAt must be no older than 30 days");
 
     const lifecycleArtifact = artifacts.find((artifact) => artifact.kind === "production-lifecycle")!;
     writeFileSync(join(root, lifecycleArtifact.ref), `${JSON.stringify({ evidenceKind: "production-lifecycle", redacted: true, tampered: true })}\n`);

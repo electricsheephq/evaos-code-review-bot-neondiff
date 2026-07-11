@@ -533,7 +533,7 @@ export function readPublicReleaseManifestStatus(input: {
   manifestPath: string;
   expectedVersion?: string;
   verifyRollbackRefs?: boolean;
-  allowStaleReleaseProof?: boolean;
+  allowStaleActivationProof?: boolean;
   now?: Date;
 }): PublicReleaseStatus {
   const absolutePath = resolve(input.cwd, input.manifestPath);
@@ -644,7 +644,6 @@ export function readPublicReleaseManifestStatus(input: {
           proofPath: licenseHealthProofPath,
           expectedReleaseVersion: expectedVersion,
           expectedUrl: licenseHealthUrl,
-          allowStaleProof: input.allowStaleReleaseProof === true,
           now: input.now
         })
       : { ok: true, detail: "" };
@@ -668,7 +667,6 @@ export function readPublicReleaseManifestStatus(input: {
           proofPath: licenseIssuanceProofPath,
           expectedReleaseVersion: expectedVersion,
           expectedUrl: licenseIssuanceUrl,
-          allowStaleProof: input.allowStaleReleaseProof === true,
           now: input.now
         })
       : { ok: true, detail: "" };
@@ -682,7 +680,6 @@ export function readPublicReleaseManifestStatus(input: {
           proofPath: licenseIssuanceAuthenticatedProofPath,
           expectedReleaseVersion: expectedVersion,
           expectedUrl: licenseIssuanceUrl,
-          allowStaleProof: input.allowStaleReleaseProof === true,
           now: input.now
         })
       : { ok: true, detail: "" };
@@ -693,7 +690,7 @@ export function readPublicReleaseManifestStatus(input: {
           cwd: input.cwd,
           proofPath: licenseActivationProofPath,
           expectedReleaseVersion: expectedVersion,
-          allowStaleProof: input.allowStaleReleaseProof === true,
+          allowStaleProof: input.allowStaleActivationProof === true,
           now: input.now
         })
       : { ok: true, detail: "" };
@@ -1071,7 +1068,7 @@ function isLicenseApiStateAcceptable(state: string, requiredForThisRelease: bool
   return state === "healthy" || state === "not_applicable" || state === "disabled" || state === "pending";
 }
 
-function validateLicenseProofObservedAt(observedAt: string | undefined, now?: Date, allowStaleProof = false): string[] {
+function validateLicenseProofObservedAt(observedAt: string | undefined, now?: Date): string[] {
   if (!observedAt) return ["observedAt must be a valid ISO timestamp"];
   const observedAtMs = Date.parse(observedAt);
   if (Number.isNaN(observedAtMs)) return ["observedAt must be a valid ISO timestamp"];
@@ -1081,7 +1078,7 @@ function validateLicenseProofObservedAt(observedAt: string | undefined, now?: Da
   if (observedAtMs > nowMs + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
     failures.push("observedAt must not be more than 5 minutes in the future");
   }
-  if (!allowStaleProof && nowMs - observedAtMs > LICENSE_PROOF_MAX_AGE_MS) {
+  if (nowMs - observedAtMs > LICENSE_PROOF_MAX_AGE_MS) {
     failures.push(`observedAt must be no older than ${LICENSE_PROOF_MAX_AGE_DAYS} days`);
   }
   return failures;
@@ -1526,7 +1523,6 @@ function validateLicenseHealthProof(input: {
   proofPath?: string;
   expectedReleaseVersion?: string;
   expectedUrl?: string;
-  allowStaleProof?: boolean;
   now?: Date;
 }): { ok: boolean; detail: string } {
   if (!input.proofPath) return { ok: false, detail: "missing health proof path (no healthProofPath declared)" };
@@ -1570,7 +1566,7 @@ function validateLicenseHealthProof(input: {
   }
   if (method !== "GET") failures.push("method must be GET");
   if (statusCode !== 200) failures.push("statusCode must be 200");
-  failures.push(...validateLicenseProofObservedAt(observedAt, input.now, input.allowStaleProof));
+  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
   if (responseBody === undefined) {
     failures.push("responseBody must be present");
   }
@@ -1594,7 +1590,6 @@ function validateLicenseIssuanceProof(input: {
   proofPath?: string;
   expectedReleaseVersion?: string;
   expectedUrl?: string;
-  allowStaleProof?: boolean;
   now?: Date;
 }): { ok: boolean; detail: string } {
   if (!input.proofPath) return { ok: false, detail: "missing checkout issuance proof path (no checkoutIssuanceProofPath declared)" };
@@ -1641,7 +1636,7 @@ function validateLicenseIssuanceProof(input: {
   // must fail closed. Authenticated issuance smoke uses owner-held secrets and
   // belongs in the deploy runbook/evidence lane, not committed manifest JSON.
   if (statusCode !== 401) failures.push("statusCode must be 401");
-  failures.push(...validateLicenseProofObservedAt(observedAt, input.now, input.allowStaleProof));
+  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
   if (responseBody === undefined) {
     failures.push("responseBody must be present");
   }
@@ -1673,7 +1668,6 @@ function validateAuthenticatedLicenseIssuanceProof(input: {
   proofPath?: string;
   expectedReleaseVersion?: string;
   expectedUrl?: string;
-  allowStaleProof?: boolean;
   now?: Date;
 }): { ok: boolean; detail: string } {
   if (!input.proofPath) {
@@ -1743,7 +1737,7 @@ function validateAuthenticatedLicenseIssuanceProof(input: {
   }
   if (method !== "POST") failures.push("method must be POST");
   if (statusCode !== 200) failures.push("statusCode must be 200");
-  failures.push(...validateLicenseProofObservedAt(observedAt, input.now, input.allowStaleProof));
+  failures.push(...validateLicenseProofObservedAt(observedAt, input.now));
   if (!isPlainRecord(proof.redactedResponse)) failures.push("redactedResponse must be present");
   if (responseStatus !== "issued") failures.push("redactedResponse.status must be issued");
   if (replayed === undefined) failures.push("redactedResponse.replayed must be boolean");

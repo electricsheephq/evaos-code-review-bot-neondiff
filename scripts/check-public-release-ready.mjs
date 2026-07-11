@@ -52,7 +52,7 @@ const status = readPublicReleaseManifestStatus({
   cwd,
   manifestPath,
   expectedVersion,
-  allowStaleReleaseProof: existingPackageRecovery === "true"
+  allowStaleActivationProof: existingPackageRecovery === "true"
 });
 if (!status.ok) fail("public release manifest is blocked; run release-status locally for redacted gate details");
 const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();

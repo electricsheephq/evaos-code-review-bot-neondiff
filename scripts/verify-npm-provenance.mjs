@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { verify } from "sigstore";
+import { verifyNpmProvenanceBundle } from "./lib/npm-provenance-policy.mjs";
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -38,33 +39,18 @@ try {
 } catch {
   fail("attestations response must be valid JSON");
 }
-const slsa = document?.attestations?.filter((item) => item?.predicateType === "https://slsa.dev/provenance/v1") ?? [];
-if (slsa.length !== 1) fail("attestations response must contain exactly one SLSA provenance statement");
-let statement;
 try {
-  statement = JSON.parse(Buffer.from(slsa[0].bundle.dsseEnvelope.payload, "base64").toString("utf8"));
-} catch {
-  fail("SLSA provenance payload must be valid base64 JSON");
+  const result = await verifyNpmProvenanceBundle({
+    document,
+    expectedPackage,
+    expectedVersion,
+    expectedIntegrity,
+    expectedRepository,
+    expectedWorkflow,
+    expectedTag,
+    expectedCommit
+  }, verify);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+} catch (error) {
+  fail(error instanceof Error ? error.message : "npm provenance verification failed");
 }
-if (statement.predicateType !== "https://slsa.dev/provenance/v1") fail("SLSA predicate type does not match");
-const expectedSubject = `pkg:npm/${expectedPackage}@${expectedVersion}`;
-const subject = statement.subject?.find((item) => item?.name === expectedSubject);
-if (!subject) fail("provenance subject does not match the npm package");
-let expectedSha512;
-try {
-  expectedSha512 = Buffer.from(expectedIntegrity.slice("sha512-".length), "base64").toString("hex");
-} catch {
-  fail("expected integrity is not valid base64");
-}
-if (subject.digest?.sha512 !== expectedSha512) fail("provenance subject digest does not match the reviewed tarball");
-const build = statement.predicate?.buildDefinition;
-const workflow = build?.externalParameters?.workflow;
-if (workflow?.repository !== `https://github.com/${expectedRepository}`) fail("provenance repository does not match");
-if (workflow?.path !== expectedWorkflow) fail("provenance workflow does not match");
-if (workflow?.ref !== `refs/tags/${expectedTag}`) fail("provenance tag ref does not match");
-const dependency = build?.resolvedDependencies?.find((item) => item?.digest?.gitCommit);
-if (dependency?.digest?.gitCommit !== expectedCommit) fail("provenance git commit does not match");
-if (dependency?.uri !== `git+https://github.com/${expectedRepository}@refs/tags/${expectedTag}`) {
-  fail("provenance resolved dependency does not match the release tag");
-}
-process.stdout.write(`${JSON.stringify({ package: expectedPackage, version: expectedVersion, commit: expectedCommit, sha512: expectedSha512 })}\n`);
