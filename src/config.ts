@@ -8,6 +8,12 @@ import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import { resolveEnvAlias } from "./env-alias.js";
 import type { LicenseConfig } from "./license.js";
+import {
+  OFFICIAL_LICENSE_API_BASE_URL,
+  OFFICIAL_LICENSE_KEYCHAIN_ACCOUNT,
+  OFFICIAL_LICENSE_KEYCHAIN_SERVICE,
+  resolveProductionLicensePolicy
+} from "./license-production-policy.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import {
   buildPublicConfidencePolicy,
@@ -409,16 +415,16 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG,
   license: {
-    enabled: false,
-    apiBaseUrl: undefined,
+    enabled: true,
+    apiBaseUrl: OFFICIAL_LICENSE_API_BASE_URL,
     cachePath: "",
     storageBackend: "file",
     keyPath: undefined,
-    keychainService: "com.electricsheephq.neondiff.license",
-    keychainAccount: "default",
+    keychainService: OFFICIAL_LICENSE_KEYCHAIN_SERVICE,
+    keychainAccount: OFFICIAL_LICENSE_KEYCHAIN_ACCOUNT,
     requestTimeoutMs: 10_000,
-    offlineGraceMs: MAX_LICENSE_OFFLINE_GRACE_MS,
-    publicReposFree: true,
+    offlineGraceMs: 0,
+    publicReposFree: false,
     privateReposRequireEntitlement: true,
     updateEntitlementRequiresLicense: true
   },
@@ -677,11 +683,13 @@ function validateConfig(config: BotConfig): void {
   const issueEnrichment = config.issueEnrichment ?? DEFAULT_CONFIG.issueEnrichment!;
   config.issueEnrichment = issueEnrichment;
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
-  const license = { ...DEFAULT_CONFIG.license!, ...(config.license ?? {}) };
-  license.cachePath = license.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
-  if (license.storageBackend === "file" && !license.keyPath) {
-    license.keyPath = join(dirname(config.statePath), "license", "license-key.txt");
+  const configuredLicense = { ...DEFAULT_CONFIG.license!, ...(config.license ?? {}) };
+  validateConfiguredLicensePolicyShape(configuredLicense, "config.license");
+  configuredLicense.cachePath = configuredLicense.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
+  if (configuredLicense.storageBackend === "file" && !configuredLicense.keyPath) {
+    configuredLicense.keyPath = join(dirname(config.statePath), "license", "license-key.txt");
   }
+  const license = resolveProductionLicensePolicy(configuredLicense);
   config.license = license;
   validateLicenseConfig(license, "config.license");
   const desktop = config.desktop ?? DEFAULT_CONFIG.desktop!;
@@ -1238,6 +1246,18 @@ function validateLicenseConfig(value: unknown, label: string): void {
   validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
   validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
   validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);
+}
+
+function validateConfiguredLicensePolicyShape(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.apiBaseUrl, `${label}.apiBaseUrl`);
+  validateNonNegativeInteger(value.offlineGraceMs, `${label}.offlineGraceMs`);
+  validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
+  validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
+  validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);
+  validateOptionalString(value.keychainService, `${label}.keychainService`);
+  validateOptionalString(value.keychainAccount, `${label}.keychainAccount`);
 }
 
 export function validateLicenseConfigOverride(value: LicenseConfig, label = "config.license"): void {

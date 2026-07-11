@@ -11,6 +11,7 @@ import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
 import {
   activateLicense,
+  deactivateLicense,
   evaluateLicenseReviewGate,
   getLicenseStatus,
   type LicenseConfig
@@ -53,16 +54,11 @@ describe("license activation and entitlement cache", () => {
     const configPath = join(root, "config.json");
     writeConfig(configPath, root, server.url);
 
-    const activated = await runCli([
-      "license",
-      "activate",
-      "--config",
-      configPath,
-      "--license-key-env",
-      "NEONDIFF_TEST_LICENSE_KEY",
-      "--repo",
-      "owner/private"
-    ], { NEONDIFF_TEST_LICENSE_KEY: key });
+    const activated = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: key,
+      repo: "owner/private"
+    });
     expect(activated.ok).toBe(true);
     expect(activated.status).toBe("active");
     expect(JSON.stringify(activated)).not.toContain(key);
@@ -440,47 +436,13 @@ describe("license activation and entitlement cache", () => {
       });
     });
     servers.push(server);
-    const configPath = join(root, "config.json");
-    writeConfig(configPath, root, server.url);
-    await runCli([
-      "license",
-      "activate",
-      "--config",
-      configPath,
-      "--license-key-env",
-      "NEONDIFF_TEST_LICENSE_KEY"
-    ], { NEONDIFF_TEST_LICENSE_KEY: key });
+    const config = licenseConfig(root, server.url);
+    expect((await activateLicense({ config, licenseKey: key })).ok).toBe(true);
 
-    await expect(execFileAsync(process.execPath, [
-      tsxCliPath,
-      "src/cli.ts",
-      "license",
-      "deactivate",
-      "--config",
-      configPath,
-      "--notify-api",
-      "true"
-    ], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
-    })).rejects.toMatchObject({
-      stdout: expect.stringContaining("\"ok\": false")
-    });
-    await expect(execFileAsync(process.execPath, [
-      tsxCliPath,
-      "src/cli.ts",
-      "license",
-      "deactivate",
-      "--config",
-      configPath,
-      "--notify-api",
-      "true"
-    ], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
-    })).rejects.toMatchObject({
-      stdout: expect.stringContaining("\"status\": \"deactivation_failed\"")
-    });
+    const first = await deactivateLicense({ config, notifyApi: true });
+    const second = await deactivateLicense({ config, notifyApi: true });
+    expect(first).toMatchObject({ ok: false, status: "deactivation_failed" });
+    expect(second).toMatchObject({ ok: false, status: "deactivation_failed" });
     expect(existsSync(join(root, "license.key"))).toBe(true);
     expect(existsSync(join(root, "entitlement.json"))).toBe(true);
   });
@@ -574,7 +536,7 @@ describe("license activation and entitlement cache", () => {
       }
     })).toThrow(/config\.license\.cachePath must be outside protected checkout root/);
 
-    expect(() => loadConfigFromObject({
+    const redirected = loadConfigFromObject({
       pilotRepos: ["owner/repo"],
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
@@ -586,13 +548,19 @@ describe("license activation and entitlement cache", () => {
         storageBackend: "file",
         keyPath: join(root, "license.key")
       }
-    })).toThrow(/config\.license\.apiBaseUrl must use https/);
+    });
+    expect(redirected.license).toMatchObject({
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      productionPolicy: {
+        diagnostics: expect.arrayContaining([expect.objectContaining({ field: "apiBaseUrl" })])
+      }
+    });
   });
 
-  it("requires an API base URL when license enforcement is enabled", () => {
+  it("supplies the canonical API base URL when a legacy config omits it", () => {
     const root = mkRoot(roots);
 
-    expect(() => loadConfigFromObject({
+    const config = loadConfigFromObject({
       pilotRepos: ["owner/repo"],
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
@@ -603,7 +571,14 @@ describe("license activation and entitlement cache", () => {
         storageBackend: "file",
         keyPath: join(root, "license.key")
       }
-    })).toThrow(/config\.license\.apiBaseUrl is required when config\.license\.enabled=true/);
+    });
+    expect(config.license).toMatchObject({
+      enabled: true,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      productionPolicy: {
+        diagnostics: []
+      }
+    });
   });
 
   it("uses a still-active cached entitlement during transient API outage", async () => {

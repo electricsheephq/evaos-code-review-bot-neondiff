@@ -50,6 +50,27 @@ export interface LicenseConfig {
   publicReposFree: boolean;
   privateReposRequireEntitlement: boolean;
   updateEntitlementRequiresLicense: boolean;
+  productionPolicy?: LicenseProductionPolicyMetadata;
+}
+
+export interface LicensePolicyDiagnostic {
+  field:
+    | "enabled"
+    | "apiBaseUrl"
+    | "offlineGraceMs"
+    | "publicReposFree"
+    | "privateReposRequireEntitlement"
+    | "updateEntitlementRequiresLicense"
+    | "keychainService"
+    | "keychainAccount";
+  configured: string;
+  effective: string;
+  reason: string;
+}
+
+export interface LicenseProductionPolicyMetadata {
+  mode: "mandatory_online";
+  diagnostics: LicensePolicyDiagnostic[];
 }
 
 export interface LicenseEntitlement {
