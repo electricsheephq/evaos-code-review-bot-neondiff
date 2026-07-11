@@ -23,7 +23,7 @@
 - No fixture content, fake implementations, `--ui-testing` hooks, XCTest symbols, or test-only environment values may appear in a release executable or release app bundle.
 - Do not claim hosted XCUITest, `.xcresult`, full-Xcode, signed/notarized distribution, Sparkle update, browser/native parity, or GA from a Command Line Tools build.
 - #516 remains open and `owner-gated` until the full-Xcode task has actual `xcodebuild` and `.xcresult` evidence.
-- Every filtered Swift test file declares a correspondingly named `@Suite`. Run `swift test list` and require at least one discovered identifier matching the filter; a zero-test exit is not proof.
+- Command Line Tools 6.2.4 contains Apple's signed `Testing.framework` but does not add its framework directory to SwiftPM automatically. Task 2 adds a wrapper that supplies the installed compiler/linker/rpath flags only when a direct `import Testing` probe fails; no external package is added. Every filtered file declares a correspondingly named `@Suite`. Run test discovery and require at least one matching identifier; a zero-test exit is not proof.
 - Unless a command block explicitly changes directory, Tasks 1–5 run from `apps/neondiff-desktop`; Task 6 and Task 8 validation blocks run from the repository root. Every command that crosses that boundary uses `--package-path` or an absolute repo-relative path.
 
 ---
@@ -76,8 +76,9 @@ Run from `apps/neondiff-desktop`:
 
 ```bash
 pwd
-swift test --filter CoreImportTests
-swift test --filter AppCoreImportTests
+framework_path=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+swift test -Xswiftc -F -Xswiftc "$framework_path" -Xlinker -F -Xlinker "$framework_path" -Xlinker -rpath -Xlinker "$framework_path" --filter CoreImportTests
+swift test -Xswiftc -F -Xswiftc "$framework_path" -Xlinker -F -Xlinker "$framework_path" -Xlinker -rpath -Xlinker "$framework_path" --filter AppCoreImportTests
 ```
 
 Expected: Core import test may compile; AppCore test fails because `NeonDiffDesktopAppCore` and `NeonDiffDesktopAppCoreModule` do not exist. A successful AppCore test before the target exists is not acceptable evidence.
@@ -116,9 +117,11 @@ Create only `package enum NeonDiffDesktopAppCoreModule { package static let cont
 ```bash
 swift build --target NeonDiffDesktopCore
 swift build --target NeonDiffDesktopAppCore
-swift test --filter CoreImportTests
-swift test --filter AppCoreImportTests
-swift test list | rg 'CoreImportTests|AppCoreImportTests'
+framework_path=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+swift test -Xswiftc -F -Xswiftc "$framework_path" -Xlinker -F -Xlinker "$framework_path" -Xlinker -rpath -Xlinker "$framework_path" --filter CoreImportTests
+swift test -Xswiftc -F -Xswiftc "$framework_path" -Xlinker -F -Xlinker "$framework_path" -Xlinker -rpath -Xlinker "$framework_path" --filter AppCoreImportTests
+swift test -Xswiftc -F -Xswiftc "$framework_path" -Xlinker -F -Xlinker "$framework_path" -Xlinker -rpath -Xlinker "$framework_path" list | rg 'CoreImportTests|AppCoreImportTests'
+swift test -Xswiftc -F -Xswiftc "$framework_path" -Xlinker -F -Xlinker "$framework_path" -Xlinker -rpath -Xlinker "$framework_path"
 ```
 
 Expected: exit 0 and discovery output contains at least one test from each named `@Suite`.
@@ -137,6 +140,7 @@ git commit -m "test(desktop): add AppCore and Swift test targets"
 
 **Files:**
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/DesktopAppDependencies.swift`
+- Create: `apps/neondiff-desktop/scripts/run-swift-tests.sh`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/Dependencies/DesktopClipboard.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/Dependencies/DesktopURLOpener.swift`
 - Create: `apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/Dependencies/DesktopCLIExecuting.swift`
@@ -221,30 +225,53 @@ Test that:
 - `RecordingProviderVerifier` records the current executable path and verification metadata while never retaining or exposing the secret read by the Core service.
 
 ```swift
-@Test func CLIAndDashboardAreDistinctCapabilities() async throws {
-    let recorder = RecordingDesktopDependencies()
-    _ = try await recorder.cli.run(
-        executablePath: "fixture-neondiff",
-        arguments: ["daemon", "status"],
-        standardInput: nil,
-        timeout: 15
-    )
-    #expect(recorder.cli.calls.count == 1)
-    #expect(recorder.dashboard.calls.isEmpty)
+@Suite struct DesktopAppDependenciesTests {
+    @Test func CLIAndDashboardAreDistinctCapabilities() async throws {
+        let recorder = RecordingDesktopDependencies()
+        _ = try await recorder.cli.run(
+            executablePath: "fixture-neondiff",
+            arguments: ["daemon", "status"],
+            standardInput: nil,
+            timeout: 15
+        )
+        #expect(recorder.cli.calls.count == 1)
+        #expect(recorder.dashboard.calls.isEmpty)
+    }
 }
 ```
 
 - [ ] **Step 2: Run and observe missing-protocol failures**
 
 ```bash
-swift test --filter DesktopAppDependenciesTests
+framework_path=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+swift test -Xswiftc -F -Xswiftc "$framework_path" -Xlinker -F -Xlinker "$framework_path" -Xlinker -rpath -Xlinker "$framework_path" --filter DesktopAppDependenciesTests
 ```
 
 Expected: FAIL with unresolved dependency protocols and recording fakes.
 
-- [ ] **Step 3: Implement the eight protocols exactly as declared above and the required dependency initializer**
+- [ ] **Step 3: Implement the eight protocols exactly as declared above, the required dependency initializer, and the portable test wrapper**
 
 Put each declared protocol in its named file. Store one value for each of the eight protocols plus `DesktopSecretStoring` and `GitHubDesktopAuthenticating` in `DesktopAppDependencies`; require all ten values in its `package init`. Use actor/lock-backed fakes so Swift 6 concurrency checking remains enabled. The production types must contain no AppKit references. Keep `standardInput` in the CLI protocol because provider secrets must stay off argv and environment.
+
+`scripts/run-swift-tests.sh` must execute plain `swift test "$@"` when `swift -e 'import Testing'` succeeds. Otherwise it must require the existing Apple CLT framework directory and execute:
+
+```bash
+framework_path=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+exec swift test \
+  -Xswiftc -F -Xswiftc "$framework_path" \
+  -Xlinker -F -Xlinker "$framework_path" \
+  -Xlinker -rpath -Xlinker "$framework_path" \
+  "$@"
+```
+
+The wrapper fails closed if `Testing.framework` is absent. It does not download a package, mutate Xcode selection, or alter global toolchain configuration. All later SwiftPM test commands use this wrapper.
+
+Mark it executable and verify the mode before any direct invocation:
+
+```bash
+chmod +x scripts/run-swift-tests.sh
+test -x scripts/run-swift-tests.sh
+```
 
 - [ ] **Step 4: Implement bounded deterministic fakes under Tests only**
 
@@ -253,7 +280,7 @@ Put each declared protocol in its named file. Store one value for each of the ei
 - [ ] **Step 5: Run AppCore seam tests and a forbidden-import check**
 
 ```bash
-swift test --filter DesktopAppDependenciesTests
+scripts/run-swift-tests.sh --filter DesktopAppDependenciesTests
 if rg -n '^(import (AppKit|SwiftUI|Sparkle|Security|XCTest))$|NSPasteboard|NSWorkspace|FileManager\.default|UserDefaults\.standard' \
   Sources/NeonDiffDesktopAppCore; then
   echo 'forbidden AppCore OS dependency' >&2
@@ -267,7 +294,8 @@ Expected: tests pass and `rg` returns no matches.
 
 ```bash
 git add apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore \
-  apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests
+  apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests \
+  apps/neondiff-desktop/scripts/run-swift-tests.sh
 git commit -m "refactor(desktop): define injectable AppCore dependencies"
 ```
 
@@ -298,16 +326,18 @@ git commit -m "refactor(desktop): define injectable AppCore dependencies"
 
 ```swift
 @MainActor
-@Test func constructingModelReadsOnlyInjectedState() {
-    let fixture = RecordingDesktopDependencies()
-    fixture.preferences.values["neondiff.configPath"] = "fixture/config.json"
-    let model = NeonDiffDesktopModel(dependencies: fixture.dependencies)
+@Suite struct NeonDiffDesktopModelConstructionTests {
+    @Test func constructingModelReadsOnlyInjectedState() {
+        let fixture = RecordingDesktopDependencies()
+        fixture.preferences.values["neondiff.configPath"] = "fixture/config.json"
+        let model = NeonDiffDesktopModel(dependencies: fixture.dependencies)
 
-    #expect(model.configPath == "fixture/config.json")
-    #expect(fixture.clipboard.values.isEmpty)
-    #expect(fixture.urls.isEmpty)
-    #expect(fixture.cli.calls.isEmpty)
-    #expect(fixture.dashboard.calls.isEmpty)
+        #expect(model.configPath == "fixture/config.json")
+        #expect(fixture.clipboard.values.isEmpty)
+        #expect(fixture.urls.isEmpty)
+        #expect(fixture.cli.calls.isEmpty)
+        #expect(fixture.dashboard.calls.isEmpty)
+    }
 }
 ```
 
@@ -316,7 +346,7 @@ git commit -m "refactor(desktop): define injectable AppCore dependencies"
 Run:
 
 ```bash
-swift test --filter NeonDiffDesktopModelConstructionTests
+scripts/run-swift-tests.sh --filter NeonDiffDesktopModelConstructionTests
 ```
 
 Expected: FAIL because the moved model still imports AppKit and directly references `NSPasteboard`, `NSWorkspace`, `UserDefaults`, `Date`, `FileManager`, `Data.write`, and concrete CLI/dashboard clients.
@@ -398,8 +428,8 @@ No view may instantiate a production dependency.
 - [ ] **Step 10: Run boundary and build proof**
 
 ```bash
-swift test --filter ProductionBoundaryContractTests
-swift test list | rg 'NeonDiffDesktopModelConstructionTests|ProductionBoundaryContractTests'
+scripts/run-swift-tests.sh --filter ProductionBoundaryContractTests
+scripts/run-swift-tests.sh list | rg 'NeonDiffDesktopModelConstructionTests|ProductionBoundaryContractTests'
 swift build -c debug --product NeonDiffDesktop
 swift build -c release --product NeonDiffDesktop
 ```
@@ -462,8 +492,8 @@ Cover the existing guarantees:
 Run:
 
 ```bash
-swift test --filter ProviderVisualFixtureTests
-swift test --filter ProviderKeyScopingTests
+scripts/run-swift-tests.sh --filter ProviderVisualFixtureTests
+scripts/run-swift-tests.sh --filter ProviderKeyScopingTests
 ```
 
 Expected before production adjustments: FAIL on missing migrated helpers; after porting: pass without Keychain prompts.
@@ -474,14 +504,16 @@ Cover healthy, configured-unverified, blocked, wrong-provider, wrong-command, tr
 
 ```swift
 @MainActor
-@Test func concurrentVerifyClicksLaunchOneStdinOnlyOperation() async throws {
-    let fixture = ProviderModelFixture.blockedCLI()
-    fixture.model.verifyProviderKey()
-    fixture.model.verifyProviderKey()
-    await fixture.cli.waitUntilCallCount(1)
-    #expect(fixture.cli.calls.count == 1)
-    #expect(fixture.cli.calls[0].arguments.joined().contains(fixture.secret) == false)
-    #expect(fixture.cli.calls[0].standardInput == Data(fixture.secret.utf8))
+@Suite struct ProviderVerificationStateMachineTests {
+    @Test func concurrentVerifyClicksLaunchOneStdinOnlyOperation() async throws {
+        let fixture = ProviderModelFixture.blockedCLI()
+        fixture.model.verifyProviderKey()
+        fixture.model.verifyProviderKey()
+        await fixture.cli.waitUntilCallCount(1)
+        #expect(fixture.cli.calls.count == 1)
+        #expect(fixture.cli.calls[0].arguments.joined().contains(fixture.secret) == false)
+        #expect(fixture.cli.calls[0].standardInput == Data(fixture.secret.utf8))
+    }
 }
 ```
 
@@ -496,8 +528,8 @@ Cover token-expiry thresholds at exact injected times, refresh expiry, device po
 - [ ] **Step 6: Run the migration ledger and full AppCore target**
 
 ```bash
-swift test --filter ModelHarnessMigrationLedgerTests
-swift test --filter NeonDiffDesktopAppCoreTests
+scripts/run-swift-tests.sh --filter ModelHarnessMigrationLedgerTests
+scripts/run-swift-tests.sh --filter NeonDiffDesktopAppCoreTests
 ```
 
 Expected: all old assertion messages map exactly once to passing real tests. No test accesses live OS state.
@@ -507,7 +539,7 @@ Expected: all old assertion messages map exactly once to passing real tests. No 
 Remove the harness source, runner script, any Package target used only by that harness, and the workflow invocation `./scripts/run-model-checks.sh`. Replace it with:
 
 ```bash
-swift test --filter NeonDiffDesktopAppCoreTests
+scripts/run-swift-tests.sh --filter NeonDiffDesktopAppCoreTests
 ```
 
 Run this guard:
@@ -516,7 +548,7 @@ Run this guard:
 test ! -e Checks/NeonDiffDesktopModelChecks/main.swift
 test ! -e scripts/run-model-checks.sh
 ! rg -n 'NeonDiffDesktopModelChecks|run-model-checks' Package.swift scripts .github/workflows
-swift test --filter NeonDiffDesktopAppCoreTests
+scripts/run-swift-tests.sh --filter NeonDiffDesktopAppCoreTests
 ```
 
 - [ ] **Step 8: Commit Task 4**
@@ -559,12 +591,12 @@ The migration ledger follows the same concrete-test-function rule as Task 4. Kee
 For each group, first add imports and assertions, run its filter, observe the failure if visibility or injection is missing, then make the smallest Core change needed. Do not make internal APIs public solely for tests; use `@testable import NeonDiffDesktopCore`.
 
 ```bash
-swift test --filter CommandBuilderTests
-swift test --filter ConfigParsingTests
-swift test --filter GitHubDeviceAuthTests
-swift test --filter ProviderRegistryTests
-swift test --filter ProviderVerificationServiceTests
-swift test --filter RedactorTests
+scripts/run-swift-tests.sh --filter CommandBuilderTests
+scripts/run-swift-tests.sh --filter ConfigParsingTests
+scripts/run-swift-tests.sh --filter GitHubDeviceAuthTests
+scripts/run-swift-tests.sh --filter ProviderRegistryTests
+scripts/run-swift-tests.sh --filter ProviderVerificationServiceTests
+scripts/run-swift-tests.sh --filter RedactorTests
 ```
 
 - [ ] **Step 3: Prove secret transport and parser strictness in real tests**
@@ -574,11 +606,11 @@ Require provider stdin stays out of argv/errors, only exact redacted envelopes p
 - [ ] **Step 4: Delete only the migrated monolithic executable target**
 
 ```bash
-swift test --filter CoreChecksMigrationLedgerTests
-swift test --filter NeonDiffDesktopCoreTests
+scripts/run-swift-tests.sh --filter CoreChecksMigrationLedgerTests
+scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests
 ```
 
-After both pass, remove `NeonDiffDesktopCoreChecks` from `Package.swift` and replace its workflow command with `swift test --filter NeonDiffDesktopCoreTests`.
+After both pass, remove `NeonDiffDesktopCoreChecks` from `Package.swift` and replace its workflow command with `scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests`.
 
 - [ ] **Step 5: Commit Task 5**
 
@@ -828,8 +860,8 @@ git commit -m "test(desktop): add hosted macOS UI target"
 pwd
 git status --short
 cd apps/neondiff-desktop
-swift test --filter NeonDiffDesktopCoreTests
-swift test --filter NeonDiffDesktopAppCoreTests
+scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests
+scripts/run-swift-tests.sh --filter NeonDiffDesktopAppCoreTests
 swift build -c debug --product NeonDiffDesktop
 swift build -c release --product NeonDiffDesktop
 swift run NeonDiffDesktopFixtureChecks
