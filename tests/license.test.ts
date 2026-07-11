@@ -581,7 +581,7 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
-  it("uses a still-active cached entitlement during transient API outage", async () => {
+  it("keeps a still-active cache diagnostic-only during a transient API outage", async () => {
     const root = mkRoot(roots);
     const config = licenseConfig(root, "http://127.0.0.1:9");
     writeFileSync(join(root, "license.key"), "LIC-offline-cache-test-123456\n", { mode: 0o600 });
@@ -597,16 +597,48 @@ describe("license activation and entitlement cache", () => {
     const status = await getLicenseStatus({
       config,
       refresh: true,
-      now: new Date("2026-07-04T00:00:00.000Z")
+      now: new Date("2026-07-04T00:00:00.000Z"),
+      licenseSecretReader: { read: () => "LIC-offline-cache-test-123456" }
     });
 
-    expect(status).toMatchObject({
-      ok: true,
+    expect(status).toMatchObject({ ok: false, status: "network", source: "none", classification: "network" });
+  });
+
+  it("does not accept an active cache when no license key is stored", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "http://127.0.0.1:9");
+    writeFileSync(config.cachePath, `${JSON.stringify({
       status: "active",
-      source: "cache",
-      stale: true,
-      classification: "network"
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "all",
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+    const status = await getLicenseStatus({
+      config,
+      refresh: true,
+      now: new Date("2026-07-04T00:00:01.000Z"),
+      licenseSecretReader: { read: () => undefined }
     });
+    expect(status).toMatchObject({ ok: false, status: "missing", source: "none" });
+  });
+
+  it("rejects an already-expired active success response", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    writeFileSync(join(root, "license.key"), "LIC-expired-success-test-123456\n", { mode: 0o600 });
+    const status = await getLicenseStatus({
+      config,
+      refresh: true,
+      now: new Date("2026-07-04T00:00:00.000Z"),
+      fetchImpl: (async () => new Response(JSON.stringify({
+        status: "active",
+        expiresAt: "2026-07-03T00:00:00.000Z",
+        repoVisibilityScope: "all",
+        updateEntitlement: true
+      }), { status: 200 })) as typeof fetch
+    });
+    expect(status).toMatchObject({ ok: false, status: "invalid", classification: "invalid" });
   });
 
   it("treats entitlement offline grace metadata as diagnostic only", async () => {
