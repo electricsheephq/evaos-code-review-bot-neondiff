@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { runDaemonCycle as runDaemonCycleImpl, type RunDaemonCycleOptions } from "../src/daemon.js";
+import {
+  runDaemonCycle as runDaemonCycleImpl,
+  shouldExitDaemonAfterFailedCycle,
+  type RunDaemonCycleOptions
+} from "../src/daemon.js";
 import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
 import type { ProductionLicenseAdmission } from "../src/license-admission.js";
 
@@ -9,6 +13,15 @@ const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
 });
 
 describe("daemon cycle resilience", () => {
+  it("exits on activation denial but keeps long-running daemons alive after recoverable runtime failures", () => {
+    const admissionDenied = { ok: false, failureKind: "admission_denied", error: "license missing" } as const;
+    const runtimeFailure = { ok: false, failureKind: "runtime_failure", error: "transient timeout" } as const;
+
+    expect(shouldExitDaemonAfterFailedCycle(admissionDenied, false)).toBe(true);
+    expect(shouldExitDaemonAfterFailedCycle(runtimeFailure, false)).toBe(false);
+    expect(shouldExitDaemonAfterFailedCycle(runtimeFailure, true)).toBe(true);
+  });
+
   it("threads one cycle validation bundle into review, retry, and enrichment work", async () => {
     const daemonCycle = { operation: "daemon_cycle" } as ProductionLicenseAdmission;
     const reviewDiscovery = { operation: "review_discovery" } as ProductionLicenseAdmission;
@@ -65,7 +78,11 @@ describe("daemon cycle resilience", () => {
       stderr: (line) => stderr.push(line)
     });
 
-    expect(result).toEqual({ ok: false, error: "license missing: no license key is stored" });
+    expect(result).toEqual({
+      ok: false,
+      failureKind: "admission_denied",
+      error: "license missing: no license key is stored"
+    });
     expect(calls).toEqual({ heartbeat: 0, review: 0, retry: 0, enrichment: 0 });
     expect(stderr).toHaveLength(1);
   });
@@ -90,6 +107,7 @@ describe("daemon cycle resilience", () => {
     });
 
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ failureKind: "runtime_failure" });
     expect(stdout).toHaveLength(1);
     expect(JSON.parse(stdout[0]!)).toMatchObject({
       event: "daemon_cycle_start",
@@ -304,6 +322,7 @@ describe("daemon cycle resilience", () => {
     });
 
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ failureKind: "runtime_failure" });
     expect(heartbeats).toEqual([
       { event: "daemon_cycle_start" },
       { event: "daemon_cycle_failed", error: "second timeout" }

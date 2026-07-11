@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
-import { runDaemonCycle } from "./daemon.js";
+import { runDaemonCycle, shouldExitDaemonAfterFailedCycle } from "./daemon.js";
 import {
   closeSync,
   existsSync,
@@ -53,7 +53,7 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
-import { requireActiveProductionLicense } from "./license-admission.js";
+import { requireActiveProductionLicense, type ProductionLicenseAdmission } from "./license-admission.js";
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { runLocalDashboardPreviewSmoke, startLocalDashboardServer } from "./local-dashboard.js";
 import {
@@ -2018,7 +2018,12 @@ async function main(): Promise<void> {
         useZCode,
         expectedHeadSha: reviewPrExpectedHeadSha
       },
-      commandName: command
+      commandName: command,
+      admitImpl: async () => {
+        const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+        if (!admission) throw new Error("review commands require production license admission");
+        return admission;
+      }
     });
     console.log(result.output);
     if (result.exitCode !== 0) process.exitCode = result.exitCode;
@@ -2252,7 +2257,7 @@ async function main(): Promise<void> {
         issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
         configPath: args.config
       });
-      if (!cycleResult.ok) {
+      if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
         process.exitCode = 1;
         return;
       }
@@ -3632,14 +3637,15 @@ async function requireClassifiedCommandAdmission(
   policy: CommandLicensePolicy,
   configPath?: string,
   loadedConfig?: BotConfig
-): Promise<void> {
-  if (policy.mode === "setup_safe") return;
+): Promise<ProductionLicenseAdmission | undefined> {
+  if (policy.mode === "setup_safe") return undefined;
   const config = loadedConfig ?? loadConfig(configPath);
   const operation = policy.operation === "review_cycle" ? "review_discovery" : policy.operation;
   const admission = await requireActiveProductionLicense({ operation, config: config.license! });
   if (!admission.ok) {
     throw new Error(`license ${admission.decision.status}: ${admission.decision.detail}`);
   }
+  return admission.admission;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {

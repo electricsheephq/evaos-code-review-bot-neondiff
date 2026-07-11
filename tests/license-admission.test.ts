@@ -150,6 +150,23 @@ describe("production useful-work admission", () => {
     expect(fetchCalls).toBe(0);
   });
 
+  it("denies a missing production key file before any API request", async () => {
+    const config = fixtureConfig();
+    rmSync(config.keyPath!);
+    let fetchCalls = 0;
+    const result = await requireActiveProductionLicense({
+      operation: "provider_verify",
+      config,
+      fetchImpl: (async () => {
+        fetchCalls += 1;
+        return new Response("{}");
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({ ok: false, decision: { status: "missing" } });
+    expect(fetchCalls).toBe(0);
+  });
+
   it("authorizes only repository visibilities covered by the opaque admission", async () => {
     const result = await requireActiveProductionLicense({
       operation: "review_cycle",

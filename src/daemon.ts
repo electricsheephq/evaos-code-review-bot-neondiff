@@ -15,7 +15,11 @@ import { retryProviderCooldowns, runOnce, type RetryProviderCooldownsResult, typ
 
 export type DaemonCycleResult =
   | { ok: true; result: RunOnceResult }
-  | { ok: false; error: string };
+  | { ok: false; failureKind: "admission_denied" | "runtime_failure"; error: string };
+
+export function shouldExitDaemonAfterFailedCycle(result: DaemonCycleResult, runOnce: boolean): boolean {
+  return !result.ok && (runOnce || result.failureKind === "admission_denied");
+}
 
 export interface RunDaemonCycleOptions {
   cycle: number;
@@ -62,7 +66,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       error: message
     }));
-    return { ok: false, error: message };
+    return { ok: false, failureKind: "admission_denied", error: message };
   }
   const schedulerEnabled = input.reviewSchedulerEnabled === true;
   const runOnceImpl = input.runOnceImpl ?? (schedulerEnabled ? runScheduledCycle : runOnce);
@@ -172,7 +176,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       error: message
     }));
     recordHeartbeat("daemon_cycle_failed", message);
-    return { ok: false, error: message };
+    return { ok: false, failureKind: "runtime_failure", error: message };
   }
 }
 
