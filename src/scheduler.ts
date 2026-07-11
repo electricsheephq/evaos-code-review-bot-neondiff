@@ -12,6 +12,7 @@ import {
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
 import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
+import { requireActiveProductionLicense, type ProductionLicenseAdmission } from "./license-admission.js";
 import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import {
   buildReviewStatusMarker,
@@ -102,6 +103,13 @@ export interface SchedulerGitHubApi {
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
   const config = loadConfig(options.configPath);
+  const licenseAdmission = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!licenseAdmission.ok) {
+    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  }
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   try {
@@ -110,6 +118,7 @@ export async function runScheduledCycle(options: RunOnceOptions): Promise<Schedu
       github,
       state,
       options,
+      licenseAdmission: licenseAdmission.admission,
       reviewPullImpl: reviewPull
     });
   } finally {
@@ -123,9 +132,11 @@ export async function runScheduledCycleWithDeps(input: {
   state: ReviewStateStore;
   options: RunOnceOptions;
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission?: ProductionLicenseAdmission;
   now?: Date;
   clock?: () => Date;
 }): Promise<ScheduledRunResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for scheduled review cycles");
   const config = input.config;
   const scheduler = config.reviewScheduler;
   if (!scheduler?.enabled) {
@@ -174,6 +185,7 @@ export async function runScheduledCycleWithDeps(input: {
         now,
         dryRun: input.options.dryRun,
         reviewPullImpl: input.reviewPullImpl,
+        licenseAdmission: input.licenseAdmission,
         allowActivationBaselineCommandLookup: input.options.pullNumber !== undefined,
         onStatusCommentFailure: () => {
           result.statusCommentFailures += 1;
@@ -238,6 +250,7 @@ export async function runScheduledCycleWithDeps(input: {
       dryRun: input.options.dryRun,
       useZCode: input.options.useZCode ?? true,
       reviewPullImpl: input.reviewPullImpl,
+      licenseAdmission: input.licenseAdmission,
       budget,
       onStatusCommentFailure: () => {
         result.statusCommentFailures += 1;
@@ -429,6 +442,7 @@ async function enqueuePullIfEligible(input: {
   now: Date;
   dryRun: boolean;
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission: ProductionLicenseAdmission;
   allowActivationBaselineCommandLookup?: boolean;
   onStatusCommentFailure?: () => void;
   onCommandFetchError?: () => void;
@@ -516,6 +530,7 @@ async function enqueuePullIfEligible(input: {
         dryRun: input.dryRun,
         useZCode: false,
         budget: new ReviewRunBudget(1),
+        licenseAdmission: input.licenseAdmission,
         allowActivationBaselineCommandLookup: true,
         commandCommentId: commandDecision.commandId
       });
@@ -1135,6 +1150,7 @@ async function runLeasedQueueJob(input: {
   dryRun: boolean;
   useZCode: boolean;
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission: ProductionLicenseAdmission;
   budget: ReviewRunBudget;
   onStatusCommentFailure?: () => void;
   now?: Date;
@@ -1306,6 +1322,7 @@ async function runLeasedQueueJob(input: {
       dryRun: input.dryRun,
       useZCode: input.useZCode,
       budget: input.budget,
+      licenseAdmission: input.licenseAdmission,
       processedHeadPolicy: processedHeadPolicyForQueueJob(input.state, input.job, pull),
       allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})

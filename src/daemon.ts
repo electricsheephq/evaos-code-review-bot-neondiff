@@ -3,6 +3,7 @@ import { loadConfig } from "./config.js";
 import { GitHubApi } from "./github.js";
 import { runIssueEnrichmentCycle, type IssueEnrichmentCycleResult } from "./issue-enrichment.js";
 import { runScheduledCycle } from "./scheduler.js";
+import { requireActiveProductionLicense } from "./license-admission.js";
 import { ReviewStateStore, type DaemonHeartbeatEvent } from "./state.js";
 import { retryProviderCooldowns, runOnce, type RetryProviderCooldownsResult, type RunOnceResult } from "./worker.js";
 
@@ -30,6 +31,7 @@ export interface RunDaemonCycleOptions {
   }) => Promise<RetryProviderCooldownsResult>;
   issueEnrichmentCycleImpl?: (options: { configPath?: string; dryRun: boolean }) => Promise<IssueEnrichmentCycleResult>;
   recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string) => void;
+  admitDaemonCycleImpl?: (configPath?: string) => Promise<void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
 }
@@ -37,6 +39,19 @@ export interface RunDaemonCycleOptions {
 export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<DaemonCycleResult> {
   const stdout = input.stdout ?? console.log;
   const stderr = input.stderr ?? console.error;
+  try {
+    await (input.admitDaemonCycleImpl ?? admitDaemonCycle)(input.configPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    stderr(formatDaemonLog({
+      event: "daemon_cycle_failed",
+      level: "error",
+      cycle: input.cycle,
+      dryRun: input.dryRun,
+      error: message
+    }));
+    return { ok: false, error: message };
+  }
   const schedulerEnabled = input.reviewSchedulerEnabled === true;
   const runOnceImpl = input.runOnceImpl ?? (schedulerEnabled ? runScheduledCycle : runOnce);
   const retryProviderCooldownsImpl = input.retryProviderCooldownsImpl ?? retryProviderCooldowns;
@@ -143,15 +158,34 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   }
 }
 
+async function admitDaemonCycle(configPath?: string): Promise<void> {
+  const config = loadConfig(configPath);
+  const admission = await requireActiveProductionLicense({
+    operation: "daemon_cycle",
+    config: config.license!
+  });
+  if (!admission.ok) {
+    throw new Error(`license ${admission.decision.status}: ${admission.decision.detail}`);
+  }
+}
+
 async function runIssueEnrichmentCycleFromConfig(input: { configPath?: string; dryRun: boolean }): Promise<IssueEnrichmentCycleResult> {
   const config = loadConfig(input.configPath);
+  const licenseAdmission = await requireActiveProductionLicense({
+    operation: "issue_enrichment",
+    config: config.license!
+  });
+  if (!licenseAdmission.ok) {
+    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  }
   const state = new ReviewStateStore(config.statePath);
   try {
     return await runIssueEnrichmentCycle({
       config,
       state,
       github: new GitHubApi(config.github),
-      dryRun: input.dryRun
+      dryRun: input.dryRun,
+      licenseAdmission: licenseAdmission.admission
     });
   } finally {
     state.close();

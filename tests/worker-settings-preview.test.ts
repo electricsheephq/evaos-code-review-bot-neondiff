@@ -6,6 +6,7 @@ import type { BotConfig } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
@@ -20,7 +21,15 @@ vi.mock("../src/git.js", async (importOriginal) => {
   };
 });
 
-const { buildReviewProviderMetadata, localDateFolder, reviewPull } = await import("../src/worker.js");
+const { buildReviewProviderMetadata, localDateFolder, reviewPull: reviewPullImpl } = await import("../src/worker.js");
+const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
+  ...input,
+  pull: {
+    ...input.pull,
+    base: { ...input.pull.base, repo: { ...input.pull.base.repo, private: false, visibility: "public" } }
+  },
+  licenseAdmission: input.licenseAdmission ?? testLicenseAdmission
+});
 
 describe("worker review settings preview evidence", () => {
   const roots: string[] = [];

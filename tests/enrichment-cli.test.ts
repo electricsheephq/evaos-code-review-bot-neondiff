@@ -1031,6 +1031,7 @@ describe("build-enrichment-comment issue CLI", () => {
 });
 
 async function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
+  const licenseApiLoader = join(process.cwd(), "tests", "helpers", "mock-production-license-api.mjs");
   return execFileAsync(process.execPath, [tsxCliPath, "src/cli.ts", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -1039,6 +1040,7 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
       EVAOS_REVIEW_BOT_APP_ID: "",
       EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "",
       [["GITHUB", "TOKEN"].join("_")]: "test-token",
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${licenseApiLoader}`.trim(),
       ...env
     },
     maxBuffer: 1024 * 1024
@@ -1061,6 +1063,7 @@ function writeConfig(root: string, apiBaseUrl: string): string {
       token: "test-token",
       apiBaseUrl
     },
+    license: fixtureLicenseConfig(root),
     enrichment: {
       enabled: false,
       postIssueComment: false,
@@ -1098,6 +1101,7 @@ function writeIssueScanConfig(root: string, apiBaseUrl: string): string {
       token: "test-token",
       apiBaseUrl
     },
+    license: fixtureLicenseConfig(root),
     issueEnrichment: {
       enabled: false,
       postIssueComment: true,
@@ -1124,6 +1128,7 @@ function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
       token: "test-token",
       apiBaseUrl
     },
+    license: fixtureLicenseConfig(root),
     issueEnrichment: {
       enabled: true,
       postIssueComment: true,
@@ -1156,6 +1161,23 @@ function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
     }
   }, null, 2)}\n`);
   return path;
+}
+
+function fixtureLicenseConfig(root: string) {
+  const keyPath = join(root, "fixture-license.key");
+  writeFileSync(keyPath, `${["nd", "live", "fixtureenrichment0123456789"].join("_")}\n`, { mode: 0o600 });
+  return {
+    enabled: true,
+    apiBaseUrl: "https://neondiff-license.fly.dev",
+    cachePath: join(root, "fixture-entitlement.json"),
+    storageBackend: "file",
+    keyPath,
+    requestTimeoutMs: 1_000,
+    offlineGraceMs: 0,
+    publicReposFree: false,
+    privateReposRequireEntitlement: true,
+    updateEntitlementRequiresLicense: true
+  };
 }
 
 function writeTwoRepoIssueRunConfig(root: string, apiBaseUrl: string): string {

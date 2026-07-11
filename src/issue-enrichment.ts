@@ -14,6 +14,7 @@ import {
 } from "./review-lenses.js";
 import { redactSecrets } from "./secrets.js";
 import type { IssueEnrichmentRecord, IssueEnrichmentRecordStatus, ReviewStateStore } from "./state.js";
+import type { ProductionLicenseAdmission } from "./license-admission.js";
 
 export interface IssueEnrichmentConfig {
   enabled: boolean;
@@ -504,7 +505,9 @@ export async function runIssueEnrichmentCycle(input: {
   advanceWatermarks?: boolean;
   checkedAt?: string;
   preacquiredLease?: { leaseId: string };
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<IssueEnrichmentCycleResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for issue enrichment cycles");
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
   const releasePreacquiredLeaseBeforeRun = () => {

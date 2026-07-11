@@ -115,6 +115,17 @@ export async function requireActiveProductionLicense(
       }
     };
   }
+  if (input.operation === "issue_enrichment" && admission.repoVisibilityScope !== "all") {
+    return {
+      ok: false,
+      decision: {
+        status: "scope_mismatch",
+        checkedAt: admission.checkedAt,
+        classification: "scope_mismatch",
+        detail: "issue enrichment requires an active entitlement covering all repository visibility scopes"
+      }
+    };
+  }
   if (input.operation === "review_cycle") {
     const visibilityDecision = authorizeAdmissionForVisibility(admission, input.visibility);
     if (!visibilityDecision.ok) return visibilityDecision;

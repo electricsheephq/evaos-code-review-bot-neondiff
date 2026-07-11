@@ -15,9 +15,13 @@ import {
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
 import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
-import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle } from "../src/issue-enrichment.js";
+import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
+
+const runIssueEnrichmentCycle = (input: Parameters<typeof runIssueEnrichmentCycleImpl>[0]) =>
+  runIssueEnrichmentCycleImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission });
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
@@ -35,6 +39,15 @@ const pull: PullRequestSummary = {
 };
 
 describe("sticky enrichment comments", () => {
+  it("blocks direct issue-enrichment cycles before reading state or GitHub without admission", async () => {
+    await expect(runIssueEnrichmentCycleImpl({
+      config: {},
+      state: {} as never,
+      github: {} as never,
+      dryRun: true
+    })).rejects.toThrow("production license admission is required");
+  });
+
   it("loads default-off enrichment config", () => {
     expect(loadConfig().enrichment).toMatchObject({
       enabled: false,

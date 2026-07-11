@@ -1321,7 +1321,7 @@ describe("license activation and entitlement cache", () => {
     expect(statSync(keyPath).mode & 0o777).toBe(0o600);
   });
 
-  it("blocks provider-configured private repo worker reviews before checkout, provider, or posting when entitlement is missing", async () => {
+  it("blocks direct worker reviews without an opaque admission before state, checkout, provider, or GitHub work", async () => {
     const root = mkRoot(roots);
     const state = new ReviewStateStore(join(root, "state.sqlite"));
     const config = minimalConfig(root);
@@ -1347,7 +1347,11 @@ describe("license activation and entitlement cache", () => {
     };
     const pull = pullSummary(7, "private-head");
     const github = new GitHubApi({});
-    github.getRepo = async () => ({ full_name: "owner/private", private: true as const, visibility: "private" as const });
+    let githubReads = 0;
+    github.getRepo = async () => {
+      githubReads += 1;
+      return { full_name: "owner/private", private: true as const, visibility: "private" as const };
+    };
     github.listPullFiles = async () => {
       throw new Error("license gate should block before checkout/file listing/provider work");
     };
@@ -1367,16 +1371,9 @@ describe("license activation and entitlement cache", () => {
     });
 
     expect(status).toBe("skipped_license_gate");
-    const readiness = state.getReviewReadiness("owner/private", 7, "private-head");
-    expect(readiness).toMatchObject({
-      state: "blocked_on_proof",
-      reason: expect.stringContaining("private repo review requires active entitlement")
-    });
-    const gateEvidence = readFileSync(
-      join(root, "evidence", localDateFolder(), "owner__private", "pr-7", "private-head", "license-gate.json"),
-      "utf8"
-    );
-    expect(gateEvidence).toContain("private repo review requires active entitlement");
+    expect(state.getReviewReadiness("owner/private", 7, "private-head")).toBeUndefined();
+    expect(githubReads).toBe(0);
+    expect(existsSync(join(root, "evidence"))).toBe(false);
     expect(existsSync(join(root, "work"))).toBe(false);
     state.close();
   });

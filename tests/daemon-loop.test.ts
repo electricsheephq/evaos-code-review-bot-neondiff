@@ -1,8 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { runDaemonCycle } from "../src/daemon.js";
+import { runDaemonCycle as runDaemonCycleImpl, type RunDaemonCycleOptions } from "../src/daemon.js";
 import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
 
+const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
+  ...input,
+  admitDaemonCycleImpl: input.admitDaemonCycleImpl ?? (async () => undefined)
+});
+
 describe("daemon cycle resilience", () => {
+  it("denies a cycle before heartbeat, review, retry, or enrichment work", async () => {
+    const calls = { heartbeat: 0, review: 0, retry: 0, enrichment: 0 };
+    const stderr: string[] = [];
+    const result = await runDaemonCycleImpl({
+      cycle: 1,
+      dryRun: false,
+      pilotRepos: ["electricsheephq/WorldOS"],
+      monitoredRepos: ["electricsheephq/WorldOS"],
+      canaryPulls: [],
+      commandsEnabled: false,
+      issueEnrichmentEnabled: true,
+      admitDaemonCycleImpl: async () => { throw new Error("license missing: no license key is stored"); },
+      recordHeartbeatImpl: () => { calls.heartbeat += 1; },
+      runOnceImpl: async () => { calls.review += 1; throw new Error("must not run"); },
+      retryProviderCooldownsImpl: async () => { calls.retry += 1; throw new Error("must not run"); },
+      issueEnrichmentCycleImpl: async () => { calls.enrichment += 1; throw new Error("must not run"); },
+      stdout: () => undefined,
+      stderr: (line) => stderr.push(line)
+    });
+
+    expect(result).toEqual({ ok: false, error: "license missing: no license key is stored" });
+    expect(calls).toEqual({ heartbeat: 0, review: 0, retry: 0, enrichment: 0 });
+    expect(stderr).toHaveLength(1);
+  });
   it("logs runtime cycle failures without throwing out of the daemon loop", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];

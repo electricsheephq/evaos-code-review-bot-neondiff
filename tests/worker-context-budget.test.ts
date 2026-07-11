@@ -6,6 +6,7 @@ import type { BotConfig } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { Finding, PullRequestSummary } from "../src/types.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 const zcodePrompts = vi.hoisted((): string[] => []);
 const zcodeFindingsByPath = vi.hoisted(() => new Map<string, Finding[]>());
@@ -79,7 +80,15 @@ vi.mock("../src/github.js", async (importOriginal) => {
   };
 });
 
-const { localDateFolder, prepareFailedHeadRetry, reviewPull } = await import("../src/worker.js");
+const { localDateFolder, prepareFailedHeadRetry, reviewPull: reviewPullImpl } = await import("../src/worker.js");
+const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
+  ...input,
+  pull: {
+    ...input.pull,
+    base: { ...input.pull.base, repo: { ...input.pull.base.repo, private: false, visibility: "public" } }
+  },
+  licenseAdmission: input.licenseAdmission ?? testLicenseAdmission
+});
 const { buildReviewPrompt } = await import("../src/zcode.js");
 
 describe("worker context budget preflight", () => {

@@ -3,10 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
-import { runScheduledCycleWithDeps, type SchedulerGitHubApi } from "../src/scheduler.js";
+import { runScheduledCycleWithDeps as runScheduledCycleWithDepsImpl, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { reviewPull, type ReviewPullInput, type ReviewPullResult } from "../src/worker.js";
+import { reviewPull as reviewPullImpl, type ReviewPullInput, type ReviewPullResult } from "../src/worker.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
@@ -15,6 +16,21 @@ const HEAD_D = "d".repeat(40);
 const HEAD_F = "f".repeat(40);
 const SELF_REPO_CURRENT = "electricsheephq/evaos-code-review-bot-neondiff";
 const SELF_REPO_LEGACY = "electricsheephq/evaos-code-review-bot";
+const reviewPull = (input: ReviewPullInput) => reviewPullImpl({
+  ...input,
+  pull: testVisiblePull(input.pull),
+  licenseAdmission: input.licenseAdmission ?? testLicenseAdmission
+});
+const runScheduledCycleWithDeps = (
+  input: Parameters<typeof runScheduledCycleWithDepsImpl>[0]
+) => runScheduledCycleWithDepsImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission });
+
+function testVisiblePull(pull: PullRequestSummary): PullRequestSummary {
+  return {
+    ...pull,
+    base: { ...pull.base, repo: { ...pull.base.repo, private: false, visibility: "public" } }
+  };
+}
 
 describe("provider-aware review scheduler", () => {
   const roots: string[] = [];

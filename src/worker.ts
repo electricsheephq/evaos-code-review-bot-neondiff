@@ -32,7 +32,11 @@ import {
 import { GitHubApi } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
-import { requireActiveProductionLicense } from "./license-admission.js";
+import {
+  authorizeAdmissionForVisibility,
+  requireActiveProductionLicense,
+  type ProductionLicenseAdmission
+} from "./license-admission.js";
 import {
   buildPullFileFilterImpact,
   buildReviewSettingsPreview,
@@ -370,6 +374,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
             budget,
+            licenseAdmission: licenseAdmission.admission,
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
@@ -412,11 +417,26 @@ export async function retryFailedHead(options: {
   useZCode?: boolean;
 }): Promise<RetryFailedHeadResult> {
   const config = loadConfig(options.configPath);
+  const licenseAdmission = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!licenseAdmission.ok) {
+    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  }
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(1);
   try {
-    return await retryFailedHeadWithDeps({ config, github, state, budget, options, reviewPullImpl: reviewPull });
+    return await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget,
+      options,
+      reviewPullImpl: reviewPull,
+      licenseAdmission: licenseAdmission.admission
+    });
   } finally {
     state.close();
   }
@@ -431,6 +451,13 @@ export async function retryProviderCooldowns(options: {
   useZCode?: boolean;
 }): Promise<RetryProviderCooldownsResult> {
   const config = loadConfig(options.configPath);
+  const licenseAdmission = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!licenseAdmission.ok) {
+    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  }
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(1);
@@ -441,7 +468,8 @@ export async function retryProviderCooldowns(options: {
       state,
       budget,
       options,
-      reviewPullImpl: reviewPull
+      reviewPullImpl: reviewPull,
+      licenseAdmission: licenseAdmission.admission
     });
   } finally {
     state.close();
@@ -461,7 +489,9 @@ export async function retryProviderCooldownsWithDeps(input: {
     useZCode?: boolean;
   };
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryProviderCooldownsResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for provider retry cycles");
   const limit = input.options.limit ?? 5;
   if (!Number.isInteger(limit) || limit < 1) throw new Error("limit must be a positive integer");
   const expiredOnly = input.options.expiredOnly ?? true;
@@ -507,7 +537,8 @@ export async function retryProviderCooldownsWithDeps(input: {
         dryRun: input.options.dryRun,
         useZCode: input.options.useZCode
       },
-      reviewPullImpl: input.reviewPullImpl
+      reviewPullImpl: input.reviewPullImpl,
+      licenseAdmission: input.licenseAdmission
     });
     results.push(result);
   }
@@ -540,7 +571,9 @@ export async function retryFailedHeadWithDeps(input: {
     useZCode?: boolean;
   };
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryFailedHeadResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for failed-head retry cycles");
   const { config, github, state, budget, options } = input;
   const repoPolicy = resolveRepoProfile(config, options.repo);
   if (!repoPolicy.allowed) {
@@ -662,6 +695,7 @@ export async function retryFailedHeadWithDeps(input: {
       dryRun: options.dryRun,
       useZCode: options.useZCode ?? true,
       budget,
+      licenseAdmission: input.licenseAdmission,
       processedHeadPolicy: "retry_failed_head"
     });
     const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
@@ -1186,6 +1220,7 @@ export interface ReviewPullInput {
   processedHeadPolicy?: "normal" | "retry_failed_head";
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }
 
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
@@ -1194,6 +1229,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
+  if (!input.licenseAdmission) return "skipped_license_gate";
+  const visibilityDecision = authorizeAdmissionForVisibility(
+    input.licenseAdmission,
+    visibilityFromPullSummary(pull)
+  );
+  if (!visibilityDecision.ok) return "skipped_license_gate";
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
   if (
@@ -1430,21 +1471,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   };
 
   try {
-    const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
-    if (!licenseGate.ok) {
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-      mkdirSync(evidenceDir, { recursive: true });
-      writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
-      state.recordReviewReadiness({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        state: "blocked_on_proof",
-        reason: licenseGate.reason
-      });
-      return "skipped_license_gate";
-    }
-
     if (!acquireReviewCapacity()) return "skipped_capacity";
 
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);

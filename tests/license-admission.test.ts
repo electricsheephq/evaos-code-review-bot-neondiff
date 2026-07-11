@@ -155,4 +155,19 @@ describe("production useful-work admission", () => {
     });
     expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
   });
+
+  it("requires all-repository scope for issue enrichment discovery", async () => {
+    const result = await requireActiveProductionLicense({
+      operation: "issue_enrichment",
+      config: fixtureConfig(),
+      fetchImpl: (async () => new Response(JSON.stringify({
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "public",
+        updateEntitlement: true
+      }), { status: 200 })) as typeof fetch,
+      now: new Date("2026-07-11T00:00:00.000Z")
+    });
+    expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
+  });
 });

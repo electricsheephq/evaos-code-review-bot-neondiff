@@ -1202,6 +1202,13 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const dryRun = args["dry-run"] !== "false";
     if (!dryRun) throw new Error("issue-enrichment-scan currently supports dry-run only; live issue comments require a separate promotion gate");
+    const licenseAdmission = await requireActiveProductionLicense({
+      operation: "issue_enrichment",
+      config: config.license!
+    });
+    if (!licenseAdmission.ok) {
+      throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+    }
     const github = new GitHubApi(config.github);
     const scan = await collectIssueEnrichmentScan({
       config,
@@ -1244,6 +1251,13 @@ async function main(): Promise<void> {
     }
     const policy = resolveIssueEnrichmentRepoPolicy(issueConfig, repo);
     if (!policy.allowed) throw new Error(`Repo ${repo} is skipped by issue-enrichment policy: ${policy.reason}`);
+    const licenseAdmission = await requireActiveProductionLicense({
+      operation: "issue_enrichment",
+      config: config.license!
+    });
+    if (!licenseAdmission.ok) {
+      throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+    }
     const github = new GitHubApi(config.github);
     const liveStatus = buildIssueEnrichmentStatus({ config, canPostAsApp: github.canPostAsApp() });
     const statusBlockers = dryRun
@@ -1323,6 +1337,7 @@ async function main(): Promise<void> {
         includeExisting: true,
         advanceWatermarks: false,
         force,
+        licenseAdmission: licenseAdmission.admission,
         ...(preacquiredLease ? { preacquiredLease } : {})
       };
       if (preacquiredLease) leaseTransferredToCycle = true;
@@ -2205,7 +2220,7 @@ async function main(): Promise<void> {
     for (;;) {
       cycle += 1;
       const dryRun = args["dry-run"] !== "false";
-      await runDaemonCycle({
+      const cycleResult = await runDaemonCycle({
         cycle,
         dryRun,
         pilotRepos: config.pilotRepos,
@@ -2216,7 +2231,10 @@ async function main(): Promise<void> {
         issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
         configPath: args.config
       });
-      if (runOnce) return;
+      if (runOnce) {
+        if (!cycleResult.ok) process.exitCode = 1;
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
     }
   }

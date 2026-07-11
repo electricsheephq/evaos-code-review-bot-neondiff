@@ -12,6 +12,12 @@ import {
   startLocalDashboardServer,
   verifyProviderApiKey
 } from "../src/local-dashboard.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
+
+const admittedProviderVerification = async () => ({
+  ok: true as const,
+  admission: Object.freeze({ ...testLicenseAdmission, operation: "provider_verify" as const })
+});
 
 describe("local HTML dashboard", () => {
   const servers: Server[] = [];
@@ -217,7 +223,7 @@ describe("local HTML dashboard", () => {
     expect(JSON.stringify(result)).not.toContain(fakeKey);
   });
 
-  it("serves HTML status and redacted provider verification routes", async () => {
+  it("serves HTML status but blocks provider verification before activation", async () => {
     const fakeKey = ["sk", "dashboard-route-1234567890"].join("-");
     const config = loadConfigFromObject({
       providers: {
@@ -254,8 +260,8 @@ describe("local HTML dashboard", () => {
       })
     });
     const resultText = await response.text();
-    expect(response.status).toBe(422);
-    expect(resultText).toContain("configured_unverified");
+    expect(response.status).toBe(403);
+    expect(resultText).toContain("license missing");
     expect(resultText).not.toContain(fakeKey);
     expect(resultText).not.toContain("dashboard-route");
   });
@@ -286,7 +292,8 @@ describe("local HTML dashboard", () => {
       apiKey: fakeKey,
       allowRemoteSmoke: false,
       screenshotPath,
-      sourceSha: "0123456789abcdef0123456789abcdef01234567"
+      sourceSha: "0123456789abcdef0123456789abcdef01234567",
+      requireActiveProductionLicense: admittedProviderVerification
     });
 
     expect(smoke).toMatchObject({

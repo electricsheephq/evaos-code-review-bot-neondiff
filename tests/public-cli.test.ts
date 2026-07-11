@@ -3444,7 +3444,7 @@ exit 1
     await expect(runCli(["daemon", "bad-subcommand"])).rejects.toMatchObject({
       stderr: expect.stringContaining("daemon subcommand must be one of")
     });
-    // Empty temp repo config keeps runDaemonCycle local-only while proving dispatch.
+    // The loop dispatches, but useful daemon work remains blocked until activation.
     await expect(runCli([
       "daemon",
       "--config",
@@ -3453,8 +3453,9 @@ exit 1
       "true",
       "--once",
       "true"
-    ])).resolves.toMatchObject({
-      stdout: expect.stringContaining("daemon_cycle_start")
+    ])).rejects.toMatchObject({
+      stdout: "",
+      stderr: expect.stringContaining("license missing")
     });
   });
 });
