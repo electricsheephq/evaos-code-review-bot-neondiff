@@ -1,0 +1,142 @@
+name: License lifecycle proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Stable release tag under proof
+        required: true
+        default: v1.0.4
+      candidate_head:
+        description: Exact protected-main commit to install and exercise
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  production-lifecycle:
+    name: Production activation lifecycle
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: license-lifecycle-production
+    timeout-minutes: 30
+    steps:
+      - name: Checkout protected candidate
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify exact protected-main candidate
+        env:
+          EXPECTED_CANDIDATE_HEAD: ${{ inputs.candidate_head }}
+          EXPECTED_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$EXPECTED_CANDIDATE_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CANDIDATE_HEAD"
+          test "$EXPECTED_RELEASE_VERSION" = "v$(node -p "require('./package.json').version")"
+          git merge-base --is-ancestor "$EXPECTED_CANDIDATE_HEAD" origin/main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run fail-closed activation matrix
+        run: |
+          npx vitest run \
+            tests/license-production-policy.test.ts \
+            tests/license-admission.test.ts \
+            tests/providers-license-admission.test.ts \
+            tests/review-activation.test.ts \
+            tests/local-dashboard.test.ts \
+            tests/command-license-policy.test.ts \
+            tests/desktop-evaluation-boundary.test.ts \
+            --pool=forks --maxWorkers=1
+
+      - name: Pack and isolate the candidate
+        id: package
+        env:
+          EXPECTED_CANDIDATE_HEAD: ${{ inputs.candidate_head }}
+          EXPECTED_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          PACK_DIR="$RUNNER_TEMP/neondiff-lifecycle-pack"
+          INSTALL_PREFIX="$RUNNER_TEMP/neondiff-lifecycle-install"
+          CONFIG_PATH="$RUNNER_TEMP/neondiff-lifecycle-config.json"
+          PACKAGE_VERSION="${EXPECTED_RELEASE_VERSION#v}"
+          ARTIFACT_OUTPUT="docs/evidence/$EXPECTED_RELEASE_VERSION/production-lifecycle-$EXPECTED_CANDIDATE_HEAD.json"
+          mkdir -p "$PACK_DIR" "$(dirname "$ARTIFACT_OUTPUT")"
+          npm pack --json --pack-destination "$PACK_DIR" > "$RUNNER_TEMP/lifecycle-pack.json"
+          node scripts/check-packlist.mjs "$RUNNER_TEMP/lifecycle-pack.json"
+          PACK_TARBALL="$PACK_DIR/neondiff-$PACKAGE_VERSION.tgz"
+          npm install --ignore-scripts --prefix "$INSTALL_PREFIX" "$PACK_TARBALL"
+          test "$("$INSTALL_PREFIX/node_modules/.bin/neondiff" --version)" = "$PACKAGE_VERSION"
+          # shellcheck disable=SC2016
+          node -e '
+            require("node:fs").writeFileSync(process.argv[1], `${JSON.stringify({ license: {
+              enabled: true,
+              apiBaseUrl: "https://neondiff-license.fly.dev",
+              publicReposFree: false,
+              offlineGraceMs: 0
+            } }, null, 2)}\n`, { mode: 0o600 });
+          ' "$CONFIG_PATH"
+          # shellcheck disable=SC2016
+          PACK_SHASUM="$(node -e 'const [pack] = require(process.argv[1]); process.stdout.write(pack.shasum)' "$RUNNER_TEMP/lifecycle-pack.json")"
+          PACK_INTEGRITY="$(node -e 'const [pack] = require(process.argv[1]); process.stdout.write(pack.integrity)' "$RUNNER_TEMP/lifecycle-pack.json")"
+          {
+            echo "pack_tarball=$PACK_TARBALL"
+            echo "pack_shasum=$PACK_SHASUM"
+            echo "pack_integrity=$PACK_INTEGRITY"
+            echo "candidate_cli=$INSTALL_PREFIX/node_modules/.bin/neondiff"
+            echo "config_path=$CONFIG_PATH"
+            echo "artifact_path=$ARTIFACT_OUTPUT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Exercise production issuance, activation, refresh, deactivation, and denial
+        env:
+          EXPECTED_CANDIDATE_HEAD: ${{ inputs.candidate_head }}
+          EXPECTED_RELEASE_VERSION: ${{ inputs.release_version }}
+          PACK_SHASUM: ${{ steps.package.outputs.pack_shasum }}
+          PACK_INTEGRITY: ${{ steps.package.outputs.pack_integrity }}
+          CANDIDATE_CLI: ${{ steps.package.outputs.candidate_cli }}
+          CONFIG_PATH: ${{ steps.package.outputs.config_path }}
+          ARTIFACT_OUTPUT: ${{ steps.package.outputs.artifact_path }}
+        run: |
+          node scripts/run-license-lifecycle-smoke.mjs \
+            --release-version "$EXPECTED_RELEASE_VERSION" \
+            --candidate-head "$EXPECTED_CANDIDATE_HEAD" \
+            --pack-shasum "$PACK_SHASUM" \
+            --pack-integrity "$PACK_INTEGRITY" \
+            --candidate-cli "$CANDIDATE_CLI" \
+            --config "$CONFIG_PATH" \
+            --artifact-output "$ARTIFACT_OUTPUT" \
+            --confirm-live-lifecycle true
+          # shellcheck disable=SC2016
+          node -e '
+            const text = require("node:fs").readFileSync(process.argv[1], "utf8");
+            JSON.parse(text);
+            if (/nd_live_|Bearer\s+|\/Volumes\/|\/Users\//.test(text)) process.exit(1);
+          ' "$ARTIFACT_OUTPUT"
+
+      - name: Attest redacted lifecycle evidence
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ steps.package.outputs.artifact_path }}
+
+      - name: Upload redacted lifecycle evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: neondiff-${{ inputs.release_version }}-production-lifecycle-${{ inputs.candidate_head }}
+          path: ${{ steps.package.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 30

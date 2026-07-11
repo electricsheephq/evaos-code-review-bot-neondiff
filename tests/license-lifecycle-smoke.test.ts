@@ -8,15 +8,15 @@ import { runLicenseLifecycleSmoke } from "../src/license-lifecycle-smoke.js";
 describe("license lifecycle smoke", () => {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-  it("keeps the operator wrapper stdin-only for the issuance bearer", () => {
+  it("keeps the trusted wrapper on GitHub OIDC without secret arguments or shared-secret stdin", () => {
     const script = readFileSync(resolve(repoRoot, "scripts", "run-license-lifecycle-smoke.mjs"), "utf8");
-    expect(script).toContain("readSecretFromStdin(process.stdin");
-    expect(script).not.toMatch(/process\.env|--issuance-secret|authorization:\s*`Bearer/);
+    expect(script).toContain("requestGitHubActionsOidcToken");
+    expect(script).not.toMatch(/readSecretFromStdin|--issuance-secret|authorization:\s*`Bearer/);
   });
 
   it("issues a disposable production key, drives the candidate through stdin, and emits only redacted bound evidence", async () => {
     const rawKey = ["nd", "live", "disposableLifecycleFixture123"].join("_");
-    const issuanceSecret = ["issuance", "fixture", "secret"].join("-");
+    const oidcToken = ["header", "claims", "signature"].join(".");
     const candidateHead = "a".repeat(40);
     const packShasum = "b".repeat(40);
     const packIntegrity = `sha512-${"Y".repeat(86)}==`;
@@ -30,7 +30,7 @@ describe("license lifecycle smoke", () => {
       packShasum,
       packIntegrity,
       apiBaseUrl: "https://neondiff-license.fly.dev",
-      issuanceSecret,
+      issuanceAuthorization: { kind: "github-oidc", bearer: oidcToken },
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: true,
@@ -38,8 +38,14 @@ describe("license lifecycle smoke", () => {
       randomId: () => "c".repeat(32),
       fetchImpl: async (url, init) => {
         const path = new URL(String(url)).pathname;
-        if (path === "/v1/admin/licenses/issue") {
-          expect(init?.headers).toMatchObject({ authorization: `Bearer ${issuanceSecret}` });
+        if (path === "/v1/admin/licenses/issue-lifecycle") {
+          expect(init?.headers).toMatchObject({ authorization: `Bearer ${oidcToken}` });
+          expect(JSON.parse(String(init?.body))).toEqual({
+            releaseVersion: "v1.0.4",
+            candidateHead,
+            packShasum,
+            packIntegrity
+          });
           return new Response(JSON.stringify({
             status: "issued",
             replayed: false,
@@ -112,7 +118,7 @@ describe("license lifecycle smoke", () => {
     })));
     expect(result.licenseFingerprint).toBe(`sha256:${createHash("sha256").update(rawKey).digest("hex")}`);
     expect(JSON.stringify(result)).not.toContain(rawKey);
-    expect(JSON.stringify(result)).not.toContain(issuanceSecret);
+    expect(JSON.stringify(result)).not.toContain(oidcToken);
   });
 
   it("does not read or call live systems without explicit confirmation", async () => {
@@ -123,7 +129,7 @@ describe("license lifecycle smoke", () => {
       packShasum: "b".repeat(40),
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
-      issuanceSecret: "not-read",
+      issuanceAuthorization: { kind: "shared-secret", bearer: "not-read" },
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: false,
@@ -147,7 +153,7 @@ describe("license lifecycle smoke", () => {
       packShasum: "b".repeat(40),
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
-      issuanceSecret: "fixture-secret",
+      issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: true,
@@ -169,7 +175,7 @@ describe("license lifecycle smoke", () => {
       packShasum: "b".repeat(40),
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
-      issuanceSecret: "fixture-secret",
+      issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: true,
@@ -219,7 +225,7 @@ describe("license lifecycle smoke", () => {
         packShasum: "b".repeat(40),
         packIntegrity: `sha512-${"Y".repeat(86)}==`,
         apiBaseUrl: "https://neondiff-license.fly.dev",
-        issuanceSecret: "fixture-secret",
+        issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
         candidateCliPath: "/isolated/prefix/bin/neondiff",
         configPath: "/isolated/config.local.json",
         confirmLiveLifecycle: true,
@@ -249,7 +255,7 @@ describe("license lifecycle smoke", () => {
       packShasum: "b".repeat(40),
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
-      issuanceSecret: "fixture-secret",
+      issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: true,

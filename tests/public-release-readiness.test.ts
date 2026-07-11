@@ -584,12 +584,13 @@ describe("NeonDiff public release readiness", () => {
   });
 
   it("CI workflows gate build, tests, package, docs claims, and npm provenance publish", () => {
-    for (const path of [".github/workflows/ci.yml", ".github/workflows/publish-npm.yml"]) {
+    for (const path of [".github/workflows/ci.yml", ".github/workflows/publish-npm.yml", ".github/workflows/license-lifecycle-proof.yml"]) {
       expect(existsSync(path)).toBe(true);
     }
 
     const ci = read(".github/workflows/ci.yml");
     const publish = read(".github/workflows/publish-npm.yml");
+    const lifecycle = read(".github/workflows/license-lifecycle-proof.yml");
     const releasePolicy = read("scripts/npm-release-policy.mjs");
 
     expect(ci).toMatch(/node-version:\s*26/);
@@ -623,6 +624,10 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/npm-release-policy\.mjs verify-pack/);
     expect(publish).toMatch(/verify-npm-provenance\.mjs/);
     expect(publish).toMatch(/npm audit signatures --prefix "\$SIGNATURE_VERIFY_ROOT" --json/);
+    expect(publish).toMatch(/gh attestation verify "\$LIFECYCLE_ARTIFACT"/);
+    expect(publish).toMatch(/--signer-workflow electricsheephq\/evaos-code-review-bot-neondiff\/\.github\/workflows\/license-lifecycle-proof\.yml/);
+    expect(publish).toMatch(/--signer-digest "\$CANDIDATE_HEAD"/);
+    expect(publish).toMatch(/--source-ref refs\/heads\/main/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-channel/);
     expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
     expect(publish).toMatch(/GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
@@ -663,6 +668,19 @@ describe("NeonDiff public release readiness", () => {
     );
     expect(publish).toMatch(/default:\s*v1\.0\.4/);
     expect(publish).not.toMatch(/default:\s*v0\.4\.30-beta\.1/);
+
+    expect(lifecycle).toMatch(/workflow_dispatch:/);
+    expect(lifecycle).toMatch(/environment:\s*license-lifecycle-production/);
+    expect(lifecycle).toMatch(/contents:\s*read/);
+    expect(lifecycle).toMatch(/id-token:\s*write/);
+    expect(lifecycle).toMatch(/attestations:\s*write/);
+    expect(lifecycle).toMatch(/github\.ref == 'refs\/heads\/main'/);
+    expect(lifecycle).toMatch(/persist-credentials:\s*false/);
+    expect(lifecycle).toMatch(/run-license-lifecycle-smoke\.mjs/);
+    expect(lifecycle).toMatch(/npm install --ignore-scripts --prefix "\$INSTALL_PREFIX" "\$PACK_TARBALL"/);
+    expect(lifecycle).toContain("actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3");
+    expect(lifecycle).toContain("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4");
+    expect(lifecycle).not.toMatch(/LICENSE_ISSUANCE_SECRET|NPM_TOKEN|secrets\./);
 
     const governance = read("docs/release-governance.md");
     expect(governance).toMatch(/partial quarantine promotion/i);

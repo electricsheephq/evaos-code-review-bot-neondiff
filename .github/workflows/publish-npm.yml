@@ -143,6 +143,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TAG: ${{ steps.package_release.outputs.npm_tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           EXPECTED_GIT_HEAD="$(git rev-list -n 1 "$RELEASE_TAG")"
@@ -152,6 +153,28 @@ jobs:
             echo "::error::reviewed npm tarball is missing"
             exit 1
           }
+          ACTIVATION_PROOF_PATH="$(node -p "require('./docs/public-release-manifest.json').licenseApi.activationProofPath")"
+          # shellcheck disable=SC2016
+          LIFECYCLE_ARTIFACT="$(node -e '
+            const proof = require(`./${process.argv[1]}`);
+            const artifact = proof.artifacts?.find((entry) => entry.kind === "production-lifecycle");
+            if (!artifact?.ref) process.exit(1);
+            process.stdout.write(artifact.ref);
+          ' "$ACTIVATION_PROOF_PATH")" || {
+            echo "::error::production lifecycle artifact ref is missing"
+            exit 1
+          }
+          test -f "$LIFECYCLE_ARTIFACT" || {
+            echo "::error::production lifecycle artifact is missing"
+            exit 1
+          }
+          gh attestation verify "$LIFECYCLE_ARTIFACT" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/license-lifecycle-proof.yml \
+            --signer-digest "$CANDIDATE_HEAD" \
+            --source-digest "$CANDIDATE_HEAD" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
           PACKAGE_ALREADY_EXISTS=false
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             PACKAGE_ALREADY_EXISTS=true

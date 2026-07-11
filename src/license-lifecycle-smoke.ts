@@ -74,7 +74,10 @@ export interface LicenseLifecycleSmokeInput {
   packShasum: string;
   packIntegrity: string;
   apiBaseUrl: string;
-  issuanceSecret: string;
+  issuanceAuthorization: {
+    kind: "shared-secret" | "github-oidc";
+    bearer: string;
+  };
   candidateCliPath: string;
   configPath: string;
   confirmLiveLifecycle: boolean;
@@ -111,11 +114,24 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
   const records: LifecycleRecord[] = [];
 
   try {
-    const issuance = await postJson(fetchImpl, `${input.apiBaseUrl}/v1/admin/licenses/issue`, {
-      idempotencyKey: `neondiff-lifecycle-${input.releaseVersion}-${issuanceIdentity.slice(0, 24)}`,
-      checkoutLookupKey: "neondiff_monthly",
-      externalCheckoutId: `lifecycle-${issuanceIdentity.slice(0, 32)}`
-    }, input.issuanceSecret);
+    const githubOidcIssuance = input.issuanceAuthorization.kind === "github-oidc";
+    const issuance = await postJson(
+      fetchImpl,
+      `${input.apiBaseUrl}${githubOidcIssuance ? "/v1/admin/licenses/issue-lifecycle" : "/v1/admin/licenses/issue"}`,
+      githubOidcIssuance
+        ? {
+            releaseVersion: input.releaseVersion,
+            candidateHead: input.candidateHead,
+            packShasum: input.packShasum,
+            packIntegrity: input.packIntegrity
+          }
+        : {
+            idempotencyKey: `neondiff-lifecycle-${input.releaseVersion}-${issuanceIdentity.slice(0, 24)}`,
+            checkoutLookupKey: "neondiff_monthly",
+            externalCheckoutId: `lifecycle-${issuanceIdentity.slice(0, 32)}`
+          },
+      input.issuanceAuthorization.bearer
+    );
     rawKey = readIssuedKey(issuance);
     if (!rawKey) {
       executionFailure = failure("issuance_failed", "production issuance did not return one valid disposable key", boundary);
@@ -267,7 +283,10 @@ function isValidInput(input: LicenseLifecycleSmokeInput): boolean {
       && url.protocol === "https:"
       && url.origin === "https://neondiff-license.fly.dev"
       && url.pathname === "/"
-      && Boolean(input.issuanceSecret && input.candidateCliPath && input.configPath);
+      && (input.issuanceAuthorization.kind === "shared-secret" || input.issuanceAuthorization.kind === "github-oidc")
+      && input.issuanceAuthorization.bearer.length >= 8
+      && input.issuanceAuthorization.bearer.length <= 16 * 1024
+      && Boolean(input.candidateCliPath && input.configPath);
   } catch {
     return false;
   }

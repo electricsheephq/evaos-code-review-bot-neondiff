@@ -3,7 +3,7 @@
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { runLicenseLifecycleSmoke } from "../dist/src/license-lifecycle-smoke.js";
-import { readSecretFromStdin } from "../dist/src/secret-stdin.js";
+import { requestGitHubActionsOidcToken } from "./lib/github-actions-oidc-token.mjs";
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -52,11 +52,16 @@ if (outputRelative.startsWith("..") || isAbsolute(outputRelative)) {
   fail("--artifact-output must stay within docs/evidence");
 }
 
-let issuanceSecret;
+let oidcToken;
 try {
-  issuanceSecret = await readSecretFromStdin(process.stdin, 512, 10_000);
+  oidcToken = await requestGitHubActionsOidcToken({
+    requestUrl: process.env.ACTIONS_ID_TOKEN_REQUEST_URL,
+    requestToken: process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
+    audience: "neondiff-license-lifecycle",
+    fetchImpl: fetch
+  });
 } catch {
-  fail("issuance bearer could not be read from bounded stdin");
+  fail("trusted GitHub Actions OIDC token could not be obtained");
 }
 
 const result = await runLicenseLifecycleSmoke({
@@ -65,12 +70,12 @@ const result = await runLicenseLifecycleSmoke({
   packShasum: args.get("pack-shasum"),
   packIntegrity: args.get("pack-integrity"),
   apiBaseUrl: "https://neondiff-license.fly.dev",
-  issuanceSecret,
+  issuanceAuthorization: { kind: "github-oidc", bearer: oidcToken },
   candidateCliPath: args.get("candidate-cli"),
   configPath: args.get("config"),
   confirmLiveLifecycle: true
 });
-issuanceSecret = undefined;
+oidcToken = undefined;
 
 if (!result.ok) fail(`license lifecycle smoke failed: ${result.errorCode}`);
 mkdirSync(dirname(absoluteOutput), { recursive: true });
