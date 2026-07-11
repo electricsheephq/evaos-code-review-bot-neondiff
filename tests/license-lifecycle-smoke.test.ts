@@ -338,6 +338,9 @@ describe("license lifecycle smoke", () => {
           localRemoved = true;
           return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "deactivated" }), stderr: "" };
         }
+        if (args[1] === "status" && !args.includes("true") && !localRemoved) {
+          return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "missing" }), stderr: "" };
+        }
         if (args[1] === "status" && localRemoved) {
           return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "missing" }), stderr: "" };
         }
@@ -348,6 +351,7 @@ describe("license lifecycle smoke", () => {
     expect(result).toMatchObject({
       ok: false,
       errorCode: "candidate_failed",
+      detail: "candidate deactivation did not complete",
       cleanup: { localState: "confirmed_removed", remoteState: "confirmed_deactivated" }
     });
   });
