@@ -599,6 +599,9 @@ describe("NeonDiff public release readiness", () => {
     expect(ci).not.toMatch(/uses:\s*actions\/(?:checkout|setup-node)@v\d+/);
     expect(ci).toMatch(/npm ci/);
     expect(ci).toMatch(/npm run build/);
+    expect(ci).toMatch(/npm ci --prefix services\/license-api/);
+    expect(ci).toMatch(/npm test --prefix services\/license-api/);
+    expect(ci).toMatch(/npm run build --prefix services\/license-api/);
     expect(ci).toMatch(/tests\/public-release-readiness\.test\.ts/);
     expect(ci).toMatch(/npm pack --dry-run --json/);
     expect(ci).toMatch(/forbidden public claims/i);
