@@ -78,6 +78,29 @@ describe("license http transport", () => {
     assert.equal(throttled.status, 429);
     assert.equal(throttled.json.status, "rate_limited");
   });
+
+  it("indexes rate limiting by a one-way key digest", async () => {
+    class CapturingRateLimiter extends RateLimiter {
+      readonly keys: string[] = [];
+      override allow(key: string, now: number): boolean {
+        this.keys.push(key);
+        return super.allow(key, now);
+      }
+    }
+    const isolatedStore = new LicenseStore(":memory:");
+    const limiter = new CapturingRateLimiter({ maxPerWindow: 3, windowMs: 60_000 });
+    const started = await startLicenseServer({ store: isolatedStore, rateLimiter: limiter });
+    const rawKey = fakeKey("digest");
+    try {
+      await post(started.url, "/v1/license/validate", { licenseKey: rawKey, machineId: "m" });
+      assert.equal(limiter.keys.length, 1);
+      assert.notEqual(limiter.keys[0], rawKey);
+      assert.match(limiter.keys[0], /^[a-f0-9]{64}$/);
+    } finally {
+      started.server.close();
+      isolatedStore.close();
+    }
+  });
 });
 
 describe("license issuance transport", () => {

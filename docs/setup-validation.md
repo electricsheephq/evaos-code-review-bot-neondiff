@@ -142,14 +142,14 @@ Then edit only local, untracked values for:
 - evidence path
 - allowed pilot repos
 - provider id and model path
-- license settings when validating a private or commercial repo path
+- license settings when validating any supported repository review path
 
 Provider keys and NeonDiff entitlements are separate inputs. Provider keys are
 for model access; they are not proof that private-repo review is licensed.
 Record whether the transcript is proving:
 
-- public repo review on the default free path
-- public repo review with `license.publicReposFree=false`
+- public repo review with an active API-backed entitlement
+- public repo review without activation failing before checkout/provider work
 - private repo review with an active private entitlement
 
 Do not treat a public-only entitlement as proof for a private repo path.

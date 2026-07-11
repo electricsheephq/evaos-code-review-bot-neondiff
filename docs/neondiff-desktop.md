@@ -177,7 +177,8 @@ authorization, API rate limiting, missing App installation, and organization
 policy or permission blocks without showing raw API bodies. Discovered repos
 show one of these access cues:
 
-- `PUBLIC · FREE` for the public-repo path;
+- `PUBLIC · ACTIVATION REQUIRED` until active entitlement is proven;
+- `PUBLIC · LICENSE ACTIVE` only for an explicit active entitlement state;
 - `PRIVATE · LICENSE REQUIRED` until active entitlement is proven;
 - `PRIVATE · LICENSE ACTIVE` only for an explicit active entitlement state;
 - `INSUFFICIENT READ ACCESS` when GitHub reports that the user cannot read the

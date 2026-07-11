@@ -3,10 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
-import { runScheduledCycleWithDeps, type SchedulerGitHubApi } from "../src/scheduler.js";
+import { runScheduledCycleWithDeps as runScheduledCycleWithDepsImpl, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { reviewPull, type ReviewPullInput, type ReviewPullResult } from "../src/worker.js";
+import { reviewPull as reviewPullImpl, type ReviewPullInput, type ReviewPullResult } from "../src/worker.js";
+import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/license-admission.js";
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
@@ -15,12 +16,87 @@ const HEAD_D = "d".repeat(40);
 const HEAD_F = "f".repeat(40);
 const SELF_REPO_CURRENT = "electricsheephq/evaos-code-review-bot-neondiff";
 const SELF_REPO_LEGACY = "electricsheephq/evaos-code-review-bot";
+const publicOnlyTestLicenseAdmission = await createTestLicenseAdmission({
+  operation: "review_cycle",
+  scope: "public",
+  privateRepoAllowed: false
+});
+const reviewPull = (input: ReviewPullInput) => reviewPullImpl({
+  ...input,
+  pull: testVisiblePull(input.pull),
+  licenseAdmission: input.licenseAdmission ?? testLicenseAdmission
+});
+const runScheduledCycleWithDeps = (
+  input: Parameters<typeof runScheduledCycleWithDepsImpl>[0]
+) => runScheduledCycleWithDepsImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission });
+
+function testVisiblePull(pull: PullRequestSummary): PullRequestSummary {
+  return {
+    ...pull,
+    base: { ...pull.base, repo: { ...pull.base.repo, private: false, visibility: "public" } }
+  };
+}
 
 describe("provider-aware review scheduler", () => {
   const roots: string[] = [];
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("rejects a wrong-operation public token before scheduled work", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-license-scope-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/private-repo"]);
+    const state = new ReviewStateStore(config.statePath);
+    const privatePull = pull("org/private-repo", 1, "private-head", "base", { visibility: "private" });
+    let reviewCalls = 0;
+
+    await expect(runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/private-repo", [privatePull]]])),
+      state,
+      options: { dryRun: false },
+      licenseAdmission: publicOnlyTestLicenseAdmission,
+      reviewPullImpl: async () => {
+        reviewCalls += 1;
+        return "reviewed";
+      }
+    })).rejects.toThrow(/review-discovery admission is required/i);
+
+    expect(reviewCalls).toBe(0);
+    expect(state.listReviewQueueJobs()).toEqual([]);
+    expect(state.getReviewReadiness("org/private-repo", 1, "private-head")).toBeUndefined();
+    state.close();
+  });
+
+  it("counts unknown-visibility admission denials only as license-gate skips", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-unknown-visibility-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/unknown-repo"]);
+    const state = new ReviewStateStore(config.statePath);
+    const sourcePull = pull("org/unknown-repo", 1, "unknown-head");
+    const unknownPull: PullRequestSummary = {
+      ...sourcePull,
+      base: { ...sourcePull.base, repo: { full_name: "org/unknown-repo" } }
+    };
+    let reviewCalls = 0;
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/unknown-repo", [unknownPull]]])),
+      state,
+      options: { dryRun: false },
+      reviewPullImpl: async () => {
+        reviewCalls += 1;
+        return "reviewed";
+      }
+    });
+
+    expect(result.skippedLicenseGate).toBe(1);
+    expect(result.skippedPolicy).toBe(0);
+    expect(reviewCalls).toBe(0);
+    state.close();
   });
 
   it("queues a multi-repo burst and leases up to provider capacity with per-repo caps", async () => {
@@ -3985,7 +4061,7 @@ function pull(
   number: number,
   headSha: string,
   baseSha = "base",
-  options: { state?: string; mergedAt?: string | null; createdAt?: string; draft?: boolean } = {}
+  options: { state?: string; mergedAt?: string | null; createdAt?: string; draft?: boolean; visibility?: "public" | "private" } = {}
 ): PullRequestSummary {
   return {
     number,
@@ -3997,12 +4073,12 @@ function pull(
     head: {
       sha: headSha,
       ref: `pr-${number}`,
-      repo: { full_name: repo }
+      repo: { full_name: repo, private: options.visibility === "private", visibility: options.visibility ?? "public" }
     },
     base: {
       sha: baseSha,
       ref: "main",
-      repo: { full_name: repo }
+      repo: { full_name: repo, private: options.visibility === "private", visibility: options.visibility ?? "public" }
     },
     html_url: `https://github.com/${repo}/pull/${number}`
   };

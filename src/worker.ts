@@ -33,6 +33,13 @@ import { GitHubApi } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
+  authorizeAdmissionForVisibility,
+  isAuthenticProductionLicenseAdmission,
+  requireActiveProductionLicense,
+  type ProductionLicenseAdmission,
+  type RedactedLicenseDecision
+} from "./license-admission.js";
+import {
   buildPullFileFilterImpact,
   buildReviewSettingsPreview,
   filterPullFilesForProfile,
@@ -149,6 +156,7 @@ export interface RunOnceOptions {
   pullNumber?: number;
   expectedHeadSha?: string;
   useZCode?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }
 
 export interface RunOnceResult {
@@ -287,9 +295,6 @@ export function assertExpectedReviewPrHead(input: {
 
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
-  const github = new GitHubApi(config.github);
-  const state = new ReviewStateStore(config.statePath);
-  const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   const result: RunOnceResult = {
     reposScanned: 0,
     pullsSeen: 0,
@@ -311,16 +316,23 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     baselinedExisting: 0,
     policySkips: []
   };
+  const repos = options.repo ? [options.repo] : listReposToScan(config);
+  const admittedRepos = repos.filter((repo) => {
+    result.reposScanned += 1;
+    const repoPolicy = resolveRepoProfile(config, repo);
+    if (repoPolicy.allowed) return true;
+    result.skippedPolicy += 1;
+    result.policySkips.push({ repo, reason: repoPolicy.reason });
+    return false;
+  });
+  if (admittedRepos.length === 0) return result;
+
+  const licenseAdmission = await resolveReviewDiscoveryAdmission(config, options.licenseAdmission);
+  const github = new GitHubApi(config.github);
+  const state = new ReviewStateStore(config.statePath);
+  const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   try {
-    const repos = options.repo ? [options.repo] : listReposToScan(config);
-    for (const repo of repos) {
-      result.reposScanned += 1;
-      const repoPolicy = resolveRepoProfile(config, repo);
-      if (!repoPolicy.allowed) {
-        result.skippedPolicy += 1;
-        result.policySkips.push({ repo, reason: repoPolicy.reason });
-        continue;
-      }
+    for (const repo of admittedRepos) {
       const pulls = options.pullNumber
         ? [await github.getPull(repo, options.pullNumber)]
         : await github.listOpenPulls(repo);
@@ -362,6 +374,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
             budget,
+            licenseAdmission,
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
@@ -404,11 +417,26 @@ export async function retryFailedHead(options: {
   useZCode?: boolean;
 }): Promise<RetryFailedHeadResult> {
   const config = loadConfig(options.configPath);
+  const licenseAdmission = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!licenseAdmission.ok) {
+    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  }
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(1);
   try {
-    return await retryFailedHeadWithDeps({ config, github, state, budget, options, reviewPullImpl: reviewPull });
+    return await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget,
+      options,
+      reviewPullImpl: reviewPull,
+      licenseAdmission: licenseAdmission.admission
+    });
   } finally {
     state.close();
   }
@@ -421,8 +449,10 @@ export async function retryProviderCooldowns(options: {
   expiredOnly?: boolean;
   dryRun: boolean;
   useZCode?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryProviderCooldownsResult> {
   const config = loadConfig(options.configPath);
+  const licenseAdmission = await resolveReviewDiscoveryAdmission(config, options.licenseAdmission);
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(1);
@@ -433,7 +463,8 @@ export async function retryProviderCooldowns(options: {
       state,
       budget,
       options,
-      reviewPullImpl: reviewPull
+      reviewPullImpl: reviewPull,
+      licenseAdmission
     });
   } finally {
     state.close();
@@ -453,7 +484,9 @@ export async function retryProviderCooldownsWithDeps(input: {
     useZCode?: boolean;
   };
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryProviderCooldownsResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for provider retry cycles");
   const limit = input.options.limit ?? 5;
   if (!Number.isInteger(limit) || limit < 1) throw new Error("limit must be a positive integer");
   const expiredOnly = input.options.expiredOnly ?? true;
@@ -499,7 +532,8 @@ export async function retryProviderCooldownsWithDeps(input: {
         dryRun: input.options.dryRun,
         useZCode: input.options.useZCode
       },
-      reviewPullImpl: input.reviewPullImpl
+      reviewPullImpl: input.reviewPullImpl,
+      licenseAdmission: input.licenseAdmission
     });
     results.push(result);
   }
@@ -532,7 +566,9 @@ export async function retryFailedHeadWithDeps(input: {
     useZCode?: boolean;
   };
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryFailedHeadResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for failed-head retry cycles");
   const { config, github, state, budget, options } = input;
   const repoPolicy = resolveRepoProfile(config, options.repo);
   if (!repoPolicy.allowed) {
@@ -654,6 +690,7 @@ export async function retryFailedHeadWithDeps(input: {
       dryRun: options.dryRun,
       useZCode: options.useZCode ?? true,
       budget,
+      licenseAdmission: input.licenseAdmission,
       processedHeadPolicy: "retry_failed_head"
     });
     const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
@@ -1178,6 +1215,7 @@ export interface ReviewPullInput {
   processedHeadPolicy?: "normal" | "retry_failed_head";
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }
 
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
@@ -1186,6 +1224,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
+  if (!input.licenseAdmission) throw new Error("production license admission is required for pull review");
+  const visibility = visibilityFromPullSummary(pull);
+  const visibilityDecision = authorizeAdmissionForVisibility(
+    input.licenseAdmission,
+    visibility,
+    "review_discovery"
+  );
+  if (!visibilityDecision.ok) {
+    recordLicenseAdmissionBlock({ config, state, repo, pull, decision: visibilityDecision.decision });
+    return "skipped_license_gate";
+  }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
   if (
@@ -1422,21 +1471,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   };
 
   try {
-    const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
-    if (!licenseGate.ok) {
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-      mkdirSync(evidenceDir, { recursive: true });
-      writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
-      state.recordReviewReadiness({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        state: "blocked_on_proof",
-        reason: licenseGate.reason
-      });
-      return "skipped_license_gate";
-    }
-
     if (!acquireReviewCapacity()) return "skipped_capacity";
 
     const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
@@ -1779,6 +1813,24 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   } finally {
     releaseReviewCapacity();
   }
+}
+
+async function resolveReviewDiscoveryAdmission(
+  config: BotConfig,
+  provided?: ProductionLicenseAdmission
+): Promise<ProductionLicenseAdmission> {
+  if (provided) {
+    if (!isAuthenticProductionLicenseAdmission(provided, "review_discovery")) {
+      throw new Error("production review-discovery admission is required");
+    }
+    return provided;
+  }
+  const result = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
+  return result.admission;
 }
 
 async function reconcileProcessedHeadAfterDirectReviewSafely(input: {
@@ -2193,6 +2245,36 @@ function buildEvidenceDir(
 ): string {
   const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
   return commandDecision.action !== "none" ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+}
+
+function recordLicenseAdmissionBlock(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  decision: RedactedLicenseDecision;
+}): void {
+  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
+  mkdirSync(evidenceDir, { recursive: true });
+  writeRedactedJson(join(evidenceDir, "license-gate.json"), {
+    schemaVersion: 1,
+    ok: false,
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    status: input.decision.status,
+    checkedAt: input.decision.checkedAt,
+    ...(input.decision.classification ? { classification: input.decision.classification } : {}),
+    detail: input.decision.detail,
+    redacted: true
+  });
+  input.state.recordReviewReadiness({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: "blocked_on_proof",
+    reason: input.decision.detail
+  });
 }
 
 function isExistingPullWorktreeClean(config: BotConfig, repo: string, pull: PullRequestSummary): boolean {

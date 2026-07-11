@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
-import { runDaemonCycle } from "./daemon.js";
+import { runDaemonCycle, shouldExitDaemonAfterFailedCycle } from "./daemon.js";
 import {
   closeSync,
   existsSync,
@@ -53,6 +53,8 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
+import { requireActiveProductionLicense, type ProductionLicenseAdmission } from "./license-admission.js";
+import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { runLocalDashboardPreviewSmoke, startLocalDashboardServer } from "./local-dashboard.js";
 import {
   assertOutcomeLedgerOutputDirEmpty,
@@ -120,6 +122,8 @@ import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 import { parsePositiveInteger } from "./cli-args.js";
+import { readSecretFromStdin } from "./secret-stdin.js";
+import { classifyCommandLicensePolicy, type CommandLicensePolicy } from "./command-license-policy.js";
 
 const LAUNCHCTL_TIMEOUT_MS = 15_000;
 const PLUTIL_TIMEOUT_MS = 5_000;
@@ -141,6 +145,19 @@ async function main(): Promise<void> {
   if (isHelpRequested(args)) {
     console.log(JSON.stringify(buildHelp(command), null, 2));
     return;
+  }
+
+  const commandLicensePolicy = classifyCommandLicensePolicy({
+    command,
+    subcommand: args._[1],
+    smoke: command === "providers" && args._[1] === "doctor" && args.smoke === "true",
+    dryRun: args["dry-run"] !== "false",
+    coverageBacked: isCoverageBackedCommand(command, args)
+  });
+  if (commandLicensePolicy.mode === "requires_license"
+    && isKnownCLICommand(command)
+    && !deferCommandAdmissionUntilValidated(command)) {
+    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
   }
 
   if (command === "init") {
@@ -275,10 +292,26 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      const smoke = args.smoke === undefined ? false : parseBooleanArg(args.smoke, "--smoke");
+      if (smoke) {
+        const admission = await requireActiveProductionLicense({
+          operation: "provider_smoke",
+          config: config.license!
+        });
+        if (!admission.ok) {
+          console.log(stringifyProviderOutput({
+            ok: false,
+            command: "providers doctor",
+            error: `license ${admission.decision.status}: ${admission.decision.detail}`
+          }));
+          process.exitCode = 1;
+          return;
+        }
+      }
       const result = await doctorProviderRegistry({
         registry: config.providers!,
         ...(providerId ? { providerId } : {}),
-        smoke: args.smoke === undefined ? false : parseBooleanArg(args.smoke, "--smoke")
+        smoke
       });
       console.log(stringifyProviderOutput({
         ...result,
@@ -295,7 +328,7 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const licenseConfig = licenseConfigFromArgs(config.license!, args);
     if (action === "activate") {
-      const licenseKey = resolveLicenseKeyArg(args);
+      const licenseKey = await resolveLicenseKeyArg(args, process.stdin);
       const result = await activateLicense({
         config: licenseConfig,
         licenseKey,
@@ -1107,6 +1140,7 @@ async function main(): Promise<void> {
     if (Array.isArray(args.issue)) throw new Error("--issue must be provided once for build-enrichment-comment");
     const repo = parseSingleArg(args.repo, "--repo");
     const config = loadConfig(args.config);
+    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config, config);
     const github = new GitHubApi(config.github);
     const repoPolicy = resolveRepoProfile(config, repo);
     const enrichmentConfig = config.enrichment!;
@@ -1183,6 +1217,13 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const dryRun = args["dry-run"] !== "false";
     if (!dryRun) throw new Error("issue-enrichment-scan currently supports dry-run only; live issue comments require a separate promotion gate");
+    const licenseAdmission = await requireActiveProductionLicense({
+      operation: "issue_enrichment",
+      config: config.license!
+    });
+    if (!licenseAdmission.ok) {
+      throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+    }
     const github = new GitHubApi(config.github);
     const scan = await collectIssueEnrichmentScan({
       config,
@@ -1225,6 +1266,13 @@ async function main(): Promise<void> {
     }
     const policy = resolveIssueEnrichmentRepoPolicy(issueConfig, repo);
     if (!policy.allowed) throw new Error(`Repo ${repo} is skipped by issue-enrichment policy: ${policy.reason}`);
+    const licenseAdmission = await requireActiveProductionLicense({
+      operation: "issue_enrichment",
+      config: config.license!
+    });
+    if (!licenseAdmission.ok) {
+      throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+    }
     const github = new GitHubApi(config.github);
     const liveStatus = buildIssueEnrichmentStatus({ config, canPostAsApp: github.canPostAsApp() });
     const statusBlockers = dryRun
@@ -1304,6 +1352,7 @@ async function main(): Promise<void> {
         includeExisting: true,
         advanceWatermarks: false,
         force,
+        licenseAdmission: licenseAdmission.admission,
         ...(preacquiredLease ? { preacquiredLease } : {})
       };
       if (preacquiredLease) leaseTransferredToCycle = true;
@@ -1443,6 +1492,7 @@ async function main(): Promise<void> {
     });
     const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
     const commentId = parsePositiveInteger(parseSingleArg(args["comment-id"], "--comment-id"), "--comment-id");
+    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
     const trustedAuthors = parseCsv(args["trusted-authors"]);
     const worktreeCleanArg = args["worktree-clean"];
     const worktreeCleanExplicit = worktreeCleanArg !== undefined;
@@ -1968,7 +2018,12 @@ async function main(): Promise<void> {
         useZCode,
         expectedHeadSha: reviewPrExpectedHeadSha
       },
-      commandName: command
+      commandName: command,
+      admitImpl: async () => {
+        const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+        if (!admission) throw new Error("review commands require production license admission");
+        return admission;
+      }
     });
     console.log(result.output);
     if (result.exitCode !== 0) process.exitCode = result.exitCode;
@@ -2171,6 +2226,11 @@ async function main(): Promise<void> {
   if (command === "daemon") {
     const daemonAction = args._[1];
     if (daemonAction === "start" || daemonAction === "stop" || daemonAction === "status") {
+      if (daemonAction === "start"
+        && args["dry-run"] === "false"
+        && args.confirm === "true") {
+        await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+      }
       const result = runDaemonControlCommandSafely(daemonAction, args);
       console.log(stringifyRedactedJson(result));
       if (!result.ok) process.exitCode = 1;
@@ -2186,7 +2246,7 @@ async function main(): Promise<void> {
     for (;;) {
       cycle += 1;
       const dryRun = args["dry-run"] !== "false";
-      await runDaemonCycle({
+      const cycleResult = await runDaemonCycle({
         cycle,
         dryRun,
         pilotRepos: config.pilotRepos,
@@ -2197,7 +2257,13 @@ async function main(): Promise<void> {
         issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
         configPath: args.config
       });
-      if (runOnce) return;
+      if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
+        process.exitCode = 1;
+        return;
+      }
+      if (runOnce) {
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
     }
   }
@@ -3276,7 +3342,7 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     description: "Manage the license: `license activate|status|deactivate`.",
     flags: [
       { name: "--config", description: "Path to the config file." },
-      { name: "--license-key-env", description: "Env var name holding the license key (activate only)." },
+      { name: "--license-key-stdin", description: "true to read one bounded license key from stdin (activate only)." },
       { name: "--repo", description: "Repo to scope activation/status to, owner/name." },
       { name: "--refresh", description: "true to force a fresh status check instead of cached." }
     ]
@@ -3285,8 +3351,17 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
 
 function buildHelp(command?: string) {
   const usage = command ? COMMAND_USAGE[command] : undefined;
+  const packageVersion = resolvePackageVersion();
   return {
     ok: true,
+    licenseBoundary: {
+      sourceAvailableCommercial: true,
+      activationRequired: "Supported public, private, internal, and unknown repository review requires live API-backed activation.",
+      packageVersion,
+      releaseState: packageVersion === "1.0.3"
+        ? "Mandatory activation is staged for v1.0.4; public npm latest v1.0.3 does not enforce this boundary."
+        : `This package reports ${packageVersion}; verify the matching npm version and GitHub Release before relying on activation enforcement.`
+    },
     ...(command ? { command } : {}),
     ...(usage ? { usage: { command, ...usage } } : {}),
     commands: {
@@ -3374,7 +3449,7 @@ function buildHelp(command?: string) {
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
       "neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --allow-remote-smoke true --json",
-      "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
+      "security find-generic-password -s YOUR_APPROVED_SOURCE -w | neondiff license activate --config config.local.json --license-key-stdin true --json",
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",
       "neondiff doctor --config config.local.json --json",
@@ -3445,6 +3520,13 @@ function buildHelp(command?: string) {
       ]
     }
   };
+}
+
+function isKnownCLICommand(command: string): boolean {
+  const groups = buildHelp().commands;
+  return Object.values(groups)
+    .flat()
+    .some((entry) => entry.split(" ", 1)[0] === command);
 }
 
 function stringifyProviderOutput(input: unknown): string {
@@ -3523,6 +3605,49 @@ function shouldUseOperatorDashboard(args: ParsedArgs): boolean {
   ].some((key) => args[key] !== undefined);
 }
 
+function isCoverageBackedCommand(command: string, args: ParsedArgs): boolean {
+  if (command === "coverage" || command === "status" || command === "runtime-inventory" || command === "queue" || command === "why") {
+    return true;
+  }
+  if (command === "dashboard") return shouldUseOperatorDashboard(args);
+  if (command !== "release-status") return false;
+  return (args.coverage !== undefined && parseBooleanArg(args.coverage, "--coverage"))
+    || (args["require-coverage"] !== undefined
+      && parseBooleanArg(args["require-coverage"], "--require-coverage"));
+}
+
+const admissionAfterValidationCommands = new Set([
+  "providers",
+  "daemon",
+  "issue-enrichment-run",
+  "issue-enrichment-scan",
+  "review-pr",
+  "run-once",
+  "retry-failed",
+  "retry-provider-cooldowns",
+  "finishing-touch-dry-run",
+  "build-enrichment-comment"
+]);
+
+function deferCommandAdmissionUntilValidated(command: string): boolean {
+  return admissionAfterValidationCommands.has(command);
+}
+
+async function requireClassifiedCommandAdmission(
+  policy: CommandLicensePolicy,
+  configPath?: string,
+  loadedConfig?: BotConfig
+): Promise<ProductionLicenseAdmission | undefined> {
+  if (policy.mode === "setup_safe") return undefined;
+  const config = loadedConfig ?? loadConfig(configPath);
+  const operation = policy.operation === "review_cycle" ? "review_discovery" : policy.operation;
+  const admission = await requireActiveProductionLicense({ operation, config: config.license! });
+  if (!admission.ok) {
+    throw new Error(`license ${admission.decision.status}: ${admission.decision.detail}`);
+  }
+  return admission.admission;
+}
+
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = { _: [] };
   const repeatableArgs = repeatableArgsForCommand(argv);
@@ -3550,28 +3675,39 @@ function repeatableArgsForCommand(argv: string[]): Set<string> {
 }
 
 function licenseConfigFromArgs(base: LicenseConfig, args: ParsedArgs): LicenseConfig {
-  const config = {
+  if (args["license-api-url"]) {
+    throw new Error("--license-api-url is not supported; the supported distribution pins the canonical license API");
+  }
+  const config = resolveProductionLicensePolicy({
     ...base,
-    ...(args["license-api-url"] ? { apiBaseUrl: parseSingleArg(args["license-api-url"], "--license-api-url") } : {}),
     ...(args["license-cache-path"] ? { cachePath: parseSingleArg(args["license-cache-path"], "--license-cache-path") } : {}),
     ...(args["license-key-path"] ? { keyPath: parseSingleArg(args["license-key-path"], "--license-key-path") } : {}),
     ...(args["license-storage"] ? { storageBackend: parseLicenseStorageBackend(parseSingleArg(args["license-storage"], "--license-storage")) } : {})
-  };
+  });
   validateLicenseConfigOverride(config, "config.license");
   return config;
 }
 
-function resolveLicenseKeyArg(args: ParsedArgs): string {
+async function resolveLicenseKeyArg(args: ParsedArgs, stdin: NodeJS.ReadableStream): Promise<string> {
   if (args["license-key"]) {
-    throw new Error("license activate no longer accepts --license-key because argv can expose secrets; use --license-key-env");
+    throw new Error("license activate does not accept --license-key because argv can expose secrets; use --license-key-stdin true");
   }
   if (args["license-key-env"]) {
-    const envName = parseSingleArg(args["license-key-env"], "--license-key-env");
-    const value = process.env[envName];
-    if (!value) throw new Error(`license activate --license-key-env ${envName} did not resolve to a non-empty environment variable`);
-    return value;
+    throw new Error("license activate does not accept --license-key-env because process environments can expose secrets; use --license-key-stdin true");
   }
-  throw new Error("license activate requires --license-key-env");
+  if (args["license-key-stdin"] !== "true") {
+    throw new Error("license activate requires --license-key-stdin true");
+  }
+  let key: string;
+  try {
+    key = await readSecretFromStdin(stdin, 512, 5_000);
+  } catch (error) {
+    throw new Error((error instanceof Error ? error.message : "license secret stdin could not be read").replaceAll("provider secret", "license secret"));
+  }
+  if (!/^nd_live_[A-Za-z0-9_-]{8,}$/.test(key)) {
+    throw new Error("license secret stdin is not one valid production key");
+  }
+  return key;
 }
 
 function parseLicenseStorageBackend(value: string): "keychain" | "file" {

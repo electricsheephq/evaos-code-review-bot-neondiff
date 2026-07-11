@@ -12,6 +12,12 @@ import {
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
 import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
+import {
+  authorizeAdmissionForVisibility,
+  isAuthenticProductionLicenseAdmission,
+  requireActiveProductionLicense,
+  type ProductionLicenseAdmission
+} from "./license-admission.js";
 import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import {
   buildReviewStatusMarker,
@@ -102,6 +108,18 @@ export interface SchedulerGitHubApi {
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
   const config = loadConfig(options.configPath);
+  let licenseAdmission = options.licenseAdmission;
+  if (licenseAdmission && !isAuthenticProductionLicenseAdmission(licenseAdmission, "review_discovery")) {
+    throw new Error("production review-discovery admission is required for scheduled review cycles");
+  }
+  if (!licenseAdmission) {
+    const result = await requireActiveProductionLicense({
+      operation: "review_discovery",
+      config: config.license!
+    });
+    if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
+    licenseAdmission = result.admission;
+  }
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   try {
@@ -110,6 +128,7 @@ export async function runScheduledCycle(options: RunOnceOptions): Promise<Schedu
       github,
       state,
       options,
+      licenseAdmission,
       reviewPullImpl: reviewPull
     });
   } finally {
@@ -123,9 +142,14 @@ export async function runScheduledCycleWithDeps(input: {
   state: ReviewStateStore;
   options: RunOnceOptions;
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission?: ProductionLicenseAdmission;
   now?: Date;
   clock?: () => Date;
 }): Promise<ScheduledRunResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for scheduled review cycles");
+  if (!isAuthenticProductionLicenseAdmission(input.licenseAdmission, "review_discovery")) {
+    throw new Error("production review-discovery admission is required for scheduled review cycles");
+  }
   const config = input.config;
   const scheduler = config.reviewScheduler;
   if (!scheduler?.enabled) {
@@ -153,17 +177,27 @@ export async function runScheduledCycleWithDeps(input: {
       ? [await input.github.getPull(repo, input.options.pullNumber)]
       : await input.github.listOpenPulls(repo);
     result.pullsSeen += pulls.length;
+    const admittedPulls = pulls.filter((pull) => {
+      const decision = authorizeAdmissionForVisibility(
+        input.licenseAdmission!,
+        schedulerPullVisibility(pull),
+        "review_discovery"
+      );
+      if (decision.ok) return true;
+      result.skippedLicenseGate += 1;
+      return false;
+    });
     const activation = activateRepoForNewOnlyReview({
       config,
       state: input.state,
       repo,
-      pulls,
+      pulls: admittedPulls,
       scopedPullNumber: input.options.pullNumber,
       now
     });
     result.baselinedExisting += activation.baselined;
 
-    for (const pull of pulls) {
+    for (const pull of admittedPulls) {
       const enqueueStatus = await enqueuePullIfEligible({
         config,
         github: input.github,
@@ -174,6 +208,7 @@ export async function runScheduledCycleWithDeps(input: {
         now,
         dryRun: input.options.dryRun,
         reviewPullImpl: input.reviewPullImpl,
+        licenseAdmission: input.licenseAdmission,
         allowActivationBaselineCommandLookup: input.options.pullNumber !== undefined,
         onStatusCommentFailure: () => {
           result.statusCommentFailures += 1;
@@ -238,6 +273,7 @@ export async function runScheduledCycleWithDeps(input: {
       dryRun: input.options.dryRun,
       useZCode: input.options.useZCode ?? true,
       reviewPullImpl: input.reviewPullImpl,
+      licenseAdmission: input.licenseAdmission,
       budget,
       onStatusCommentFailure: () => {
         result.statusCommentFailures += 1;
@@ -266,6 +302,13 @@ export async function runScheduledCycleWithDeps(input: {
   await observeScheduledOutcomes({ config, github: input.github, state: input.state, now });
 
   return result;
+}
+
+function schedulerPullVisibility(pull: PullRequestSummary): "public" | "private" | "unknown" {
+  const repo = pull.base.repo;
+  if (repo.private === true || repo.visibility === "private" || repo.visibility === "internal") return "private";
+  if (repo.private === false || repo.visibility === "public") return "public";
+  return "unknown";
 }
 
 /**
@@ -429,6 +472,7 @@ async function enqueuePullIfEligible(input: {
   now: Date;
   dryRun: boolean;
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission: ProductionLicenseAdmission;
   allowActivationBaselineCommandLookup?: boolean;
   onStatusCommentFailure?: () => void;
   onCommandFetchError?: () => void;
@@ -516,6 +560,7 @@ async function enqueuePullIfEligible(input: {
         dryRun: input.dryRun,
         useZCode: false,
         budget: new ReviewRunBudget(1),
+        licenseAdmission: input.licenseAdmission,
         allowActivationBaselineCommandLookup: true,
         commandCommentId: commandDecision.commandId
       });
@@ -1135,6 +1180,7 @@ async function runLeasedQueueJob(input: {
   dryRun: boolean;
   useZCode: boolean;
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission: ProductionLicenseAdmission;
   budget: ReviewRunBudget;
   onStatusCommentFailure?: () => void;
   now?: Date;
@@ -1306,6 +1352,7 @@ async function runLeasedQueueJob(input: {
       dryRun: input.dryRun,
       useZCode: input.useZCode,
       budget: input.budget,
+      licenseAdmission: input.licenseAdmission,
       processedHeadPolicy: processedHeadPolicyForQueueJob(input.state, input.job, pull),
       allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})

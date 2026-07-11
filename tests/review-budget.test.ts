@@ -8,6 +8,7 @@ import { buildReviewBudgetStatus, ReviewRunBudget } from "../src/review-budget.j
 import { ReviewStateStore, type ReviewQueueJobRecord } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { reviewPull } from "../src/worker.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 describe("review run budget", () => {
   const roots: string[] = [];
@@ -62,6 +63,7 @@ describe("review run budget", () => {
       pull: pull(1190, "new-head"),
       dryRun: true,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget
     });
 
@@ -361,6 +363,7 @@ describe("review run budget", () => {
       pull: pull(1190, "new-head"),
       dryRun: true,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget
     });
 
@@ -438,7 +441,8 @@ function pull(number: number, sha: string): PullRequestSummary {
       sha: "base",
       ref: "main",
       repo: {
-        full_name: "owner/repo"
+        full_name: "owner/repo",
+        private: true
       }
     },
     html_url: `https://github.test/owner/repo/pull/${number}`

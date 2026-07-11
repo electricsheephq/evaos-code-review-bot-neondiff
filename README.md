@@ -11,12 +11,12 @@ Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
-Public open-source repos are free. Private and commercial repos require a paid
-NeonDiff support license: $1/month or $10/year for individuals, or $100/year for
-organizations. Individual plans include a 7-day trial, organization plans include
-a 30-day trial, and legacy lifetime licenses remain honored but are no longer
-sold. NeonDiff is source-available commercial software, not open-source
-software.
+API-backed activation is required for supported review work on every repository
+visibility. NeonDiff support licenses cost $1/month or $10/year for individuals,
+or $100/year for organizations. Individual plans include a 7-day trial,
+organization plans include a 30-day trial, and legacy lifetime licenses remain
+honored but are no longer sold. NeonDiff is source-available commercial
+software, not open-source software.
 
 [Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
 [GitHub App Install](docs/github-app-setup.md) · [Contributing](CONTRIBUTING.md) ·
@@ -70,7 +70,13 @@ Requirements:
 - a model/provider path configured locally, such as GLM/Z.ai, Ollama, or a
   future OpenAI-compatible provider slot
 
-Recommended package install:
+> **v1.0.4 release-candidate notice:** Mandatory activation is implemented on
+> this source branch, but public npm `latest` remains v1.0.3 until the
+> replacement passes release proof. v1.0.3 does not enforce this boundary.
+> Do not treat the package command below as mandatory-activation proof until
+> npm and the GitHub Release both report v1.0.4.
+
+Recommended package install after v1.0.4 is published and verified:
 
 ```bash
 npm install -g neondiff

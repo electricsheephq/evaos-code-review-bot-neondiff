@@ -1,0 +1,20 @@
+{
+  "pilotRepos": ["owner/repo"],
+  "workRoot": "/tmp/neondiff-v1.0.3-upgrade/runtime",
+  "statePath": "/tmp/neondiff-v1.0.3-upgrade/state/reviews.sqlite",
+  "evidenceDir": "/tmp/neondiff-v1.0.3-upgrade/evidence",
+  "license": {
+    "enabled": false,
+    "apiBaseUrl": "https://legacy-license.invalid",
+    "cachePath": "/tmp/neondiff-v1.0.3-upgrade/state/license/entitlement-cache.json",
+    "storageBackend": "file",
+    "keyPath": "/tmp/neondiff-v1.0.3-upgrade/state/license/license-key.txt",
+    "keychainService": "com.electricsheephq.neondiff.license",
+    "keychainAccount": "default",
+    "requestTimeoutMs": 10000,
+    "offlineGraceMs": 900000,
+    "publicReposFree": true,
+    "privateReposRequireEntitlement": false,
+    "updateEntitlementRequiresLicense": false
+  }
+}

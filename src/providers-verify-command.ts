@@ -8,6 +8,7 @@ import {
 import { isProviderId } from "./providers.js";
 import { readSecretFromStdin } from "./secret-stdin.js";
 import { loadConfigAtRevision } from "./config-cli.js";
+import { isAuthenticProductionLicenseAdmission, requireActiveProductionLicense } from "./license-admission.js";
 
 export interface ProvidersVerifyCommandInput {
   configPath?: string | string[];
@@ -23,6 +24,7 @@ export interface ProvidersVerifyCommandDependencies {
   verifyProviderApiKey: (input: ProviderApiKeyVerificationInput) => Promise<ProviderApiKeyVerificationResult>;
   readSecretFromStdin: typeof readSecretFromStdin;
   loadConfigAtRevision: (path: string) => { config: BotConfig; revision: string };
+  requireActiveProductionLicense: typeof requireActiveProductionLicense;
 }
 
 export type ProvidersVerifyCommandOutput = ProviderApiKeyVerificationResult | {
@@ -40,7 +42,8 @@ const defaultDependencies: ProvidersVerifyCommandDependencies = {
   loadConfig,
   verifyProviderApiKey,
   readSecretFromStdin,
-  loadConfigAtRevision
+  loadConfigAtRevision,
+  requireActiveProductionLicense
 };
 
 export async function runProvidersVerifyCommand(
@@ -129,6 +132,17 @@ export async function runProvidersVerifyCommand(
       },
       exitCode: 1
     };
+  }
+
+  const admission = await dependencies.requireActiveProductionLicense({
+    operation: "provider_verify",
+    config: config.license!
+  });
+  if (!admission.ok) {
+    return commandError(`license ${admission.decision.status}: ${admission.decision.detail}`);
+  }
+  if (!isAuthenticProductionLicenseAdmission(admission.admission, "provider_verify")) {
+    return commandError("license invalid: production admission proof is not authentic");
   }
 
   const apiKey = await dependencies.readSecretFromStdin(input.stdin);

@@ -16,6 +16,9 @@ import { hostname, platform } from "node:os";
 import { dirname } from "node:path";
 import { redactSecrets } from "./secrets.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
+import type { LicenseSecretReader } from "./license-secret-store.js";
+
+const MAXIMUM_LICENSE_API_RESPONSE_BYTES = 64 * 1024;
 
 export type LicenseStorageBackend = "keychain" | "file";
 export type LicenseStatus =
@@ -50,6 +53,27 @@ export interface LicenseConfig {
   publicReposFree: boolean;
   privateReposRequireEntitlement: boolean;
   updateEntitlementRequiresLicense: boolean;
+  productionPolicy?: LicenseProductionPolicyMetadata;
+}
+
+export interface LicensePolicyDiagnostic {
+  field:
+    | "enabled"
+    | "apiBaseUrl"
+    | "offlineGraceMs"
+    | "publicReposFree"
+    | "privateReposRequireEntitlement"
+    | "updateEntitlementRequiresLicense"
+    | "keychainService"
+    | "keychainAccount";
+  configured: string;
+  effective: string;
+  reason: string;
+}
+
+export interface LicenseProductionPolicyMetadata {
+  mode: "mandatory_online";
+  diagnostics: LicensePolicyDiagnostic[];
 }
 
 export interface LicenseEntitlement {
@@ -152,14 +176,27 @@ export async function getLicenseStatus(input: {
   refresh?: boolean;
   now?: Date;
   fetchImpl?: typeof fetch;
+  licenseSecretReader?: LicenseSecretReader;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
   const cached = readLicenseCache(input.config.cachePath, () => readCacheRedactionLicenseKey(input.config));
   if (!input.refresh) return statusFromCache(cached, now);
 
-  const licenseKey = readLicenseKey(input.config);
-  if (!licenseKey) return cached ? statusFromCache(cached, now) : missingResult(now, "no license key is stored");
-  if (!input.config.apiBaseUrl) return cached ? statusFromCache(cached, now) : serverResult(now, "license API base URL is not configured");
+  const productionRead = input.licenseSecretReader !== undefined;
+  let licenseKey: string | undefined;
+  try {
+    licenseKey = input.licenseSecretReader
+      ? input.licenseSecretReader.read(input.config)
+      : readLicenseKey(input.config);
+  } catch (error) {
+    return invalidApiResult(now, error instanceof Error ? error.message : "license secret could not be read safely");
+  }
+  if (!licenseKey) return productionRead
+    ? missingResult(now, "no license key is stored")
+    : cached ? statusFromCache(cached, now) : missingResult(now, "no license key is stored");
+  if (!input.config.apiBaseUrl) return productionRead
+    ? serverResult(now, "license API base URL is not configured")
+    : cached ? statusFromCache(cached, now) : serverResult(now, "license API base URL is not configured");
 
   const response = await callLicenseApi({
     config: input.config,
@@ -179,6 +216,7 @@ export async function getLicenseStatus(input: {
   }
 
   if (
+    !productionRead &&
     (response.status === "network" || response.status === "server") &&
     cached &&
     entitlementUsableDuringOutage(cached, now, input.config.offlineGraceMs)
@@ -194,6 +232,7 @@ export async function getLicenseStatus(input: {
       detail: `using cached entitlement after ${response.status} license API failure`
     };
   }
+
   if (shouldDeleteLicenseCacheForStatus(response.status) && cachedEntitlementMatchesLicenseKey(cached, licenseKey)) {
     deleteLicenseCache(input.config.cachePath);
   }
@@ -403,7 +442,7 @@ async function callLicenseApi(input: {
         machineId: localMachineId()
       })
     });
-    const text = await response.text();
+    const text = await readBoundedResponseText(response);
     const body = text ? safeJsonParse(text) : {};
     if (!response.ok) return apiFailureResult(response.status, body, now, input.licenseKey);
 
@@ -464,11 +503,16 @@ function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): Lic
   const status = readBodyStatus(record);
   const repoVisibilityScope = readRepoVisibilityScope(record);
   if (!status || !repoVisibilityScope) return undefined;
+  const expiresAt = readString(record, "expiresAt");
+  if (status === "active" && expiresAt) {
+    const expiry = Date.parse(expiresAt);
+    if (!Number.isFinite(expiry) || expiry <= now.getTime()) return undefined;
+  }
   const revocationReason = status === "active" ? undefined : sanitizeRevocationReason(readString(record, "revocationReason"), licenseKey);
   return {
     status,
     checkedAt: now.toISOString(),
-    ...(readString(record, "expiresAt") ? { expiresAt: readString(record, "expiresAt")! } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
     repoVisibilityScope,
     ...(readBoolean(record, "privateRepoAllowed") !== undefined ? { privateRepoAllowed: readBoolean(record, "privateRepoAllowed")! } : {}),
     updateEntitlement: readBoolean(record, "updateEntitlement") ?? false,
@@ -479,6 +523,34 @@ function normalizeEntitlement(body: unknown, licenseKey: string, now: Date): Lic
     ...(readNumber(record, "seats") !== undefined ? { seats: readNumber(record, "seats")! } : {}),
     licenseFingerprint: fingerprintLicenseKey(licenseKey)
   };
+}
+
+async function readBoundedResponseText(response: Response): Promise<string> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAXIMUM_LICENSE_API_RESPONSE_BYTES) {
+    throw new Error("license API response exceeds the supported byte bound");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAXIMUM_LICENSE_API_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error("license API response exceeds the supported byte bound");
+    }
+    chunks.push(value);
+  }
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(combined);
 }
 
 function readBodyStatus(body: unknown): LicenseApiBodyStatus | undefined {

@@ -71,6 +71,7 @@ describe("NeonDiff public release readiness", () => {
       url: "git+https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git"
     });
     expect(pkg.bin).toEqual({ neondiff: "dist/src/cli.js" });
+    expect(pkg.exports).toEqual({});
     expect(pkg.files).toEqual([
       "dist/src",
       "README.md",
@@ -547,8 +548,8 @@ describe("NeonDiff public release readiness", () => {
     expect(docs).toMatch(/neondiff dashboard --config config\.local\.json/i);
     expect(docs).toMatch(/Verify API Key/i);
     expect(docs).toMatch(/license\s+status,\s+GitHub App status,\s+daemon status,\s+and provider readiness/i);
-    expect(docs).toMatch(/Public repo review may run without a license when `license\.publicReposFree`\s+is true/i);
-    expect(docs).toMatch(/private repo review fails closed before worktree prep,\s+model\/provider calls,\s+or\s+GitHub review posting/i);
+    expect(docs).toMatch(/API-backed activation is required for supported (?:public, private, internal, and unknown repository review|review work)/i);
+    expect(docs).toMatch(/active NeonDiff entitlement before\s+>\s*worktree prep, provider calls, or GitHub review posting/i);
     expect(docs).toMatch(/curl -fsSL https:\/\/www\.neondiff\.com\/install/i);
     expect(docs).toContain("git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git");
     expect(legacyRepoReferences).toEqual([]);
@@ -556,7 +557,7 @@ describe("NeonDiff public release readiness", () => {
     expect(read("docs/releases/v1.0.3.md")).not.toMatch(/\/Volumes\/LEXAR|\/Users\/lume/);
   });
 
-  it("keeps the GitHub Marketplace free-listing packet bounded to discoverability", () => {
+  it("keeps the retired GitHub Marketplace free-listing packet explicitly non-publishable", () => {
     expect(existsSync("docs/github-marketplace-free-listing.md")).toBe(true);
 
     const listing = read("docs/github-marketplace-free-listing.md");
@@ -567,21 +568,19 @@ describe("NeonDiff public release readiness", () => {
     expect(pkg.scripts?.["check:public-claims"]).toBe("node scripts/check-public-claims.mjs");
 
     expect(listing).toContain("Issue: #428");
-    expect(listing).toContain("free discoverability listing");
-    expect(listing).toContain("No Marketplace billing is shipped by this packet");
-    expect(listing).toContain("owner clicks the final Marketplace publish button");
+    expect(listing).toMatch(/free-use\s+listing strategy is retired/i);
+    expect(listing).toContain("No Marketplace billing or listing is shipped by this packet");
+    expect(listing).toMatch(/owner must approve and click the final Marketplace\s+publish button/i);
     expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/creating-apps-for-github-marketplace/requirements-for-listing-an-app");
     expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/selling-your-app-on-github-marketplace/pricing-plans-for-github-marketplace-apps");
     expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/listing-an-app-on-github-marketplace");
-    expect(listing).toMatch(/Public open-source repositories are free/i);
-    expect(listing).toMatch(/Private and commercial repository\s+review requires a paid NeonDiff support license/i);
+    expect(listing).toMatch(/requires\s+API-backed activation for public, private, internal, and unknown repository\s+work/i);
     expect(listing).toMatch(/provider\/model costs stay external/i);
     expect(listing).toMatch(/support@electricsheephq\.com/);
-    expect(listing).toMatch(/Security\.md/);
-    expect(listing).toMatch(/Publish blocker: provide a valid privacy-policy URL/i);
-    expect(listing).toMatch(/Publish blocker: implement or explicitly defer Marketplace purchase-event\s+webhooks/i);
-    expect(listing).toMatch(/Publish blocker: create Marketplace logo and feature-card assets/i);
-    expect(listing).toMatch(/Do not paste beta or public-preview wording into the Marketplace listing/i);
+    expect(listing).toMatch(/SECURITY\.md/);
+    expect(listing).toMatch(/provide a valid privacy-policy URL/i);
+    expect(listing).toMatch(/implement the required purchase and\s+cancellation webhooks/i);
+    expect(listing).toMatch(/Do not paste\s+beta, public-preview, or retired free-use wording/i);
   });
 
   it("CI workflows gate build, tests, package, docs claims, and npm provenance publish", () => {

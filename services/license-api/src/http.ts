@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import { LicenseStore } from "./store.js";
 import {
   issueCheckoutLicense,
@@ -67,7 +68,8 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
     }
 
     // Per-key sliding window; the hot validate path is what the client polls.
-    if (!rateLimiter.allow(parsed.licenseKey, Date.now())) {
+    const rateLimitKey = createHash("sha256").update(parsed.licenseKey).digest("hex");
+    if (!rateLimiter.allow(rateLimitKey, Date.now())) {
       return writeResult(res, rateLimitedResult());
     }
 

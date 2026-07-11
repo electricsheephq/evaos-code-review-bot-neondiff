@@ -23,15 +23,16 @@ describe("NeonDiff public community funnel", () => {
       /docs\/pricing\.md/i,
       /docs\/providers\.md/i,
       /docs\/known-limitations-and-provider-status\.md/i,
-      /public open-source repos.*free/i,
+      /API-backed activation is required.*every repository/i,
+      /v1\.0\.4 release-candidate notice/i,
+      /v1\.0\.3 does not enforce this boundary/i,
       /\$1\/month/i,
       /\$10\/year/i,
       /\$100\/year/i,
       /7-day trial/i,
       /30-day trial/i,
-      /legacy lifetime licenses remain honored/i,
-      /private.*commercial.*paid/i,
-      /source-available commercial software/i,
+      /legacy lifetime licenses\s+remain\s+honored/i,
+      /source-available commercial\s+software/i,
       /GitHub App/i,
       /dry-run review/i,
       /electricsheephq\/evaos-code-review-bot-neondiff\/issues\/103/i,
@@ -64,8 +65,12 @@ describe("NeonDiff public community funnel", () => {
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
 
     for (const text of [license, boundary]) {
+      const normalized = text.replace(/\s+/g, " ");
       expect(text).toMatch(/source-available commercial software/i);
-      expect(text).toMatch(/Public open-source repositor(?:y|ies).*free/i);
+      expect(normalized).toMatch(/requires?.*active API-backed|active API-backed.*required/i);
+      for (const visibility of ["public", "private", "internal", "unknown"]) {
+        expect(normalized).toMatch(new RegExp(`\\b${visibility}\\b`, "i"));
+      }
       expect(text).toMatch(/private/i);
       expect(text).toMatch(/commercial/i);
       expect(text).toMatch(/paid NeonDiff license/i);
@@ -78,6 +83,22 @@ describe("NeonDiff public community funnel", () => {
 
     expect(boundary).toMatch(/copy these claims/i);
     expect(boundary).toMatch(/Do not describe NeonDiff as \"open source\"|Avoid:\n\n- \"open source\"/i);
+
+    const currentPublicSurfaces = [
+      "README.md",
+      "LICENSE.md",
+      "docs/license-boundary.md",
+      "docs/pricing.md",
+      "docs/SETUP.md",
+      "docs/github-app-setup.md"
+    ].map(read).join("\n");
+    for (const retiredClaim of [
+      /public(?: open-source)? repositor(?:y|ies) (?:are|is) free/i,
+      /free (?:for|on) public repositor(?:y|ies)/i,
+      /public repos? with no license (?:may )?(?:pass|run|review)/i
+    ]) {
+      expect(currentPublicSurfaces).not.toMatch(retiredClaim);
+    }
   });
 
   it("pricing doc records support tiers, BYOK costs, and no hosted model credit bundle", () => {
@@ -86,8 +107,9 @@ describe("NeonDiff public community funnel", () => {
     const boundary = read("docs/license-boundary.md");
     const issueTemplate = read(".github/ISSUE_TEMPLATE/license_setup_confusion.yml");
 
-    for (const text of [pricing, setup, boundary]) {
-      expect(text).toMatch(/public open-source/i);
+    for (const text of [pricing, boundary]) {
+      expect(text).toMatch(/public/i);
+      expect(text).toMatch(/API-backed activation|active API-backed/i);
       expect(text).toMatch(/\$1\/mo|\$1\/month/i);
       expect(text).toMatch(/\$10\/yr|\$10\/year/i);
       expect(text).toMatch(/\$100\/yr|\$100\/year/i);
@@ -103,6 +125,10 @@ describe("NeonDiff public community funnel", () => {
       expect(normalized).toMatch(/does not include|do not include|not included|no bundled/i);
       expect(text).not.toMatch(/unlimited SaaS inference included|bundled provider tokens included/i);
     }
+
+    expect(setup).toMatch(/API-backed activation/i);
+    expect(setup).toMatch(/public, private, internal, and unknown/i);
+    expect(setup).toMatch(/BYOK|provider key|local model/i);
 
     expect(pricing).toMatch(/neondiff pricing/i);
     expect(pricing).toMatch(/monthly_support/i);
@@ -173,8 +199,8 @@ describe("NeonDiff public community funnel", () => {
       /dry-run true/i,
       /App bot, not the human user token/i,
       /License Boundary/i,
-      /Public open-source repositories are free/i,
-      /Private and commercial repositories require/i,
+      /requires live API-backed activation before public/i,
+      /Legacy `publicReposFree`/i,
       /Private repo data stays local/i,
       /Uninstall/i,
       /Troubleshooting/i,

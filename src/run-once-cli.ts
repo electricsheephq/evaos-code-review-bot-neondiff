@@ -1,4 +1,5 @@
 import { redactSecrets } from "./secrets.js";
+import type { ProductionLicenseAdmission } from "./license-admission.js";
 import { runOnce, type RunOnceOptions, type RunOnceResult } from "./worker.js";
 
 const STRUCTURED_SECRET_VALUE_PATTERN =
@@ -72,11 +73,18 @@ export function serializeRunOnceCliReport(report: RunOnceCliReport): string {
 export async function runOnceCliCommand(input: {
   options: RunOnceOptions;
   runOnceImpl?: (options: RunOnceOptions) => Promise<RunOnceResult>;
+  admitImpl?: () => Promise<ProductionLicenseAdmission>;
   commandName?: "run-once" | "review-pr";
 }): Promise<RunOnceCliCommandResult> {
   let result: RunOnceResult;
   try {
-    result = await (input.runOnceImpl ?? runOnce)(input.options);
+    const licenseAdmission = input.admitImpl
+      ? await input.admitImpl()
+      : input.options.licenseAdmission;
+    result = await (input.runOnceImpl ?? runOnce)({
+      ...input.options,
+      ...(licenseAdmission ? { licenseAdmission } : {})
+    });
   } catch (error) {
     const report = buildRunOnceCliErrorReport({
       error,

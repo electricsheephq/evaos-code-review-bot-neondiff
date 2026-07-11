@@ -11,6 +11,7 @@ import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
 import {
   activateLicense,
+  deactivateLicense,
   evaluateLicenseReviewGate,
   getLicenseStatus,
   type LicenseConfig
@@ -18,7 +19,8 @@ import {
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { buildLicenseGateForPull, reviewPull } from "../src/worker.js";
+import { buildLicenseGateForPull, localDateFolder, reviewPull } from "../src/worker.js";
+import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/license-admission.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -53,16 +55,11 @@ describe("license activation and entitlement cache", () => {
     const configPath = join(root, "config.json");
     writeConfig(configPath, root, server.url);
 
-    const activated = await runCli([
-      "license",
-      "activate",
-      "--config",
-      configPath,
-      "--license-key-env",
-      "NEONDIFF_TEST_LICENSE_KEY",
-      "--repo",
-      "owner/private"
-    ], { NEONDIFF_TEST_LICENSE_KEY: key });
+    const activated = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: key,
+      repo: "owner/private"
+    });
     expect(activated.ok).toBe(true);
     expect(activated.status).toBe("active");
     expect(JSON.stringify(activated)).not.toContain(key);
@@ -440,47 +437,13 @@ describe("license activation and entitlement cache", () => {
       });
     });
     servers.push(server);
-    const configPath = join(root, "config.json");
-    writeConfig(configPath, root, server.url);
-    await runCli([
-      "license",
-      "activate",
-      "--config",
-      configPath,
-      "--license-key-env",
-      "NEONDIFF_TEST_LICENSE_KEY"
-    ], { NEONDIFF_TEST_LICENSE_KEY: key });
+    const config = licenseConfig(root, server.url);
+    expect((await activateLicense({ config, licenseKey: key })).ok).toBe(true);
 
-    await expect(execFileAsync(process.execPath, [
-      tsxCliPath,
-      "src/cli.ts",
-      "license",
-      "deactivate",
-      "--config",
-      configPath,
-      "--notify-api",
-      "true"
-    ], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
-    })).rejects.toMatchObject({
-      stdout: expect.stringContaining("\"ok\": false")
-    });
-    await expect(execFileAsync(process.execPath, [
-      tsxCliPath,
-      "src/cli.ts",
-      "license",
-      "deactivate",
-      "--config",
-      configPath,
-      "--notify-api",
-      "true"
-    ], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
-    })).rejects.toMatchObject({
-      stdout: expect.stringContaining("\"status\": \"deactivation_failed\"")
-    });
+    const first = await deactivateLicense({ config, notifyApi: true });
+    const second = await deactivateLicense({ config, notifyApi: true });
+    expect(first).toMatchObject({ ok: false, status: "deactivation_failed" });
+    expect(second).toMatchObject({ ok: false, status: "deactivation_failed" });
     expect(existsSync(join(root, "license.key"))).toBe(true);
     expect(existsSync(join(root, "entitlement.json"))).toBe(true);
   });
@@ -574,7 +537,7 @@ describe("license activation and entitlement cache", () => {
       }
     })).toThrow(/config\.license\.cachePath must be outside protected checkout root/);
 
-    expect(() => loadConfigFromObject({
+    const redirected = loadConfigFromObject({
       pilotRepos: ["owner/repo"],
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
@@ -586,13 +549,19 @@ describe("license activation and entitlement cache", () => {
         storageBackend: "file",
         keyPath: join(root, "license.key")
       }
-    })).toThrow(/config\.license\.apiBaseUrl must use https/);
+    });
+    expect(redirected.license).toMatchObject({
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      productionPolicy: {
+        diagnostics: expect.arrayContaining([expect.objectContaining({ field: "apiBaseUrl" })])
+      }
+    });
   });
 
-  it("requires an API base URL when license enforcement is enabled", () => {
+  it("supplies the canonical API base URL when a legacy config omits it", () => {
     const root = mkRoot(roots);
 
-    expect(() => loadConfigFromObject({
+    const config = loadConfigFromObject({
       pilotRepos: ["owner/repo"],
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
@@ -603,10 +572,38 @@ describe("license activation and entitlement cache", () => {
         storageBackend: "file",
         keyPath: join(root, "license.key")
       }
-    })).toThrow(/config\.license\.apiBaseUrl is required when config\.license\.enabled=true/);
+    });
+    expect(config.license).toMatchObject({
+      enabled: true,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      productionPolicy: {
+        diagnostics: []
+      }
+    });
   });
 
-  it("uses a still-active cached entitlement during transient API outage", async () => {
+  it("rejects public CLI attempts to override the canonical license API", async () => {
+    const root = mkRoot(roots);
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, root, "https://legacy-license.invalid");
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      "src/cli.ts",
+      "license",
+      "status",
+      "--config",
+      configPath,
+      "--license-api-url",
+      "https://fake-license.invalid"
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stderr: expect.stringContaining("--license-api-url is not supported")
+    });
+  });
+
+  it("keeps a still-active cache diagnostic-only during a transient API outage", async () => {
     const root = mkRoot(roots);
     const config = licenseConfig(root, "http://127.0.0.1:9");
     writeFileSync(join(root, "license.key"), "LIC-offline-cache-test-123456\n", { mode: 0o600 });
@@ -622,16 +619,48 @@ describe("license activation and entitlement cache", () => {
     const status = await getLicenseStatus({
       config,
       refresh: true,
-      now: new Date("2026-07-04T00:00:00.000Z")
+      now: new Date("2026-07-04T00:00:00.000Z"),
+      licenseSecretReader: { read: () => "LIC-offline-cache-test-123456" }
     });
 
-    expect(status).toMatchObject({
-      ok: true,
+    expect(status).toMatchObject({ ok: false, status: "network", source: "none", classification: "network" });
+  });
+
+  it("does not accept an active cache when no license key is stored", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "http://127.0.0.1:9");
+    writeFileSync(config.cachePath, `${JSON.stringify({
       status: "active",
-      source: "cache",
-      stale: true,
-      classification: "network"
+      checkedAt: "2026-07-04T00:00:00.000Z",
+      expiresAt: "2026-08-01T00:00:00.000Z",
+      repoVisibilityScope: "all",
+      updateEntitlement: true
+    })}\n`, { mode: 0o600 });
+    const status = await getLicenseStatus({
+      config,
+      refresh: true,
+      now: new Date("2026-07-04T00:00:01.000Z"),
+      licenseSecretReader: { read: () => undefined }
     });
+    expect(status).toMatchObject({ ok: false, status: "missing", source: "none" });
+  });
+
+  it("rejects an already-expired active success response", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    writeFileSync(join(root, "license.key"), "LIC-expired-success-test-123456\n", { mode: 0o600 });
+    const status = await getLicenseStatus({
+      config,
+      refresh: true,
+      now: new Date("2026-07-04T00:00:00.000Z"),
+      fetchImpl: (async () => new Response(JSON.stringify({
+        status: "active",
+        expiresAt: "2026-07-03T00:00:00.000Z",
+        repoVisibilityScope: "all",
+        updateEntitlement: true
+      }), { status: 200 })) as typeof fetch
+    });
+    expect(status).toMatchObject({ ok: false, status: "invalid", classification: "invalid" });
   });
 
   it("treats entitlement offline grace metadata as diagnostic only", async () => {
@@ -1187,7 +1216,7 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
-  it("rejects malformed API success responses and reports missing env vars clearly", async () => {
+  it("rejects malformed API success responses and unsafe CLI secret inputs", async () => {
     const root = mkRoot(roots);
     const server = await startLicenseServer((_req, res) => {
       writeJson(res, 200, {
@@ -1222,7 +1251,7 @@ describe("license activation and entitlement cache", () => {
       cwd: process.cwd(),
       env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
     })).rejects.toMatchObject({
-      stderr: expect.stringContaining("NEONDIFF_LICENSE_KEY_DOES_NOT_EXIST did not resolve")
+      stderr: expect.stringContaining("process environments can expose secrets")
     });
 
     await expect(execFileAsync(process.execPath, [
@@ -1293,7 +1322,7 @@ describe("license activation and entitlement cache", () => {
     expect(statSync(keyPath).mode & 0o777).toBe(0o600);
   });
 
-  it("blocks provider-configured private repo worker reviews before checkout, provider, or posting when entitlement is missing", async () => {
+  it("blocks direct worker reviews without an opaque admission before state, checkout, provider, or GitHub work", async () => {
     const root = mkRoot(roots);
     const state = new ReviewStateStore(join(root, "state.sqlite"));
     const config = minimalConfig(root);
@@ -1319,7 +1348,11 @@ describe("license activation and entitlement cache", () => {
     };
     const pull = pullSummary(7, "private-head");
     const github = new GitHubApi({});
-    github.getRepo = async () => ({ full_name: "owner/private", private: true as const, visibility: "private" as const });
+    let githubReads = 0;
+    github.getRepo = async () => {
+      githubReads += 1;
+      return { full_name: "owner/private", private: true as const, visibility: "private" as const };
+    };
     github.listPullFiles = async () => {
       throw new Error("license gate should block before checkout/file listing/provider work");
     };
@@ -1327,7 +1360,7 @@ describe("license activation and entitlement cache", () => {
       throw new Error("license gate should block before GitHub review posting");
     };
 
-    const status = await reviewPull({
+    await expect(reviewPull({
       config,
       github,
       state,
@@ -1336,20 +1369,84 @@ describe("license activation and entitlement cache", () => {
       dryRun: false,
       useZCode: true,
       budget: new ReviewRunBudget(1)
+    })).rejects.toThrow("production license admission is required for pull review");
+
+    expect(state.getReviewReadiness("owner/private", 7, "private-head")).toBeUndefined();
+    expect(githubReads).toBe(0);
+    expect(existsSync(join(root, "evidence"))).toBe(false);
+    expect(existsSync(join(root, "work"))).toBe(false);
+    state.close();
+  });
+
+  it("records blocked-on-proof readiness for an admitted pull with unknown visibility", async () => {
+    const root = mkRoot(roots);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const pull = pullSummary(8, "unknown-visibility-head");
+    const status = await reviewPull({
+      config: minimalConfig(root),
+      github: {} as GitHubApi,
+      state,
+      repo: "owner/unknown",
+      pull,
+      dryRun: true,
+      useZCode: false,
+      licenseAdmission: testLicenseAdmission,
+      budget: new ReviewRunBudget(1)
     });
 
     expect(status).toBe("skipped_license_gate");
-    const readiness = state.getReviewReadiness("owner/private", 7, "private-head");
-    expect(readiness).toMatchObject({
+    expect(state.getReviewReadiness("owner/unknown", 8, "unknown-visibility-head")).toMatchObject({
       state: "blocked_on_proof",
-      reason: expect.stringContaining("private repo review requires active entitlement")
+      reason: expect.stringContaining("visibility is unknown")
     });
-    const gateEvidence = readFileSync(
-      join(root, "evidence", localDateFolder(), "owner__private", "pr-7", "private-head", "license-gate.json"),
-      "utf8"
-    );
-    expect(gateEvidence).toContain("private repo review requires active entitlement");
-    expect(existsSync(join(root, "work"))).toBe(false);
+    expect(existsSync(join(
+      minimalConfig(root).evidenceDir,
+      localDateFolder(),
+      "owner__unknown",
+      "pr-8",
+      "unknown-visibility-head",
+      "license-gate.json"
+    ))).toBe(true);
+    state.close();
+  });
+
+  it("records redacted evidence when an authentic admission is denied at the pull operation boundary", async () => {
+    const root = mkRoot(roots);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const pull = privatePullSummary(9, "private-scope-denied-head");
+    const status = await reviewPull({
+      config: minimalConfig(root),
+      github: {} as GitHubApi,
+      state,
+      repo: "owner/private",
+      pull,
+      dryRun: true,
+      useZCode: false,
+      licenseAdmission: await createTestLicenseAdmission({ operation: "provider_verify", scope: "public" }),
+      budget: new ReviewRunBudget(1)
+    });
+
+    expect(status).toBe("skipped_license_gate");
+    expect(state.getReviewReadiness("owner/private", 9, "private-scope-denied-head")).toMatchObject({
+      state: "blocked_on_proof",
+      reason: expect.stringContaining("does not authorize this operation")
+    });
+    const evidence = JSON.parse(readFileSync(join(
+      minimalConfig(root).evidenceDir,
+      localDateFolder(),
+      "owner__private",
+      "pr-9",
+      "private-scope-denied-head",
+      "license-gate.json"
+    ), "utf8"));
+    expect(evidence).toMatchObject({
+      ok: false,
+      status: "invalid",
+      repo: "owner/private",
+      pullNumber: 9,
+      redacted: true
+    });
+    expect(JSON.stringify(evidence)).not.toContain("fixtureadmission");
     state.close();
   });
 

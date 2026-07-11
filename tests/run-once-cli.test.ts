@@ -5,8 +5,31 @@ import { describe, expect, it } from "vitest";
 import { parsePositiveInteger } from "../src/cli-args.js";
 import { buildRunOnceCliReport, runOnceCliCommand, runOnceCliExitCode, serializeRunOnceCliReport } from "../src/run-once-cli.js";
 import { assertExpectedReviewPrHead, type RunOnceResult } from "../src/worker.js";
+import type { ProductionLicenseAdmission } from "../src/license-admission.js";
 
 describe("run-once CLI reporting", () => {
+  it("runs CLI-boundary admission once and forwards the exact token into review work", async () => {
+    const admission = { operation: "review_discovery" } as ProductionLicenseAdmission;
+    let admitCalls = 0;
+    let forwarded: ProductionLicenseAdmission | undefined;
+
+    const command = await runOnceCliCommand({
+      options: { dryRun: true, repo: "owner/repo" },
+      admitImpl: async () => {
+        admitCalls += 1;
+        return admission;
+      },
+      runOnceImpl: async (options) => {
+        forwarded = options.licenseAdmission;
+        return runOnceResult({ reposScanned: 1 });
+      }
+    });
+
+    expect(command.exitCode).toBe(0);
+    expect(admitCalls).toBe(1);
+    expect(forwarded).toBe(admission);
+  });
+
   it("prints invocation metadata with the structured runOnce result", () => {
     const result = runOnceResult({
       reposScanned: 1,

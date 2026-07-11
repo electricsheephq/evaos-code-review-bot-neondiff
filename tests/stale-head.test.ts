@@ -9,6 +9,7 @@ import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { detectStalePullHead, reviewPull } from "../src/worker.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 describe("exact-head stale guards", () => {
   const roots: string[] = [];
@@ -68,6 +69,7 @@ describe("exact-head stale guards", () => {
       pull: pull(1213, oldHead, "base-a"),
       dryRun: true,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget: new ReviewRunBudget(1)
     })).resolves.toBe("skipped_stale_head");
 
@@ -118,6 +120,7 @@ describe("exact-head stale guards", () => {
       pull: pull(1214, headA, "base-a"),
       dryRun: false,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget: new ReviewRunBudget(1)
     })).resolves.toBe("skipped_finishing_touch_draft");
 
@@ -183,6 +186,7 @@ describe("exact-head stale guards", () => {
       pull: pull(1214, headA, "base-a"),
       dryRun: false,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget: new ReviewRunBudget(1),
       commandCommentId: 9005
     })).resolves.toBe("skipped_finishing_touch_draft");
@@ -244,6 +248,7 @@ describe("exact-head stale guards", () => {
       pull: pull(1214, "head-a", "base-a"),
       dryRun: false,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget: new ReviewRunBudget(1),
       commandCommentId: 9007
     })).resolves.toBe("skipped_finishing_touch_draft");
@@ -294,6 +299,7 @@ describe("exact-head stale guards", () => {
       pull: pull(1215, "head-a", "base-a"),
       dryRun: false,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget: new ReviewRunBudget(1)
     })).rejects.toThrow(/disabled finishing-touch command should not fetch files/);
 
@@ -352,6 +358,7 @@ describe("exact-head stale guards", () => {
       pull: pull(1216, headA, "base-a"),
       dryRun: false,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget: new ReviewRunBudget(1)
     })).resolves.toBe("skipped_finishing_touch_draft");
 
@@ -435,7 +442,8 @@ function pull(number: number, headSha: string, baseSha: string): PullRequestSumm
       sha: baseSha,
       ref: "main",
       repo: {
-        full_name: "electricsheephq/WorldOS"
+        full_name: "electricsheephq/WorldOS",
+        private: true
       }
     },
     html_url: `https://github.test/electricsheephq/WorldOS/pull/${number}`

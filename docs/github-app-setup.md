@@ -116,11 +116,10 @@ registry target; it never puts that key in GitHub App settings or config.
 For public/private entitlement proof, keep the GitHub doctor JSON and the review
 evidence path together. The proof packet should show `visibility_result`,
 `visibility_source`, `license_gate_decision`, and `pre_checkout_gate_result`.
-Public repos with no license may pass this gate, then fail later if no provider
-is configured. Private repos without an active private entitlement, expired or
-revoked entitlements, and unknown visibility must block before checkout,
-provider calls, or GitHub review posting. A provider API key alone is not
-private-repo entitlement evidence.
+Public repos with no license fail this gate, as do private repos without an
+active private entitlement, expired or revoked entitlements, and unknown
+visibility. Every denial must happen before checkout, provider calls, or GitHub
+review posting. A provider API key alone is not repository entitlement evidence.
 
 ## First Review Path
 
@@ -145,9 +144,10 @@ and fix App credentials before continuing.
 
 ## License Boundary
 
-Public open-source repositories are free when `license.publicReposFree` is true.
-Private and commercial repositories require a paid NeonDiff support license when
-`license.privateReposRequireEntitlement` is true.
+The supported distribution requires live API-backed activation before public,
+private, internal, or unknown repository work. Legacy `publicReposFree` and
+`privateReposRequireEntitlement` values are migration inputs only and cannot
+weaken the production policy.
 
 Private repo data stays local to the worker and GitHub App installation. Do not
 send private repository names, diffs, logs, private keys, provider keys, license

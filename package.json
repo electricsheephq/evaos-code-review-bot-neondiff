@@ -6,6 +6,7 @@
   "bin": {
     "neondiff": "dist/src/cli.js"
   },
+  "exports": {},
   "description": "Local-first AI PR reviewer for teams that want current-head reviews without handing every diff to a hosted review SaaS.",
   "homepage": "https://www.neondiff.com",
   "repository": {

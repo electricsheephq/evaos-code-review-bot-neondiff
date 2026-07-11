@@ -8,6 +8,7 @@ import type { GitHubApi } from "../src/github.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 import {
   buildRepoMemoryContext,
   buildGitNexusContext,
@@ -24,12 +25,25 @@ import {
   recordFailedReview,
   recordProviderRateLimitCooldownIfNeeded,
   restoreFailedRetryRowIfNeeded,
-  retryFailedHeadWithDeps,
-  retryProviderCooldownsWithDeps,
-  reviewPull,
+  retryFailedHeadWithDeps as retryFailedHeadWithDepsImpl,
+  retryProviderCooldownsWithDeps as retryProviderCooldownsWithDepsImpl,
+  reviewPull as reviewPullImpl,
   runWithProviderRetry
 } from "../src/worker.js";
 import { formatZCodeTimeoutFailureError, isZCodeTimeoutError, parseZCodeTimeoutError } from "../src/zcode-timeout.js";
+
+const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
+  ...input,
+  pull: {
+    ...input.pull,
+    base: { ...input.pull.base, repo: { ...input.pull.base.repo, private: false, visibility: "public" } }
+  },
+  licenseAdmission: input.licenseAdmission ?? testLicenseAdmission
+});
+const retryFailedHeadWithDeps = (input: Parameters<typeof retryFailedHeadWithDepsImpl>[0]) =>
+  retryFailedHeadWithDepsImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission });
+const retryProviderCooldownsWithDeps = (input: Parameters<typeof retryProviderCooldownsWithDepsImpl>[0]) =>
+  retryProviderCooldownsWithDepsImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission });
 
 describe("worker review failures", () => {
   const roots: string[] = [];
