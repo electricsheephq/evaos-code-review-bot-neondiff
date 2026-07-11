@@ -104,8 +104,9 @@ struct NeonWindowConfigurator: NSViewRepresentable {
             coordinator.positionedWindowNumber = window.windowNumber
         }
 #if DEBUG
-        if readinessRequest != nil {
+        if let readinessRequest {
             window.isRestorable = false
+            window.setAccessibilityIdentifier("neondiff.fixture.\(readinessRequest.fixtureId)")
         }
 #endif
         paintNativeTitlebar(in: window)
