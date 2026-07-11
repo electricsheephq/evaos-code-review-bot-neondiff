@@ -44,7 +44,11 @@ export function classifyCommandLicensePolicy(input: {
   subcommand?: string;
   smoke?: boolean;
   dryRun?: boolean;
+  coverageBacked?: boolean;
 }): CommandLicensePolicy {
+  if (input.coverageBacked === true) {
+    return { mode: "requires_license", operation: "review_discovery" };
+  }
   if (input.command === "providers") {
     if (input.subcommand === "verify") return { mode: "requires_license", operation: "provider_verify" };
     if (input.subcommand === "doctor" && input.smoke === true) {

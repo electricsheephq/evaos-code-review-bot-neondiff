@@ -19,8 +19,8 @@ import {
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { buildLicenseGateForPull, reviewPull } from "../src/worker.js";
-import { testLicenseAdmission } from "./helpers/license-admission.js";
+import { buildLicenseGateForPull, localDateFolder, reviewPull } from "../src/worker.js";
+import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/license-admission.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -1400,6 +1400,54 @@ describe("license activation and entitlement cache", () => {
       state: "blocked_on_proof",
       reason: expect.stringContaining("visibility is unknown")
     });
+    expect(existsSync(join(
+      minimalConfig(root).evidenceDir,
+      localDateFolder(),
+      "owner__unknown",
+      "pr-8",
+      "unknown-visibility-head",
+      "license-gate.json"
+    ))).toBe(true);
+    state.close();
+  });
+
+  it("records redacted evidence when an authentic admission is denied at the pull operation boundary", async () => {
+    const root = mkRoot(roots);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const pull = privatePullSummary(9, "private-scope-denied-head");
+    const status = await reviewPull({
+      config: minimalConfig(root),
+      github: {} as GitHubApi,
+      state,
+      repo: "owner/private",
+      pull,
+      dryRun: true,
+      useZCode: false,
+      licenseAdmission: await createTestLicenseAdmission({ operation: "provider_verify", scope: "public" }),
+      budget: new ReviewRunBudget(1)
+    });
+
+    expect(status).toBe("skipped_license_gate");
+    expect(state.getReviewReadiness("owner/private", 9, "private-scope-denied-head")).toMatchObject({
+      state: "blocked_on_proof",
+      reason: expect.stringContaining("does not authorize this operation")
+    });
+    const evidence = JSON.parse(readFileSync(join(
+      minimalConfig(root).evidenceDir,
+      localDateFolder(),
+      "owner__private",
+      "pr-9",
+      "private-scope-denied-head",
+      "license-gate.json"
+    ), "utf8"));
+    expect(evidence).toMatchObject({
+      ok: false,
+      status: "invalid",
+      repo: "owner/private",
+      pullNumber: 9,
+      redacted: true
+    });
+    expect(JSON.stringify(evidence)).not.toContain("fixtureadmission");
     state.close();
   });
 

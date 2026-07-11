@@ -70,7 +70,13 @@ Requirements:
 - a model/provider path configured locally, such as GLM/Z.ai, Ollama, or a
   future OpenAI-compatible provider slot
 
-Recommended package install:
+> **v1.0.4 release-candidate notice:** Mandatory activation is implemented on
+> this source branch, but public npm `latest` remains v1.0.3 until the
+> replacement passes release proof. v1.0.3 does not enforce this boundary.
+> Do not treat the package command below as mandatory-activation proof until
+> npm and the GitHub Release both report v1.0.4.
+
+Recommended package install after v1.0.4 is published and verified:
 
 ```bash
 npm install -g neondiff

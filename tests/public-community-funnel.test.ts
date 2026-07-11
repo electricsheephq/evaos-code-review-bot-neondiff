@@ -24,6 +24,8 @@ describe("NeonDiff public community funnel", () => {
       /docs\/providers\.md/i,
       /docs\/known-limitations-and-provider-status\.md/i,
       /API-backed activation is required.*every repository/i,
+      /v1\.0\.4 release-candidate notice/i,
+      /v1\.0\.3 does not enforce this boundary/i,
       /\$1\/month/i,
       /\$10\/year/i,
       /\$100\/year/i,

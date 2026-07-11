@@ -35,7 +35,8 @@ import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./licen
 import {
   authorizeAdmissionForVisibility,
   requireActiveProductionLicense,
-  type ProductionLicenseAdmission
+  type ProductionLicenseAdmission,
+  type RedactedLicenseDecision
 } from "./license-admission.js";
 import {
   buildPullFileFilterImpact,
@@ -1240,15 +1241,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     "review_discovery"
   );
   if (!visibilityDecision.ok) {
-    if (visibility === "unknown") {
-      state.recordReviewReadiness({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        state: "blocked_on_proof",
-        reason: visibilityDecision.decision.detail
-      });
-    }
+    recordLicenseAdmissionBlock({ config, state, repo, pull, decision: visibilityDecision.decision });
     return "skipped_license_gate";
   }
 
@@ -2243,6 +2236,36 @@ function buildEvidenceDir(
 ): string {
   const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
   return commandDecision.action !== "none" ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+}
+
+function recordLicenseAdmissionBlock(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  decision: RedactedLicenseDecision;
+}): void {
+  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
+  mkdirSync(evidenceDir, { recursive: true });
+  writeRedactedJson(join(evidenceDir, "license-gate.json"), {
+    schemaVersion: 1,
+    ok: false,
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    status: input.decision.status,
+    checkedAt: input.decision.checkedAt,
+    ...(input.decision.classification ? { classification: input.decision.classification } : {}),
+    detail: input.decision.detail,
+    redacted: true
+  });
+  input.state.recordReviewReadiness({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: "blocked_on_proof",
+    reason: input.decision.detail
+  });
 }
 
 function isExistingPullWorktreeClean(config: BotConfig, repo: string, pull: PullRequestSummary): boolean {

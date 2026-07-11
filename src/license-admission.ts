@@ -54,7 +54,7 @@ export function authorizeAdmissionForVisibility(
   visibility: "public" | "private" | "unknown",
   expectedOperation?: ProductionLicenseOperation
 ): { ok: true } | { ok: false; decision: RedactedLicenseDecision } {
-  if (!isAuthenticProductionLicenseAdmission(admission, expectedOperation)) {
+  if (!isAuthenticProductionLicenseAdmission(admission)) {
     return {
       ok: false,
       decision: {
@@ -62,6 +62,17 @@ export function authorizeAdmissionForVisibility(
         checkedAt: new Date(0).toISOString(),
         classification: "invalid",
         detail: "production license admission was not minted by live validation"
+      }
+    };
+  }
+  if (expectedOperation !== undefined && admission.operation !== expectedOperation) {
+    return {
+      ok: false,
+      decision: {
+        status: "invalid",
+        checkedAt: admission.checkedAt,
+        classification: "invalid",
+        detail: "production license admission does not authorize this operation"
       }
     };
   }

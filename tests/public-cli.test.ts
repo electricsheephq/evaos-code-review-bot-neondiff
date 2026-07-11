@@ -45,6 +45,13 @@ describe("public NeonDiff CLI surface", () => {
     const { stdout } = await runCli(["help"]);
     const output = JSON.parse(stdout);
 
+    expect(output.licenseBoundary).toMatchObject({
+      sourceAvailableCommercial: true,
+      activationRequired: expect.stringContaining("live API-backed activation"),
+      packageVersion: "1.0.3",
+      releaseState: expect.stringContaining("v1.0.4")
+    });
+
     expect(output.commands.public).toEqual([
       "init",
       "config inspect",
@@ -84,6 +91,7 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples.some((example: string) => example.includes("--license-key-stdin true"))).toBe(true);
     expect(output.examples.join("\n")).not.toContain("--license-key-env");
     const licenseHelp = JSON.parse((await runCli(["license", "--help"])).stdout);
+    expect(licenseHelp.licenseBoundary.activationRequired).toContain("public, private, internal, and unknown");
     expect(licenseHelp.usage.flags).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "--license-key-stdin" })
     ]));
@@ -781,6 +789,22 @@ exit 1
 
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain("license missing");
+
+      for (const coverageArgs of [
+        ["status", "--config", configPath],
+        ["runtime-inventory", "--config", configPath],
+        ["queue", "--config", configPath],
+        ["dashboard", "--operator", "true", "--config", configPath],
+        ["release-status", "--coverage", "true", "--config", configPath]
+      ]) {
+        const blocked = await runCli(coverageArgs).then(
+          () => { throw new Error(`${coverageArgs[0]} unexpectedly bypassed activation`); },
+          (error: unknown) => error as { stdout: string; stderr: string }
+        );
+        expect(blocked.stdout).toBe("");
+        expect(blocked.stderr).toContain("license missing");
+        expect(githubRequests).toBe(0);
+      }
       expect(githubRequests).toBe(0);
     } finally {
       await closeServer(server);
@@ -1456,7 +1480,8 @@ exit 1
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
       evidenceDir: join(root, "evidence"),
-      pollIntervalMs: 60_000
+      pollIntervalMs: 60_000,
+      license: activatedLicenseTestConfig(root)
     })}\n`);
 
     await expect(runCli([
@@ -1465,7 +1490,7 @@ exit 1
       configPath,
       "--verify-public-rollback-refs",
       "yes"
-    ])).rejects.toMatchObject({
+    ], { env: activatedLicenseTestEnv() })).rejects.toMatchObject({
       stderr: expect.stringContaining("--verify-public-rollback-refs must be true or false")
     });
   });
@@ -1479,7 +1504,8 @@ exit 1
       workRoot: join(root, "runtime"),
       statePath: join(root, "state.sqlite"),
       evidenceDir: join(root, "evidence"),
-      pollIntervalMs: 60_000
+      pollIntervalMs: 60_000,
+      license: activatedLicenseTestConfig(root)
     })}\n`);
 
     await expect(runCli([
@@ -1490,7 +1516,7 @@ exit 1
       "true",
       "--repo",
       "owner/repo"
-    ])).rejects.toMatchObject({
+    ], { env: activatedLicenseTestEnv() })).rejects.toMatchObject({
       stderr: expect.stringContaining("release-status does not support --repo/--pr")
     });
   });
@@ -2759,7 +2785,8 @@ exit 1
         repos: {
           "owner/repo": { enabled: false }
         }
-      }
+      },
+      license: activatedLicenseTestConfig(root)
     })}\n`);
     const store = new ReviewStateStore(statePath);
     try {
@@ -2795,12 +2822,16 @@ exit 1
       store.close();
     }
 
-    await expect(runCli(["queue", "--config", configPath, "--state", "provider_deferred"])).rejects.toMatchObject({
+    await expect(runCli(["queue", "--config", configPath, "--state", "provider_deferred"], {
+      env: activatedLicenseTestEnv()
+    })).rejects.toMatchObject({
       stdout: expect.stringContaining("\"runtimeOk\": false")
     });
 
     try {
-      await runCli(["queue", "--config", configPath, "--state", "provider_deferred"]);
+      await runCli(["queue", "--config", configPath, "--state", "provider_deferred"], {
+        env: activatedLicenseTestEnv()
+      });
       throw new Error("queue command unexpectedly passed");
     } catch (error) {
       const stdout = (error as { stdout: string }).stdout;
@@ -2854,7 +2885,8 @@ exit 1
         repos: {
           "owner/repo": { enabled: false }
         }
-      }
+      },
+      license: activatedLicenseTestConfig(root)
     })}\n`);
     const store = new ReviewStateStore(statePath);
     const fixtureNow = new Date();
@@ -2893,7 +2925,9 @@ exit 1
     }
 
     try {
-      await runCli(["queue", "--config", configPath, "--state", "provider_deferred"]);
+      await runCli(["queue", "--config", configPath, "--state", "provider_deferred"], {
+        env: activatedLicenseTestEnv()
+      });
       throw new Error("queue command unexpectedly passed");
     } catch (error) {
       const output = JSON.parse((error as { stdout: string }).stdout);
@@ -2947,7 +2981,8 @@ exit 1
         repos: {
           "owner/repo": { enabled: false }
         }
-      }
+      },
+      license: activatedLicenseTestConfig(root)
     })}\n`);
     const store = new ReviewStateStore(statePath);
     try {
@@ -2971,7 +3006,9 @@ exit 1
 
     let output: Record<string, any>;
     try {
-      await runCli(["queue", "--config", configPath, "--repo", "owner/repo"]);
+      await runCli(["queue", "--config", configPath, "--repo", "owner/repo"], {
+        env: activatedLicenseTestEnv()
+      });
       throw new Error("queue command unexpectedly passed");
     } catch (error) {
       output = JSON.parse((error as { stdout: string }).stdout);
@@ -3521,6 +3558,16 @@ exit 1
       "--once",
       "true"
     ])).rejects.toMatchObject({
+      stdout: "",
+      stderr: expect.stringContaining("license missing")
+    });
+    await expect(runCli([
+      "daemon",
+      "--config",
+      configPath,
+      "--dry-run",
+      "true"
+    ], { timeout: 5_000 })).rejects.toMatchObject({
       stdout: "",
       stderr: expect.stringContaining("license missing")
     });

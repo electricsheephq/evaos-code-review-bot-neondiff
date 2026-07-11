@@ -151,7 +151,8 @@ async function main(): Promise<void> {
     command,
     subcommand: args._[1],
     smoke: command === "providers" && args._[1] === "doctor" && args.smoke === "true",
-    dryRun: args["dry-run"] !== "false"
+    dryRun: args["dry-run"] !== "false",
+    coverageBacked: isCoverageBackedCommand(command, args)
   });
   if (commandLicensePolicy.mode === "requires_license"
     && isKnownCLICommand(command)
@@ -2251,8 +2252,11 @@ async function main(): Promise<void> {
         issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
         configPath: args.config
       });
+      if (!cycleResult.ok) {
+        process.exitCode = 1;
+        return;
+      }
       if (runOnce) {
-        if (!cycleResult.ok) process.exitCode = 1;
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
@@ -3342,8 +3346,17 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
 
 function buildHelp(command?: string) {
   const usage = command ? COMMAND_USAGE[command] : undefined;
+  const packageVersion = resolvePackageVersion();
   return {
     ok: true,
+    licenseBoundary: {
+      sourceAvailableCommercial: true,
+      activationRequired: "Supported public, private, internal, and unknown repository review requires live API-backed activation.",
+      packageVersion,
+      releaseState: packageVersion === "1.0.3"
+        ? "Mandatory activation is staged for v1.0.4; public npm latest v1.0.3 does not enforce this boundary."
+        : `This package reports ${packageVersion}; verify the matching npm version and GitHub Release before relying on activation enforcement.`
+    },
     ...(command ? { command } : {}),
     ...(usage ? { usage: { command, ...usage } } : {}),
     commands: {
@@ -3585,6 +3598,17 @@ function shouldUseOperatorDashboard(args: ParsedArgs): boolean {
     "include-history",
     "limit"
   ].some((key) => args[key] !== undefined);
+}
+
+function isCoverageBackedCommand(command: string, args: ParsedArgs): boolean {
+  if (command === "coverage" || command === "status" || command === "runtime-inventory" || command === "queue") {
+    return true;
+  }
+  if (command === "dashboard") return shouldUseOperatorDashboard(args);
+  if (command !== "release-status") return false;
+  return (args.coverage !== undefined && parseBooleanArg(args.coverage, "--coverage"))
+    || (args["require-coverage"] !== undefined
+      && parseBooleanArg(args["require-coverage"], "--require-coverage"));
 }
 
 const admissionAfterValidationCommands = new Set([
