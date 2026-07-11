@@ -18,6 +18,10 @@ function root() {
 }
 
 describe("production license file secret reader", () => {
+  it("reports a missing secret as not configured", () => {
+    expect(readProductionFileLicenseSecret(join(root(), "missing.key"))).toBeUndefined();
+  });
+
   it("reads one bounded owner-only production key", () => {
     const directory = root();
     const path = join(directory, "license.key");
