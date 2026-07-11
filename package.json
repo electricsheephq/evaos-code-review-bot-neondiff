@@ -48,6 +48,7 @@
     "check:secrets": "node scripts/check-secret-scan.mjs",
     "check:secret-rule-differential": "node scripts/generate-secret-rules.mjs --check && node scripts/check-secret-rule-differential.mjs --require-swift",
     "check:secret-corpus-boundary": "node scripts/generate-secret-rules.mjs --check && node scripts/check-secret-corpus-boundary.mjs",
+    "check:desktop-fixture-boundary": "node scripts/check-desktop-fixture-boundary.mjs",
     "eval:offline": "tsx src/cli.ts eval-offline",
     "eval:suite": "tsx src/cli.ts eval-suite",
     "eval:sticky-vs-cold": "tsx src/cli.ts eval-sticky-vs-cold",

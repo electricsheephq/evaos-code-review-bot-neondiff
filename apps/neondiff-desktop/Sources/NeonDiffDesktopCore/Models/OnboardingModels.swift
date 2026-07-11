@@ -14,7 +14,7 @@ public enum OnboardingMode: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-public enum OnboardingStep: String, CaseIterable, Identifiable, Hashable {
+public enum OnboardingStep: String, CaseIterable, Codable, Identifiable, Hashable, Sendable {
     case welcome
     case provider
     case daemon

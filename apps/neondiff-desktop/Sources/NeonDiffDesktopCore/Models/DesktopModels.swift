@@ -1,6 +1,6 @@
 import Foundation
 
-public enum DesktopSection: String, CaseIterable, Identifiable {
+public enum DesktopSection: String, CaseIterable, Codable, Identifiable, Sendable {
     case overview
     case repos
     case providers
