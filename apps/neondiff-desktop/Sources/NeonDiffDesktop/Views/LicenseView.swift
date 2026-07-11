@@ -11,8 +11,9 @@ struct LicenseView: View {
                     OperatorTextField(title: "License Key", text: $model.pendingLicenseKey, secure: true)
                     HStack(spacing: 10) {
                         Button { model.storeLicenseKey() } label: {
-                            Label("Store License", systemImage: "key.fill")
+                            Label("Activation Unavailable", systemImage: "lock.shield")
                         }
+                        .disabled(!model.productionUsefulWorkAvailable)
                         OperatorBadge(
                             text: model.license.keyStored ? "Stored Locally" : "No Key Stored",
                             color: model.license.keyStored ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary
@@ -27,7 +28,7 @@ struct LicenseView: View {
                 }
 
                 OperatorSection("Boundary") {
-                    Text("This MVP can store a local license key while hosted activation remains pending #327. Signed updater behavior and downloadable app readiness remain separate release work.")
+                    Text(model.productionActivationBoundaryMessage)
                         .operatorBodyText()
                 }
             }

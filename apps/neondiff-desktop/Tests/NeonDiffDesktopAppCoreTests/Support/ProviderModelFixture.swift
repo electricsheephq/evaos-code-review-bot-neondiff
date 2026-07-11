@@ -253,7 +253,8 @@ struct ProviderModelFixture {
             fileWriter: fileWriter,
             providerVerifier: providerVerifier,
             secretStore: keychain,
-            githubAuthenticator: StubGitHubAuthenticator()
+            githubAuthenticator: StubGitHubAuthenticator(),
+            productionBoundary: .testVerified
         )
 
         self.keychain = keychain

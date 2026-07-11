@@ -76,11 +76,13 @@ struct OverviewView: View {
                     Button { model.previewStartDaemon() } label: {
                         Label("Preview Start", systemImage: "play.circle")
                     }
+                    .disabled(!model.productionUsefulWorkAvailable)
                     .accessibilityIdentifier("neondiff-preview-start-daemon")
 
                     Button { model.previewStopDaemon() } label: {
                         Label("Preview Stop", systemImage: "stop.circle")
                     }
+                    .disabled(!model.productionUsefulWorkAvailable)
                     .accessibilityIdentifier("neondiff-preview-stop-daemon")
                 }
 

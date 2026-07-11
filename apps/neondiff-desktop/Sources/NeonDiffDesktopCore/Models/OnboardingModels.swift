@@ -84,7 +84,7 @@ public struct OnboardingFlow: Equatable {
         case .daemon:
             return daemonBootstrapChecked
         case .license:
-            return mode == .publicReposOnly || licenseActivation == .activated
+            return licenseActivation == .activated
         case .done:
             return true
         }
@@ -94,8 +94,6 @@ public struct OnboardingFlow: Equatable {
         switch currentStep {
         case .done:
             return "Finish"
-        case .license where mode == .publicReposOnly:
-            return "Continue Public Setup"
         default:
             return "Continue"
         }
