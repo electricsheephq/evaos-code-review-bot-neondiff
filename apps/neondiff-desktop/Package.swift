@@ -48,10 +48,6 @@ let package = Package(
             dependencies: ["NeonDiffDesktopCore"]
         ),
         .executableTarget(
-            name: "NeonDiffDesktopCoreChecks",
-            dependencies: ["NeonDiffDesktopCore"]
-        ),
-        .executableTarget(
             name: "NeonDiffDesktopFixtureChecks",
             dependencies: ["NeonDiffDesktopCore", "NeonDiffDesktopEvaluationSupport"]
         ),

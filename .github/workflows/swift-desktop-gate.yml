@@ -136,7 +136,7 @@ jobs:
       - name: Swift core and AppCore tests
         working-directory: apps/neondiff-desktop
         run: |
-          swift run NeonDiffDesktopCoreChecks
+          scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests
           swift run NeonDiffDesktopFixtureChecks
           scripts/run-swift-tests.sh --filter NeonDiffDesktopAppCoreTests
 
