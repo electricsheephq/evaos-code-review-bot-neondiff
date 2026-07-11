@@ -613,7 +613,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/Verify npm publish token is configured/);
     expect(publish).toMatch(/NPM_TOKEN Actions secret is not configured; publish cannot continue/);
-    expect(publish).toMatch(/npm publish "\$STAGING_ROOT\/package" --provenance/);
+    expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance/);
     expect(releasePolicy).toMatch(/npmTag = packageVersion\.includes\("-"\) \? "beta" : "latest"/);
     expect(publish).toMatch(/github\.event_name == 'release'/);
     expect(publish).toMatch(/environment:\s*npm-publish/);
@@ -621,12 +621,17 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/npm-release-policy\.mjs classify/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-git/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-pack/);
+    expect(publish).toMatch(/verify-npm-provenance\.mjs/);
+    expect(publish).toMatch(/npm audit signatures --prefix "\$SIGNATURE_VERIFY_ROOT" --json/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-channel/);
     expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
     expect(publish).toMatch(/GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
     expect(releasePolicy).toMatch(/stable npm packages require a non-prerelease GitHub Release/);
     expect(publish).toMatch(/release tag commit must be an ancestor of protected main/i);
     expect(releasePolicy).toMatch(/npm tarball integrity does not match the reviewed pack/);
+    expect(publish.indexOf("verify-npm-provenance.mjs")).toBeLessThan(
+      publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
+    );
     expect(publish).not.toMatch(/github\.event\.release\.prerelease\s*==\s*true/);
     expect(publish).toMatch(/Classify npm package release/);
     expect(releasePolicy).toMatch(/manual npm publish tag .* does not match package\.json version/i);
@@ -649,8 +654,8 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/tags\[npmTag\].*expectedVersion/);
     expect(publish).toMatch(/npm dist-tag did not converge to the promoted package after/);
     expect(publish).toMatch(/previousReleasedPackageVersion/);
-    expect(publish).toMatch(/npm publish "\$STAGING_ROOT\/package" --provenance --access public --tag "release-candidate"/);
-    expect(publish.indexOf('npm publish "$STAGING_ROOT/package" --provenance --access public --tag "release-candidate"')).toBeLessThan(
+    expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance --access public --tag "release-candidate"/);
+    expect(publish.indexOf('npm publish "$PACK_TARBALL" --provenance --access public --tag "release-candidate"')).toBeLessThan(
       publish.indexOf("npm-release-policy.mjs verify-pack")
     );
     expect(publish.indexOf("npm-release-policy.mjs verify-pack")).toBeLessThan(

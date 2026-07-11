@@ -98,9 +98,12 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
   const harnessRunId = createHash("sha256")
     .update(`${input.releaseVersion}:${input.candidateHead}:${input.packShasum}:${observedAt}:${randomId()}`)
     .digest("hex");
+  const issuanceIdentity = createHash("sha256")
+    .update(`${input.releaseVersion}:${input.candidateHead}:${input.packShasum}:${input.packIntegrity}:license-lifecycle`)
+    .digest("hex");
   let rawKey: string | undefined;
   let licenseFingerprint: string | undefined;
-  let candidateActivated = false;
+  let activationAttempted = false;
   let localState: "not_applicable" | "confirmed_removed" | "unresolved" = "not_applicable";
   let remoteState: "not_applicable" | "confirmed_deactivated" | "unresolved" = "not_applicable";
   let executionFailure: Extract<LicenseLifecycleSmokeResult, { ok: false }> | undefined;
@@ -109,9 +112,9 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
 
   try {
     const issuance = await postJson(fetchImpl, `${input.apiBaseUrl}/v1/admin/licenses/issue`, {
-      idempotencyKey: `neondiff-lifecycle-${input.releaseVersion}-${harnessRunId.slice(0, 24)}`,
+      idempotencyKey: `neondiff-lifecycle-${input.releaseVersion}-${issuanceIdentity.slice(0, 24)}`,
       checkoutLookupKey: "neondiff_monthly",
-      externalCheckoutId: `lifecycle-${harnessRunId.slice(0, 32)}`
+      externalCheckoutId: `lifecycle-${issuanceIdentity.slice(0, 32)}`
     }, input.issuanceSecret);
     rawKey = readIssuedKey(issuance);
     if (!rawKey) {
@@ -123,6 +126,7 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
     remoteState = "unresolved";
     records.push(record("issue", "succeeded", issuance.statusCode, input.apiBaseUrl, { status: "issued" }));
 
+    activationAttempted = true;
     const activate = await runCandidateJson(runCandidate, {
       executable: input.candidateCliPath,
       args: ["license", "activate", "--config", input.configPath, "--license-key-stdin", "true", "--json"],
@@ -132,7 +136,6 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
       executionFailure = failure("candidate_failed", "candidate activation did not return active API state", boundary);
       throw new Error("candidate activation failed");
     }
-    candidateActivated = true;
     records.push(record("activate", "succeeded", 200, input.apiBaseUrl, { status: "active", source: "api" }));
 
     const activeStatus = await runCandidateJson(runCandidate, {
@@ -180,7 +183,7 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
     executionFailure ??= failure("candidate_failed", "lifecycle execution failed before redacted proof completed", boundary);
   } finally {
     if (rawKey) {
-      if (candidateActivated && localState !== "confirmed_removed") {
+      if (activationAttempted && localState !== "confirmed_removed") {
         try {
           await runCandidateJsonAnyExit(runCandidate, {
             executable: input.candidateCliPath,
@@ -194,7 +197,7 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
         } catch {
           localState = "unresolved";
         }
-      } else if (!candidateActivated) {
+      } else if (!activationAttempted) {
         localState = "not_applicable";
       }
       if (remoteState !== "confirmed_deactivated") {

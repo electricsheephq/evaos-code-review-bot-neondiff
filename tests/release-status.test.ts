@@ -744,8 +744,8 @@ describe("beta release status", () => {
       cwd: root,
       manifestPath: "public-release.json",
       expectedVersion: "v1.0.4",
-      now: new Date("2026-07-12T01:00:00.000Z"),
-      allowStaleActivationProof: true
+      now: new Date("2026-08-20T01:00:00.000Z"),
+      allowStaleReleaseProof: true
     });
     expect(immutableRecovery.licenseApi.ok).toBe(true);
 

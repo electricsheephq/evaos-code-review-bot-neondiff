@@ -209,4 +209,86 @@ describe("license lifecycle smoke", () => {
     expect(remoteRevoked).toBe(true);
     expect(JSON.stringify(result)).not.toContain(rawKey);
   });
+
+  it("reuses one issuance idempotency key across retries for the same candidate pack", async () => {
+    const issuanceKeys: string[] = [];
+    for (const randomId of ["c".repeat(32), "d".repeat(32)]) {
+      await runLicenseLifecycleSmoke({
+        releaseVersion: "v1.0.4",
+        candidateHead: "a".repeat(40),
+        packShasum: "b".repeat(40),
+        packIntegrity: `sha512-${"Y".repeat(86)}==`,
+        apiBaseUrl: "https://neondiff-license.fly.dev",
+        issuanceSecret: "fixture-secret",
+        candidateCliPath: "/isolated/prefix/bin/neondiff",
+        configPath: "/isolated/config.local.json",
+        confirmLiveLifecycle: true,
+        now: () => new Date("2026-07-12T04:00:00.000Z"),
+        randomId: () => randomId,
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body)) as { idempotencyKey: string };
+          issuanceKeys.push(body.idempotencyKey);
+          return new Response(JSON.stringify({ status: "server" }), { status: 500 });
+        },
+        runCandidateCommand: async () => {
+          throw new Error("candidate must not run after failed issuance");
+        }
+      });
+    }
+    expect(issuanceKeys).toHaveLength(2);
+    expect(issuanceKeys[0]).toBe(issuanceKeys[1]);
+  });
+
+  it("removes local state when activation persists the key but returns malformed output", async () => {
+    const rawKey = ["nd", "live", "malformedActivationFixture"].join("_");
+    let localRemoved = false;
+    let remoteRevoked = false;
+    const result = await runLicenseLifecycleSmoke({
+      releaseVersion: "v1.0.4",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      issuanceSecret: "fixture-secret",
+      candidateCliPath: "/isolated/prefix/bin/neondiff",
+      configPath: "/isolated/config.local.json",
+      confirmLiveLifecycle: true,
+      randomId: () => "c".repeat(32),
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/v1/admin/licenses/issue") {
+          return new Response(JSON.stringify({ status: "issued", licenseKey: rawKey }), { status: 200 });
+        }
+        if (path === "/v1/license/deactivate") {
+          remoteRevoked = true;
+          return new Response(JSON.stringify({ status: "deactivated" }), { status: 200 });
+        }
+        if (path === "/v1/license/validate") {
+          return new Response(JSON.stringify({ status: "scope_mismatch" }), { status: 409 });
+        }
+        throw new Error("unexpected API path");
+      },
+      runCandidateCommand: async ({ args }) => {
+        if (args[1] === "activate") {
+          return { exitCode: 1, stdout: "{truncated", stderr: "activation response interrupted" };
+        }
+        if (args[1] === "deactivate" && args.includes("false")) {
+          localRemoved = true;
+          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "deactivated" }), stderr: "" };
+        }
+        if (args[1] === "status" && localRemoved) {
+          return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "missing" }), stderr: "" };
+        }
+        throw new Error("unexpected candidate command");
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: "candidate_failed",
+      cleanup: { localState: "confirmed_removed", remoteState: "confirmed_deactivated" }
+    });
+    expect(localRemoved).toBe(true);
+    expect(remoteRevoked).toBe(true);
+  });
 });

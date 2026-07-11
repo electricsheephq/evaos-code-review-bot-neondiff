@@ -152,16 +152,6 @@ jobs:
             echo "::error::reviewed npm tarball is missing"
             exit 1
           }
-          STAGING_ROOT="$RUNNER_TEMP/neondiff-reviewed-stage"
-          STAGED_PACK_DIR="$RUNNER_TEMP/neondiff-reviewed-stage-pack"
-          rm -rf "$STAGING_ROOT" "$STAGED_PACK_DIR"
-          mkdir -p "$STAGING_ROOT" "$STAGED_PACK_DIR"
-          tar -xzf "$PACK_TARBALL" -C "$STAGING_ROOT"
-          mkdir -p "$STAGING_ROOT/package/.git"
-          printf '%s\n' "$EXPECTED_GIT_HEAD" > "$STAGING_ROOT/package/.git/HEAD"
-          npm pack "$STAGING_ROOT/package" --json --pack-destination "$STAGED_PACK_DIR" > "$RUNNER_TEMP/staged-pack.json"
-          node scripts/check-packlist.mjs "$RUNNER_TEMP/staged-pack.json"
-          STAGED_TARBALL="$STAGED_PACK_DIR/neondiff-$PACKAGE_VERSION.tgz"
           PACKAGE_ALREADY_EXISTS=false
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             PACKAGE_ALREADY_EXISTS=true
@@ -171,19 +161,18 @@ jobs:
             --expected-version "v$PACKAGE_VERSION" \
             --candidate-head "$CANDIDATE_HEAD" \
             --release-head "$EXPECTED_GIT_HEAD" \
-            --pack "$RUNNER_TEMP/staged-pack.json" \
-            --tarball "$STAGED_TARBALL" \
+            --pack pack.json \
+            --tarball "$PACK_TARBALL" \
             --existing-package-recovery "$PACKAGE_ALREADY_EXISTS"
-          chmod -R a-w "$STAGING_ROOT/package"
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             echo "neondiff@$PACKAGE_VERSION already exists; verifying reviewed tarball identity"
           else
-            npm publish "$STAGING_ROOT/package" --provenance --access public --tag "release-candidate"
+            npm publish "$PACK_TARBALL" --provenance --access public --tag "release-candidate"
           fi
           rm -f remote-package.json registry-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
             rm -f registry-metadata.tmp.json
-            if npm view "neondiff@$PACKAGE_VERSION" version dist.integrity dist.shasum gitHead --json > registry-metadata.tmp.json 2>/dev/null && \
+            if npm view "neondiff@$PACKAGE_VERSION" version dist.integrity dist.shasum gitHead dist.attestations --json > registry-metadata.tmp.json 2>/dev/null && \
               node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' registry-metadata.tmp.json; then
               mv registry-metadata.tmp.json remote-package.json
               break
@@ -197,8 +186,41 @@ jobs:
           node scripts/npm-release-policy.mjs verify-pack \
             --local-pack pack.json \
             --remote-metadata remote-package.json \
+            --expected-version "$PACKAGE_VERSION"
+          # shellcheck disable=SC2016
+          ATTESTATION_URL="$(node -e '
+            const metadata = require("./remote-package.json");
+            const expected = `https://registry.npmjs.org/-/npm/v1/attestations/neondiff@${process.argv[1]}`;
+            const actual = metadata["dist.attestations"]?.url;
+            if (actual !== expected) process.exit(1);
+            process.stdout.write(actual);
+          ' "$PACKAGE_VERSION")" || {
+            echo "::error::npm provenance attestation URL is missing or untrusted"
+            exit 1
+          }
+          curl --fail --silent --show-error "$ATTESTATION_URL" > npm-attestations.json
+          EXPECTED_INTEGRITY="$(node -e 'const [pack] = require("./pack.json"); process.stdout.write(pack.integrity ?? "")')"
+          node scripts/verify-npm-provenance.mjs \
+            --attestations npm-attestations.json \
+            --expected-package neondiff \
             --expected-version "$PACKAGE_VERSION" \
-            --expected-git-head "$EXPECTED_GIT_HEAD"
+            --expected-integrity "$EXPECTED_INTEGRITY" \
+            --expected-repository "$GITHUB_REPOSITORY" \
+            --expected-workflow .github/workflows/publish-npm.yml \
+            --expected-tag "$RELEASE_TAG" \
+            --expected-commit "$EXPECTED_GIT_HEAD"
+          SIGNATURE_VERIFY_ROOT="$RUNNER_TEMP/neondiff-signature-verify"
+          rm -rf "$SIGNATURE_VERIFY_ROOT"
+          npm install --ignore-scripts --prefix "$SIGNATURE_VERIFY_ROOT" "neondiff@$PACKAGE_VERSION" >/dev/null
+          npm audit signatures --prefix "$SIGNATURE_VERIFY_ROOT" --json > npm-signature-audit.json
+          # shellcheck disable=SC2016
+          node -e '
+            const audit = require("./npm-signature-audit.json");
+            if (!Array.isArray(audit.invalid) || audit.invalid.length || !Array.isArray(audit.missing) || audit.missing.length) process.exit(1);
+          ' || {
+            echo "::error::npm signature or provenance verification failed"
+            exit 1
+          }
           EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
           rm -f channel-metadata.json channel-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
