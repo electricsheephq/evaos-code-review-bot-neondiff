@@ -608,6 +608,7 @@ describe("NeonDiff public release readiness", () => {
     expect(ci).toMatch(/secret/i);
 
     expect(publish).toMatch(/id-token:\s*write/);
+    expect(publish).toMatch(/attestations:\s*read/);
     expect(publish).toMatch(/concurrency:\s*\n\s*group:\s*publish-npm-neondiff/);
     expect(publish).toMatch(/cancel-in-progress:\s*false/);
     expect(publish).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0");
