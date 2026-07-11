@@ -133,12 +133,12 @@ jobs:
           swift build -c debug --product NeonDiffDesktop
           swift build -c release --product NeonDiffDesktop
 
-      - name: Swift core and model checks
+      - name: Swift core and AppCore tests
         working-directory: apps/neondiff-desktop
         run: |
           swift run NeonDiffDesktopCoreChecks
           swift run NeonDiffDesktopFixtureChecks
-          ./scripts/run-model-checks.sh
+          scripts/run-swift-tests.sh --filter NeonDiffDesktopAppCoreTests
 
       - name: Secret corpus production-artifact boundary
         shell: bash

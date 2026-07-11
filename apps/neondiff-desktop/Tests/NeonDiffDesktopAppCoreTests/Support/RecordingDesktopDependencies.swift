@@ -65,6 +65,7 @@ final class RecordingClipboard: DesktopClipboard, @unchecked Sendable {
     }
 
     var strings: [String] { recordedStrings.read { $0 } }
+    var result: Bool { scriptedResult }
 
     @MainActor func write(_ string: String) -> Bool {
         recordedStrings.update { $0.append(string) }
@@ -81,6 +82,7 @@ final class RecordingURLOpener: DesktopURLOpener, @unchecked Sendable {
     }
 
     var urls: [URL] { recordedURLs.read { $0 } }
+    var result: Bool { scriptedResult }
 
     @MainActor func open(_ url: URL) -> Bool {
         recordedURLs.update { $0.append(url) }
