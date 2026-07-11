@@ -570,22 +570,27 @@ public enum NeonDiffCLIResolver {
     }
 
     public static func findPackageRoot(startingAt startURL: URL, fileManager: FileManager = .default) -> URL? {
-        var current = startURL
+        var current = startURL.standardizedFileURL
+        var visitedPaths = Set<String>()
         var isDirectoryValue: ObjCBool = false
         if fileManager.fileExists(atPath: current.path, isDirectory: &isDirectoryValue), !isDirectoryValue.boolValue {
             current.deleteLastPathComponent()
         }
 
-        while true {
+        for _ in 0..<128 {
+            guard visitedPaths.insert(current.path).inserted else {
+                return nil
+            }
             if isNeonDiffPackageRoot(current, fileManager: fileManager) {
                 return current
             }
-            let parent = current.deletingLastPathComponent()
+            let parent = current.deletingLastPathComponent().standardizedFileURL
             if parent.path == current.path {
                 return nil
             }
             current = parent
         }
+        return nil
     }
 
     public static func resolveExecutablePath(

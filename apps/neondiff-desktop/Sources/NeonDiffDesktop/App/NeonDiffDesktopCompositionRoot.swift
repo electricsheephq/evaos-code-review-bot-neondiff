@@ -29,7 +29,8 @@ enum NeonDiffDesktopCompositionRoot {
             providerVerifier: FoundationProviderVerifier(secretStore: keychain),
             secretStore: keychain,
             githubAuthenticator: GitHubDeviceAuthClient(),
-            productionBoundary: .quarantined
+            productionBoundary: .quarantined,
+            cliWorkingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
         ))
     }
 }

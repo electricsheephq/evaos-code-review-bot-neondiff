@@ -20,6 +20,7 @@ package struct DesktopAppDependencies {
     package let secretStore: any DesktopSecretStoring
     package let githubAuthenticator: any GitHubDesktopAuthenticating
     package let productionBoundary: DesktopProductionBoundary
+    package let cliWorkingDirectory: URL?
 
     package init(
         clipboard: any DesktopClipboard,
@@ -32,7 +33,8 @@ package struct DesktopAppDependencies {
         providerVerifier: any DesktopProviderVerifying,
         secretStore: any DesktopSecretStoring,
         githubAuthenticator: any GitHubDesktopAuthenticating,
-        productionBoundary: DesktopProductionBoundary
+        productionBoundary: DesktopProductionBoundary,
+        cliWorkingDirectory: URL? = nil
     ) {
         self.clipboard = clipboard
         self.urlOpener = urlOpener
@@ -45,5 +47,6 @@ package struct DesktopAppDependencies {
         self.secretStore = secretStore
         self.githubAuthenticator = githubAuthenticator
         self.productionBoundary = productionBoundary
+        self.cliWorkingDirectory = cliWorkingDirectory
     }
 }

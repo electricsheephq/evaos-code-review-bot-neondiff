@@ -389,7 +389,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             openBrowser: openBrowser
         )
         let dashboard = dependencies.dashboard
-        let workingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
+        let workingDirectory = dependencies.cliWorkingDirectory
 
         Task { [weak self] in
             guard let self else { return }
