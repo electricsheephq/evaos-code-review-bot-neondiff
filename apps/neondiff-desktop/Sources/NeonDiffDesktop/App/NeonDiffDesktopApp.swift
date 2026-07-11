@@ -62,7 +62,10 @@ struct NeonDiffDesktopApp: App {
                 rootAccessibilityIdentifier: rootAccessibilityIdentifier,
                 onSurfaceReady: evaluationSurfaceReadyAction
             )
-                .frame(minWidth: 1040, minHeight: 680)
+                .frame(
+                    minWidth: CGFloat(minimumContentSize.width),
+                    minHeight: CGFloat(minimumContentSize.height)
+                )
                 .environment(\.locale, evaluationLocale)
                 .transaction { transaction in
                     if disablesAnimations {
@@ -120,6 +123,18 @@ struct NeonDiffDesktopApp: App {
         }
 #else
         nil
+#endif
+    }
+
+    private var minimumContentSize: DesktopWindowContentSize {
+#if DEBUG
+        DesktopWindowGeometryPolicy.minimumContentSize(
+            requested: evaluationContext.map {
+                DesktopWindowContentSize(width: $0.contentSize.width, height: $0.contentSize.height)
+            }
+        )
+#else
+        DesktopWindowGeometryPolicy.minimumContentSize(requested: nil)
 #endif
     }
 

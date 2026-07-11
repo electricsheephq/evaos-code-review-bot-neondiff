@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import NeonDiffDesktopAppCore
 
 struct NeonWindowConfigurator: NSViewRepresentable {
     let requestedContentSize: NSSize?
@@ -55,24 +56,52 @@ struct NeonWindowConfigurator: NSViewRepresentable {
             blue: 0.533,
             alpha: 1.0
         )
-        window.minSize = NSSize(width: 1040, height: 680)
         window.styleMask.insert(.fullSizeContentView)
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
         window.standardWindowButton(.zoomButton)?.isHidden = false
-        if let requestedContentSize,
-           coordinator.configuredWindowNumber != window.windowNumber {
-            if disablesAnimations {
-                window.animationBehavior = .none
+        if let requestedContentSize {
+            let currentContentSize = DesktopWindowContentSize(
+                width: window.contentLayoutRect.width,
+                height: window.contentLayoutRect.height
+            )
+            let requestedSize = DesktopWindowContentSize(
+                width: requestedContentSize.width,
+                height: requestedContentSize.height
+            )
+            let targetFrameSize = DesktopWindowGeometryPolicy.targetFrameSize(
+                requestedContent: requestedSize,
+                currentFrame: DesktopWindowContentSize(
+                    width: window.frame.width,
+                    height: window.frame.height
+                ),
+                currentContent: currentContentSize
+            )
+            window.minSize = NSSize(width: targetFrameSize.width, height: targetFrameSize.height)
+            if DesktopWindowGeometryPolicy.shouldApply(current: currentContentSize, requested: requestedSize) {
+                if disablesAnimations {
+                    window.animationBehavior = .none
+                }
+                window.setFrame(
+                    NSRect(
+                        origin: window.frame.origin,
+                        size: NSSize(width: targetFrameSize.width, height: targetFrameSize.height)
+                    ),
+                    display: true
+                )
             }
-            window.setContentSize(requestedContentSize)
+        } else {
+            window.minSize = NSSize(width: 1040, height: 680)
+        }
+        if requestedContentSize != nil,
+           coordinator.positionedWindowNumber != window.windowNumber {
             if let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
                 window.setFrameOrigin(NSPoint(
                     x: visibleFrame.minX + 80,
                     y: visibleFrame.maxY - window.frame.height - 80
                 ))
             }
-            coordinator.configuredWindowNumber = window.windowNumber
+            coordinator.positionedWindowNumber = window.windowNumber
         }
 #if DEBUG
         if readinessRequest != nil {
@@ -104,7 +133,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
     }
 
     final class Coordinator {
-        var configuredWindowNumber: Int?
+        var positionedWindowNumber: Int?
 #if DEBUG
         var readinessSampling = false
         var readinessEmitted = false

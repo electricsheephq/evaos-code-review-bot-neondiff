@@ -5,6 +5,30 @@ import NeonDiffDesktopCore
 @MainActor
 @Suite("Desktop evaluation state")
 struct DesktopEvaluationStateTests {
+    @Test func reappliesRequestedContentSizeAfterSwiftUIWindowDrift() {
+        let requested = DesktopWindowContentSize(width: 1280, height: 800)
+        #expect(DesktopWindowGeometryPolicy.shouldApply(
+            current: DesktopWindowContentSize(width: 1280, height: 768),
+            requested: requested
+        ))
+        #expect(!DesktopWindowGeometryPolicy.shouldApply(current: requested, requested: requested))
+        #expect(DesktopWindowGeometryPolicy.targetFrameSize(
+            requestedContent: requested,
+            currentFrame: DesktopWindowContentSize(width: 1280, height: 800),
+            currentContent: DesktopWindowContentSize(width: 1280, height: 768)
+        ) == DesktopWindowContentSize(width: 1280, height: 832))
+        #expect(DesktopWindowGeometryPolicy.targetFrameSize(
+            requestedContent: DesktopWindowContentSize(width: 760, height: 560),
+            currentFrame: DesktopWindowContentSize(width: 1040, height: 680),
+            currentContent: DesktopWindowContentSize(width: 1040, height: 648)
+        ) == DesktopWindowContentSize(width: 760, height: 592))
+        #expect(DesktopWindowGeometryPolicy.minimumContentSize(requested: nil)
+            == DesktopWindowContentSize(width: 1040, height: 680))
+        #expect(DesktopWindowGeometryPolicy.minimumContentSize(
+            requested: DesktopWindowContentSize(width: 760, height: 560)
+        ) == DesktopWindowContentSize(width: 760, height: 560))
+    }
+
     @Test func appliesASettledProviderFixtureWithoutLiveDependencies() {
         let dependencies = RecordingDesktopDependencies(
             root: fixtureURL("/fixture/evaluation", directory: true)
