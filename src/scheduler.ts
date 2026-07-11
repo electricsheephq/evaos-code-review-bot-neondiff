@@ -180,7 +180,6 @@ export async function runScheduledCycleWithDeps(input: {
       );
       if (decision.ok) return true;
       result.skippedLicenseGate += 1;
-      result.skippedPolicy += 1;
       return false;
     });
     const activation = activateRepoForNewOnlyReview({

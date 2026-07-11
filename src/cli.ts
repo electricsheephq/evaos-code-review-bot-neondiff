@@ -3333,7 +3333,7 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     description: "Manage the license: `license activate|status|deactivate`.",
     flags: [
       { name: "--config", description: "Path to the config file." },
-      { name: "--license-key-env", description: "Env var name holding the license key (activate only)." },
+      { name: "--license-key-stdin", description: "true to read one bounded license key from stdin (activate only)." },
       { name: "--repo", description: "Repo to scope activation/status to, owner/name." },
       { name: "--refresh", description: "true to force a fresh status check instead of cached." }
     ]
@@ -3431,7 +3431,7 @@ function buildHelp(command?: string) {
       "neondiff providers doctor --config config.local.json --json",
       "neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json",
       "neondiff providers verify --config config.local.json --provider openai-compatible --api-key-stdin true --allow-remote-smoke true --json",
-      "neondiff license activate --config config.local.json --license-key-env NEONDIFF_LICENSE_KEY --json",
+      "security find-generic-password -s YOUR_APPROVED_SOURCE -w | neondiff license activate --config config.local.json --license-key-stdin true --json",
       "neondiff license status --config config.local.json --json",
       "neondiff license deactivate --config config.local.json --json",
       "neondiff doctor --config config.local.json --json",

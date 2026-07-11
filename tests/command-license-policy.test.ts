@@ -26,6 +26,7 @@ describe("default-deny command license policy", () => {
     [{ command: "providers", subcommand: "doctor", smoke: true }, "provider_smoke"],
     [{ command: "review-pr" }, "review_cycle"],
     [{ command: "run-once" }, "review_cycle"],
+    [{ command: "coverage" }, "review_cycle"],
     [{ command: "retry-failed" }, "review_cycle"],
     [{ command: "retry-provider-cooldowns" }, "review_cycle"],
     [{ command: "daemon", subcommand: "start", dryRun: false }, "daemon_cycle"],

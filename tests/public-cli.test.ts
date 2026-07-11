@@ -81,6 +81,15 @@ describe("public NeonDiff CLI surface", () => {
     ]));
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
+    expect(output.examples.some((example: string) => example.includes("--license-key-stdin true"))).toBe(true);
+    expect(output.examples.join("\n")).not.toContain("--license-key-env");
+    const licenseHelp = JSON.parse((await runCli(["license", "--help"])).stdout);
+    expect(licenseHelp.usage.flags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--license-key-stdin" })
+    ]));
+    expect(licenseHelp.usage.flags).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--license-key-env" })
+    ]));
     expect(output.examples).toContain("npx tsx src/cli.ts daemon --config /path/to/live.json --dry-run true --once true");
     expect(output.commands.existing).toContain("provider-throttle-report");
     expect(output.examples).toContain(

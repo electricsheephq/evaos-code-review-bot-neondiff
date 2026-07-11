@@ -70,6 +70,35 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("counts unknown-visibility admission denials only as license-gate skips", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-unknown-visibility-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/unknown-repo"]);
+    const state = new ReviewStateStore(config.statePath);
+    const sourcePull = pull("org/unknown-repo", 1, "unknown-head");
+    const unknownPull: PullRequestSummary = {
+      ...sourcePull,
+      base: { ...sourcePull.base, repo: { full_name: "org/unknown-repo" } }
+    };
+    let reviewCalls = 0;
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/unknown-repo", [unknownPull]]])),
+      state,
+      options: { dryRun: false },
+      reviewPullImpl: async () => {
+        reviewCalls += 1;
+        return "reviewed";
+      }
+    });
+
+    expect(result.skippedLicenseGate).toBe(1);
+    expect(result.skippedPolicy).toBe(0);
+    expect(reviewCalls).toBe(0);
+    state.close();
+  });
+
   it("queues a multi-repo burst and leases up to provider capacity with per-repo caps", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-burst-"));
     roots.push(root);

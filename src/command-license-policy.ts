@@ -15,7 +15,6 @@ const setupSafeCommands = new Set([
   "agents",
   "queue",
   "budget-status",
-  "coverage",
   "cooldowns",
   "why",
   "release-status",

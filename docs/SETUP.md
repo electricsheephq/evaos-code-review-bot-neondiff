@@ -7,6 +7,13 @@ fallback for contributors and reviewers who want to inspect or build locally. Se
 for the public/private repo license boundary, and [docs/pricing.md](pricing.md)
 for the support-tier pricing contract.
 
+> **v1.0.4 release-candidate notice:** The mandatory activation behavior in
+> this guide describes the next release and the current source branch. Public
+> npm `latest` remains v1.0.3 until the replacement passes activation,
+> install, CI, and review proof. v1.0.3 does not enforce this boundary. Do not
+> use `npm install -g neondiff` as mandatory-activation proof until npm and the
+> GitHub Release both report v1.0.4.
+
 ## Requirements
 
 - Node.js 26 or newer
@@ -25,7 +32,7 @@ include hosted model credits, unlimited SaaS inference, or bundled provider toke
 
 ## 1. Install NeonDiff
 
-Recommended package install:
+Recommended package install after v1.0.4 is published and verified:
 
 ```bash
 npm install -g neondiff
