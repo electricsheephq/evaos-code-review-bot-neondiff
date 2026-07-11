@@ -17,6 +17,11 @@ import {
   type LicenseRequest,
   type ServiceResult
 } from "./service.js";
+import {
+  issueLifecycleLicense,
+  parseLifecycleIssuanceRequest,
+  type LifecycleOidcVerifier
+} from "./oidc-lifecycle.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -24,6 +29,7 @@ export interface LicenseHttpOptions {
   store: LicenseStore;
   rateLimiter?: RateLimiter;
   issuanceSecret?: string;
+  lifecycleOidcVerifier?: LifecycleOidcVerifier;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;
 }
@@ -54,6 +60,9 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
     if (req.method === "POST" && path === "/v1/admin/licenses/issue") {
       return handleIssuanceRequest(options, req, res);
     }
+    if (req.method === "POST" && path === "/v1/admin/licenses/issue-lifecycle") {
+      return handleLifecycleIssuanceRequest(options, req, res);
+    }
 
     const route = path ? ROUTES[path] : undefined;
     if (req.method !== "POST" || !route) {
@@ -80,6 +89,44 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       return writeJson(res, 500, { status: "server", detail: "internal error" });
     }
   };
+}
+
+async function handleLifecycleIssuanceRequest(
+  options: LicenseHttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!options.issuanceSecret || !options.lifecycleOidcVerifier) {
+    return writeJson(res, 503, { status: "server", detail: "lifecycle issuance is not configured" });
+  }
+  const authorization = Array.isArray(req.headers.authorization)
+    ? req.headers.authorization[0]
+    : req.headers.authorization;
+  if (!authorization?.startsWith("Bearer ") || authorization.length === "Bearer ".length) {
+    return writeJson(res, 401, { status: "unauthorized", detail: "lifecycle issuance authorization failed" });
+  }
+  try {
+    const claims = await options.lifecycleOidcVerifier.verify(authorization.slice("Bearer ".length));
+    const request = parseLifecycleIssuanceRequest(await readBody(req));
+    return writeResult(
+      res,
+      issueLifecycleLicense({
+        store: options.store,
+        request,
+        claims,
+        issuanceSecret: options.issuanceSecret,
+        now: (options.now ?? (() => new Date()))()
+      })
+    );
+  } catch (error) {
+    if (error instanceof SyntaxError || (error instanceof Error && error.message.startsWith("request body"))) {
+      return writeResult(res, malformedIssuanceResult(error.message));
+    }
+    if (error instanceof Error && /^(unexpected|releaseVersion|candidateHead|packShasum|packIntegrity)/.test(error.message)) {
+      return writeResult(res, malformedIssuanceResult(error.message));
+    }
+    return writeJson(res, 401, { status: "unauthorized", detail: "lifecycle issuance authorization failed" });
+  }
 }
 
 async function handleIssuanceRequest(

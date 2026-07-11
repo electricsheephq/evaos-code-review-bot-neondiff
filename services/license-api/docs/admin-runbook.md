@@ -30,8 +30,10 @@ LICENSE_DB_PATH=/data/license.sqlite npm run admin -- \
   issue --plan yearly --scope private --seats 1 --expires 2027-01-01T00:00:00Z
 ```
 
-- `--scope public` keys never gate anything (public repos are free client-side);
-  issue `private` or `all` for paying customers.
+- Supported review work now requires API-backed activation for every repository
+  visibility. Choose `public`, `private`, or `all` deliberately for the
+  entitlement being sold or exercised; do not assume public repositories bypass
+  activation.
 - `--private-repo-allowed false` denies private repos even at scope `all`.
 - `--update-entitlement` grants update-channel access.
 

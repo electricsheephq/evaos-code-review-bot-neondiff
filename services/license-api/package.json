@@ -3,12 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "NeonDiff production license service: activate/validate/deactivate API + admin issuance CLI (#327).",
+  "description": "NeonDiff production license service: entitlement API, checkout issuance, and GitHub OIDC release lifecycle broker.",
   "bin": {
     "license-admin": "dist/admin.js"
   },
   "engines": {
     "node": ">=26"
+  },
+  "dependencies": {
+    "jose": "^6.2.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

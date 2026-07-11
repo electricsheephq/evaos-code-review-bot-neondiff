@@ -56,7 +56,7 @@ primary_region = "iad"  # placeholder — set to wherever the fleet/owner is clo
   memory = "256mb"
 
 # --- Why min_machines_running = 1 (not 0) --------------------------------------
-# This is a licensing gate for PAID private-repo entitlements (see README.md /
+# This is a licensing gate for supported review entitlements (see README.md /
 # docs/admin-runbook.md) — every `activate`/`validate` call on a private repo
 # blocks on this service being reachable. Two reasons to keep it warm instead
 # of scale-to-zero:
@@ -69,9 +69,8 @@ primary_region = "iad"  # placeholder — set to wherever the fleet/owner is clo
 #      it's the same single machine/volume pairing Fly already tracks — safer
 #      to just keep the one machine (and its attached volume) continuously
 #      running than to lean on stop/start + reattach behavior for a database.
-# Public repos never call this service at all (license gating is client-side
-# and only fires for private repos — see README.md "Contract"), so traffic
-# here is inherently low-volume; the cost of staying warm on a single
+# Supported public and private review paths call this service, but activation
+# traffic remains low-volume; the cost of staying warm on a single
 # shared-cpu-1x/256mb machine is small relative to the availability win.
 #
 # If cost becomes a real concern later: raise `auto_stop_machines` cautiously

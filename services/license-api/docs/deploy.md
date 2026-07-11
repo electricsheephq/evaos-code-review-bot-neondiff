@@ -13,21 +13,19 @@ does not cover deploy), [`disaster-recovery.md`](disaster-recovery.md)
 
 ## Why this endpoint exists (scope reminder)
 
-License gating is **client-side and private-repo only**: public repos are
-free and never call this service (`publicReposFree: true` in
-`config.example.json`; see the client at `src/license.ts` and the contract
-description in `README.md`). This deploy stands up the backend that
-`activate` / `validate` / `deactivate` calls hit **only when a user has
-enabled license enforcement for a private repo**. There is no scenario where
-this service being down affects a public-repo user.
+Supported review work is client-gated and requires this API for public,
+private, internal, and unknown repository visibility. This deploy stands up the
+backend that `activate` / `validate` / `deactivate` call before useful review
+work. Service outages therefore fail closed for all supported review work; the
+release proof must cover that availability boundary explicitly.
 
 ## Prerequisites
 
 - `flyctl` installed (`brew install flyctl` or see fly.io docs) and
   authenticated: `flyctl auth login`.
 - Repo root as the build context — the Dockerfile compiles the service using
-  the root `typescript` devDependency (the service itself has zero runtime
-  npm dependencies; see `Dockerfile` header comment). Run every `flyctl`
+  the root toolchain and installs the service runtime dependency from
+  `services/license-api/package-lock.json`. Run every `flyctl`
   command below **from the repo root**, not from `services/license-api/`.
 
 ## 1. Create the app (no deploy yet)
@@ -94,6 +92,16 @@ release-status: an unauthenticated request to the checkout issuance endpoint mus
 return `401` with `{"status":"unauthorized"}`. A `503` response with
 `license issuance is not configured` means the Fly app is still missing
 `LICENSE_ISSUANCE_SECRET` and is not ready for paid/trial checkout activation.
+
+The same Fly-only secret derives deterministic short-lived keys for
+`POST /v1/admin/licenses/issue-lifecycle`; it is never valid authorization for
+that route and must not be copied into GitHub. The protected release workflow
+uses GitHub Actions OIDC with audience `neondiff-license-lifecycle`. The service
+pins the canonical repository IDs, protected `main` ref, workflow path,
+`license-lifecycle-production` environment, `workflow_dispatch`, GitHub-hosted
+runner, and candidate SHA. Configure the GitHub environment approval policy
+before treating this route as production proof. No additional OIDC secret is
+required.
 This release-status proof intentionally verifies only the fail-closed public
 boundary. It does not prove that a valid server-side checkout webhook can issue
 a license or write the DB. Stable/GA manifests must also point
@@ -239,8 +247,8 @@ separate, deliberate change — do not fold it into a deploy-assets PR.
   system today.
 - **Emergency full stop:** `flyctl scale count 0 --app neondiff-license`
   stops serving entirely. Since license checks fail closed only for
-  *private* repos with enforcement enabled, this is a safe last resort — it
-  does not affect public-repo users, and existing private-repo users just
-  see their entitlement checks start failing (client behavior on
+  all supported review work, this is an emergency stop rather than a
+  customer-transparent action. Existing users see their entitlement checks
+  start failing (client behavior on
   `apiBaseUrl` unreachable is a server-classified failure, not a silent
   allow — see `README.md`'s HTTP-code table) until service is restored.
