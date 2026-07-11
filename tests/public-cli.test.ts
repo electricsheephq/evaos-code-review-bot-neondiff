@@ -691,6 +691,52 @@ exit 1
     }
   });
 
+  it("blocks run-once before the first GitHub request without activation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-run-once-license-cli-"));
+    roots.push(root);
+    let githubRequests = 0;
+    const server = createServer((_request: IncomingMessage, response: ServerResponse) => {
+      githubRequests += 1;
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify([]));
+    });
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        github: {
+          token: "fixture-github-token",
+          apiBaseUrl: `http://127.0.0.1:${address.port}`
+        }
+      })}\n`);
+
+      const result = await runCli([
+        "run-once",
+        "--config",
+        configPath,
+        "--repo",
+        "acme/demo"
+      ]).then(
+        () => { throw new Error("run-once unexpectedly succeeded without activation"); },
+        (error: unknown) => error as { stdout: string; stderr: string }
+      );
+
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        command: "run-once",
+        error: { message: expect.stringContaining("license missing") }
+      });
+      expect(githubRequests).toBe(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("requires the providers verify stdin flag to be present and true", async () => {
     await expect(runCli([
       "providers",

@@ -32,6 +32,7 @@ import {
 import { GitHubApi } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
+import { requireActiveProductionLicense } from "./license-admission.js";
 import {
   buildPullFileFilterImpact,
   buildReviewSettingsPreview,
@@ -287,6 +288,13 @@ export function assertExpectedReviewPrHead(input: {
 
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
+  const licenseAdmission = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!licenseAdmission.ok) {
+    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  }
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
