@@ -53,6 +53,7 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
+import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { runLocalDashboardPreviewSmoke, startLocalDashboardServer } from "./local-dashboard.js";
 import {
   assertOutcomeLedgerOutputDirEmpty,
@@ -120,6 +121,7 @@ import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "
 import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 import { parsePositiveInteger } from "./cli-args.js";
+import { readSecretFromStdin } from "./secret-stdin.js";
 
 const LAUNCHCTL_TIMEOUT_MS = 15_000;
 const PLUTIL_TIMEOUT_MS = 5_000;
@@ -295,7 +297,7 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const licenseConfig = licenseConfigFromArgs(config.license!, args);
     if (action === "activate") {
-      const licenseKey = resolveLicenseKeyArg(args);
+      const licenseKey = await resolveLicenseKeyArg(args, process.stdin);
       const result = await activateLicense({
         config: licenseConfig,
         licenseKey,
@@ -3550,28 +3552,39 @@ function repeatableArgsForCommand(argv: string[]): Set<string> {
 }
 
 function licenseConfigFromArgs(base: LicenseConfig, args: ParsedArgs): LicenseConfig {
-  const config = {
+  if (args["license-api-url"]) {
+    throw new Error("--license-api-url is not supported; the supported distribution pins the canonical license API");
+  }
+  const config = resolveProductionLicensePolicy({
     ...base,
-    ...(args["license-api-url"] ? { apiBaseUrl: parseSingleArg(args["license-api-url"], "--license-api-url") } : {}),
     ...(args["license-cache-path"] ? { cachePath: parseSingleArg(args["license-cache-path"], "--license-cache-path") } : {}),
     ...(args["license-key-path"] ? { keyPath: parseSingleArg(args["license-key-path"], "--license-key-path") } : {}),
     ...(args["license-storage"] ? { storageBackend: parseLicenseStorageBackend(parseSingleArg(args["license-storage"], "--license-storage")) } : {})
-  };
+  });
   validateLicenseConfigOverride(config, "config.license");
   return config;
 }
 
-function resolveLicenseKeyArg(args: ParsedArgs): string {
+async function resolveLicenseKeyArg(args: ParsedArgs, stdin: NodeJS.ReadableStream): Promise<string> {
   if (args["license-key"]) {
-    throw new Error("license activate no longer accepts --license-key because argv can expose secrets; use --license-key-env");
+    throw new Error("license activate does not accept --license-key because argv can expose secrets; use --license-key-stdin true");
   }
   if (args["license-key-env"]) {
-    const envName = parseSingleArg(args["license-key-env"], "--license-key-env");
-    const value = process.env[envName];
-    if (!value) throw new Error(`license activate --license-key-env ${envName} did not resolve to a non-empty environment variable`);
-    return value;
+    throw new Error("license activate does not accept --license-key-env because process environments can expose secrets; use --license-key-stdin true");
   }
-  throw new Error("license activate requires --license-key-env");
+  if (args["license-key-stdin"] !== "true") {
+    throw new Error("license activate requires --license-key-stdin true");
+  }
+  let key: string;
+  try {
+    key = await readSecretFromStdin(stdin, 512, 5_000);
+  } catch (error) {
+    throw new Error((error instanceof Error ? error.message : "license secret stdin could not be read").replaceAll("provider secret", "license secret"));
+  }
+  if (!/^nd_live_[A-Za-z0-9_-]{8,}$/.test(key)) {
+    throw new Error("license secret stdin is not one valid production key");
+  }
+  return key;
 }
 
 function parseLicenseStorageBackend(value: string): "keychain" | "file" {

@@ -119,32 +119,24 @@ OpenAI-compatible endpoint examples. The provider registry stores metadata such
 as provider id, base URL, model id, timeout, retry policy, and an API-key
 environment variable name; it must not store the API key itself.
 
-If you are reviewing private or commercial repos, set the `NEONDIFF_LICENSE_KEY`
-environment variable to your `nd_live_...` license key value, or store that same
-value in the configured local secret path used by your operator wrapper. Do not
-paste license keys into tracked config.
+Every supported repository review requires a live NeonDiff entitlement. The
+supported distribution pins `https://neondiff-license.fly.dev`, enables
+enforcement, disables the public-free path, and grants no offline cache
+authority. Legacy v1.0.3 fields still load for upgrade recovery but cannot
+weaken this effective policy.
 
-The public license path is explicit and local-first. By default, license
-enforcement is disabled in the example config so internal beta workers do not
-change behavior accidentally. For a public/private repo install, enable
-`license.enabled`, use the beta `file` storage backend, and activate the key
-without writing it to tracked config. The file backend writes the key with 0600
-permissions under the configured `license.keyPath`, which defaults next to
+Use the `file` storage backend and pipe one `nd_live_...` key through bounded
+stdin. Do not place license keys in environment variables, argv, tracked config,
+shell history, logs, screenshots, or evidence. The file backend writes the key
+with 0600 permissions under `license.keyPath`, which defaults next to
 `statePath` when omitted.
-Private-repo review only accepts a cached entitlement during a transient API
-outage for up to 15 minutes; longer grace windows are rejected at config load.
-
-`license.apiBaseUrl` must be set in `config.local.json` before you set
-`license.enabled: true` — config load throws
-`license.apiBaseUrl is required when license.enabled=true` otherwise, and
-`license activate` cannot run against a config that fails to load.
 
 ```bash
-NEONDIFF_LICENSE_KEY="..." \
-  neondiff license activate \
-  --config config.local.json \
-  --license-key-env NEONDIFF_LICENSE_KEY \
-  --json
+security find-generic-password -s YOUR_APPROVED_SOURCE -w \
+  | neondiff license activate \
+      --config config.local.json \
+      --license-key-stdin true \
+      --json
 ```
 
 Check entitlement cache state:
@@ -165,21 +157,18 @@ Remove the local key and cache:
 neondiff license deactivate --config config.local.json --json
 ```
 
-When `license.enabled` and `license.privateReposRequireEntitlement` are true,
-private repo review fails closed before worktree prep, model/provider calls, or
-GitHub review posting unless the cached entitlement is active and covers private
-repos. Public repo review may run without a license when `license.publicReposFree`
-is true.
+Public, private, internal, and unknown repository work all fail closed before
+worktree prep, model/provider calls, or GitHub review posting unless live API
+validation returns an active entitlement covering that operation and visibility.
+Cached entitlement metadata is diagnostic only.
 
 Use this matrix when reading doctor or review evidence:
 
 | Repo visibility | License state | Provider state | Expected setup result |
 | --- | --- | --- | --- |
-| public | no license | provider present | license allows; provider output decides review success |
-| public | no license | provider absent | license allows; setup/provider check blocks |
-| public with `publicReposFree=false` | no license | provider present | license blocks before checkout/provider/post |
-| public with `publicReposFree=false` | no license | provider absent | license blocks before checkout/provider/post |
-| public with `publicReposFree=false` | active entitlement | provider present | license allows; provider output decides review success |
+| public | no license | provider present | license blocks before checkout/provider/post |
+| public | no license | provider absent | license blocks before checkout/provider/post |
+| public | active covering entitlement | provider present | license allows; provider output decides review success |
 | private | no license | provider present | license blocks before checkout/provider/post |
 | private | active private entitlement | provider present | license allows; provider output decides review success |
 | private | expired or revoked entitlement | provider present | license blocks before checkout/provider/post |
@@ -191,11 +180,11 @@ For `review-pr` license blocks, the gate writes its local proof under the
 configured `evidenceDir` as
 `<date>/<owner__repo>/pr-<number>/<head-sha>/license-gate.json`.
 
-The `keychain` backend remains listed for future native macOS storage support,
-but headless CLI activation currently rejects Keychain writes rather than passing
-license keys through `security add-generic-password` process arguments.
-Treat `--license-storage keychain` as read/delete-only for pre-existing native
-items during this beta; `license activate` with `keychain` intentionally throws.
+The `keychain` backend remains reserved for a separately proven native broker.
+Headless CLI activation currently rejects Keychain writes rather than passing
+license keys through process arguments. v1.0.4 supports the approved file
+backend; the Desktop app remains blocked from useful actions until native
+broker/launchd access is proven.
 The local `machineId` sent to the license API is advisory beta metadata derived
 from host name and platform, not hardware attestation or a durable seat-binding
 primitive.

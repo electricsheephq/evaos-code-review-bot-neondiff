@@ -6,13 +6,13 @@ CLI help, package metadata, and release notes instead of inventing new wording.
 
 ## Short Copy
 
-NeonDiff is source-available commercial software, not open-source software. Public
-open-source repository review is free. Private, internal, commercial,
-proprietary, hosted, marketplace, binary redistribution, and auto-updates require
-an active paid NeonDiff license.
+NeonDiff is source-available commercial software, not open-source software.
+Supported review and provider work requires active API-backed activation for
+every repository visibility. Private, internal, public, commercial,
+proprietary, hosted, marketplace, binary redistribution, and auto-updates all
+remain inside the paid entitlement boundary.
 
-Public open-source repositories are free. Private and commercial repository
-review requires a paid NeonDiff support license: $1/month or $10/year for
+Repository review requires a paid NeonDiff support license: $1/month or $10/year for
 individuals, or $100/year for organizations. Individual plans include a 7-day
 trial, organization plans include a 30-day trial, and legacy lifetime licenses
 remain honored for existing holders but are no longer sold. NeonDiff support
@@ -23,30 +23,23 @@ provider tokens.
 
 - Inspecting the source.
 - Forking the repository to evaluate NeonDiff or propose changes.
-- Running NeonDiff locally to review public open-source repositories.
 - Submitting GitHub issues and pull requests.
 
 ## Requires A Paid License
 
-- Reviewing private repositories.
+- Reviewing public or private repositories through the supported distribution.
 - Reviewing internal, proprietary, client, or commercial code.
 - Using NeonDiff in a company, agency, consulting, or paid-support workflow.
 - Shipping NeonDiff binaries, installers, update channels, marketplace
   packages, or hosted services.
 - Enabling private-repo entitlement or auto-updates.
 
-## Public Repo Grant
+## Supported Distribution Policy
 
-The public-repository grant is based on repository visibility and use case:
-
-- Public open-source repos: free.
-- Private, internal, or non-public repos: paid license required.
-- Public repos used primarily for proprietary or commercial distribution:
-  paid license required unless Electric Sheep grants an explicit exception.
-
-The default config may keep license enforcement disabled for internal prerelease
-workers. Public/private product installs should enable license enforcement and
-keep `license.publicReposFree` true when the public free path is intended.
+The supported distribution pins the canonical production license API, requires
+live activation for public/private/internal/unknown repository work, and grants
+zero offline cache authority in v1.0.4. User or legacy config cannot disable
+enforcement, restore a public-free path, redirect the API, or enable grace.
 
 ## Review Gate Proof Matrix
 
@@ -56,11 +49,9 @@ private repository entitlement.
 
 | Repo visibility | NeonDiff entitlement | Provider configured | License gate result | Next blocking layer |
 | --- | --- | --- | --- | --- |
-| public | none | yes | allow | provider output may still fail normally |
-| public | none | no | allow | setup/provider blocked, not license blocked |
-| public with `publicReposFree=false` | none | yes | block before checkout, provider call, or post | license blocked |
-| public with `publicReposFree=false` | none | no | block before checkout, provider call, or post | license blocked |
-| public with `publicReposFree=false` | active public/private entitlement | yes | allow | provider output may still fail normally |
+| public | none | yes | block before checkout, provider call, or post | license blocked |
+| public | none | no | block before checkout, provider call, or post | license blocked |
+| public | active covering entitlement | yes | allow | provider output may still fail normally |
 | private | none | yes | block before checkout, provider call, or post | license blocked |
 | private | active private entitlement | yes | allow | provider output may still fail normally |
 | private | expired or revoked entitlement | yes | block before checkout, provider call, or post | license blocked |
@@ -76,7 +67,7 @@ logs.
 Use:
 
 - "source-available commercial software"
-- "free for public open-source repositories"
+- "API-backed activation is required for supported review work"
 - "private and commercial repository review requires a paid NeonDiff license"
 - "$1/month or $10/year individual support license"
 - "$100/year organization support license"
@@ -112,9 +103,9 @@ Avoid:
 
 CLI setup/help copy should say:
 
-> NeonDiff is source-available commercial software. Public open-source repository
-> review is free. Private, internal, and commercial repository review requires
-> an active paid NeonDiff license. Individual support tiers are $1/month or
+> NeonDiff is source-available commercial software. Supported public, private,
+> internal, and commercial repository review requires an active API-backed
+> NeonDiff license. Individual support tiers are $1/month or
 > $10/year, organization support is $100/year, trials are 7 days for individuals
 > and 30 days for organizations, and legacy lifetime licenses remain honored but
 > are no longer sold; provider/model costs stay external through BYOK or local

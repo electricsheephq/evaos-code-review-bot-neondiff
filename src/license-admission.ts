@@ -3,6 +3,7 @@ import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { productionLicenseSecretReader, type LicenseSecretReader } from "./license-secret-store.js";
 
 export type ProductionLicenseOperation =
+  | "review_discovery"
   | "review_cycle"
   | "provider_verify"
   | "provider_smoke"
@@ -26,6 +27,17 @@ export interface RedactedLicenseDecision {
   classification?: string;
   detail: string;
 }
+
+type ProductionLicenseAdmissionInput = {
+  config: LicenseConfig;
+  repo?: string;
+  now?: Date;
+  fetchImpl?: typeof fetch;
+  secretReader?: LicenseSecretReader;
+} & (
+  | { operation: "review_cycle"; visibility: "public" | "private" | "unknown" }
+  | { operation: Exclude<ProductionLicenseOperation, "review_cycle">; visibility?: never }
+);
 
 export function authorizeAdmissionForVisibility(
   admission: ProductionLicenseAdmission,
@@ -53,14 +65,9 @@ export function authorizeAdmissionForVisibility(
   };
 }
 
-export async function requireActiveProductionLicense(input: {
-  operation: ProductionLicenseOperation;
-  config: LicenseConfig;
-  repo?: string;
-  now?: Date;
-  fetchImpl?: typeof fetch;
-  secretReader?: LicenseSecretReader;
-}): Promise<{ ok: true; admission: ProductionLicenseAdmission } | { ok: false; decision: RedactedLicenseDecision }> {
+export async function requireActiveProductionLicense(
+  input: ProductionLicenseAdmissionInput
+): Promise<{ ok: true; admission: ProductionLicenseAdmission } | { ok: false; decision: RedactedLicenseDecision }> {
   const config = resolveProductionLicensePolicy(input.config);
   const status = await getLicenseStatus({
     config,
@@ -87,17 +94,33 @@ export async function requireActiveProductionLicense(input: {
       }
     };
   }
+  const admission: ProductionLicenseAdmission = Object.freeze({
+    kind: "production-license-admission",
+    operation: input.operation,
+    checkedAt: status.checkedAt,
+    fingerprint: entitlement.licenseFingerprint,
+    repoVisibilityScope: entitlement.repoVisibilityScope,
+    privateRepoAllowed: entitlement.privateRepoAllowed !== false
+      && (entitlement.repoVisibilityScope === "private" || entitlement.repoVisibilityScope === "all"),
+    updateEntitlement: entitlement.updateEntitlement
+  });
+  if (input.operation === "update_check" && !admission.updateEntitlement) {
+    return {
+      ok: false,
+      decision: {
+        status: "scope_mismatch",
+        checkedAt: admission.checkedAt,
+        classification: "scope_mismatch",
+        detail: "active entitlement does not include update access"
+      }
+    };
+  }
+  if (input.operation === "review_cycle") {
+    const visibilityDecision = authorizeAdmissionForVisibility(admission, input.visibility);
+    if (!visibilityDecision.ok) return visibilityDecision;
+  }
   return {
     ok: true,
-    admission: Object.freeze({
-      kind: "production-license-admission",
-      operation: input.operation,
-      checkedAt: status.checkedAt,
-      fingerprint: entitlement.licenseFingerprint,
-      repoVisibilityScope: entitlement.repoVisibilityScope,
-      privateRepoAllowed: entitlement.privateRepoAllowed !== false
-        && (entitlement.repoVisibilityScope === "private" || entitlement.repoVisibilityScope === "all"),
-      updateEntitlement: entitlement.updateEntitlement
-    })
+    admission
   };
 }

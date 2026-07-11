@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
+import { resolveProductionLicensePolicy } from "../src/license-production-policy.js";
 
 const canonicalApi = "https://neondiff-license.fly.dev";
 
@@ -53,6 +54,8 @@ describe("official license production policy", () => {
       }
     });
     expect(JSON.stringify(config.license?.productionPolicy)).not.toContain("legacy-license.invalid");
+    expect(resolveProductionLicensePolicy(config.license!).productionPolicy?.diagnostics)
+      .toEqual(config.license?.productionPolicy?.diagnostics);
   });
 
   it("locks the Keychain identity used by the supported distribution", () => {

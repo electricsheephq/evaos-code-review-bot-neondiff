@@ -38,6 +38,7 @@ describe("production useful-work admission", () => {
     const urls: string[] = [];
     const result = await requireActiveProductionLicense({
       operation: "review_cycle",
+      visibility: "private",
       config: fixtureConfig(),
       fetchImpl: (async (url) => {
         urls.push(String(url));
@@ -101,7 +102,7 @@ describe("production useful-work admission", () => {
 
   it("authorizes only repository visibilities covered by the opaque admission", async () => {
     const result = await requireActiveProductionLicense({
-      operation: "review_cycle",
+      operation: "review_discovery",
       config: fixtureConfig(),
       fetchImpl: (async () => new Response(JSON.stringify({
         status: "active",
@@ -122,5 +123,36 @@ describe("production useful-work admission", () => {
       ok: false,
       decision: { status: "network" }
     });
+  });
+
+  it("denies private review inside admission when a public entitlement is returned", async () => {
+    const result = await requireActiveProductionLicense({
+      operation: "review_cycle",
+      visibility: "private",
+      config: fixtureConfig(),
+      fetchImpl: (async () => new Response(JSON.stringify({
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "public",
+        updateEntitlement: true
+      }), { status: 200 })) as typeof fetch,
+      now: new Date("2026-07-11T00:00:00.000Z")
+    });
+    expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
+  });
+
+  it("denies update checks when the active entitlement lacks update access", async () => {
+    const result = await requireActiveProductionLicense({
+      operation: "update_check",
+      config: fixtureConfig(),
+      fetchImpl: (async () => new Response(JSON.stringify({
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "all",
+        updateEntitlement: false
+      }), { status: 200 })) as typeof fetch,
+      now: new Date("2026-07-11T00:00:00.000Z")
+    });
+    expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
   });
 });

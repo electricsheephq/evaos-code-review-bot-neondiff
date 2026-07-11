@@ -581,6 +581,27 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
+  it("rejects public CLI attempts to override the canonical license API", async () => {
+    const root = mkRoot(roots);
+    const configPath = join(root, "config.json");
+    writeConfig(configPath, root, "https://legacy-license.invalid");
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      "src/cli.ts",
+      "license",
+      "status",
+      "--config",
+      configPath,
+      "--license-api-url",
+      "https://fake-license.invalid"
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stderr: expect.stringContaining("--license-api-url is not supported")
+    });
+  });
+
   it("keeps a still-active cache diagnostic-only during a transient API outage", async () => {
     const root = mkRoot(roots);
     const config = licenseConfig(root, "http://127.0.0.1:9");
@@ -1194,7 +1215,7 @@ describe("license activation and entitlement cache", () => {
     });
   });
 
-  it("rejects malformed API success responses and reports missing env vars clearly", async () => {
+  it("rejects malformed API success responses and unsafe CLI secret inputs", async () => {
     const root = mkRoot(roots);
     const server = await startLicenseServer((_req, res) => {
       writeJson(res, 200, {
@@ -1229,7 +1250,7 @@ describe("license activation and entitlement cache", () => {
       cwd: process.cwd(),
       env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
     })).rejects.toMatchObject({
-      stderr: expect.stringContaining("NEONDIFF_LICENSE_KEY_DOES_NOT_EXIST did not resolve")
+      stderr: expect.stringContaining("process environments can expose secrets")
     });
 
     await expect(execFileAsync(process.execPath, [

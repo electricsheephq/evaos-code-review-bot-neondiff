@@ -16,14 +16,24 @@ const officialValues = {
 } as const;
 
 export function resolveProductionLicensePolicy(input: LicenseConfig): LicenseConfig {
+  const diagnostics = mergeDiagnostics(input.productionPolicy?.diagnostics ?? [], policyDiagnostics(input));
   return {
     ...input,
     ...officialValues,
     productionPolicy: {
       mode: "mandatory_online",
-      diagnostics: policyDiagnostics(input)
+      diagnostics
     }
   };
+}
+
+function mergeDiagnostics(
+  previous: LicensePolicyDiagnostic[],
+  current: LicensePolicyDiagnostic[]
+): LicensePolicyDiagnostic[] {
+  const merged = new Map(previous.map((item) => [item.field, item]));
+  for (const item of current) merged.set(item.field, item);
+  return [...merged.values()];
 }
 
 function policyDiagnostics(input: LicenseConfig): LicensePolicyDiagnostic[] {

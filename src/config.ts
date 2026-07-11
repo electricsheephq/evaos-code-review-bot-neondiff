@@ -684,6 +684,7 @@ function validateConfig(config: BotConfig): void {
   config.issueEnrichment = issueEnrichment;
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
   const configuredLicense = { ...DEFAULT_CONFIG.license!, ...(config.license ?? {}) };
+  delete configuredLicense.productionPolicy;
   validateConfiguredLicensePolicyShape(configuredLicense, "config.license");
   configuredLicense.cachePath = configuredLicense.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
   if (configuredLicense.storageBackend === "file" && !configuredLicense.keyPath) {
