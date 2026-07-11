@@ -7,8 +7,8 @@ final class NeonUpdateController: ObservableObject {
 
     private let controller: SPUStandardUpdaterController?
 
-    init(bundle: Bundle = .main) {
-        guard Self.hasSparkleConfiguration(in: bundle) else {
+    init(bundle: Bundle = .main, startsUpdater: Bool = true) {
+        guard startsUpdater, Self.hasSparkleConfiguration(in: bundle) else {
             self.controller = nil
             return
         }

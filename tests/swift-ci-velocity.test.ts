@@ -81,6 +81,7 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/npm run check:secret-rule-differential/);
     expect(gate.match(/scripts\/run-required-swift-test-suite\.sh NeonDiffDesktopCoreTests/g)).toHaveLength(1);
     expect(gate.match(/scripts\/run-required-swift-test-suite\.sh NeonDiffDesktopAppCoreTests/g)).toHaveLength(1);
+    expect(gate.match(/scripts\/run-required-swift-test-suite\.sh NeonDiffDesktopEvaluationSupportTests/g)).toHaveLength(1);
     expect(gate).not.toContain(retiredCoreChecksTarget);
     expect(gate.match(/swift run NeonDiffDesktopFixtureChecks/g)).toHaveLength(1);
     expect(gate).not.toMatch(/swift run NeonDiffDesktopKeychainChecks/);

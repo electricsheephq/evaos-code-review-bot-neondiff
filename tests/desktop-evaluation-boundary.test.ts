@@ -81,4 +81,89 @@ describe("desktop evaluation production boundary", () => {
     expect(bundleBuilder).toMatch(/NEONDIFF_DESKTOP_DIST_DIR/);
     expect(bundleBuilder).toMatch(/release-bundle-check/);
   });
+
+  it("keeps launched evaluation wiring debug-only and fail-closed", () => {
+    const packageManifest = readFileSync("apps/neondiff-desktop/Package.swift", "utf8");
+    const app = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift",
+      "utf8"
+    );
+    const launchContext = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopEvaluationSupport/DesktopEvaluationLaunchContext.swift",
+      "utf8"
+    );
+
+    const appTarget = packageManifest.match(/\.executableTarget\(\s*name: "NeonDiffDesktop",([\s\S]*?)resources:/)?.[1];
+    expect(appTarget).toBeDefined();
+    expect(appTarget).not.toContain("NeonDiffDesktopEvaluationSupport");
+    expect(packageManifest).toMatch(/name: "NeonDiffDesktopFixtureResolve"[\s\S]*?"NeonDiffDesktopEvaluationSupport"/);
+    expect(app).not.toContain("import NeonDiffDesktopEvaluationSupport");
+    expect(app).toContain("DesktopResolvedEvaluationLaunch.load");
+    expect(app).toMatch(/fatalError\("NeonDiff Desktop evaluation launch rejected/);
+    expect(launchContext).toMatch(/isRegularFileKey/);
+    expect(launchContext).toMatch(/isSymbolicLinkKey/);
+    expect(launchContext).toMatch(/launch content size mismatch/);
+  });
+
+  it("captures exact native windows with non-prompting permission and readiness gates", () => {
+    const helper = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopCapture/main.swift",
+      "utf8"
+    );
+    const runner = readFileSync(
+      "apps/neondiff-desktop/scripts/capture-evaluation-baseline.sh",
+      "utf8"
+    );
+    const windowConfigurator = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/NeonWindowConfigurator.swift",
+      "utf8"
+    );
+    const app = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift",
+      "utf8"
+    );
+    const updater = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/NeonUpdateController.swift",
+      "utf8"
+    );
+    const manifestBuilder = readFileSync("scripts/build-desktop-evaluation-manifest.mjs", "utf8");
+
+    expect(helper).toContain("CGPreflightScreenCaptureAccess()");
+    expect(helper).toContain("AXIsProcessTrusted()");
+    expect(helper).toContain("/usr/sbin/screencapture");
+    expect(helper).toContain("exact PID/window identity mismatch");
+    expect(helper).toContain("AXUIElementSetMessagingTimeout");
+    expect(helper).toContain("screencapture timed out");
+    expect(runner).toContain("canonical capture requires a clean worktree");
+    expect(runner).toContain("assert_clean_head");
+    expect(runner).toContain('swift package --package-path "$package_dir" clean');
+    expect(runner).toContain("NeonDiffDesktopCoreTests");
+    expect(runner).toContain("NeonDiffDesktopAppCoreTests");
+    expect(runner).toContain("NeonDiffDesktopEvaluationSupportTests");
+    expect(runner).toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
+    expect(runner).toMatch(/for size in 1040x680 1280x800/);
+    expect(runner).toContain("NeonDiffDesktopManifestChecks");
+    expect(runner).toContain("check-desktop-evaluation-packet-secrets.mjs");
+    expect(runner).toContain("verify-desktop-evaluation-packet.mjs");
+    expect(runner).toContain("capture_pid");
+    expect(runner).toContain("capture helper timed out");
+    expect(runner).not.toMatch(/(^|\s)screencapture\s/);
+    expect(windowConfigurator).toMatch(/readinessAttemptCount \+= 1[\s\S]*readinessAttemptCount < 50[\s\S]*renderLatch\.isReady/);
+    expect(windowConfigurator).toContain("window.isRestorable = false");
+    expect(app).toContain("applicationShouldRestoreSecureApplicationState");
+    expect(app).toContain("startsUpdater: context == nil");
+    expect(app).toContain('keyEquivalent == "n"');
+    expect(app).not.toContain('item(withTitle: "File")');
+    expect(app).not.toContain('hasPrefix("New NeonDiff Desktop Window")');
+    expect(updater).toContain("startsUpdater: Bool = true");
+    expect(manifestBuilder).toContain('visualBaseline: { status: "captured-no-reference" }');
+    expect(manifestBuilder).not.toContain("goldenMetrics");
+    expect(runner).toContain("kill -KILL");
+    const resolver = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopResolvedEvaluationFixture.swift",
+      "utf8"
+    );
+    expect(resolver).toContain("SIGKILL");
+    expect(resolver).not.toContain("readDataToEndOfFile");
+  });
 });

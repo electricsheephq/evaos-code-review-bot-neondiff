@@ -273,6 +273,22 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
                 throw DesktopEvaluationFixtureError.invalidValue("github.login")
             }
         }
+        switch surface.onboardingStep {
+        case .daemon, .license, .done:
+            guard state.provider?.credentialPresent == true else {
+                throw DesktopEvaluationFixtureError.invalidValue("onboarding state has not completed provider setup")
+            }
+        case .welcome, .provider, nil:
+            break
+        }
+        switch surface.onboardingStep {
+        case .license, .done:
+            guard state.runtimeReady != nil else {
+                throw DesktopEvaluationFixtureError.invalidValue("onboarding state has not completed daemon readiness")
+            }
+        case .welcome, .provider, .daemon, nil:
+            break
+        }
         for outcome in scriptedOutcomes {
             guard (0...30_000).contains(outcome.delayMilliseconds) else {
                 throw DesktopEvaluationFixtureError.invalidValue("scriptedOutcomes.delayMilliseconds")

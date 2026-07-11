@@ -5,6 +5,23 @@ import NeonDiffDesktopCore
 struct ContentView: View {
     @ObservedObject var model: NeonDiffDesktopModel
     @ObservedObject var updateController: NeonUpdateController
+    let preferredColorScheme: ColorScheme?
+    let rootAccessibilityIdentifier: String
+    let onSurfaceReady: (() -> Void)?
+
+    init(
+        model: NeonDiffDesktopModel,
+        updateController: NeonUpdateController,
+        preferredColorScheme: ColorScheme? = .dark,
+        rootAccessibilityIdentifier: String = "neondiff.desktop.root",
+        onSurfaceReady: (() -> Void)? = nil
+    ) {
+        self.model = model
+        self.updateController = updateController
+        self.preferredColorScheme = preferredColorScheme
+        self.rootAccessibilityIdentifier = rootAccessibilityIdentifier
+        self.onSurfaceReady = onSurfaceReady
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -27,21 +44,27 @@ struct ContentView: View {
                         .fill(NeonDiffTheme.stroke.opacity(0.55))
                         .frame(width: 1)
 
-                    DetailView(model: model, updateController: updateController)
+                    DetailView(
+                        model: model,
+                        updateController: updateController,
+                        onSurfaceReady: model.isOnboardingPresented ? nil : onSurfaceReady
+                    )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
         .tint(NeonDiffTheme.accent)
         .buttonStyle(OperatorButtonStyle())
-        .preferredColorScheme(.dark)
+        .accessibilityIdentifier(rootAccessibilityIdentifier)
+        .preferredColorScheme(preferredColorScheme)
         .sheet(isPresented: $model.isOnboardingPresented) {
             OnboardingWizardView(model: model)
                 .frame(minWidth: 760, minHeight: 560)
                 .buttonStyle(OperatorButtonStyle())
                 .tint(NeonDiffTheme.accent)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
                 .interactiveDismissDisabled(model.onboardingFlow.currentStep != .done)
+                .onAppear { onSurfaceReady?() }
         }
     }
 }
@@ -49,6 +72,7 @@ struct ContentView: View {
 private struct DetailView: View {
     @ObservedObject var model: NeonDiffDesktopModel
     @ObservedObject var updateController: NeonUpdateController
+    let onSurfaceReady: (() -> Void)?
 
     var body: some View {
         ZStack {
@@ -69,6 +93,7 @@ private struct DetailView: View {
                     case .settings: SettingsPane(model: model, updateController: updateController)
                     }
                 }
+                .onAppear { onSurfaceReady?() }
             }
         }
     }

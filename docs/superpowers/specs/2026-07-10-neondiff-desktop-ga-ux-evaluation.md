@@ -46,10 +46,11 @@ hierarchy. They do not prove the reported click-to-click window resizing. A
 valid bug claim requires an exact artifact, click sequence, window/content
 frame trace, accessibility tree, and settled-state timing.
 
-The existing Swift package has executable check harnesses but no real test
-target. `NeonDiffDesktopModel` belongs to the executable target, so the model
-cannot be imported by a normal test target. The compile harness remains an
-acceptable temporary gate until AppCore extraction is complete.
+PR #529 moved `NeonDiffDesktopModel` into the importable
+`NeonDiffDesktopAppCore` library and landed real Core/AppCore Swift Testing
+targets. Migration ledgers preserve assertion coverage while the remaining
+full-Xcode work is the hosted UI-test target and `.xcresult` production, not
+model importability.
 
 ## Critical Invariants
 
@@ -96,7 +97,7 @@ visual content.
 
 ### Phase 2: Make App Logic Importable
 
-Issue #516 owns the full-Xcode structure:
+PR #529 landed the reusable package structure:
 
 ```text
 NeonDiffDesktopCore
@@ -111,14 +112,15 @@ effects are injected behind clipboard, URL-opening, CLI/dashboard, preferences,
 clock, and file-writing protocols. AppKit adapters and the composition root
 stay in the executable.
 
-The package/project adds:
+The package now has:
 
 - `NeonDiffDesktopCoreTests`
 - `NeonDiffDesktopAppCoreTests`
-- hosted `NeonDiffDesktopUITests`
+- `NeonDiffDesktopEvaluationSupportTests`
 
-The compile harness is removed only after all its assertions are migrated and
-pass in the real targets.
+Issue #516 remains open for the full-Xcode project and hosted
+`NeonDiffDesktopUITests`/`.xcresult` lane. Installing full Xcode does not replace
+the importable-library structure that is now already in main.
 
 ### Phase 3: Prove Geometry And Accessibility
 
@@ -269,7 +271,8 @@ Each run records:
 - fixture catalog SHA;
 - macOS, Xcode, Swift, architecture, and backing scale;
 - requested and actual window/content sizes;
-- test count, duration, and `.xcresult` hash;
+- test count, duration, runner, and test-result artifact hash (`swift-testing`
+  log under CLT or `.xcresult` under hosted XCTest);
 - PNG, accessibility-tree, and geometry hashes;
 - golden metrics and mask version;
 - secret and release-artifact fixture scans;
