@@ -43,7 +43,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(job?.defaults?.run?.["working-directory"]).toBe("apps/neondiff-desktop");
 
     for (const command of [
-      "scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests",
+      "scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests",
       "swift build --target NeonDiffDesktopKeychainChecks",
       "swift run NeonDiffDesktopAppcastChecks",
       "script/build_and_run.sh build",
@@ -56,7 +56,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).not.toContain("NeonDiffDesktopCoreSmoke");
     expect(workflow).not.toContain(retiredCoreChecksTarget);
     expect(workflow).not.toContain("swift run NeonDiffDesktopKeychainChecks");
-    expect(workflow).toMatch(/grep -Eq ['"]Test run with \[1-9\]\[0-9\]\* tests\?['"]/);
+    expect(workflow).not.toMatch(/Test run with \[1-9\]/);
     expect(workflow).toContain("unsigned");
     expect(workflow).toMatch(/macOS 15 Keychain contract compilation/);
     expect(workflow).toMatch(/persist-credentials:\s*false/);

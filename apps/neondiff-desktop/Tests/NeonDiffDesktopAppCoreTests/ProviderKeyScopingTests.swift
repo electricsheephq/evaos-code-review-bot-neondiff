@@ -3,7 +3,7 @@ import Testing
 import NeonDiffDesktopCore
 
 @MainActor
-@Suite struct ProviderKeyScopingTests {
+@Suite(.timeLimit(.minutes(1))) struct ProviderKeyScopingTests {
     @Test func selectedProviderNeverReusesAnotherOrLegacyKey() async throws {
         let legacy = LegacyModelHarnessAssertionContext(
             scenario: .selectedProviderNeverReusesAnotherOrLegacyKey,

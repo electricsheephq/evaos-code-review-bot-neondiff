@@ -39,7 +39,7 @@ Commit the green implementation, open the #487 PR, then require exact-current-he
 
 ## Implementation Proof
 
-- `scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests`: passed, including HTTP recovery classification, raw-body non-disclosure, request-generation gating, local device-code expiry, App install URL, and repository access cues.
+- `(cd apps/neondiff-desktop && scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests)`: passed, including HTTP recovery classification, raw-body non-disclosure, request-generation gating, local device-code expiry, App install URL, and repository access cues.
 - `swift run NeonDiffDesktopCoreSmoke`: passed.
 - `swift build`: passed for the complete SwiftUI target.
 - `./script/build_and_run.sh bundle-check`: passed for the unsigned dev bundle.

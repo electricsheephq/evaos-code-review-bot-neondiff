@@ -20,12 +20,20 @@ import Darwin
         let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
         let providerPatchText = String(data: providerPatchData, encoding: .utf8) ?? ""
         let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
+        let providerPatchZCode = providerPatchObject?["zcode"] as? [String: Any]
         let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
         let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
         let selectedProviderPatch = providerPatchEntries?["gateway"] as? [String: Any]
         context.expect(selectedProviderPatch?["baseUrl"] as? String == "https://saved.example/v1", "provider patch uses the selected saved registry target")
         context.expect(!providerPatchText.contains("https://legacy.example/v1"), "legacy desktop endpoint cannot enter the provider registry patch")
-        context.expect(!providerPatchText.lowercased().contains("apikey"), "provider registry patch contains no secret-bearing key field")
+        context.expect(
+            Set(providerPatchObject?.keys.map { $0 } ?? []) == Set(["zcode", "providers"])
+                && Set(providerPatchZCode?.keys.map { $0 } ?? []) == Set(["cliPath", "appConfigPath", "model"])
+                && Set(providerPatchRegistry?.keys.map { $0 } ?? []) == Set(["defaultProviderId", "providers"])
+                && Set(providerPatchEntries?.keys.map { $0 } ?? []) == Set(["gateway"])
+                && Set(selectedProviderPatch?.keys.map { $0 } ?? []) == Set(["baseUrl", "model"]),
+            "provider registry patch contains only the explicit non-secret schema"
+        )
     }
 
       return context.assertions

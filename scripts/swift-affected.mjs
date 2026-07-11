@@ -5,6 +5,10 @@ import { pathToFileURL } from "node:url";
 
 const SWIFT_PATH_PREFIXES = [
   "apps/neondiff-desktop/Sources/",
+  "apps/neondiff-desktop/Checks/",
+  "apps/neondiff-desktop/Tests/",
+  "apps/neondiff-desktop/script/",
+  "apps/neondiff-desktop/scripts/",
   "apps/neondiff-desktop/fixtures/ui/"
 ];
 
@@ -18,6 +22,7 @@ const SWIFT_ROOT_FILES = new Set([
   "scripts/generate-secret-rules.mjs",
   "scripts/check-secret-corpus-boundary.mjs",
   "scripts/check-secret-rule-differential.mjs",
+  "scripts/shared/swift-corpus-boundary.mjs",
   "scripts/check-desktop-fixture-boundary.mjs",
   "scripts/secret-rule-foundation-runner.swift"
 ]);

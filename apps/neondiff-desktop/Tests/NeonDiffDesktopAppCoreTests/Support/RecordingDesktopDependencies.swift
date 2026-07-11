@@ -302,10 +302,18 @@ final class RecordingProviderVerifier: DesktopProviderVerifying, @unchecked Send
 }
 
 final class StubSecretStore: DesktopSecretStoring, @unchecked Sendable {
-    func setSecret(_ secret: String, account: String) throws {}
+    private let recordedMutations = Locked<[String]>([])
+
+    var mutations: [String] { recordedMutations.read { $0 } }
+
+    func setSecret(_ secret: String, account: String) throws {
+        recordedMutations.update { $0.append("set:\(account)") }
+    }
     func readSecret(account: String) throws -> String? { nil }
     func containsSecret(account: String) -> Bool { false }
-    func deleteSecret(account: String) throws {}
+    func deleteSecret(account: String) throws {
+        recordedMutations.update { $0.append("delete:\(account)") }
+    }
 }
 
 final class StubGitHubAuthenticator: GitHubDesktopAuthenticating, @unchecked Sendable {

@@ -280,9 +280,10 @@ change, the product-behavior proof is missing even when `swift build`,
 
 Remote CI should keep a stable, always-reporting `Swift desktop gate` check.
 That check passes quickly with an explicit `not affected` result on non-desktop
-changes, runs `NeonDiffDesktopCoreTests` plus compiles
-`NeonDiffDesktopKeychainChecks`, runs `swift build`, app bundle build, and bundle
-check only when Swift desktop paths changed or when manually dispatched. Keep
+changes, requires nonzero `NeonDiffDesktopCoreTests` and
+`NeonDiffDesktopAppCoreTests` execution, runs `NeonDiffDesktopFixtureChecks`,
+compiles `NeonDiffDesktopKeychainChecks`, and runs `swift build`, app bundle
+build, and bundle check only when Swift desktop paths changed or when manually dispatched. Keep
 the Keychain check executable, `NeonDiffDesktopCoreSmoke`, and visible UI clicks
 in the local/release-smoke lane because hosted macOS runners can kill
 Security.framework-linked helpers after a successful build unless the runner

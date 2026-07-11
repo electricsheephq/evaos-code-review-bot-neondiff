@@ -2,6 +2,10 @@ import Testing
 
 @MainActor
 @Suite struct CoreChecksMigrationLedgerTests {
+    @Test func inventoryDigestDistinguishesEmbeddedNewlinesFromMessageBoundaries() {
+        #expect(coreChecksSHA256(["a\nb", "c"]) != coreChecksSHA256(["a", "b\nc"]))
+    }
+
     @Test func everyLegacyAssertionExecutesThroughItsNamedScenario() async throws {
         let aggregate = LegacyCoreChecksAggregate()
 

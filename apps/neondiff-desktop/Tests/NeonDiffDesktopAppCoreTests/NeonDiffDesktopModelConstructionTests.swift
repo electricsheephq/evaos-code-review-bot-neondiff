@@ -18,5 +18,6 @@ import Testing
         #expect(fixture.dashboard.calls.isEmpty)
         #expect(fixture.fileWriter.writes.isEmpty)
         #expect(fixture.providerVerifier.calls.isEmpty)
+        #expect(fixture.secretStore.mutations.isEmpty)
     }
 }

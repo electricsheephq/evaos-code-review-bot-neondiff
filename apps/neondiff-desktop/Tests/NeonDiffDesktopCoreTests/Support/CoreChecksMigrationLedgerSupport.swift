@@ -22,19 +22,19 @@ struct LegacyCoreChecksScenarioInventory: Sendable {
 }
 
 let legacyCoreChecksScenarioInventory: [LegacyCoreChecksScenario: LegacyCoreChecksScenarioInventory] = [
-    .onboardingFlowContracts: .init(assertionCount: 10, sortedMessageSHA256: "c5ba559e388905b38fda89cf21c1ff2bccca392dec2f827588b0fdcfa21d2a8d"),
-    .cliResolutionAndStandardInputContracts: .init(assertionCount: 5, sortedMessageSHA256: "905317318e872cdbb40a315287265524c03bb9833225852c344f866b970dc9db"),
-    .cliCancellationContracts: .init(assertionCount: 10, sortedMessageSHA256: "f01d08e8d59093c74193406a4ad18aec5569447eaa924a28858f149e6e015e6f"),
-    .cliStandardInputTimeoutContracts: .init(assertionCount: 14, sortedMessageSHA256: "ddd5b166d183319ea477171185bd713c05baffe65bf1f66f2f8908246f2b6c22"),
-    .cliCleanupDeadlineAndOutputContracts: .init(assertionCount: 15, sortedMessageSHA256: "119af28fc994298a1f6aadf74e50fd06e8ff50f03d8d80b9ac0090d8e5780858"),
-    .githubDeviceFlowTransportContracts: .init(assertionCount: 14, sortedMessageSHA256: "351e4087df270522a2acb1d4872389d1d275bd32ff8ba89c3e5b93b9cd8bc51a"),
-    .detachedCommandLaunchContracts: .init(assertionCount: 4, sortedMessageSHA256: "22e122292016c1526c876ae8bafc7bf75343588786d9796f06c2b15d1fe3d17b"),
-    .githubRecoveryRepositoryAndRateLimitContracts: .init(assertionCount: 29, sortedMessageSHA256: "7e8dc26a3c8d899bc5497a4198a7c32dc2d0298da5b82ca4d65e9791716eb450"),
-    .configInspectAndPatchContracts: .init(assertionCount: 27, sortedMessageSHA256: "537f57b1515b583e871f88b9df52438af52709de4e8acf66f36fffd4b86b6df0"),
-    .providerRegistryParsingAndPatchContracts: .init(assertionCount: 9, sortedMessageSHA256: "9c8216564d1e3fb401cbf2c5c8cc8db17dcea9f2f2297f9c4c0ac26479f7ec41"),
-    .providerVerificationTransportAndStrictEnvelopeContracts: .init(assertionCount: 37, sortedMessageSHA256: "8a31e05ce98c94a5c4cff0d01e9257758a778fa3dea9b792370beb6992c2ae67"),
-    .canonicalRedactorCorpusContracts: .init(assertionCount: 195, sortedMessageSHA256: "aa59c4bd36916df3b58b8e1a4853aac9f67675c513edf60808b23b3f4bfcf4a6"),
-    .providerVerificationEscapingAndBudgetContracts: .init(assertionCount: 20, sortedMessageSHA256: "1e23a46f76f0ad3ba40bb8fef3200e684f1b9526a270e96dd4bd114744767b39")
+    .onboardingFlowContracts: .init(assertionCount: 10, sortedMessageSHA256: "2f06c0bf60cb5ba0326c7ff260454831985fe8528fed73600b35bc3b80764513"),
+    .cliResolutionAndStandardInputContracts: .init(assertionCount: 5, sortedMessageSHA256: "3d313d66cf17ecdf294b1235dc1f34401b74f52d33ad7d78ed4fb3d783ce1a86"),
+    .cliCancellationContracts: .init(assertionCount: 10, sortedMessageSHA256: "4d93d68b30b32e326aad8d2f93dacf515d346cc3fb373a1a9061f829f3c0c0ad"),
+    .cliStandardInputTimeoutContracts: .init(assertionCount: 14, sortedMessageSHA256: "a979b18020324519db8eb863c445a7bd2ca9d3a61f7f8e6a447a3742527864d4"),
+    .cliCleanupDeadlineAndOutputContracts: .init(assertionCount: 15, sortedMessageSHA256: "8c562230f44b6c485ddbb0a3f414bb193a05f53a22207445c9da3590b39b2989"),
+    .githubDeviceFlowTransportContracts: .init(assertionCount: 14, sortedMessageSHA256: "7d747813edd367f1c3d9cbe0082b2ae9b1f56d1fd7d6217c3141fc503967e422"),
+    .detachedCommandLaunchContracts: .init(assertionCount: 4, sortedMessageSHA256: "d2256a821d4f0eecfba2db5484b48e617ae10a09a007626268a76e82dbb70ddb"),
+    .githubRecoveryRepositoryAndRateLimitContracts: .init(assertionCount: 29, sortedMessageSHA256: "bc27311a9264ba1b20622afabc316a78e48f1ea8539bff071564faaebf8a4092"),
+    .configInspectAndPatchContracts: .init(assertionCount: 27, sortedMessageSHA256: "c963178d0c437cf22ab1e5cec966440761ac87c1730a9c5cd2ddc3107932393c"),
+    .providerRegistryParsingAndPatchContracts: .init(assertionCount: 9, sortedMessageSHA256: "706ee5a8c88d44eab64f6210f3eb7f5d131c6a7ceb57a56c4e264edb32948b90"),
+    .providerVerificationTransportAndStrictEnvelopeContracts: .init(assertionCount: 37, sortedMessageSHA256: "27b74eecdf695f4be3fca3d9bf1090c8c41a2d27b1ca20e0e3ad47e6da28199e"),
+    .canonicalRedactorCorpusContracts: .init(assertionCount: 195, sortedMessageSHA256: "b1af4e9101e9255b709cf93af983827cb367a7f37d1993940f004b0da2591c41"),
+    .providerVerificationEscapingAndBudgetContracts: .init(assertionCount: 20, sortedMessageSHA256: "aabd8511ab77476e062c96210aee2ccafabaae2489d31fb44a7545313af56f1a")
 ]
 
 enum LegacyCoreChecksExecution {
@@ -65,7 +65,7 @@ final class LegacyCoreChecksAggregate: @unchecked Sendable {
         }
         #expect(messages.count == 389)
         #expect(Set(messages).count == 295)
-        #expect(coreChecksSHA256(messages.sorted()) == "09bac066ca56654a62415feb63a95d509af72f6f9e72dbe942e6e231291d31b0")
+        #expect(coreChecksSHA256(messages.sorted()) == "e459d3956cea8d9b839bf7cb86e0f81325d9dc714b6eea09b5177cba48fd91e0")
     }
 }
 

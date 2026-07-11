@@ -1,6 +1,13 @@
 import Testing
 
 @Suite struct ProductionBoundaryContractTests {
+    @Test func sourceBoundaryHelpersRejectDirectoriesNamedLikeSwiftFiles() throws {
+        try withSourceBoundaryDirectoryFixture { root, fakeSource in
+            #expect(sourceBoundarySwiftFiles(below: root).isEmpty)
+            #expect(!sourceBoundaryFileExists(fakeSource))
+        }
+    }
+
     @Test func appCoreContainsNoExecutableOnlyOSDependencies() throws {
         let appCoreDirectory = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktopAppCore", isDirectory: true)

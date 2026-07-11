@@ -2,24 +2,10 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertSwiftCorpusBoundary } from "./shared/swift-corpus-boundary.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const swiftTestCorpus = join(
-  root,
-  "apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/Support/CanonicalSecretRuleCorpus.generated.swift"
-);
-const retiredSwiftCorpus = join(
-  root,
-  "apps/neondiff-desktop/Sources",
-  ["NeonDiffDesktopCore", "Checks"].join(""),
-  "CanonicalSecretRuleCorpus.generated.swift"
-);
-if (!existsSync(swiftTestCorpus)) {
-  throw new Error("generated Swift test corpus is missing from the compiled Core test target");
-}
-if (existsSync(retiredSwiftCorpus)) {
-  throw new Error("generated Swift test corpus still has an orphan copy under Sources");
-}
+assertSwiftCorpusBoundary(root);
 const canonical = JSON.parse(readFileSync(join(root, "shared/canonical-secret-rules.json"), "utf8"));
 const samples = [...canonical.rules, canonical.cookieHeader].map((fixture) => ({
   id: fixture.id,

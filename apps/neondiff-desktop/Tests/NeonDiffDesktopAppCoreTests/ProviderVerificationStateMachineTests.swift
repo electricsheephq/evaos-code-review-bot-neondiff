@@ -3,7 +3,7 @@ import Testing
 import NeonDiffDesktopCore
 
 @MainActor
-@Suite struct ProviderVerificationStateMachineTests {
+@Suite(.timeLimit(.minutes(1))) struct ProviderVerificationStateMachineTests {
     @Test func concurrentVerifyClicksLaunchOneStdinOnlyOperation() async throws {
         let legacy = LegacyModelHarnessAssertionContext(
             scenario: .concurrentVerifyClicksLaunchOneStdinOnlyOperation,

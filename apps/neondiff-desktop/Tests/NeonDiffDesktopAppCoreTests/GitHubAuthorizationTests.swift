@@ -3,7 +3,7 @@ import Testing
 import NeonDiffDesktopCore
 
 @MainActor
-@Suite struct GitHubAuthorizationTests {
+@Suite(.timeLimit(.minutes(1))) struct GitHubAuthorizationTests {
     @Test func exactSixtySecondExpiryThresholdRefreshesToken() async throws {
         let now = fixtureDate(secondsSince1970: 1_000_000)
         let authenticator = ScriptedGitHubAuthenticator(

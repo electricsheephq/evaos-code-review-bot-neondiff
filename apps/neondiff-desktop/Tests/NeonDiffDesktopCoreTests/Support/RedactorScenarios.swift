@@ -164,11 +164,5 @@ import Darwin
         )
     }
 
-    escapedSecretCLI.result = CLIRunResult(
-        exitCode: 0,
-        stdout: try encodedProviderEnvelope().replacingOccurrences(of: #""providerId":"zcode-glm""#, with: #""providerId":"other-provider""#),
-        stderr: ""
-    )
-
       return context.assertions
   }

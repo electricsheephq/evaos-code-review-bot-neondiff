@@ -1,7 +1,7 @@
 import Testing
 
 @MainActor
-@Suite struct ModelHarnessMigrationLedgerTests {
+@Suite(.timeLimit(.minutes(1))) struct ModelHarnessMigrationLedgerTests {
     @Test func everyLegacyAssertionExecutesExactlyOnceInItsNamedScenario() async throws {
         let aggregate = LegacyModelHarnessAggregate()
 

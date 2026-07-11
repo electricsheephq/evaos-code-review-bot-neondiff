@@ -136,9 +136,9 @@ jobs:
       - name: Swift core and AppCore tests
         working-directory: apps/neondiff-desktop
         run: |
-          scripts/run-swift-tests.sh --filter NeonDiffDesktopCoreTests
+          scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests
           swift run NeonDiffDesktopFixtureChecks
-          scripts/run-swift-tests.sh --filter NeonDiffDesktopAppCoreTests
+          scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests
 
       - name: Secret corpus production-artifact boundary
         shell: bash

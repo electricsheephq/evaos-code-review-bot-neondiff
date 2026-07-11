@@ -3,7 +3,7 @@ import Testing
 import NeonDiffDesktopCore
 
 @MainActor
-@Suite struct ConfigurationControlCenterTests {
+@Suite(.timeLimit(.minutes(1))) struct ConfigurationControlCenterTests {
     @Test func localPreferencesPersistOnlyThroughInjectedStore() {
         let fixture = ModelDependencyFixture()
         fixture.model.configPath = "fixture/config.json"

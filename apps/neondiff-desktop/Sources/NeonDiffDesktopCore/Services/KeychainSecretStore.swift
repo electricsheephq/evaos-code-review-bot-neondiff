@@ -35,12 +35,15 @@ public enum KeychainSecretError: Error, LocalizedError {
 
 public final class KeychainSecretStore: DesktopSecretStoring {
     public let service: String
+    private let accessLock = NSLock()
 
     public init(service: String = "com.electricsheephq.NeonDiffDesktop.secrets") {
         self.service = service
     }
 
     public func setSecret(_ secret: String, account: String) throws {
+        accessLock.lock()
+        defer { accessLock.unlock() }
         let data = Data(secret.utf8)
         let query = baseQuery(account: account)
         SecItemDelete(query as CFDictionary)
@@ -57,6 +60,8 @@ public final class KeychainSecretStore: DesktopSecretStoring {
     }
 
     public func readSecret(account: String, allowUserInteraction: Bool) throws -> String? {
+        accessLock.lock()
+        defer { accessLock.unlock() }
         let query = Self.query(
             service: service,
             account: account,
@@ -75,11 +80,15 @@ public final class KeychainSecretStore: DesktopSecretStoring {
     }
 
     public func containsSecret(account: String) -> Bool {
+        accessLock.lock()
+        defer { accessLock.unlock() }
         let query = Self.query(service: service, account: account, operation: .contains)
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     public func deleteSecret(account: String) throws {
+        accessLock.lock()
+        defer { accessLock.unlock() }
         let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainSecretError.unexpectedStatus(status)
