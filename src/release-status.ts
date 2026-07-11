@@ -1224,7 +1224,7 @@ function validateMandatoryActivationProofPath(input: {
   for (const rawStep of lifecycleSteps) {
     const step = asRecord(rawStep);
     const id = readString(step.id);
-    const unexpectedStepKeys = collectUnexpectedKeys(step, new Set(["id", "outcome", "statusCode", "apiBaseUrl", "responseSha256"]));
+    const unexpectedStepKeys = collectUnexpectedKeys(step, new Set(["id", "outcome", "statusCode", "apiBaseUrl", "redactedResponse", "responseSha256"]));
     if (unexpectedStepKeys.length) failures.push(`unexpected productionLifecycle step fields: ${unexpectedStepKeys.join(", ")}`);
     if (!id || lifecycleById.has(id)) {
       failures.push("productionLifecycle.steps must have unique named steps");
@@ -1418,7 +1418,7 @@ function validateMandatoryActivationProofPath(input: {
   for (const rawRecord of lifecycleArtifactRecords) {
     const record = asRecord(rawRecord);
     const id = readString(record.id);
-    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "outcome", "statusCode", "apiBaseUrl"]));
+    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "outcome", "statusCode", "apiBaseUrl", "redactedResponse"]));
     if (unexpectedRecordKeys.length) failures.push(`unexpected production-lifecycle record fields: ${unexpectedRecordKeys.join(", ")}`);
     if (!id || lifecycleArtifactById.has(id)) failures.push("production-lifecycle records must have unique ids");
     else lifecycleArtifactById.set(id, record);
@@ -1429,10 +1429,10 @@ function validateMandatoryActivationProofPath(input: {
       failures.push(`production-lifecycle artifact must include ${id}`);
       continue;
     }
-    if (record.outcome !== step.outcome || record.statusCode !== step.statusCode || record.apiBaseUrl !== step.apiBaseUrl) {
+    if (record.outcome !== step.outcome || record.statusCode !== step.statusCode || record.apiBaseUrl !== step.apiBaseUrl || JSON.stringify(record.redactedResponse) !== JSON.stringify(step.redactedResponse)) {
       failures.push(`production-lifecycle artifact record ${id} must match the aggregate proof`);
     }
-    if (step.responseSha256 !== digestRecord(record)) failures.push(`productionLifecycle.${id}.responseSha256 must match its artifact record`);
+    if (step.responseSha256 !== digestRecord(asRecord(record.redactedResponse))) failures.push(`productionLifecycle.${id}.responseSha256 must match its redacted artifact response`);
   }
 
   const matrixArtifactRecords = artifactRecordsByKind.get("no-bypass-matrix") ?? [];

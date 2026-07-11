@@ -562,11 +562,11 @@ describe("beta release status", () => {
     ];
     const zeroSideEffects = { providerCalls: 0, checkoutCalls: 0, worktreeWrites: 0, reviewPosts: 0 };
     const lifecycleRecords = [
-      { id: "issue", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev" },
-      { id: "activate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev" },
-      { id: "validate_active", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev" },
-      { id: "deactivate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev" },
-      { id: "validate_denied", outcome: "denied", statusCode: 403, apiBaseUrl: "https://neondiff-license.fly.dev" }
+      { id: "issue", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "issued" } },
+      { id: "activate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "active", source: "api" } },
+      { id: "validate_active", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "active", source: "api" } },
+      { id: "deactivate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "revoked" } },
+      { id: "validate_denied", outcome: "denied", statusCode: 403, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "revoked" } }
     ];
     const scenarioRecords = [
       { id: "public_active", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
@@ -622,7 +622,7 @@ describe("beta release status", () => {
       productionLifecycle: {
         apiBaseUrl: "https://neondiff-license.fly.dev",
         licenseFingerprint: `sha256:${"c".repeat(64)}`,
-        steps: lifecycleRecords.map((record) => ({ ...record, responseSha256: digestRecord(record) }))
+        steps: lifecycleRecords.map((record) => ({ ...record, responseSha256: digestRecord(record.redactedResponse) }))
       },
       matrix: {
         bypassAllowedCases: 0,
