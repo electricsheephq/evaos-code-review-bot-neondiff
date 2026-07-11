@@ -686,6 +686,10 @@ describe("NeonDiff public release readiness", () => {
     expect(lifecycle).not.toMatch(/LICENSE_ISSUANCE_SECRET|NPM_TOKEN|secrets\./);
 
     const governance = read("docs/release-governance.md");
+    expect(governance).toMatch(/Mandatory Activation Proof Sequence/);
+    expect(governance).toMatch(/Download the exact attested JSON artifact without editing it/);
+    expect(governance).toMatch(/may change only files outside the npm\s+package allowlist/i);
+    expect(governance).toMatch(/package bytes must remain identical/);
     expect(governance).toMatch(/partial quarantine promotion/i);
     const recovery = governance.split("### Partial Quarantine Promotion Recovery")[1]?.split("## Tag And Release")[0] ?? "";
     expect(recovery).toMatch(/gh workflow run publish-npm\.yml/);

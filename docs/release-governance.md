@@ -189,14 +189,49 @@ verified prior package, reinstall that package on affected hosts, restart the
 host-specific daemon/dashboard, and preserve the immutable release tag and
 package as incident provenance.
 
-Stable npm publication uses a quarantine dist-tag first. Verify the registry
-integrity, shasum, and `gitHead` against the reviewed pack and annotated tag,
-then promote the package to `latest`. Manual retry runs must resolve the exact
+Stable npm publication uses a quarantine dist-tag first. Publish the exact
+tarball that passed the release gate, then verify registry integrity and
+shasum against that archive. Cryptographically verify the npm Sigstore bundle
+and require its signed SLSA statement to name this repository, publish
+workflow, release tag, and release commit before promoting to `latest`.
+`gitHead` remains useful registry metadata when present, but it is not a
+substitute for exact archive identity plus signed provenance. Manual retry runs must resolve the exact
 existing GitHub Release and prove it is published and non-prerelease before
 promotion. All NeonDiff npm releases share one workflow concurrency group.
 Before moving `latest` or `beta`, the workflow also requires the channel to be
 absent, already at the target, or exactly at the manifest-declared predecessor;
 an unexpected channel version blocks promotion instead of moving backward.
+
+### Mandatory Activation Proof Sequence
+
+For stable v1.0.4 and later, finish every package-included source, config,
+version, setup-doc, and runtime change before dispatching
+`license-lifecycle-proof.yml`. The protected-main candidate SHA is the source
+identity under proof.
+
+The trusted workflow installs the candidate's materialized tarball, runs the
+fail-closed activation matrix, obtains a custom-audience GitHub OIDC token, and
+uses the dedicated lifecycle broker to exercise production issuance,
+activation, refresh, deactivation, and denied revalidation. It signs the
+redacted lifecycle artifact with a GitHub artifact attestation. The Fly-held
+issuance secret never enters GitHub.
+
+After the run succeeds:
+
+1. Download the exact attested JSON artifact without editing it.
+2. Verify it locally with `gh attestation verify`, pinning the signer workflow,
+   candidate SHA, protected-main source ref, and GitHub-hosted runner.
+3. Commit that artifact, the aggregate activation proof, and manifest links in
+   a follow-up evidence PR. That PR may change only files outside the npm
+   package allowlist; otherwise the candidate tarball identity changes and the
+   lifecycle proof must be rerun.
+4. Let the publish workflow independently verify the committed artifact's
+   GitHub attestation and require the current `npm pack` shasum/integrity to
+   match the installed candidate recorded by the proof.
+
+The final release/tag commit may descend from the candidate SHA because the
+evidence itself must be committed, but the package bytes must remain identical.
+Do not manually recreate, summarize, or reformat the attested lifecycle JSON.
 
 ### Partial Quarantine Promotion Recovery
 
