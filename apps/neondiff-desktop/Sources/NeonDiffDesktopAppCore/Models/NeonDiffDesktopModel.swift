@@ -1,27 +1,27 @@
-import AppKit
+import Combine
 import Foundation
 import NeonDiffDesktopCore
 
 @MainActor
-final class NeonDiffDesktopModel: ObservableObject {
-    @Published var selectedSection: DesktopSection = .overview
-    @Published var configPath: String {
+package final class NeonDiffDesktopModel: ObservableObject {
+    @Published package var selectedSection: DesktopSection = .overview
+    @Published package var configPath: String {
         didSet {
             guard configPath != oldValue else { return }
             invalidateProviderConfigAuthorization()
             invalidateProviderVerificationContext()
         }
     }
-    @Published var cliPath: String {
+    @Published package var cliPath: String {
         didSet {
             guard cliPath != oldValue else { return }
             invalidateProviderVerificationContext()
         }
     }
-    @Published var launchdLabel: String
-    @Published var status: DaemonStatus = .unknown
-    @Published var repos: [RepoMonitor] = []
-    @Published var providers = ProviderSettings() {
+    @Published package var launchdLabel: String
+    @Published package var status: DaemonStatus = .unknown
+    @Published package var repos: [RepoMonitor] = []
+    @Published package var providers = ProviderSettings() {
         didSet {
             guard providers != oldValue else { return }
             if providers.selectedProviderId != oldValue.selectedProviderId {
@@ -30,40 +30,37 @@ final class NeonDiffDesktopModel: ObservableObject {
             invalidateProviderVerificationContext()
         }
     }
-    @Published var license = LicenseStatus()
-    @Published var controlCenter = DesktopControlCenterSettings()
-    @Published var controlCenterStatus = "Load current config before editing."
-    @Published var isControlCenterOperationInProgress = false
-    @Published var isConfigPatchInProgress = false
-    @Published var isConfigInspectInProgress = false
-    @Published var pendingIssueRepoName = ""
-    @Published var github = GitHubConnectionStatus()
-    @Published var githubAuthorizationCode: GitHubDeviceAuthorizationCode?
-    @Published var githubAuthorizationStatus = "not connected"
-    @Published var githubRecovery: GitHubConnectionRecovery?
-    @Published var discoveredGitHubRepos: [GitHubDiscoveredRepository] = []
-    @Published var isGitHubAuthorizationInProgress = false
-    @Published var isGitHubRepositoryRefreshInProgress = false
-    @Published var logText = "No logs loaded."
-    @Published var lastError: String?
-    @Published var lastCommandLine = ""
-    @Published var dashboardLaunchStatus = "not opened"
-    @Published var dashboardProcessIdentifier: Int32?
-    @Published var pendingRepoName = ""
-    @Published var pendingProviderKey = ""
-    @Published var providerVerification: ProviderVerificationSnapshot?
-    @Published var providerVerificationStatus = "Verify the stored API key when ready."
-    @Published var isProviderVerificationInProgress = false
-    @Published var isProviderVerificationCancelling = false
-    @Published private(set) var providerVerificationSafetyLatchMessage: String?
-    @Published var pendingLicenseKey = ""
-    @Published var onboardingFlow = OnboardingFlow()
-    @Published var isOnboardingPresented = false
+    @Published package var license = LicenseStatus()
+    @Published package var controlCenter = DesktopControlCenterSettings()
+    @Published package var controlCenterStatus = "Load current config before editing."
+    @Published package var isControlCenterOperationInProgress = false
+    @Published package var isConfigPatchInProgress = false
+    @Published package var isConfigInspectInProgress = false
+    @Published package var pendingIssueRepoName = ""
+    @Published package var github = GitHubConnectionStatus()
+    @Published package var githubAuthorizationCode: GitHubDeviceAuthorizationCode?
+    @Published package var githubAuthorizationStatus = "not connected"
+    @Published package var githubRecovery: GitHubConnectionRecovery?
+    @Published package var discoveredGitHubRepos: [GitHubDiscoveredRepository] = []
+    @Published package var isGitHubAuthorizationInProgress = false
+    @Published package var isGitHubRepositoryRefreshInProgress = false
+    @Published package var logText = "No logs loaded."
+    @Published package var lastError: String?
+    @Published package var lastCommandLine = ""
+    @Published package var dashboardLaunchStatus = "not opened"
+    @Published package var dashboardProcessIdentifier: Int32?
+    @Published package var pendingRepoName = ""
+    @Published package var pendingProviderKey = ""
+    @Published package var providerVerification: ProviderVerificationSnapshot?
+    @Published package var providerVerificationStatus = "Verify the stored API key when ready."
+    @Published package var isProviderVerificationInProgress = false
+    @Published package var isProviderVerificationCancelling = false
+    @Published package private(set) var providerVerificationSafetyLatchMessage: String?
+    @Published package var pendingLicenseKey = ""
+    @Published package var onboardingFlow = OnboardingFlow()
+    @Published package var isOnboardingPresented = false
 
-    private let userDefaults: UserDefaults
-    private let keychain: DesktopSecretStoring
-    private let githubAuthClient: GitHubDesktopAuthenticating
-    private let providerVerificationService: ProviderVerificationService?
+    private let dependencies: DesktopAppDependencies
     private var providerVerificationTask: Task<Void, Never>?
     private var providerVerificationRequestGeneration: UInt64 = 0
     private var providerVerificationContextGeneration: UInt64 = 0
@@ -85,48 +82,17 @@ final class NeonDiffDesktopModel: ObservableObject {
     private var previewedProviderExpectedRevision: String?
     private var pendingProviderPatchProof: PendingProviderPatchProof?
 
-    init(
-        userDefaults: UserDefaults = .standard,
-        keychain: DesktopSecretStoring = KeychainSecretStore(),
-        githubAuthClient: GitHubDesktopAuthenticating = GitHubDeviceAuthClient(),
-        providerVerificationService: ProviderVerificationService? = nil
-    ) {
-        #if DEBUG
-        let visualProofFixtureEnabled = ProcessInfo.processInfo.environment[
-            "NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE"
-        ] == "provider-verification"
-        #endif
-        self.userDefaults = userDefaults
-        self.keychain = keychain
-        self.githubAuthClient = githubAuthClient
-        self.providerVerificationService = providerVerificationService
-        self.configPath = userDefaults.string(forKey: "neondiff.configPath") ?? "config.local.json"
-        self.cliPath = userDefaults.string(forKey: "neondiff.cliPath") ?? "neondiff"
-        self.launchdLabel = userDefaults.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
-        #if DEBUG
-        let providerKeyStored = visualProofFixtureEnabled
-            || ProviderKeychainAccount.account(providerId: providers.selectedProviderId)
-                .map(keychain.containsSecret(account:)) == true
-        let githubUserTokenStored = visualProofFixtureEnabled
-            ? false
-            : keychain.containsSecret(account: githubUserTokenAccount)
-        let githubRefreshTokenStored = visualProofFixtureEnabled
-            ? false
-            : keychain.containsSecret(account: githubRefreshTokenAccount)
-        #else
+    package init(dependencies: DesktopAppDependencies) {
+        self.dependencies = dependencies
+        self.configPath = dependencies.preferences.string(forKey: "neondiff.configPath") ?? "config.local.json"
+        self.cliPath = dependencies.preferences.string(forKey: "neondiff.cliPath") ?? "neondiff"
+        self.launchdLabel = dependencies.preferences.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
         let providerKeyStored = ProviderKeychainAccount.account(providerId: providers.selectedProviderId)
-            .map(keychain.containsSecret(account:)) == true
-        let githubUserTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
-        let githubRefreshTokenStored = keychain.containsSecret(account: githubRefreshTokenAccount)
-        #endif
+            .map(dependencies.secretStore.containsSecret(account:)) == true
+        let githubUserTokenStored = dependencies.secretStore.containsSecret(account: githubUserTokenAccount)
+        let githubRefreshTokenStored = dependencies.secretStore.containsSecret(account: githubRefreshTokenAccount)
         self.providers.providerKeyStored = providerKeyStored
-        #if DEBUG
-        self.license.keyStored = visualProofFixtureEnabled
-            ? false
-            : keychain.containsSecret(account: licenseKeyAccount)
-        #else
-        self.license.keyStored = keychain.containsSecret(account: licenseKeyAccount)
-        #endif
+        self.license.keyStored = dependencies.secretStore.containsSecret(account: licenseKeyAccount)
         self.github.userTokenStored = githubUserTokenStored
         if githubUserTokenStored {
             self.github.installationState = "authorization stored; verify"
@@ -139,85 +105,85 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
         self.github.authorizedUserLogin = nil
         self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
-        self.isOnboardingPresented = !userDefaults.bool(forKey: onboardingCompletedKey)
+        self.isOnboardingPresented = !dependencies.preferences.bool(forKey: onboardingCompletedKey)
         self.lastCommandLine = statusCommand.commandLine
-
-        #if DEBUG
-        if visualProofFixtureEnabled {
-            selectedSection = .providers
-            configPath = "/tmp/neondiff-visual-proof/config.local.json"
-            cliPath = "neondiff"
-            providers.zcodeModel = "glm-5"
-            providers.zcodeCliPath = "/usr/local/bin/zcode"
-            providers.zcodeAppConfigPath = "~/.config/zcode/config.json"
-            providers.openAICompatibleEndpoint = "https://legacy-endpoint.invalid/v1"
-            providers.selectedProviderId = "zcode-glm"
-            providers.registryTargets = [
-                ProviderRegistryTarget(
-                    id: "zcode-glm",
-                    displayName: "Z.AI GLM",
-                    enabled: true,
-                    adapter: "openai-compatible",
-                    authMode: "api-key-env",
-                    baseUrl: "https://api.z.ai/api/coding/paas/v4",
-                    model: "glm-5"
-                )
-            ]
-            providers.providerKeyStored = true
-            providerLoadedSnapshot = ProviderConfigurationSnapshot(
-                providers: providers,
-                configPath: configPath
-            )
-            providerLoadedRevision = String(repeating: "a", count: 64)
-            providerVerification = ProviderVerificationSnapshot(
-                ok: true,
-                command: "providers verify",
-                providerId: "zcode-glm",
-                checkedAt: "2026-07-10T12:00:00Z",
-                state: .healthy,
-                mode: "openai_compatible_models",
-                detail: "Provider responded with compatible model metadata. No secret value is retained.",
-                troubleshooting: []
-            )
-            providerVerificationStatus = "Verified from redacted fixture metadata. No hosted request was made."
-            isOnboardingPresented = false
-        }
-        #endif
     }
 
-    var statusCommand: DesktopCommand {
+    #if DEBUG
+    package func applyProviderVerificationVisualProofFixture() {
+        selectedSection = .providers
+        configPath = "/tmp/neondiff-visual-proof/config.local.json"
+        cliPath = "neondiff"
+        providers.zcodeModel = "glm-5"
+        providers.zcodeCliPath = "/usr/local/bin/zcode"
+        providers.zcodeAppConfigPath = "~/.config/zcode/config.json"
+        providers.openAICompatibleEndpoint = "https://legacy-endpoint.invalid/v1"
+        providers.selectedProviderId = "zcode-glm"
+        providers.registryTargets = [
+            ProviderRegistryTarget(
+                id: "zcode-glm",
+                displayName: "Z.AI GLM",
+                enabled: true,
+                adapter: "openai-compatible",
+                authMode: "api-key-env",
+                baseUrl: "https://api.z.ai/api/coding/paas/v4",
+                model: "glm-5"
+            )
+        ]
+        providers.providerKeyStored = true
+        providerLoadedSnapshot = ProviderConfigurationSnapshot(
+            providers: providers,
+            configPath: configPath
+        )
+        providerLoadedRevision = String(repeating: "a", count: 64)
+        providerVerification = ProviderVerificationSnapshot(
+            ok: true,
+            command: "providers verify",
+            providerId: "zcode-glm",
+            checkedAt: "2026-07-10T12:00:00Z",
+            state: .healthy,
+            mode: "openai_compatible_models",
+            detail: "Provider responded with compatible model metadata. No secret value is retained.",
+            troubleshooting: []
+        )
+        providerVerificationStatus = "Verified from redacted fixture metadata. No hosted request was made."
+        isOnboardingPresented = false
+    }
+    #endif
+
+    package var statusCommand: DesktopCommand {
         NeonDiffCommandBuilder.daemonStatus(cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel)
     }
 
-    var dashboardCommand: DesktopCommand {
+    package var dashboardCommand: DesktopCommand {
         NeonDiffCommandBuilder.dashboard(cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel)
     }
 
-    var dashboardServerCommand: DesktopCommand {
+    package var dashboardServerCommand: DesktopCommand {
         NeonDiffCommandBuilder.dashboard(cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel, openBrowser: false)
     }
 
-    var startDaemonDryRunCommand: DesktopCommand {
+    package var startDaemonDryRunCommand: DesktopCommand {
         NeonDiffCommandBuilder.daemonControl(action: "start", cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel)
     }
 
-    var stopDaemonDryRunCommand: DesktopCommand {
+    package var stopDaemonDryRunCommand: DesktopCommand {
         NeonDiffCommandBuilder.daemonControl(action: "stop", cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel)
     }
 
-    var startDaemonCommand: DesktopCommand {
+    package var startDaemonCommand: DesktopCommand {
         NeonDiffCommandBuilder.daemonControl(action: "start", cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel, dryRun: false)
     }
 
-    var stopDaemonCommand: DesktopCommand {
+    package var stopDaemonCommand: DesktopCommand {
         NeonDiffCommandBuilder.daemonControl(action: "stop", cliPath: cliPath, configPath: configPath, launchdLabel: launchdLabel, dryRun: false)
     }
 
-    var configInspectCommand: DesktopCommand {
+    package var configInspectCommand: DesktopCommand {
         NeonDiffCommandBuilder.configInspect(cliPath: cliPath, configPath: configPath)
     }
 
-    var providerPatchPreviewCommand: DesktopCommand {
+    package var providerPatchPreviewCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(
             cliPath: cliPath,
             configPath: configPath,
@@ -226,7 +192,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    var providerPatchApplyCommand: DesktopCommand {
+    package var providerPatchApplyCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(
             cliPath: cliPath,
             configPath: configPath,
@@ -236,15 +202,15 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    var repoSelectionPatchPreviewCommand: DesktopCommand {
+    package var repoSelectionPatchPreviewCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(cliPath: cliPath, configPath: configPath, inputPath: repoSelectionPatchPath.path)
     }
 
-    var repoSelectionPatchApplyCommand: DesktopCommand {
+    package var repoSelectionPatchApplyCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(cliPath: cliPath, configPath: configPath, inputPath: repoSelectionPatchPath.path, dryRun: false)
     }
 
-    var controlCenterPatchPreviewCommand: DesktopCommand {
+    package var controlCenterPatchPreviewCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(
             cliPath: cliPath,
             configPath: configPath,
@@ -253,7 +219,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    var controlCenterPatchApplyCommand: DesktopCommand {
+    package var controlCenterPatchApplyCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(
             cliPath: cliPath,
             configPath: configPath,
@@ -263,7 +229,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    var controlCenterRollbackCommand: DesktopCommand {
+    package var controlCenterRollbackCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(
             cliPath: cliPath,
             configPath: configPath,
@@ -273,11 +239,11 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    var controlCenterValidationError: String? {
+    package var controlCenterValidationError: String? {
         DesktopControlCenterPatchBuilder.validationError(for: controlCenter)
     }
 
-    var canPreviewControlCenter: Bool {
+    package var canPreviewControlCenter: Bool {
         controlCenterLoadedSnapshot?.configPath == configPath
             && controlCenterLoadedRevision != nil
             && controlCenterValidationError == nil
@@ -286,14 +252,14 @@ final class NeonDiffDesktopModel: ObservableObject {
             && !isConfigInspectInProgress
     }
 
-    var canApplyControlCenter: Bool {
+    package var canApplyControlCenter: Bool {
         canPreviewControlCenter
             && previewedControlCenterSnapshot == currentControlCenterSnapshot
             && previewedControlCenterBaseline?.configPath == configPath
             && previewedControlCenterExpectedRevision != nil
     }
 
-    var canRollbackControlCenter: Bool {
+    package var canRollbackControlCenter: Bool {
         controlCenterRollbackSnapshot?.configPath == configPath
             && controlCenterRollbackExpectedRevision != nil
             && controlCenterLoadedRevision == controlCenterRollbackExpectedRevision
@@ -302,7 +268,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             && !isConfigInspectInProgress
     }
 
-    var canVerifyProviderKey: Bool {
+    package var canVerifyProviderKey: Bool {
         providers.providerKeyStored
             && providers.selectedRegistryTarget?.isAPIKeyVerificationEligible == true
             && providerLoadedRevision != nil
@@ -315,13 +281,13 @@ final class NeonDiffDesktopModel: ObservableObject {
             && !isConfigInspectInProgress
     }
 
-    var canEditProviderConfiguration: Bool {
+    package var canEditProviderConfiguration: Bool {
         !isProviderVerificationInProgress
             && !isProviderVerificationCancelling
             && providerVerificationSafetyLatchMessage == nil
     }
 
-    var canPreviewProviderConfig: Bool {
+    package var canPreviewProviderConfig: Bool {
         canEditProviderConfiguration
             && providerLoadedSnapshot?.configPath == configPath
             && providerLoadedRevision != nil
@@ -331,7 +297,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             && !isConfigInspectInProgress
     }
 
-    var canApplyProviderConfig: Bool {
+    package var canApplyProviderConfig: Bool {
         canEditProviderConfiguration
             && previewedProviderSnapshot == currentProviderConfigurationSnapshot
             && previewedProviderExpectedRevision == providerLoadedRevision
@@ -339,7 +305,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             && !isConfigInspectInProgress
     }
 
-    var providerVerificationButtonTitle: String {
+    package var providerVerificationButtonTitle: String {
         isProviderVerificationCancelling ? "Cancelling…" : (isProviderVerificationInProgress ? "Verifying…" : "Verify API Key")
     }
 
@@ -351,11 +317,11 @@ final class NeonDiffDesktopModel: ObservableObject {
         DesktopControlCenterSnapshot(settings: controlCenter, configPath: configPath)
     }
 
-    var githubAppInstallURL: URL {
+    package var githubAppInstallURL: URL {
         GitHubAppInstallLink.url(botLogin: github.botLogin) ?? GitHubAppInstallLink.publicAppURL
     }
 
-    var githubRecoveryActionTitle: String {
+    package var githubRecoveryActionTitle: String {
         switch githubRecovery?.action {
         case .reconnect: "Reconnect GitHub"
         case .retryLater, .retry: "Retry Repository Discovery"
@@ -365,18 +331,18 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    var githubRecoveryShowsAction: Bool {
+    package var githubRecoveryShowsAction: Bool {
         githubRecovery?.action != .contactOrganizationOwner
     }
 
-    func persistLocalSettings() {
+    package func persistLocalSettings() {
         guard providerVerificationSafetyLatchMessage == nil else {
             lastError = providerVerificationSafetyLatchMessage
             return
         }
-        userDefaults.set(configPath, forKey: "neondiff.configPath")
-        userDefaults.set(cliPath, forKey: "neondiff.cliPath")
-        userDefaults.set(launchdLabel, forKey: "neondiff.launchdLabel")
+        dependencies.preferences.set(configPath, forKey: "neondiff.configPath")
+        dependencies.preferences.set(cliPath, forKey: "neondiff.cliPath")
+        dependencies.preferences.set(launchdLabel, forKey: "neondiff.launchdLabel")
         if controlCenterLoadedSnapshot?.configPath != configPath {
             previewedControlCenterSnapshot = nil
             previewedControlCenterBaseline = nil
@@ -385,16 +351,16 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func refreshStatus() {
+    package func refreshStatus() {
         persistLocalSettings()
         runCLI(arguments: ["daemon", "status", "--config", configPath, "--launchd-label", launchdLabel], displayCommand: statusCommand)
     }
 
-    func openDashboard() {
+    package func openDashboard() {
         launchDashboard(openBrowser: true)
     }
 
-    func startDashboardServer() {
+    package func startDashboardServer() {
         launchDashboard(openBrowser: false)
     }
 
@@ -414,18 +380,17 @@ final class NeonDiffDesktopModel: ObservableObject {
             launchdLabel: launchdLabel,
             openBrowser: openBrowser
         )
+        let dashboard = dependencies.dashboard
         let workingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
 
         Task { [weak self] in
             guard let self else { return }
             do {
-                let result = try await Task.detached(priority: .userInitiated) {
-                    let client = NeonDiffCLIClient(
-                        executablePath: executablePath,
-                        workingDirectory: workingDirectory
-                    )
-                    return try client.launchDetached(arguments: arguments)
-                }.value
+                let result = try await dashboard.launch(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    workingDirectory: workingDirectory
+                )
                 self.dashboardProcessIdentifier = result.processIdentifier
                 self.dashboardLaunchStatus = openBrowser
                     ? "launched pid \(result.processIdentifier); browser opens the local HTML dashboard"
@@ -443,15 +408,15 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func previewStartDaemon() {
+    package func previewStartDaemon() {
         runCLI(arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: startDaemonDryRunCommand)
     }
 
-    func previewStopDaemon() {
+    package func previewStopDaemon() {
         runCLI(arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: stopDaemonDryRunCommand)
     }
 
-    func startDaemon() {
+    package func startDaemon() {
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
@@ -459,7 +424,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    func stopDaemon() {
+    package func stopDaemon() {
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
@@ -467,12 +432,12 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    func inspectConfig() {
+    package func inspectConfig() {
         guard canEditProviderConfiguration, !isConfigPatchInProgress, !isConfigInspectInProgress else { return }
         runCLI(arguments: ["config", "inspect", "--config", configPath], displayCommand: configInspectCommand)
     }
 
-    func addPendingIssueRepo() {
+    package func addPendingIssueRepo() {
         guard canEditProviderConfiguration else {
             lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
             return
@@ -491,7 +456,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         controlCenterStatus = "Issue-enrichment allowlist changed locally; Preview is required before Apply."
     }
 
-    func removeIssueRepo(_ repo: String) {
+    package func removeIssueRepo(_ repo: String) {
         guard canEditProviderConfiguration else {
             lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
             return
@@ -500,7 +465,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         controlCenterStatus = "Issue-enrichment allowlist changed locally; Preview is required before Apply."
     }
 
-    func previewControlCenterPatch() {
+    package func previewControlCenterPatch() {
         guard
             let baseline = controlCenterLoadedSnapshot,
             baseline.configPath == configPath,
@@ -534,7 +499,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    func applyControlCenterPatch() {
+    package func applyControlCenterPatch() {
         guard
             let snapshot = previewedControlCenterSnapshot,
             let baseline = previewedControlCenterBaseline,
@@ -569,7 +534,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    func rollbackControlCenterPatch() {
+    package func rollbackControlCenterPatch() {
         guard
             let rollback = controlCenterRollbackSnapshot,
             rollback.configPath == configPath,
@@ -601,7 +566,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    func previewProviderConfigPatch() {
+    package func previewProviderConfigPatch() {
         guard canPreviewProviderConfig else {
             lastError = "Load current config, make a provider change, then preview it."
             return
@@ -609,7 +574,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         runProviderConfigPatch(dryRun: true)
     }
 
-    func applyProviderConfigPatch() {
+    package func applyProviderConfigPatch() {
         guard canApplyProviderConfig else {
             lastError = "Preview this exact provider configuration before applying it."
             return
@@ -617,7 +582,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         runProviderConfigPatch(dryRun: false)
     }
 
-    func addPendingRepoToAllowlist() {
+    package func addPendingRepoToAllowlist() {
         guard canEditProviderConfiguration else {
             lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
             return
@@ -638,14 +603,14 @@ final class NeonDiffDesktopModel: ObservableObject {
         logText = "Repo allowlist updated locally. Preview or apply the config patch to persist it."
     }
 
-    func toggleRepoAllowlist(_ repo: RepoMonitor) {
+    package func toggleRepoAllowlist(_ repo: RepoMonitor) {
         guard let index = repos.firstIndex(where: { $0.id == repo.id }) else { return }
         repos[index].enabled.toggle()
         lastError = nil
         logText = "Repo allowlist updated locally. Preview or apply the config patch to persist it."
     }
 
-    func githubAccessCue(for repo: RepoMonitor) -> GitHubRepositoryAccessCue? {
+    package func githubAccessCue(for repo: RepoMonitor) -> GitHubRepositoryAccessCue? {
         guard let discovered = discoveredGitHubRepos.first(where: {
             $0.fullName.caseInsensitiveCompare(repo.name) == .orderedSame
         }) else {
@@ -654,13 +619,13 @@ final class NeonDiffDesktopModel: ObservableObject {
         return GitHubRepositoryAccessPolicy.cue(for: discovered, licenseEntitlement: license.entitlement)
     }
 
-    func removeRepoFromAllowlist(_ repo: RepoMonitor) {
+    package func removeRepoFromAllowlist(_ repo: RepoMonitor) {
         repos.removeAll { $0.id == repo.id }
         lastError = nil
         logText = "Repo removed locally. Preview or apply the config patch to persist it."
     }
 
-    func startGitHubAuthorization() {
+    package func startGitHubAuthorization() {
         guard !isGitHubRepositoryRefreshInProgress else { return }
         guard let clientId = github.clientId?.trimmingCharacters(in: .whitespacesAndNewlines), !clientId.isEmpty else {
             lastError = "Set the public GitHub App client ID before connecting GitHub."
@@ -676,7 +641,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         githubAuthorizationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let code = try await githubAuthClient.requestDeviceCode(clientId: clientId)
+                let code = try await dependencies.githubAuthenticator.requestDeviceCode(clientId: clientId)
                 if Task.isCancelled { return }
                 githubAuthorizationCode = code
                 githubAuthorizationStatus = "enter code \(code.userCode)"
@@ -691,7 +656,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func cancelGitHubAuthorization() {
+    package func cancelGitHubAuthorization() {
         githubAuthorizationTask?.cancel()
         githubAuthorizationTask = nil
         isGitHubAuthorizationInProgress = false
@@ -700,25 +665,24 @@ final class NeonDiffDesktopModel: ObservableObject {
         github.installationState = github.userTokenStored ? "user authorized" : "not connected"
     }
 
-    func copyGitHubUserCode() {
+    package func copyGitHubUserCode() {
         guard let userCode = githubAuthorizationCode?.userCode else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(userCode, forType: .string)
+        _ = dependencies.clipboard.write(userCode)
         githubAuthorizationStatus = "code copied"
     }
 
-    func openGitHubDeviceVerification() {
+    package func openGitHubDeviceVerification() {
         guard let verificationURI = githubAuthorizationCode?.verificationURI else { return }
-        NSWorkspace.shared.open(verificationURI)
+        _ = dependencies.urlOpener.open(verificationURI)
         githubAuthorizationStatus = "verification page opened"
     }
 
-    func openGitHubAppInstallation() {
-        NSWorkspace.shared.open(githubAppInstallURL)
+    package func openGitHubAppInstallation() {
+        _ = dependencies.urlOpener.open(githubAppInstallURL)
         githubAuthorizationStatus = "App installation page opened"
     }
 
-    func performGitHubRecoveryAction() {
+    package func performGitHubRecoveryAction() {
         switch githubRecovery?.action {
         case .reconnect:
             startGitHubAuthorization()
@@ -733,7 +697,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func refreshGitHubRepositories() {
+    package func refreshGitHubRepositories() {
         guard !isGitHubRepositoryRefreshInProgress, !isGitHubAuthorizationInProgress else { return }
         githubRepositoryRefreshTask?.cancel()
         let requestGeneration = githubRepositoryRefreshGate.begin()
@@ -750,8 +714,8 @@ final class NeonDiffDesktopModel: ObservableObject {
                 githubAuthorizationStatus = "refreshing repositories"
                 githubRecovery = nil
                 let accessToken = try await gitHubAccessTokenForAPI()
-                let user = try await githubAuthClient.fetchCurrentUser(accessToken: accessToken)
-                let discovered = try await githubAuthClient.listAccessibleRepositories(accessToken: accessToken)
+                let user = try await dependencies.githubAuthenticator.fetchCurrentUser(accessToken: accessToken)
+                let discovered = try await dependencies.githubAuthenticator.listAccessibleRepositories(accessToken: accessToken)
                 guard !Task.isCancelled, githubRepositoryRefreshGate.isCurrent(requestGeneration) else { return }
                 applyGitHubDiscovery(user: user, discovered: discovered)
             } catch {
@@ -771,15 +735,15 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func previewRepoAllowlistPatch() {
+    package func previewRepoAllowlistPatch() {
         runRepoSelectionPatch(dryRun: true)
     }
 
-    func applyRepoAllowlistPatch() {
+    package func applyRepoAllowlistPatch() {
         runRepoSelectionPatch(dryRun: false)
     }
 
-    func storeProviderKey() {
+    package func storeProviderKey() {
         guard providerVerificationSafetyLatchMessage == nil else {
             lastError = providerVerificationSafetyLatchMessage
             return
@@ -791,7 +755,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         do {
-            try keychain.setSecret(pendingProviderKey, account: account)
+            try dependencies.secretStore.setSecret(pendingProviderKey, account: account)
             pendingProviderKey = ""
             providerKeyRevision &+= 1
             invalidateProviderVerificationContext(status: "Stored key changed. Verify it when ready.")
@@ -803,7 +767,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func clearProviderKey() {
+    package func clearProviderKey() {
         guard providerVerificationSafetyLatchMessage == nil else {
             lastError = providerVerificationSafetyLatchMessage
             return
@@ -815,7 +779,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         do {
-            try keychain.deleteSecret(account: account)
+            try dependencies.secretStore.deleteSecret(account: account)
             pendingProviderKey = ""
             providerKeyRevision &+= 1
             invalidateProviderVerificationContext(status: "Stored key cleared. Store a key before verification.")
@@ -827,7 +791,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func verifyProviderKey() {
+    package func verifyProviderKey() {
         if let providerVerificationSafetyLatchMessage {
             providerVerification = nil
             providerVerificationStatus = providerVerificationSafetyLatchMessage
@@ -837,7 +801,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         guard !isProviderVerificationInProgress else { return }
         guard let providerKeyAccount = selectedProviderKeyAccount,
               providers.providerKeyStored,
-              keychain.containsSecret(account: providerKeyAccount)
+              dependencies.secretStore.containsSecret(account: providerKeyAccount)
         else {
             providerVerification = nil
             providerVerificationStatus = "Store a provider API key in Keychain before verification."
@@ -869,13 +833,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         let requestContextGeneration = providerVerificationContextGeneration
         providerVerificationRequestGeneration &+= 1
         let requestGeneration = providerVerificationRequestGeneration
-        let service = providerVerificationService ?? ProviderVerificationService(
-            keychain: keychain,
-            cli: NeonDiffCLIClient(
-                executablePath: executablePath,
-                workingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
-            )
-        )
+        let providerVerifier = dependencies.providerVerifier
 
         providerVerification = nil
         providerVerificationStatus = "Verifying the stored API key…"
@@ -888,7 +846,8 @@ final class NeonDiffDesktopModel: ObservableObject {
         providerVerificationTask = Task { [weak self] in
             let outcome: Result<ProviderVerificationSnapshot, Error>
             do {
-                outcome = .success(try await service.verifyCancellable(
+                outcome = .success(try await providerVerifier.verify(
+                    executablePath: executablePath,
                     account: providerKeyAccount,
                     expectedProviderId: providerId,
                     expectedConfigRevision: expectedRevision,
@@ -959,7 +918,7 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func refreshSelectedProviderKeyState() {
-        let stored = selectedProviderKeyAccount.map(keychain.containsSecret(account:)) == true
+        let stored = selectedProviderKeyAccount.map(dependencies.secretStore.containsSecret(account:)) == true
         providers.providerKeyStored = stored
         onboardingFlow.providerKeyStored = stored
     }
@@ -980,9 +939,9 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func storeLicenseKey() {
+    package func storeLicenseKey() {
         do {
-            try keychain.setSecret(pendingLicenseKey, account: licenseKeyAccount)
+            try dependencies.secretStore.setSecret(pendingLicenseKey, account: licenseKeyAccount)
             pendingLicenseKey = ""
             license = LicenseStatus(keyStored: true, entitlement: "stored locally", updateChannel: license.updateChannel)
             lastError = nil
@@ -991,7 +950,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    func activateLicenseForOnboarding() {
+    package func activateLicenseForOnboarding() {
         if !pendingLicenseKey.isEmpty {
             storeLicenseKey()
         }
@@ -1001,7 +960,7 @@ final class NeonDiffDesktopModel: ObservableObject {
         logText = "License activation is pending the hosted license service deployment."
     }
 
-    func advanceOnboarding() {
+    package func advanceOnboarding() {
         onboardingFlow.providerKeyStored = providers.providerKeyStored
         if onboardingFlow.currentStep == .done {
             completeOnboarding()
@@ -1010,23 +969,22 @@ final class NeonDiffDesktopModel: ObservableObject {
         onboardingFlow.advance()
     }
 
-    func goBackOnboarding() {
+    package func goBackOnboarding() {
         onboardingFlow.goBack()
     }
 
-    func completeOnboarding() {
-        userDefaults.set(true, forKey: onboardingCompletedKey)
+    package func completeOnboarding() {
+        dependencies.preferences.set(true, forKey: onboardingCompletedKey)
         isOnboardingPresented = false
     }
 
-    func reopenOnboarding() {
+    package func reopenOnboarding() {
         onboardingFlow.providerKeyStored = providers.providerKeyStored
         isOnboardingPresented = true
     }
 
-    func copyCommand(_ command: DesktopCommand) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command.commandLine, forType: .string)
+    package func copyCommand(_ command: DesktopCommand) {
+        _ = dependencies.clipboard.write(command.commandLine)
         lastCommandLine = command.commandLine
     }
 
@@ -1067,13 +1025,15 @@ final class NeonDiffDesktopModel: ObservableObject {
         if isConfigInspectCommand { isConfigInspectInProgress = true }
         lastCommandLine = displayCommand.commandLine
         let executablePath = cliPath
+        let cli = dependencies.cli
         Task.detached { [configPath, launchdLabel] in
-            let client = NeonDiffCLIClient(
-                executablePath: executablePath,
-                workingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
-            )
             do {
-                let result = try client.run(arguments: arguments, timeout: 15)
+                let result = try await cli.run(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    standardInput: nil,
+                    timeout: 15
+                )
                 await MainActor.run {
                     self.applyCLIResult(
                         result,
@@ -1171,21 +1131,17 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private var appSupportDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("NeonDiffDesktop", isDirectory: true)
+        dependencies.fileWriter.applicationSupportDirectory
     }
 
     private func writeProviderPatch() throws {
-        try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
         let data = try ProviderRegistryPatchBuilder.data(for: providers)
-        try data.write(to: providerPatchPath, options: [.atomic])
+        try dependencies.fileWriter.write(data, to: providerPatchPath)
     }
 
     private func writeControlCenterPatch(_ settings: DesktopControlCenterSettings, to path: URL) throws {
-        try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
         let data = try DesktopControlCenterPatchBuilder.data(for: settings)
-        try data.write(to: path, options: [.atomic])
+        try dependencies.fileWriter.write(data, to: path)
     }
 
     private func beginControlCenterOperation(_ operation: ControlCenterOperation) -> Bool {
@@ -1234,32 +1190,32 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func gitHubAccessTokenForAPI() async throws -> String {
-        guard let accessToken = try keychain.readSecret(account: githubUserTokenAccount), !accessToken.isEmpty else {
+        guard let accessToken = try dependencies.secretStore.readSecret(account: githubUserTokenAccount), !accessToken.isEmpty else {
             clearStoredGitHubAuthorization(status: "connect GitHub first")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("Connect GitHub before refreshing accessible repositories.")
         }
         guard let expiresAt = readGitHubStoredDate(account: githubTokenExpiresAtAccount) else {
             return accessToken
         }
-        if expiresAt > Date().addingTimeInterval(60) {
+        if expiresAt > dependencies.clock.now.addingTimeInterval(60) {
             return accessToken
         }
         guard let clientId = github.clientId?.trimmingCharacters(in: .whitespacesAndNewlines), !clientId.isEmpty else {
             clearStoredGitHubAuthorization(status: "authorization expired; reconnect GitHub")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization expired and the public client ID is missing. Reconnect GitHub after loading config.")
         }
-        guard let refreshToken = try keychain.readSecret(account: githubRefreshTokenAccount), !refreshToken.isEmpty else {
+        guard let refreshToken = try dependencies.secretStore.readSecret(account: githubRefreshTokenAccount), !refreshToken.isEmpty else {
             clearStoredGitHubAuthorization(status: "authorization expired; reconnect GitHub")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization expired. Reconnect GitHub.")
         }
-        if let refreshExpiresAt = readGitHubStoredDate(account: githubRefreshTokenExpiresAtAccount), refreshExpiresAt <= Date() {
+        if let refreshExpiresAt = readGitHubStoredDate(account: githubRefreshTokenExpiresAtAccount), refreshExpiresAt <= dependencies.clock.now {
             clearStoredGitHubAuthorization(status: "refresh expired; reconnect GitHub")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub refresh token expired. Reconnect GitHub.")
         }
         githubAuthorizationStatus = "refreshing GitHub authorization"
         let refreshedToken: GitHubUserToken
         do {
-            refreshedToken = try await githubAuthClient.refreshUserToken(clientId: clientId, refreshToken: refreshToken)
+            refreshedToken = try await dependencies.githubAuthenticator.refreshUserToken(clientId: clientId, refreshToken: refreshToken)
         } catch {
             clearStoredGitHubAuthorization(status: "refresh failed; reconnect GitHub")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization refresh failed. Reconnect GitHub.")
@@ -1271,18 +1227,18 @@ final class NeonDiffDesktopModel: ObservableObject {
 
     private func pollGitHubAuthorization(clientId: String, code: GitHubDeviceAuthorizationCode) async {
         var intervalSeconds = code.intervalSeconds
-        while !Task.isCancelled && Date() < code.expiresAt {
+        while !Task.isCancelled && dependencies.clock.now < code.expiresAt {
             do {
-                try await Task.sleep(nanoseconds: UInt64(max(1, intervalSeconds)) * 1_000_000_000)
-                let result = try await githubAuthClient.pollDeviceAuthorization(clientId: clientId, deviceCode: code.deviceCode)
+                try await dependencies.clock.sleep(for: .seconds(max(1, intervalSeconds)))
+                let result = try await dependencies.githubAuthenticator.pollDeviceAuthorization(clientId: clientId, deviceCode: code.deviceCode)
                 switch result {
                 case .pending(let nextInterval):
                     intervalSeconds = max(1, nextInterval)
                     githubAuthorizationStatus = "waiting for authorization"
                 case .authorized(let token):
                     try storeGitHubToken(token)
-                    let user = try await githubAuthClient.fetchCurrentUser(accessToken: token.accessToken)
-                    let discovered = try await githubAuthClient.listAccessibleRepositories(accessToken: token.accessToken)
+                    let user = try await dependencies.githubAuthenticator.fetchCurrentUser(accessToken: token.accessToken)
+                    let discovered = try await dependencies.githubAuthenticator.listAccessibleRepositories(accessToken: token.accessToken)
                     applyGitHubDiscovery(user: user, discovered: discovered)
                     isGitHubAuthorizationInProgress = false
                     githubAuthorizationCode = nil
@@ -1316,21 +1272,21 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func storeGitHubToken(_ token: GitHubUserToken) throws {
-        try keychain.setSecret(token.accessToken, account: githubUserTokenAccount)
+        try dependencies.secretStore.setSecret(token.accessToken, account: githubUserTokenAccount)
         if let refreshToken = token.refreshToken {
-            try keychain.setSecret(refreshToken, account: githubRefreshTokenAccount)
+            try dependencies.secretStore.setSecret(refreshToken, account: githubRefreshTokenAccount)
         } else {
-            try? keychain.deleteSecret(account: githubRefreshTokenAccount)
+            try? dependencies.secretStore.deleteSecret(account: githubRefreshTokenAccount)
         }
         if let expiresAt = token.expiresAt {
-            try keychain.setSecret(ISO8601DateFormatter().string(from: expiresAt), account: githubTokenExpiresAtAccount)
+            try dependencies.secretStore.setSecret(ISO8601DateFormatter().string(from: expiresAt), account: githubTokenExpiresAtAccount)
         } else {
-            try? keychain.deleteSecret(account: githubTokenExpiresAtAccount)
+            try? dependencies.secretStore.deleteSecret(account: githubTokenExpiresAtAccount)
         }
         if let refreshTokenExpiresAt = token.refreshTokenExpiresAt {
-            try keychain.setSecret(ISO8601DateFormatter().string(from: refreshTokenExpiresAt), account: githubRefreshTokenExpiresAtAccount)
+            try dependencies.secretStore.setSecret(ISO8601DateFormatter().string(from: refreshTokenExpiresAt), account: githubRefreshTokenExpiresAtAccount)
         } else {
-            try? keychain.deleteSecret(account: githubRefreshTokenExpiresAtAccount)
+            try? dependencies.secretStore.deleteSecret(account: githubRefreshTokenExpiresAtAccount)
         }
         github.userTokenStored = true
     }
@@ -1349,15 +1305,15 @@ final class NeonDiffDesktopModel: ObservableObject {
         githubAuthorizationStatus = "authorized as \(user.login)"
         lastError = nil
         logText = "GitHub connected as \(user.login). Select repositories, then preview or apply the allowlist patch."
-        try? keychain.setSecret(user.login, account: githubUserLoginAccount)
+        try? dependencies.secretStore.setSecret(user.login, account: githubUserLoginAccount)
     }
 
     private func clearStoredGitHubAuthorization(status: String) {
-        try? keychain.deleteSecret(account: githubUserTokenAccount)
-        try? keychain.deleteSecret(account: githubRefreshTokenAccount)
-        try? keychain.deleteSecret(account: githubTokenExpiresAtAccount)
-        try? keychain.deleteSecret(account: githubRefreshTokenExpiresAtAccount)
-        try? keychain.deleteSecret(account: githubUserLoginAccount)
+        try? dependencies.secretStore.deleteSecret(account: githubUserTokenAccount)
+        try? dependencies.secretStore.deleteSecret(account: githubRefreshTokenAccount)
+        try? dependencies.secretStore.deleteSecret(account: githubTokenExpiresAtAccount)
+        try? dependencies.secretStore.deleteSecret(account: githubRefreshTokenExpiresAtAccount)
+        try? dependencies.secretStore.deleteSecret(account: githubUserLoginAccount)
         github.userTokenStored = false
         github.authorizedUserLogin = nil
         github.installationCount = 0
@@ -1383,18 +1339,17 @@ final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func readGitHubStoredDate(account: String) -> Date? {
-        Self.storedDate(keychain: keychain, account: account)
+        Self.storedDate(secretStore: dependencies.secretStore, account: account)
     }
 
-    private static func storedDate(keychain: DesktopSecretStoring, account: String) -> Date? {
-        guard let value = try? keychain.readSecret(account: account) else {
+    private static func storedDate(secretStore: DesktopSecretStoring, account: String) -> Date? {
+        guard let value = try? secretStore.readSecret(account: account) else {
             return nil
         }
         return ISO8601DateFormatter().date(from: value)
     }
 
     private func writeRepoSelectionPatch() throws {
-        try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
         let selectedRepos = repos
             .filter(\.enabled)
             .map(\.name)
@@ -1403,7 +1358,7 @@ final class NeonDiffDesktopModel: ObservableObject {
             "pilotRepos": uniqueRepos
         ]
         let data = try JSONSerialization.data(withJSONObject: patch, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: repoSelectionPatchPath, options: [.atomic])
+        try dependencies.fileWriter.write(data, to: repoSelectionPatchPath)
     }
 
     private func applyCLIResult(
@@ -1429,14 +1384,14 @@ final class NeonDiffDesktopModel: ObservableObject {
             ? ConfigInspectParser.parse(
                 result.stdout,
                 providerKeyStored: false,
-                licenseKeyStored: keychain.containsSecret(account: licenseKeyAccount),
-                githubUserTokenStored: keychain.containsSecret(account: githubUserTokenAccount)
+                licenseKeyStored: dependencies.secretStore.containsSecret(account: licenseKeyAccount),
+                githubUserTokenStored: dependencies.secretStore.containsSecret(account: githubUserTokenAccount)
             )
             : nil
         if var snapshot = parsedSnapshot {
             snapshot.providers.providerKeyStored = ProviderKeychainAccount.account(
                 providerId: snapshot.providers.selectedProviderId
-            ).map(keychain.containsSecret(account:)) == true
+            ).map(dependencies.secretStore.containsSecret(account:)) == true
             parsedSnapshot = snapshot
         }
         var validatedPatchRevisionAfter: String?
@@ -1507,7 +1462,7 @@ final class NeonDiffDesktopModel: ObservableObject {
                 providers = snapshot.providers
                 license = snapshot.license
                 var parsedGitHub = snapshot.github
-                parsedGitHub.userTokenStored = keychain.containsSecret(account: githubUserTokenAccount)
+                parsedGitHub.userTokenStored = dependencies.secretStore.containsSecret(account: githubUserTokenAccount)
                 parsedGitHub.authorizedUserLogin = github.authorizedUserLogin
                 parsedGitHub.installationCount = github.installationCount
                 parsedGitHub.discoveredRepositoryCount = github.discoveredRepositoryCount

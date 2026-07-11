@@ -1,4 +1,5 @@
 import SwiftUI
+import NeonDiffDesktopAppCore
 
 struct LicenseView: View {
     @ObservedObject var model: NeonDiffDesktopModel
