@@ -18,7 +18,7 @@ export const productionLicenseSecretReader: LicenseSecretReader = {
   }
 };
 
-export function readProductionFileLicenseSecret(path: string): string {
+export function readProductionFileLicenseSecret(path: string): string | undefined {
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -48,9 +48,14 @@ export function readProductionFileLicenseSecret(path: string): string {
     }
     return key;
   } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") return undefined;
     if (error instanceof Error && error.message.startsWith("license secret")) throw error;
     throw new Error("license secret could not be read safely");
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+function isErrno(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
