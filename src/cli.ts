@@ -53,6 +53,7 @@ import {
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
+import { requireActiveProductionLicense } from "./license-admission.js";
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { runLocalDashboardPreviewSmoke, startLocalDashboardServer } from "./local-dashboard.js";
 import {
@@ -277,10 +278,26 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      const smoke = args.smoke === undefined ? false : parseBooleanArg(args.smoke, "--smoke");
+      if (smoke) {
+        const admission = await requireActiveProductionLicense({
+          operation: "provider_smoke",
+          config: config.license!
+        });
+        if (!admission.ok) {
+          console.log(stringifyProviderOutput({
+            ok: false,
+            command: "providers doctor",
+            error: `license ${admission.decision.status}: ${admission.decision.detail}`
+          }));
+          process.exitCode = 1;
+          return;
+        }
+      }
       const result = await doctorProviderRegistry({
         registry: config.providers!,
         ...(providerId ? { providerId } : {}),
-        smoke: args.smoke === undefined ? false : parseBooleanArg(args.smoke, "--smoke")
+        smoke
       });
       console.log(stringifyProviderOutput({
         ...result,

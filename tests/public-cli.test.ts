@@ -19,6 +19,18 @@ const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 const repoRoot = process.cwd();
 const darwinDaemonEnv = { NEONDIFF_TEST_PLATFORM: "darwin" };
+const admittedProviderVerification = async () => ({
+  ok: true as const,
+  admission: {
+    kind: "production-license-admission" as const,
+    operation: "provider_verify" as const,
+    checkedAt: "2026-07-11T00:00:00.000Z",
+    fingerprint: "fixture-fingerprint",
+    repoVisibilityScope: "all" as const,
+    privateRepoAllowed: true,
+    updateEntitlement: true
+  }
+});
 
 describe("public NeonDiff CLI surface", () => {
   const roots: string[] = [];
@@ -537,10 +549,12 @@ exit 1
     });
   });
 
-  it("runs providers doctor smoke through the public CLI against a local OpenAI-compatible endpoint", async () => {
+  it("blocks providers doctor smoke before contacting a configured endpoint without activation", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cli-"));
     roots.push(root);
+    let providerRequests = 0;
     const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      providerRequests += 1;
       const url = new URL(request.url ?? "/", "http://localhost");
       response.setHeader("Content-Type", "application/json");
       if (request.method === "GET" && url.pathname === "/v1/models") {
@@ -572,7 +586,7 @@ exit 1
         }
       })}\n`);
 
-      const output = JSON.parse((await runCli([
+      const result = await runCli([
         "providers",
         "doctor",
         "--config",
@@ -581,32 +595,30 @@ exit 1
         "ollama-local",
         "--smoke",
         "true"
-      ])).stdout);
+      ]).then(
+        () => { throw new Error("providers doctor smoke unexpectedly succeeded without activation"); },
+        (error: unknown) => error as { stdout: string; stderr: string }
+      );
+      const output = JSON.parse(result.stdout);
 
       expect(output).toMatchObject({
-        ok: true,
+        ok: false,
         command: "providers doctor",
-        providerId: "ollama-local",
-        checks: [
-          expect.objectContaining({
-            providerId: "ollama-local",
-            ok: true,
-            smokeAttempted: true,
-            readMode: "openai_compatible_models",
-            modelCount: 1
-          })
-        ]
+        error: expect.stringContaining("license missing")
       });
+      expect(providerRequests).toBe(0);
     } finally {
       await closeServer(server);
     }
   });
 
-  it("verifies a provider key from stdin without serializing the submitted value", async () => {
+  it("blocks provider-key stdin and provider network before activation", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provider-verify-cli-"));
     roots.push(root);
     const fixtureSecret = "fixture-provider-value";
+    let providerRequests = 0;
     const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      providerRequests += 1;
       const url = new URL(request.url ?? "/", "http://localhost");
       response.setHeader("Content-Type", "application/json");
       if (
@@ -659,20 +671,21 @@ exit 1
         "fixture-openai",
         "--api-key-stdin",
         "true"
-      ], `${fixtureSecret}\n`);
+      ], `${fixtureSecret}\n`).then(
+        () => { throw new Error("providers verify unexpectedly succeeded without activation"); },
+        (error: unknown) => error as { stdout: string; stderr: string }
+      );
       const output = JSON.parse(result.stdout);
 
       expect(output).toMatchObject({
-        ok: true,
+        ok: false,
         command: "providers verify",
-        redacted: true,
-        providerId: "fixture-openai",
-        state: "healthy",
-        mode: "openai_compatible_models"
+        error: expect.stringContaining("license missing")
       });
       expect(JSON.stringify(output)).not.toContain(fixtureSecret);
       expect(result.stdout).not.toContain(fixtureSecret);
       expect(result.stderr).not.toContain(fixtureSecret);
+      expect(providerRequests).toBe(0);
     } finally {
       await closeServer(server);
     }
@@ -720,7 +733,7 @@ exit 1
     });
   });
 
-  it("exits providers verify after the bounded stdin deadline even when the parent keeps the pipe open", async () => {
+  it("denies providers verify before waiting on an open stdin pipe", async () => {
     const startedAt = Date.now();
     const result = await runCliWithOpenStdin([
       "providers",
@@ -734,10 +747,10 @@ exit 1
     ], "partial-fixture-provider-value");
 
     expect(result.error).toBeTruthy();
-    expect(result.stderr).toContain("provider secret stdin timed out after 5000ms");
+    expect(result.stdout).toContain("license missing");
     expect(result.stdout).not.toContain("partial-fixture-provider-value");
     expect(result.stderr).not.toContain("partial-fixture-provider-value");
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(5_000);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(result.error?.killed).not.toBe(true);
   }, 10_000);
 
@@ -781,7 +794,8 @@ exit 1
           keySource: "submitted",
           troubleshooting: []
         };
-      }
+      },
+      requireActiveProductionLicense: admittedProviderVerification
     });
 
     expect(verifierInput).toMatchObject({
@@ -827,7 +841,8 @@ exit 1
       verifyProviderApiKey: async () => {
         providerCalls += 1;
         throw new Error("provider must not run");
-      }
+      },
+      requireActiveProductionLicense: admittedProviderVerification
     });
 
     expect(result).toEqual({
@@ -878,7 +893,8 @@ exit 1
           redacted: true,
           troubleshooting: []
         };
-      }
+      },
+      requireActiveProductionLicense: admittedProviderVerification
     });
     await Promise.resolve();
     releaseVerification();
@@ -928,7 +944,8 @@ exit 1
         detail: "Verified hosted provider with redacted metadata.",
         redacted: true,
         troubleshooting: []
-      })
+      }),
+      requireActiveProductionLicense: admittedProviderVerification
     });
 
     expect(result.exitCode).toBe(0);
@@ -971,7 +988,7 @@ exit 1
     expect({ stdinReads, providerCalls }).toEqual({ stdinReads: 0, providerCalls: 0 });
   });
 
-  it("fails hosted remote smoke through the public CLI without explicit remote opt-in", async () => {
+  it("fails hosted remote smoke on activation before considering provider credentials", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-remote-provider-cli-"));
     roots.push(root);
     const configPath = join(root, "config.json");
@@ -1015,7 +1032,7 @@ exit 1
         NEONDIFF_PROVIDER_API_KEY: "provider-secret"
       }
     })).rejects.toMatchObject({
-      stdout: expect.stringContaining("Remote OpenAI-compatible smoke checks require explicit remote opt-in and --provider <id>.")
+      stdout: expect.stringContaining("license missing")
     });
   });
 
@@ -1132,8 +1149,8 @@ exit 1
               installation_id_present: true,
               app_can_read_metadata: true,
               app_can_read_pull_requests: true,
-              license_gate_decision: "public_free_allowed",
-              pre_checkout_gate_result: "allowed",
+              license_gate_decision: "active_public_entitlement_required",
+              pre_checkout_gate_result: "blocked_until_entitlement_proof",
               openPullCount: 0
             }
           ]
@@ -1234,7 +1251,7 @@ exit 1
         app_can_read_metadata: true,
         app_can_read_pull_requests: false,
         github_api_error_class: "resource_not_accessible",
-        license_gate_decision: "public_free_allowed",
+        license_gate_decision: "active_public_entitlement_required",
         pre_checkout_gate_result: "blocked_before_checkout"
       });
       expect(output.github.readChecks[0]).not.toHaveProperty("openPullCount");
