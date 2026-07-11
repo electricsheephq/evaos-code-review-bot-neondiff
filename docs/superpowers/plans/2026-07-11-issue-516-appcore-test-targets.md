@@ -646,7 +646,7 @@ git commit -m "test(desktop): migrate Core checks to Swift tests"
 
 - [ ] **Step 1: Add failing scanner tests for AppCore leakage**
 
-Create fixture artifacts containing representative test-only markers such as `RecordingDesktopDependencies`, `--ui-testing`, `NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE`, and a fixture-catalog marker. Assert each is rejected when placed in an AppCore object/module or release app, while a clean artifact passes. Construct token-shaped negative fixtures from fragments so the repository secret scan itself remains clean.
+Create fixture artifacts containing representative test-only markers such as `RecordingDesktopDependencies`, `--ui-testing`, `NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE`, `VisualProofDesktopDependencies`, `VisualProofSecretStore`, and a fixture-catalog marker. Assert each is rejected when placed in an AppCore object/module or release app, while a clean artifact passes. Construct token-shaped negative fixtures from fragments so the repository secret scan itself remains clean.
 
 - [ ] **Step 2: Run focused scanner tests and confirm missing AppCore coverage**
 
