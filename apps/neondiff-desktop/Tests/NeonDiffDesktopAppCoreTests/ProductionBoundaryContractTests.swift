@@ -22,6 +22,33 @@ import Testing
         #expect(fixture.model.lastError?.contains("activation broker") == true)
     }
 
+    @MainActor
+    @Test func quarantineIgnoresLegacyCompletionAndOffersNonPersistentReadOnlyEscape() throws {
+        let fixture = ModelDependencyFixture(
+            preferenceBools: ["neondiff.hasCompletedOnboarding": true],
+            productionBoundary: .quarantined
+        )
+
+        #expect(fixture.model.isOnboardingPresented)
+        fixture.model.openReadOnlyAppFromQuarantinedOnboarding()
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(fixture.preferences.bool(forKey: "neondiff.hasCompletedOnboarding"))
+        #expect(!fixture.preferences.bool(forKey: "neondiff.hasCompletedActivationOnboarding.v2"))
+        #expect(fixture.model.logText.contains("read-only setup surface"))
+    }
+
+    @MainActor
+    @Test func verifiedActivationCompletionWritesOnlyTheVersionedProofStamp() throws {
+        let fixture = ModelDependencyFixture(productionBoundary: .testVerified)
+        fixture.model.onboardingFlow.licenseActivation = .activated
+
+        fixture.model.completeOnboarding()
+
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(fixture.preferences.bool(forKey: "neondiff.hasCompletedActivationOnboarding.v2"))
+        #expect(!fixture.preferences.bool(forKey: "neondiff.hasCompletedOnboarding"))
+    }
+
     @Test func sourceBoundaryHelpersRejectDirectoriesNamedLikeSwiftFiles() throws {
         try withSourceBoundaryDirectoryFixture { root, fakeSource in
             #expect(sourceBoundarySwiftFiles(below: root).isEmpty)

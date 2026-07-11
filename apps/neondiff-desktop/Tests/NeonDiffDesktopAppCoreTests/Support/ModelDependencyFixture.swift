@@ -185,6 +185,7 @@ struct ModelDependencyFixture {
         clipboardResult: Bool = true,
         urlResult: Bool = true,
         githubAuthenticator: ScriptedGitHubAuthenticator = ScriptedGitHubAuthenticator(),
+        preferenceBools: [String: Bool] = [:],
         productionBoundary: DesktopProductionBoundary = .testVerified
     ) {
         clipboard = RecordingClipboard(result: clipboardResult)
@@ -192,6 +193,9 @@ struct ModelDependencyFixture {
         cli = ScriptedDesktopCLIExecutor(outcomes: cliOutcomes)
         dashboard = RecordingDashboardLauncher()
         preferences = MemoryPreferences()
+        for (key, value) in preferenceBools {
+            preferences.set(value, forKey: key)
+        }
         clock = TestClock(now: now)
         fileWriter = TemporaryFileWriter(root: root)
         providerVerifier = RecordingProviderVerifier()

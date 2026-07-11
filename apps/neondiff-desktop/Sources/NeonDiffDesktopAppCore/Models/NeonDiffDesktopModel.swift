@@ -1023,6 +1023,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
         isOnboardingPresented = false
     }
 
+    package func openReadOnlyAppFromQuarantinedOnboarding() {
+        guard !dependencies.productionBoundary.nativeActivationBrokerVerified else { return }
+        isOnboardingPresented = false
+        lastError = nil
+        logText = "Opened the read-only setup surface. (productionActivationBoundaryMessage)"
+    }
+
     @discardableResult
     private func requireVerifiedNativeActivationBroker() -> Bool {
         guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
@@ -1850,7 +1857,7 @@ private let githubRefreshTokenAccount = "github/user-refresh-token"
 private let githubTokenExpiresAtAccount = "github/user-token-expires-at"
 private let githubRefreshTokenExpiresAtAccount = "github/user-refresh-token-expires-at"
 private let githubUserLoginAccount = "github/user-login"
-private let onboardingCompletedKey = "neondiff.hasCompletedOnboarding"
+private let onboardingCompletedKey = "neondiff.hasCompletedActivationOnboarding.v2"
 
 private func isValidRepoName(_ value: String) -> Bool {
     let parts = value.split(separator: "/", omittingEmptySubsequences: false)

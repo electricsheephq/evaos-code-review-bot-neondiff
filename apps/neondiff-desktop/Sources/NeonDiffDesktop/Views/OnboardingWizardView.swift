@@ -276,6 +276,13 @@ struct OnboardingWizardView: View {
 
             Spacer()
 
+            if !model.productionUsefulWorkAvailable {
+                Button("Open Read-Only App") {
+                    model.openReadOnlyAppFromQuarantinedOnboarding()
+                }
+                .help("Inspect setup and settings without completing activation onboarding. Useful work remains blocked.")
+            }
+
             if let lastError = model.lastError, !lastError.isEmpty {
                 Text(lastError)
                     .font(.caption)
