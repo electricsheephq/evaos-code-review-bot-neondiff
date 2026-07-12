@@ -116,16 +116,25 @@ describe("NeonDiff public release readiness", () => {
       candidateSourceSha?: string;
       proofRunUrl?: string;
       activationProofPath?: string;
+      recoveryIssue?: string;
+      releaseCommit?: string;
+      githubReleaseUrl?: string;
+      publishRunUrl?: string;
       packageArtifact?: { shasum?: string; integrity?: string };
+      registry?: { state?: string; gitHeadState?: string; latest?: string; releaseCandidate?: string };
       proofBoundary?: { forbidden?: string[] };
     };
     expect(candidateLedger).toMatchObject({
       version: "v1.0.4",
       packageVersion: "1.0.4",
       publishedVersionAtCandidateCut: "v1.0.3",
-      state: "protected_main_candidate_proven_pending_publication",
+      state: "immutable_package_published_quarantined_pending_provenance_recovery",
       trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532",
+      recoveryIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/542",
       candidateSourceSha: "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+      releaseCommit: "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
+      githubReleaseUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.4",
+      publishRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185873762",
       proofRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
       activationProofPath:
         "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
@@ -133,6 +142,12 @@ describe("NeonDiff public release readiness", () => {
         shasum: "526c04bd24673351b9cc7136d8747df00ffaa2be",
         integrity:
           "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw=="
+      },
+      registry: {
+        state: "published_quarantined",
+        gitHeadState: "absent_reviewed_tarball_publish",
+        latest: "1.0.3",
+        releaseCandidate: "1.0.4"
       }
     });
     expect(candidateLedger.proofBoundary?.forbidden).not.toContain("v1.0.4 activation proof exists");
@@ -728,12 +743,22 @@ describe("NeonDiff public release readiness", () => {
     const recovery = governance.split("### Partial Quarantine Promotion Recovery")[1]?.split("## Tag And Release")[0] ?? "";
     expect(recovery).toMatch(/gh workflow run publish-npm\.yml/);
     expect(recovery).toMatch(/--ref v<version>/);
-    expect(recovery).not.toMatch(/--ref main/);
     expect(recovery).toMatch(/-f tag=v<version>/);
+    expect(recovery).toMatch(/--ref main/);
+    expect(recovery).toMatch(/-f tag=v1\.0\.4/);
+    expect(recovery).toMatch(/-f provenance_recovery=true/);
+    expect(recovery).toMatch(/v1\.0\.4-only/i);
+    expect(recovery).toMatch(/cannot publish|does not publish/i);
     expect(recovery).toMatch(/direct dist-tag mutation is not supported/i);
     expect(recovery).toMatch(/waives only the normal 24-hour activation-proof/);
     expect(recovery).toMatch(/30-day maximum-age ceiling/);
     expect(recovery).not.toMatch(/npm dist-tag add/);
     expect(recovery).not.toMatch(/npm dist-tag rm/);
+
+    const changelog = read("CHANGELOG.md").split("## [1.0.4]")[0] ?? "";
+    expect(changelog).toMatch(/#542/);
+    expect(changelog).toMatch(/reviewed\s+tarball/i);
+    expect(changelog).toMatch(/Sigstore\/SLSA provenance/i);
+    expect(changelog).not.toMatch(/latest=1\.0\.4|public install succeeded/i);
   });
 });
