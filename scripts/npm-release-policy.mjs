@@ -3,6 +3,17 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
+const V104_PROVENANCE_RECOVERY = Object.freeze({
+  package: "neondiff",
+  version: "1.0.4",
+  repository: "electricsheephq/evaos-code-review-bot-neondiff",
+  workflow: ".github/workflows/publish-npm.yml",
+  workflowRef: "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main",
+  tag: "v1.0.4",
+  commit: "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
+  predecessor: "1.0.3"
+});
+
 function fail(message) {
   console.error(message);
   process.exit(1);
@@ -163,19 +174,141 @@ function verifyPack(args) {
   if (!localPack.shasum || localPack.shasum !== remote["dist.shasum"]) {
     fail("npm tarball shasum does not match the reviewed pack");
   }
+  let sourceIdentity = "reviewed_tarball";
   if (expectedGitHead) {
-    if (typeof remote.gitHead !== "string" || remote.gitHead.length === 0) {
-      fail("npm gitHead is missing from published package metadata");
-    }
-    if (remote.gitHead !== expectedGitHead) {
-      fail("npm gitHead does not match the reviewed release tag commit");
+    if (Object.prototype.hasOwnProperty.call(remote, "gitHead")) {
+      if (typeof remote.gitHead !== "string" || !/^[0-9a-f]{40}$/.test(remote.gitHead)) {
+        fail("npm gitHead is malformed in published package metadata");
+      }
+      if (remote.gitHead !== expectedGitHead) {
+        fail("npm gitHead does not match the reviewed release tag commit");
+      }
+      sourceIdentity = "registry_git_head";
+    } else {
+      const provenancePath = args.get("verified-provenance");
+      if (!provenancePath) fail("npm gitHead is missing from published package metadata");
+      const expectedPackage = required(args, "expected-package");
+      const expectedRepository = required(args, "expected-repository");
+      const expectedWorkflow = required(args, "expected-workflow");
+      const expectedTag = required(args, "expected-tag");
+      if (
+        expectedPackage !== V104_PROVENANCE_RECOVERY.package
+        || expectedVersion !== V104_PROVENANCE_RECOVERY.version
+        || expectedRepository !== V104_PROVENANCE_RECOVERY.repository
+        || expectedWorkflow !== V104_PROVENANCE_RECOVERY.workflow
+        || expectedTag !== V104_PROVENANCE_RECOVERY.tag
+        || expectedGitHead !== V104_PROVENANCE_RECOVERY.commit
+      ) {
+        fail("verified npm provenance fallback is scoped only to the v1.0.4 recovery");
+      }
+      let provenance;
+      try {
+        provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
+      } catch {
+        fail("verified npm provenance is not valid JSON");
+      }
+      const expectedSha512 = localPack.integrity.startsWith("sha512-")
+        ? Buffer.from(localPack.integrity.slice("sha512-".length), "base64").toString("hex")
+        : "";
+      if (
+        provenance?.package !== expectedPackage
+        || provenance?.version !== expectedVersion
+        || provenance?.integrity !== localPack.integrity
+        || provenance?.sha512 !== expectedSha512
+        || provenance?.repository !== expectedRepository
+        || provenance?.workflow !== expectedWorkflow
+        || provenance?.tag !== expectedTag
+        || provenance?.commit !== expectedGitHead
+      ) {
+        fail("verified npm provenance does not match the reviewed release");
+      }
+      sourceIdentity = "verified_provenance_fallback";
     }
   }
   console.log(JSON.stringify({
     version: expectedVersion,
     integrity: localPack.integrity,
     shasum: localPack.shasum,
-    gitHead: remote.gitHead
+    ...(Object.prototype.hasOwnProperty.call(remote, "gitHead") ? { gitHead: remote.gitHead } : {}),
+    sourceIdentity
+  }));
+}
+
+function verifyRecoveryDispatch(args) {
+  const eventName = required(args, "event-name");
+  const githubRef = required(args, "github-ref");
+  const workflowRef = required(args, "workflow-ref");
+  const workflowSha = required(args, "workflow-sha");
+  const githubSha = required(args, "github-sha");
+  const mainSha = required(args, "main-sha");
+  const tag = required(args, "tag");
+  const tagCommit = required(args, "tag-commit");
+  const packageVersion = required(args, "package-version");
+  const provenanceRecovery = parseBoolean(required(args, "provenance-recovery"), "provenance-recovery");
+  const releaseValid = parseBoolean(required(args, "release-valid"), "release-valid");
+  const packageExists = parseBoolean(required(args, "package-exists"), "package-exists");
+
+  if (eventName !== "workflow_dispatch" || githubRef !== "refs/heads/main" || !provenanceRecovery) {
+    fail("provenance recovery requires an explicit protected-main workflow dispatch");
+  }
+  if (workflowRef !== V104_PROVENANCE_RECOVERY.workflowRef) {
+    fail("provenance recovery workflow ref must be publish-npm.yml on protected main");
+  }
+  if (!/^[0-9a-f]{40}$/.test(githubSha) || workflowSha !== githubSha || mainSha !== githubSha) {
+    fail("provenance recovery workflow and protected-main SHAs must match exactly");
+  }
+  if (
+    tag !== V104_PROVENANCE_RECOVERY.tag
+    || packageVersion !== V104_PROVENANCE_RECOVERY.version
+    || tagCommit !== V104_PROVENANCE_RECOVERY.commit
+  ) {
+    fail("provenance recovery is scoped only to the exact v1.0.4 release commit");
+  }
+  if (!releaseValid) fail("provenance recovery requires the existing published GitHub Release");
+  if (!packageExists) fail("provenance recovery requires the immutable npm package to already exist");
+  console.log(JSON.stringify({
+    eventName,
+    githubRef,
+    workflowRef,
+    workflowSha,
+    tag,
+    tagCommit,
+    packageVersion,
+    packageExists
+  }));
+}
+
+function verifyRecoveryChannels(args) {
+  const latestVersion = required(args, "latest-version");
+  const quarantineVersion = args.get("quarantine-version") ?? "";
+  const targetVersion = required(args, "target-version");
+  const expectedPredecessor = required(args, "expected-predecessor");
+  if (
+    targetVersion !== V104_PROVENANCE_RECOVERY.version
+    || expectedPredecessor !== V104_PROVENANCE_RECOVERY.predecessor
+  ) {
+    fail("provenance recovery channels are scoped only to v1.0.4 and its v1.0.3 predecessor");
+  }
+  let action;
+  if (latestVersion === expectedPredecessor) {
+    if (quarantineVersion !== targetVersion) {
+      fail("v1.0.4 recovery requires the target to own release-candidate before promotion");
+    }
+    action = "promote";
+  } else if (latestVersion === targetVersion) {
+    if (quarantineVersion !== "" && quarantineVersion !== targetVersion) {
+      fail("v1.0.4 recovery refuses unexpected release-candidate ownership");
+    }
+    action = quarantineVersion === targetVersion ? "confirm_and_cleanup" : "confirmed";
+  } else {
+    fail("v1.0.4 recovery refuses unexpected latest ownership");
+  }
+  console.log(JSON.stringify({
+    latestVersion,
+    quarantineVersion,
+    targetVersion,
+    expectedPredecessor,
+    action
   }));
 }
 
@@ -206,4 +339,6 @@ if (command === "classify") classify(args);
 else if (command === "verify-git") verifyGit(args);
 else if (command === "verify-pack") verifyPack(args);
 else if (command === "verify-channel") verifyChannel(args);
-else fail("command must be classify, verify-git, verify-pack, or verify-channel");
+else if (command === "verify-recovery-dispatch") verifyRecoveryDispatch(args);
+else if (command === "verify-recovery-channels") verifyRecoveryChannels(args);
+else fail("command must be classify, verify-git, verify-pack, verify-channel, verify-recovery-dispatch, or verify-recovery-channels");

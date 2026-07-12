@@ -9,6 +9,7 @@ describe("npm release policy", () => {
   const roots: string[] = [];
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const policyScript = join(repoRoot, "scripts", "npm-release-policy.mjs");
+  const releaseCommit = "fc66d27b6ab9f6a1eb8282d289ef63407cd96982";
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -245,6 +246,220 @@ describe("npm release policy", () => {
 
     expect(pack.integrity).toMatch(/^sha512-/);
     expect(pack.shasum).toMatch(/^[a-f0-9]{40}$/);
+  });
+
+  it("accepts an absent npm gitHead only with exact v1.0.4 verified provenance", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-npm-provenance-fallback-"));
+    roots.push(root);
+    const localPath = join(root, "pack.json");
+    const remotePath = join(root, "remote.json");
+    const provenancePath = join(root, "verified-provenance.json");
+    const integrity = `sha512-${Buffer.from("reviewed-v1.0.4-tarball").toString("base64")}`;
+    writeFileSync(localPath, JSON.stringify([{
+      version: "1.0.4",
+      integrity,
+      shasum: "1".repeat(40)
+    }]));
+    writeFileSync(remotePath, JSON.stringify({
+      version: "1.0.4",
+      "dist.integrity": integrity,
+      "dist.shasum": "1".repeat(40)
+    }));
+    writeFileSync(provenancePath, JSON.stringify({
+      package: "neondiff",
+      version: "1.0.4",
+      integrity,
+      sha512: Buffer.from(integrity.slice("sha512-".length), "base64").toString("hex"),
+      repository: "electricsheephq/evaos-code-review-bot-neondiff",
+      workflow: ".github/workflows/publish-npm.yml",
+      tag: "v1.0.4",
+      commit: releaseCommit
+    }));
+
+    const result = spawnSync(process.execPath, [
+      policyScript, "verify-pack",
+      "--local-pack", localPath,
+      "--remote-metadata", remotePath,
+      "--expected-version", "1.0.4",
+      "--expected-git-head", releaseCommit,
+      "--verified-provenance", provenancePath,
+      "--expected-package", "neondiff",
+      "--expected-repository", "electricsheephq/evaos-code-review-bot-neondiff",
+      "--expected-workflow", ".github/workflows/publish-npm.yml",
+      "--expected-tag", "v1.0.4"
+    ], { encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      version: "1.0.4",
+      sourceIdentity: "verified_provenance_fallback"
+    });
+  });
+
+  it("rejects malformed, mismatched, or under-bound provenance for an absent gitHead", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-npm-provenance-rejections-"));
+    roots.push(root);
+    const localPath = join(root, "pack.json");
+    const remotePath = join(root, "remote.json");
+    const provenancePath = join(root, "verified-provenance.json");
+    const integrity = `sha512-${Buffer.from("reviewed-v1.0.4-tarball").toString("base64")}`;
+    const exactProvenance = {
+      package: "neondiff",
+      version: "1.0.4",
+      integrity,
+      sha512: Buffer.from(integrity.slice("sha512-".length), "base64").toString("hex"),
+      repository: "electricsheephq/evaos-code-review-bot-neondiff",
+      workflow: ".github/workflows/publish-npm.yml",
+      tag: "v1.0.4",
+      commit: releaseCommit
+    };
+    writeFileSync(localPath, JSON.stringify([{
+      version: "1.0.4",
+      integrity,
+      shasum: "1".repeat(40)
+    }]));
+    writeFileSync(remotePath, JSON.stringify({
+      version: "1.0.4",
+      "dist.integrity": integrity,
+      "dist.shasum": "1".repeat(40)
+    }));
+
+    const run = () => spawnSync(process.execPath, [
+      policyScript, "verify-pack",
+      "--local-pack", localPath,
+      "--remote-metadata", remotePath,
+      "--expected-version", "1.0.4",
+      "--expected-git-head", releaseCommit,
+      "--verified-provenance", provenancePath,
+      "--expected-package", "neondiff",
+      "--expected-repository", "electricsheephq/evaos-code-review-bot-neondiff",
+      "--expected-workflow", ".github/workflows/publish-npm.yml",
+      "--expected-tag", "v1.0.4"
+    ], { encoding: "utf8" });
+
+    for (const [field, value] of [
+      ["package", "other"],
+      ["version", "1.0.5"],
+      ["integrity", "sha512-other"],
+      ["sha512", "00"],
+      ["repository", "other/repo"],
+      ["workflow", ".github/workflows/other.yml"],
+      ["tag", "v1.0.5"],
+      ["commit", "2".repeat(40)]
+    ] as const) {
+      writeFileSync(provenancePath, JSON.stringify({ ...exactProvenance, [field]: value }));
+      const result = run();
+      expect(result.status, field).not.toBe(0);
+      expect(result.stderr, field).toContain("verified npm provenance does not match the reviewed release");
+    }
+
+    writeFileSync(provenancePath, "not-json");
+    const malformed = run();
+    expect(malformed.status).not.toBe(0);
+    expect(malformed.stderr).toContain("verified npm provenance is not valid JSON");
+  });
+
+  it("rejects every present malformed or mismatched gitHead despite exact provenance", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-npm-present-git-head-"));
+    roots.push(root);
+    const localPath = join(root, "pack.json");
+    const remotePath = join(root, "remote.json");
+    const provenancePath = join(root, "verified-provenance.json");
+    const integrity = `sha512-${Buffer.from("reviewed-v1.0.4-tarball").toString("base64")}`;
+    writeFileSync(localPath, JSON.stringify([{ version: "1.0.4", integrity, shasum: "1".repeat(40) }]));
+    writeFileSync(provenancePath, JSON.stringify({
+      package: "neondiff", version: "1.0.4", integrity,
+      sha512: Buffer.from(integrity.slice("sha512-".length), "base64").toString("hex"),
+      repository: "electricsheephq/evaos-code-review-bot-neondiff",
+      workflow: ".github/workflows/publish-npm.yml", tag: "v1.0.4", commit: releaseCommit
+    }));
+
+    for (const gitHead of [null, "", "   ", [], {}, "2".repeat(40)]) {
+      writeFileSync(remotePath, JSON.stringify({
+        version: "1.0.4",
+        "dist.integrity": integrity,
+        "dist.shasum": "1".repeat(40),
+        gitHead
+      }));
+      const result = spawnSync(process.execPath, [
+        policyScript, "verify-pack",
+        "--local-pack", localPath,
+        "--remote-metadata", remotePath,
+        "--expected-version", "1.0.4",
+        "--expected-git-head", releaseCommit,
+        "--verified-provenance", provenancePath,
+        "--expected-package", "neondiff",
+        "--expected-repository", "electricsheephq/evaos-code-review-bot-neondiff",
+        "--expected-workflow", ".github/workflows/publish-npm.yml",
+        "--expected-tag", "v1.0.4"
+      ], { encoding: "utf8" });
+      expect(result.status, JSON.stringify(gitHead)).not.toBe(0);
+      expect(result.stderr).toMatch(/npm gitHead (?:is malformed|does not match)/);
+    }
+  });
+
+  it("scopes protected-main provenance recovery to the exact existing v1.0.4 release", () => {
+    const mainSha = "a".repeat(40);
+    const exactArgs = [
+      policyScript, "verify-recovery-dispatch",
+      "--event-name", "workflow_dispatch",
+      "--github-ref", "refs/heads/main",
+      "--workflow-ref", "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main",
+      "--workflow-sha", mainSha,
+      "--github-sha", mainSha,
+      "--main-sha", mainSha,
+      "--tag", "v1.0.4",
+      "--tag-commit", releaseCommit,
+      "--package-version", "1.0.4",
+      "--provenance-recovery", "true",
+      "--release-valid", "true",
+      "--package-exists", "true"
+    ];
+    const accepted = spawnSync(process.execPath, exactArgs, { encoding: "utf8" });
+    expect(accepted.status).toBe(0);
+
+    const mutations: Array<[string, string]> = [
+      ["--event-name", "release"],
+      ["--github-ref", "refs/tags/v1.0.4"],
+      ["--workflow-ref", "other"],
+      ["--workflow-sha", "b".repeat(40)],
+      ["--github-sha", "b".repeat(40)],
+      ["--main-sha", "b".repeat(40)],
+      ["--tag", "v1.0.5"],
+      ["--tag-commit", "b".repeat(40)],
+      ["--package-version", "1.0.5"],
+      ["--provenance-recovery", "false"],
+      ["--release-valid", "false"],
+      ["--package-exists", "false"]
+    ];
+    for (const [flag, value] of mutations) {
+      const args = [...exactArgs];
+      args[args.indexOf(flag) + 1] = value;
+      const rejected = spawnSync(process.execPath, args, { encoding: "utf8" });
+      expect(rejected.status, flag).not.toBe(0);
+    }
+  });
+
+  it("requires exact predecessor and quarantine ownership before recovery promotion", () => {
+    const run = (latestVersion: string, quarantineVersion: string) => spawnSync(process.execPath, [
+      policyScript, "verify-recovery-channels",
+      "--latest-version", latestVersion,
+      "--quarantine-version", quarantineVersion,
+      "--target-version", "1.0.4",
+      "--expected-predecessor", "1.0.3"
+    ], { encoding: "utf8" });
+
+    expect(JSON.parse(run("1.0.3", "1.0.4").stdout)).toMatchObject({ action: "promote" });
+    expect(JSON.parse(run("1.0.4", "1.0.4").stdout)).toMatchObject({ action: "confirm_and_cleanup" });
+    expect(JSON.parse(run("1.0.4", "").stdout)).toMatchObject({ action: "confirmed" });
+    for (const [latest, quarantine] of [
+      ["1.0.3", ""],
+      ["1.0.3", "9.9.9"],
+      ["1.0.4", "9.9.9"],
+      ["9.9.9", "1.0.4"]
+    ]) {
+      expect(run(latest, quarantine).status, `${latest}/${quarantine}`).not.toBe(0);
+    }
   });
 
   it("runs the activation-aware public release gate after packing and before npm publication", () => {
