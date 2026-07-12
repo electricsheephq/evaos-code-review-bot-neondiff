@@ -7,12 +7,30 @@ import {
   type ReviewBenchScenarioV1,
   type ReviewBenchSourceVerificationV1
 } from "./review-bench-corpus.js";
+import { containsSecretLikeText } from "./secrets.js";
 
 const MAX_REPOSITORY_METADATA_BYTES = 256 * 1024;
 const MAX_SOURCE_METADATA_BYTES = 256 * 1024;
 const MAX_LICENSE_METADATA_BYTES = 2 * 1024 * 1024;
 const MAX_LICENSE_ARTIFACT_BYTES = 1024 * 1024;
 export const REVIEW_BENCH_MAX_SOURCE_ARTIFACT_BYTES = 32 * 1024 * 1024;
+
+export function decodeAndValidateReviewBenchSourceArtifact(
+  bytes: Uint8Array,
+  label: string
+): string {
+  if (bytes.byteLength === 0 || bytes.byteLength > REVIEW_BENCH_MAX_SOURCE_ARTIFACT_BYTES) {
+    throw new Error(`${label} must contain 1-${REVIEW_BENCH_MAX_SOURCE_ARTIFACT_BYTES} bytes`);
+  }
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(`${label} must be valid UTF-8`);
+  }
+  if (containsSecretLikeText(decoded)) throw new Error(`${label} contains secret-like text`);
+  return decoded;
+}
 
 export async function reverifyReviewBenchCorpusPublicSources(input: {
   corpus: ReviewBenchCorpusV1;
@@ -66,6 +84,7 @@ export async function verifyGitHubReviewBenchSource(input: {
   if (sourceArtifactSha256 !== scenario.provenance.sourceArtifactSha256) {
     throw new Error("source artifact sha256 does not match the declared provenance digest");
   }
+  decodeAndValidateReviewBenchSourceArtifact(sourceArtifact, `source artifact: ${scenario.scenarioId}`);
 
   const urls = requireCanonicalGitHubUrls(scenario);
   const metadataResponse = await fetchImpl(urls.visibilityEvidenceUrl, {
@@ -82,12 +101,7 @@ export async function verifyGitHubReviewBenchSource(input: {
     MAX_REPOSITORY_METADATA_BYTES,
     "GitHub repository metadata"
   );
-  let metadata: unknown;
-  try {
-    metadata = JSON.parse(new TextDecoder().decode(metadataBytes));
-  } catch {
-    throw new Error("GitHub repository metadata must be valid JSON");
-  }
+  const metadata = parseFatalUtf8Json(metadataBytes, "GitHub repository metadata");
   const proof = parseRepositoryProof(metadata, scenario);
   const sourceMetadataSha256 = await verifySourceMetadata(fetchImpl, scenario);
 
@@ -270,20 +284,63 @@ async function verifySourceMetadata(
     });
     const metadata = await readJsonResponse(response, MAX_SOURCE_METADATA_BYTES, "GitHub pull request metadata");
     const record = requireRecord(metadata, "GitHub pull request metadata");
-    const head = requireRecord(record.head, "GitHub pull request head");
     const base = requireRecord(record.base, "GitHub pull request base");
     const baseRepository = requireRecord(base.repo, "GitHub pull request base repository");
-    if (record.number !== pullNumber || head.sha !== scenario.sourceRevision ||
-        typeof baseRepository.full_name !== "string" ||
+    if (record.number !== pullNumber || typeof baseRepository.full_name !== "string" ||
         baseRepository.full_name.toLowerCase() !== repository) {
-      throw new Error("GitHub pull request metadata does not bind sourceRevision to repository PR head");
+      throw new Error("GitHub pull request metadata does not bind the repository PR identity");
+    }
+    if (record.state !== "closed" || record.merged !== true) {
+      throw new Error("GitHub pull request metadata must prove the PR is closed and merged");
+    }
+    const mergedAt = normalizeGitHubTimestamp(
+      record.merged_at,
+      "GitHub pull request metadata merged_at"
+    );
+    const commitsUrl = new URL(`https://api.github.com/repos/${repository}/pulls/${pullNumber}/commits`);
+    commitsUrl.searchParams.set("per_page", "100");
+    const commitsResponse = await fetchImpl(commitsUrl, {
+      method: "GET",
+      redirect: "error",
+      headers: {
+        accept: "application/vnd.github+json",
+        "user-agent": "neondiff-review-bench-v1"
+      }
+    });
+    const commitsValue = await readJsonResponse(
+      commitsResponse,
+      MAX_SOURCE_METADATA_BYTES,
+      "GitHub pull request commits"
+    );
+    if (commitsResponse.headers.get("link")?.includes('rel="next"')) {
+      throw new Error("GitHub pull request commits must fit one bounded exhaustive page");
+    }
+    if (!Array.isArray(commitsValue) || commitsValue.length === 0 || commitsValue.length > 100) {
+      throw new Error("GitHub pull request commits must contain 1-100 entries");
+    }
+    const commitShas = commitsValue.map((value, index) => {
+      const commit = requireRecord(value, `GitHub pull request commits[${index}]`);
+      if (typeof commit.sha !== "string" || !/^[a-f0-9]{40,64}$/.test(commit.sha)) {
+        throw new Error(`GitHub pull request commits[${index}].sha must be an immutable revision`);
+      }
+      return commit.sha;
+    });
+    if (new Set(commitShas).size !== commitShas.length) {
+      throw new Error("GitHub pull request commits must be unique");
+    }
+    if (commitShas.at(-1) !== scenario.sourceRevision) {
+      throw new Error("GitHub pull request final PR commit does not equal sourceRevision");
     }
     return sha256(stableJson({
       kind: "pull_request",
       pullNumber,
-      headSha: head.sha,
+      pinnedHeadSha: scenario.sourceRevision,
       pinnedBaseSha: scenario.provenance.baseRevision,
-      baseRepository: baseRepository.full_name.toLowerCase()
+      commitShas,
+      baseRepository: baseRepository.full_name.toLowerCase(),
+      state: record.state,
+      merged: record.merged,
+      mergedAt
     }));
   }
 
@@ -354,10 +411,14 @@ async function verifyRevisionLicense(
 async function readJsonResponse(response: Response, maximumBytes: number, label: string): Promise<unknown> {
   requireOk(response, label);
   const bytes = await readBoundedBody(response, maximumBytes, label);
+  return parseFatalUtf8Json(bytes, label);
+}
+
+function parseFatalUtf8Json(bytes: Uint8Array, label: string): unknown {
   try {
-    return JSON.parse(new TextDecoder().decode(bytes));
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
-    throw new Error(`${label} must be valid JSON`);
+    throw new Error(`${label} must be valid UTF-8 JSON`);
   }
 }
 
@@ -405,6 +466,16 @@ function requireIsoTimestamp(value: string, label: string): void {
   if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
     throw new Error(`${label} must be an ISO-8601 UTC timestamp`);
   }
+}
+
+function normalizeGitHubTimestamp(value: unknown, label: string): string {
+  if (typeof value !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)) {
+    throw new Error(`${label} must be a UTC RFC3339 timestamp`);
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) throw new Error(`${label} must be a UTC RFC3339 timestamp`);
+  return new Date(parsed).toISOString();
 }
 
 function sha256(value: string | Uint8Array): string {

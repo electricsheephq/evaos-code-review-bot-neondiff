@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -13,6 +13,9 @@ describe("Review Bench public corpus gate", () => {
     expect(workflow).toContain("node dist/src/cli.js review-bench verify-sources");
     expect(workflow).toContain("scripts/check-review-bench-admission-receipt.mjs");
     expect(workflow).toContain("--committed docs/bench/review-bench-corpus-v1/admission-receipt.json");
+    expect(workflow).toContain('publication_artifact_count=0');
+    expect(workflow).toContain('if [[ "$publication_artifact_count" -ne 3 ]]');
+    expect(workflow).toContain("Partial Review Bench Corpus v1 publication artifacts are forbidden.");
     expect(workflow).not.toMatch(/\n\s+paths:/);
     expect(workflow).not.toContain("continue-on-error");
   });
@@ -24,25 +27,74 @@ describe("Review Bench public corpus gate", () => {
       const committedPath = join(root, "committed.json");
       const live = receipt({ admittedAt: "2026-07-12T00:00:00.000Z" });
       const committed = receipt({ admittedAt: "2026-07-12T00:05:00.000Z" });
-      writeFileSync(livePath, JSON.stringify(live));
-      writeFileSync(committedPath, JSON.stringify(committed));
+      writeFileSync(livePath, `${stableJson(live)}\n`);
+      writeFileSync(committedPath, `${stableJson(committed)}\n`);
 
       const accepted = runReceiptGate(livePath, committedPath);
       expect(accepted.status).toBe(0);
       expect(JSON.parse(accepted.stdout)).toEqual(expect.objectContaining({
         ok: true,
         corpusHash: "a".repeat(64),
-        verificationEvidenceSha256: "b".repeat(64)
+        verificationEvidenceSha256: "b".repeat(64),
+        semanticEvidenceVersion: "review-bench-oracle-evidence/v2",
+        semanticEvidenceVerifierVersion: "review-bench-semantic-admission/v2",
+        semanticEvidenceSha256: "d".repeat(64),
+        oracleSourceVerifierVersion: "github-oracle-source-verifier/v1",
+        oracleSourceVerificationSha256: "e".repeat(64),
+        adjudicationAgreementVersion: "review-bench-adjudication-agreement/v2",
+        actionabilityItemCount: 175,
+        actionabilityKappa: 0.9,
+        artifactSemanticsKappa: 0.9,
+        p0p1LabelCount: 30,
+        severityWithinOneTierAgreement: 0.95
       }));
 
       const drifted = receipt({
         admittedAt: "2026-07-12T00:05:00.000Z",
         verificationEvidenceSha256: "c".repeat(64)
       });
-      writeFileSync(committedPath, JSON.stringify(drifted));
+      writeFileSync(committedPath, `${stableJson(drifted)}\n`);
       const rejected = runReceiptGate(livePath, committedPath);
       expect(rejected.status).not.toBe(0);
       expect(`${rejected.stdout}\n${rejected.stderr}`).toContain("receipt mismatch for verificationEvidenceSha256");
+
+      const semanticDrift = receipt({
+        admittedAt: "2026-07-12T00:05:00.000Z",
+        semanticEvidenceSha256: "e".repeat(64)
+      });
+      writeFileSync(committedPath, `${stableJson(semanticDrift)}\n`);
+      const semanticRejected = runReceiptGate(livePath, committedPath);
+      expect(semanticRejected.status).not.toBe(0);
+      expect(`${semanticRejected.stdout}\n${semanticRejected.stderr}`)
+        .toContain("receipt mismatch for semanticEvidenceSha256");
+
+      const invalidVersion = receipt({
+        admittedAt: "2026-07-12T00:05:00.000Z",
+        semanticEvidenceVersion: "review-bench-oracle-evidence/v0"
+      });
+      writeFileSync(committedPath, `${stableJson(invalidVersion)}\n`);
+      const versionRejected = runReceiptGate(livePath, committedPath);
+      expect(versionRejected.status).not.toBe(0);
+      expect(`${versionRejected.stdout}\n${versionRejected.stderr}`).toContain("invalid fields");
+
+      const insufficientHighSeverity = receipt({
+        admittedAt: "2026-07-12T00:05:00.000Z",
+        p0p1LabelCount: 29
+      });
+      writeFileSync(committedPath, `${stableJson(insufficientHighSeverity)}\n`);
+      const severityFloorRejected = runReceiptGate(committedPath, committedPath);
+      expect(severityFloorRejected.status).not.toBe(0);
+      expect(`${severityFloorRejected.stdout}\n${severityFloorRejected.stderr}`).toContain("invalid fields");
+
+      const canonicalCommitted = stableJson(committed);
+      writeFileSync(
+        committedPath,
+        `{"corpusHash":"${"f".repeat(64)}",${canonicalCommitted.slice(1)}\n`
+      );
+      const duplicateKeyRejected = runReceiptGate(livePath, committedPath);
+      expect(duplicateKeyRejected.status).not.toBe(0);
+      expect(`${duplicateKeyRejected.stdout}\n${duplicateKeyRejected.stderr}`)
+        .toContain("canonical JSON without duplicate keys");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -53,6 +105,41 @@ describe("Review Bench public corpus gate", () => {
     expect(operatorDocs).toContain("--receipt <outside-checkout-evidence-dir>/admission-receipt.json");
     expect(operatorDocs).toMatch(/copy that exact no-clobber\s+receipt into the publication worktree/);
     expect(operatorDocs).not.toContain("/Volumes/LEXAR/Codex/evals");
+  });
+
+  it("rejects a checkout-local receipt even when the CLI starts outside every git repository", () => {
+    const root = mkdtempSync(join(tmpdir(), "review-bench-outside-cwd-"));
+    const unsafeReceipt = join(repoRoot, `.review-bench-unsafe-${process.pid}.json`);
+    try {
+      const result = spawnSync(join(repoRoot, "node_modules/.bin/tsx"), [
+        join(repoRoot, "src/cli.ts"),
+        "review-bench",
+        "verify-sources",
+        "--corpus",
+        join(root, "missing-corpus.json"),
+        "--artifacts",
+        root,
+        "--receipt",
+        unsafeReceipt
+      ], { cwd: root, encoding: "utf8" });
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("outside every git checkout");
+      expect(existsSync(unsafeReceipt)).toBe(false);
+    } finally {
+      rmSync(unsafeReceipt, { force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("documents reviewed-state semantics, oracle isolation, and deterministic nearby matching", () => {
+    const corpusDocs = readFileSync(
+      join(repoRoot, "docs/evals/review-bench-corpus-v1.md"),
+      "utf8"
+    );
+    expect(corpusDocs).toContain("A bug-fix diff cannot be labeled with the");
+    expect(corpusDocs).toContain("answer-bearing evidence remain outside the model prompt");
+    expect(corpusDocs).toContain("line delta one through three");
+    expect(corpusDocs).toContain("synthetic");
   });
 
   it("exposes the packaged review-bench command and flags through CLI help", () => {
@@ -74,13 +161,46 @@ describe("Review Bench public corpus gate", () => {
 function receipt(overrides: Partial<{
   admittedAt: string;
   verificationEvidenceSha256: string;
+  semanticEvidenceVersion: string;
+  semanticEvidenceVerifierVersion: string;
+  semanticEvidenceSha256: string;
+  oracleSourceVerifierVersion: string;
+  oracleSourceVerificationSha256: string;
+  p0p1LabelCount: number;
 }> = {}) {
   const basis = {
     schemaVersion: "review-bench-source-admission-receipt/v1",
     corpusVersion: "1.0.0",
     corpusHash: "a".repeat(64),
     verificationEvidenceSha256: overrides.verificationEvidenceSha256 ?? "b".repeat(64),
+    semanticEvidenceVersion: overrides.semanticEvidenceVersion ?? "review-bench-oracle-evidence/v2",
+    semanticEvidenceVerifierVersion: overrides.semanticEvidenceVerifierVersion ??
+      "review-bench-semantic-admission/v2",
+    semanticEvidenceSha256: overrides.semanticEvidenceSha256 ?? "d".repeat(64),
+    oracleSourceVerifierVersion: overrides.oracleSourceVerifierVersion ??
+      "github-oracle-source-verifier/v1",
+    oracleSourceVerificationSha256: overrides.oracleSourceVerificationSha256 ?? "e".repeat(64),
+    adjudicationAgreementVersion: "review-bench-adjudication-agreement/v2",
+    adjudicationScenarioCount: 150,
+    actionabilityItemCount: 175,
+    actionabilityBothActionableCount: 125,
+    actionabilityPrimaryOnlyCount: 0,
+    actionabilitySecondaryOnlyCount: 0,
+    actionabilityNeitherCount: 50,
+    actionabilityKappa: 0.9,
+    artifactBothDefectCount: 125,
+    artifactPrimaryOnlyDefectCount: 0,
+    artifactSecondaryOnlyDefectCount: 0,
+    artifactBothCleanCount: 25,
+    artifactSemanticsKappa: 0.9,
+    severityAgreementLabelCount: 125,
+    p0p1LabelCount: overrides.p0p1LabelCount ?? 30,
+    severityWithinOneTierAgreement: 0.95,
     scenarioCount: 150,
+    defectScenarioCount: 125,
+    cleanControlCount: 25,
+    languageCount: 6,
+    repositoryCount: 10,
     sourceVerifierVersion: "github-public-source-ingest/v1",
     admittedAt: overrides.admittedAt ?? "2026-07-12T00:00:00.000Z"
   };

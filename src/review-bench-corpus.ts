@@ -2,13 +2,42 @@ import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import validateNpmPackageLicense from "validate-npm-package-license";
 import type { EvalScenarioInput } from "./eval-harness.js";
+import { isRegressionCategory } from "./regression-taxonomy.js";
 import { containsSecretLikeText } from "./secrets.js";
-import type { Severity } from "./types.js";
+import type { RegressionCategory, Severity } from "./types.js";
 
 export type ReviewBenchSplit = "train" | "validation" | "holdout";
+export type ReviewBenchLanguage =
+  | "TypeScript"
+  | "JavaScript"
+  | "Python"
+  | "Go"
+  | "Rust"
+  | "Java"
+  | "C#"
+  | "C++"
+  | "Ruby";
+export type ReviewBenchArtifactSemantics = "defect_present" | "verified_clean";
+export type ReviewBenchOracleKind =
+  | "review_comment"
+  | "later_fix"
+  | "revert"
+  | "test_transition"
+  | "clean_adjudication";
 
 export const REVIEW_BENCH_MATCHER_VERSION = "review-bench-matcher/v1" as const;
 const REVIEW_BENCH_LEXICAL_THRESHOLDS = { exact: 0.25, nearby: 0.35 } as const;
+const REVIEW_BENCH_LANGUAGES: readonly ReviewBenchLanguage[] = [
+  "TypeScript",
+  "JavaScript",
+  "Python",
+  "Go",
+  "Rust",
+  "Java",
+  "C#",
+  "C++",
+  "Ruby"
+];
 
 export interface ReviewBenchSourceVerificationV1 {
   schemaVersion: "review-bench-source-verification/v1";
@@ -25,8 +54,21 @@ export interface ReviewBenchSourceVerificationV1 {
   bindingSha256: string;
 }
 
+export interface ReviewBenchOracleV1 {
+  schemaVersion: "review-bench-oracle/v1";
+  kind: ReviewBenchOracleKind;
+  sourceUrl: string;
+  sourceRevision: string;
+  evidenceSha256: string;
+  defectPresentInReviewedArtifact: boolean;
+  modelInputExcluded: true;
+}
+
 export interface ReviewBenchScenarioV1 {
   schemaVersion: "review-bench-scenario/v1";
+  taskKind: "review_defect_detection";
+  artifactSemantics: ReviewBenchArtifactSemantics;
+  oracle: ReviewBenchOracleV1;
   scenarioId: string;
   sourceId: string;
   runId: string;
@@ -37,7 +79,7 @@ export interface ReviewBenchScenarioV1 {
     licenseUrl: string;
   };
   provenance: {
-    kind: "pull_request" | "commit" | "revert" | "synthetic";
+    kind: "pull_request" | "commit" | "revert";
     baseRevision?: string;
     repositoryUrl: string;
     sourceUrl: string;
@@ -48,20 +90,29 @@ export interface ReviewBenchScenarioV1 {
     visibilityVerifiedAt: string;
     verification: ReviewBenchSourceVerificationV1;
   };
-  language: string;
+  language: ReviewBenchLanguage;
   split: ReviewBenchSplit;
-  bugFamily: string;
+  bugFamily: RegressionCategory;
   explicitControl: boolean;
   labels: ReviewBenchGoldFinding[];
   adjudication: {
     status: "independently_adjudicated";
     primaryAdjudicator: string;
     secondaryAdjudicator: string;
+    resolverAdjudicator?: string;
     agreement: "agree" | "reconciled";
     method: string;
     rubricVersion: string;
+    rubricSha256: string;
+    protocolVersion: string;
+    protocolSha256: string;
     completedAt: string;
   };
+}
+
+export interface ReviewBenchModelInputV1 {
+  schemaVersion: "review-bench-model-input/v1";
+  language: ReviewBenchLanguage;
 }
 
 export interface ReviewBenchCorpusV1 {
@@ -122,20 +173,62 @@ export interface ReviewBenchMatcherIdentity {
   matcherFingerprint: string;
 }
 
+/**
+ * Prompt-facing metadata is projected allowlist-first. Scenario IDs, oracle
+ * material, labels, adjudication, split, bug family, and control status stay in
+ * the scoring envelope and must never be serialized into a provider request.
+ */
+export function buildReviewBenchModelInput(
+  scenario: ReviewBenchScenarioV1
+): ReviewBenchModelInputV1 {
+  if (!REVIEW_BENCH_LANGUAGES.includes(scenario.language)) {
+    throw new Error("model input language must be a supported Review Bench language");
+  }
+  return {
+    schemaVersion: "review-bench-model-input/v1",
+    language: scenario.language
+  };
+}
+
+export function serializeReviewBenchCorpus(corpus: ReviewBenchCorpusV1): string {
+  return canonicalJson(corpus);
+}
+
 export function computeReviewBenchCorpusHash(corpus: ReviewBenchCorpusV1): string {
   const normalized = {
     schemaVersion: corpus.schemaVersion,
     corpusVersion: corpus.corpusVersion,
-    splitPolicy: corpus.splitPolicy,
+    splitPolicy: {
+      repositoryGrouped: corpus.splitPolicy.repositoryGrouped,
+      holdoutFloor: {
+        scenarios: corpus.splitPolicy.holdoutFloor.scenarios,
+        repositories: corpus.splitPolicy.holdoutFloor.repositories,
+        minimumFraction: corpus.splitPolicy.holdoutFloor.minimumFraction
+      }
+    },
     scenarios: [...corpus.scenarios]
       .sort((a, b) => compareFixed(a.scenarioId, b.scenarioId) || compareFixed(a.sourceId, b.sourceId))
       .map((scenario) => ({
         schemaVersion: scenario.schemaVersion,
+        taskKind: scenario.taskKind,
+        artifactSemantics: scenario.artifactSemantics,
+        oracle: {
+          schemaVersion: scenario.oracle.schemaVersion,
+          kind: scenario.oracle.kind,
+          sourceUrl: scenario.oracle.sourceUrl,
+          sourceRevision: scenario.oracle.sourceRevision,
+          evidenceSha256: scenario.oracle.evidenceSha256,
+          defectPresentInReviewedArtifact: scenario.oracle.defectPresentInReviewedArtifact,
+          modelInputExcluded: scenario.oracle.modelInputExcluded
+        },
         scenarioId: scenario.scenarioId,
         sourceId: scenario.sourceId,
         repository: normalizeRepositoryIdentity(scenario.repository),
         sourceRevision: scenario.sourceRevision,
-        license: scenario.license,
+        license: {
+          spdxId: scenario.license.spdxId,
+          licenseUrl: scenario.license.licenseUrl
+        },
         provenance: {
           kind: scenario.provenance.kind,
           baseRevision: scenario.provenance.baseRevision,
@@ -175,7 +268,19 @@ export function computeReviewBenchCorpusHash(corpus: ReviewBenchCorpusV1): strin
             title: label.title,
             body: label.body
           })),
-        adjudication: scenario.adjudication
+        adjudication: {
+          status: scenario.adjudication.status,
+          primaryAdjudicator: scenario.adjudication.primaryAdjudicator,
+          secondaryAdjudicator: scenario.adjudication.secondaryAdjudicator,
+          resolverAdjudicator: scenario.adjudication.resolverAdjudicator,
+          agreement: scenario.adjudication.agreement,
+          method: scenario.adjudication.method,
+          rubricVersion: scenario.adjudication.rubricVersion,
+          rubricSha256: scenario.adjudication.rubricSha256,
+          protocolVersion: scenario.adjudication.protocolVersion,
+          protocolSha256: scenario.adjudication.protocolSha256,
+          completedAt: scenario.adjudication.completedAt
+        }
       }))
   };
   return createHash("sha256").update(canonicalJson(normalized)).digest("hex");
@@ -242,6 +347,7 @@ export function validateReviewBenchCorpus(corpus: ReviewBenchCorpusV1): void {
   const sourceIdentities = new Set<string>();
   const sourceArtifactDigests = new Set<string>();
   const repositorySplits = new Map<string, ReviewBenchSplit>();
+  const bugFamilySplits = new Map<string, ReviewBenchSplit>();
   for (const [index, scenario] of corpus.scenarios.entries()) {
     const path = `scenarios[${index}]`;
     validateScenario(scenario, path);
@@ -267,6 +373,16 @@ export function validateReviewBenchCorpus(corpus: ReviewBenchCorpusV1): void {
       );
     }
     repositorySplits.set(normalizedRepository, scenario.split);
+
+    const normalizedBugFamily = scenario.bugFamily.trim().toLowerCase();
+    const existingBugFamilySplit = bugFamilySplits.get(normalizedBugFamily);
+    if (existingBugFamilySplit && existingBugFamilySplit !== scenario.split) {
+      throw new Error(
+        `bug-family split leakage: ${scenario.bugFamily} appears in ` +
+        `${existingBugFamilySplit} and ${scenario.split}`
+      );
+    }
+    bugFamilySplits.set(normalizedBugFamily, scenario.split);
   }
 
   const holdoutScenarios = corpus.scenarios.filter((scenario) => scenario.split === "holdout");
@@ -646,6 +762,9 @@ function validateScenario(scenario: ReviewBenchScenarioV1, path: string): void {
   if (!scenario || typeof scenario !== "object") throw new Error(`${path} must be an object`);
   requireExactKeys(scenario, [
     "schemaVersion",
+    "taskKind",
+    "artifactSemantics",
+    "oracle",
     "scenarioId",
     "sourceId",
     "runId",
@@ -663,8 +782,20 @@ function validateScenario(scenario: ReviewBenchScenarioV1, path: string): void {
   if (scenario.schemaVersion !== "review-bench-scenario/v1") {
     throw new Error(`${path}.schemaVersion must be review-bench-scenario/v1`);
   }
+  if (scenario.taskKind !== "review_defect_detection") {
+    throw new Error(`${path}.taskKind must be review_defect_detection`);
+  }
+  if (!(["defect_present", "verified_clean"] as unknown[]).includes(scenario.artifactSemantics)) {
+    throw new Error(`${path}.artifactSemantics must be defect_present or verified_clean`);
+  }
   for (const field of ["scenarioId", "sourceId", "runId", "repository", "sourceRevision", "language", "bugFamily"] as const) {
     requireNonEmpty(scenario[field], `${path}.${field}`);
+  }
+  if (!REVIEW_BENCH_LANGUAGES.includes(scenario.language)) {
+    throw new Error(`${path}.language must be a supported Review Bench language`);
+  }
+  if (!isRegressionCategory(scenario.bugFamily)) {
+    throw new Error(`${path}.bugFamily must be a canonical regression taxonomy category`);
   }
   if (scenario.repository !== scenario.repository.trim() ||
       !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/.test(scenario.repository) ||
@@ -701,8 +832,8 @@ function validateScenario(scenario: ReviewBenchScenarioV1, path: string): void {
     "visibilityVerifiedAt",
     "verification"
   ], `${path}.provenance`);
-  if (!(["pull_request", "commit", "revert", "synthetic"] as unknown[]).includes(scenario.provenance.kind)) {
-    throw new Error(`${path}.provenance.kind must be pull_request, commit, revert, or synthetic`);
+  if (!(["pull_request", "commit", "revert"] as unknown[]).includes(scenario.provenance.kind)) {
+    throw new Error(`${path}.provenance.kind must be pull_request, commit, or revert`);
   }
   if (scenario.provenance.kind === "pull_request") {
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(scenario.provenance.baseRevision ?? "") ||
@@ -746,6 +877,12 @@ function validateScenario(scenario: ReviewBenchScenarioV1, path: string): void {
   if (!scenario.explicitControl && scenario.labels.length === 0) {
     throw new Error(`${path} defect scenario must contain at least one gold label`);
   }
+  if (scenario.explicitControl !== (scenario.artifactSemantics === "verified_clean")) {
+    throw new Error(
+      `${path} explicitControl and artifactSemantics must agree on verified_clean versus defect_present`
+    );
+  }
+  validateOracle(scenario, path);
   if (!scenario.adjudication || typeof scenario.adjudication !== "object") {
     throw new Error(`${path}.adjudication is required`);
   }
@@ -753,9 +890,13 @@ function validateScenario(scenario: ReviewBenchScenarioV1, path: string): void {
     "status",
     "primaryAdjudicator",
     "secondaryAdjudicator",
+    "resolverAdjudicator",
     "agreement",
     "method",
     "rubricVersion",
+    "rubricSha256",
+    "protocolVersion",
+    "protocolSha256",
     "completedAt"
   ], `${path}.adjudication`);
   if (scenario.adjudication.status !== "independently_adjudicated") {
@@ -764,6 +905,14 @@ function validateScenario(scenario: ReviewBenchScenarioV1, path: string): void {
   for (const field of ["primaryAdjudicator", "secondaryAdjudicator", "method"] as const) {
     requireNonEmpty(scenario.adjudication[field], `${path}.adjudication.${field}`);
   }
+  requireCanonicalAdjudicatorId(
+    scenario.adjudication.primaryAdjudicator,
+    `${path}.adjudication.primaryAdjudicator`
+  );
+  requireCanonicalAdjudicatorId(
+    scenario.adjudication.secondaryAdjudicator,
+    `${path}.adjudication.secondaryAdjudicator`
+  );
   if (scenario.adjudication.primaryAdjudicator.trim().toLowerCase() ===
       scenario.adjudication.secondaryAdjudicator.trim().toLowerCase()) {
     throw new Error(`${path}.adjudication requires two distinct adjudicators`);
@@ -771,9 +920,114 @@ function validateScenario(scenario: ReviewBenchScenarioV1, path: string): void {
   if (!(["agree", "reconciled"] as unknown[]).includes(scenario.adjudication.agreement)) {
     throw new Error(`${path}.adjudication has unresolved adjudication disagreement`);
   }
+  if (scenario.adjudication.agreement === "reconciled") {
+    requireNonEmpty(
+      scenario.adjudication.resolverAdjudicator,
+      `${path}.adjudication.resolverAdjudicator`
+    );
+    requireCanonicalAdjudicatorId(
+      scenario.adjudication.resolverAdjudicator,
+      `${path}.adjudication.resolverAdjudicator`
+    );
+    const resolver = scenario.adjudication.resolverAdjudicator.trim().toLowerCase();
+    if (resolver === scenario.adjudication.primaryAdjudicator.trim().toLowerCase() ||
+        resolver === scenario.adjudication.secondaryAdjudicator.trim().toLowerCase()) {
+      throw new Error(`${path}.adjudication requires a distinct resolverAdjudicator`);
+    }
+  } else if (scenario.adjudication.resolverAdjudicator !== undefined) {
+    throw new Error(`${path}.adjudication.resolverAdjudicator is only allowed for reconciled adjudication`);
+  }
   requireNonEmpty(scenario.adjudication.rubricVersion, `${path}.adjudication.rubricVersion`);
+  requireSha256(scenario.adjudication.rubricSha256, `${path}.adjudication.rubricSha256`);
+  requireNonEmpty(scenario.adjudication.protocolVersion, `${path}.adjudication.protocolVersion`);
+  requireSha256(scenario.adjudication.protocolSha256, `${path}.adjudication.protocolSha256`);
   requireIsoDate(scenario.adjudication.completedAt, `${path}.adjudication.completedAt`);
   rejectSecretLikeText(scenario, path);
+}
+
+function validateOracle(scenario: ReviewBenchScenarioV1, path: string): void {
+  const oraclePath = `${path}.oracle`;
+  const oracle = scenario.oracle;
+  if (!oracle || typeof oracle !== "object") throw new Error(`${oraclePath} is required`);
+  requireExactKeys(oracle, [
+    "schemaVersion",
+    "kind",
+    "sourceUrl",
+    "sourceRevision",
+    "evidenceSha256",
+    "defectPresentInReviewedArtifact",
+    "modelInputExcluded"
+  ], oraclePath);
+  if (oracle.schemaVersion !== "review-bench-oracle/v1") {
+    throw new Error(`${oraclePath}.schemaVersion must be review-bench-oracle/v1`);
+  }
+  if (!([
+    "review_comment",
+    "later_fix",
+    "revert",
+    "test_transition",
+    "clean_adjudication"
+  ] as unknown[]).includes(oracle.kind)) {
+    throw new Error(`${oraclePath}.kind is unsupported`);
+  }
+  requirePublicHttpsUrl(oracle.sourceUrl, `${oraclePath}.sourceUrl`);
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oracle.sourceRevision)) {
+    throw new Error(`${oraclePath}.sourceRevision must be an immutable commit digest`);
+  }
+  if (scenario.artifactSemantics === "defect_present" &&
+      ["later_fix", "revert", "test_transition"].includes(oracle.kind) &&
+      oracle.sourceRevision === scenario.sourceRevision) {
+    throw new Error(`${oraclePath} repair evidence must not be the reviewed source revision`);
+  }
+  if (oracle.kind === "review_comment" && oracle.sourceRevision !== scenario.sourceRevision) {
+    throw new Error(`${oraclePath}.sourceRevision must equal the exact reviewed source revision`);
+  }
+  const oracleSourceUrl = new URL(oracle.sourceUrl);
+  const repository = normalizeRepositoryIdentity(scenario.repository);
+  const oracleSourcePath = normalizeRepositoryUrlPath(oracleSourceUrl.pathname);
+  if (oracle.kind === "review_comment") {
+    if (scenario.provenance.kind !== "pull_request" || scenario.labels.length !== 1) {
+      throw new Error(`${oraclePath} review-comment evidence requires one-label pull-request provenance`);
+    }
+    const reviewCommentPrefix = `repos/${repository}/pulls/comments/`;
+    const reviewCommentId = oracleSourcePath.startsWith(reviewCommentPrefix)
+      ? oracleSourcePath.slice(reviewCommentPrefix.length)
+      : "";
+    if (oracleSourceUrl.origin !== "https://api.github.com" ||
+        !/^[1-9][0-9]*$/.test(reviewCommentId)) {
+      throw new Error(`${oraclePath}.sourceUrl must be a canonical review comment bound to repository`);
+    }
+  } else if (oracle.kind === "clean_adjudication") {
+    if (scenario.provenance.kind !== "pull_request") {
+      throw new Error(`${oraclePath} clean controls require pull-request provenance`);
+    }
+    if (oracle.sourceUrl !== scenario.provenance.sourceUrl) {
+      throw new Error(`${oraclePath}.sourceUrl must equal the exact reviewed source URL`);
+    }
+  } else if (oracleSourceUrl.origin !== "https://github.com" ||
+      oracleSourcePath !== `${repository}/commit/${oracle.sourceRevision}`) {
+    throw new Error(`${oraclePath}.sourceUrl must be an immutable commit bound to repository`);
+  }
+  requireSha256(oracle.evidenceSha256, `${oraclePath}.evidenceSha256`);
+  if (typeof oracle.defectPresentInReviewedArtifact !== "boolean") {
+    throw new Error(`${oraclePath}.defectPresentInReviewedArtifact must be a boolean`);
+  }
+  if (oracle.modelInputExcluded !== true) {
+    throw new Error(`${oraclePath}.modelInputExcluded must be true`);
+  }
+
+  if (scenario.artifactSemantics === "defect_present") {
+    if (!oracle.defectPresentInReviewedArtifact || oracle.kind === "clean_adjudication") {
+      throw new Error(`${oraclePath} must attest that the defect exists in the reviewed artifact`);
+    }
+  } else {
+    if (oracle.defectPresentInReviewedArtifact || oracle.kind !== "clean_adjudication") {
+      throw new Error(`${oraclePath} must independently attest the exact reviewed artifact is clean`);
+    }
+    if (oracle.sourceRevision !== scenario.sourceRevision) {
+      throw new Error(`${oraclePath}.sourceRevision must equal the verified-clean source revision`);
+    }
+  }
 }
 
 function validateHoldoutFloor(floor: ReviewBenchCorpusV1["splitPolicy"]["holdoutFloor"]): void {
@@ -1003,6 +1257,12 @@ function requireIsoDate(value: unknown, path: string): void {
 
 function requireNonEmpty(value: unknown, path: string): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${path} must be a non-empty string`);
+}
+
+function requireCanonicalAdjudicatorId(value: string, path: string): void {
+  if (!/^human:[a-z0-9](?:[a-z0-9._-]{0,63})$/.test(value)) {
+    throw new Error(`${path} must be a canonical lowercase ASCII human adjudicator identity`);
+  }
 }
 
 function requireExactKeys(value: object, allowedKeys: string[], path: string): void {
