@@ -31,5 +31,14 @@ export async function verifyNpmProvenanceBundle(input, verifyBundle) {
   if (dependency?.uri !== `git+https://github.com/${input.expectedRepository}@refs/tags/${input.expectedTag}`) {
     throw new Error("provenance resolved dependency does not match the release tag");
   }
-  return { package: input.expectedPackage, version: input.expectedVersion, commit: input.expectedCommit, sha512: expectedSha512 };
+  return {
+    package: input.expectedPackage,
+    version: input.expectedVersion,
+    integrity: input.expectedIntegrity,
+    sha512: expectedSha512,
+    repository: input.expectedRepository,
+    workflow: input.expectedWorkflow,
+    tag: input.expectedTag,
+    commit: input.expectedCommit
+  };
 }
