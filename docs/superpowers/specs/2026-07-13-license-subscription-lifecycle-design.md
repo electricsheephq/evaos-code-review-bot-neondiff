@@ -80,6 +80,10 @@ The request contains billing facts only:
   "providerEventType": "invoice.paid",
   "command": "renew_paid",
   "paymentReference": "<provider-invoice-id>",
+  "amountPaidMinor": 100,
+  "currency": "usd",
+  "paidOutOfBand": false,
+  "billingReason": "subscription_cycle",
   "subscriptionStatus": "active",
   "currentPeriodEnd": "2026-08-13T00:00:00.000Z",
   "cancelAtPeriodEnd": false
@@ -92,12 +96,15 @@ the website mapping is not trusted to make an invalid pairing safe:
 
 | Command | Allowed provider event | Allowed subscription status | Required fields | Forbidden fields |
 | --- | --- | --- | --- | --- |
-| `renew_paid` | `invoice.paid`, `invoice.payment_succeeded` | `active`, `trialing` | `paymentReference`, `currentPeriodEnd` | none |
+| `renew_paid` | `invoice.paid`, `invoice.payment_succeeded` | `active` | `paymentReference`, `amountPaidMinor > 0`, supported `currency`, `paidOutOfBand = false`, `billingReason = subscription_cycle`, `currentPeriodEnd` | none |
 | `reconcile` | `customer.subscription.updated` | `active`, `trialing` | none beyond the shared envelope | `paymentReference`; `cancelAtPeriodEnd` must be false |
 | `cancel_at_period_end` | `customer.subscription.updated` | `active`, `trialing` | `currentPeriodEnd`; `cancelAtPeriodEnd` must be true | `paymentReference` |
 | `payment_attention` | `invoice.payment_failed`, or `customer.subscription.updated` | `active`, `past_due`, `incomplete`, `paused` | none beyond the shared envelope | `paymentReference` |
 | `revoke` | `customer.subscription.deleted`, or `customer.subscription.updated` | `canceled`, `unpaid`, `incomplete_expired` | none beyond the shared envelope | `paymentReference`, `currentPeriodEnd` |
 
+Only a positive, provider-collected subscription-cycle payment qualifies for
+`renew_paid`. Zero-amount trial/discount/credit invoices, manually marked-paid or
+out-of-band invoices, and trialing subscriptions never extend entitlement.
 `reconcile` and `payment_attention` may omit `currentPeriodEnd`; if supplied it
 is parsed for diagnostic consistency but never mutates expiry. `revoke` does not
 require or accept a period end. Any command/event/status/field mismatch returns
@@ -112,6 +119,13 @@ Checkout issuance is extended to bind `provider`, `providerAccountId`,
 issuance reference. A lifecycle request must match that immutable binding.
 Unbound legacy issuances cannot receive lifecycle updates until the reviewed
 backfill binds them.
+
+The checkout issuance contract removes caller-selected `expiresAt` and `seats`.
+The product service derives initial expiry from its own plan policy and injected
+clock: monthly receives a seven-day initial trial; yearly and organization
+receive a thirty-day initial trial. A website/Stripe trial mismatch fails the
+reconciliation gate and keeps checkout held; it never changes product expiry.
+Paid time after that initial trial is granted only by `renew_paid`.
 
 Successful responses contain redacted entitlement metadata only:
 
@@ -169,11 +183,14 @@ Add a `license_subscription_lifecycle_events` table:
 Add an index on the issuance reference and event timestamp. Store the smallest
 lifecycle watermark needed for non-mutating reconciliation in the binding row.
 
-Schema evolution uses `PRAGMA user_version` with target schema version 2. The
-store recognizes the exact unversioned legacy schema, starts `BEGIN IMMEDIATE`,
-creates the additive tables/indexes, verifies their required columns and
-constraints, sets `user_version = 2`, and commits. Any error rolls back and
-prevents the service from starting. Reopening version 2 is idempotent. The
+Schema evolution uses `PRAGMA user_version` with target schema version 2. For an
+empty database with `user_version = 0`, the store starts `BEGIN IMMEDIATE` and
+creates the complete version-2 schema directly. For the exact unversioned legacy
+schema, it starts `BEGIN IMMEDIATE` and applies only the additive lifecycle
+tables/indexes. Both paths verify required columns and constraints, set
+`user_version = 2`, and commit. Any error rolls back and prevents the service
+from starting. Reopening version 2 is idempotent. Unknown non-empty version-0
+schemas fail closed. The
 deployment runbook requires a verified Litestream recovery point before rollout;
 the application does not copy a live open database as an ad hoc backup.
 
@@ -220,8 +237,11 @@ or owner-approved replacement requires a new issuance reference and key.
 
 ## Transition Semantics
 
-- `renew_paid`: only an allowlisted paid-invoice event with a payment reference
-  may extend expiry. It extends monotonically to the validated paid period end.
+- `renew_paid`: only an allowlisted paid-invoice event for an active
+  subscription with positive provider-collected amount, supported currency, no
+  out-of-band/manual-paid flag, subscription-cycle billing reason, and payment
+  reference may extend expiry. It extends monotonically to the validated paid
+  period end.
 - `reconcile`: records active/trialing or other non-terminal billing state but
   never grants time. Trial access is established only by the original guarded
   checkout issuance and its server-bounded initial expiry.
@@ -305,12 +325,16 @@ Product service coverage must prove:
   non-mutating events, and terminal non-resurrection;
 - paid-evidence-only renewal, trial non-extension, bounded timestamps, expired
   renewal, and terminal revocation without a period end;
+- rejection of zero-amount, trial, credit-covered, out-of-band/manual-paid, and
+  non-cycle invoices;
 - every valid command/event/status/field combination plus negative tests for
   every cross-command pairing;
 - server-owned seat policy and caller escalation rejection;
 - provider account/mode/subscription binding and cross-environment rejection;
 - no raw key in lifecycle responses, errors, logs, fixtures, or evidence;
 - current-schema file migration preserving hashes and activations;
+- fresh empty-database bootstrap directly to version 2, unknown-schema refusal,
+  and interrupted legacy migration rollback/reopen;
 - authenticated HTTP behavior, body limits, unknown-field rejection, rate
   limiting, and redacted failure responses;
 - compatibility with the shipped v1.0.4 client contract.
