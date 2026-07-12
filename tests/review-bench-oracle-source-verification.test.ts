@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { ReviewBenchCorpusV1, ReviewBenchScenarioV1 } from "../src/review-bench-corpus.js";
+import {
+  computeReviewBenchSourceVerificationBinding,
+  type ReviewBenchCorpusV1,
+  type ReviewBenchScenarioV1
+} from "../src/review-bench-corpus.js";
 import {
   reverifyReviewBenchCorpusOracleSources as reverifyOracleSourcesWithAdmission,
   REVIEW_BENCH_ORACLE_SOURCE_VERIFIER_VERSION
@@ -28,7 +32,7 @@ function scenario(input: {
   const pullRequest = kind === "review_comment" || control;
   const sourceRevision = "a".repeat(40);
   const oracleRevision = kind === "review_comment" || control ? sourceRevision : "c".repeat(40);
-  return {
+  const built = {
     schemaVersion: "review-bench-scenario/v1",
     taskKind: "review_defect_detection",
     artifactSemantics: control ? "verified_clean" : "defect_present",
@@ -84,7 +88,7 @@ function scenario(input: {
       }
     },
     language: "TypeScript",
-    split: "train",
+    split: "holdout",
     bugFamily: "runtime_correctness",
     explicitControl: control,
     labels: control ? [] : [{
@@ -107,7 +111,10 @@ function scenario(input: {
       protocolSha256: "8".repeat(64),
       completedAt: OBSERVED_AT
     }
-  };
+  } as ReviewBenchScenarioV1;
+  built.provenance.verification!.bindingSha256 =
+    computeReviewBenchSourceVerificationBinding(built);
+  return built;
 }
 
 function corpus(item: ReviewBenchScenarioV1): ReviewBenchCorpusV1 {
@@ -189,6 +196,17 @@ function cleanLineageResponse(base: string, head: string, message = "Routine mai
 }
 
 describe("Review Bench live oracle-source verification", () => {
+  it("rejects an unvalidated corpus before any oracle request", async () => {
+    const item = { ...scenario(), repository: "example/alpha?private=1" } as ReviewBenchScenarioV1;
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    await expect(reverifyReviewBenchCorpusOracleSources({
+      corpus: corpus(item),
+      semanticEvidenceRecords: [evidenceRecord(item, "9".repeat(64))],
+      fetchImpl
+    })).rejects.toThrow("repository");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("verifies a later-fix commit, ancestry, chronology, and immutable diff bytes", async () => {
     const item = scenario();
     const diff = new TextEncoder().encode(

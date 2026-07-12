@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import type { ReviewBenchCorpusV1, ReviewBenchScenarioV1 } from "./review-bench-corpus.js";
+import {
+  validateReviewBenchCorpus,
+  type ReviewBenchCorpusV1,
+  type ReviewBenchScenarioV1
+} from "./review-bench-corpus.js";
 import type {
   ReviewBenchSemanticEvidenceRecord
 } from "./review-bench-semantic-evidence.js";
@@ -32,6 +36,7 @@ export async function reverifyReviewBenchCorpusOracleSources(input: {
   oracleSourceVerificationSha256: string;
   records: ReviewBenchOracleSourceVerificationRecordV1[];
 }> {
+  validateReviewBenchCorpus(input.corpus);
   const fetchImpl = input.fetchImpl ?? fetch;
   const evidenceByScenario = new Map<string, ReviewBenchSemanticEvidenceRecord>();
   for (const record of input.semanticEvidenceRecords) {
