@@ -154,6 +154,12 @@ describe("NeonDiff public release readiness", () => {
       "registry exposes npm attestation metadata pending successful recovery verification"
     );
     expect(candidateLedger.proofBoundary?.allowed?.join("\n")).not.toMatch(/npm signatures.*bind/i);
+    expect(candidateLedger.proofBoundary?.forbidden).toEqual([
+      "npm latest points to 1.0.4",
+      "release-candidate cleanup completed",
+      "public-registry install and activation smoke completed",
+      "predecessor releases or artifacts are safe to remove"
+    ]);
     expect(candidateLedger.proofBoundary?.forbidden).not.toContain("v1.0.4 activation proof exists");
     expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.3\}"/);
     for (const path of ["README.md", "docs/SETUP.md"]) {
