@@ -114,6 +114,19 @@ evaos-review-bot status --config config.local.json
   packet to a fresh or empty output root. It does not post comments, mutate
   GitHub, write SQLite, restart launchd, activate lenses, or widen
   issue-enrichment/PR review allowlists.
+- `review-bench verify-sources`: setup-safe Corpus v1 admission gate. It reads a
+  corpus manifest and digest-named public source artifacts, live-reverifies the
+  repository, PR/commit revisions, cumulative PR comparison diff, and
+  revision-specific license evidence against GitHub. Every defect gold label
+  must identify a canonical repository-relative path and a final-revision
+  (new-side) context or added line inside a verified diff hunk; deletion-only
+  lines are not valid Corpus v1 anchors. The command then creates one
+  no-clobber receipt containing the corpus and verification-evidence hashes.
+  Write the receipt outside the checkout under `/Volumes/LEXAR/Codex/evals`.
+  The command does not invoke a model/provider, post to GitHub, publish a
+  corpus, or switch a provider. A future public corpus under
+  `docs/bench/review-bench-corpus-v1/` is admitted only when the mandatory CI
+  admission step regenerates and matches its committed receipt.
 - `build-skill-pack`: compiles configured read-only skill-pack files into an
   advisory prompt packet. It emits JSON/Markdown with packet SHA, byte/token
   estimates, source provenance, omitted-source reasons, and a redaction report.

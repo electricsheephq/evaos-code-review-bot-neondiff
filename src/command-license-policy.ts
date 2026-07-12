@@ -56,6 +56,9 @@ export function classifyCommandLicensePolicy(input: {
     }
     if (input.subcommand === "list" || input.subcommand === "doctor") return { mode: "setup_safe" };
   }
+  if (input.command === "review-bench" && input.subcommand === "verify-sources") {
+    return { mode: "setup_safe" };
+  }
   if (input.command === "daemon") {
     if (input.subcommand === "stop" || input.subcommand === "status") return { mode: "setup_safe" };
     if (input.subcommand === "start" && input.dryRun === true) return { mode: "setup_safe" };

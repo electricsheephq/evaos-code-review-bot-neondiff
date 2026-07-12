@@ -29,6 +29,22 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Enforce Review Bench public-corpus admission
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ ! -f docs/bench/review-bench-corpus-v1/corpus.json ]]; then
+            echo "No published Review Bench Corpus v1 subset is present."
+            exit 0
+          fi
+          node dist/src/cli.js review-bench verify-sources \
+            --corpus docs/bench/review-bench-corpus-v1/corpus.json \
+            --artifacts docs/bench/review-bench-corpus-v1/source-artifacts \
+            --receipt "$RUNNER_TEMP/review-bench-live-receipt.json"
+          node scripts/check-review-bench-admission-receipt.mjs \
+            --live "$RUNNER_TEMP/review-bench-live-receipt.json" \
+            --committed docs/bench/review-bench-corpus-v1/admission-receipt.json
+
       - name: Verify license API and OIDC lifecycle broker
         run: |
           npm ci --prefix services/license-api
