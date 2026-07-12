@@ -18,9 +18,10 @@ for the semver/GA-line and npm dist-tag policy.
 
 - Add the workflow-only #542 recovery for the immutable v1.0.4 reviewed
   tarball: an absent npm `gitHead` may be replaced only by exact
-  Sigstore/SLSA provenance after package-byte and signature verification, while
+  package bytes, npm signatures, and Sigstore/SLSA provenance, while
   protected-main, predecessor, quarantine-ownership, and no-republish guards
-  remain fail-closed. Promotion and public-install proof remain pending.
+  remain fail-closed. Bounded registry reads reconcile ambiguous nonzero
+  promotion results. Promotion and public-install proof remain pending.
 
 ## [1.0.4] - docs/releases/v1.0.4.md
 

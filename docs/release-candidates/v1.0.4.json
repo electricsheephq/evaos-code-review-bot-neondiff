@@ -27,7 +27,7 @@
       "protected-main candidate passed production activation lifecycle and no-bypass proof",
       "candidate package bytes are fixed at the recorded shasum and integrity",
       "the real non-prerelease GitHub Release and immutable npm package exist",
-      "npm signatures and Sigstore/SLSA provenance bind the package to the v1.0.4 tag commit"
+      "registry exposes npm attestation metadata pending successful recovery verification"
     ],
     "forbidden": [
       "npm latest points to 1.0.4",

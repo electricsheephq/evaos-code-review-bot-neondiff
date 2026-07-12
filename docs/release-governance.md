@@ -319,7 +319,8 @@ The recovery fails before mutation unless `latest=1.0.3` and
 `release-candidate=1.0.4`, or unless an idempotent rerun already has
 `latest=1.0.4` with quarantine either owned by `1.0.4` or absent. It preserves
 the package-wide concurrency group, predecessor guard, bounded registry
-confirmation, and owned-only quarantine cleanup. This exception does not
+confirmation (including ambiguous nonzero promotion results), and owned-only
+quarantine cleanup. This exception does not
 authorize missing `gitHead` for any later package version; fix the future
 publisher before cutting another npm release.
 

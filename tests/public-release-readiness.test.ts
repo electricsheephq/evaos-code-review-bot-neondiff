@@ -122,7 +122,7 @@ describe("NeonDiff public release readiness", () => {
       publishRunUrl?: string;
       packageArtifact?: { shasum?: string; integrity?: string };
       registry?: { state?: string; gitHeadState?: string; latest?: string; releaseCandidate?: string };
-      proofBoundary?: { forbidden?: string[] };
+      proofBoundary?: { allowed?: string[]; forbidden?: string[] };
     };
     expect(candidateLedger).toMatchObject({
       version: "v1.0.4",
@@ -150,6 +150,10 @@ describe("NeonDiff public release readiness", () => {
         releaseCandidate: "1.0.4"
       }
     });
+    expect(candidateLedger.proofBoundary?.allowed).toContain(
+      "registry exposes npm attestation metadata pending successful recovery verification"
+    );
+    expect(candidateLedger.proofBoundary?.allowed?.join("\n")).not.toMatch(/npm signatures.*bind/i);
     expect(candidateLedger.proofBoundary?.forbidden).not.toContain("v1.0.4 activation proof exists");
     expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.3\}"/);
     for (const path of ["README.md", "docs/SETUP.md"]) {
@@ -632,6 +636,14 @@ describe("NeonDiff public release readiness", () => {
     expect(publish.indexOf('test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"')).toBeLessThan(
       publish.indexOf('npm publish "$PACK_TARBALL" --provenance')
     );
+    expect(publish).toContain('test "$RELEASE_TAG" = "v1.0.4"');
+    expect(publish).toContain('test "$TAG_COMMIT" = "fc66d27b6ab9f6a1eb8282d289ef63407cd96982"');
+    expect(publish.indexOf('test "$RELEASE_TAG" = "v1.0.4"')).toBeLessThan(
+      publish.indexOf("node scripts/npm-release-policy.mjs verify-git")
+    );
+    expect(publish.indexOf('test "$TAG_COMMIT" = "fc66d27b6ab9f6a1eb8282d289ef63407cd96982"')).toBeLessThan(
+      publish.indexOf("Classify npm package release")
+    );
     expect(releasePolicy).toMatch(/npm tarball integrity does not match the reviewed pack/);
     expect(publish.indexOf("verify-npm-provenance.mjs")).toBeLessThan(
       publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
@@ -676,6 +688,11 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/provenance_recovery:\s*\n\s*description:[^\n]*\n\s*required:\s*true\n\s*type:\s*boolean\n\s*default:\s*false/);
     expect(publish).toMatch(/WORKFLOW_REF:\s*\$\{\{\s*github\.workflow_ref\s*\}\}/);
     expect(publish).toMatch(/WORKFLOW_SHA:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
+    const publishStepHeader = publish.split("- name: Publish or verify existing package")[1]?.split("run: |")[0] ?? "";
+    expect(publishStepHeader).toMatch(/PROVENANCE_RECOVERY:\s*\$\{\{\s*inputs\.provenance_recovery \|\| false\s*\}\}/);
+    expect(publishStepHeader).toMatch(/RELEASE_TAG:\s*\$\{\{\s*github\.event\.inputs\.tag \|\| github\.event\.release\.tag_name\s*\}\}/);
+    expect(publishStepHeader).toMatch(/WORKFLOW_REF:\s*\$\{\{\s*github\.workflow_ref\s*\}\}/);
+    expect(publishStepHeader).toMatch(/WORKFLOW_SHA:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
     expect(publish).toMatch(/verify-recovery-dispatch/);
     expect(publish).toMatch(/--github-ref "\$GITHUB_REF"/);
     expect(publish).toMatch(/--workflow-ref "\$WORKFLOW_REF"/);
@@ -697,6 +714,9 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/--verified-provenance "\$VERIFIED_PROVENANCE_PATH"/);
     expect(publish.indexOf('> "$VERIFIED_PROVENANCE_PATH"')).toBeLessThan(
       publish.indexOf('--verified-provenance "$VERIFIED_PROVENANCE_PATH"')
+    );
+    expect(publish.indexOf('npm audit signatures --prefix "$SIGNATURE_VERIFY_ROOT" --json')).toBeLessThan(
+      publish.indexOf('node "$POLICY_SCRIPT" verify-pack')
     );
     expect(publish.indexOf('npm audit signatures --prefix "$SIGNATURE_VERIFY_ROOT" --json')).toBeLessThan(
       publish.indexOf("BEGIN V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD")
