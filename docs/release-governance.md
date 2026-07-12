@@ -262,6 +262,13 @@ serialized workflow's registry retries, provenance checks, channel predecessor
 guard, and quarantine ownership check. Rerun the hardened workflow from
 the exact existing release tag ref:
 
+Immutable-package recovery waives only the normal 24-hour activation-proof
+freshness rule because the already-published bytes cannot be replaced. The
+proof must still pass the 30-day maximum-age ceiling, match the manifest
+candidate SHA and reviewed tarball identity, and retain valid workflow
+attestations. If that 30-day ceiling has expired, do not promote the package;
+produce a new replacement version and fresh protected lifecycle proof.
+
 ```bash
 gh workflow run publish-npm.yml \
   --repo electricsheephq/evaos-code-review-bot-neondiff \

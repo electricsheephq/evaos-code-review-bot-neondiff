@@ -626,6 +626,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/npm-release-policy\.mjs classify/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-git/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-pack/);
+    expect(publish).toMatch(/npm-release-policy\.mjs verify-pack[\s\S]*--expected-git-head "\$EXPECTED_GIT_HEAD"/);
     expect(publish).toMatch(/verify-npm-provenance\.mjs/);
     expect(publish).toMatch(/npm audit signatures --prefix "\$SIGNATURE_VERIFY_ROOT" --json/);
     expect(publish).toMatch(/REQUIRED_EVIDENCE_KINDS/);
@@ -728,6 +729,8 @@ describe("NeonDiff public release readiness", () => {
     expect(recovery).not.toMatch(/--ref main/);
     expect(recovery).toMatch(/-f tag=v<version>/);
     expect(recovery).toMatch(/direct dist-tag mutation is not supported/i);
+    expect(recovery).toMatch(/waives only the normal 24-hour activation-proof/);
+    expect(recovery).toMatch(/30-day maximum-age ceiling/);
     expect(recovery).not.toMatch(/npm dist-tag add/);
     expect(recovery).not.toMatch(/npm dist-tag rm/);
   });

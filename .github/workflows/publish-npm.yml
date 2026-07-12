@@ -233,7 +233,8 @@ jobs:
           node scripts/npm-release-policy.mjs verify-pack \
             --local-pack pack.json \
             --remote-metadata remote-package.json \
-            --expected-version "$PACKAGE_VERSION"
+            --expected-version "$PACKAGE_VERSION" \
+            --expected-git-head "$EXPECTED_GIT_HEAD"
           # shellcheck disable=SC2016
           ATTESTATION_URL="$(node -e '
             const metadata = require("./remote-package.json");
