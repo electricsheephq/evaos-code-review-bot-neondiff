@@ -1,7 +1,6 @@
 {
   "version": "v1.0.4",
   "releaseLevel": "stable",
-  "publicationProofPath": "docs/evidence/v1.0.4-publication-proof.json",
   "packageArtifact": {
     "name": "neondiff",
     "version": "1.0.4",

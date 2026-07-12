@@ -14,6 +14,8 @@
   "proofRunUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
   "activationProofPath": "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
   "publicationProofPath": "docs/evidence/v1.0.4-publication-proof.json",
+  "nextImmutablePackageIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+  "websiteActivationIssue": "https://github.com/electricsheephq/neon-diff-agent-website/issues/45",
   "packageArtifact": {
     "shasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
     "integrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw=="
@@ -37,6 +39,9 @@
     "forbidden": [
       "predecessor npm versions, GitHub Releases, tags, or Actions artifacts are removed",
       "public source, forks, caches, clones, or already-downloaded artifacts are recalled",
+      "package-allowlisted v1.0.4 files are changed after publication",
+      "website activation and installer copy is synchronized",
+      "an authorized npm predecessor-rollback mode exists",
       "signed or notarized Mac distribution, Sparkle/appcast, browser/native parity, or v1.1 readiness"
     ]
   }

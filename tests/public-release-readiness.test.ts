@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 function read(path: string): string {
@@ -25,7 +29,6 @@ describe("NeonDiff public release readiness", () => {
       packages?: Record<string, { name?: string; version?: string; license?: string; bin?: Record<string, string> }>;
     };
     const manifest = JSON.parse(read("docs/public-release-manifest.json")) as {
-      publicationProofPath?: string;
       packageArtifact?: {
         name?: string;
         version?: string;
@@ -124,6 +127,8 @@ describe("NeonDiff public release readiness", () => {
       nextPhase?: string;
       recoveryRunUrl?: string;
       publicationProofPath?: string;
+      nextImmutablePackageIssue?: string;
+      websiteActivationIssue?: string;
       packageArtifact?: { shasum?: string; integrity?: string };
       registry?: { state?: string; gitHeadState?: string; latest?: string; releaseCandidatePresent?: boolean };
       proofBoundary?: { allowed?: string[]; forbidden?: string[] };
@@ -143,6 +148,8 @@ describe("NeonDiff public release readiness", () => {
       nextPhase: "predecessor_cleanup",
       recoveryRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29190031396",
       publicationProofPath: "docs/evidence/v1.0.4-publication-proof.json",
+      nextImmutablePackageIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+      websiteActivationIssue: "https://github.com/electricsheephq/neon-diff-agent-website/issues/45",
       proofRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
       activationProofPath:
         "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
@@ -165,6 +172,9 @@ describe("NeonDiff public release readiness", () => {
     expect(candidateLedger.proofBoundary?.forbidden).toEqual([
       "predecessor npm versions, GitHub Releases, tags, or Actions artifacts are removed",
       "public source, forks, caches, clones, or already-downloaded artifacts are recalled",
+      "package-allowlisted v1.0.4 files are changed after publication",
+      "website activation and installer copy is synchronized",
+      "an authorized npm predecessor-rollback mode exists",
       "signed or notarized Mac distribution, Sparkle/appcast, browser/native parity, or v1.1 readiness"
     ]);
     expect(candidateLedger.proofBoundary?.forbidden).not.toContain("v1.0.4 activation proof exists");
@@ -172,15 +182,15 @@ describe("NeonDiff public release readiness", () => {
     for (const path of ["README.md", "docs/SETUP.md"]) {
       const releaseNotice = read(path);
       const normalizedReleaseNotice = releaseNotice.replace(/^>\s?/gm, "").replace(/\s+/g, " ");
-      expect(normalizedReleaseNotice).toContain("v1.0.4 release notice:");
-      expect(normalizedReleaseNotice).not.toContain("v1.0.4 verification notice:");
+      expect(normalizedReleaseNotice).toContain("v1.0.4 verification notice:");
+      expect(normalizedReleaseNotice).not.toContain("v1.0.4 release notice:");
       expect(normalizedReleaseNotice).toContain(
-        "v1.0.4 is the current public release and requires mandatory API-backed activation for all supported repository review."
+        "v1.0.4 is the first package intended to enforce mandatory API-backed activation."
       );
       expect(normalizedReleaseNotice).toContain(
-        "npm `latest` and the matching non-prerelease GitHub Release are verified"
+        "Verify `npm view neondiff version` and the matching non-prerelease GitHub Release before relying on it"
       );
-      expect(normalizedReleaseNotice).toContain("v1.0.3 and earlier do not enforce this boundary and must be upgraded.");
+      expect(normalizedReleaseNotice).toContain("v1.0.3 and earlier do not enforce this boundary.");
       expect(releaseNotice).not.toContain("this source branch");
     }
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.29-beta.1");
@@ -251,8 +261,8 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.updateChannels?.website).toBeUndefined();
     expect(manifest.updateChannels?.desktop).toBeUndefined();
 
-    expect(manifest.publicationProofPath).toBe("docs/evidence/v1.0.4-publication-proof.json");
-    const publicationRaw = read(manifest.publicationProofPath ?? "");
+    expect(manifest).not.toHaveProperty("publicationProofPath");
+    const publicationRaw = read(candidateLedger.publicationProofPath ?? "");
     const publication = JSON.parse(publicationRaw) as {
       schemaVersion?: number;
       observedAt?: string;
@@ -289,6 +299,13 @@ describe("NeonDiff public release readiness", () => {
         provenanceSourceSha?: string;
         republished?: boolean;
       };
+      postReleaseStamp?: {
+        packageAllowlistChanged?: boolean;
+        canonicalTarSha256?: string;
+        registryShasum?: string;
+        registryIntegrity?: string;
+        nextImmutablePackageIssue?: string;
+      };
       installedPackage?: {
         binaryVersion?: string;
         evidenceRootId?: string;
@@ -299,6 +316,7 @@ describe("NeonDiff public release readiness", () => {
           ok?: boolean;
           source?: string;
           plan?: string;
+          entitlementPurpose?: string;
           repoVisibilityScope?: string;
           rawKeyPresentInCommittedProof?: boolean;
         };
@@ -347,6 +365,13 @@ describe("NeonDiff public release readiness", () => {
         provenanceSourceSha: "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
         republished: false
       },
+      postReleaseStamp: {
+        packageAllowlistChanged: false,
+        canonicalTarSha256: "1258228765984bc9c0f44330cb028c63a755db2fdf5dc992718fc343cdc6a437",
+        registryShasum: "526c04bd24673351b9cc7136d8747df00ffaa2be",
+        registryIntegrity: "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw==",
+        nextImmutablePackageIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
+      },
       installedPackage: {
         binaryVersion: "1.0.4",
         evidenceRootId: "neondiff-ga/2026-07-12/v1.0.4/post-recovery-install-smoke",
@@ -357,6 +382,7 @@ describe("NeonDiff public release readiness", () => {
           ok: true,
           source: "api",
           plan: "internal",
+          entitlementPurpose: "internal_team_production_smoke",
           repoVisibilityScope: "all",
           rawKeyPresentInCommittedProof: false
         },
@@ -371,7 +397,9 @@ describe("NeonDiff public release readiness", () => {
       },
       followUps: [
         "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/556",
-        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/557"
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/557",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+        "https://github.com/electricsheephq/neon-diff-agent-website/issues/45"
       ]
     });
     expect(publication.installedPackage?.artifacts).toEqual(
@@ -395,6 +423,12 @@ describe("NeonDiff public release readiness", () => {
     );
     expect(publication.proofBoundary?.allowed).toContain("real non-prerelease GitHub Release v1.0.4 and public npm latest=1.0.4");
     expect(publication.proofBoundary?.forbidden).toContain("predecessor distribution cleanup is complete");
+    expect(publication.proofBoundary?.forbidden).toContain(
+      "package-allowlisted README, setup, or schema copy was changed after publication"
+    );
+    expect(publication.proofBoundary?.forbidden).toContain(
+      "website onboarding or installer copy was synchronized with mandatory activation"
+    );
     expect(publicationRaw).not.toMatch(/nd_live_[A-Za-z0-9_-]{8,}|Bearer |ghp_|github_pat_|npm_[A-Za-z0-9]/);
     expect(publicationRaw).not.toMatch(/\/Volumes\/LEXAR|\/Users\/lume/);
     const aggregatePath =
@@ -449,6 +483,52 @@ describe("NeonDiff public release readiness", () => {
       expect(artifact.ref).toMatch(/^docs\/evidence\/v1\.0\.4\/[a-z-]+-42db7c8ff7dba6ceac813238dcebfb54dc83851f\.json$/);
       expect(existsSync(artifact.ref ?? "")).toBe(true);
       expect(createHash("sha256").update(read(artifact.ref ?? "")).digest("hex")).toBe(artifact.sha256);
+    }
+  });
+
+  it("keeps a published package source pack byte-identical after state stamps", () => {
+    const pkg = JSON.parse(read("package.json")) as { name?: string; version?: string };
+    const ledgerPath = `docs/release-candidates/v${pkg.version}.json`;
+    expect(existsSync(ledgerPath)).toBe(true);
+    const ledger = JSON.parse(read(ledgerPath)) as {
+      publicationProofPath?: string;
+      registry?: { state?: string };
+    };
+    if (ledger.registry?.state !== "published_latest") return;
+
+    expect(ledger.publicationProofPath).toMatch(/^docs\/evidence\/v\d+\.\d+\.\d+-publication-proof\.json$/);
+    const publication = JSON.parse(read(ledger.publicationProofPath ?? "")) as {
+      npm?: { packageVersion?: string; shasum?: string; integrity?: string };
+      postReleaseStamp?: {
+        packageAllowlistChanged?: boolean;
+        canonicalTarSha256?: string;
+        registryShasum?: string;
+        registryIntegrity?: string;
+      };
+    };
+    expect(publication.postReleaseStamp?.packageAllowlistChanged).toBe(false);
+    expect(publication.postReleaseStamp?.registryShasum).toBe(publication.npm?.shasum);
+    expect(publication.postReleaseStamp?.registryIntegrity).toBe(publication.npm?.integrity);
+
+    const packRoot = mkdtempSync(join(tmpdir(), "neondiff-published-pack-"));
+    try {
+      const [pack] = JSON.parse(
+        execFileSync("npm", ["pack", "--json", "--pack-destination", packRoot], {
+          encoding: "utf8",
+          maxBuffer: 5 * 1024 * 1024
+        })
+      ) as Array<{ name?: string; version?: string; filename?: string; shasum?: string; integrity?: string }>;
+      const tarball = gunzipSync(readFileSync(join(packRoot, pack.filename ?? "")));
+      const canonicalTarSha256 = createHash("sha256").update(tarball).digest("hex");
+
+      expect(pack).toMatchObject({ name: pkg.name, version: publication.npm?.packageVersion });
+      expect(canonicalTarSha256).toBe(publication.postReleaseStamp?.canonicalTarSha256);
+      if (process.platform === "linux") {
+        expect(pack.shasum).toBe(publication.npm?.shasum);
+        expect(pack.integrity).toBe(publication.npm?.integrity);
+      }
+    } finally {
+      rmSync(packRoot, { recursive: true, force: true });
     }
   });
 

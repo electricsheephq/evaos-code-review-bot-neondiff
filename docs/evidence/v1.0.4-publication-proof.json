@@ -37,6 +37,13 @@
     "provenanceSourceSha": "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
     "republished": false
   },
+  "postReleaseStamp": {
+    "packageAllowlistChanged": false,
+    "canonicalTarSha256": "1258228765984bc9c0f44330cb028c63a755db2fdf5dc992718fc343cdc6a437",
+    "registryShasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
+    "registryIntegrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw==",
+    "nextImmutablePackageIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
+  },
   "installedPackage": {
     "binaryVersion": "1.0.4",
     "evidenceRootId": "neondiff-ga/2026-07-12/v1.0.4/post-recovery-install-smoke",
@@ -52,6 +59,7 @@
       "ok": true,
       "source": "api",
       "plan": "internal",
+      "entitlementPurpose": "internal_team_production_smoke",
       "repoVisibilityScope": "all",
       "privateRepoAllowed": true,
       "updateEntitlement": true,
@@ -166,7 +174,9 @@
   },
   "followUps": [
     "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/556",
-    "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/557"
+    "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/557",
+    "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+    "https://github.com/electricsheephq/neon-diff-agent-website/issues/45"
   ],
   "proofBoundary": {
     "allowed": [
@@ -177,6 +187,8 @@
     "forbidden": [
       "predecessor distribution cleanup is complete",
       "public source, forks, caches, clones, or already-downloaded artifacts were recalled",
+      "package-allowlisted README, setup, or schema copy was changed after publication",
+      "website onboarding or installer copy was synchronized with mandatory activation",
       "signed or notarized Mac distribution",
       "Sparkle or appcast readiness",
       "browser and native UI parity",
