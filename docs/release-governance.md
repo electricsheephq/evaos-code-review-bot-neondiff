@@ -288,9 +288,46 @@ npm view neondiff@<version> version dist.integrity dist.shasum gitHead dist.atte
 test "$(npm view neondiff dist-tags.latest)" = "<version>"
 ```
 
+#### v1.0.4-only reviewed-tarball provenance recovery
+
+Run `29185873762` published the exact reviewed `neondiff@1.0.4` tarball under
+`release-candidate`, but npm 11.17.0 did not synthesize `gitHead` because the
+publish input was the prebuilt tarball rather than the Git checkout. The
+registry version is immutable. Do not republish, unpublish, retag, or directly
+edit dist-tags to compensate.
+
+The v1.0.4-only recovery loads reviewed workflow policy from the exact current
+protected-main SHA while retaining the annotated v1.0.4 tag checkout as the
+sole build and pack source. It cannot publish: the immutable npm version and
+matching non-prerelease GitHub Release must already exist. Missing `gitHead`
+is accepted only after exact shasum/integrity, npm signatures, and Sigstore/SLSA
+provenance verify the repository, publish workflow, tag, and release commit. A
+present malformed or mismatched `gitHead` remains fatal.
+
+After the recovery change is merged to protected main, dispatch only this
+bounded command:
+
+```bash
+gh workflow run publish-npm.yml \
+  --repo electricsheephq/evaos-code-review-bot-neondiff \
+  --ref main \
+  -f tag=v1.0.4 \
+  -f provenance_recovery=true
+```
+
+The recovery fails before mutation unless `latest=1.0.3` and
+`release-candidate=1.0.4`, or unless an idempotent rerun already has
+`latest=1.0.4` with quarantine either owned by `1.0.4` or absent. It preserves
+the package-wide concurrency group, predecessor guard, bounded registry
+confirmation (including ambiguous nonzero promotion results), and owned-only
+quarantine cleanup. This exception does not
+authorize missing `gitHead` for any later package version; fix the future
+publisher before cutting another npm release.
+
 Record the failed workflow URL, registry identity output, repaired dist-tags,
-and operator in the release tracker. If any identity field is missing or does
-not match, leave `latest` unchanged and treat the package as quarantined.
+and operator in the release tracker. Outside the bounded v1.0.4 provenance
+fallback, if any identity field is missing or does not match, leave `latest`
+unchanged and treat the package as quarantined.
 
 ## Tag And Release
 

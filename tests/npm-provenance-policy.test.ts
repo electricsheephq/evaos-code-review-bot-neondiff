@@ -58,7 +58,16 @@ describe("npm provenance policy", () => {
       expectedCommit: commit
     }, async (bundle) => { verifiedBundle = bundle; return {} as never; });
     expect(verifiedBundle).toBe(document.attestations[0].bundle);
-    expect(result.commit).toBe(commit);
+    expect(result).toEqual({
+      package: "neondiff",
+      version: "1.0.4",
+      integrity,
+      sha512: createHash("sha512").update(bytes).digest("hex"),
+      repository: "electricsheephq/evaos-code-review-bot-neondiff",
+      workflow: ".github/workflows/publish-npm.yml",
+      tag: "v1.0.4",
+      commit
+    });
 
     await expect(verifyNpmProvenanceBundle({
       document,

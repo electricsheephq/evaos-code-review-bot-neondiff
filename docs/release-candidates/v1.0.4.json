@@ -2,24 +2,40 @@
   "version": "v1.0.4",
   "packageVersion": "1.0.4",
   "publishedVersionAtCandidateCut": "v1.0.3",
-  "state": "protected_main_candidate_proven_pending_publication",
+  "state": "immutable_package_published_quarantined_pending_provenance_recovery",
   "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532",
+  "recoveryIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/542",
   "proofWorkflow": ".github/workflows/license-lifecycle-proof.yml",
   "candidateSourceSha": "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+  "releaseCommit": "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
+  "githubReleaseUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.4",
+  "publishRunUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185873762",
   "proofRunUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
   "activationProofPath": "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
   "packageArtifact": {
     "shasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
     "integrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw=="
   },
+  "registry": {
+    "state": "published_quarantined",
+    "gitHeadState": "absent_reviewed_tarball_publish",
+    "latest": "1.0.3",
+    "releaseCandidate": "1.0.4"
+  },
+  "proofBoundaryPhase": "pre_recovery",
+  "nextPhase": "post_recovery",
+  "pendingRecoveryAction": "Replace this pre-recovery ledger with the successful workflow run and converged npm channel truth before closing #532.",
   "proofBoundary": {
     "allowed": [
       "protected-main candidate passed production activation lifecycle and no-bypass proof",
-      "candidate package bytes are fixed at the recorded shasum and integrity"
+      "candidate package bytes are fixed at the recorded shasum and integrity",
+      "the real non-prerelease GitHub Release and immutable npm package exist",
+      "registry exposes npm attestation metadata pending successful recovery verification"
     ],
     "forbidden": [
-      "v1.0.4 is published",
       "npm latest points to 1.0.4",
+      "release-candidate cleanup completed",
+      "public-registry install and activation smoke completed",
       "predecessor releases or artifacts are safe to remove"
     ]
   }

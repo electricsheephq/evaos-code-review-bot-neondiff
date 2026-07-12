@@ -10,6 +10,11 @@ on:
         description: Release tag to publish
         required: true
         default: v1.0.4
+      provenance_recovery:
+        description: Recover the already-published v1.0.4 package through exact npm provenance
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: publish-npm-neondiff
@@ -30,6 +35,9 @@ jobs:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
       RELEASE_EVENT_NAME: ${{ github.event_name }}
       RELEASE_PRERELEASE: ${{ github.event.release.prerelease || false }}
+      PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+      WORKFLOW_REF: ${{ github.workflow_ref }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -39,17 +47,56 @@ jobs:
           persist-credentials: false
 
       - name: Verify release provenance before repository code runs
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
+          PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
-          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG" || {
-            echo "::error::Publish workflow must be dispatched from the exact release tag"
-            exit 1
-          }
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            test "$RELEASE_EVENT_NAME" = "workflow_dispatch" || {
+              echo "::error::Provenance recovery requires workflow_dispatch"
+              exit 1
+            }
+            test "$GITHUB_REF" = "refs/heads/main" || {
+              echo "::error::Provenance recovery must run from protected main"
+              exit 1
+            }
+            test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/publish-npm.yml@refs/heads/main" || {
+              echo "::error::Provenance recovery workflow ref must be publish-npm.yml on protected main"
+              exit 1
+            }
+            test "$WORKFLOW_SHA" = "$GITHUB_SHA" || {
+              echo "::error::Provenance recovery workflow SHA must equal the protected-main dispatch SHA"
+              exit 1
+            }
+            test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA" || {
+              echo "::error::Provenance recovery dispatch SHA is not the current protected-main head"
+              exit 1
+            }
+          else
+            test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG" || {
+              echo "::error::Publish workflow must be dispatched from the exact release tag"
+              exit 1
+            }
+          fi
           test "$(git cat-file -t "$RELEASE_TAG")" = "tag" || {
             echo "::error::Release tag must be annotated"
             exit 1
           }
           TAG_COMMIT="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            test "$RELEASE_TAG" = "v1.0.4" || {
+              echo "::error::Provenance recovery is scoped only to v1.0.4"
+              exit 1
+            }
+            test "$TAG_COMMIT" = "fc66d27b6ab9f6a1eb8282d289ef63407cd96982" || {
+              echo "::error::Provenance recovery tag must peel to the exact v1.0.4 release commit"
+              exit 1
+            }
+          fi
           git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main || {
             echo "::error::Release tag commit must be an ancestor of protected main"
             exit 1
@@ -146,17 +193,52 @@ jobs:
             --tarball "$PACK_TARBALL" \
             --existing-package-recovery "$PACKAGE_ALREADY_EXISTS"
 
+      - name: Checkout protected-main recovery policy
+        if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .recovery-policy
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify protected-main recovery policy checkout
+        if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          test "$(git -C .recovery-policy rev-parse HEAD)" = "$WORKFLOW_SHA" || {
+            echo "::error::Protected-main recovery policy checkout does not match the workflow SHA"
+            exit 1
+          }
+
       - name: Publish or verify existing package
         if: steps.package_release.outputs.should_publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TAG: ${{ steps.package_release.outputs.npm_tag }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
+          PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
+          # BEGIN V104_PROVENANCE_RECOVERY_MUTATION_GATE
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           EXPECTED_GIT_HEAD="$(git rev-list -n 1 "$RELEASE_TAG")"
           CANDIDATE_HEAD="$(node -p "require('./docs/public-release-manifest.json').source.candidateHeadBeforeReleaseMetadata")"
           PACK_TARBALL="$RUNNER_TEMP/neondiff-reviewed-pack/neondiff-$PACKAGE_VERSION.tgz"
+          POLICY_SCRIPT="scripts/npm-release-policy.mjs"
+          PROVENANCE_VERIFIER="scripts/verify-npm-provenance.mjs"
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            POLICY_SCRIPT=".recovery-policy/scripts/npm-release-policy.mjs"
+            PROVENANCE_VERIFIER=".recovery-policy/scripts/verify-npm-provenance.mjs"
+            test -f "$POLICY_SCRIPT" -a -f "$PROVENANCE_VERIFIER" || {
+              echo "::error::Protected-main recovery policy files are missing"
+              exit 1
+            }
+          fi
           test -f "$PACK_TARBALL" || {
             echo "::error::reviewed npm tarball is missing"
             exit 1
@@ -200,8 +282,57 @@ jobs:
               --deny-self-hosted-runners
           done
           PACKAGE_ALREADY_EXISTS=false
-          if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              OBSERVED_PACKAGE_VERSION="$(npm view "neondiff@$PACKAGE_VERSION" version --prefer-online 2>/dev/null || true)"
+              if [ "$OBSERVED_PACKAGE_VERSION" = "$PACKAGE_VERSION" ]; then
+                PACKAGE_ALREADY_EXISTS=true
+                break
+              fi
+              sleep 5
+            done
+          elif npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             PACKAGE_ALREADY_EXISTS=true
+          fi
+          if { [ "$GITHUB_REF" = "refs/heads/main" ] || [ "$WORKFLOW_REF" = "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main" ]; } && [ "$PROVENANCE_RECOVERY" != "true" ]; then
+            echo "::error::Protected-main npm execution must remain in provenance recovery mode"
+            exit 1
+          fi
+          RECOVERY_PROOF_PATH=""
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            RECOVERY_MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+            test "$RECOVERY_MAIN_SHA" = "$GITHUB_SHA" || {
+              echo "::error::Provenance recovery dispatch SHA is no longer the protected-main head"
+              exit 1
+            }
+            RECOVERY_PROOF_PATH="$RUNNER_TEMP/v1.0.4-recovery-dispatch-proof.json"
+            RECOVERY_RELEASE_METADATA_PATH="$RUNNER_TEMP/recovery-release-metadata.json"
+            rm -f "$RECOVERY_PROOF_PATH" "$RECOVERY_RELEASE_METADATA_PATH"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RECOVERY_RELEASE_METADATA_PATH"
+            RELEASE_VALID="$(node -e '
+              const release = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+              const valid = release?.tag_name === process.argv[2] && release?.draft === false && release?.prerelease === false;
+              process.stdout.write(valid ? "true" : "false");
+            ' "$RECOVERY_RELEASE_METADATA_PATH" "$RELEASE_TAG")"
+            test "$RELEASE_VALID" = "true" || {
+              echo "::error::Provenance recovery requires the existing non-draft, non-prerelease GitHub Release"
+              exit 1
+            }
+            node "$POLICY_SCRIPT" verify-recovery-dispatch \
+              --event-name "$RELEASE_EVENT_NAME" \
+              --github-ref "$GITHUB_REF" \
+              --workflow-ref "$WORKFLOW_REF" \
+              --workflow-sha "$WORKFLOW_SHA" \
+              --github-sha "$GITHUB_SHA" \
+              --main-sha "$RECOVERY_MAIN_SHA" \
+              --tag "$RELEASE_TAG" \
+              --tag-commit "$EXPECTED_GIT_HEAD" \
+              --package-version "$PACKAGE_VERSION" \
+              --provenance-recovery "$PROVENANCE_RECOVERY" \
+              --release-valid "$RELEASE_VALID" \
+              --package-exists "$PACKAGE_ALREADY_EXISTS" \
+              --proof-output "$RECOVERY_PROOF_PATH"
           fi
           node scripts/check-public-release-ready.mjs \
             --manifest docs/public-release-manifest.json \
@@ -211,16 +342,29 @@ jobs:
             --pack pack.json \
             --tarball "$PACK_TARBALL" \
             --existing-package-recovery "$PACKAGE_ALREADY_EXISTS"
-          if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+          # BEGIN V104_PROVENANCE_RECOVERY_PUBLISH_GUARD
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            test "$PACKAGE_ALREADY_EXISTS" = "true" || {
+              echo "::error::Provenance recovery requires neondiff@$PACKAGE_VERSION to already exist"
+              exit 1
+            }
+            echo "neondiff@$PACKAGE_VERSION already exists; provenance recovery will not publish"
+          elif [ "$PACKAGE_ALREADY_EXISTS" = "true" ]; then
             echo "neondiff@$PACKAGE_VERSION already exists; verifying reviewed tarball identity"
           else
             npm publish "$PACK_TARBALL" --provenance --access public --tag "release-candidate"
           fi
+          # END V104_PROVENANCE_RECOVERY_PUBLISH_GUARD
           rm -f remote-package.json registry-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
             rm -f registry-metadata.tmp.json
-            if npm view "neondiff@$PACKAGE_VERSION" version dist.integrity dist.shasum gitHead dist.attestations --json > registry-metadata.tmp.json 2>/dev/null && \
-              node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' registry-metadata.tmp.json; then
+            if npm view "neondiff@$PACKAGE_VERSION" version dist.integrity dist.shasum gitHead dist.attestations --json --prefer-online > registry-metadata.tmp.json 2>/dev/null && \
+              node -e '
+                const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+                if (!value || Array.isArray(value) || typeof value !== "object") process.exit(1);
+                if (value.version !== process.argv[2] || typeof value["dist.integrity"] !== "string" || typeof value["dist.shasum"] !== "string") process.exit(1);
+                if (typeof value["dist.attestations"]?.url !== "string") process.exit(1);
+              ' registry-metadata.tmp.json "$PACKAGE_VERSION"; then
               mv registry-metadata.tmp.json remote-package.json
               break
             fi
@@ -230,11 +374,6 @@ jobs:
             echo "::error::npm registry metadata remained unavailable or invalid after retries"
             exit 1
           }
-          node scripts/npm-release-policy.mjs verify-pack \
-            --local-pack pack.json \
-            --remote-metadata remote-package.json \
-            --expected-version "$PACKAGE_VERSION" \
-            --expected-git-head "$EXPECTED_GIT_HEAD"
           # shellcheck disable=SC2016
           ATTESTATION_URL="$(node -e '
             const metadata = require("./remote-package.json");
@@ -254,7 +393,9 @@ jobs:
             --retry-max-time 120 \
             "$ATTESTATION_URL" > npm-attestations.json
           EXPECTED_INTEGRITY="$(node -e 'const [pack] = require("./pack.json"); process.stdout.write(pack.integrity ?? "")')"
-          node scripts/verify-npm-provenance.mjs \
+          VERIFIED_PROVENANCE_PATH="$RUNNER_TEMP/verified-npm-provenance.json"
+          rm -f "$VERIFIED_PROVENANCE_PATH"
+          node "$PROVENANCE_VERIFIER" \
             --attestations npm-attestations.json \
             --expected-package neondiff \
             --expected-version "$PACKAGE_VERSION" \
@@ -262,7 +403,12 @@ jobs:
             --expected-repository "$GITHUB_REPOSITORY" \
             --expected-workflow .github/workflows/publish-npm.yml \
             --expected-tag "$RELEASE_TAG" \
-            --expected-commit "$EXPECTED_GIT_HEAD"
+            --expected-commit "$EXPECTED_GIT_HEAD" \
+            > "$VERIFIED_PROVENANCE_PATH"
+          test -s "$VERIFIED_PROVENANCE_PATH" || {
+            echo "::error::Verified npm provenance result is missing"
+            exit 1
+          }
           SIGNATURE_VERIFY_ROOT="$RUNNER_TEMP/neondiff-signature-verify"
           rm -rf "$SIGNATURE_VERIFY_ROOT"
           npm install --ignore-scripts --prefix "$SIGNATURE_VERIFY_ROOT" "neondiff@$PACKAGE_VERSION" >/dev/null
@@ -275,6 +421,21 @@ jobs:
             echo "::error::npm signature or provenance verification failed"
             exit 1
           }
+          VERIFY_PACK_ARGS=(
+            --local-pack pack.json
+            --remote-metadata remote-package.json
+            --expected-version "$PACKAGE_VERSION"
+            --expected-git-head "$EXPECTED_GIT_HEAD"
+            --verified-provenance "$VERIFIED_PROVENANCE_PATH"
+            --expected-package neondiff
+            --expected-repository "$GITHUB_REPOSITORY"
+            --expected-workflow .github/workflows/publish-npm.yml
+            --expected-tag "$RELEASE_TAG"
+          )
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            VERIFY_PACK_ARGS+=(--recovery-proof "$RECOVERY_PROOF_PATH")
+          fi
+          node "$POLICY_SCRIPT" verify-pack "${VERIFY_PACK_ARGS[@]}"
           EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
           rm -f channel-metadata.json channel-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -291,19 +452,48 @@ jobs:
             exit 1
           }
           CURRENT_TAG_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags[process.argv[2]] ?? "")' channel-metadata.json "$NPM_TAG")"
-          node scripts/npm-release-policy.mjs verify-channel \
+          node "$POLICY_SCRIPT" verify-channel \
             --current-version "$CURRENT_TAG_VERSION" \
             --target-version "$PACKAGE_VERSION" \
             --expected-predecessor "$EXPECTED_PREDECESSOR" \
             --npm-tag "$NPM_TAG"
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            PREPROMOTION_MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+            test "$PREPROMOTION_MAIN_SHA" = "$GITHUB_SHA" || {
+              echo "::error::Protected main advanced before npm promotion; refusing dist-tag mutation"
+              exit 1
+            }
+          fi
           npm view neondiff dist-tags --json --prefer-online > prepromotion-channel.json
           PREPROMOTION_TAG_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(tags[process.argv[2]] ?? "")' prepromotion-channel.json "$NPM_TAG")"
-          node scripts/npm-release-policy.mjs verify-channel \
+          PREPROMOTION_QUARANTINE_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(tags["release-candidate"] ?? "")' prepromotion-channel.json)"
+          # BEGIN V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            node "$POLICY_SCRIPT" verify-recovery-channels \
+              --latest-version "$PREPROMOTION_TAG_VERSION" \
+              --quarantine-version "$PREPROMOTION_QUARANTINE_VERSION" \
+              --target-version "$PACKAGE_VERSION" \
+              --expected-predecessor "$EXPECTED_PREDECESSOR"
+          fi
+          node "$POLICY_SCRIPT" verify-channel \
             --current-version "$PREPROMOTION_TAG_VERSION" \
             --target-version "$PACKAGE_VERSION" \
             --expected-predecessor "$EXPECTED_PREDECESSOR" \
             --npm-tag "$NPM_TAG"
-          npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"
+          if [ "$PREPROMOTION_TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+              if npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"; then
+                echo "npm dist-tag promotion command was accepted; confirming registry state"
+              else
+                PROMOTION_COMMAND_STATUS=$?
+                echo "::warning::npm dist-tag promotion returned nonzero (exit $PROMOTION_COMMAND_STATUS); confirming registry state before deciding recovery outcome"
+              fi
+            else
+              npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"
+            fi
+          fi
+          # END V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD
           # BEGIN POST_PROMOTION_CONFIRMATION
           NPM_CONFIRM_ATTEMPTS="${NPM_CONFIRM_ATTEMPTS:-12}" \
           NPM_CONFIRM_DELAY_MS="${NPM_CONFIRM_DELAY_MS:-5000}" \
@@ -422,3 +612,4 @@ jobs:
           process.exit(0);
           NODE
           # END POST_PROMOTION_CONFIRMATION
+          # END V104_PROVENANCE_RECOVERY_MUTATION_GATE

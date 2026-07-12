@@ -116,16 +116,31 @@ describe("NeonDiff public release readiness", () => {
       candidateSourceSha?: string;
       proofRunUrl?: string;
       activationProofPath?: string;
+      recoveryIssue?: string;
+      releaseCommit?: string;
+      githubReleaseUrl?: string;
+      publishRunUrl?: string;
+      proofBoundaryPhase?: string;
+      nextPhase?: string;
+      pendingRecoveryAction?: string;
       packageArtifact?: { shasum?: string; integrity?: string };
-      proofBoundary?: { forbidden?: string[] };
+      registry?: { state?: string; gitHeadState?: string; latest?: string; releaseCandidate?: string };
+      proofBoundary?: { allowed?: string[]; forbidden?: string[] };
     };
     expect(candidateLedger).toMatchObject({
       version: "v1.0.4",
       packageVersion: "1.0.4",
       publishedVersionAtCandidateCut: "v1.0.3",
-      state: "protected_main_candidate_proven_pending_publication",
+      state: "immutable_package_published_quarantined_pending_provenance_recovery",
       trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532",
+      recoveryIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/542",
       candidateSourceSha: "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+      releaseCommit: "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
+      githubReleaseUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.4",
+      publishRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185873762",
+      proofBoundaryPhase: "pre_recovery",
+      nextPhase: "post_recovery",
+      pendingRecoveryAction: expect.stringMatching(/replace this pre-recovery ledger.*successful workflow run/i),
       proofRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
       activationProofPath:
         "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
@@ -133,8 +148,24 @@ describe("NeonDiff public release readiness", () => {
         shasum: "526c04bd24673351b9cc7136d8747df00ffaa2be",
         integrity:
           "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw=="
+      },
+      registry: {
+        state: "published_quarantined",
+        gitHeadState: "absent_reviewed_tarball_publish",
+        latest: "1.0.3",
+        releaseCandidate: "1.0.4"
       }
     });
+    expect(candidateLedger.proofBoundary?.allowed).toContain(
+      "registry exposes npm attestation metadata pending successful recovery verification"
+    );
+    expect(candidateLedger.proofBoundary?.allowed?.join("\n")).not.toMatch(/npm signatures.*bind/i);
+    expect(candidateLedger.proofBoundary?.forbidden).toEqual([
+      "npm latest points to 1.0.4",
+      "release-candidate cleanup completed",
+      "public-registry install and activation smoke completed",
+      "predecessor releases or artifacts are safe to remove"
+    ]);
     expect(candidateLedger.proofBoundary?.forbidden).not.toContain("v1.0.4 activation proof exists");
     expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.3\}"/);
     for (const path of ["README.md", "docs/SETUP.md"]) {
@@ -593,8 +624,8 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/fetch-depth:\s*0/);
     expect(publish).toMatch(/npm-release-policy\.mjs classify/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-git/);
-    expect(publish).toMatch(/npm-release-policy\.mjs verify-pack/);
-    expect(publish).toMatch(/npm-release-policy\.mjs verify-pack[\s\S]*--expected-git-head "\$EXPECTED_GIT_HEAD"/);
+    expect(publish).toMatch(/node "\$POLICY_SCRIPT" verify-pack/);
+    expect(publish).toMatch(/VERIFY_PACK_ARGS=\([\s\S]*--expected-git-head "\$EXPECTED_GIT_HEAD"[\s\S]*node "\$POLICY_SCRIPT" verify-pack/);
     expect(publish).toMatch(/verify-npm-provenance\.mjs/);
     expect(publish).toMatch(/npm audit signatures --prefix "\$SIGNATURE_VERIFY_ROOT" --json/);
     expect(publish).toMatch(/REQUIRED_EVIDENCE_KINDS/);
@@ -604,7 +635,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/--signer-workflow electricsheephq\/evaos-code-review-bot-neondiff\/\.github\/workflows\/license-lifecycle-proof\.yml/);
     expect(publish).toMatch(/--signer-digest "\$CANDIDATE_HEAD"/);
     expect(publish).toMatch(/--source-ref refs\/heads\/main/);
-    expect(publish).toMatch(/npm-release-policy\.mjs verify-channel/);
+    expect(publish).toMatch(/node "\$POLICY_SCRIPT" verify-channel/);
     expect(publish).toMatch(/prepromotion-channel\.json/);
     expect(publish.indexOf("prepromotion-channel.json")).toBeLessThan(
       publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
@@ -616,6 +647,14 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toContain('test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"');
     expect(publish.indexOf('test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"')).toBeLessThan(
       publish.indexOf('npm publish "$PACK_TARBALL" --provenance')
+    );
+    expect(publish).toContain('test "$RELEASE_TAG" = "v1.0.4"');
+    expect(publish).toContain('test "$TAG_COMMIT" = "fc66d27b6ab9f6a1eb8282d289ef63407cd96982"');
+    expect(publish.indexOf('test "$RELEASE_TAG" = "v1.0.4"')).toBeLessThan(
+      publish.indexOf("node scripts/npm-release-policy.mjs verify-git")
+    );
+    expect(publish.indexOf('test "$TAG_COMMIT" = "fc66d27b6ab9f6a1eb8282d289ef63407cd96982"')).toBeLessThan(
+      publish.indexOf("Classify npm package release")
     );
     expect(releasePolicy).toMatch(/npm tarball integrity does not match the reviewed pack/);
     expect(publish.indexOf("verify-npm-provenance.mjs")).toBeLessThan(
@@ -645,9 +684,9 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/previousReleasedPackageVersion/);
     expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance --access public --tag "release-candidate"/);
     expect(publish.indexOf('npm publish "$PACK_TARBALL" --provenance --access public --tag "release-candidate"')).toBeLessThan(
-      publish.indexOf("npm-release-policy.mjs verify-pack")
+      publish.indexOf('node "$POLICY_SCRIPT" verify-pack')
     );
-    expect(publish.indexOf("npm-release-policy.mjs verify-pack")).toBeLessThan(
+    expect(publish.indexOf('node "$POLICY_SCRIPT" verify-pack')).toBeLessThan(
       publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
     );
     expect(publish).toMatch(/default:\s*v1\.0\.4/);
@@ -658,6 +697,88 @@ describe("NeonDiff public release readiness", () => {
       publish.indexOf('npm publish "$PACK_TARBALL" --provenance')
     );
     expect(publish).toMatch(/curl[\s\S]*--connect-timeout 10[\s\S]*--max-time 30[\s\S]*--retry 3[\s\S]*--retry-all-errors/);
+    expect(publish).toMatch(/provenance_recovery:\s*\n\s*description:[^\n]*\n\s*required:\s*true\n\s*type:\s*boolean\n\s*default:\s*false/);
+    expect(publish).toMatch(/WORKFLOW_REF:\s*\$\{\{\s*github\.workflow_ref\s*\}\}/);
+    expect(publish).toMatch(/WORKFLOW_SHA:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
+    const publishStepHeader = publish.split("- name: Publish or verify existing package")[1]?.split("run: |")[0] ?? "";
+    expect(publishStepHeader).toMatch(/PROVENANCE_RECOVERY:\s*\$\{\{\s*inputs\.provenance_recovery \|\| false\s*\}\}/);
+    expect(publishStepHeader).toMatch(/RELEASE_TAG:\s*\$\{\{\s*github\.event\.inputs\.tag \|\| github\.event\.release\.tag_name\s*\}\}/);
+    expect(publishStepHeader).toMatch(/WORKFLOW_REF:\s*\$\{\{\s*github\.workflow_ref\s*\}\}/);
+    expect(publishStepHeader).toMatch(/WORKFLOW_SHA:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
+    expect(publish).toMatch(/verify-recovery-dispatch/);
+    expect(publish).toContain('[ "$GITHUB_REF" = "refs/heads/main" ] || [ "$WORKFLOW_REF" = "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main" ]');
+    expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
+    const mutationGateStart = publish.indexOf("BEGIN V104_PROVENANCE_RECOVERY_MUTATION_GATE");
+    const recoveryMainFetch = publish.indexOf(
+      "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+      mutationGateStart
+    );
+    expect(recoveryMainFetch).toBeGreaterThan(mutationGateStart);
+    expect(recoveryMainFetch).toBeLessThan(
+      publish.indexOf('RECOVERY_RELEASE_METADATA_PATH="$RUNNER_TEMP/recovery-release-metadata.json"')
+    );
+    expect(publish).toMatch(/RECOVERY_MAIN_SHA="\$\(git rev-parse refs\/remotes\/origin\/main\)"/);
+    expect(publish).toMatch(/--main-sha "\$RECOVERY_MAIN_SHA"/);
+    expect(publish.indexOf('RECOVERY_RELEASE_METADATA_PATH="$RUNNER_TEMP/recovery-release-metadata.json"')).toBeGreaterThan(
+      mutationGateStart
+    );
+    expect(publish.indexOf('RECOVERY_RELEASE_METADATA_PATH="$RUNNER_TEMP/recovery-release-metadata.json"')).toBeLessThan(
+      publish.indexOf('node "$POLICY_SCRIPT" verify-recovery-dispatch')
+    );
+    expect(publish).toMatch(/--release-valid "\$RELEASE_VALID"/);
+    expect(publish).not.toContain("--release-valid true");
+    expect(publish).toMatch(/RECOVERY_PROOF_PATH="\$RUNNER_TEMP\/v1\.0\.4-recovery-dispatch-proof\.json"/);
+    expect(publish).toMatch(/--proof-output "\$RECOVERY_PROOF_PATH"/);
+    expect(publish).toMatch(/--recovery-proof "\$RECOVERY_PROOF_PATH"/);
+    expect(publish).toMatch(/if \[ "\$PROVENANCE_RECOVERY" = "true" \]; then\s+VERIFY_PACK_ARGS\+=\(--recovery-proof "\$RECOVERY_PROOF_PATH"\)\s+fi\s+node "\$POLICY_SCRIPT" verify-pack "\$\{VERIFY_PACK_ARGS\[@\]\}"/);
+    expect(publish.indexOf('--proof-output "$RECOVERY_PROOF_PATH"')).toBeLessThan(
+      publish.indexOf('--recovery-proof "$RECOVERY_PROOF_PATH"')
+    );
+    expect(publish).toMatch(/--github-ref "\$GITHUB_REF"/);
+    expect(publish).toMatch(/--workflow-ref "\$WORKFLOW_REF"/);
+    expect(publish).toMatch(/--workflow-sha "\$WORKFLOW_SHA"/);
+    expect(publish).toMatch(/--package-exists "\$PACKAGE_ALREADY_EXISTS"/);
+    expect(publish).toMatch(/Checkout protected-main recovery policy/);
+    expect(publish).toMatch(/- name: Checkout protected-main recovery policy\n\s+if: \$\{\{[^\n]*steps\.package_release\.outputs\.should_publish == 'true'[^\n]*\}\}/);
+    expect(publish).toMatch(/- name: Verify protected-main recovery policy checkout\n\s+if: \$\{\{[^\n]*steps\.package_release\.outputs\.should_publish == 'true'[^\n]*\}\}/);
+    expect(publish).toMatch(/path:\s*\.recovery-policy/);
+    expect(publish).toMatch(/ref:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
+    expect(publish.indexOf('npm pack --json --pack-destination "$PACK_DIR" > pack.json')).toBeLessThan(
+      publish.indexOf("Checkout protected-main recovery policy")
+    );
+    expect(publish).toMatch(/git -C \.recovery-policy rev-parse HEAD/);
+    expect(publish).toMatch(/BEGIN V104_PROVENANCE_RECOVERY_PUBLISH_GUARD/);
+    expect(publish).toMatch(/END V104_PROVENANCE_RECOVERY_PUBLISH_GUARD/);
+    expect(publish).toMatch(/provenance recovery requires neondiff@\$PACKAGE_VERSION to already exist/i);
+    expect(publish).toMatch(/VERIFIED_PROVENANCE_PATH="\$RUNNER_TEMP\/verified-npm-provenance\.json"/);
+    expect(publish).toMatch(/rm -f "\$VERIFIED_PROVENANCE_PATH"/);
+    expect(publish).toMatch(/verify-npm-provenance\.mjs[\s\S]*> "\$VERIFIED_PROVENANCE_PATH"/);
+    expect(publish).toMatch(/--verified-provenance "\$VERIFIED_PROVENANCE_PATH"/);
+    expect(publish.indexOf('> "$VERIFIED_PROVENANCE_PATH"')).toBeLessThan(
+      publish.indexOf('--verified-provenance "$VERIFIED_PROVENANCE_PATH"')
+    );
+    expect(publish.indexOf('npm audit signatures --prefix "$SIGNATURE_VERIFY_ROOT" --json')).toBeLessThan(
+      publish.indexOf('node "$POLICY_SCRIPT" verify-pack')
+    );
+    expect(publish.indexOf('npm audit signatures --prefix "$SIGNATURE_VERIFY_ROOT" --json')).toBeLessThan(
+      publish.indexOf("BEGIN V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD")
+    );
+    const prepromotionMainFetch = publish.indexOf(
+      "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+      recoveryMainFetch + 1
+    );
+    expect(prepromotionMainFetch).toBeGreaterThan(
+      publish.indexOf('node "$POLICY_SCRIPT" verify-pack')
+    );
+    expect(prepromotionMainFetch).toBeLessThan(
+      publish.indexOf("BEGIN V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD")
+    );
+    expect(publish).toMatch(/verify-recovery-channels/);
+    expect(publish).toMatch(/BEGIN V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD/);
+    expect(publish).toMatch(/END V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD/);
+    expect(publish.indexOf("verify-recovery-channels")).toBeLessThan(
+      publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
+    );
 
     expect(lifecycle).toMatch(/workflow_dispatch:/);
     expect(lifecycle).toMatch(/concurrency:\s*\n\s*group:\s*neondiff-license-lifecycle-production/);
@@ -694,12 +815,22 @@ describe("NeonDiff public release readiness", () => {
     const recovery = governance.split("### Partial Quarantine Promotion Recovery")[1]?.split("## Tag And Release")[0] ?? "";
     expect(recovery).toMatch(/gh workflow run publish-npm\.yml/);
     expect(recovery).toMatch(/--ref v<version>/);
-    expect(recovery).not.toMatch(/--ref main/);
     expect(recovery).toMatch(/-f tag=v<version>/);
+    expect(recovery).toMatch(/--ref main/);
+    expect(recovery).toMatch(/-f tag=v1\.0\.4/);
+    expect(recovery).toMatch(/-f provenance_recovery=true/);
+    expect(recovery).toMatch(/v1\.0\.4-only/i);
+    expect(recovery).toMatch(/cannot publish|does not publish/i);
     expect(recovery).toMatch(/direct dist-tag mutation is not supported/i);
     expect(recovery).toMatch(/waives only the normal 24-hour activation-proof/);
     expect(recovery).toMatch(/30-day maximum-age ceiling/);
     expect(recovery).not.toMatch(/npm dist-tag add/);
     expect(recovery).not.toMatch(/npm dist-tag rm/);
+
+    const changelog = read("CHANGELOG.md").split("## [1.0.4]")[0] ?? "";
+    expect(changelog).toMatch(/#542/);
+    expect(changelog).toMatch(/reviewed\s+tarball/i);
+    expect(changelog).toMatch(/Sigstore\/SLSA provenance/i);
+    expect(changelog).not.toMatch(/latest=1\.0\.4|public install succeeded/i);
   });
 });
