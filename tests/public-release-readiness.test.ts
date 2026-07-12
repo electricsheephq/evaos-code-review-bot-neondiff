@@ -122,6 +122,8 @@ describe("NeonDiff public release readiness", () => {
     for (const path of ["README.md", "docs/SETUP.md"]) {
       const releaseNotice = read(path);
       const normalizedReleaseNotice = releaseNotice.replace(/^>\s?/gm, "").replace(/\s+/g, " ");
+      expect(normalizedReleaseNotice).toContain("v1.0.4 verification notice:");
+      expect(normalizedReleaseNotice).not.toContain("v1.0.4 release notice:");
       expect(normalizedReleaseNotice).toContain(
         "v1.0.4 is the first package intended to enforce mandatory API-backed activation."
       );
