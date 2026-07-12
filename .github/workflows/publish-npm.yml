@@ -194,7 +194,7 @@ jobs:
             --existing-package-recovery "$PACKAGE_ALREADY_EXISTS"
 
       - name: Checkout protected-main recovery policy
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
+        if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ github.workflow_sha }}
@@ -203,7 +203,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify protected-main recovery policy checkout
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
+        if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
         env:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |

@@ -699,6 +699,8 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/--workflow-sha "\$WORKFLOW_SHA"/);
     expect(publish).toMatch(/--package-exists "\$PACKAGE_ALREADY_EXISTS"/);
     expect(publish).toMatch(/Checkout protected-main recovery policy/);
+    expect(publish).toMatch(/- name: Checkout protected-main recovery policy\n\s+if: \$\{\{[^\n]*steps\.package_release\.outputs\.should_publish == 'true'[^\n]*\}\}/);
+    expect(publish).toMatch(/- name: Verify protected-main recovery policy checkout\n\s+if: \$\{\{[^\n]*steps\.package_release\.outputs\.should_publish == 'true'[^\n]*\}\}/);
     expect(publish).toMatch(/path:\s*\.recovery-policy/);
     expect(publish).toMatch(/ref:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
     expect(publish.indexOf('npm pack --json --pack-destination "$PACK_DIR" > pack.json')).toBeLessThan(

@@ -97,13 +97,13 @@ describe("v1.0.4 npm provenance recovery workflow", () => {
     writeFileSync(join(root, "scripts", "npm-release-policy.mjs"), "throw new Error('tag-root recovery policy must not execute');\n");
     writeFileSync(join(root, "scripts", "verify-npm-provenance.mjs"), "throw new Error('tag-root provenance verifier must not execute');\n");
     const state = join(root, "npm-state");
-    writeFileSync(state, `LATEST=${JSON.stringify(initialLatest)}\nQUARANTINE=${JSON.stringify(initialQuarantine)}\nCHANNEL_READS=0\n`);
+    writeFileSync(state, `LATEST=${JSON.stringify(initialLatest)}\nQUARANTINE=${JSON.stringify(initialQuarantine)}\nCHANNEL_READS=0\nPACKAGE_READS=0\n`);
     const npm = join(bin, "npm");
     writeFileSync(npm, `#!/usr/bin/env bash
 set -euo pipefail
 source "$NPM_STATE_FILE"
 write_state() {
-  printf 'LATEST=%q\\nQUARANTINE=%q\\nCHANNEL_READS=%q\\n' "$LATEST" "$QUARANTINE" "$CHANNEL_READS" > "$NPM_STATE_FILE.tmp"
+  printf 'LATEST=%q\\nQUARANTINE=%q\\nCHANNEL_READS=%q\\nPACKAGE_READS=%q\\n' "$LATEST" "$QUARANTINE" "$CHANNEL_READS" "$PACKAGE_READS" > "$NPM_STATE_FILE.tmp"
   mv "$NPM_STATE_FILE.tmp" "$NPM_STATE_FILE"
 }
 case "\${1:-}" in
@@ -153,7 +153,10 @@ case "\${1:-}" in
         printf '{"latest":"%s"}\\n' "$LATEST"
       fi
     else
+      PACKAGE_READS=$((PACKAGE_READS + 1))
+      write_state
       if [ "\${FAIL_STAGE:-}" = "package-missing" ]; then exit 44; fi
+      if [ "\${FAIL_STAGE:-}" = "package-transient" ] && [ "$PACKAGE_READS" -lt 3 ]; then exit 44; fi
       printf '%s\\n' '1.0.4'
     fi
     ;;
@@ -368,6 +371,18 @@ fi
     const { result, commands } = runOrchestration({}, { latest: "1.0.4", quarantine: "" });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(commands).toBe("");
+  });
+
+  it("converges transient package existence reads before the no-publish recovery guard", () => {
+    const { result, commands, registryState } = runOrchestration({ FAIL_STAGE: "package-transient" });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(commands).toBe([
+      "dist-tag add neondiff@1.0.4 latest",
+      "dist-tag rm neondiff release-candidate",
+      ""
+    ].join("\n"));
+    expect(commands).not.toMatch(/^publish\b/m);
+    expect(registryState).toMatch(/^PACKAGE_READS=3$/m);
   });
 
   it("reconciles both accepted and rejected ambiguous promotion command failures", () => {
