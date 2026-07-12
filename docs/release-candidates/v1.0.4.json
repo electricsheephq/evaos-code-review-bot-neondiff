@@ -23,6 +23,8 @@
     "releaseCandidate": "1.0.4"
   },
   "proofBoundaryPhase": "pre_recovery",
+  "nextPhase": "post_recovery",
+  "pendingRecoveryAction": "Replace this pre-recovery ledger with the successful workflow run and converged npm channel truth before closing #532.",
   "proofBoundary": {
     "allowed": [
       "protected-main candidate passed production activation lifecycle and no-bypass proof",

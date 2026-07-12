@@ -294,7 +294,7 @@ jobs:
           elif npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             PACKAGE_ALREADY_EXISTS=true
           fi
-          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then
+          if { [ "$GITHUB_REF" = "refs/heads/main" ] || [ "$WORKFLOW_REF" = "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main" ]; } && [ "$PROVENANCE_RECOVERY" != "true" ]; then
             echo "::error::Protected-main npm execution must remain in provenance recovery mode"
             exit 1
           fi
@@ -421,17 +421,21 @@ jobs:
             echo "::error::npm signature or provenance verification failed"
             exit 1
           }
-          node "$POLICY_SCRIPT" verify-pack \
-            --local-pack pack.json \
-            --remote-metadata remote-package.json \
-            --expected-version "$PACKAGE_VERSION" \
-            --expected-git-head "$EXPECTED_GIT_HEAD" \
-            --verified-provenance "$VERIFIED_PROVENANCE_PATH" \
-            --expected-package neondiff \
-            --expected-repository "$GITHUB_REPOSITORY" \
-            --expected-workflow .github/workflows/publish-npm.yml \
-            --expected-tag "$RELEASE_TAG" \
-            --recovery-proof "$RECOVERY_PROOF_PATH"
+          VERIFY_PACK_ARGS=(
+            --local-pack pack.json
+            --remote-metadata remote-package.json
+            --expected-version "$PACKAGE_VERSION"
+            --expected-git-head "$EXPECTED_GIT_HEAD"
+            --verified-provenance "$VERIFIED_PROVENANCE_PATH"
+            --expected-package neondiff
+            --expected-repository "$GITHUB_REPOSITORY"
+            --expected-workflow .github/workflows/publish-npm.yml
+            --expected-tag "$RELEASE_TAG"
+          )
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            VERIFY_PACK_ARGS+=(--recovery-proof "$RECOVERY_PROOF_PATH")
+          fi
+          node "$POLICY_SCRIPT" verify-pack "${VERIFY_PACK_ARGS[@]}"
           EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
           rm -f channel-metadata.json channel-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -482,7 +486,8 @@ jobs:
               if npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"; then
                 echo "npm dist-tag promotion command was accepted; confirming registry state"
               else
-                echo "::warning::npm dist-tag promotion returned nonzero; confirming registry state before deciding recovery outcome"
+                PROMOTION_COMMAND_STATUS=$?
+                echo "::warning::npm dist-tag promotion returned nonzero (exit $PROMOTION_COMMAND_STATUS); confirming registry state before deciding recovery outcome"
               fi
             else
               npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"

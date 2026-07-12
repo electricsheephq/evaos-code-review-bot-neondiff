@@ -443,6 +443,7 @@ fi
     ].join("\n"));
     expect(accepted.registryState).toMatch(/^LATEST=1\.0\.4$/m);
     expect(accepted.registryState).toMatch(/^QUARANTINE=''$/m);
+    expect(accepted.result.stdout).toContain("npm dist-tag promotion returned nonzero (exit 47)");
 
     const rejected = runOrchestration({ FAIL_STAGE: "promotion-rejected-error" });
     expect(rejected.result.status).not.toBe(0);
@@ -450,6 +451,7 @@ fi
     expect(rejected.registryState).toMatch(/^LATEST=1\.0\.3$/m);
     expect(rejected.registryState).toMatch(/^QUARANTINE=1\.0\.4$/m);
     expect(rejected.registryState).toMatch(/^CHANNEL_READS=4$/m);
+    expect(rejected.result.stdout).toContain("npm dist-tag promotion returned nonzero (exit 47)");
   }, 15_000);
 
   it("keeps non-recovery promotion command failures fail-fast", () => {

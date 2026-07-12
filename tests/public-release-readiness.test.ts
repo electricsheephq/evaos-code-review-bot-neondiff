@@ -121,6 +121,8 @@ describe("NeonDiff public release readiness", () => {
       githubReleaseUrl?: string;
       publishRunUrl?: string;
       proofBoundaryPhase?: string;
+      nextPhase?: string;
+      pendingRecoveryAction?: string;
       packageArtifact?: { shasum?: string; integrity?: string };
       registry?: { state?: string; gitHeadState?: string; latest?: string; releaseCandidate?: string };
       proofBoundary?: { allowed?: string[]; forbidden?: string[] };
@@ -137,6 +139,8 @@ describe("NeonDiff public release readiness", () => {
       githubReleaseUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.4",
       publishRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185873762",
       proofBoundaryPhase: "pre_recovery",
+      nextPhase: "post_recovery",
+      pendingRecoveryAction: expect.stringMatching(/replace this pre-recovery ledger.*successful workflow run/i),
       proofRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
       activationProofPath:
         "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
@@ -621,7 +625,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/npm-release-policy\.mjs classify/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-git/);
     expect(publish).toMatch(/node "\$POLICY_SCRIPT" verify-pack/);
-    expect(publish).toMatch(/node "\$POLICY_SCRIPT" verify-pack[\s\S]*--expected-git-head "\$EXPECTED_GIT_HEAD"/);
+    expect(publish).toMatch(/VERIFY_PACK_ARGS=\([\s\S]*--expected-git-head "\$EXPECTED_GIT_HEAD"[\s\S]*node "\$POLICY_SCRIPT" verify-pack/);
     expect(publish).toMatch(/verify-npm-provenance\.mjs/);
     expect(publish).toMatch(/npm audit signatures --prefix "\$SIGNATURE_VERIFY_ROOT" --json/);
     expect(publish).toMatch(/REQUIRED_EVIDENCE_KINDS/);
@@ -702,6 +706,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publishStepHeader).toMatch(/WORKFLOW_REF:\s*\$\{\{\s*github\.workflow_ref\s*\}\}/);
     expect(publishStepHeader).toMatch(/WORKFLOW_SHA:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
     expect(publish).toMatch(/verify-recovery-dispatch/);
+    expect(publish).toContain('[ "$GITHUB_REF" = "refs/heads/main" ] || [ "$WORKFLOW_REF" = "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main" ]');
     expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
     const mutationGateStart = publish.indexOf("BEGIN V104_PROVENANCE_RECOVERY_MUTATION_GATE");
     const recoveryMainFetch = publish.indexOf(
@@ -725,6 +730,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/RECOVERY_PROOF_PATH="\$RUNNER_TEMP\/v1\.0\.4-recovery-dispatch-proof\.json"/);
     expect(publish).toMatch(/--proof-output "\$RECOVERY_PROOF_PATH"/);
     expect(publish).toMatch(/--recovery-proof "\$RECOVERY_PROOF_PATH"/);
+    expect(publish).toMatch(/if \[ "\$PROVENANCE_RECOVERY" = "true" \]; then\s+VERIFY_PACK_ARGS\+=\(--recovery-proof "\$RECOVERY_PROOF_PATH"\)\s+fi\s+node "\$POLICY_SCRIPT" verify-pack "\$\{VERIFY_PACK_ARGS\[@\]\}"/);
     expect(publish.indexOf('--proof-output "$RECOVERY_PROOF_PATH"')).toBeLessThan(
       publish.indexOf('--recovery-proof "$RECOVERY_PROOF_PATH"')
     );
