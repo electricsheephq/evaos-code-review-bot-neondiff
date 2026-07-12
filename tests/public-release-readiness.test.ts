@@ -61,7 +61,7 @@ describe("NeonDiff public release readiness", () => {
     };
 
     expect(pkg.name).toBe("neondiff");
-    expect(pkg.version).toBe("1.0.3");
+    expect(pkg.version).toBe("1.0.4");
     expect(pkg.private).toBeUndefined();
     expect(pkg.description).toMatch(/local-first AI PR reviewer/i);
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
@@ -95,10 +95,10 @@ describe("NeonDiff public release readiness", () => {
     ]);
 
     expect(lock.name).toBe("neondiff");
-    expect(lock.version).toBe("1.0.3");
+    expect(lock.version).toBe("1.0.4");
     expect(lock.packages?.[""]).toMatchObject({
       name: "neondiff",
-      version: "1.0.3",
+      version: "1.0.4",
       license: "SEE LICENSE IN LICENSE.md",
       bin: { neondiff: "dist/src/cli.js" }
     });
@@ -109,6 +109,28 @@ describe("NeonDiff public release readiness", () => {
       state: "published",
       previousReleasedPackageVersion: "1.0.2"
     });
+    expect(existsSync("docs/release-candidates/v1.0.4.json")).toBe(true);
+    if (!existsSync("docs/release-candidates/v1.0.4.json")) return;
+    expect(JSON.parse(read("docs/release-candidates/v1.0.4.json"))).toMatchObject({
+      version: "v1.0.4",
+      packageVersion: "1.0.4",
+      publishedVersionAtCandidateCut: "v1.0.3",
+      state: "protected_main_candidate_pending_production_proof",
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532"
+    });
+    expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.3\}"/);
+    for (const path of ["README.md", "docs/SETUP.md"]) {
+      const releaseNotice = read(path);
+      const normalizedReleaseNotice = releaseNotice.replace(/^>\s?/gm, "").replace(/\s+/g, " ");
+      expect(normalizedReleaseNotice).toContain(
+        "v1.0.4 is the first package intended to enforce mandatory API-backed activation."
+      );
+      expect(normalizedReleaseNotice).toContain(
+        "Verify `npm view neondiff version` and the matching non-prerelease GitHub Release before relying on it"
+      );
+      expect(normalizedReleaseNotice).toContain("v1.0.3 and earlier do not enforce this boundary.");
+      expect(releaseNotice).not.toContain("this source branch");
+    }
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.29-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.36-beta.1");
     expect(manifest.packageArtifact?.skippedPublicPackageVersions).toContain("v0.4.37-beta.1");

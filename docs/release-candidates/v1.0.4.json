@@ -1,0 +1,19 @@
+{
+  "version": "v1.0.4",
+  "packageVersion": "1.0.4",
+  "publishedVersionAtCandidateCut": "v1.0.3",
+  "state": "protected_main_candidate_pending_production_proof",
+  "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532",
+  "proofWorkflow": ".github/workflows/license-lifecycle-proof.yml",
+  "proofBoundary": {
+    "allowed": [
+      "package bytes and version are ready for protected-main lifecycle proof"
+    ],
+    "forbidden": [
+      "v1.0.4 is published",
+      "v1.0.4 activation proof exists",
+      "npm latest points to 1.0.4",
+      "predecessor releases or artifacts are safe to remove"
+    ]
+  }
+}
