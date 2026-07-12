@@ -292,12 +292,13 @@ describe("Review Bench public-source verification", () => {
       pullHeadSha: revision,
       pullBaseSha: baseRevision
     });
-    await expect(verifyGitHubReviewBenchSource({
+    const stableRecord = await verifyGitHubReviewBenchSource({
       scenario: pullDraft,
       sourceArtifact: artifact,
       fetchImpl: successfulFetch,
       verifiedAt: VERIFIED_AT
-    })).resolves.toEqual(expect.objectContaining({
+    });
+    expect(stableRecord).toEqual(expect.objectContaining({
       sourceMetadataSha256: expect.stringMatching(/^[a-f0-9]{64}$/)
     }));
     expect(vi.mocked(successfulFetch).mock.calls.map(([url]) => String(url))).toContain(
@@ -313,7 +314,7 @@ describe("Review Bench public-source verification", () => {
       }),
       verifiedAt: VERIFIED_AT
     })).rejects.toThrow("PR head");
-    await expect(verifyGitHubReviewBenchSource({
+    const advancedBaseRecord = await verifyGitHubReviewBenchSource({
       scenario: pullDraft,
       sourceArtifact: artifact,
       fetchImpl: githubFetch({
@@ -322,7 +323,8 @@ describe("Review Bench public-source verification", () => {
         pullBaseSha: "f".repeat(40)
       }),
       verifiedAt: VERIFIED_AT
-    })).rejects.toThrow("PR head");
+    });
+    expect(advancedBaseRecord.sourceMetadataSha256).toBe(stableRecord.sourceMetadataSha256);
   });
 
   it("rejects tampering with a stored source-verification record", async () => {

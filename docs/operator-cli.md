@@ -120,7 +120,10 @@ evaos-review-bot status --config config.local.json
   revision-specific license evidence against GitHub. Every defect gold label
   must identify a canonical repository-relative path and a final-revision
   (new-side) context or added line inside a verified diff hunk; deletion-only
-  lines are not valid Corpus v1 anchors. The command then creates one
+  lines are not valid Corpus v1 anchors. Corpus v1 also fails closed on Git
+  C-quoted unusual filenames rather than decoding them. GitHub source and
+  license artifacts must be served directly from their validated canonical
+  origins; redirects are rejected. The command then creates one
   no-clobber receipt containing the corpus and verification-evidence hashes.
   Write the receipt outside the checkout under `/Volumes/LEXAR/Codex/evals`.
   The command does not invoke a model/provider, post to GitHub, publish a

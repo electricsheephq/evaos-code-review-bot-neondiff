@@ -532,7 +532,7 @@ describe("Review Bench Corpus v1 contract", () => {
     expect(() => validateReviewBenchCorpus(corpus([
       scenario({ license: { spdxId: "MIT OR Apache-2.0", licenseUrl: scenario().license.licenseUrl } }),
       holdout
-    ]))).not.toThrow();
+    ]))).toThrow("single SPDX identifier");
   });
 
   it("rejects whitespace and case aliases for the same adjudicator", () => {

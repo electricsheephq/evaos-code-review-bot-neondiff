@@ -679,8 +679,11 @@ function validateScenario(scenario: ReviewBenchScenarioV1, path: string): void {
   requireNonEmpty(scenario.license.spdxId, `${path}.license.spdxId`);
   const licenseValidation = validateNpmPackageLicense(scenario.license.spdxId);
   if (!licenseValidation.validForNewPackages ||
+      !/^[A-Za-z0-9][A-Za-z0-9.+-]*$/.test(scenario.license.spdxId) ||
       ["NONE", "NOASSERTION", "UNLICENSED"].includes(scenario.license.spdxId.toUpperCase())) {
-    throw new Error(`${path}.license.spdxId must be a verified SPDX identifier`);
+    throw new Error(
+      `${path}.license.spdxId must be a verified SPDX identifier and a single SPDX identifier`
+    );
   }
   requirePublicHttpsUrl(scenario.license.licenseUrl, `${path}.license.licenseUrl`);
   if (!scenario.provenance || typeof scenario.provenance !== "object") {

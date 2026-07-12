@@ -274,7 +274,6 @@ async function verifySourceMetadata(
     const base = requireRecord(record.base, "GitHub pull request base");
     const baseRepository = requireRecord(base.repo, "GitHub pull request base repository");
     if (record.number !== pullNumber || head.sha !== scenario.sourceRevision ||
-        base.sha !== scenario.provenance.baseRevision ||
         typeof baseRepository.full_name !== "string" ||
         baseRepository.full_name.toLowerCase() !== repository) {
       throw new Error("GitHub pull request metadata does not bind sourceRevision to repository PR head");
@@ -283,7 +282,7 @@ async function verifySourceMetadata(
       kind: "pull_request",
       pullNumber,
       headSha: head.sha,
-      baseSha: base.sha,
+      pinnedBaseSha: scenario.provenance.baseRevision,
       baseRepository: baseRepository.full_name.toLowerCase()
     }));
   }
