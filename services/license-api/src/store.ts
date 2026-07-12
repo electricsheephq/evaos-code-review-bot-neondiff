@@ -16,18 +16,11 @@ export interface LicenseStoreOptions {
   migrationHook?: (step: SchemaMigrationStep) => void;
 }
 
-interface TableColumn {
-  name: string;
+interface SchemaObjectSignature {
   type: string;
-  notnull: number;
-  dflt_value: string | null;
-  pk: number;
-}
-
-interface ForeignKeyRow {
-  table: string;
-  from: string;
-  to: string;
+  name: string;
+  tableName: string;
+  sql: string;
 }
 
 const CORE_SCHEMA = `
@@ -104,73 +97,8 @@ const LIFECYCLE_SCHEMA = `
     on license_subscription_lifecycle_events (issuance_idempotency_key, event_created_at);
 `;
 
-const EXPECTED_COLUMNS: Record<string, readonly TableColumn[]> = {
-  licenses: [
-    column("license_key_hash", "TEXT", 0, null, 1),
-    column("plan", "TEXT", 1),
-    column("repo_visibility_scope", "TEXT", 1),
-    column("private_repo_allowed", "INTEGER", 1, "1"),
-    column("update_entitlement", "INTEGER", 1, "0"),
-    column("seats", "INTEGER", 1, "1"),
-    column("expires_at", "TEXT", 0),
-    column("status", "TEXT", 1, "'active'"),
-    column("revocation_reason", "TEXT", 0),
-    column("created_at", "TEXT", 1, "datetime('now')")
-  ],
-  activations: [
-    column("license_key_hash", "TEXT", 1, null, 1),
-    column("machine_id", "TEXT", 1, null, 2),
-    column("repo", "TEXT", 0),
-    column("activated_at", "TEXT", 1, "datetime('now')"),
-    column("last_seen_at", "TEXT", 1, "datetime('now')")
-  ],
-  license_issuance_events: [
-    column("idempotency_key", "TEXT", 0, null, 1),
-    column("license_key_hash", "TEXT", 1),
-    column("request_hash", "TEXT", 1),
-    column("source", "TEXT", 0),
-    column("external_ref", "TEXT", 0),
-    column("created_at", "TEXT", 1, "datetime('now')")
-  ],
-  checkout_subscription_bindings: [
-    column("issuance_idempotency_key", "TEXT", 0, null, 1),
-    column("license_key_hash", "TEXT", 1),
-    column("provider", "TEXT", 1),
-    column("provider_account_id", "TEXT", 1),
-    column("provider_mode", "TEXT", 1),
-    column("external_subscription_id", "TEXT", 1),
-    column("external_checkout_id", "TEXT", 1),
-    column("last_non_mutating_event_created_at", "INTEGER", 0),
-    column("created_at", "TEXT", 1, "datetime('now')")
-  ],
-  license_subscription_lifecycle_events: [
-    column("event_id", "TEXT", 0, null, 1),
-    column("issuance_idempotency_key", "TEXT", 1),
-    column("license_key_hash", "TEXT", 1),
-    column("external_subscription_id", "TEXT", 1),
-    column("request_hash", "TEXT", 1),
-    column("event_created_at", "INTEGER", 1),
-    column("provider", "TEXT", 1),
-    column("provider_account_id", "TEXT", 1),
-    column("provider_mode", "TEXT", 1),
-    column("provider_event_type", "TEXT", 1),
-    column("command", "TEXT", 1),
-    column("payment_reference_fingerprint", "TEXT", 0),
-    column("normalized_transition", "TEXT", 1),
-    column("result", "TEXT", 1),
-    column("created_at", "TEXT", 1, "datetime('now')")
-  ]
-};
-
-function column(
-  name: string,
-  type: string,
-  notnull: number,
-  dflt_value: string | null = null,
-  pk = 0
-): TableColumn {
-  return { name, type, notnull, dflt_value, pk };
-}
+const LEGACY_SCHEMA_SIGNATURE = expectedSchemaSignature(CORE_SCHEMA);
+const SCHEMA_V2_SIGNATURE = expectedSchemaSignature(`${CORE_SCHEMA}\n${LIFECYCLE_SCHEMA}`);
 
 export type LicenseStatus = "active" | "revoked" | "expired";
 export type RepoVisibilityScope = "public" | "private" | "all";
@@ -286,9 +214,9 @@ export class LicenseStore {
       throw new Error(`unsupported license database schema version ${version}`);
     }
 
-    const tableNames = this.schemaObjectNames("table");
-    const isEmpty = tableNames.length === 0;
-    const isLegacy = this.isExactLegacySchema();
+    const currentSignature = readSchemaSignature(this.db);
+    const isEmpty = currentSignature.length === 0;
+    const isLegacy = signaturesEqual(currentSignature, LEGACY_SCHEMA_SIGNATURE);
     if (!isEmpty && !isLegacy) {
       throw new Error("unknown non-empty schema at user_version 0");
     }
@@ -316,103 +244,12 @@ export class LicenseStore {
     return Number(row.user_version);
   }
 
-  private schemaObjectNames(type: "table" | "index" | "trigger" | "view"): string[] {
-    return (
-      this.db
-        .prepare("select name from sqlite_schema where type = ? and name not like 'sqlite_%' order by name")
-        .all(type) as unknown as Array<{ name: string }>
-    ).map(({ name }) => name);
-  }
-
-  private isExactLegacySchema(): boolean {
-    const legacyTables = ["activations", "license_issuance_events", "licenses"];
-    if (!sameStrings(this.schemaObjectNames("table"), legacyTables)) return false;
-    if (this.schemaObjectNames("index").length > 0) return false;
-    if (this.schemaObjectNames("trigger").length > 0) return false;
-    if (this.schemaObjectNames("view").length > 0) return false;
-    if (!legacyTables.every((table) => this.hasExpectedColumns(table))) return false;
-
-    const issuanceForeignKeys = this.foreignKeys("license_issuance_events");
-    if (
-      issuanceForeignKeys.length !== 1 ||
-      issuanceForeignKeys[0]?.table !== "licenses" ||
-      issuanceForeignKeys[0]?.from !== "license_key_hash" ||
-      issuanceForeignKeys[0]?.to !== "license_key_hash"
-    ) {
-      return false;
-    }
-    return this.foreignKeys("licenses").length === 0 && this.foreignKeys("activations").length === 0;
-  }
-
-  private hasExpectedColumns(table: string): boolean {
-    const actual = this.db.prepare(`pragma table_info(${table})`).all() as unknown as TableColumn[];
-    return JSON.stringify(actual.map(normalizeColumn)) === JSON.stringify(EXPECTED_COLUMNS[table]);
-  }
-
-  private foreignKeys(table: string): ForeignKeyRow[] {
-    return this.db.prepare(`pragma foreign_key_list(${table})`).all() as unknown as ForeignKeyRow[];
-  }
-
-  private uniqueColumnSets(table: string): string[] {
-    const indexes = this.db.prepare(`pragma index_list(${table})`).all() as unknown as Array<{
-      name: string;
-      unique: number;
-    }>;
-    return indexes
-      .filter((index) => index.unique === 1)
-      .map((index) => {
-        const columns = this.db.prepare(`pragma index_info(${index.name})`).all() as unknown as Array<{ name: string }>;
-        return columns.map(({ name }) => name).join(",");
-      })
-      .sort();
-  }
-
   private verifySchemaV2(): void {
-    const expectedTables = [
-      "activations",
-      "checkout_subscription_bindings",
-      "license_issuance_events",
-      "license_subscription_lifecycle_events",
-      "licenses"
-    ];
-    if (!sameStrings(this.schemaObjectNames("table"), expectedTables)) {
-      throw new Error("license database schema v2 has unexpected tables");
+    const actual = readSchemaSignature(this.db);
+    if (!sameStrings(schemaObjectKeys(actual), schemaObjectKeys(SCHEMA_V2_SIGNATURE))) {
+      throw new Error("license database schema v2 has unexpected objects");
     }
-    if (!expectedTables.every((table) => this.hasExpectedColumns(table))) {
-      throw new Error("license database schema v2 has unexpected columns");
-    }
-    const indexes = this.schemaObjectNames("index");
-    if (!sameStrings(indexes, ["license_subscription_lifecycle_events_issuance_time_idx"])) {
-      throw new Error("license database schema v2 has unexpected indexes");
-    }
-
-    const indexColumns = (
-      this.db
-        .prepare("pragma index_info(license_subscription_lifecycle_events_issuance_time_idx)")
-        .all() as unknown as Array<{ name: string }>
-    ).map(({ name }) => name);
-    if (!sameStrings(indexColumns, ["issuance_idempotency_key", "event_created_at"])) {
-      throw new Error("license database schema v2 has an invalid lifecycle index");
-    }
-
-    const bindingForeignKeys = foreignKeySignatures(this.foreignKeys("checkout_subscription_bindings"));
-    const lifecycleForeignKeys = foreignKeySignatures(this.foreignKeys("license_subscription_lifecycle_events"));
-    if (
-      !sameStrings(bindingForeignKeys, [
-        "license_key_hash:licenses.license_key_hash",
-        "issuance_idempotency_key:license_issuance_events.idempotency_key"
-      ].sort()) ||
-      !sameStrings(lifecycleForeignKeys, [
-        "license_key_hash:licenses.license_key_hash",
-        "issuance_idempotency_key:checkout_subscription_bindings.issuance_idempotency_key"
-      ].sort()) ||
-      !sameStrings(this.uniqueColumnSets("checkout_subscription_bindings"), [
-        "issuance_idempotency_key",
-        "license_key_hash",
-        "provider,provider_account_id,provider_mode,external_subscription_id"
-      ].sort()) ||
-      !sameStrings(this.uniqueColumnSets("license_subscription_lifecycle_events"), ["event_id"])
-    ) {
+    if (!signaturesEqual(actual, SCHEMA_V2_SIGNATURE)) {
       throw new Error("license database schema v2 has unexpected constraints");
     }
   }
@@ -606,20 +443,88 @@ function mapActivation(row: ActivationRow): ActivationRecord {
   };
 }
 
-function normalizeColumn(value: TableColumn): TableColumn {
-  return {
-    name: value.name,
-    type: value.type.toUpperCase(),
-    notnull: Number(value.notnull),
-    dflt_value: value.dflt_value?.replaceAll(/\s+/g, " ") ?? null,
-    pk: Number(value.pk)
-  };
+function expectedSchemaSignature(schema: string): SchemaObjectSignature[] {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(schema);
+    return readSchemaSignature(db);
+  } finally {
+    db.close();
+  }
+}
+
+function readSchemaSignature(db: DatabaseSync): SchemaObjectSignature[] {
+  const rows = db
+    .prepare(
+      `select type, name, tbl_name, sql
+       from sqlite_schema
+       where name not like 'sqlite_%'
+       order by type, name`
+    )
+    .all() as unknown as Array<{ type: string; name: string; tbl_name: string; sql: string }>;
+  return rows.map((row) => ({
+    type: row.type,
+    name: row.name,
+    tableName: row.tbl_name,
+    sql: normalizeSchemaSql(row.sql)
+  }));
+}
+
+function normalizeSchemaSql(sql: string): string {
+  let result = "";
+  let pendingSpace = false;
+  let quote: "'" | '"' | "`" | null = null;
+
+  for (let index = 0; index < sql.length; index += 1) {
+    const character = sql[index]!;
+    if (quote) {
+      result += character;
+      if (character === quote) {
+        if (sql[index + 1] === quote) {
+          result += quote;
+          index += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+
+    if (character === "'" || character === '"' || character === "`") {
+      if (pendingSpace && result && !result.endsWith("(") && !result.endsWith(",")) result += " ";
+      pendingSpace = false;
+      quote = character;
+      result += character;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      pendingSpace = true;
+      continue;
+    }
+    if (character === "(" || character === ")" || character === "," || character === ";") {
+      result = result.trimEnd() + character;
+      pendingSpace = false;
+      continue;
+    }
+    if (pendingSpace && result && !result.endsWith("(") && !result.endsWith(",")) result += " ";
+    pendingSpace = false;
+    result += character.toLowerCase();
+  }
+
+  return result.trim().replace(/;$/, "");
+}
+
+function signaturesEqual(
+  actual: readonly SchemaObjectSignature[],
+  expected: readonly SchemaObjectSignature[]
+): boolean {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function schemaObjectKeys(signature: readonly SchemaObjectSignature[]): string[] {
+  return signature.map((object) => `${object.type}:${object.name}:${object.tableName}`);
 }
 
 function sameStrings(actual: readonly string[], expected: readonly string[]): boolean {
   return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
-}
-
-function foreignKeySignatures(rows: readonly ForeignKeyRow[]): string[] {
-  return rows.map((row) => `${row.from}:${row.table}.${row.to}`).sort();
 }

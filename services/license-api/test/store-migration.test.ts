@@ -62,12 +62,23 @@ function userVersion(db: DatabaseSync): number {
   return Number((db.prepare("pragma user_version").get() as { user_version: number }).user_version);
 }
 
-function objectNames(db: DatabaseSync, type: "table" | "index" | "trigger"): string[] {
+function objectNames(db: DatabaseSync, type: "table" | "index" | "trigger" | "view"): string[] {
   return (
     db
       .prepare("select name from sqlite_schema where type = ? and name not like 'sqlite_%' order by name")
       .all(type) as unknown as Array<{ name: string }>
   ).map(({ name }) => name);
+}
+
+function schemaRows(db: DatabaseSync): unknown[] {
+  return db
+    .prepare(
+      `select type, name, tbl_name, sql
+       from sqlite_schema
+       where name not like 'sqlite_%'
+       order by type, name`
+    )
+    .all();
 }
 
 function createLegacyDatabase(path: string): void {
@@ -249,6 +260,32 @@ describe("license store schema v2 migration", () => {
     inspected.close();
   });
 
+  for (const [label, schema] of [
+    ["an extra CHECK constraint", LEGACY_SCHEMA.replace("seats integer not null default 1", "seats integer not null default 1 check (seats > 0)")],
+    [
+      "an ON DELETE CASCADE action",
+      LEGACY_SCHEMA.replace(
+        "references licenses(license_key_hash)",
+        "references licenses(license_key_hash) on delete cascade"
+      )
+    ]
+  ] as const) {
+    it(`rejects a legacy lookalike with ${label} before mutation`, () => {
+      const path = databasePath();
+      const db = open(path);
+      db.exec(schema);
+      const before = schemaRows(db);
+      db.close();
+
+      assert.throws(() => new LicenseStore(path), /unknown non-empty schema at user_version 0/);
+
+      const inspected = open(path);
+      assert.equal(userVersion(inspected), 0);
+      assert.deepEqual(schemaRows(inspected), before);
+      inspected.close();
+    });
+  }
+
   it("rejects a database labeled v2 when lifecycle constraints are missing", () => {
     const path = databasePath();
     const db = open(path);
@@ -291,34 +328,109 @@ describe("license store schema v2 migration", () => {
     assert.throws(() => new LicenseStore(path), /schema v2 has unexpected constraints/);
   });
 
-  it("rolls back all additive DDL and user_version when a migration hook fails", () => {
-    const path = databasePath();
-    createLegacyDatabase(path);
-    const reached: SchemaMigrationStep[] = [];
+  for (const [label, mutation, type, name] of [
+    [
+      "mutation trigger",
+      `create trigger unexpected_license_mutation
+       after update on licenses
+       begin
+         update licenses set status = 'revoked'
+         where license_key_hash = new.license_key_hash;
+       end`,
+      "trigger",
+      "unexpected_license_mutation"
+    ],
+    [
+      "projection view",
+      "create view unexpected_license_projection as select license_key_hash from licenses",
+      "view",
+      "unexpected_license_projection"
+    ]
+  ] as const) {
+    it(`rejects an otherwise valid v2 schema with an unexpected ${label}`, () => {
+      const path = databasePath();
+      new LicenseStore(path).close();
+      const db = open(path);
+      db.exec(mutation);
+      db.close();
 
-    assert.throws(
-      () =>
-        new LicenseStore(path, {
-          migrationHook(step) {
-            reached.push(step);
-            if (step === "lifecycle-schema-created") throw new Error("deterministic migration failure");
-          }
-        }),
-      /deterministic migration failure/
-    );
-    assert.ok(reached.includes("lifecycle-schema-created"));
+      assert.throws(() => new LicenseStore(path), /schema v2 has unexpected objects/);
 
-    const rolledBack = open(path);
-    assert.equal(userVersion(rolledBack), 0);
-    assert.deepEqual(objectNames(rolledBack, "table"), ["activations", "license_issuance_events", "licenses"]);
-    assert.deepEqual(objectNames(rolledBack, "index"), []);
-    assertLegacyRowsPreserved(rolledBack);
-    rolledBack.close();
+      const inspected = open(path);
+      assert.equal(userVersion(inspected), 2);
+      assert.deepEqual(objectNames(inspected, type), [name]);
+      inspected.close();
+    });
+  }
 
-    new LicenseStore(path).close();
-    const recovered = open(path);
-    assert.equal(userVersion(recovered), 2);
-    assertLegacyRowsPreserved(recovered);
-    recovered.close();
-  });
+  const rollbackCases: Array<{
+    label: string;
+    setup(path: string): void;
+    steps: SchemaMigrationStep[];
+    assertUnchanged(db: DatabaseSync): void;
+    assertRecovered(db: DatabaseSync): void;
+  }> = [
+    {
+      label: "empty bootstrap",
+      setup() {},
+      steps: ["core-schema-created", "lifecycle-schema-created", "schema-verified", "version-set"],
+      assertUnchanged(db) {
+        assert.equal(userVersion(db), 0);
+        assert.deepEqual(schemaRows(db), []);
+      },
+      assertRecovered(db) {
+        assert.equal(userVersion(db), 2);
+        assert.deepEqual(objectNames(db, "table"), [
+          "activations",
+          "checkout_subscription_bindings",
+          "license_issuance_events",
+          "license_subscription_lifecycle_events",
+          "licenses"
+        ]);
+      }
+    },
+    {
+      label: "legacy migration",
+      setup: createLegacyDatabase,
+      steps: ["lifecycle-schema-created", "schema-verified", "version-set"],
+      assertUnchanged(db) {
+        assert.equal(userVersion(db), 0);
+        assert.deepEqual(objectNames(db, "table"), ["activations", "license_issuance_events", "licenses"]);
+        assert.deepEqual(objectNames(db, "index"), []);
+        assertLegacyRowsPreserved(db);
+      },
+      assertRecovered(db) {
+        assert.equal(userVersion(db), 2);
+        assertLegacyRowsPreserved(db);
+      }
+    }
+  ];
+
+  for (const migration of rollbackCases) {
+    for (const failingStep of migration.steps) {
+      it(`rolls back ${migration.label} when ${failingStep} fails and later reopens cleanly`, () => {
+        const path = databasePath();
+        migration.setup(path);
+
+        assert.throws(
+          () =>
+            new LicenseStore(path, {
+              migrationHook(step) {
+                if (step === failingStep) throw new Error(`deterministic failure at ${step}`);
+              }
+            }),
+          new RegExp(`deterministic failure at ${failingStep}`)
+        );
+
+        const rolledBack = open(path);
+        migration.assertUnchanged(rolledBack);
+        rolledBack.close();
+
+        new LicenseStore(path).close();
+        const recovered = open(path);
+        migration.assertRecovered(recovered);
+        recovered.close();
+      });
+    }
+  }
 });
