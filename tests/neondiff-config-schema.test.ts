@@ -128,6 +128,8 @@ describe("NeonDiff config schema draft", () => {
     expect(get("properties.issueEnrichment.properties.enabled.default", schema)).toBe(false);
     expect(get("properties.confidence.properties.mode.default", schema)).toBe("uncalibrated");
     expect(get("properties.confidence.properties.displayPercentages.default", schema)).toBe(false);
+    expect(get("properties.repo.properties.publicRepoMode.default", schema)).toBe("activation-required");
+    expect(get("properties.repo.properties.publicRepoMode.enum", schema)).toEqual(["activation-required", "disabled"]);
     expect(get("properties.review.properties.maxComments.description", schema)).toMatch(/stricter lower cap wins/);
     expect(get("properties.review.properties.maxComments.minimum", schema)).toBe(1);
     expect(get("properties.providers.properties.default.$ref", schema)).toBe("#/$defs/providerId");

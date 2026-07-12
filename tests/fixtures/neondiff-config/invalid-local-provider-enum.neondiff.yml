@@ -50,5 +50,5 @@ confidence:
 repo:
   visibility: public
   reviewDraftPullRequests: false
-  publicRepoMode: free-source-available-beta
+  publicRepoMode: activation-required
   privateRepoMode: requires-license

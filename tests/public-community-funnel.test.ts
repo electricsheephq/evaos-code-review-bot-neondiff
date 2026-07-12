@@ -24,9 +24,9 @@ describe("NeonDiff public community funnel", () => {
       /docs\/providers\.md/i,
       /docs\/known-limitations-and-provider-status\.md/i,
       /API-backed activation is required.*every repository/i,
-      /v1\.0\.4 verification notice/i,
-      /v1\.0\.4 is the first package intended to enforce\s*>?\s*mandatory API-backed activation/i,
-      /v1\.0\.3 and\s*>?\s*earlier do not enforce this boundary/i,
+      /v1\.0\.4 release notice/i,
+      /v1\.0\.4 is the current public release and requires\s*>?\s*mandatory API-backed activation/i,
+      /v1\.0\.3\s*>?\s*and earlier do not enforce this boundary and must be upgraded/i,
       /\$1\/month/i,
       /\$10\/year/i,
       /\$100\/year/i,
@@ -91,7 +91,10 @@ describe("NeonDiff public community funnel", () => {
       "docs/license-boundary.md",
       "docs/pricing.md",
       "docs/SETUP.md",
-      "docs/github-app-setup.md"
+      "docs/github-app-setup.md",
+      "CONTRIBUTING.md",
+      "docs/neondiff-config.md",
+      "docs/teams-marketplace-plan.md"
     ].map(read).join("\n");
     for (const retiredClaim of [
       /public(?: open-source)? repositor(?:y|ies) (?:are|is) free/i,

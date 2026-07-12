@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-07-12T11:31:21Z",
+  "releaseVersion": "v1.0.4",
+  "releaseSourceSha": "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
+  "candidateSourceSha": "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+  "annotatedTagObjectSha": "c2dbb0fd69800785028eb42e30e72b2cc648eb3c",
+  "tagMoved": false,
+  "github": {
+    "releaseUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.4",
+    "publishedAt": "2026-07-12T08:27:29Z",
+    "nonPrerelease": true,
+    "publishWorkflowUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185873762",
+    "publishWorkflowOutcome": "immutable_publish_succeeded_promotion_gate_failed",
+    "recoveryPullRequestUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/554",
+    "recoveryMergeSha": "5444351148aa86913f03b8bc3b2d646202327613",
+    "recoveryWorkflowUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29190031396",
+    "recoveryWorkflowHeadSha": "5444351148aa86913f03b8bc3b2d646202327613",
+    "recoveryWorkflowConclusion": "success",
+    "mainCiUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29189884996",
+    "codeqlUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29189884543",
+    "swiftGateUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29189884980"
+  },
+  "npm": {
+    "packageUrl": "https://www.npmjs.com/package/neondiff/v/1.0.4",
+    "packageVersion": "1.0.4",
+    "latest": "1.0.4",
+    "releaseCandidatePresent": false,
+    "gitHeadState": "absent_reviewed_tarball_publish",
+    "shasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
+    "integrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw==",
+    "provenanceAttestationUrl": "https://registry.npmjs.org/-/npm/v1/attestations/neondiff@1.0.4",
+    "provenanceVerified": true,
+    "signatureAuditPassed": true,
+    "verificationMode": "verified_provenance_fallback",
+    "provenanceWorkflowIdentity": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/tags/v1.0.4",
+    "provenanceSourceSha": "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
+    "republished": false
+  },
+  "installedPackage": {
+    "binaryVersion": "1.0.4",
+    "evidenceRootId": "neondiff-ga/2026-07-12/v1.0.4/post-recovery-install-smoke",
+    "proofManifestRef": "proof-manifest.json",
+    "proofManifestSha256": "29a6ac64f828cf4fe10ad4e299ab0a14447a772c7c8d8b2c815e995468d784d8",
+    "preactivation": {
+      "licenseStatus": "missing",
+      "licenseSource": "none",
+      "providerDenied": true,
+      "dashboardProviderStatus": 403
+    },
+    "activation": {
+      "ok": true,
+      "source": "api",
+      "plan": "internal",
+      "repoVisibilityScope": "all",
+      "privateRepoAllowed": true,
+      "updateEntitlement": true,
+      "rawKeyPresentInCommittedProof": false
+    },
+    "postactivation": {
+      "dashboardProviderStatus": 200,
+      "providerMode": "metadata_only",
+      "providerResult": "configured_unverified",
+      "provider": "zcode-glm",
+      "redacted": true
+    },
+    "cacheNoBypass": {
+      "diagnosticStatus": "active",
+      "diagnosticSource": "cache",
+      "providerDenied": true,
+      "dashboardProviderStatus": 403
+    },
+    "browser": {
+      "verifyButtonCount": 1,
+      "rawLicenseKeyVisible": false,
+      "consoleWarnings": 0,
+      "consoleErrors": 0
+    },
+    "artifacts": [
+      {
+        "kind": "registry-dist-tags",
+        "ref": "dist-tags.json",
+        "sha256": "9c623cd98ade367b5e9f684a0b329ed43ee934f2550a69fe23169e93074a5ade"
+      },
+      {
+        "kind": "registry-package-metadata",
+        "ref": "npm-metadata.json",
+        "sha256": "236ddbf8928d12e5e8419aa96e7e5cf451753ec2b2ee48956e2b6af1212a53aa"
+      },
+      {
+        "kind": "npm-signature-audit",
+        "ref": "npm-audit-signatures.log",
+        "sha256": "d6c98d41303a1d4376e2bcaae38fbf34cdd05591f0902f99a4f485ac18f70c70"
+      },
+      {
+        "kind": "installed-version",
+        "ref": "version.txt",
+        "sha256": "d1b77b88f4b9f675a900e4143ac768a21218623cfe1703ca43162388c3271bd6"
+      },
+      {
+        "kind": "preactivation-license-status",
+        "ref": "preactivation-license-status.json",
+        "sha256": "e92d0d1c153f4ddbf9292e6f3f58f936c1b37bdd3620df90df95f7db9ad7e4c7"
+      },
+      {
+        "kind": "preactivation-provider-denial",
+        "ref": "preactivation-provider.json",
+        "sha256": "ef5d6f342beac07f26bcebba11f3f35a7b01b78244249e6b609b2a2b00428da7"
+      },
+      {
+        "kind": "preactivation-dashboard-preview",
+        "ref": "dashboard-preactivation/preview-smoke.json",
+        "sha256": "ad9b767c07f689cc6fcaf64842c70f4802db7e3e252abb6635524afe348686bd"
+      },
+      {
+        "kind": "api-activation",
+        "ref": "activation.json",
+        "sha256": "ce3c4e76120b2d5bf748cfc401c301cef78405f4a8d4650f5081519b317c474d"
+      },
+      {
+        "kind": "api-refreshed-license-status",
+        "ref": "active-license-status.json",
+        "sha256": "18b618fd8553e580b0dc2a41bbadc3b9744f6466e7388c45b876a159fe482859"
+      },
+      {
+        "kind": "active-dashboard-preview",
+        "ref": "dashboard-active/preview-smoke.json",
+        "sha256": "f238bdbe1fa217834b934b01bb27a2e8c98e24f4c925dfa12da89fab54652396"
+      },
+      {
+        "kind": "active-dashboard-provider-verification",
+        "ref": "dashboard-active/provider-verify.json",
+        "sha256": "b94e2aac48f5ddc7fe3d06a59f5f313500e15432455dededc1d8fbee6671349c"
+      },
+      {
+        "kind": "cache-only-provider-denial",
+        "ref": "cache-only-provider-denial.json",
+        "sha256": "ef5d6f342beac07f26bcebba11f3f35a7b01b78244249e6b609b2a2b00428da7"
+      },
+      {
+        "kind": "cache-only-dashboard-preview",
+        "ref": "dashboard-cache-only/preview-smoke.json",
+        "sha256": "07bf17acee6511d5f5b897be9dfefb3ac6a4c596229edf8ad6486b8e67e5a08e"
+      },
+      {
+        "kind": "browser-proof",
+        "ref": "browser-proof.json",
+        "sha256": "3399467d009c9ae57f0eab7b3a99856237dd974c37695045bc237a6f8ec0ff26"
+      },
+      {
+        "kind": "browser-console",
+        "ref": "browser-console-warnings-errors.json",
+        "sha256": "285e6efe04ec00df19b3ff30e3e0121778b5f3209bf3c7b555f0cec081644cf5"
+      },
+      {
+        "kind": "browser-dashboard",
+        "ref": "dashboard-installed-1.0.4-active-viewport.png",
+        "sha256": "25f7bc4fbc0390acd96810a6451c1f46b3c442a81e0847f535cd6ca1340ff75a"
+      },
+      {
+        "kind": "provider-verification-viewport",
+        "ref": "dashboard-installed-1.0.4-provider-verified-viewport.png",
+        "sha256": "3767f71c03d10fa32ab52162887aaeb5f9a6dcd5b4964e15aab3b83e4d4a059b"
+      }
+    ]
+  },
+  "followUps": [
+    "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/556",
+    "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/557"
+  ],
+  "proofBoundary": {
+    "allowed": [
+      "real non-prerelease GitHub Release v1.0.4 and public npm latest=1.0.4",
+      "immutable neondiff@1.0.4 bytes retained verified npm provenance without republish",
+      "installed CLI activation, no-bypass, local dashboard, and browser verification for neondiff@1.0.4"
+    ],
+    "forbidden": [
+      "predecessor distribution cleanup is complete",
+      "public source, forks, caches, clones, or already-downloaded artifacts were recalled",
+      "signed or notarized Mac distribution",
+      "Sparkle or appcast readiness",
+      "browser and native UI parity",
+      "full customer readiness or v1.1 completion"
+    ]
+  }
+}

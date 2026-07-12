@@ -432,8 +432,8 @@
         },
         "publicRepoMode": {
           "type": "string",
-          "enum": ["free-source-available-beta", "disabled"],
-          "default": "free-source-available-beta"
+          "enum": ["activation-required", "disabled"],
+          "default": "activation-required"
         },
         "privateRepoMode": {
           "type": "string",

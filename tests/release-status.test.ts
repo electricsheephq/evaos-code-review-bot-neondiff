@@ -359,19 +359,19 @@ describe("beta release status", () => {
         expect.objectContaining({
           name: "cli",
           requiredForThisRelease: true,
-          state: "source_checkout",
+          state: "published",
           rollback: "git reset --hard refs/tags/v1.0.3"
         }),
         expect.objectContaining({
           name: "daemon",
           requiredForThisRelease: true,
-          state: "source_checkout",
+          state: "published",
           rollback: "git reset --hard refs/tags/v1.0.3"
         }),
         expect.objectContaining({
           name: "browserDashboard",
           requiredForThisRelease: true,
-          state: "source_checkout",
+          state: "published",
           rollback: "git reset --hard refs/tags/v1.0.3",
           rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff"
         })
@@ -1075,7 +1075,7 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual({
       name: "public_update_channels",
       ok: true,
-      detail: "cli=source_checkout; daemon=source_checkout; browserDashboard=source_checkout"
+      detail: "cli=published; daemon=published; browserDashboard=published"
     });
     const redactedOutput = stringifyRedactedJson({
       ...status,
@@ -1083,7 +1083,7 @@ describe("beta release status", () => {
       runtimeOk: status.ok
     });
     expect(redactedOutput).toContain("git reset --hard refs/tags/v1.0.3");
-    expect(redactedOutput).toContain("cli=source_checkout; daemon=source_checkout");
+    expect(redactedOutput).toContain("cli=published; daemon=published");
     expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327");
     expect(redactedOutput).toContain("electricsheephq/evaos-code-review-bot-neondiff/issues/443");
   });
