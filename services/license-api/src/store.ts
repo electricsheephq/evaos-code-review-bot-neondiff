@@ -154,6 +154,18 @@ interface LicenseIssuanceRow {
   created_at: string;
 }
 
+interface CheckoutSubscriptionBindingRow {
+  issuance_idempotency_key: string;
+  license_key_hash: string;
+  provider: string;
+  provider_account_id: string;
+  provider_mode: string;
+  external_subscription_id: string;
+  external_checkout_id: string;
+  last_non_mutating_event_created_at: number | null;
+  created_at: string;
+}
+
 /**
  * Deterministic at-rest identifier for a license key. Only the hash is ever
  * stored or logged; the raw key is printed once by the admin CLI at issuance
@@ -188,6 +200,27 @@ export interface IssueIdempotentLicenseInput extends IssueLicenseInput {
   source?: string;
   externalRef?: string;
 }
+
+export interface CheckoutSubscriptionBindingInput {
+  provider: string;
+  providerAccountId: string;
+  providerMode: string;
+  externalSubscriptionId: string;
+  externalCheckoutId: string;
+}
+
+export interface CheckoutSubscriptionBindingRecord extends CheckoutSubscriptionBindingInput {
+  issuanceIdempotencyKey: string;
+  licenseKeyHash: string;
+  createdAt: string;
+}
+
+export interface IssueBoundCheckoutLicenseInput extends IssueIdempotentLicenseInput {
+  source: "checkout";
+  binding: CheckoutSubscriptionBindingInput;
+}
+
+export class CheckoutIssuanceConflictError extends Error {}
 
 export class LicenseStore {
   private readonly db: DatabaseSync;
@@ -311,6 +344,102 @@ export class LicenseStore {
     }
   }
 
+  /**
+   * Issue and bind a checkout license in one write transaction. Existing
+   * admin and release issuance continue through issueLicense and
+   * issueIdempotentLicense; only checkout fulfillment uses this stricter path.
+   */
+  issueBoundCheckoutLicense(
+    rawKey: string,
+    input: IssueBoundCheckoutLicenseInput
+  ): {
+    rawKey: string;
+    record: LicenseRecord;
+    binding: CheckoutSubscriptionBindingRecord;
+    replayed: boolean;
+  } {
+    this.db.exec("begin immediate");
+    try {
+      if (input.seats !== 1) {
+        throw new CheckoutIssuanceConflictError(
+          "bound checkout issuance requires exactly one seat"
+        );
+      }
+      const existing = this.getIssuanceEvent(input.idempotencyKey);
+      if (existing) {
+        if (existing.source !== "checkout") {
+          throw new CheckoutIssuanceConflictError("issuance reference is not checkout-owned");
+        }
+        const binding = this.getCheckoutSubscriptionBinding(input.idempotencyKey);
+        if (!binding) {
+          throw new CheckoutIssuanceConflictError("legacy checkout issuance is not bound");
+        }
+        const record = this.getLicenseByHash(existing.license_key_hash);
+        if (!record) {
+          throw new Error("issuance reference points to a missing license record");
+        }
+        if (record.seats !== 1) {
+          throw new CheckoutIssuanceConflictError("multi-seat checkout issuance requires owner review");
+        }
+        if (hashLicenseKey(rawKey) !== existing.license_key_hash) {
+          throw new CheckoutIssuanceConflictError(
+            "issuance reference was issued with a different key derivation secret"
+          );
+        }
+        if (existing.request_hash !== input.requestHash) {
+          throw new CheckoutIssuanceConflictError(
+            "issuance reference was already used with different request data"
+          );
+        }
+        if (!sameCheckoutBinding(binding, input.binding)) {
+          throw new CheckoutIssuanceConflictError(
+            "issuance reference was already used with different checkout correlation"
+          );
+        }
+        this.db.exec("commit");
+        return { rawKey, record, binding, replayed: true };
+      }
+
+      const { record } = this.insertLicense(rawKey, input);
+      this.db
+        .prepare(
+          `insert into license_issuance_events (
+            idempotency_key, license_key_hash, request_hash, source, external_ref
+          ) values (?, ?, ?, 'checkout', ?)`
+        )
+        .run(input.idempotencyKey, record.licenseKeyHash, input.requestHash, input.externalRef ?? null);
+      this.db
+        .prepare(
+          `insert into checkout_subscription_bindings (
+            issuance_idempotency_key, license_key_hash, provider, provider_account_id,
+            provider_mode, external_subscription_id, external_checkout_id
+          ) values (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.idempotencyKey,
+          record.licenseKeyHash,
+          input.binding.provider,
+          input.binding.providerAccountId,
+          input.binding.providerMode,
+          input.binding.externalSubscriptionId,
+          input.binding.externalCheckoutId
+        );
+      const binding = this.getCheckoutSubscriptionBinding(input.idempotencyKey);
+      if (!binding) throw new Error("checkout binding insert did not persist");
+      this.db.exec("commit");
+      return { rawKey, record, binding, replayed: false };
+    } catch (error) {
+      this.db.exec("rollback");
+      if (
+        error instanceof Error &&
+        error.message.includes("UNIQUE constraint failed: checkout_subscription_bindings")
+      ) {
+        throw new CheckoutIssuanceConflictError("checkout correlation is already bound");
+      }
+      throw error;
+    }
+  }
+
   private insertLicense(rawKey: string, input: IssueLicenseInput): { rawKey: string; record: LicenseRecord } {
     const licenseKeyHash = hashLicenseKey(rawKey);
     const seats = input.seats ?? 1;
@@ -342,6 +471,17 @@ export class LicenseStore {
     return this.db
       .prepare("select * from license_issuance_events where idempotency_key = ?")
       .get(idempotencyKey) as LicenseIssuanceRow | undefined;
+  }
+
+  private getCheckoutSubscriptionBinding(
+    idempotencyKey: string
+  ): CheckoutSubscriptionBindingRecord | undefined {
+    const row = this.db
+      .prepare(
+        "select * from checkout_subscription_bindings where issuance_idempotency_key = ?"
+      )
+      .get(idempotencyKey) as CheckoutSubscriptionBindingRow | undefined;
+    return row ? mapCheckoutSubscriptionBinding(row) : undefined;
   }
 
   getLicenseByHash(licenseKeyHash: string): LicenseRecord | undefined {
@@ -441,6 +581,34 @@ function mapActivation(row: ActivationRow): ActivationRecord {
     activatedAt: row.activated_at,
     lastSeenAt: row.last_seen_at
   };
+}
+
+function mapCheckoutSubscriptionBinding(
+  row: CheckoutSubscriptionBindingRow
+): CheckoutSubscriptionBindingRecord {
+  return {
+    issuanceIdempotencyKey: row.issuance_idempotency_key,
+    licenseKeyHash: row.license_key_hash,
+    provider: row.provider,
+    providerAccountId: row.provider_account_id,
+    providerMode: row.provider_mode,
+    externalSubscriptionId: row.external_subscription_id,
+    externalCheckoutId: row.external_checkout_id,
+    createdAt: row.created_at
+  };
+}
+
+function sameCheckoutBinding(
+  existing: CheckoutSubscriptionBindingRecord,
+  requested: CheckoutSubscriptionBindingInput
+): boolean {
+  return (
+    existing.provider === requested.provider &&
+    existing.providerAccountId === requested.providerAccountId &&
+    existing.providerMode === requested.providerMode &&
+    existing.externalSubscriptionId === requested.externalSubscriptionId &&
+    existing.externalCheckoutId === requested.externalCheckoutId
+  );
 }
 
 function expectedSchemaSignature(schema: string): SchemaObjectSignature[] {

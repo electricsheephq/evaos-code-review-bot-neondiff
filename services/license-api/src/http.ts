@@ -157,7 +157,15 @@ async function handleIssuanceRequest(
 
   try {
     const parsed = parseIssuanceRequest(await readBody(req));
-    return writeResult(res, issueCheckoutLicense(options.store, parsed, options.issuanceSecret));
+    return writeResult(
+      res,
+      issueCheckoutLicense(
+        options.store,
+        parsed,
+        options.issuanceSecret,
+        (options.now ?? (() => new Date()))()
+      )
+    );
   } catch (error) {
     return writeResult(
       res,
