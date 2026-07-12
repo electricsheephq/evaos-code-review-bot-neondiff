@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -245,6 +245,23 @@ describe("npm release policy", () => {
 
     expect(pack.integrity).toMatch(/^sha512-/);
     expect(pack.shasum).toMatch(/^[a-f0-9]{40}$/);
+  });
+
+  it("runs the activation-aware public release gate after packing and before npm publication", () => {
+    const workflow = readFileSync(join(repoRoot, ".github", "workflows", "publish-npm.yml"), "utf8");
+    const packIndex = workflow.indexOf('npm pack --json --pack-destination "$PACK_DIR" > pack.json');
+    const readinessIndex = workflow.indexOf("node scripts/check-public-release-ready.mjs");
+    const publishIndex = workflow.indexOf('npm publish "$PACK_TARBALL" --provenance');
+
+    expect(packIndex).toBeGreaterThan(-1);
+    expect(readinessIndex).toBeGreaterThan(packIndex);
+    expect(publishIndex).toBeGreaterThan(readinessIndex);
+    expect(workflow.match(/node scripts\/check-public-release-ready\.mjs/g)).toHaveLength(2);
+    expect(workflow).not.toContain('tar -xzf "$PACK_TARBALL" -C "$STAGING_ROOT"');
+    expect(workflow).not.toContain('npm pack "$STAGING_ROOT/package"');
+    expect(workflow).toContain("verify-npm-provenance.mjs");
+    expect(workflow).toContain('npm audit signatures --prefix "$SIGNATURE_VERIFY_ROOT" --json');
+    expect(workflow).not.toMatch(/^\s*npm publish --provenance/m);
   });
 
   it("allows only absent, identical, or manifest-declared predecessor channel values", () => {

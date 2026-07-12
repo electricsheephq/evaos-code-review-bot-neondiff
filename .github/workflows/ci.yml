@@ -29,6 +29,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Verify license API and OIDC lifecycle broker
+        run: |
+          npm ci --prefix services/license-api
+          npm test --prefix services/license-api
+          npm run build --prefix services/license-api
+
       - name: Focused public release tests
         run: npx vitest run tests/public-release-readiness.test.ts tests/public-community-funnel.test.ts tests/public-cli.test.ts tests/license.test.ts tests/release-status.test.ts --pool=forks --maxWorkers=1
 

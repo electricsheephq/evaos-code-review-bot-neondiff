@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import { LicenseStore } from "./store.js";
 import {
   issueCheckoutLicense,
@@ -17,13 +18,23 @@ import {
   type LicenseRequest,
   type ServiceResult
 } from "./service.js";
+import {
+  issueLifecycleLicense,
+  LifecycleRequestError,
+  parseLifecycleIssuanceRequest,
+  type LifecycleOidcVerifier
+} from "./oidc-lifecycle.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
+
+class RequestBodyTooLargeError extends Error {}
 
 export interface LicenseHttpOptions {
   store: LicenseStore;
   rateLimiter?: RateLimiter;
+  lifecycleRateLimiter?: RateLimiter;
   issuanceSecret?: string;
+  lifecycleOidcVerifier?: LifecycleOidcVerifier;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;
 }
@@ -45,6 +56,8 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
   const now = options.now ?? (() => new Date());
   const rateLimiter =
     options.rateLimiter ?? new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
+  const lifecycleRateLimiter =
+    options.lifecycleRateLimiter ?? new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method === "GET" && req.url === "/healthz") {
@@ -53,6 +66,16 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
     const path = req.url?.split("?")[0];
     if (req.method === "POST" && path === "/v1/admin/licenses/issue") {
       return handleIssuanceRequest(options, req, res);
+    }
+    if (req.method === "POST" && path === "/v1/admin/licenses/issue-lifecycle") {
+      const forwardedAddress = req.headers["fly-client-ip"];
+      const candidateAddress = Array.isArray(forwardedAddress) ? forwardedAddress[0] : forwardedAddress;
+      const sourceAddress = candidateAddress && isIP(candidateAddress) ? candidateAddress : (req.socket.remoteAddress ?? "unknown");
+      const lifecycleRateLimitKey = createHash("sha256").update(`lifecycle:${sourceAddress}`).digest("hex");
+      if (!lifecycleRateLimiter.allow(lifecycleRateLimitKey, now().getTime())) {
+        return writeJson(res, 429, { status: "rate_limited", detail: "too many lifecycle issuance requests" });
+      }
+      return handleLifecycleIssuanceRequest(options, req, res);
     }
 
     const route = path ? ROUTES[path] : undefined;
@@ -80,6 +103,44 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       return writeJson(res, 500, { status: "server", detail: "internal error" });
     }
   };
+}
+
+async function handleLifecycleIssuanceRequest(
+  options: LicenseHttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!options.issuanceSecret || !options.lifecycleOidcVerifier) {
+    return writeJson(res, 503, { status: "server", detail: "lifecycle issuance is not configured" });
+  }
+  const authorization = Array.isArray(req.headers.authorization)
+    ? req.headers.authorization[0]
+    : req.headers.authorization;
+  if (!authorization?.startsWith("Bearer ") || authorization.length === "Bearer ".length) {
+    return writeJson(res, 401, { status: "unauthorized", detail: "lifecycle issuance authorization failed" });
+  }
+  try {
+    const claims = await options.lifecycleOidcVerifier.verify(authorization.slice("Bearer ".length));
+    const request = parseLifecycleIssuanceRequest(await readBody(req));
+    return writeResult(
+      res,
+      issueLifecycleLicense({
+        store: options.store,
+        request,
+        claims,
+        issuanceSecret: options.issuanceSecret,
+        now: (options.now ?? (() => new Date()))()
+      })
+    );
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return writeResult(res, malformedIssuanceResult(error.message), 413);
+    }
+    if (error instanceof LifecycleRequestError) {
+      return writeResult(res, malformedIssuanceResult(error.message));
+    }
+    return writeJson(res, 401, { status: "unauthorized", detail: "lifecycle issuance authorization failed" });
+  }
 }
 
 async function handleIssuanceRequest(
@@ -132,18 +193,25 @@ function parseRequest(raw: string): LicenseRequest {
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let tooLarge = false;
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
+      if (tooLarge) return;
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new Error("request body too large"));
-        req.destroy();
+        tooLarge = true;
+        chunks.length = 0;
+        reject(new RequestBodyTooLargeError("request body too large"));
         return;
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    req.on("end", () => {
+      if (!tooLarge) resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (error) => {
+      if (!tooLarge) reject(error);
+    });
   });
 }
 

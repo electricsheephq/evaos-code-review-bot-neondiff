@@ -1,6 +1,6 @@
 # NeonDiff license API (`@neondiff/license-api`)
 
-Self-contained license service for NeonDiff private-repo entitlements
+Self-contained license service for NeonDiff API-backed entitlements
 ([#327](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327)).
 It implements the exact HTTP contract the shipped client (`src/license.ts`)
 already calls — activate / validate / deactivate — backed by SQLite, with an
@@ -22,6 +22,7 @@ Three `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
 | `/v1/license/validate` | `{ licenseKey, repo?, machineId }` | active entitlement | 404 invalid · 403 revoked · 402 expired · 409 scope_mismatch (never activated on this machine) |
 | `/v1/license/deactivate` | `{ licenseKey, repo?, machineId }` | `{ status:"active", … }` (idempotent) | 404 invalid |
 | `/v1/admin/licenses/issue` | `{ idempotencyKey, checkoutLookupKey, ... }` + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | `{ status:"issued", licenseKey:"nd_live_...", entitlement, replayed }` | 401 unauthorized · 400 malformed/unsupported plan · 409 idempotency conflict |
+| `/v1/admin/licenses/issue-lifecycle` | exact release identity + GitHub Actions OIDC bearer | short-lived lifecycle license + all-scope entitlement | 401 invalid workflow token · 403 candidate SHA mismatch · 409 workflow-run conflict · 503 unconfigured |
 
 Cross-cutting: 429 rate_limited (per-key throttle) · 400 malformed · 5xx server.
 `machineId` is the single-activation binding — one machine per seat (default
@@ -63,11 +64,43 @@ conflict`. SQLite stores only the license hash plus issuance metadata; the raw
 key is deterministically derived from `LICENSE_ISSUANCE_SECRET` and the
 idempotency key so webhook retries can be safe without storing raw key material.
 
+### Release lifecycle issuance
+
+`POST /v1/admin/licenses/issue-lifecycle` is a separate authorization domain
+for the protected release proof workflow. It does not accept the checkout
+shared secret. The request body is strict and rejects unknown fields:
+
+```json
+{
+  "releaseVersion": "v1.0.4",
+  "candidateHead": "<40-character lowercase commit SHA>",
+  "packShasum": "<40-character lowercase npm shasum>",
+  "packIntegrity": "sha512-<npm integrity digest>"
+}
+```
+
+The bearer JWT must be signed by GitHub Actions with RS256 and the GitHub OIDC
+JWKS. Verification pins the issuer, `neondiff-license-lifecycle` audience,
+canonical repository and numeric repository/owner IDs, protected `main` ref,
+workflow file on `main`, `license-lifecycle-production` environment and
+subject, `workflow_dispatch` event, GitHub-hosted runner, candidate SHA, numeric
+run ID, and a five-minute timestamp window. The request `candidateHead` must
+equal the JWT `sha` claim.
+
+The server derives idempotency from the canonical repository ID and workflow
+run ID. An identical retry returns the same key; different release data for the
+same run fails with `409`. The client cannot choose plan, scope, seats, or
+expiry: the server issues a 15-minute, one-seat, all-visibility
+`release_lifecycle` entitlement with update access. Only the successful caller
+receives the raw key; authorization and validation failures return generic,
+redacted errors.
+
 ## Run
 
 ```sh
-# from the repo root, deps installed via `npm install`
+# install from the service-local lock
 cd services/license-api
+npm ci
 npm run build           # tsc → dist/
 LICENSE_DB_PATH=runtime/license.sqlite PORT=8080 npm start
 ```
@@ -79,8 +112,10 @@ Environment:
 - `PORT` / `HOST` — listen address (default `8080` / `0.0.0.0`). TLS is
   terminated upstream (fly), so the process serves plain HTTP internally.
 - `LICENSE_ISSUANCE_SECRET` — optional server-to-server bearer secret that
-  enables `POST /v1/admin/licenses/issue`. Keep it shared only with the
-  checkout webhook server; do not expose it to browsers or clients.
+  derives issued keys and enables `POST /v1/admin/licenses/issue`. The OIDC
+  lifecycle route also requires it for deterministic key derivation, but never
+  accepts it as request authorization. Keep it only on Fly and the checkout
+  webhook server; do not expose it to browsers, clients, workflows, or logs.
 
 ## Admin issuance CLI
 

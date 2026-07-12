@@ -1,5 +1,6 @@
 import { LicenseStore } from "./store.js";
 import { startLicenseServer } from "./http.js";
+import { createGitHubActionsOidcVerifier } from "./oidc-lifecycle.js";
 
 /**
  * Production entrypoint. SQLite lives on a mounted volume in deploy
@@ -15,7 +16,8 @@ async function main(): Promise<void> {
     store,
     port,
     host,
-    issuanceSecret: process.env.LICENSE_ISSUANCE_SECRET
+    issuanceSecret: process.env.LICENSE_ISSUANCE_SECRET,
+    lifecycleOidcVerifier: createGitHubActionsOidcVerifier()
   });
   // eslint-disable-next-line no-console
   console.log(`license-api listening on ${url} (db=${dbPath})`);

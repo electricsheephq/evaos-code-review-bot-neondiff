@@ -34,7 +34,7 @@ evidence remain Owner-gated.
   provider's recommended key variables.
 
 The container fails closed by default when `LICENSE_REPLICA_URL` is absent
-because this service is release-required for private-repo entitlements. Local
+because this service is release-required for supported review entitlements. Local
 development may set `LICENSE_LITESTREAM_REQUIRED=false` to run without
 replication.
 

@@ -584,12 +584,13 @@ describe("NeonDiff public release readiness", () => {
   });
 
   it("CI workflows gate build, tests, package, docs claims, and npm provenance publish", () => {
-    for (const path of [".github/workflows/ci.yml", ".github/workflows/publish-npm.yml"]) {
+    for (const path of [".github/workflows/ci.yml", ".github/workflows/publish-npm.yml", ".github/workflows/license-lifecycle-proof.yml"]) {
       expect(existsSync(path)).toBe(true);
     }
 
     const ci = read(".github/workflows/ci.yml");
     const publish = read(".github/workflows/publish-npm.yml");
+    const lifecycle = read(".github/workflows/license-lifecycle-proof.yml");
     const releasePolicy = read("scripts/npm-release-policy.mjs");
 
     expect(ci).toMatch(/node-version:\s*26/);
@@ -598,12 +599,16 @@ describe("NeonDiff public release readiness", () => {
     expect(ci).not.toMatch(/uses:\s*actions\/(?:checkout|setup-node)@v\d+/);
     expect(ci).toMatch(/npm ci/);
     expect(ci).toMatch(/npm run build/);
+    expect(ci).toMatch(/npm ci --prefix services\/license-api/);
+    expect(ci).toMatch(/npm test --prefix services\/license-api/);
+    expect(ci).toMatch(/npm run build --prefix services\/license-api/);
     expect(ci).toMatch(/tests\/public-release-readiness\.test\.ts/);
     expect(ci).toMatch(/npm pack --dry-run --json/);
     expect(ci).toMatch(/forbidden public claims/i);
     expect(ci).toMatch(/secret/i);
 
     expect(publish).toMatch(/id-token:\s*write/);
+    expect(publish).toMatch(/attestations:\s*read/);
     expect(publish).toMatch(/concurrency:\s*\n\s*group:\s*publish-npm-neondiff/);
     expect(publish).toMatch(/cancel-in-progress:\s*false/);
     expect(publish).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0");
@@ -613,7 +618,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/Verify npm publish token is configured/);
     expect(publish).toMatch(/NPM_TOKEN Actions secret is not configured; publish cannot continue/);
-    expect(publish).toMatch(/npm publish --provenance/);
+    expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance/);
     expect(releasePolicy).toMatch(/npmTag = packageVersion\.includes\("-"\) \? "beta" : "latest"/);
     expect(publish).toMatch(/github\.event_name == 'release'/);
     expect(publish).toMatch(/environment:\s*npm-publish/);
@@ -621,12 +626,33 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/npm-release-policy\.mjs classify/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-git/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-pack/);
+    expect(publish).toMatch(/npm-release-policy\.mjs verify-pack[\s\S]*--expected-git-head "\$EXPECTED_GIT_HEAD"/);
+    expect(publish).toMatch(/verify-npm-provenance\.mjs/);
+    expect(publish).toMatch(/npm audit signatures --prefix "\$SIGNATURE_VERIFY_ROOT" --json/);
+    expect(publish).toMatch(/REQUIRED_EVIDENCE_KINDS/);
+    expect(publish).toMatch(/EVIDENCE_ARTIFACTS/);
+    expect(publish).toMatch(/gh attestation verify "\$EVIDENCE_ARTIFACT"/);
+    expect(publish).toMatch(/gh attestation verify "\$ACTIVATION_PROOF_PATH"/);
+    expect(publish).toMatch(/--signer-workflow electricsheephq\/evaos-code-review-bot-neondiff\/\.github\/workflows\/license-lifecycle-proof\.yml/);
+    expect(publish).toMatch(/--signer-digest "\$CANDIDATE_HEAD"/);
+    expect(publish).toMatch(/--source-ref refs\/heads\/main/);
     expect(publish).toMatch(/npm-release-policy\.mjs verify-channel/);
+    expect(publish).toMatch(/prepromotion-channel\.json/);
+    expect(publish.indexOf("prepromotion-channel.json")).toBeLessThan(
+      publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
+    );
     expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
     expect(publish).toMatch(/GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
     expect(releasePolicy).toMatch(/stable npm packages require a non-prerelease GitHub Release/);
     expect(publish).toMatch(/release tag commit must be an ancestor of protected main/i);
+    expect(publish).toContain('test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"');
+    expect(publish.indexOf('test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"')).toBeLessThan(
+      publish.indexOf('npm publish "$PACK_TARBALL" --provenance')
+    );
     expect(releasePolicy).toMatch(/npm tarball integrity does not match the reviewed pack/);
+    expect(publish.indexOf("verify-npm-provenance.mjs")).toBeLessThan(
+      publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
+    );
     expect(publish).not.toMatch(/github\.event\.release\.prerelease\s*==\s*true/);
     expect(publish).toMatch(/Classify npm package release/);
     expect(releasePolicy).toMatch(/manual npm publish tag .* does not match package\.json version/i);
@@ -649,23 +675,62 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/tags\[npmTag\].*expectedVersion/);
     expect(publish).toMatch(/npm dist-tag did not converge to the promoted package after/);
     expect(publish).toMatch(/previousReleasedPackageVersion/);
-    expect(publish).toMatch(/npm publish --provenance --access public --tag "release-candidate"/);
-    expect(publish.indexOf('npm publish --provenance --access public --tag "release-candidate"')).toBeLessThan(
+    expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance --access public --tag "release-candidate"/);
+    expect(publish.indexOf('npm publish "$PACK_TARBALL" --provenance --access public --tag "release-candidate"')).toBeLessThan(
       publish.indexOf("npm-release-policy.mjs verify-pack")
     );
     expect(publish.indexOf("npm-release-policy.mjs verify-pack")).toBeLessThan(
       publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
     );
-    expect(publish).toMatch(/default:\s*v1\.0\.3/);
+    expect(publish).toMatch(/default:\s*v1\.0\.4/);
     expect(publish).not.toMatch(/default:\s*v0\.4\.30-beta\.1/);
+    expect(publish).toMatch(/npm install --global npm@11\.17\.0/);
+    expect(publish).toContain('test "$(npm --version)" = "11.17.0"');
+    expect(publish.indexOf("npm install --global npm@11.17.0")).toBeLessThan(
+      publish.indexOf('npm publish "$PACK_TARBALL" --provenance')
+    );
+    expect(publish).toMatch(/curl[\s\S]*--connect-timeout 10[\s\S]*--max-time 30[\s\S]*--retry 3[\s\S]*--retry-all-errors/);
+
+    expect(lifecycle).toMatch(/workflow_dispatch:/);
+    expect(lifecycle).toMatch(/concurrency:\s*\n\s*group:\s*neondiff-license-lifecycle-production/);
+    expect(lifecycle).toMatch(/cancel-in-progress:\s*false/);
+    expect(lifecycle).toMatch(/environment:\s*license-lifecycle-production/);
+    expect(lifecycle).toMatch(/contents:\s*read/);
+    expect(lifecycle).toMatch(/id-token:\s*write/);
+    expect(lifecycle).toMatch(/attestations:\s*write/);
+    expect(lifecycle).toMatch(/github\.ref == 'refs\/heads\/main'/);
+    expect(lifecycle).toMatch(/persist-credentials:\s*false/);
+    expect(lifecycle).toMatch(/run-license-lifecycle-smoke\.mjs/);
+    expect(lifecycle).toMatch(/desktop-quarantine-proof:/);
+    expect(lifecycle).toMatch(/runs-on:\s*macos-15/);
+    expect(lifecycle).toMatch(/run-required-swift-test-suite\.sh NeonDiffDesktopAppCoreTests/);
+    expect(lifecycle).toMatch(/swift build -c release --product NeonDiffDesktop/);
+    expect(lifecycle).toMatch(/needs:\s*desktop-quarantine-proof/);
+    expect(lifecycle).toMatch(/tests\/license\.test\.ts/);
+    expect(lifecycle).toMatch(/run-mandatory-activation-matrix\.mjs/);
+    expect(lifecycle).toMatch(/assemble-mandatory-activation-proof\.mjs/);
+    expect(lifecycle).toMatch(/subject-path:\s*docs\/evidence\/\$\{\{ inputs\.release_version \}\}\/\*-\$\{\{ inputs\.candidate_head \}\}\.json/);
+    expect(lifecycle).toMatch(/npm install --ignore-scripts --prefix "\$INSTALL_PREFIX" "\$PACK_TARBALL"/);
+    expect(lifecycle).toMatch(/config inspect[\s\S]*v1\.0\.3-legacy-license\.json/);
+    expect(lifecycle).toMatch(/candidate_cli=\$UPGRADE_PREFIX\/node_modules\/\.bin\/neondiff/);
+    expect(lifecycle).toContain("actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3");
+    expect(lifecycle).toContain("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4");
+    expect(lifecycle).not.toMatch(/LICENSE_ISSUANCE_SECRET|NPM_TOKEN|secrets\./);
 
     const governance = read("docs/release-governance.md");
+    expect(governance).toMatch(/Mandatory Activation Proof Sequence/);
+    expect(governance).toMatch(/Download the exact seven attested JSON artifacts without editing them/);
+    expect(governance).toMatch(/may change only files outside the npm\s+package allowlist/i);
+    expect(governance).toMatch(/package bytes must remain identical/);
     expect(governance).toMatch(/partial quarantine promotion/i);
     const recovery = governance.split("### Partial Quarantine Promotion Recovery")[1]?.split("## Tag And Release")[0] ?? "";
     expect(recovery).toMatch(/gh workflow run publish-npm\.yml/);
-    expect(recovery).toMatch(/--ref main/);
+    expect(recovery).toMatch(/--ref v<version>/);
+    expect(recovery).not.toMatch(/--ref main/);
     expect(recovery).toMatch(/-f tag=v<version>/);
     expect(recovery).toMatch(/direct dist-tag mutation is not supported/i);
+    expect(recovery).toMatch(/waives only the normal 24-hour activation-proof/);
+    expect(recovery).toMatch(/30-day maximum-age ceiling/);
     expect(recovery).not.toMatch(/npm dist-tag add/);
     expect(recovery).not.toMatch(/npm dist-tag rm/);
   });

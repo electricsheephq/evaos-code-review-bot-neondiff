@@ -132,6 +132,7 @@ export interface PublicReleaseStatus {
     checkoutIssuanceUrl?: string;
     checkoutIssuanceProofPath?: string;
     checkoutIssuanceAuthenticatedProofPath?: string;
+    activationProofPath?: string;
     checkoutIssuanceState?: string;
     checkoutIssuanceTrackingIssue?: string;
   };
@@ -532,6 +533,7 @@ export function readPublicReleaseManifestStatus(input: {
   manifestPath: string;
   expectedVersion?: string;
   verifyRollbackRefs?: boolean;
+  allowStaleActivationProof?: boolean;
   now?: Date;
 }): PublicReleaseStatus {
   const absolutePath = resolve(input.cwd, input.manifestPath);
@@ -567,6 +569,7 @@ export function readPublicReleaseManifestStatus(input: {
   try {
     const manifest = JSON.parse(readFileSync(absolutePath, "utf8")) as unknown;
     const root = asRecord(manifest);
+    const source = asRecord(root.source);
     const docs = asRecord(root.docs);
     const licenseApi = asRecord(root.licenseApi);
     const updateChannels = asRecord(root.updateChannels);
@@ -626,6 +629,8 @@ export function readPublicReleaseManifestStatus(input: {
     const licenseIssuanceUrl = readString(licenseApi.checkoutIssuanceUrl);
     const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
     const licenseIssuanceAuthenticatedProofPath = readString(licenseApi.checkoutIssuanceAuthenticatedProofPath);
+    const licenseActivationProofPath = readString(licenseApi.activationProofPath);
+    const releaseCandidateHead = readString(source.candidateHeadBeforeReleaseMetadata);
     const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
     const licenseIssuanceTrackingIssue = readString(licenseApi.checkoutIssuanceTrackingIssue);
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
@@ -681,6 +686,18 @@ export function readPublicReleaseManifestStatus(input: {
         })
       : { ok: true, detail: "" };
     const licenseIssuanceAuthenticatedProofOk = licenseIssuanceAuthenticatedProof.ok;
+    const licenseNeedsActivationProof = releaseLevel === "stable" && isVersionAtLeast(expectedVersion, "v1.0.4");
+    const licenseActivationProof = licenseNeedsActivationProof
+      ? validateMandatoryActivationProofPath({
+          cwd: input.cwd,
+          proofPath: licenseActivationProofPath,
+          expectedReleaseVersion: expectedVersion,
+          expectedCandidateHead: releaseCandidateHead,
+          allowStaleProof: input.allowStaleActivationProof === true,
+          now: input.now
+        })
+      : { ok: true, detail: "" };
+    const licenseActivationProofOk = licenseActivationProof.ok;
     const licenseMetadataFailures = licenseHealthMetadataFailures.concat(licenseIssuanceMetadataFailures);
     const licenseMetadataOk = licenseMetadataFailures.length === 0;
     const licenseOk =
@@ -688,11 +705,13 @@ export function readPublicReleaseManifestStatus(input: {
       licenseMetadataOk &&
       licenseHealthProofOk &&
       licenseIssuanceProofOk &&
-      licenseIssuanceAuthenticatedProofOk;
+      licenseIssuanceAuthenticatedProofOk &&
+      licenseActivationProofOk;
     const licenseDetailParts = [
       ...(licenseNeedsHealthProof ? [licenseHealthProof.detail] : []),
       ...(licenseNeedsIssuanceProof ? [licenseIssuanceProof.detail] : []),
       ...(licenseShouldValidateAuthenticatedIssuanceProof ? [licenseIssuanceAuthenticatedProof.detail] : []),
+      ...(licenseNeedsActivationProof ? [licenseActivationProof.detail] : []),
       ...licenseMetadataFailures
     ].filter(Boolean);
     const declaredChannelNames = Object.keys(updateChannels);
@@ -776,6 +795,7 @@ export function readPublicReleaseManifestStatus(input: {
         checkoutIssuanceUrl: licenseIssuanceUrl,
         checkoutIssuanceProofPath: licenseIssuanceProofPath,
         checkoutIssuanceAuthenticatedProofPath: licenseIssuanceAuthenticatedProofPath,
+        activationProofPath: licenseActivationProofPath,
         checkoutIssuanceState: licenseIssuanceState,
         checkoutIssuanceTrackingIssue: licenseIssuanceTrackingIssue,
         detail: licenseOk
@@ -946,6 +966,21 @@ function isPublicVersionTag(version: string): boolean {
   return isSemver(version.slice(1));
 }
 
+function isVersionAtLeast(version: string | undefined, minimum: string): boolean {
+  const parseCore = (value: string | undefined): [number, number, number] | undefined => {
+    const match = value?.match(/^v(\d+)\.(\d+)\.(\d+)(?:[-+]|$)/);
+    if (!match) return undefined;
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
+  };
+  const actual = parseCore(version);
+  const floor = parseCore(minimum);
+  if (!actual || !floor) return false;
+  for (let index = 0; index < actual.length; index += 1) {
+    if (actual[index] !== floor[index]) return actual[index] > floor[index];
+  }
+  return true;
+}
+
 function isRollbackVersionTagRef(target: string): boolean {
   const prefix = "refs/tags/";
   return target.startsWith(prefix) && isPublicVersionTag(target.slice(prefix.length));
@@ -1050,6 +1085,475 @@ function validateLicenseProofObservedAt(observedAt: string | undefined, now?: Da
     failures.push(`observedAt must be no older than ${LICENSE_PROOF_MAX_AGE_DAYS} days`);
   }
   return failures;
+}
+
+function validateMandatoryActivationProofPath(input: {
+  cwd: string;
+  proofPath?: string;
+  expectedReleaseVersion?: string;
+  expectedCandidateHead?: string;
+  allowStaleProof?: boolean;
+  now?: Date;
+}): { ok: boolean; detail: string } {
+  if (!input.proofPath) {
+    return { ok: false, detail: "missing mandatory activation proof path (no activationProofPath declared)" };
+  }
+  const confinedPath = resolveConfinedEvidenceProofPath(input.cwd, input.proofPath, "activationProofPath");
+  if (!confinedPath.ok) {
+    return { ok: false, detail: `invalid mandatory activation proof ${input.proofPath}: ${confinedPath.detail}` };
+  }
+  if (!existsSync(confinedPath.absolutePath)) {
+    return { ok: false, detail: `missing mandatory activation proof ${input.proofPath}` };
+  }
+  let proof: Record<string, unknown>;
+  let serialized: string;
+  try {
+    serialized = readFileSync(confinedPath.absolutePath, "utf8");
+    proof = asRecord(JSON.parse(serialized));
+  } catch {
+    return { ok: false, detail: `invalid mandatory activation proof ${input.proofPath}: proof JSON is invalid` };
+  }
+
+  const installedCandidate = asRecord(proof.installedCandidate);
+  const productionLifecycle = asRecord(proof.productionLifecycle);
+  const matrix = asRecord(proof.matrix);
+  const usefulWorkBoundaries = asRecord(proof.usefulWorkBoundaries);
+  const desktop = asRecord(proof.desktop);
+  const redaction = asRecord(proof.redaction);
+  const failures: string[] = [];
+  const requireTrue = (value: unknown, field: string): void => {
+    if (value !== true) failures.push(`${field} must be true`);
+  };
+  const requireZero = (value: unknown, field: string): void => {
+    if (value !== 0) failures.push(`${field} must be zero`);
+  };
+  const requireSha256 = (value: unknown, field: string): void => {
+    if (!/^[a-f0-9]{64}$/.test(readString(value) ?? "")) failures.push(`${field} must be a SHA-256 digest`);
+  };
+
+  const unexpectedTopLevelKeys = collectUnexpectedKeys(proof, new Set([
+    "evidenceKind",
+    "releaseVersion",
+    "observedAt",
+    "harness",
+    "installedCandidate",
+    "productionLifecycle",
+    "matrix",
+    "usefulWorkBoundaries",
+    "installUpgrade",
+    "dashboard",
+    "desktop",
+    "redaction",
+    "artifacts"
+  ]));
+  if (unexpectedTopLevelKeys.length) failures.push(`unexpected proof fields: ${unexpectedTopLevelKeys.join(", ")}`);
+
+  if (readString(proof.evidenceKind) !== "mandatory_activation_no_bypass") {
+    failures.push("evidenceKind must be mandatory_activation_no_bypass");
+  }
+  if (!input.expectedReleaseVersion) {
+    failures.push("expected releaseVersion must be present");
+  } else if (readString(proof.releaseVersion) !== input.expectedReleaseVersion) {
+    failures.push(`releaseVersion must match ${input.expectedReleaseVersion}`);
+  }
+  const observedAt = readString(proof.observedAt);
+  const observedAtFailures = validateLicenseProofObservedAt(observedAt, input.now);
+  failures.push(...observedAtFailures);
+  if (observedAt && !input.allowStaleProof) {
+    const observedAtMs = Date.parse(observedAt);
+    const effectiveNow = input.now ?? new Date();
+    if (!Number.isNaN(observedAtMs) && effectiveNow.getTime() - observedAtMs > 24 * 60 * 60 * 1_000) {
+      failures.push("observedAt must be no older than 24 hours for mandatory activation proof");
+    }
+  }
+
+  const harness = asRecord(proof.harness);
+  const unexpectedHarnessKeys = collectUnexpectedKeys(harness, new Set(["name", "version", "sourceHead", "runId"]));
+  if (unexpectedHarnessKeys.length) failures.push(`unexpected harness fields: ${unexpectedHarnessKeys.join(", ")}`);
+  if (readString(harness.name) !== "neondiff-license-lifecycle-smoke") {
+    failures.push("harness.name must be neondiff-license-lifecycle-smoke");
+  }
+  if (harness.version !== 1) failures.push("harness.version must be 1");
+  if (!/^[a-f0-9]{40}$/.test(readString(harness.sourceHead) ?? "")) {
+    failures.push("harness.sourceHead must be a full lowercase Git SHA");
+  }
+  if (!/^[a-f0-9]{64}$/.test(readString(harness.runId) ?? "")) {
+    failures.push("harness.runId must be a SHA-256 run identity");
+  }
+
+  const packageVersion = input.expectedReleaseVersion?.slice(1);
+  const unexpectedInstalledKeys = collectUnexpectedKeys(installedCandidate, new Set([
+    "packageVersion",
+    "binaryVersion",
+    "sourceHead",
+    "packShasum",
+    "packIntegrity",
+    "installSource"
+  ]));
+  if (unexpectedInstalledKeys.length) failures.push(`unexpected installedCandidate fields: ${unexpectedInstalledKeys.join(", ")}`);
+  if (!packageVersion || readString(installedCandidate.packageVersion) !== packageVersion) {
+    failures.push(`installedCandidate.packageVersion must match ${packageVersion ?? "the release version"}`);
+  }
+  if (readString(installedCandidate.binaryVersion) !== packageVersion) {
+    failures.push(`installedCandidate.binaryVersion must match ${packageVersion ?? "the release version"}`);
+  }
+  if (!/^[a-f0-9]{40}$/.test(readString(installedCandidate.sourceHead) ?? "")) {
+    failures.push("installedCandidate.sourceHead must be a full lowercase Git SHA");
+  }
+  if (!/^[a-f0-9]{40}$/.test(input.expectedCandidateHead ?? "")) {
+    failures.push("manifest candidate head must be a full lowercase Git SHA");
+  } else if (readString(installedCandidate.sourceHead) !== input.expectedCandidateHead) {
+    failures.push("installedCandidate.sourceHead must match manifest candidate head");
+  }
+  if (!/^[a-f0-9]{40}$/.test(readString(installedCandidate.packShasum) ?? "")) {
+    failures.push("installedCandidate.packShasum must be the npm pack SHA-1 digest");
+  }
+  if (!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(readString(installedCandidate.packIntegrity) ?? "")) {
+    failures.push("installedCandidate.packIntegrity must be the npm pack SHA-512 integrity");
+  }
+  if (readString(installedCandidate.installSource) !== "npm_pack_tarball") {
+    failures.push("installedCandidate.installSource must be npm_pack_tarball");
+  }
+  if (readString(harness.sourceHead) !== readString(installedCandidate.sourceHead)) {
+    failures.push("harness.sourceHead must match installedCandidate.sourceHead");
+  }
+
+  const unexpectedLifecycleKeys = collectUnexpectedKeys(productionLifecycle, new Set(["apiBaseUrl", "licenseFingerprint", "steps"]));
+  if (unexpectedLifecycleKeys.length) failures.push(`unexpected productionLifecycle fields: ${unexpectedLifecycleKeys.join(", ")}`);
+  if (readString(productionLifecycle.apiBaseUrl) !== "https://neondiff-license.fly.dev") {
+    failures.push("productionLifecycle.apiBaseUrl must be the official production API");
+  }
+  if (!/^sha256:[a-f0-9]{64}$/.test(readString(productionLifecycle.licenseFingerprint) ?? "")) {
+    failures.push("productionLifecycle.licenseFingerprint must be a redacted SHA-256 fingerprint");
+  }
+
+  const lifecycleRequirements = new Map<string, { outcome: string; statusCode: number }>([
+    ["issue", { outcome: "succeeded", statusCode: 200 }],
+    ["activate", { outcome: "succeeded", statusCode: 200 }],
+    ["validate_active", { outcome: "succeeded", statusCode: 200 }],
+    ["deactivate", { outcome: "succeeded", statusCode: 200 }],
+    ["validate_denied", { outcome: "denied", statusCode: 409 }]
+  ]);
+  const lifecycleSteps = Array.isArray(productionLifecycle.steps) ? productionLifecycle.steps : [];
+  const lifecycleById = new Map<string, Record<string, unknown>>();
+  for (const rawStep of lifecycleSteps) {
+    const step = asRecord(rawStep);
+    const id = readString(step.id);
+    const unexpectedStepKeys = collectUnexpectedKeys(step, new Set(["id", "outcome", "statusCode", "apiBaseUrl", "redactedResponse", "responseSha256"]));
+    if (unexpectedStepKeys.length) failures.push(`unexpected productionLifecycle step fields: ${unexpectedStepKeys.join(", ")}`);
+    if (!id || lifecycleById.has(id)) {
+      failures.push("productionLifecycle.steps must have unique named steps");
+      continue;
+    }
+    lifecycleById.set(id, step);
+  }
+  for (const [id, requirement] of lifecycleRequirements) {
+    const step = lifecycleById.get(id);
+    if (!step) {
+      failures.push(`productionLifecycle.steps must include ${id}`);
+      continue;
+    }
+    if (step.outcome !== requirement.outcome) failures.push(`productionLifecycle.${id}.outcome must be ${requirement.outcome}`);
+    if (step.statusCode !== requirement.statusCode) failures.push(`productionLifecycle.${id}.statusCode must be ${requirement.statusCode}`);
+    if (step.apiBaseUrl !== "https://neondiff-license.fly.dev") failures.push(`productionLifecycle.${id}.apiBaseUrl must be the official production API`);
+    requireSha256(step.responseSha256, `productionLifecycle.${id}.responseSha256`);
+  }
+  for (const id of lifecycleById.keys()) {
+    if (!lifecycleRequirements.has(id)) failures.push(`unexpected productionLifecycle step id: ${id}`);
+  }
+
+  const unexpectedMatrixKeys = collectUnexpectedKeys(matrix, new Set(["bypassAllowedCases", "scenarios"]));
+  if (unexpectedMatrixKeys.length) failures.push(`unexpected matrix fields: ${unexpectedMatrixKeys.join(", ")}`);
+  requireZero(matrix.bypassAllowedCases, "matrix.bypassAllowedCases");
+  const requiredAllowedScenarioIds = new Set(["public_active", "private_active"]);
+  const requiredDeniedScenarioIds = new Set([
+    "unknown_repo",
+    "public_denied",
+    "private_denied",
+    "missing_key",
+    "missing_api_url",
+    "offline",
+    "timeout",
+    "forged_cache",
+    "mismatched_cache",
+    "disabled_policy_attempt",
+    "fake_api",
+    "rate_limited",
+    "server_error",
+    "malformed_response",
+    "revoked",
+    "expired",
+    "dashboard_provider_pre_activation"
+  ]);
+  const scenarios = Array.isArray(matrix.scenarios) ? matrix.scenarios : [];
+  const scenarioIds = new Set<string>();
+  const zeroLicenseApiCallScenarioIds = new Set([
+    "missing_key", "forged_cache", "disabled_policy_attempt", "dashboard_provider_pre_activation"
+  ]);
+  for (const rawScenario of scenarios) {
+    const scenario = asRecord(rawScenario);
+    const id = readString(scenario.id);
+    const unexpectedScenarioKeys = collectUnexpectedKeys(scenario, new Set(["id", "visibility", "expected", "actual", "expectedLicenseApiCalls", "licenseApiCalls", "resultSha256"]));
+    if (unexpectedScenarioKeys.length) failures.push(`unexpected matrix scenario fields: ${unexpectedScenarioKeys.join(", ")}`);
+    if (!id || scenarioIds.has(id)) {
+      failures.push("matrix.scenarios must have unique named scenarios");
+      continue;
+    }
+    scenarioIds.add(id);
+    const expectedOutcome = requiredAllowedScenarioIds.has(id) ? "allowed" : requiredDeniedScenarioIds.has(id) ? "denied" : undefined;
+    if (!expectedOutcome) {
+      failures.push(`unexpected matrix scenario id: ${id}`);
+      continue;
+    }
+    if (scenario.expected !== expectedOutcome) failures.push(`matrix.${id}.expected must be ${expectedOutcome}`);
+    if (scenario.actual !== expectedOutcome) failures.push(`matrix.${id}.actual must be ${expectedOutcome}`);
+    const expectedVisibility = id === "public_active" || id === "public_denied"
+      ? "public"
+      : id === "private_active" || id === "private_denied"
+        ? "private"
+        : id === "unknown_repo"
+          ? "unknown"
+          : "not_applicable";
+    if (scenario.visibility !== expectedVisibility) failures.push(`matrix.${id}.visibility must be ${expectedVisibility}`);
+    requireSha256(scenario.resultSha256, `matrix.${id}.resultSha256`);
+    const expectedLicenseApiCalls = zeroLicenseApiCallScenarioIds.has(id) ? 0 : 1;
+    if (scenario.expectedLicenseApiCalls !== expectedLicenseApiCalls) {
+      failures.push(`matrix.${id}.expectedLicenseApiCalls must be ${expectedLicenseApiCalls}`);
+    }
+    if (scenario.licenseApiCalls !== expectedLicenseApiCalls) {
+      failures.push(`matrix.${id}.licenseApiCalls must be ${expectedLicenseApiCalls}`);
+    }
+  }
+  for (const id of [...requiredAllowedScenarioIds, ...requiredDeniedScenarioIds]) {
+    if (!scenarioIds.has(id)) failures.push(`matrix.scenarios must include ${id}`);
+  }
+
+  const requiredBoundaryTests = [
+    "providers verify license admission denies before provider-key stdin or provider network",
+    "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
+    "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
+    "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
+    "local HTML dashboard serves HTML status but blocks provider verification before activation"
+  ];
+  const unexpectedUsefulWorkKeys = collectUnexpectedKeys(usefulWorkBoundaries, new Set([
+    "reportPassed", "totalTests", "requiredPassingTests", "resultSha256"
+  ]));
+  if (unexpectedUsefulWorkKeys.length) failures.push(`unexpected usefulWorkBoundaries fields: ${unexpectedUsefulWorkKeys.join(", ")}`);
+  requireTrue(usefulWorkBoundaries.reportPassed, "usefulWorkBoundaries.reportPassed");
+  if (!Number.isInteger(usefulWorkBoundaries.totalTests) || Number(usefulWorkBoundaries.totalTests) < requiredBoundaryTests.length) {
+    failures.push("usefulWorkBoundaries.totalTests must cover the required boundary tests");
+  }
+  if (JSON.stringify(usefulWorkBoundaries.requiredPassingTests) !== JSON.stringify(requiredBoundaryTests)) {
+    failures.push("usefulWorkBoundaries.requiredPassingTests must contain the exact required tests");
+  }
+  requireSha256(usefulWorkBoundaries.resultSha256, "usefulWorkBoundaries.resultSha256");
+
+  const installUpgrade = asRecord(proof.installUpgrade);
+  const unexpectedInstallUpgradeKeys = collectUnexpectedKeys(installUpgrade, new Set([
+    "freshInstallPassed",
+    "upgradedFromVersion",
+    "upgradePassed",
+    "resultSha256"
+  ]));
+  if (unexpectedInstallUpgradeKeys.length) failures.push(`unexpected installUpgrade fields: ${unexpectedInstallUpgradeKeys.join(", ")}`);
+  requireTrue(installUpgrade.freshInstallPassed, "installUpgrade.freshInstallPassed");
+  if (installUpgrade.upgradedFromVersion !== "1.0.3") failures.push("installUpgrade.upgradedFromVersion must be 1.0.3");
+  requireTrue(installUpgrade.upgradePassed, "installUpgrade.upgradePassed");
+  requireSha256(installUpgrade.resultSha256, "installUpgrade.resultSha256");
+
+  const dashboard = asRecord(proof.dashboard);
+  const unexpectedDashboardKeys = collectUnexpectedKeys(dashboard, new Set([
+    "setupBlockedBeforeActivation",
+    "providerBlockedBeforeActivation",
+    "activatedStatusVisible",
+    "resultSha256"
+  ]));
+  if (unexpectedDashboardKeys.length) failures.push(`unexpected dashboard fields: ${unexpectedDashboardKeys.join(", ")}`);
+  requireTrue(dashboard.setupBlockedBeforeActivation, "dashboard.setupBlockedBeforeActivation");
+  requireTrue(dashboard.providerBlockedBeforeActivation, "dashboard.providerBlockedBeforeActivation");
+  requireTrue(dashboard.activatedStatusVisible, "dashboard.activatedStatusVisible");
+  requireSha256(dashboard.resultSha256, "dashboard.resultSha256");
+
+  const unexpectedDesktopKeys = collectUnexpectedKeys(desktop, new Set(["brokerUnavailable", "usefulWorkBlocked", "resultSha256"]));
+  if (unexpectedDesktopKeys.length) failures.push(`unexpected desktop fields: ${unexpectedDesktopKeys.join(", ")}`);
+  requireTrue(desktop.brokerUnavailable, "desktop.brokerUnavailable");
+  requireTrue(desktop.usefulWorkBlocked, "desktop.usefulWorkBlocked");
+  requireSha256(desktop.resultSha256, "desktop.resultSha256");
+
+  const unexpectedRedactionKeys = collectUnexpectedKeys(redaction, new Set(["rawLicenseKeyAbsent", "bearerTokenAbsent", "privatePathsAbsent"]));
+  if (unexpectedRedactionKeys.length) failures.push(`unexpected redaction fields: ${unexpectedRedactionKeys.join(", ")}`);
+  requireTrue(redaction.rawLicenseKeyAbsent, "redaction.rawLicenseKeyAbsent");
+  requireTrue(redaction.bearerTokenAbsent, "redaction.bearerTokenAbsent");
+  requireTrue(redaction.privatePathsAbsent, "redaction.privatePathsAbsent");
+  const requiredArtifactKinds = new Set(["production-lifecycle", "no-bypass-matrix", "useful-work-boundaries", "dashboard", "desktop", "install-upgrade"]);
+  const artifacts = Array.isArray(proof.artifacts) ? proof.artifacts : [];
+  const observedArtifactKinds = new Set<string>();
+  const observedArtifactRefs = new Set<string>();
+  const artifactRecordsByKind = new Map<string, unknown[]>();
+  for (const rawArtifact of artifacts) {
+    const artifact = asRecord(rawArtifact);
+    const unexpectedArtifactKeys = collectUnexpectedKeys(artifact, new Set(["kind", "ref", "sha256"]));
+    if (unexpectedArtifactKeys.length) failures.push(`unexpected artifact fields: ${unexpectedArtifactKeys.join(", ")}`);
+    const kind = readString(artifact.kind);
+    const ref = readString(artifact.ref);
+    const sha256 = readString(artifact.sha256);
+    if (!kind || !requiredArtifactKinds.has(kind) || observedArtifactKinds.has(kind)) {
+      failures.push("artifacts must contain each required kind exactly once");
+      continue;
+    }
+    observedArtifactKinds.add(kind);
+    requireSha256(sha256, `artifacts.${kind}.sha256`);
+    if (!ref) {
+      failures.push(`artifacts.${kind}.ref must be present`);
+      continue;
+    }
+    if (observedArtifactRefs.has(ref)) {
+      failures.push("artifact refs must be unique");
+      continue;
+    }
+    observedArtifactRefs.add(ref);
+    const artifactPath = resolveConfinedEvidenceProofPath(input.cwd, ref, "activationProofPath");
+    if (!artifactPath.ok || !existsSync(artifactPath.absolutePath)) {
+      failures.push(`artifacts.${kind}.ref must resolve within docs/evidence`);
+      continue;
+    }
+    const artifactBytes = readFileSync(artifactPath.absolutePath);
+    if (sha256 && createHash("sha256").update(artifactBytes).digest("hex") !== sha256) {
+      failures.push(`artifacts.${kind}.sha256 must match the referenced artifact`);
+    }
+    const artifactText = artifactBytes.toString("utf8");
+    if (containsSecretLikeText(artifactText) || /nd_live_[A-Za-z0-9_-]+|Bearer\s+\S+|\/Volumes\/|\/Users\//.test(artifactText)) {
+      failures.push(`artifacts.${kind} contains secret-like text or a private absolute path`);
+    }
+    let artifactDocument: Record<string, unknown>;
+    try {
+      artifactDocument = asRecord(JSON.parse(artifactText));
+    } catch {
+      failures.push(`artifacts.${kind} must be valid JSON`);
+      continue;
+    }
+    const unexpectedArtifactDocumentKeys = collectUnexpectedKeys(artifactDocument, new Set([
+      "evidenceKind",
+      "releaseVersion",
+      "candidateHead",
+      "packShasum",
+      "packIntegrity",
+      "harnessRunId",
+      "records"
+    ]));
+    if (unexpectedArtifactDocumentKeys.length) {
+      failures.push(`unexpected artifacts.${kind} document fields: ${unexpectedArtifactDocumentKeys.join(", ")}`);
+    }
+    if (artifactDocument.evidenceKind !== kind) failures.push(`artifacts.${kind}.evidenceKind must match its declared kind`);
+    if (artifactDocument.releaseVersion !== input.expectedReleaseVersion) failures.push(`artifacts.${kind}.releaseVersion must match the release`);
+    if (artifactDocument.candidateHead !== installedCandidate.sourceHead) failures.push(`artifacts.${kind}.candidateHead must match installedCandidate.sourceHead`);
+    if (artifactDocument.packShasum !== installedCandidate.packShasum) failures.push(`artifacts.${kind}.packShasum must match installedCandidate.packShasum`);
+    if (artifactDocument.packIntegrity !== installedCandidate.packIntegrity) failures.push(`artifacts.${kind}.packIntegrity must match installedCandidate.packIntegrity`);
+    if (artifactDocument.harnessRunId !== harness.runId) failures.push(`artifacts.${kind}.harnessRunId must match harness.runId`);
+    if (!Array.isArray(artifactDocument.records)) {
+      failures.push(`artifacts.${kind}.records must be an array`);
+    } else {
+      artifactRecordsByKind.set(kind, artifactDocument.records);
+    }
+  }
+  for (const kind of requiredArtifactKinds) {
+    if (!observedArtifactKinds.has(kind)) failures.push(`artifacts must include ${kind}`);
+  }
+  const digestRecord = (record: Record<string, unknown>): string =>
+    createHash("sha256").update(JSON.stringify(record)).digest("hex");
+  const lifecycleArtifactRecords = artifactRecordsByKind.get("production-lifecycle") ?? [];
+  const lifecycleArtifactById = new Map<string, Record<string, unknown>>();
+  for (const rawRecord of lifecycleArtifactRecords) {
+    const record = asRecord(rawRecord);
+    const id = readString(record.id);
+    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "outcome", "statusCode", "apiBaseUrl", "redactedResponse"]));
+    if (unexpectedRecordKeys.length) failures.push(`unexpected production-lifecycle record fields: ${unexpectedRecordKeys.join(", ")}`);
+    if (!id || lifecycleArtifactById.has(id)) failures.push("production-lifecycle records must have unique ids");
+    else lifecycleArtifactById.set(id, record);
+  }
+  for (const [id, step] of lifecycleById) {
+    const record = lifecycleArtifactById.get(id);
+    if (!record) {
+      failures.push(`production-lifecycle artifact must include ${id}`);
+      continue;
+    }
+    if (record.outcome !== step.outcome || record.statusCode !== step.statusCode || record.apiBaseUrl !== step.apiBaseUrl || JSON.stringify(record.redactedResponse) !== JSON.stringify(step.redactedResponse)) {
+      failures.push(`production-lifecycle artifact record ${id} must match the aggregate proof`);
+    }
+    if (step.responseSha256 !== digestRecord(asRecord(record.redactedResponse))) failures.push(`productionLifecycle.${id}.responseSha256 must match its redacted artifact response`);
+  }
+
+  const matrixArtifactRecords = artifactRecordsByKind.get("no-bypass-matrix") ?? [];
+  const matrixArtifactById = new Map<string, Record<string, unknown>>();
+  for (const rawRecord of matrixArtifactRecords) {
+    const record = asRecord(rawRecord);
+    const id = readString(record.id);
+    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "visibility", "expected", "actual", "expectedLicenseApiCalls", "licenseApiCalls"]));
+    if (unexpectedRecordKeys.length) failures.push(`unexpected no-bypass-matrix record fields: ${unexpectedRecordKeys.join(", ")}`);
+    if (!id || matrixArtifactById.has(id)) failures.push("no-bypass-matrix records must have unique ids");
+    else matrixArtifactById.set(id, record);
+  }
+  for (const rawScenario of scenarios) {
+    const scenario = asRecord(rawScenario);
+    const id = readString(scenario.id);
+    if (!id) continue;
+    const record = matrixArtifactById.get(id);
+    if (!record) {
+      failures.push(`no-bypass-matrix artifact must include ${id}`);
+      continue;
+    }
+    if (record.visibility !== scenario.visibility || record.expected !== scenario.expected || record.actual !== scenario.actual || record.expectedLicenseApiCalls !== scenario.expectedLicenseApiCalls || record.licenseApiCalls !== scenario.licenseApiCalls) {
+      failures.push(`no-bypass-matrix artifact record ${id} must match the aggregate proof`);
+    }
+    if (scenario.resultSha256 !== digestRecord(record)) failures.push(`matrix.${id}.resultSha256 must match its artifact record`);
+  }
+
+  const validateSingleRecordArtifact = (
+    kind: "dashboard" | "desktop" | "install-upgrade" | "useful-work-boundaries",
+    aggregate: Record<string, unknown>,
+    hashField: string,
+    allowedRecordKeys: Set<string>
+  ): void => {
+    const records = artifactRecordsByKind.get(kind) ?? [];
+    if (records.length !== 1) {
+      failures.push(`artifacts.${kind}.records must contain exactly one record`);
+      return;
+    }
+    const record = asRecord(records[0]);
+    const unexpectedRecordKeys = collectUnexpectedKeys(record, allowedRecordKeys);
+    if (unexpectedRecordKeys.length) failures.push(`unexpected ${kind} record fields: ${unexpectedRecordKeys.join(", ")}`);
+    for (const key of allowedRecordKeys) {
+      if (JSON.stringify(record[key]) !== JSON.stringify(aggregate[key])) failures.push(`${kind} artifact record must match aggregate field ${key}`);
+    }
+    if (aggregate[hashField] !== digestRecord(record)) failures.push(`${kind}.${hashField} must match its artifact record`);
+  };
+  validateSingleRecordArtifact(
+    "useful-work-boundaries",
+    usefulWorkBoundaries,
+    "resultSha256",
+    new Set(["reportPassed", "totalTests", "requiredPassingTests"])
+  );
+  validateSingleRecordArtifact(
+    "dashboard",
+    dashboard,
+    "resultSha256",
+    new Set(["setupBlockedBeforeActivation", "providerBlockedBeforeActivation", "activatedStatusVisible"])
+  );
+  validateSingleRecordArtifact("desktop", desktop, "resultSha256", new Set(["brokerUnavailable", "usefulWorkBlocked"]));
+  validateSingleRecordArtifact(
+    "install-upgrade",
+    installUpgrade,
+    "resultSha256",
+    new Set(["freshInstallPassed", "upgradedFromVersion", "upgradePassed"])
+  );
+  if (containsSecretLikeText(serialized)) failures.push("proof contains secret-like text");
+  if (/nd_live_[A-Za-z0-9_-]+|Bearer\s+\S+|\/Volumes\/|\/Users\//.test(serialized)) {
+    failures.push("proof must not contain raw license keys, bearer values, or private absolute paths");
+  }
+
+  return failures.length
+    ? { ok: false, detail: `invalid mandatory activation proof ${input.proofPath}: ${failures.join("; ")}` }
+    : { ok: true, detail: `validated mandatory activation proof ${input.proofPath}` };
 }
 
 function validateLicenseHealthProof(input: {
@@ -1473,7 +1977,7 @@ function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: t
 function resolveConfinedEvidenceProofPath(
   cwd: string,
   proofPath: string,
-  fieldName: "healthProofPath" | "checkoutIssuanceProofPath" | "checkoutIssuanceAuthenticatedProofPath"
+  fieldName: "healthProofPath" | "checkoutIssuanceProofPath" | "checkoutIssuanceAuthenticatedProofPath" | "activationProofPath"
 ): { ok: true; absolutePath: string } | { ok: false; detail: string } {
   if (isAbsolute(proofPath)) {
     return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };
