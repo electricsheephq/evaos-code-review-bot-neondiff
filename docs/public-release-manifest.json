@@ -1,13 +1,12 @@
 {
-  "version": "v1.0.3",
+  "version": "v1.0.4",
   "releaseLevel": "stable",
-  "publicationProofPath": "docs/evidence/v1.0.3-publication-proof.json",
   "packageArtifact": {
     "name": "neondiff",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "requiredForThisRelease": true,
-    "state": "published",
-    "previousReleasedPackageVersion": "1.0.2",
+    "state": "release_candidate",
+    "previousReleasedPackageVersion": "1.0.3",
     "skippedPublicPackageVersions": [
       "v0.4.25-beta.1",
       "v0.4.26-beta.1",
@@ -31,12 +30,12 @@
       "v0.4.45-beta.1",
       "v0.4.46-beta.1"
     ],
-    "note": "v1.0.3 publishes the CLI/dashboard npm package with verified provenance, registry identity, and installed-package browser-dashboard proof. Desktop Keychain startup-stability source changes are included, but desktop app artifacts are not part of the npm package."
+    "note": "v1.0.4 is the reviewed CLI/dashboard npm package release candidate for mandatory API-backed activation. Publication and public-registry install proof remain pending; desktop app artifacts are not part of the npm package."
   },
   "source": {
-    "shaState": "published",
-    "candidateHeadBeforeReleaseMetadata": "bcd2f7ace5b190dc86b5f86983aa62aae5e40652",
-    "proof": "annotated tag v1.0.3 peels to published main source SHA 5411365f73f0093b085eda056fe55c4cec4779d3 and contains candidate bcd2f7ace5b190dc86b5f86983aa62aae5e40652; the post-release stamp does not move the tag"
+    "shaState": "pending_tag_stamp",
+    "candidateHeadBeforeReleaseMetadata": "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+    "proof": "protected-main candidate 42db7c8ff7dba6ceac813238dcebfb54dc83851f passed mandatory production activation lifecycle run 29185155054; the annotated v1.0.4 tag, GitHub Release, and npm publication remain pending"
   },
   "releaseStages": {
     "launchCutLine": "1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not full signed desktop maturity.",
@@ -79,9 +78,9 @@
     ]
   },
   "docs": {
-    "version": "v1.0.3",
+    "version": "v1.0.4",
     "setupPath": "docs/SETUP.md",
-    "releaseNotesPath": "docs/releases/v1.0.3.md",
+    "releaseNotesPath": "docs/releases/v1.0.4.md",
     "websiteRepo": "electricsheephq/neon-diff-agent-website"
   },
   "licenseApi": {
@@ -89,34 +88,35 @@
     "state": "healthy",
     "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327",
     "healthUrl": "https://neondiff-license.fly.dev/healthz",
-    "healthProofPath": "docs/evidence/v1.0.3-license-api-healthz.json",
+    "healthProofPath": "docs/evidence/v1.0.4-license-api-healthz.json",
     "checkoutIssuanceRequiredForThisRelease": true,
     "checkoutIssuanceUrl": "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
     "checkoutIssuanceState": "ready",
-    "checkoutIssuanceProofPath": "docs/evidence/v1.0.3-license-checkout-issuance-unauthenticated.json",
-    "checkoutIssuanceAuthenticatedProofPath": "docs/evidence/v1.0.3-license-checkout-issuance-authenticated.json",
-    "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
+    "checkoutIssuanceProofPath": "docs/evidence/v1.0.4-license-checkout-issuance-unauthenticated.json",
+    "checkoutIssuanceAuthenticatedProofPath": "docs/evidence/v1.0.4-license-checkout-issuance-authenticated.json",
+    "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421",
+    "activationProofPath": "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json"
   },
   "updateChannels": {
     "cli": {
       "requiredForThisRelease": true,
-      "state": "published",
-      "version": "v1.0.3",
-      "rollback": "git reset --hard refs/tags/v1.0.2",
+      "state": "source_checkout",
+      "version": "v1.0.4",
+      "rollback": "git reset --hard refs/tags/v1.0.3",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "daemon": {
       "requiredForThisRelease": true,
-      "state": "published",
-      "version": "v1.0.3",
-      "rollback": "git reset --hard refs/tags/v1.0.2",
+      "state": "source_checkout",
+      "version": "v1.0.4",
+      "rollback": "git reset --hard refs/tags/v1.0.3",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
     },
     "browserDashboard": {
       "requiredForThisRelease": true,
-      "state": "published",
-      "version": "v1.0.3",
-      "rollback": "git reset --hard refs/tags/v1.0.2",
+      "state": "source_checkout",
+      "version": "v1.0.4",
+      "rollback": "git reset --hard refs/tags/v1.0.3",
       "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
       "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
     }
