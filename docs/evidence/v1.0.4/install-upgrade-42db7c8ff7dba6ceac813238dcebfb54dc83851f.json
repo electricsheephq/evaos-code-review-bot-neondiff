@@ -1,0 +1,15 @@
+{
+  "evidenceKind": "install-upgrade",
+  "releaseVersion": "v1.0.4",
+  "candidateHead": "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+  "packShasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
+  "packIntegrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw==",
+  "harnessRunId": "4c246a4cb724779c1e311fb7942c2046fc76df12afb6280e5c2c9ccbe0955a2a",
+  "records": [
+    {
+      "freshInstallPassed": true,
+      "upgradedFromVersion": "1.0.3",
+      "upgradePassed": true
+    }
+  ]
+}

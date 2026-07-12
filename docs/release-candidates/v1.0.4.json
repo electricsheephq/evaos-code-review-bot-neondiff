@@ -2,16 +2,23 @@
   "version": "v1.0.4",
   "packageVersion": "1.0.4",
   "publishedVersionAtCandidateCut": "v1.0.3",
-  "state": "protected_main_candidate_pending_production_proof",
+  "state": "protected_main_candidate_proven_pending_publication",
   "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532",
   "proofWorkflow": ".github/workflows/license-lifecycle-proof.yml",
+  "candidateSourceSha": "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+  "proofRunUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
+  "activationProofPath": "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
+  "packageArtifact": {
+    "shasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
+    "integrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw=="
+  },
   "proofBoundary": {
     "allowed": [
-      "package bytes and version are ready for protected-main lifecycle proof"
+      "protected-main candidate passed production activation lifecycle and no-bypass proof",
+      "candidate package bytes are fixed at the recorded shasum and integrity"
     ],
     "forbidden": [
       "v1.0.4 is published",
-      "v1.0.4 activation proof exists",
       "npm latest points to 1.0.4",
       "predecessor releases or artifacts are safe to remove"
     ]

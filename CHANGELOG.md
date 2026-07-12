@@ -16,6 +16,23 @@ for the semver/GA-line and npm dist-tag policy.
 
 No unreleased changes tracked yet.
 
+## [1.0.4] - docs/releases/v1.0.4.md
+
+### Changed
+
+- Require API-backed activation for supported review work across public,
+  private, internal, and unknown repository visibility, with no user-editable
+  enforcement-disable fallback.
+- Add production OIDC lifecycle issuance, activation, refresh, deactivation,
+  no-bypass, fresh-install, v1.0.3 upgrade, dashboard, and Desktop quarantine
+  proof for the exact protected-main candidate.
+- Require the strict release validator to preserve the public-repository
+  visibility exercised by the retired disabled-enforcement/free-public bypass
+  scenario.
+- Keep the release metadata truthful as a prepublication candidate until the
+  immutable GitHub Release, npm registry convergence, and installed-package
+  activation smoke complete.
+
 ## [1.0.3] - docs/releases/v1.0.3.md
 
 ### Fixed

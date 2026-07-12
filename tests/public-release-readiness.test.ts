@@ -104,20 +104,38 @@ describe("NeonDiff public release readiness", () => {
     });
     expect(manifest.packageArtifact).toMatchObject({
       name: "neondiff",
-      version: "1.0.3",
+      version: "1.0.4",
       requiredForThisRelease: true,
-      state: "published",
-      previousReleasedPackageVersion: "1.0.2"
+      state: "release_candidate",
+      previousReleasedPackageVersion: "1.0.3"
     });
     expect(existsSync("docs/release-candidates/v1.0.4.json")).toBe(true);
     if (!existsSync("docs/release-candidates/v1.0.4.json")) return;
-    expect(JSON.parse(read("docs/release-candidates/v1.0.4.json"))).toMatchObject({
+    const candidateLedger = JSON.parse(read("docs/release-candidates/v1.0.4.json")) as {
+      state?: string;
+      candidateSourceSha?: string;
+      proofRunUrl?: string;
+      activationProofPath?: string;
+      packageArtifact?: { shasum?: string; integrity?: string };
+      proofBoundary?: { forbidden?: string[] };
+    };
+    expect(candidateLedger).toMatchObject({
       version: "v1.0.4",
       packageVersion: "1.0.4",
       publishedVersionAtCandidateCut: "v1.0.3",
-      state: "protected_main_candidate_pending_production_proof",
-      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532"
+      state: "protected_main_candidate_proven_pending_publication",
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/532",
+      candidateSourceSha: "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+      proofRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
+      activationProofPath:
+        "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
+      packageArtifact: {
+        shasum: "526c04bd24673351b9cc7136d8747df00ffaa2be",
+        integrity:
+          "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw=="
+      }
     });
+    expect(candidateLedger.proofBoundary?.forbidden).not.toContain("v1.0.4 activation proof exists");
     expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.3\}"/);
     for (const path of ["README.md", "docs/SETUP.md"]) {
       const releaseNotice = read(path);
@@ -148,11 +166,11 @@ describe("NeonDiff public release readiness", () => {
     expect(manifest.packageArtifact?.note).toMatch(/CLI\/dashboard npm package/i);
     expect(manifest.packageArtifact?.note).toMatch(/desktop app artifacts are not part of the npm package/i);
     expect(manifest.source).toMatchObject({
-      shaState: "published",
-      candidateHeadBeforeReleaseMetadata: "bcd2f7ace5b190dc86b5f86983aa62aae5e40652"
+      shaState: "pending_tag_stamp",
+      candidateHeadBeforeReleaseMetadata: "42db7c8ff7dba6ceac813238dcebfb54dc83851f"
     });
-    expect(manifest.source?.proof).toMatch(/5411365f73f0093b085eda056fe55c4cec4779d3/);
-    expect(manifest.source?.proof).toMatch(/annotated tag v1\.0\.3/i);
+    expect(manifest.source?.proof).toMatch(/29185155054/);
+    expect(manifest.source?.proof).toMatch(/tag, GitHub Release, and npm publication remain pending/i);
     expect(manifest.releaseStages?.launchCutLine).toBe(
       "1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not full signed desktop maturity."
     );
@@ -179,108 +197,81 @@ describe("NeonDiff public release readiness", () => {
     );
     expect(manifest.updateChannels?.browserDashboard).toMatchObject({
       requiredForThisRelease: true,
-      state: "published",
-      rollback: "git reset --hard refs/tags/v1.0.2",
+      state: "source_checkout",
+      version: "v1.0.4",
+      rollback: "git reset --hard refs/tags/v1.0.3",
       rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
       trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
     });
     expect(manifest.updateChannels?.cli).toMatchObject({
       requiredForThisRelease: true,
-      state: "published",
-      rollback: "git reset --hard refs/tags/v1.0.2"
+      state: "source_checkout",
+      version: "v1.0.4",
+      rollback: "git reset --hard refs/tags/v1.0.3"
     });
     expect(manifest.updateChannels?.daemon).toMatchObject({
       requiredForThisRelease: true,
-      state: "published",
-      rollback: "git reset --hard refs/tags/v1.0.2"
+      state: "source_checkout",
+      version: "v1.0.4",
+      rollback: "git reset --hard refs/tags/v1.0.3"
     });
     expect(manifest.updateChannels?.website).toBeUndefined();
     expect(manifest.updateChannels?.desktop).toBeUndefined();
 
-    expect(manifest.publicationProofPath).toBe("docs/evidence/v1.0.3-publication-proof.json");
-    expect(existsSync(manifest.publicationProofPath!)).toBe(true);
-    const publicationProof = JSON.parse(read(manifest.publicationProofPath!)) as {
+    expect(manifest.publicationProofPath).toBeUndefined();
+    const aggregatePath =
+      "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json";
+    const aggregateRaw = read(aggregatePath);
+    const aggregate = JSON.parse(aggregateRaw) as {
+      evidenceKind?: string;
       releaseVersion?: string;
-      releaseSourceSha?: string;
-      github?: { releaseUrl?: string; publishWorkflowUrl?: string; nonPrerelease?: boolean };
-      npm?: {
+      harness?: { sourceHead?: string };
+      installedCandidate?: {
         packageVersion?: string;
-        latest?: string;
-        releaseCandidatePresent?: boolean;
-        gitHead?: string;
-        shasum?: string;
-        integrity?: string;
-        provenanceAttestationUrl?: string;
-      };
-      installedPackage?: {
         binaryVersion?: string;
-        evidenceRootId?: string;
-        isolatedPrefixRef?: string;
-        previewSmokeRef?: string;
-        browserProofRefs?: string[];
-        artifacts?: Array<{ kind?: string; ref?: string; sha256?: string }>;
-        providerVerification?: { ok?: boolean; mode?: string; result?: string };
+        packShasum?: string;
+        packIntegrity?: string;
       };
-      proofBoundary?: { allowed?: string[]; forbidden?: string[] };
+      matrix?: { bypassAllowedCases?: number; scenarios?: unknown[] };
+      usefulWorkBoundaries?: { reportPassed?: boolean; totalTests?: number };
+      installUpgrade?: { freshInstallPassed?: boolean; upgradedFromVersion?: string; upgradePassed?: boolean };
+      dashboard?: { setupBlockedBeforeActivation?: boolean; providerBlockedBeforeActivation?: boolean; activatedStatusVisible?: boolean };
+      desktop?: { brokerUnavailable?: boolean; usefulWorkBlocked?: boolean };
+      redaction?: { rawLicenseKeyAbsent?: boolean; bearerTokenAbsent?: boolean; privatePathsAbsent?: boolean };
+      artifacts?: Array<{ ref?: string; sha256?: string }>;
     };
-    expect(publicationProof).toMatchObject({
-      releaseVersion: "v1.0.3",
-      releaseSourceSha: "5411365f73f0093b085eda056fe55c4cec4779d3",
-      github: {
-        releaseUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.3",
-        publishWorkflowUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29055263065",
-        nonPrerelease: true
-      },
-      npm: {
-        packageVersion: "1.0.3",
-        latest: "1.0.3",
-        releaseCandidatePresent: false,
-        gitHead: "5411365f73f0093b085eda056fe55c4cec4779d3",
-        shasum: "99e9e74402ffe602f81584b1adf5e9b8d0b22e59",
-        integrity: "sha512-zkoatWQEq1ymbIEtCUTmbC5+ZWCplRlsJyiECLQQlXMMNn1QmsfTQ0M1Yqknn8UAYFD47zhtU1etsg/Qk+tSYQ=="
-      },
-      installedPackage: {
-        binaryVersion: "1.0.3",
-        providerVerification: { ok: true, mode: "metadata_only", result: "configured_unverified" }
-      }
-    });
-    expect(publicationProof.npm?.provenanceAttestationUrl).toMatch(/^https:\/\/registry\.npmjs\.org\//);
-    expect(publicationProof.installedPackage?.evidenceRootId).toBe("neondiff-ga/2026-07-10/v1.0.3/install-smoke");
-    expect(publicationProof.installedPackage?.isolatedPrefixRef).toBe("prefix");
-    expect(publicationProof.installedPackage?.previewSmokeRef).toBe("dashboard-preview-smoke/preview-smoke.json");
-    expect(publicationProof.installedPackage?.browserProofRefs).toHaveLength(2);
-    expect(publicationProof.installedPackage?.artifacts).toEqual([
-      {
-        kind: "installed-cli",
-        ref: "prefix/lib/node_modules/neondiff/dist/src/cli.js",
-        sha256: "f0274f200f451f9bab1ae7b1cc710589fb9d3a446bd45a41698f40b2634f7b69"
-      },
-      {
-        kind: "preview-smoke",
-        ref: "dashboard-preview-smoke/preview-smoke.json",
-        sha256: "048bc1b5f542aafbd02015c998ddf5f61b4c2864e9bf35f32b6af24adf83ff96"
-      },
-      {
-        kind: "browser-dashboard",
-        ref: "dashboard-installed-1.0.3.png",
-        sha256: "5ed63505149832fba630173ea72b915e6d94b120ff1e012dd9d6fb45bb6d17ff"
-      },
-      {
-        kind: "provider-verification-viewport",
-        ref: "dashboard-installed-1.0.3-provider-verified-viewport.png",
-        sha256: "74a36839276d715588b0f3700909ab07650d2d63d64a5977c2a6c67740b503d2"
-      }
-    ]);
-    expect(JSON.stringify(publicationProof)).not.toContain("/Volumes/");
-    expect(publicationProof.proofBoundary?.allowed).toContain("installed CLI and local browser dashboard flow for neondiff@1.0.3");
-    expect(publicationProof.proofBoundary?.forbidden).toEqual(
-      expect.arrayContaining([
-        "signed or notarized Mac distribution",
-        "Sparkle or appcast readiness",
-        "browser and native UI parity",
-        "v1.1 customer readiness"
-      ])
+    expect(createHash("sha256").update(aggregateRaw).digest("hex")).toBe(
+      "82372b6dad9992741392017116de3b423c134b8b26ad605a3a6cfcafd59c721c"
     );
+    expect(aggregate).toMatchObject({
+      evidenceKind: "mandatory_activation_no_bypass",
+      releaseVersion: "v1.0.4",
+      harness: { sourceHead: "42db7c8ff7dba6ceac813238dcebfb54dc83851f" },
+      installedCandidate: {
+        packageVersion: "1.0.4",
+        binaryVersion: "1.0.4",
+        packShasum: "526c04bd24673351b9cc7136d8747df00ffaa2be",
+        packIntegrity:
+          "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw=="
+      },
+      matrix: { bypassAllowedCases: 0 },
+      usefulWorkBoundaries: { reportPassed: true, totalTests: 197 },
+      installUpgrade: { freshInstallPassed: true, upgradedFromVersion: "1.0.3", upgradePassed: true },
+      dashboard: {
+        setupBlockedBeforeActivation: true,
+        providerBlockedBeforeActivation: true,
+        activatedStatusVisible: true
+      },
+      desktop: { brokerUnavailable: true, usefulWorkBlocked: true },
+      redaction: { rawLicenseKeyAbsent: true, bearerTokenAbsent: true, privatePathsAbsent: true }
+    });
+    expect(aggregate.matrix?.scenarios).toHaveLength(19);
+    expect(aggregate.artifacts).toHaveLength(6);
+    for (const artifact of aggregate.artifacts ?? []) {
+      expect(artifact.ref).toMatch(/^docs\/evidence\/v1\.0\.4\/[a-z-]+-42db7c8ff7dba6ceac813238dcebfb54dc83851f\.json$/);
+      expect(existsSync(artifact.ref ?? "")).toBe(true);
+      expect(createHash("sha256").update(read(artifact.ref ?? "")).digest("hex")).toBe(artifact.sha256);
+    }
   });
 
   it("requires the live production license API and checkout issuance for GA", () => {
@@ -295,6 +286,7 @@ describe("NeonDiff public release readiness", () => {
         checkoutIssuanceUrl?: string;
         checkoutIssuanceProofPath?: string;
         checkoutIssuanceAuthenticatedProofPath?: string;
+        activationProofPath?: string;
         checkoutIssuanceState?: string;
         checkoutIssuanceTrackingIssue?: string;
       };
@@ -309,13 +301,15 @@ describe("NeonDiff public release readiness", () => {
       checkoutIssuanceRequiredForThisRelease: true,
       checkoutIssuanceUrl: "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
       checkoutIssuanceState: "ready",
-      checkoutIssuanceProofPath: "docs/evidence/v1.0.3-license-checkout-issuance-unauthenticated.json",
-      checkoutIssuanceAuthenticatedProofPath: "docs/evidence/v1.0.3-license-checkout-issuance-authenticated.json",
+      checkoutIssuanceProofPath: "docs/evidence/v1.0.4-license-checkout-issuance-unauthenticated.json",
+      checkoutIssuanceAuthenticatedProofPath: "docs/evidence/v1.0.4-license-checkout-issuance-authenticated.json",
+      activationProofPath:
+        "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
       checkoutIssuanceTrackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
     });
     expect(manifest.licenseApi?.trackingIssue).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/);
     expect(manifest.licenseApi?.healthUrl).toMatch(/^https:\/\/[^/]+\/healthz$/);
-    expect(manifest.licenseApi?.healthProofPath).toBe("docs/evidence/v1.0.3-license-api-healthz.json");
+    expect(manifest.licenseApi?.healthProofPath).toBe("docs/evidence/v1.0.4-license-api-healthz.json");
 
     const proof = JSON.parse(read(manifest.licenseApi?.healthProofPath ?? "")) as {
       evidenceKind?: string;
@@ -328,7 +322,7 @@ describe("NeonDiff public release readiness", () => {
     };
     expect(proof).toMatchObject({
       evidenceKind: "license_api_healthz",
-      releaseVersion: "v1.0.3",
+      releaseVersion: "v1.0.4",
       url: manifest.licenseApi?.healthUrl,
       statusCode: 200,
       responseBody: "{\"status\":\"ok\"}"
@@ -345,7 +339,7 @@ describe("NeonDiff public release readiness", () => {
     };
     expect(issuanceProof).toMatchObject({
       evidenceKind: "license_api_checkout_issuance",
-      releaseVersion: "v1.0.3",
+      releaseVersion: "v1.0.4",
       statusCode: 401,
       responseBody: expect.stringContaining("\"unauthorized\"")
     });
@@ -360,7 +354,7 @@ describe("NeonDiff public release readiness", () => {
     };
     expect(authenticatedProof).toMatchObject({
       evidenceKind: "license_api_checkout_issuance_authenticated",
-      releaseVersion: "v1.0.3",
+      releaseVersion: "v1.0.4",
       statusCode: 200,
       redactedResponse: {
         issuedLicensePrefix: "nd_live_",
@@ -406,59 +400,9 @@ describe("NeonDiff public release readiness", () => {
     expect(liveCheckoutProof.proofBoundary).toContain("does not claim the original in-flight Stripe delivery");
     expect(JSON.stringify(liveCheckoutProof)).not.toMatch(/cs_live_|evt_|whsec_|nd_live_[A-Za-z0-9]|session_id=|fulfillment_token=|121 South/i);
 
-    const rollbackProof = JSON.parse(read("docs/evidence/v1.0.3-rollback-refs.json")) as {
-      evidenceKind?: string;
-      releaseVersion?: string;
-      channels?: Record<string, {
-        rollbackRepository?: string;
-        rollbackCommand?: string;
-        operatorRollbackCommand?: string;
-        rollbackTarget?: string;
-        targetVerifiedBy?: string;
-        targetVerifiedSha?: string;
-        targetVerifiedShasum?: string;
-        targetUrl?: string;
-      }>;
-    };
-    expect(rollbackProof).toMatchObject({
-      evidenceKind: "release_rollback_refs",
-      releaseVersion: "v1.0.3",
-      channels: {
-        cli: {
-          rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
-          rollbackCommand: manifest.updateChannels?.cli?.rollback,
-          operatorRollbackCommand: "npm dist-tag add neondiff@1.0.2 latest",
-          rollbackTarget: "v1.0.2",
-          targetVerifiedBy: "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
-          targetVerifiedShasum: "d62619b1ee2c539e3230572135a29a299be3a6ed"
-        },
-        browserDashboard: {
-          rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
-          rollbackCommand: manifest.updateChannels?.browserDashboard?.rollback,
-          operatorRollbackCommand: "npm install -g neondiff@1.0.2",
-          rollbackTarget: "v1.0.2",
-          targetVerifiedBy: "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
-          targetVerifiedShasum: "d62619b1ee2c539e3230572135a29a299be3a6ed"
-        },
-        daemon: {
-          rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
-          rollbackCommand: manifest.updateChannels?.daemon?.rollback,
-          operatorRollbackCommand: "npm install -g neondiff@1.0.2",
-          rollbackTarget: "v1.0.2",
-          targetVerifiedBy: "npm view neondiff@1.0.2 version dist.integrity dist.shasum --json",
-          targetVerifiedShasum: "d62619b1ee2c539e3230572135a29a299be3a6ed"
-        },
-        website: {
-          rollbackRepository: "electricsheephq/neon-diff-agent-website",
-          releaseAction: "no_code_deploy_for_v1.0.3",
-          currentChannelVersion: "v1.0.1",
-          rollbackTarget: "no_action_for_v1.0.3",
-          targetVerifiedBy: "docs/public-release-manifest.json omits updateChannels.website for v1.0.3",
-          targetVerifiedSha: null
-        }
-      }
-    });
-    expect(JSON.stringify(rollbackProof)).not.toContain("<sha>");
+    for (const channel of ["cli", "daemon", "browserDashboard"]) {
+      expect(manifest.updateChannels?.[channel]?.rollback).toBe("git reset --hard refs/tags/v1.0.3");
+    }
 
     const desktopProof = JSON.parse(read("docs/evidence/v1.0.3-desktop-startup-smoke.json")) as {
       evidenceKind?: string;
@@ -557,7 +501,7 @@ describe("NeonDiff public release readiness", () => {
       read("docs/github-app-setup.md"),
       read("docs/providers.md"),
       read("docs/license-boundary.md"),
-      read("docs/releases/v1.0.3.md")
+      read("docs/releases/v1.0.4.md")
     ].join("\n\n");
     const legacyRepoReferences = docs
       .split(/\s+/)
@@ -578,7 +522,7 @@ describe("NeonDiff public release readiness", () => {
     expect(docs).toContain("git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git");
     expect(legacyRepoReferences).toEqual([]);
     expect(docs).not.toMatch(/npm link installs the local source-checkout shim/i);
-    expect(read("docs/releases/v1.0.3.md")).not.toMatch(/\/Volumes\/LEXAR|\/Users\/lume/);
+    expect(read("docs/releases/v1.0.4.md")).not.toMatch(/\/Volumes\/LEXAR|\/Users\/lume/);
   });
 
   it("keeps the retired GitHub Marketplace free-listing packet explicitly non-publishable", () => {

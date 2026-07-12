@@ -1,0 +1,19 @@
+{
+  "evidenceKind": "license_api_checkout_issuance",
+  "releaseVersion": "v1.0.4",
+  "observedAt": "2026-07-12T07:39:29.197Z",
+  "method": "POST",
+  "url": "https://neondiff-license.fly.dev/v1/admin/licenses/issue",
+  "statusCode": 401,
+  "responseBody": "{\"status\":\"unauthorized\",\"detail\":\"license issuance authorization failed\"}",
+  "responseBodySha256": "a67612cc05a222fc5d28aa36be40d59daf7b32bca36f305d66c57db869150e20",
+  "captureContext": {
+    "tool": "node fetch",
+    "transport": "https",
+    "tlsValidation": "node default CA validation",
+    "capturedFrom": "Codex Desktop macOS operator shell",
+    "dnsResolution": "system resolver",
+    "note": "Captured without Authorization header to prove configured fail-closed behavior."
+  },
+  "redaction": "No license key, bearer token, cookie, customer data, or checkout payload secret was sent or captured."
+}
