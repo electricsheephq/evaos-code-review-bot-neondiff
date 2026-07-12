@@ -7,12 +7,10 @@ fallback for contributors and reviewers who want to inspect or build locally. Se
 for the public/private repo license boundary, and [docs/pricing.md](pricing.md)
 for the support-tier pricing contract.
 
-> **v1.0.4 release-candidate notice:** The mandatory activation behavior in
-> this guide describes the next release and the current source branch. Public
-> npm `latest` remains v1.0.3 until the replacement passes activation,
-> install, CI, and review proof. v1.0.3 does not enforce this boundary. Do not
-> use `npm install -g neondiff` as mandatory-activation proof until npm and the
-> GitHub Release both report v1.0.4.
+> **v1.0.4 verification notice:** v1.0.4 is the first package intended to enforce
+> mandatory API-backed activation. Verify `npm view neondiff version` and the
+> matching non-prerelease GitHub Release before relying on it; v1.0.3 and
+> earlier do not enforce this boundary.
 
 ## Requirements
 
