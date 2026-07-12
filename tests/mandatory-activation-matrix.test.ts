@@ -22,5 +22,13 @@ describe("mandatory activation no-bypass matrix", () => {
       public_active: 1,
       private_active: 1
     });
+    expect(result.records.find((record) => record.id === "disabled_policy_attempt")).toEqual({
+      id: "disabled_policy_attempt",
+      visibility: "public",
+      expected: "denied",
+      actual: "denied",
+      expectedLicenseApiCalls: 0,
+      licenseApiCalls: 0
+    });
   });
 });
