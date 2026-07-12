@@ -23,6 +23,7 @@
   },
   "npm": {
     "packageUrl": "https://www.npmjs.com/package/neondiff/v/1.0.4",
+    "tarballUrl": "https://registry.npmjs.org/neondiff/-/neondiff-1.0.4.tgz",
     "packageVersion": "1.0.4",
     "latest": "1.0.4",
     "releaseCandidatePresent": false,
@@ -42,6 +43,18 @@
     "canonicalTarSha256": "1258228765984bc9c0f44330cb028c63a755db2fdf5dc992718fc343cdc6a437",
     "registryShasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
     "registryIntegrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw==",
+    "registryTarball": {
+      "verificationMode": "downloaded_registry_tarball",
+      "observedAt": "2026-07-12T13:57:47Z",
+      "url": "https://registry.npmjs.org/neondiff/-/neondiff-1.0.4.tgz",
+      "filename": "neondiff-1.0.4.tgz",
+      "packageMetadataEntry": "package/package.json",
+      "packageName": "neondiff",
+      "packageVersion": "1.0.4",
+      "shasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
+      "integrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw==",
+      "canonicalTarSha256": "1258228765984bc9c0f44330cb028c63a755db2fdf5dc992718fc343cdc6a437"
+    },
     "nextImmutablePackageIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
   },
   "installedPackage": {

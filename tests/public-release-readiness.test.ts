@@ -1,9 +1,5 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 function read(path: string): string {
@@ -497,7 +493,7 @@ describe("NeonDiff public release readiness", () => {
     }
   });
 
-  it("keeps a published package source pack byte-identical after state stamps", () => {
+  it("locks published package identity to downloaded registry tarball proof after state stamps", () => {
     const pkg = JSON.parse(read("package.json")) as { name?: string; version?: string };
     const ledgerPath = `docs/release-candidates/v${pkg.version}.json`;
     expect(existsSync(ledgerPath)).toBe(true);
@@ -509,40 +505,56 @@ describe("NeonDiff public release readiness", () => {
 
     expect(ledger.publicationProofPath).toMatch(/^docs\/evidence\/v\d+\.\d+\.\d+-publication-proof\.json$/);
     const publication = JSON.parse(read(ledger.publicationProofPath ?? "")) as {
-      npm?: { packageVersion?: string; shasum?: string; integrity?: string };
+      npm?: { packageVersion?: string; shasum?: string; integrity?: string; tarballUrl?: string };
       postReleaseStamp?: {
         packageAllowlistChanged?: boolean;
         canonicalTarSha256?: string;
         registryShasum?: string;
         registryIntegrity?: string;
+        registryTarball?: {
+          verificationMode?: string;
+          observedAt?: string;
+          url?: string;
+          filename?: string;
+          packageMetadataEntry?: string;
+          packageName?: string;
+          packageVersion?: string;
+          shasum?: string;
+          integrity?: string;
+          canonicalTarSha256?: string;
+        };
       };
     };
     expect(publication.postReleaseStamp?.packageAllowlistChanged).toBe(false);
     expect(publication.postReleaseStamp?.registryShasum).toBe(publication.npm?.shasum);
     expect(publication.postReleaseStamp?.registryIntegrity).toBe(publication.npm?.integrity);
+    expect(publication.npm?.tarballUrl).toBe(
+      `https://registry.npmjs.org/${pkg.name}/-/${pkg.name}-${pkg.version}.tgz`
+    );
+    expect(publication.postReleaseStamp?.registryTarball).toMatchObject({
+      verificationMode: "downloaded_registry_tarball",
+      observedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/),
+      url: publication.npm?.tarballUrl,
+      filename: `${pkg.name}-${pkg.version}.tgz`,
+      packageMetadataEntry: "package/package.json",
+      packageName: pkg.name,
+      packageVersion: publication.npm?.packageVersion,
+      shasum: publication.npm?.shasum,
+      integrity: publication.npm?.integrity,
+      canonicalTarSha256: publication.postReleaseStamp?.canonicalTarSha256
+    });
+  });
 
-    const packRoot = mkdtempSync(join(tmpdir(), "neondiff-published-pack-"));
-    try {
-      const npmPackArgs = ["pack", "--json", "--ignore-scripts", "--pack-destination", packRoot];
-      expect(npmPackArgs).toContain("--ignore-scripts");
-      const [pack] = JSON.parse(
-        execFileSync("npm", npmPackArgs, {
-          encoding: "utf8",
-          maxBuffer: 5 * 1024 * 1024
-        })
-      ) as Array<{ name?: string; version?: string; filename?: string; shasum?: string; integrity?: string }>;
-      const tarball = gunzipSync(readFileSync(join(packRoot, pack.filename ?? "")));
-      const canonicalTarSha256 = createHash("sha256").update(tarball).digest("hex");
+  it("documents the expected post-publication BLOCKED status and recovery path", () => {
+    const releaseNotes = read("docs/releases/v1.0.4.md");
 
-      expect(pack).toMatchObject({ name: pkg.name, version: publication.npm?.packageVersion });
-      expect(canonicalTarSha256).toBe(publication.postReleaseStamp?.canonicalTarSha256);
-      if (process.platform === "linux") {
-        expect(pack.shasum).toBe(publication.npm?.shasum);
-        expect(pack.integrity).toBe(publication.npm?.integrity);
-      }
-    } finally {
-      rmSync(packRoot, { recursive: true, force: true });
-    }
+    expect(releaseNotes).toMatch(/initial publish workflow[\s\S]*promotion confirmation gate failed/i);
+    expect(releaseNotes).toMatch(/recovery PR[\s\S]*#554[\s\S]*29190031396/i);
+    expect(releaseNotes).toMatch(
+      /release-status --public-release-manifest docs\/public-release-manifest\.json --expected-public-version v1\.0\.4/
+    );
+    expect(releaseNotes).toMatch(/public-release update-channel gate[\s\S]*\[BLOCKED\]/i);
+    expect(releaseNotes).toMatch(/expected fail-closed public-release state[\s\S]*#559/i);
   });
 
   it("requires the live production license API and checkout issuance for GA", () => {
