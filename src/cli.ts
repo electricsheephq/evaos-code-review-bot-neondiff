@@ -1678,6 +1678,29 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "review-bench") {
+    if (args._[1] !== "verify-sources") {
+      throw new Error("review-bench subcommand must be: verify-sources");
+    }
+    if (!args.corpus) throw new Error("--corpus is required for review-bench verify-sources");
+    if (!args.artifacts) throw new Error("--artifacts is required for review-bench verify-sources");
+    if (!args.receipt) throw new Error("--receipt is required for review-bench verify-sources");
+    const receiptPath = parseSingleArg(args.receipt, "--receipt");
+    assertEvalOutputDirSafe(dirname(receiptPath));
+    const { runReviewBenchSourceAdmission } = await import("./review-bench-source-admission.js");
+    const receipt = await runReviewBenchSourceAdmission({
+      corpusPath: parseSingleArg(args.corpus, "--corpus"),
+      artifactsDirectory: parseSingleArg(args.artifacts, "--artifacts"),
+      receiptPath
+    });
+    console.log(stringifyRedactedJson({
+      command: "review-bench",
+      subcommand: "verify-sources",
+      ...receipt
+    }));
+    return;
+  }
+
   if (command === "review-lenses-eval") {
     if (args["output-root"] === undefined || (Array.isArray(args["output-root"]) && args["output-root"].length === 0)) {
       throw new Error("--output-root is required for review-lenses-eval");
@@ -3303,6 +3326,14 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--dry-run", description: "true by default; false is rejected." }
     ]
   },
+  "review-bench": {
+    description: "Verify public Corpus v1 sources and issue one immutable admission receipt; no model/provider execution or publication.",
+    flags: [
+      { name: "--corpus", description: "Corpus v1 JSON manifest to validate and live-reverify." },
+      { name: "--artifacts", description: "Directory containing <sourceArtifactSha256>.diff files." },
+      { name: "--receipt", description: "Fresh receipt JSON path outside the checkout, normally under /Volumes/LEXAR/Codex/evals." }
+    ]
+  },
   daemon: {
     description: "Control or run the review daemon: `daemon start|stop|status`, or no subcommand to run the poll loop directly.",
     flags: [
@@ -3426,6 +3457,7 @@ function buildHelp(command?: string) {
         "eval-sticky-vs-cold",
         "eval-repo-wiki-context-ab",
         "eval-openwiki-docs-drift",
+        "review-bench verify-sources",
         "review-lenses-eval",
         "outcome-ledger",
         "outcome-scorecard",
@@ -3488,6 +3520,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts eval-sticky-vs-cold --input /path/to/sticky-vs-cold.json --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold",
       "npx tsx src/cli.ts eval-repo-wiki-context-ab --input /path/to/repo-wiki-ab.json --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/ab",
       "npx tsx src/cli.ts eval-openwiki-docs-drift --input /path/to/docs-drift.json --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/docs-drift",
+      "npx tsx src/cli.ts review-bench verify-sources --corpus /path/to/corpus.json --artifacts /path/to/source-artifacts --receipt /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/source-admission.json",
       "npx tsx src/cli.ts review-lenses-eval --input-dir tests/fixtures/review-lenses-eval --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) --dry-run true",
       "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
       "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",

@@ -114,6 +114,80 @@ evaos-review-bot status --config config.local.json
   packet to a fresh or empty output root. It does not post comments, mutate
   GitHub, write SQLite, restart launchd, activate lenses, or widen
   issue-enrichment/PR review allowlists.
+- `review-bench verify-sources`: setup-safe Corpus v1 admission gate. It reads a
+  corpus manifest, digest-named public source diffs, and digest-named
+  `<oracle-evidence-sha256>.oracle.json` packets plus
+  `<rubric-sha256>.rubric.md` and `<protocol-sha256>.protocol.md`. Corpus JSON
+  must be emitted by `serializeReviewBenchCorpus`; oracle JSON must be emitted by
+  `serializeReviewBenchOracleEvidence`. These serializers produce the canonical
+  duplicate-key-free bytes required by admission; ordinary pretty-printing is
+  intentionally rejected. Before any network request the command
+  validates every local diff, oracle packet, rubric, and protocol, rejects
+  secret-like bytes, and
+  binds two blinded human adjudicator decisions plus a third human resolver for
+  reconciled cases to the exact reviewed artifact. A versioned, protocol-hash-
+  bound annotation universe is frozen first; every candidate must be final-side
+  diff-grounded and both adjudicators must rate it, including rejected
+  candidates. Verified final-side lines constrain candidate grounding but do
+  not create automatic negative votes; the complete frozen candidate universe
+  is the actionability denominator. It computes candidate-level actionability
+  kappa >= 0.70,
+  separate scenario-level defect/clean verdict kappa >= 0.70, and
+  severity-within-one-tier agreement >= 0.85. It then live-
+  verifies later-fix/revert/test-transition commits and ancestry, exact-head
+  one-label review comments, and >=30-day merged-default-branch clean-control
+  observation records whose cutoff is a pinned later PR merge, with bounded
+  source-to-checkpoint lineage, PR-timeline, issue-comment, inline-review-comment,
+  and top-level-review-summary checks. Public repository/source/license proof
+  runs before any oracle comment or timeline request. More than 250 fixed-window
+  commits or paginated timeline/comment/review
+  evidence fails closed. Finally it
+  live-reverifies the repository,
+  commit revisions, or closed-and-merged PR whose bounded exhaustive PR-commit
+  list ends at the pinned source revision, plus the exact pinned base/head
+  cumulative comparison diff and revision-specific license evidence against
+  GitHub. Every defect gold label
+  must identify a canonical repository-relative path and a final-revision
+  (new-side) context or added line inside a verified diff hunk; deletion-only
+  lines are not valid Corpus v1 anchors, but a canonical deleted old-side path
+  still counts as changed-language evidence. Each declared language must match at
+  least one changed source-file path in the verified diff before it contributes
+  to the receipt's diversity count. Bug families are canonical regression
+  taxonomy categories and cannot cross splits. Corpus v1 also fails closed on Git
+  C-quoted unusual filenames rather than decoding them. GitHub source and
+  license artifacts must be served directly from their validated canonical
+  origins; redirects are rejected. The command then creates one
+  no-clobber receipt containing the corpus, public-source verification, and
+  semantic/oracle-source evidence hashes, independent verifier versions, and
+  agreement metrics.
+  Choose an evidence directory outside the checkout and run the command with
+  `--receipt <outside-checkout-evidence-dir>/admission-receipt.json`; the
+  receipt parent must already exist. The command refuses output inside any Git
+  checkout, revalidates the parent's real path/device/inode immediately before
+  writing, and refuses to overwrite a receipt.
+  For a separately reviewed corpus-publication PR, copy that exact no-clobber
+  receipt into the publication worktree at
+  `docs/bench/review-bench-corpus-v1/admission-receipt.json`. Do not hand-edit
+  or regenerate the receipt inside the checkout. CI creates a second live
+  receipt under `$RUNNER_TEMP`, validates both receipts' self-hashes, and
+  compares their immutable corpus/source-verification/semantic-evidence/oracle-
+  source/agreement claims, including 2x2 agreement marginals and corpus
+  composition counts. The publication comparator rejects fewer than 150 total
+  scenarios, 125 defects, 25 clean controls, 30 P0/P1 gold labels, six verified
+  defect languages, ten repositories, 150 frozen candidates, 25 unanimous actionable
+  candidates, or 25 unanimous rejections; smaller receipts remain non-public
+  intake evidence only. CI also requires `corpus.json`, `source-artifacts/`, and
+  `admission-receipt.json` to be all present or all absent.
+  A GitHub token is attached only to `api.github.com`; source diffs and raw
+  license requests never receive it. Each request has a 30-second timeout and
+  transient 502/503/504 responses receive at most one immediate retry.
+  `admittedAt` and
+  the resulting `receiptSha256` may differ between the operator capture and CI
+  by design; neither is used to hide corpus or verification drift.
+  The command does not invoke a model/provider, post to GitHub, publish a
+  corpus, or switch a provider. A future public corpus under
+  `docs/bench/review-bench-corpus-v1/` is admitted only when the mandatory CI
+  admission step regenerates and matches its committed receipt.
 - `build-skill-pack`: compiles configured read-only skill-pack files into an
   advisory prompt packet. It emits JSON/Markdown with packet SHA, byte/token
   estimates, source provenance, omitted-source reasons, and a redaction report.
