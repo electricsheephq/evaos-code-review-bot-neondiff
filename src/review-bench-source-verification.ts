@@ -242,7 +242,7 @@ function parseRepositoryProof(metadata: unknown, scenario: ReviewBenchScenarioV1
   if (typeof fullName !== "string" || fullName.toLowerCase() !== scenario.repository.toLowerCase()) {
     throw new Error("GitHub repository metadata full_name does not match the corpus repository");
   }
-  if (record.private !== false || (record.visibility !== undefined && record.visibility !== "public")) {
+  if (record.private !== false || record.visibility !== "public") {
     throw new Error("GitHub metadata must prove a public repository");
   }
   if (typeof nodeId !== "string" || nodeId.trim().length === 0) {

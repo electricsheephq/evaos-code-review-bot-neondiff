@@ -89,6 +89,7 @@ function draftScenario(input: {
 
 function githubFetch(options: {
   privateRepository?: boolean;
+  omitVisibility?: boolean;
   licenseSpdxId?: string;
   sourceArtifact?: Uint8Array;
   licenseArtifact?: Uint8Array;
@@ -131,7 +132,9 @@ function githubFetch(options: {
         full_name: repository,
         node_id: `node:${repository}`,
         private: options.privateRepository ?? false,
-        visibility: options.privateRepository ? "private" : "public"
+        ...(options.omitVisibility
+          ? {}
+          : { visibility: options.privateRepository ? "private" : "public" })
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (url.hostname === "raw.githubusercontent.com") {
@@ -220,6 +223,12 @@ describe("Review Bench public-source verification", () => {
       scenario: draft,
       sourceArtifact: artifact,
       fetchImpl: githubFetch({ privateRepository: true }),
+      verifiedAt: VERIFIED_AT
+    })).rejects.toThrow("public repository");
+    await expect(verifyGitHubReviewBenchSource({
+      scenario: draft,
+      sourceArtifact: artifact,
+      fetchImpl: githubFetch({ omitVisibility: true, sourceArtifact: artifact }),
       verifiedAt: VERIFIED_AT
     })).rejects.toThrow("public repository");
     await expect(verifyGitHubReviewBenchSource({
