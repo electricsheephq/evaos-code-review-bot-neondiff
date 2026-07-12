@@ -138,7 +138,10 @@ for (const record of scenarioRecords) {
   if (!requiredScenarioIds.has(record.id)) fail(`activation matrix contains unexpected scenario: ${record.id}`);
   const expected = record.id === "public_active" || record.id === "private_active" ? "allowed" : "denied";
   if (record.expected !== expected || record.actual !== expected) fail(`activation matrix scenario did not match: ${record.id}`);
-  if (!Number.isInteger(record.licenseApiCalls) || record.licenseApiCalls < 0) fail(`activation matrix scenario has invalid API-call count: ${record.id}`);
+  if (!Number.isInteger(record.expectedLicenseApiCalls) || record.expectedLicenseApiCalls < 0) fail(`activation matrix scenario has invalid expected API-call count: ${record.id}`);
+  if (!Number.isInteger(record.licenseApiCalls) || record.licenseApiCalls !== record.expectedLicenseApiCalls) {
+    fail(`activation matrix scenario has unexpected API-call count: ${record.id}`);
+  }
 }
 if (observedScenarioIds.size !== requiredScenarioIds.size || [...requiredScenarioIds].some((id) => !observedScenarioIds.has(id))) {
   fail("activation matrix is missing required scenarios");

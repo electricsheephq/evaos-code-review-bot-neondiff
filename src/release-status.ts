@@ -1287,10 +1287,13 @@ function validateMandatoryActivationProofPath(input: {
   ]);
   const scenarios = Array.isArray(matrix.scenarios) ? matrix.scenarios : [];
   const scenarioIds = new Set<string>();
+  const zeroLicenseApiCallScenarioIds = new Set([
+    "missing_key", "forged_cache", "disabled_policy_attempt", "dashboard_provider_pre_activation"
+  ]);
   for (const rawScenario of scenarios) {
     const scenario = asRecord(rawScenario);
     const id = readString(scenario.id);
-    const unexpectedScenarioKeys = collectUnexpectedKeys(scenario, new Set(["id", "visibility", "expected", "actual", "licenseApiCalls", "resultSha256"]));
+    const unexpectedScenarioKeys = collectUnexpectedKeys(scenario, new Set(["id", "visibility", "expected", "actual", "expectedLicenseApiCalls", "licenseApiCalls", "resultSha256"]));
     if (unexpectedScenarioKeys.length) failures.push(`unexpected matrix scenario fields: ${unexpectedScenarioKeys.join(", ")}`);
     if (!id || scenarioIds.has(id)) {
       failures.push("matrix.scenarios must have unique named scenarios");
@@ -1313,8 +1316,12 @@ function validateMandatoryActivationProofPath(input: {
           : "not_applicable";
     if (scenario.visibility !== expectedVisibility) failures.push(`matrix.${id}.visibility must be ${expectedVisibility}`);
     requireSha256(scenario.resultSha256, `matrix.${id}.resultSha256`);
-    if (!Number.isInteger(scenario.licenseApiCalls) || Number(scenario.licenseApiCalls) < 0) {
-      failures.push(`matrix.${id}.licenseApiCalls must be a non-negative integer`);
+    const expectedLicenseApiCalls = zeroLicenseApiCallScenarioIds.has(id) ? 0 : 1;
+    if (scenario.expectedLicenseApiCalls !== expectedLicenseApiCalls) {
+      failures.push(`matrix.${id}.expectedLicenseApiCalls must be ${expectedLicenseApiCalls}`);
+    }
+    if (scenario.licenseApiCalls !== expectedLicenseApiCalls) {
+      failures.push(`matrix.${id}.licenseApiCalls must be ${expectedLicenseApiCalls}`);
     }
   }
   for (const id of [...requiredAllowedScenarioIds, ...requiredDeniedScenarioIds]) {
@@ -1481,7 +1488,7 @@ function validateMandatoryActivationProofPath(input: {
   for (const rawRecord of matrixArtifactRecords) {
     const record = asRecord(rawRecord);
     const id = readString(record.id);
-    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "visibility", "expected", "actual", "licenseApiCalls"]));
+    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "visibility", "expected", "actual", "expectedLicenseApiCalls", "licenseApiCalls"]));
     if (unexpectedRecordKeys.length) failures.push(`unexpected no-bypass-matrix record fields: ${unexpectedRecordKeys.join(", ")}`);
     if (!id || matrixArtifactById.has(id)) failures.push("no-bypass-matrix records must have unique ids");
     else matrixArtifactById.set(id, record);
@@ -1495,7 +1502,7 @@ function validateMandatoryActivationProofPath(input: {
       failures.push(`no-bypass-matrix artifact must include ${id}`);
       continue;
     }
-    if (record.visibility !== scenario.visibility || record.expected !== scenario.expected || record.actual !== scenario.actual || record.licenseApiCalls !== scenario.licenseApiCalls) {
+    if (record.visibility !== scenario.visibility || record.expected !== scenario.expected || record.actual !== scenario.actual || record.expectedLicenseApiCalls !== scenario.expectedLicenseApiCalls || record.licenseApiCalls !== scenario.licenseApiCalls) {
       failures.push(`no-bypass-matrix artifact record ${id} must match the aggregate proof`);
     }
     if (scenario.resultSha256 !== digestRecord(record)) failures.push(`matrix.${id}.resultSha256 must match its artifact record`);

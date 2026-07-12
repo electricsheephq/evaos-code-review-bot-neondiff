@@ -573,14 +573,15 @@ describe("beta release status", () => {
       { id: "validate_denied", outcome: "denied", statusCode: 409, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "scope_mismatch" } }
     ];
     const scenarioRecords = [
-      { id: "public_active", visibility: "public", expected: "allowed", actual: "allowed", licenseApiCalls: 1 },
-      { id: "private_active", visibility: "private", expected: "allowed", actual: "allowed", licenseApiCalls: 1 },
+      { id: "public_active", visibility: "public", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 1, licenseApiCalls: 1 },
+      { id: "private_active", visibility: "private", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 1, licenseApiCalls: 1 },
       ...deniedScenarioIds.map((id) => ({
         id,
         visibility: id === "public_denied" ? "public" : id === "private_denied" ? "private" : id === "unknown_repo" ? "unknown" : "not_applicable",
         expected: "denied",
         actual: "denied",
-        licenseApiCalls: id === "missing_key" ? 0 : 1
+        expectedLicenseApiCalls: ["missing_key", "forged_cache", "disabled_policy_attempt", "dashboard_provider_pre_activation"].includes(id) ? 0 : 1,
+        licenseApiCalls: ["missing_key", "forged_cache", "disabled_policy_attempt", "dashboard_provider_pre_activation"].includes(id) ? 0 : 1
       }))
     ];
     const installUpgradeRecord = { freshInstallPassed: true, upgradedFromVersion: "1.0.3", upgradePassed: true };
@@ -740,7 +741,7 @@ describe("beta release status", () => {
       matrix: {
         ...validProof.matrix,
         scenarios: validProof.matrix.scenarios.map((scenario) => scenario.id === "offline"
-          ? { ...offlineScenario, licenseApiCalls: -1 }
+          ? { ...offlineScenario, licenseApiCalls: 0 }
           : scenario)
       }
     }));
@@ -751,7 +752,7 @@ describe("beta release status", () => {
       now: new Date("2026-07-12T01:00:00.000Z")
     });
     expect(invalidApiCallCount.licenseApi.ok).toBe(false);
-    expect(invalidApiCallCount.licenseApi.detail).toContain("matrix.offline.licenseApiCalls must be a non-negative integer");
+    expect(invalidApiCallCount.licenseApi.detail).toContain("matrix.offline.licenseApiCalls must be 1");
 
     writeFileSync(join(root, activationProofPath), JSON.stringify({
       ...validProof,

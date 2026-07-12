@@ -11,6 +11,7 @@ export interface MandatoryActivationScenarioRecord {
   visibility: "public" | "private" | "unknown" | "not_applicable";
   expected: "allowed" | "denied";
   actual: "allowed" | "denied";
+  expectedLicenseApiCalls: number;
   licenseApiCalls: number;
 }
 
@@ -24,6 +25,7 @@ type Scenario = {
   id: string;
   visibility: MandatoryActivationScenarioRecord["visibility"];
   expected: MandatoryActivationScenarioRecord["expected"];
+  expectedLicenseApiCalls: number;
   key: "present" | "missing";
   config?: Partial<LicenseConfig>;
   cache?: "forged" | "mismatched";
@@ -33,31 +35,33 @@ type Scenario = {
 };
 
 const SCENARIOS: Scenario[] = [
-  { id: "public_active", visibility: "public", expected: "allowed", key: "present", response: "active_all" },
-  { id: "private_active", visibility: "private", expected: "allowed", key: "present", response: "active_all" },
-  { id: "unknown_repo", visibility: "unknown", expected: "denied", key: "present", response: "active_all" },
-  { id: "public_denied", visibility: "public", expected: "denied", key: "present", response: "invalid" },
-  { id: "private_denied", visibility: "private", expected: "denied", key: "present", response: "active_public" },
-  { id: "missing_key", visibility: "not_applicable", expected: "denied", key: "missing", response: "active_all", operation: "provider_verify" },
-  { id: "missing_api_url", visibility: "not_applicable", expected: "denied", key: "present", config: { apiBaseUrl: undefined }, response: "server", operation: "provider_verify", assertCanonicalUrl: true },
-  { id: "offline", visibility: "not_applicable", expected: "denied", key: "present", response: "offline", operation: "provider_verify" },
-  { id: "timeout", visibility: "not_applicable", expected: "denied", key: "present", response: "timeout", operation: "provider_verify" },
-  { id: "forged_cache", visibility: "not_applicable", expected: "denied", key: "missing", cache: "forged", response: "offline", operation: "provider_verify" },
-  { id: "mismatched_cache", visibility: "not_applicable", expected: "denied", key: "present", cache: "mismatched", response: "offline", operation: "provider_verify" },
-  { id: "disabled_policy_attempt", visibility: "public", expected: "denied", key: "missing", config: { enabled: false, publicReposFree: true }, response: "active_all" },
-  { id: "fake_api", visibility: "not_applicable", expected: "denied", key: "present", config: { apiBaseUrl: "https://fake-license.invalid" }, response: "server", operation: "provider_verify", assertCanonicalUrl: true },
-  { id: "rate_limited", visibility: "not_applicable", expected: "denied", key: "present", response: "rate_limited", operation: "provider_verify" },
-  { id: "server_error", visibility: "not_applicable", expected: "denied", key: "present", response: "server", operation: "provider_verify" },
-  { id: "malformed_response", visibility: "not_applicable", expected: "denied", key: "present", response: "malformed", operation: "provider_verify" },
-  { id: "revoked", visibility: "not_applicable", expected: "denied", key: "present", response: "revoked", operation: "provider_verify" },
-  { id: "expired", visibility: "not_applicable", expected: "denied", key: "present", response: "expired", operation: "provider_verify" },
-  { id: "dashboard_provider_pre_activation", visibility: "not_applicable", expected: "denied", key: "missing", response: "active_all", operation: "provider_verify" }
+  { id: "public_active", visibility: "public", expected: "allowed", expectedLicenseApiCalls: 1, key: "present", response: "active_all" },
+  { id: "private_active", visibility: "private", expected: "allowed", expectedLicenseApiCalls: 1, key: "present", response: "active_all" },
+  { id: "unknown_repo", visibility: "unknown", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "active_all" },
+  { id: "public_denied", visibility: "public", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "invalid" },
+  { id: "private_denied", visibility: "private", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "active_public" },
+  { id: "missing_key", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", response: "active_all", operation: "provider_verify" },
+  { id: "missing_api_url", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", config: { apiBaseUrl: undefined }, response: "server", operation: "provider_verify", assertCanonicalUrl: true },
+  { id: "offline", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "offline", operation: "provider_verify" },
+  { id: "timeout", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "timeout", operation: "provider_verify" },
+  { id: "forged_cache", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", cache: "forged", response: "offline", operation: "provider_verify" },
+  { id: "mismatched_cache", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", cache: "mismatched", response: "offline", operation: "provider_verify" },
+  { id: "disabled_policy_attempt", visibility: "public", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", config: { enabled: false, publicReposFree: true }, response: "active_all" },
+  { id: "fake_api", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", config: { apiBaseUrl: "https://fake-license.invalid" }, response: "server", operation: "provider_verify", assertCanonicalUrl: true },
+  { id: "rate_limited", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "rate_limited", operation: "provider_verify" },
+  { id: "server_error", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "server", operation: "provider_verify" },
+  { id: "malformed_response", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "malformed", operation: "provider_verify" },
+  { id: "revoked", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "revoked", operation: "provider_verify" },
+  { id: "expired", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "expired", operation: "provider_verify" },
+  { id: "dashboard_provider_pre_activation", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", response: "active_all", operation: "provider_verify" }
 ];
 
 export async function runMandatoryActivationMatrix(): Promise<MandatoryActivationMatrixResult> {
   const records: MandatoryActivationScenarioRecord[] = [];
   for (const scenario of SCENARIOS) records.push(await runScenario(scenario));
-  const bypassAllowedCases = records.filter((record) => record.actual !== record.expected).length;
+  const bypassAllowedCases = records.filter((record) =>
+    record.actual !== record.expected || record.licenseApiCalls !== record.expectedLicenseApiCalls
+  ).length;
   return { ok: bypassAllowedCases === 0, bypassAllowedCases, records };
 }
 
@@ -119,6 +123,7 @@ async function runScenario(scenario: Scenario): Promise<MandatoryActivationScena
       visibility: scenario.visibility,
       expected: scenario.expected,
       actual,
+      expectedLicenseApiCalls: scenario.expectedLicenseApiCalls,
       licenseApiCalls: observedUrls.length
     };
   } finally {

@@ -179,6 +179,36 @@ describe("license lifecycle smoke", () => {
     expect(called).toBe(false);
   });
 
+  it("rejects a preactivation dashboard probe that does not prove setup blocking", async () => {
+    let fetched = false;
+    const result = await runLicenseLifecycleSmoke({
+      releaseVersion: "v1.0.4",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      issuanceAuthorization: { kind: "github-oidc", bearer: "header.claims.signature" },
+      candidateCliPath: "/isolated/prefix/bin/neondiff",
+      configPath: "/isolated/config.local.json",
+      confirmLiveLifecycle: true,
+      runDashboardProbe: async () => ({
+        setupBlockedBeforeActivation: false,
+        providerBlockedBeforeActivation: true
+      }),
+      fetchImpl: async () => {
+        fetched = true;
+        throw new Error("issuance must not run after a failed preactivation probe");
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: "candidate_failed",
+      detail: "dashboard did not fail closed before activation"
+    });
+    expect(fetched).toBe(false);
+  });
+
   it("accepts future stable release versions covered by the v1.0.4+ gate", async () => {
     const result = await runLicenseLifecycleSmoke({
       releaseVersion: "v1.0.5",

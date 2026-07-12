@@ -12,7 +12,15 @@ describe("mandatory activation no-bypass matrix", () => {
     expect(result.records.filter((record) => record.expected === "denied")).toHaveLength(17);
     for (const record of result.records) {
       expect(record.actual, record.id).toBe(record.expected);
-      expect(record.licenseApiCalls, record.id).toBeGreaterThanOrEqual(0);
+      expect(record.licenseApiCalls, record.id).toBe(record.expectedLicenseApiCalls);
     }
+    expect(Object.fromEntries(result.records.map((record) => [record.id, record.licenseApiCalls]))).toMatchObject({
+      missing_key: 0,
+      forged_cache: 0,
+      disabled_policy_attempt: 0,
+      dashboard_provider_pre_activation: 0,
+      public_active: 1,
+      private_active: 1
+    });
   });
 });

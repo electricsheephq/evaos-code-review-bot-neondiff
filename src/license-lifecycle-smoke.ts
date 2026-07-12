@@ -45,8 +45,8 @@ export interface DashboardLifecycleProof {
 }
 
 type DashboardProbeResult =
-  | { setupBlockedBeforeActivation: true; providerBlockedBeforeActivation: true }
-  | { activatedStatusVisible: true };
+  | { setupBlockedBeforeActivation: boolean; providerBlockedBeforeActivation: boolean }
+  | { activatedStatusVisible: boolean };
 
 export type LicenseLifecycleSmokeResult =
   | {
@@ -133,14 +133,16 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
   const records: LifecycleRecord[] = [];
 
   try {
-    let preactivationDashboard: Extract<DashboardProbeResult, { setupBlockedBeforeActivation: true }> | undefined;
+    let preactivationDashboard: { setupBlockedBeforeActivation: true; providerBlockedBeforeActivation: true } | undefined;
     if (runDashboardProbe) {
       const probe = await runDashboardProbe("preactivation");
-      if (!("setupBlockedBeforeActivation" in probe) || probe.providerBlockedBeforeActivation !== true) {
+      if (!("setupBlockedBeforeActivation" in probe)
+        || probe.setupBlockedBeforeActivation !== true
+        || probe.providerBlockedBeforeActivation !== true) {
         executionFailure = failure("candidate_failed", "dashboard did not fail closed before activation", boundary);
         throw new Error("preactivation dashboard proof failed");
       }
-      preactivationDashboard = probe;
+      preactivationDashboard = { setupBlockedBeforeActivation: true, providerBlockedBeforeActivation: true };
     }
     const githubOidcIssuance = input.issuanceAuthorization.kind === "github-oidc";
     const issuance = await postJson(
