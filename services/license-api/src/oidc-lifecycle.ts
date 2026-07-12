@@ -23,6 +23,13 @@ export interface LifecycleIssuanceRequest {
   packIntegrity: string;
 }
 
+export class LifecycleRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LifecycleRequestError";
+  }
+}
+
 const REQUEST_FIELDS = new Set([
   "releaseVersion",
   "candidateHead",
@@ -122,23 +129,28 @@ function validateLifecycleClaims(payload: JWTPayload, now: Date): LifecycleOidcC
 }
 
 export function parseLifecycleIssuanceRequest(raw: string): LifecycleIssuanceRequest {
-  const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+  let parsed: unknown;
+  try {
+    parsed = raw ? (JSON.parse(raw) as unknown) : {};
+  } catch {
+    throw new LifecycleRequestError("request body must be valid JSON");
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("request body must be a JSON object");
+    throw new LifecycleRequestError("request body must be a JSON object");
   }
   const body = parsed as Record<string, unknown>;
   const unexpected = Object.keys(body).filter((key) => !REQUEST_FIELDS.has(key));
-  if (unexpected.length > 0) throw new Error("unexpected request fields");
+  if (unexpected.length > 0) throw new LifecycleRequestError("unexpected request fields");
 
   const releaseVersion = requiredString(body, "releaseVersion");
   const candidateHead = requiredString(body, "candidateHead");
   const packShasum = requiredString(body, "packShasum");
   const packIntegrity = requiredString(body, "packIntegrity");
   if (!/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(releaseVersion)) {
-    throw new Error("releaseVersion must be a stable v-prefixed semver");
+    throw new LifecycleRequestError("releaseVersion must be a stable v-prefixed semver");
   }
-  if (!/^[a-f0-9]{40}$/.test(candidateHead)) throw new Error("candidateHead must be a full lowercase commit SHA");
-  if (!/^[a-f0-9]{40}$/.test(packShasum)) throw new Error("packShasum must be a lowercase SHA-1 digest");
+  if (!/^[a-f0-9]{40}$/.test(candidateHead)) throw new LifecycleRequestError("candidateHead must be a full lowercase commit SHA");
+  if (!/^[a-f0-9]{40}$/.test(packShasum)) throw new LifecycleRequestError("packShasum must be a lowercase SHA-1 digest");
   const integrityMatch = /^sha512-([A-Za-z0-9+/]+={0,2})$/.exec(packIntegrity);
   const integrityBytes = integrityMatch ? Buffer.from(integrityMatch[1], "base64") : undefined;
   if (
@@ -147,7 +159,7 @@ export function parseLifecycleIssuanceRequest(raw: string): LifecycleIssuanceReq
     integrityBytes.byteLength !== 64 ||
     integrityBytes.toString("base64") !== integrityMatch[1]
   ) {
-    throw new Error("packIntegrity must be an npm sha512 integrity value");
+    throw new LifecycleRequestError("packIntegrity must be an npm sha512 integrity value");
   }
   return { releaseVersion, candidateHead, packShasum, packIntegrity };
 }
@@ -222,8 +234,8 @@ export function issueLifecycleLicense(input: {
 
 function requiredString(body: Record<string, unknown>, field: string): string {
   const value = body[field];
-  if (typeof value !== "string" || value.length === 0) throw new Error(`${field} is required`);
-  if (value !== value.trim()) throw new Error(`${field} must not have surrounding whitespace`);
-  if (value.length > 256) throw new Error(`${field} is too long`);
+  if (typeof value !== "string" || value.length === 0) throw new LifecycleRequestError(`${field} is required`);
+  if (value !== value.trim()) throw new LifecycleRequestError(`${field} must not have surrounding whitespace`);
+  if (value.length > 256) throw new LifecycleRequestError(`${field} is too long`);
   return value;
 }

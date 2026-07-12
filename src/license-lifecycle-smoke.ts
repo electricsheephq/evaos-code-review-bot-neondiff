@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { hostname, platform } from "node:os";
+import { resolve } from "node:path";
 
 const API_TIMEOUT_MS = 15_000;
 const CLI_TIMEOUT_MS = 20_000;
@@ -36,6 +38,16 @@ export interface ProductionLifecycleArtifact {
   records: LifecycleRecord[];
 }
 
+export interface DashboardLifecycleProof {
+  setupBlockedBeforeActivation: true;
+  providerBlockedBeforeActivation: true;
+  activatedStatusVisible: true;
+}
+
+type DashboardProbeResult =
+  | { setupBlockedBeforeActivation: true; providerBlockedBeforeActivation: true }
+  | { activatedStatusVisible: true };
+
 export type LicenseLifecycleSmokeResult =
   | {
       ok: true;
@@ -48,6 +60,7 @@ export type LicenseLifecycleSmokeResult =
         licenseFingerprint: string;
         steps: Array<LifecycleRecord & { responseSha256: string }>;
       };
+      dashboard?: DashboardLifecycleProof;
       proofBoundary: string;
     }
   | {
@@ -85,6 +98,8 @@ export interface LicenseLifecycleSmokeInput {
   randomId?: () => string;
   fetchImpl?: typeof fetch;
   runCandidateCommand?: (request: CandidateCommandRequest) => Promise<CandidateCommandResult>;
+  dashboardEvidenceRoot?: string;
+  runDashboardProbe?: (phase: "preactivation" | "active") => Promise<DashboardProbeResult>;
 }
 
 export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput): Promise<LicenseLifecycleSmokeResult> {
@@ -96,6 +111,9 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
 
   const fetchImpl = input.fetchImpl ?? fetch;
   const runCandidate = input.runCandidateCommand ?? defaultRunCandidateCommand;
+  const runDashboardProbe = input.runDashboardProbe ?? (input.dashboardEvidenceRoot
+    ? createInstalledDashboardProbe(input, runCandidate)
+    : undefined);
   const observedAt = (input.now ?? (() => new Date()))().toISOString();
   const randomId = input.randomId ?? (() => randomBytes(16).toString("hex"));
   const harnessRunId = createHash("sha256")
@@ -111,9 +129,19 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
   let remoteState: "not_applicable" | "confirmed_deactivated" | "unresolved" = "not_applicable";
   let executionFailure: Extract<LicenseLifecycleSmokeResult, { ok: false }> | undefined;
   let lifecycleSucceeded = false;
+  let dashboardEvidence: DashboardLifecycleProof | undefined;
   const records: LifecycleRecord[] = [];
 
   try {
+    let preactivationDashboard: Extract<DashboardProbeResult, { setupBlockedBeforeActivation: true }> | undefined;
+    if (runDashboardProbe) {
+      const probe = await runDashboardProbe("preactivation");
+      if (!("setupBlockedBeforeActivation" in probe) || probe.providerBlockedBeforeActivation !== true) {
+        executionFailure = failure("candidate_failed", "dashboard did not fail closed before activation", boundary);
+        throw new Error("preactivation dashboard proof failed");
+      }
+      preactivationDashboard = probe;
+    }
     const githubOidcIssuance = input.issuanceAuthorization.kind === "github-oidc";
     const issuance = await postJson(
       fetchImpl,
@@ -163,6 +191,19 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
       throw new Error("candidate refresh failed");
     }
     records.push(record("validate_active", "succeeded", 200, input.apiBaseUrl, { status: "active", source: "api" }));
+
+    if (runDashboardProbe) {
+      const probe = await runDashboardProbe("active");
+      if (!("activatedStatusVisible" in probe) || probe.activatedStatusVisible !== true || !preactivationDashboard) {
+        executionFailure = failure("candidate_failed", "dashboard did not show the active API-backed license", boundary);
+        throw new Error("active dashboard proof failed");
+      }
+      dashboardEvidence = {
+        setupBlockedBeforeActivation: true,
+        providerBlockedBeforeActivation: true,
+        activatedStatusVisible: true
+      };
+    }
 
     const deactivate = await runCandidateJson(runCandidate, {
       executable: input.candidateCliPath,
@@ -269,8 +310,58 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
         responseSha256: createHash("sha256").update(JSON.stringify(item.redactedResponse)).digest("hex")
       }))
     },
+    ...(dashboardEvidence ? { dashboard: dashboardEvidence } : {}),
     proofBoundary: boundary
   };
+}
+
+function createInstalledDashboardProbe(
+  input: LicenseLifecycleSmokeInput,
+  runCandidate: (request: CandidateCommandRequest) => Promise<CandidateCommandResult>
+): (phase: "preactivation" | "active") => Promise<DashboardProbeResult> {
+  return async (phase) => {
+    const outputDir = resolve(input.dashboardEvidenceRoot!, phase);
+    const result = await runCandidateJson(runCandidate, {
+      executable: input.candidateCliPath,
+      args: [
+        "dashboard",
+        "--config", input.configPath,
+        "--preview-smoke", "true",
+        "--output-dir", outputDir,
+        "--source-sha", input.candidateHead
+      ]
+    });
+    if (!result.ok || result.body.ok !== true) throw new Error("installed dashboard preview smoke failed");
+    const status = readJsonObject(resolve(outputDir, "dashboard-status.json"));
+    const license = readJsonObject(status.items).license;
+    const licenseItem = readJsonObject(license);
+    if (phase === "preactivation") {
+      const preview = readJsonObject(status.firstReviewPreview);
+      const settled = readJsonObject(result.body.settledUiState);
+      if (preview.available !== false || settled.providerVerifyStatus !== 403 || licenseItem.state === "healthy") {
+        throw new Error("installed dashboard did not remain blocked before activation");
+      }
+      return { setupBlockedBeforeActivation: true, providerBlockedBeforeActivation: true };
+    }
+    const metadata = readJsonObject(licenseItem.metadata);
+    if (licenseItem.state !== "healthy" || metadata.status !== "active") {
+      throw new Error("installed dashboard did not expose active license status");
+    }
+    return { activatedStatusVisible: true };
+  };
+}
+
+function readJsonObject(pathOrValue: unknown): Record<string, unknown> {
+  try {
+    const value = typeof pathOrValue === "string"
+      ? JSON.parse(readFileSync(pathOrValue, "utf8")) as unknown
+      : pathOrValue;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function isValidInput(input: LicenseLifecycleSmokeInput): boolean {

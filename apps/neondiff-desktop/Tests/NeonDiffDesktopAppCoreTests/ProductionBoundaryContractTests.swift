@@ -124,4 +124,13 @@ import Testing
         #expect(!source.contains("startingUpdater"))
         #expect(source.contains("Updates blocked pending native activation proof"))
     }
+
+    @Test func productionCompositionRootInstallsTheQuarantinedBoundary() throws {
+        let compositionRoot = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/App/NeonDiffDesktopCompositionRoot.swift")
+        let source = try sourceBoundaryText(at: compositionRoot)
+
+        #expect(source.contains("productionBoundary: .quarantined"))
+        #expect(!source.contains("productionBoundary: .testVerified"))
+    }
 }

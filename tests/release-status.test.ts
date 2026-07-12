@@ -464,7 +464,7 @@ describe("beta release status", () => {
     expect(manifest.ok).toBe(false);
   });
 
-  it("rejects an activation proof that does not prove lifecycle, bypass denial, and zero denied side effects", () => {
+  it("rejects an activation proof that does not prove lifecycle, bypass denial, and useful-work boundaries", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-v1.0.4-invalid-activation-proof-"));
     roots.push(root);
     mkdirSync(join(root, "docs", "releases"), { recursive: true });
@@ -484,11 +484,15 @@ describe("beta release status", () => {
       releaseVersion: "v1.0.4",
       observedAt: "2026-07-12T00:02:00.000Z"
     });
+    const sourceHead = "a".repeat(40);
     const activationProofPath = "docs/evidence/v1.0.4-mandatory-activation.json";
     writeFileSync(join(root, activationProofPath), "{}\n");
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v1.0.4",
       releaseLevel: "stable",
+      source: {
+        candidateHeadBeforeReleaseMetadata: sourceHead
+      },
       docs: {
         version: "v1.0.4",
         setupPath: "docs/SETUP.md",
@@ -540,7 +544,6 @@ describe("beta release status", () => {
 
     const digestRecord = (record: unknown) => createHash("sha256").update(JSON.stringify(record)).digest("hex");
     const harnessRunId = "d".repeat(64);
-    const sourceHead = "a".repeat(40);
     const packShasum = "b".repeat(40);
     const packIntegrity = `sha512-${"Y".repeat(86)}==`;
     const deniedScenarioIds = [
@@ -562,7 +565,6 @@ describe("beta release status", () => {
       "expired",
       "dashboard_provider_pre_activation"
     ];
-    const zeroSideEffects = { providerCalls: 0, checkoutCalls: 0, worktreeWrites: 0, reviewPosts: 0 };
     const lifecycleRecords = [
       { id: "issue", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "issued" } },
       { id: "activate", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "active", source: "api" } },
@@ -571,14 +573,14 @@ describe("beta release status", () => {
       { id: "validate_denied", outcome: "denied", statusCode: 409, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "scope_mismatch" } }
     ];
     const scenarioRecords = [
-      { id: "public_active", visibility: "public", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
-      { id: "private_active", visibility: "private", expected: "allowed", actual: "allowed", sideEffects: zeroSideEffects },
+      { id: "public_active", visibility: "public", expected: "allowed", actual: "allowed", licenseApiCalls: 1 },
+      { id: "private_active", visibility: "private", expected: "allowed", actual: "allowed", licenseApiCalls: 1 },
       ...deniedScenarioIds.map((id) => ({
         id,
         visibility: id === "public_denied" ? "public" : id === "private_denied" ? "private" : id === "unknown_repo" ? "unknown" : "not_applicable",
         expected: "denied",
         actual: "denied",
-        sideEffects: zeroSideEffects
+        licenseApiCalls: id === "missing_key" ? 0 : 1
       }))
     ];
     const installUpgradeRecord = { freshInstallPassed: true, upgradedFromVersion: "1.0.3", upgradePassed: true };
@@ -588,9 +590,21 @@ describe("beta release status", () => {
       activatedStatusVisible: true
     };
     const desktopRecord = { brokerUnavailable: true, usefulWorkBlocked: true };
+    const usefulWorkBoundaryRecord = {
+      reportPassed: true,
+      totalTests: 5,
+      requiredPassingTests: [
+        "providers verify license admission denies before provider-key stdin or provider network",
+        "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
+        "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
+        "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
+        "local HTML dashboard serves HTML status but blocks provider verification before activation"
+      ]
+    };
     const artifactRecords: Record<string, unknown[]> = {
       "production-lifecycle": lifecycleRecords,
       "no-bypass-matrix": scenarioRecords,
+      "useful-work-boundaries": [usefulWorkBoundaryRecord],
       dashboard: [dashboardRecord],
       desktop: [desktopRecord],
       "install-upgrade": [installUpgradeRecord]
@@ -636,6 +650,10 @@ describe("beta release status", () => {
         bypassAllowedCases: 0,
         scenarios: scenarioRecords.map((record) => ({ ...record, resultSha256: digestRecord(record) }))
       },
+      usefulWorkBoundaries: {
+        ...usefulWorkBoundaryRecord,
+        resultSha256: digestRecord(usefulWorkBoundaryRecord)
+      },
       installUpgrade: {
         ...installUpgradeRecord,
         resultSha256: digestRecord(installUpgradeRecord)
@@ -667,6 +685,20 @@ describe("beta release status", () => {
     expect(validManifest.licenseApi.ok).toBe(true);
     expect(validManifest.licenseApi.detail).toContain(`validated mandatory activation proof ${activationProofPath}`);
     expect(validManifest.ok).toBe(true);
+
+    const manifestDocument = JSON.parse(readFileSync(join(root, "public-release.json"), "utf8"));
+    manifestDocument.source.candidateHeadBeforeReleaseMetadata = "e".repeat(40);
+    writeFileSync(join(root, "public-release.json"), JSON.stringify(manifestDocument));
+    const mismatchedCandidate = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+    expect(mismatchedCandidate.licenseApi.ok).toBe(false);
+    expect(mismatchedCandidate.licenseApi.detail).toContain("installedCandidate.sourceHead must match manifest candidate head");
+    manifestDocument.source.candidateHeadBeforeReleaseMetadata = sourceHead;
+    writeFileSync(join(root, "public-release.json"), JSON.stringify(manifestDocument));
 
     writeFileSync(join(root, activationProofPath), JSON.stringify({
       ...validProof,
@@ -708,18 +740,18 @@ describe("beta release status", () => {
       matrix: {
         ...validProof.matrix,
         scenarios: validProof.matrix.scenarios.map((scenario) => scenario.id === "offline"
-          ? { ...offlineScenario, sideEffects: { ...zeroSideEffects, providerCalls: 1 } }
+          ? { ...offlineScenario, licenseApiCalls: -1 }
           : scenario)
       }
     }));
-    const nonzeroDeniedSideEffect = readPublicReleaseManifestStatus({
+    const invalidApiCallCount = readPublicReleaseManifestStatus({
       cwd: root,
       manifestPath: "public-release.json",
       expectedVersion: "v1.0.4",
       now: new Date("2026-07-12T01:00:00.000Z")
     });
-    expect(nonzeroDeniedSideEffect.licenseApi.ok).toBe(false);
-    expect(nonzeroDeniedSideEffect.licenseApi.detail).toContain("matrix.offline.sideEffects.providerCalls must be zero");
+    expect(invalidApiCallCount.licenseApi.ok).toBe(false);
+    expect(invalidApiCallCount.licenseApi.detail).toContain("matrix.offline.licenseApiCalls must be a non-negative integer");
 
     writeFileSync(join(root, activationProofPath), JSON.stringify({
       ...validProof,
@@ -733,11 +765,14 @@ describe("beta release status", () => {
     });
     expect(staleActivationProof.licenseApi.ok).toBe(false);
     expect(staleActivationProof.licenseApi.detail).toContain("observedAt must be no older than 24 hours for mandatory activation proof");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-12T01:00:00.000Z"));
     const staleWithoutInjectedClock = readPublicReleaseManifestStatus({
       cwd: root,
       manifestPath: "public-release.json",
       expectedVersion: "v1.0.4"
     });
+    vi.useRealTimers();
     expect(staleWithoutInjectedClock.licenseApi.ok).toBe(false);
     expect(staleWithoutInjectedClock.licenseApi.detail).toContain("observedAt must be no older than 24 hours for mandatory activation proof");
     const immutableRecovery = readPublicReleaseManifestStatus({
@@ -748,6 +783,21 @@ describe("beta release status", () => {
       allowStaleActivationProof: true
     });
     expect(immutableRecovery.licenseApi.ok).toBe(true);
+    writeLicenseHealthProof(root, {
+      path: healthProofPath,
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-08-20T00:00:00.000Z"
+    });
+    writeLicenseIssuanceProof(root, {
+      path: issuanceProofPath,
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-08-20T00:01:00.000Z"
+    });
+    writeAuthenticatedLicenseIssuanceProof(root, {
+      path: authenticatedIssuanceProofPath,
+      releaseVersion: "v1.0.4",
+      observedAt: "2026-08-20T00:02:00.000Z"
+    });
     const expiredImmutableRecovery = readPublicReleaseManifestStatus({
       cwd: root,
       manifestPath: "public-release.json",

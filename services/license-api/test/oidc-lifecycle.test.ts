@@ -213,7 +213,7 @@ describe("GitHub Actions OIDC lifecycle issuance", () => {
       issuanceSecret: "isolated-secret",
       lifecycleOidcVerifier: {
         verify: async () => {
-          throw new Error("JWKS failed while checking raw-sensitive-token");
+          throw new SyntaxError("JWKS JSON failed while checking raw-sensitive-token");
         }
       }
     });

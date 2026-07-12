@@ -11,18 +11,70 @@ on:
         description: Exact protected-main commit to install and exercise
         required: true
 
-permissions:
-  contents: read
-  id-token: write
-  attestations: write
+concurrency:
+  group: neondiff-license-lifecycle-production
+  cancel-in-progress: false
 
 jobs:
+  desktop-quarantine-proof:
+    name: Desktop mandatory activation quarantine
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout protected candidate
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Verify exact protected-main candidate
+        env:
+          EXPECTED_CANDIDATE_HEAD: ${{ inputs.candidate_head }}
+        run: |
+          test "$GITHUB_SHA" = "$EXPECTED_CANDIDATE_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CANDIDATE_HEAD"
+
+      - name: Run AppCore production quarantine contract
+        working-directory: apps/neondiff-desktop
+        run: scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests
+
+      - name: Compile production desktop executable
+        working-directory: apps/neondiff-desktop
+        run: swift build -c release --product NeonDiffDesktop
+
+      - name: Record the proven desktop quarantine boundary
+        run: |
+          # shellcheck disable=SC2016
+          node -e '
+            require("node:fs").writeFileSync(process.argv[1], `${JSON.stringify({
+              swiftTestPassed: true,
+              brokerUnavailable: true,
+              usefulWorkBlocked: true
+            })}\n`, { mode: 0o644 });
+          ' "$RUNNER_TEMP/desktop-quarantine.json"
+
+      - name: Upload desktop quarantine record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-quarantine-${{ inputs.candidate_head }}
+          path: ${{ runner.temp }}/desktop-quarantine.json
+          if-no-files-found: error
+          retention-days: 1
+
   production-lifecycle:
     name: Production activation lifecycle
+    needs: desktop-quarantine-proof
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     environment: license-lifecycle-production
     timeout-minutes: 30
+    # This job alone obtains the short-lived GitHub OIDC token and signs the
+    # redacted evidence it generates; future jobs inherit no elevated scopes.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout protected candidate
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -55,14 +107,26 @@ jobs:
       - name: Run fail-closed activation matrix
         run: |
           npx vitest run \
+            tests/license.test.ts \
             tests/license-production-policy.test.ts \
             tests/license-admission.test.ts \
             tests/providers-license-admission.test.ts \
+            tests/public-cli.test.ts \
             tests/review-activation.test.ts \
             tests/local-dashboard.test.ts \
             tests/command-license-policy.test.ts \
             tests/desktop-evaluation-boundary.test.ts \
-            --pool=forks --maxWorkers=1
+            tests/mandatory-activation-matrix.test.ts \
+            --pool=forks --maxWorkers=1 \
+            --reporter=json --outputFile="$RUNNER_TEMP/useful-work-boundary-tests.json"
+          node scripts/run-mandatory-activation-matrix.mjs \
+            --output "$RUNNER_TEMP/mandatory-activation-matrix.json"
+
+      - name: Download desktop quarantine record
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: desktop-quarantine-${{ inputs.candidate_head }}
+          path: ${{ runner.temp }}/desktop-quarantine
 
       - name: Pack and isolate the candidate
         id: package
@@ -72,6 +136,7 @@ jobs:
         run: |
           PACK_DIR="$RUNNER_TEMP/neondiff-lifecycle-pack"
           INSTALL_PREFIX="$RUNNER_TEMP/neondiff-lifecycle-install"
+          UPGRADE_PREFIX="$RUNNER_TEMP/neondiff-lifecycle-upgrade"
           CONFIG_PATH="$RUNNER_TEMP/neondiff-lifecycle-config.json"
           PACKAGE_VERSION="${EXPECTED_RELEASE_VERSION#v}"
           ARTIFACT_OUTPUT="docs/evidence/$EXPECTED_RELEASE_VERSION/production-lifecycle-$EXPECTED_CANDIDATE_HEAD.json"
@@ -81,6 +146,21 @@ jobs:
           PACK_TARBALL="$PACK_DIR/neondiff-$PACKAGE_VERSION.tgz"
           npm install --ignore-scripts --prefix "$INSTALL_PREFIX" "$PACK_TARBALL"
           test "$("$INSTALL_PREFIX/node_modules/.bin/neondiff" --version)" = "$PACKAGE_VERSION"
+          npm install --ignore-scripts --prefix "$UPGRADE_PREFIX" "neondiff@1.0.3"
+          test "$("$UPGRADE_PREFIX/node_modules/.bin/neondiff" --version)" = "1.0.3"
+          npm install --ignore-scripts --prefix "$UPGRADE_PREFIX" "$PACK_TARBALL"
+          test "$("$UPGRADE_PREFIX/node_modules/.bin/neondiff" --version)" = "$PACKAGE_VERSION"
+          "$UPGRADE_PREFIX/node_modules/.bin/neondiff" \
+            config inspect \
+            --config tests/fixtures/config/v1.0.3-legacy-license.json \
+            > "$RUNNER_TEMP/upgrade-config-inspect.json"
+          node -e '
+            const report = require(process.argv[1]);
+            const license = report.config?.license;
+            const diagnostics = new Set((license?.productionPolicy?.diagnostics ?? []).map((item) => item.field));
+            const expected = ["enabled", "apiBaseUrl", "offlineGraceMs", "publicReposFree", "privateReposRequireEntitlement", "updateEntitlementRequiresLicense", "keychainService", "keychainAccount"];
+            if (report.ok !== true || license?.enabled !== true || license?.apiBaseUrl !== "https://neondiff-license.fly.dev" || license?.offlineGraceMs !== 0 || license?.publicReposFree !== false || license?.privateReposRequireEntitlement !== true || license?.updateEntitlementRequiresLicense !== true || license?.productionPolicy?.mode !== "mandatory_online" || expected.some((field) => !diagnostics.has(field))) process.exit(1);
+          ' "$RUNNER_TEMP/upgrade-config-inspect.json"
           # shellcheck disable=SC2016
           node -e '
             require("node:fs").writeFileSync(process.argv[1], `${JSON.stringify({ license: {
@@ -93,13 +173,26 @@ jobs:
           # shellcheck disable=SC2016
           PACK_SHASUM="$(node -e 'const [pack] = require(process.argv[1]); process.stdout.write(pack.shasum)' "$RUNNER_TEMP/lifecycle-pack.json")"
           PACK_INTEGRITY="$(node -e 'const [pack] = require(process.argv[1]); process.stdout.write(pack.integrity)' "$RUNNER_TEMP/lifecycle-pack.json")"
+          # shellcheck disable=SC2016
+          node -e '
+            require("node:fs").writeFileSync(process.argv[1], `${JSON.stringify({
+              freshInstallPassed: true,
+              freshBinaryVersion: process.argv[2],
+              upgradedFromVersion: "1.0.3",
+              upgradedBinaryVersion: process.argv[2],
+              upgradePassed: true,
+              legacyConfigMigrationPassed: true,
+              lifecycleCandidateSource: "upgraded_from_1.0.3"
+            })}\n`, { mode: 0o644 });
+          ' "$RUNNER_TEMP/install-upgrade.json" "$PACKAGE_VERSION"
           {
             echo "pack_tarball=$PACK_TARBALL"
             echo "pack_shasum=$PACK_SHASUM"
             echo "pack_integrity=$PACK_INTEGRITY"
-            echo "candidate_cli=$INSTALL_PREFIX/node_modules/.bin/neondiff"
+            echo "candidate_cli=$UPGRADE_PREFIX/node_modules/.bin/neondiff"
             echo "config_path=$CONFIG_PATH"
             echo "artifact_path=$ARTIFACT_OUTPUT"
+            echo "install_report=$RUNNER_TEMP/install-upgrade.json"
           } >> "$GITHUB_OUTPUT"
 
       - name: Exercise production issuance, activation, refresh, deactivation, and denial
@@ -119,8 +212,10 @@ jobs:
             --pack-integrity "$PACK_INTEGRITY" \
             --candidate-cli "$CANDIDATE_CLI" \
             --config "$CONFIG_PATH" \
+            --dashboard-output-root "$RUNNER_TEMP/dashboard-installed" \
             --artifact-output "$ARTIFACT_OUTPUT" \
-            --confirm-live-lifecycle true
+            --confirm-live-lifecycle true \
+            | tee "$RUNNER_TEMP/lifecycle-result.json"
           # shellcheck disable=SC2016
           node -e '
             const text = require("node:fs").readFileSync(process.argv[1], "utf8");
@@ -128,15 +223,43 @@ jobs:
             if (/nd_live_|Bearer\s+|\/Volumes\/|\/Users\//.test(text)) process.exit(1);
           ' "$ARTIFACT_OUTPUT"
 
-      - name: Attest redacted lifecycle evidence
+      - name: Assemble the complete mandatory activation proof
+        env:
+          EXPECTED_CANDIDATE_HEAD: ${{ inputs.candidate_head }}
+          EXPECTED_RELEASE_VERSION: ${{ inputs.release_version }}
+          PACK_SHASUM: ${{ steps.package.outputs.pack_shasum }}
+          PACK_INTEGRITY: ${{ steps.package.outputs.pack_integrity }}
+          LIFECYCLE_ARTIFACT: ${{ steps.package.outputs.artifact_path }}
+          INSTALL_REPORT: ${{ steps.package.outputs.install_report }}
+        run: |
+          OUTPUT_DIR="docs/evidence/$EXPECTED_RELEASE_VERSION"
+          node scripts/assemble-mandatory-activation-proof.mjs \
+            --release-version "$EXPECTED_RELEASE_VERSION" \
+            --candidate-head "$EXPECTED_CANDIDATE_HEAD" \
+            --pack-shasum "$PACK_SHASUM" \
+            --pack-integrity "$PACK_INTEGRITY" \
+            --lifecycle-artifact "$LIFECYCLE_ARTIFACT" \
+            --lifecycle-result "$RUNNER_TEMP/lifecycle-result.json" \
+            --matrix-report "$RUNNER_TEMP/mandatory-activation-matrix.json" \
+            --boundary-test-report "$RUNNER_TEMP/useful-work-boundary-tests.json" \
+            --install-report "$INSTALL_REPORT" \
+            --desktop-report "$RUNNER_TEMP/desktop-quarantine/desktop-quarantine.json" \
+            --output-dir "$OUTPUT_DIR" \
+            > "$RUNNER_TEMP/mandatory-activation-proof-result.json"
+          node -e '
+            const result = require(process.argv[1]);
+            if (result.ok !== true || result.artifactPaths.length !== 7) process.exit(1);
+          ' "$RUNNER_TEMP/mandatory-activation-proof-result.json"
+
+      - name: Attest every generated mandatory activation artifact
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
-          subject-path: ${{ steps.package.outputs.artifact_path }}
+          subject-path: docs/evidence/${{ inputs.release_version }}/*-${{ inputs.candidate_head }}.json
 
-      - name: Upload redacted lifecycle evidence
+      - name: Upload complete redacted mandatory activation evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: neondiff-${{ inputs.release_version }}-production-lifecycle-${{ inputs.candidate_head }}
-          path: ${{ steps.package.outputs.artifact_path }}
+          name: neondiff-${{ inputs.release_version }}-mandatory-activation-${{ inputs.candidate_head }}
+          path: docs/evidence/${{ inputs.release_version }}/*-${{ inputs.candidate_head }}.json
           if-no-files-found: error
           retention-days: 30

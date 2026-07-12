@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { writeFileSync } from "node:fs";
 import { runLicenseLifecycleSmoke } from "../dist/src/license-lifecycle-smoke.js";
+import { resolveConfinedEvidenceOutputPath } from "./lib/evidence-output-path.mjs";
 import { requestGitHubActionsOidcToken } from "./lib/github-actions-oidc-token.mjs";
 
 function fail(message) {
@@ -29,6 +29,7 @@ const required = [
   "pack-integrity",
   "candidate-cli",
   "config",
+  "dashboard-output-root",
   "artifact-output",
   "confirm-live-lifecycle"
 ];
@@ -39,16 +40,10 @@ if (args.get("confirm-live-lifecycle") !== "true") fail("--confirm-live-lifecycl
 
 const cwd = process.cwd();
 const artifactOutput = args.get("artifact-output");
-if (isAbsolute(artifactOutput)) fail("--artifact-output must be relative and stay within docs/evidence");
-let evidenceRoot;
+let absoluteOutput;
 try {
-  evidenceRoot = realpathSync(resolve(cwd, "docs", "evidence"));
+  absoluteOutput = resolveConfinedEvidenceOutputPath(cwd, artifactOutput);
 } catch {
-  fail("docs/evidence must exist before running the lifecycle smoke");
-}
-const absoluteOutput = resolve(cwd, artifactOutput);
-const outputRelative = relative(evidenceRoot, absoluteOutput);
-if (outputRelative.startsWith("..") || isAbsolute(outputRelative)) {
   fail("--artifact-output must stay within docs/evidence");
 }
 
@@ -73,12 +68,12 @@ const result = await runLicenseLifecycleSmoke({
   issuanceAuthorization: { kind: "github-oidc", bearer: oidcToken },
   candidateCliPath: args.get("candidate-cli"),
   configPath: args.get("config"),
+  dashboardEvidenceRoot: args.get("dashboard-output-root"),
   confirmLiveLifecycle: true
 });
 oidcToken = undefined;
 
 if (!result.ok) fail(`license lifecycle smoke failed: ${result.errorCode}`);
-mkdirSync(dirname(absoluteOutput), { recursive: true });
 writeFileSync(absoluteOutput, `${JSON.stringify(result.artifact, null, 2)}\n`, { encoding: "utf8", mode: 0o644 });
 process.stdout.write(`${JSON.stringify({
   ok: true,
@@ -86,6 +81,7 @@ process.stdout.write(`${JSON.stringify({
   observedAt: result.observedAt,
   licenseFingerprint: result.licenseFingerprint,
   lifecycle: result.lifecycle,
+  dashboard: result.dashboard,
   artifactPath: artifactOutput,
   proofBoundary: result.proofBoundary
 })}\n`);

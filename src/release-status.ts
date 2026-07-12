@@ -569,6 +569,7 @@ export function readPublicReleaseManifestStatus(input: {
   try {
     const manifest = JSON.parse(readFileSync(absolutePath, "utf8")) as unknown;
     const root = asRecord(manifest);
+    const source = asRecord(root.source);
     const docs = asRecord(root.docs);
     const licenseApi = asRecord(root.licenseApi);
     const updateChannels = asRecord(root.updateChannels);
@@ -629,6 +630,7 @@ export function readPublicReleaseManifestStatus(input: {
     const licenseIssuanceProofPath = readString(licenseApi.checkoutIssuanceProofPath);
     const licenseIssuanceAuthenticatedProofPath = readString(licenseApi.checkoutIssuanceAuthenticatedProofPath);
     const licenseActivationProofPath = readString(licenseApi.activationProofPath);
+    const releaseCandidateHead = readString(source.candidateHeadBeforeReleaseMetadata);
     const licenseIssuanceState = readString(licenseApi.checkoutIssuanceState);
     const licenseIssuanceTrackingIssue = readString(licenseApi.checkoutIssuanceTrackingIssue);
     const licenseNeedsHealthProof = licenseRequired && licenseState === "healthy";
@@ -690,6 +692,7 @@ export function readPublicReleaseManifestStatus(input: {
           cwd: input.cwd,
           proofPath: licenseActivationProofPath,
           expectedReleaseVersion: expectedVersion,
+          expectedCandidateHead: releaseCandidateHead,
           allowStaleProof: input.allowStaleActivationProof === true,
           now: input.now
         })
@@ -1088,6 +1091,7 @@ function validateMandatoryActivationProofPath(input: {
   cwd: string;
   proofPath?: string;
   expectedReleaseVersion?: string;
+  expectedCandidateHead?: string;
   allowStaleProof?: boolean;
   now?: Date;
 }): { ok: boolean; detail: string } {
@@ -1113,6 +1117,7 @@ function validateMandatoryActivationProofPath(input: {
   const installedCandidate = asRecord(proof.installedCandidate);
   const productionLifecycle = asRecord(proof.productionLifecycle);
   const matrix = asRecord(proof.matrix);
+  const usefulWorkBoundaries = asRecord(proof.usefulWorkBoundaries);
   const desktop = asRecord(proof.desktop);
   const redaction = asRecord(proof.redaction);
   const failures: string[] = [];
@@ -1134,6 +1139,7 @@ function validateMandatoryActivationProofPath(input: {
     "installedCandidate",
     "productionLifecycle",
     "matrix",
+    "usefulWorkBoundaries",
     "installUpgrade",
     "dashboard",
     "desktop",
@@ -1152,9 +1158,7 @@ function validateMandatoryActivationProofPath(input: {
   }
   const observedAt = readString(proof.observedAt);
   const observedAtFailures = validateLicenseProofObservedAt(observedAt, input.now);
-  failures.push(...(input.allowStaleProof
-    ? observedAtFailures.filter((failure) => !failure.startsWith("observedAt must be no older than"))
-    : observedAtFailures));
+  failures.push(...observedAtFailures);
   if (observedAt && !input.allowStaleProof) {
     const observedAtMs = Date.parse(observedAt);
     const effectiveNow = input.now ?? new Date();
@@ -1195,6 +1199,11 @@ function validateMandatoryActivationProofPath(input: {
   }
   if (!/^[a-f0-9]{40}$/.test(readString(installedCandidate.sourceHead) ?? "")) {
     failures.push("installedCandidate.sourceHead must be a full lowercase Git SHA");
+  }
+  if (!/^[a-f0-9]{40}$/.test(input.expectedCandidateHead ?? "")) {
+    failures.push("manifest candidate head must be a full lowercase Git SHA");
+  } else if (readString(installedCandidate.sourceHead) !== input.expectedCandidateHead) {
+    failures.push("installedCandidate.sourceHead must match manifest candidate head");
   }
   if (!/^[a-f0-9]{40}$/.test(readString(installedCandidate.packShasum) ?? "")) {
     failures.push("installedCandidate.packShasum must be the npm pack SHA-1 digest");
@@ -1281,7 +1290,7 @@ function validateMandatoryActivationProofPath(input: {
   for (const rawScenario of scenarios) {
     const scenario = asRecord(rawScenario);
     const id = readString(scenario.id);
-    const unexpectedScenarioKeys = collectUnexpectedKeys(scenario, new Set(["id", "visibility", "expected", "actual", "sideEffects", "resultSha256"]));
+    const unexpectedScenarioKeys = collectUnexpectedKeys(scenario, new Set(["id", "visibility", "expected", "actual", "licenseApiCalls", "resultSha256"]));
     if (unexpectedScenarioKeys.length) failures.push(`unexpected matrix scenario fields: ${unexpectedScenarioKeys.join(", ")}`);
     if (!id || scenarioIds.has(id)) {
       failures.push("matrix.scenarios must have unique named scenarios");
@@ -1304,17 +1313,33 @@ function validateMandatoryActivationProofPath(input: {
           : "not_applicable";
     if (scenario.visibility !== expectedVisibility) failures.push(`matrix.${id}.visibility must be ${expectedVisibility}`);
     requireSha256(scenario.resultSha256, `matrix.${id}.resultSha256`);
-    const sideEffects = asRecord(scenario.sideEffects);
-    const unexpectedSideEffectKeys = collectUnexpectedKeys(sideEffects, new Set(["providerCalls", "checkoutCalls", "worktreeWrites", "reviewPosts"]));
-    if (unexpectedSideEffectKeys.length) failures.push(`unexpected matrix.${id}.sideEffects fields: ${unexpectedSideEffectKeys.join(", ")}`);
-    requireZero(sideEffects.providerCalls, `matrix.${id}.sideEffects.providerCalls`);
-    requireZero(sideEffects.checkoutCalls, `matrix.${id}.sideEffects.checkoutCalls`);
-    requireZero(sideEffects.worktreeWrites, `matrix.${id}.sideEffects.worktreeWrites`);
-    requireZero(sideEffects.reviewPosts, `matrix.${id}.sideEffects.reviewPosts`);
+    if (!Number.isInteger(scenario.licenseApiCalls) || Number(scenario.licenseApiCalls) < 0) {
+      failures.push(`matrix.${id}.licenseApiCalls must be a non-negative integer`);
+    }
   }
   for (const id of [...requiredAllowedScenarioIds, ...requiredDeniedScenarioIds]) {
     if (!scenarioIds.has(id)) failures.push(`matrix.scenarios must include ${id}`);
   }
+
+  const requiredBoundaryTests = [
+    "providers verify license admission denies before provider-key stdin or provider network",
+    "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
+    "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
+    "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
+    "local HTML dashboard serves HTML status but blocks provider verification before activation"
+  ];
+  const unexpectedUsefulWorkKeys = collectUnexpectedKeys(usefulWorkBoundaries, new Set([
+    "reportPassed", "totalTests", "requiredPassingTests", "resultSha256"
+  ]));
+  if (unexpectedUsefulWorkKeys.length) failures.push(`unexpected usefulWorkBoundaries fields: ${unexpectedUsefulWorkKeys.join(", ")}`);
+  requireTrue(usefulWorkBoundaries.reportPassed, "usefulWorkBoundaries.reportPassed");
+  if (!Number.isInteger(usefulWorkBoundaries.totalTests) || Number(usefulWorkBoundaries.totalTests) < requiredBoundaryTests.length) {
+    failures.push("usefulWorkBoundaries.totalTests must cover the required boundary tests");
+  }
+  if (JSON.stringify(usefulWorkBoundaries.requiredPassingTests) !== JSON.stringify(requiredBoundaryTests)) {
+    failures.push("usefulWorkBoundaries.requiredPassingTests must contain the exact required tests");
+  }
+  requireSha256(usefulWorkBoundaries.resultSha256, "usefulWorkBoundaries.resultSha256");
 
   const installUpgrade = asRecord(proof.installUpgrade);
   const unexpectedInstallUpgradeKeys = collectUnexpectedKeys(installUpgrade, new Set([
@@ -1353,7 +1378,7 @@ function validateMandatoryActivationProofPath(input: {
   requireTrue(redaction.rawLicenseKeyAbsent, "redaction.rawLicenseKeyAbsent");
   requireTrue(redaction.bearerTokenAbsent, "redaction.bearerTokenAbsent");
   requireTrue(redaction.privatePathsAbsent, "redaction.privatePathsAbsent");
-  const requiredArtifactKinds = new Set(["production-lifecycle", "no-bypass-matrix", "dashboard", "desktop", "install-upgrade"]);
+  const requiredArtifactKinds = new Set(["production-lifecycle", "no-bypass-matrix", "useful-work-boundaries", "dashboard", "desktop", "install-upgrade"]);
   const artifacts = Array.isArray(proof.artifacts) ? proof.artifacts : [];
   const observedArtifactKinds = new Set<string>();
   const observedArtifactRefs = new Set<string>();
@@ -1456,7 +1481,7 @@ function validateMandatoryActivationProofPath(input: {
   for (const rawRecord of matrixArtifactRecords) {
     const record = asRecord(rawRecord);
     const id = readString(record.id);
-    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "visibility", "expected", "actual", "sideEffects"]));
+    const unexpectedRecordKeys = collectUnexpectedKeys(record, new Set(["id", "visibility", "expected", "actual", "licenseApiCalls"]));
     if (unexpectedRecordKeys.length) failures.push(`unexpected no-bypass-matrix record fields: ${unexpectedRecordKeys.join(", ")}`);
     if (!id || matrixArtifactById.has(id)) failures.push("no-bypass-matrix records must have unique ids");
     else matrixArtifactById.set(id, record);
@@ -1470,14 +1495,14 @@ function validateMandatoryActivationProofPath(input: {
       failures.push(`no-bypass-matrix artifact must include ${id}`);
       continue;
     }
-    if (record.visibility !== scenario.visibility || record.expected !== scenario.expected || record.actual !== scenario.actual || JSON.stringify(record.sideEffects) !== JSON.stringify(scenario.sideEffects)) {
+    if (record.visibility !== scenario.visibility || record.expected !== scenario.expected || record.actual !== scenario.actual || record.licenseApiCalls !== scenario.licenseApiCalls) {
       failures.push(`no-bypass-matrix artifact record ${id} must match the aggregate proof`);
     }
     if (scenario.resultSha256 !== digestRecord(record)) failures.push(`matrix.${id}.resultSha256 must match its artifact record`);
   }
 
   const validateSingleRecordArtifact = (
-    kind: "dashboard" | "desktop" | "install-upgrade",
+    kind: "dashboard" | "desktop" | "install-upgrade" | "useful-work-boundaries",
     aggregate: Record<string, unknown>,
     hashField: string,
     allowedRecordKeys: Set<string>
@@ -1491,10 +1516,16 @@ function validateMandatoryActivationProofPath(input: {
     const unexpectedRecordKeys = collectUnexpectedKeys(record, allowedRecordKeys);
     if (unexpectedRecordKeys.length) failures.push(`unexpected ${kind} record fields: ${unexpectedRecordKeys.join(", ")}`);
     for (const key of allowedRecordKeys) {
-      if (record[key] !== aggregate[key]) failures.push(`${kind} artifact record must match aggregate field ${key}`);
+      if (JSON.stringify(record[key]) !== JSON.stringify(aggregate[key])) failures.push(`${kind} artifact record must match aggregate field ${key}`);
     }
     if (aggregate[hashField] !== digestRecord(record)) failures.push(`${kind}.${hashField} must match its artifact record`);
   };
+  validateSingleRecordArtifact(
+    "useful-work-boundaries",
+    usefulWorkBoundaries,
+    "resultSha256",
+    new Set(["reportPassed", "totalTests", "requiredPassingTests"])
+  );
   validateSingleRecordArtifact(
     "dashboard",
     dashboard,

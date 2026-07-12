@@ -223,3 +223,104 @@ describe("license issuance transport", () => {
     assert.equal(res.json.status, "invalid");
   });
 });
+
+describe("lifecycle issuance transport", () => {
+  it("shares one pre-verification rate-limit budget across bearer values", async () => {
+    const isolatedStore = new LicenseStore(":memory:");
+    let verifierCalls = 0;
+    const started = await startLicenseServer({
+      store: isolatedStore,
+      issuanceSecret: "lifecycle-issuance-secret",
+      lifecycleRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
+      lifecycleOidcVerifier: {
+        verify: async () => {
+          verifierCalls += 1;
+          throw new Error("invalid fixture token");
+        }
+      }
+    });
+    const body = {
+      releaseVersion: "v1.0.4",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`
+    };
+    try {
+      const first = await post(started.url, "/v1/admin/licenses/issue-lifecycle", body, {
+        Authorization: "Bearer first.invalid.token",
+        "Fly-Client-IP": "203.0.113.10"
+      });
+      const second = await post(started.url, "/v1/admin/licenses/issue-lifecycle", body, {
+        Authorization: "Bearer second.invalid.token",
+        "Fly-Client-IP": "203.0.113.10"
+      });
+      assert.equal(first.status, 401);
+      assert.equal(second.status, 429);
+      assert.equal(second.json.status, "rate_limited");
+      assert.equal(verifierCalls, 1);
+    } finally {
+      started.server.close();
+      isolatedStore.close();
+    }
+  });
+
+  it("keeps Fly-provided client IP budgets independent behind the proxy", async () => {
+    const isolatedStore = new LicenseStore(":memory:");
+    let verifierCalls = 0;
+    const started = await startLicenseServer({
+      store: isolatedStore,
+      issuanceSecret: "lifecycle-issuance-secret",
+      lifecycleRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
+      lifecycleOidcVerifier: {
+        verify: async () => {
+          verifierCalls += 1;
+          throw new Error("invalid fixture token");
+        }
+      }
+    });
+    const body = {
+      releaseVersion: "v1.0.4",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`
+    };
+    try {
+      const first = await post(started.url, "/v1/admin/licenses/issue-lifecycle", body, {
+        Authorization: "Bearer first.invalid.token",
+        "Fly-Client-IP": "203.0.113.10"
+      });
+      const second = await post(started.url, "/v1/admin/licenses/issue-lifecycle", body, {
+        Authorization: "Bearer second.invalid.token",
+        "Fly-Client-IP": "203.0.113.11"
+      });
+      assert.equal(first.status, 401);
+      assert.equal(second.status, 401);
+      assert.equal(verifierCalls, 2);
+    } finally {
+      started.server.close();
+      isolatedStore.close();
+    }
+  });
+
+  it("classifies an oversized authenticated lifecycle body as payload-too-large", async () => {
+    const isolatedStore = new LicenseStore(":memory:");
+    const started = await startLicenseServer({
+      store: isolatedStore,
+      issuanceSecret: "lifecycle-issuance-secret",
+      lifecycleOidcVerifier: { verify: async () => ({}) as any }
+    });
+    try {
+      const response = await post(
+        started.url,
+        "/v1/admin/licenses/issue-lifecycle",
+        "x".repeat(20 * 1024),
+        { Authorization: "Bearer syntactically-valid-fixture" }
+      );
+      assert.equal(response.status, 413);
+      assert.equal(response.json.status, "invalid");
+    } finally {
+      started.server.close();
+      isolatedStore.close();
+    }
+  });
+});

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runLicenseLifecycleSmoke } from "../src/license-lifecycle-smoke.js";
@@ -23,6 +24,9 @@ describe("license lifecycle smoke", () => {
     const runnerCalls: Array<{ args: string[]; stdin?: string }> = [];
     let validateAfterDeactivation = false;
     let localRemoved = false;
+    let activated = false;
+    const dashboardPhases: string[] = [];
+    const dashboardEvidenceRoot = mkdtempSync(join(tmpdir(), "neondiff-lifecycle-dashboard-"));
 
     const result = await runLicenseLifecycleSmoke({
       releaseVersion: "v1.0.4",
@@ -33,6 +37,7 @@ describe("license lifecycle smoke", () => {
       issuanceAuthorization: { kind: "github-oidc", bearer: oidcToken },
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
+      dashboardEvidenceRoot,
       confirmLiveLifecycle: true,
       now: () => new Date("2026-07-12T04:00:00.000Z"),
       randomId: () => "c".repeat(32),
@@ -62,9 +67,29 @@ describe("license lifecycle smoke", () => {
         throw new Error(`unexpected fake API path ${path}`);
       },
       runCandidateCommand: async ({ args, stdin }) => {
+        if (args[0] === "dashboard") {
+          const phase = activated ? "active" : "preactivation";
+          dashboardPhases.push(phase);
+          const outputDir = args[args.indexOf("--output-dir") + 1];
+          mkdirSync(outputDir, { recursive: true });
+          writeFileSync(join(outputDir, "dashboard-status.json"), JSON.stringify({
+            items: {
+              license: activated
+                ? { state: "healthy", metadata: { status: "active" } }
+                : { state: "not_configured", metadata: { status: "missing" } }
+            },
+            firstReviewPreview: { available: activated }
+          }));
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ ok: true, settledUiState: { providerVerifyStatus: activated ? 422 : 403 } }),
+            stderr: ""
+          };
+        }
         runnerCalls.push({ args, ...(stdin ? { stdin } : {}) });
         expect(args.join(" ")).not.toContain(rawKey);
         if (args[1] === "activate") {
+          activated = true;
           expect(stdin).toBe(`${rawKey}\n`);
           return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "active", source: "api" }), stderr: "" };
         }
@@ -72,6 +97,7 @@ describe("license lifecycle smoke", () => {
           return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "active", source: "api" }), stderr: "" };
         }
         if (args[1] === "deactivate") {
+          activated = false;
           validateAfterDeactivation = true;
           localRemoved = true;
           return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "deactivated", apiNotified: true }), stderr: "" };
@@ -116,9 +142,16 @@ describe("license lifecycle smoke", () => {
       ...record,
       responseSha256: createHash("sha256").update(JSON.stringify(record.redactedResponse)).digest("hex")
     })));
+    expect(dashboardPhases).toEqual(["preactivation", "active"]);
+    expect(result.dashboard).toEqual({
+      setupBlockedBeforeActivation: true,
+      providerBlockedBeforeActivation: true,
+      activatedStatusVisible: true
+    });
     expect(result.licenseFingerprint).toBe(`sha256:${createHash("sha256").update(rawKey).digest("hex")}`);
     expect(JSON.stringify(result)).not.toContain(rawKey);
     expect(JSON.stringify(result)).not.toContain(oidcToken);
+    rmSync(dashboardEvidenceRoot, { recursive: true, force: true });
   });
 
   it("does not read or call live systems without explicit confirmation", async () => {

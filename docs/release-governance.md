@@ -209,29 +209,49 @@ version, setup-doc, and runtime change before dispatching
 `license-lifecycle-proof.yml`. The protected-main candidate SHA is the source
 identity under proof.
 
-The trusted workflow installs the candidate's materialized tarball, runs the
-fail-closed activation matrix, obtains a custom-audience GitHub OIDC token, and
-uses the dedicated lifecycle broker to exercise production issuance,
-activation, refresh, deactivation, and denied revalidation. It signs the
-redacted lifecycle artifact with a GitHub artifact attestation. The Fly-held
-issuance secret never enters GitHub.
+The trusted workflow installs the candidate's materialized tarball, proves a
+fresh install, upgrades an isolated v1.0.3 installation in place, and validates
+that the upgraded binary normalizes the legacy weakening fields to the
+mandatory-online production policy. That upgraded binary—not a separate fresh
+copy—runs the live lifecycle and installed-dashboard probes. A machine-readable
+19-scenario evaluator records each real admission-gate allow/deny outcome and
+license-API call count; the assembler rejects missing, duplicate, unexpected,
+or mismatched scenario rows. A separate machine-readable Vitest report binds
+the proof to passing CLI, provider, review, and dashboard tests that instrument
+the useful-work boundaries and assert they are not reached before activation.
+The workflow also compiles/tests the production Swift
+desktop quarantine on a GitHub-hosted Mac and binds the proof to the real
+composition root.
+
+The protected production job then obtains a custom-audience GitHub OIDC token
+and uses the dedicated lifecycle broker to exercise production issuance,
+activation, refresh, deactivation, and denied revalidation. It runs the
+installed dashboard before activation and while the disposable entitlement is
+active, proving setup/provider denial first and visible active status second.
+The workflow derives the aggregate plus all six child artifacts from those
+passing runs and attests the complete seven-file set. The Fly-held issuance
+secret never enters GitHub.
+
+The desktop child proves the current safe boundary: without a verified native
+activation broker, useful native work remains blocked. It does not prove native
+activation, signing/notarization, Sparkle operation, or installed-app readiness.
 
 After the run succeeds:
 
-1. Download the exact attested JSON artifact without editing it.
-2. Verify it locally with `gh attestation verify`, pinning the signer workflow,
+1. Download the exact seven attested JSON artifacts without editing them.
+2. Verify every file locally with `gh attestation verify`, pinning the signer workflow,
    candidate SHA, protected-main source ref, and GitHub-hosted runner.
-3. Commit that artifact, the aggregate activation proof, and manifest links in
+3. Commit that exact evidence set and the manifest links in
    a follow-up evidence PR. That PR may change only files outside the npm
    package allowlist; otherwise the candidate tarball identity changes and the
    lifecycle proof must be rerun.
-4. Let the publish workflow independently verify the committed artifact's
-   GitHub attestation and require the current `npm pack` shasum/integrity to
+4. Let the publish workflow independently verify the aggregate and every child
+   GitHub attestation, and require the current `npm pack` shasum/integrity to
    match the installed candidate recorded by the proof.
 
 The final release/tag commit may descend from the candidate SHA because the
 evidence itself must be committed, but the package bytes must remain identical.
-Do not manually recreate, summarize, or reformat the attested lifecycle JSON.
+Do not manually recreate, summarize, or reformat any attested evidence JSON.
 
 ### Partial Quarantine Promotion Recovery
 
@@ -240,12 +260,12 @@ does not complete, do not republish, retag, or unpublish the immutable package.
 Direct dist-tag mutation is not supported for recovery because it bypasses the
 serialized workflow's registry retries, provenance checks, channel predecessor
 guard, and quarantine ownership check. Rerun the hardened workflow from
-protected `main` for the exact existing release tag:
+the exact existing release tag ref:
 
 ```bash
 gh workflow run publish-npm.yml \
   --repo electricsheephq/evaos-code-review-bot-neondiff \
-  --ref main \
+  --ref v<version> \
   -f tag=v<version>
 gh run list \
   --repo electricsheephq/evaos-code-review-bot-neondiff \

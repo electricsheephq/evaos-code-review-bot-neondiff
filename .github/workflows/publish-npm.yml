@@ -40,6 +40,10 @@ jobs:
 
       - name: Verify release provenance before repository code runs
         run: |
+          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG" || {
+            echo "::error::Publish workflow must be dispatched from the exact release tag"
+            exit 1
+          }
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           test "$(git cat-file -t "$RELEASE_TAG")" = "tag" || {
             echo "::error::Release tag must be annotated"
@@ -107,7 +111,10 @@ jobs:
 
       - name: Install dependencies
         if: steps.package_release.outputs.should_publish == 'true'
-        run: npm ci
+        run: |
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+          npm ci
 
       - name: Build
         if: steps.package_release.outputs.should_publish == 'true'
@@ -155,27 +162,43 @@ jobs:
             exit 1
           }
           ACTIVATION_PROOF_PATH="$(node -p "require('./docs/public-release-manifest.json').licenseApi.activationProofPath")"
+          REQUIRED_EVIDENCE_KINDS='["production-lifecycle","no-bypass-matrix","useful-work-boundaries","dashboard","desktop","install-upgrade"]'
           # shellcheck disable=SC2016
-          LIFECYCLE_ARTIFACT="$(node -e '
+          mapfile -t EVIDENCE_ARTIFACTS < <(node -e '
             const proof = require(`./${process.argv[1]}`);
-            const artifact = proof.artifacts?.find((entry) => entry.kind === "production-lifecycle");
-            if (!artifact?.ref) process.exit(1);
-            process.stdout.write(artifact.ref);
-          ' "$ACTIVATION_PROOF_PATH")" || {
-            echo "::error::production lifecycle artifact ref is missing"
+            const required = JSON.parse(process.argv[2]);
+            if (!Array.isArray(proof.artifacts) || proof.artifacts.length !== required.length) process.exit(1);
+            const refs = required.map((kind) => {
+              const matches = proof.artifacts.filter((entry) => entry?.kind === kind && typeof entry.ref === "string");
+              if (matches.length !== 1) process.exit(1);
+              return matches[0].ref;
+            });
+            process.stdout.write(`${refs.join("\n")}\n`);
+          ' "$ACTIVATION_PROOF_PATH" "$REQUIRED_EVIDENCE_KINDS")
+          test "${#EVIDENCE_ARTIFACTS[@]}" = "6" || {
+            echo "::error::complete mandatory activation artifact inventory is missing"
             exit 1
           }
-          test -f "$LIFECYCLE_ARTIFACT" || {
-            echo "::error::production lifecycle artifact is missing"
-            exit 1
-          }
-          gh attestation verify "$LIFECYCLE_ARTIFACT" \
+          gh attestation verify "$ACTIVATION_PROOF_PATH" \
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/license-lifecycle-proof.yml \
             --signer-digest "$CANDIDATE_HEAD" \
             --source-digest "$CANDIDATE_HEAD" \
             --source-ref refs/heads/main \
             --deny-self-hosted-runners
+          for EVIDENCE_ARTIFACT in "${EVIDENCE_ARTIFACTS[@]}"; do
+            test -f "$EVIDENCE_ARTIFACT" || {
+              echo "::error::mandatory activation artifact is missing"
+              exit 1
+            }
+            gh attestation verify "$EVIDENCE_ARTIFACT" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/license-lifecycle-proof.yml \
+              --signer-digest "$CANDIDATE_HEAD" \
+              --source-digest "$CANDIDATE_HEAD" \
+              --source-ref refs/heads/main \
+              --deny-self-hosted-runners
+          done
           PACKAGE_ALREADY_EXISTS=false
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             PACKAGE_ALREADY_EXISTS=true
@@ -222,7 +245,13 @@ jobs:
             echo "::error::npm provenance attestation URL is missing or untrusted"
             exit 1
           }
-          curl --fail --silent --show-error "$ATTESTATION_URL" > npm-attestations.json
+          curl --fail --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-max-time 120 \
+            "$ATTESTATION_URL" > npm-attestations.json
           EXPECTED_INTEGRITY="$(node -e 'const [pack] = require("./pack.json"); process.stdout.write(pack.integrity ?? "")')"
           node scripts/verify-npm-provenance.mjs \
             --attestations npm-attestations.json \
@@ -263,6 +292,13 @@ jobs:
           CURRENT_TAG_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags[process.argv[2]] ?? "")' channel-metadata.json "$NPM_TAG")"
           node scripts/npm-release-policy.mjs verify-channel \
             --current-version "$CURRENT_TAG_VERSION" \
+            --target-version "$PACKAGE_VERSION" \
+            --expected-predecessor "$EXPECTED_PREDECESSOR" \
+            --npm-tag "$NPM_TAG"
+          npm view neondiff dist-tags --json --prefer-online > prepromotion-channel.json
+          PREPROMOTION_TAG_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(tags[process.argv[2]] ?? "")' prepromotion-channel.json "$NPM_TAG")"
+          node scripts/npm-release-policy.mjs verify-channel \
+            --current-version "$PREPROMOTION_TAG_VERSION" \
             --target-version "$PACKAGE_VERSION" \
             --expected-predecessor "$EXPECTED_PREDECESSOR" \
             --npm-tag "$NPM_TAG"
