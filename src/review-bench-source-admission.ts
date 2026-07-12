@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  openSync,
   mkdirSync,
   linkSync,
-  readFileSync,
+  readSync,
   realpathSync,
   rmSync,
   statSync,
@@ -39,13 +43,10 @@ export async function runReviewBenchSourceAdmission(input: {
   const admittedAt = input.admittedAt ?? new Date().toISOString();
   requireIsoTimestamp(admittedAt, "admittedAt");
   const corpusPath = realpathSync(resolve(input.corpusPath));
-  const corpusStats = statSync(corpusPath);
-  if (!corpusStats.isFile() || corpusStats.size === 0 || corpusStats.size > MAX_CORPUS_MANIFEST_BYTES) {
-    throw new Error(`corpus manifest must contain 1-${MAX_CORPUS_MANIFEST_BYTES} bytes`);
-  }
+  const corpusBytes = readBoundedRegularFile(corpusPath, MAX_CORPUS_MANIFEST_BYTES, "corpus manifest");
   let corpus: ReviewBenchCorpusV1;
   try {
-    corpus = JSON.parse(readFileSync(corpusPath, "utf8")) as ReviewBenchCorpusV1;
+    corpus = JSON.parse(new TextDecoder().decode(corpusBytes)) as ReviewBenchCorpusV1;
   } catch {
     throw new Error("corpus manifest must be valid JSON");
   }
@@ -60,14 +61,11 @@ export async function runReviewBenchSourceAdmission(input: {
     if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
       throw new Error(`source artifact escapes artifacts directory: ${scenario.scenarioId}`);
     }
-    const artifactStats = statSync(artifactPath);
-    if (!artifactStats.isFile() || artifactStats.size === 0 ||
-        artifactStats.size > REVIEW_BENCH_MAX_SOURCE_ARTIFACT_BYTES) {
-      throw new Error(
-        `source artifact must contain 1-${REVIEW_BENCH_MAX_SOURCE_ARTIFACT_BYTES} bytes: ${scenario.scenarioId}`
-      );
-    }
-    const artifact = new Uint8Array(readFileSync(artifactPath));
+    const artifact = readBoundedRegularFile(
+      artifactPath,
+      REVIEW_BENCH_MAX_SOURCE_ARTIFACT_BYTES,
+      `source artifact: ${scenario.scenarioId}`
+    );
     assertGoldLabelAnchorsInUnifiedDiff(scenario, artifact);
     return artifact;
   };
@@ -91,6 +89,30 @@ export async function runReviewBenchSourceAdmission(input: {
   };
   writeImmutableReceipt(resolve(input.receiptPath), receipt);
   return receipt;
+}
+
+function readBoundedRegularFile(path: string, maximumBytes: number, label: string): Uint8Array {
+  const descriptor = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const before = fstatSync(descriptor);
+    if (!before.isFile() || before.size === 0 || before.size > maximumBytes) {
+      throw new Error(`${label} must contain 1-${maximumBytes} bytes`);
+    }
+    const buffer = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const bytesRead = readSync(descriptor, buffer, offset, buffer.byteLength - offset, offset);
+      if (bytesRead === 0) throw new Error(`${label} changed while being read`);
+      offset += bytesRead;
+    }
+    const after = fstatSync(descriptor);
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+      throw new Error(`${label} changed while being read`);
+    }
+    return buffer;
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 /**

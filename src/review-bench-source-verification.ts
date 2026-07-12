@@ -109,8 +109,8 @@ export async function verifyGitHubReviewBenchSource(input: {
     throw new Error("fetched source artifact sha256 does not match supplied artifact bytes");
   }
 
-  const licenseProof = await verifyRevisionLicense(fetchImpl, scenario, urls.licenseUrl);
-  const licenseResponse = await fetchImpl(urls.licenseUrl, {
+  const licenseProof = await verifyRevisionLicense(fetchImpl, scenario, urls.declaredLicenseUrl);
+  const licenseResponse = await fetchImpl(licenseProof.artifactUrl, {
     method: "GET",
     redirect: "error",
     headers: {
@@ -160,14 +160,26 @@ export async function verifyGitHubReviewBenchSource(input: {
 function requireCanonicalGitHubUrls(scenario: ReviewBenchScenarioV1): {
   visibilityEvidenceUrl: URL;
   sourceArtifactUrl: URL;
-  licenseUrl: URL;
+  declaredLicenseUrl: URL;
 } {
   const repository = scenario.repository.trim().toLowerCase();
+  const repositoryMatch = /^([a-z0-9](?:[a-z0-9._-]{0,99}))\/([a-z0-9](?:[a-z0-9._-]{0,99}))$/.exec(repository);
+  if (!repositoryMatch) throw new Error("repository must be a canonical GitHub owner/name identity");
+  const safeRepository = `${repositoryMatch[1]}/${repositoryMatch[2]}`;
+  const revision = scenario.sourceRevision.toLowerCase();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision)) {
+    throw new Error("sourceRevision must be an immutable hexadecimal digest");
+  }
+  const baseRevision = scenario.provenance.baseRevision?.toLowerCase();
+  if (scenario.provenance.kind === "pull_request" &&
+      (!baseRevision || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseRevision))) {
+    throw new Error("pull-request baseRevision must be an immutable hexadecimal digest");
+  }
   const repositoryUrl = new URL(scenario.provenance.repositoryUrl);
   const sourceUrl = new URL(scenario.provenance.sourceUrl);
-  const sourceArtifactUrl = new URL(scenario.provenance.sourceArtifactUrl);
-  const visibilityEvidenceUrl = new URL(scenario.provenance.visibilityEvidenceUrl);
-  const licenseUrl = new URL(scenario.license.licenseUrl);
+  const declaredSourceArtifactUrl = new URL(scenario.provenance.sourceArtifactUrl);
+  const declaredVisibilityEvidenceUrl = new URL(scenario.provenance.visibilityEvidenceUrl);
+  const declaredLicenseUrl = new URL(scenario.license.licenseUrl);
   const normalizedPath = (url: URL) => url.pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
   if (repositoryUrl.origin !== "https://github.com" || normalizedPath(repositoryUrl) !== repository) {
     throw new Error("repositoryUrl must be the canonical public GitHub repository URL");
@@ -184,32 +196,37 @@ function requireCanonicalGitHubUrls(scenario: ReviewBenchScenarioV1): {
   if (scenario.provenance.kind === "pull_request" && !new RegExp(`^${escapeRegExp(repository)}/pull/[1-9][0-9]*$`).test(sourcePath)) {
     throw new Error("pull-request sourceUrl must identify a repository pull request");
   }
-  if (sourceArtifactUrl.origin !== "https://github.com" ||
-      normalizedPath(sourceArtifactUrl) !== (scenario.provenance.kind === "pull_request"
-        ? `${repository}/compare/${scenario.provenance.baseRevision?.toLowerCase()}...${scenario.sourceRevision.toLowerCase()}.diff`
-        : `${repository}/commit/${scenario.sourceRevision.toLowerCase()}.diff`)) {
+  const expectedSourceArtifactPath = scenario.provenance.kind === "pull_request"
+    ? `${safeRepository}/compare/${baseRevision}...${revision}.diff`
+    : `${safeRepository}/commit/${revision}.diff`;
+  if (declaredSourceArtifactUrl.origin !== "https://github.com" ||
+      normalizedPath(declaredSourceArtifactUrl) !== expectedSourceArtifactPath) {
     throw new Error("sourceArtifactUrl must identify the immutable sourceRevision diff");
   }
-  if (visibilityEvidenceUrl.origin !== "https://api.github.com" ||
-      normalizedPath(visibilityEvidenceUrl) !== `repos/${repository}`) {
+  if (declaredVisibilityEvidenceUrl.origin !== "https://api.github.com" ||
+      normalizedPath(declaredVisibilityEvidenceUrl) !== `repos/${safeRepository}`) {
     throw new Error("visibilityEvidenceUrl must be the canonical GitHub repository API URL");
   }
-  if (licenseUrl.origin !== "https://raw.githubusercontent.com" ||
-      !normalizedPath(licenseUrl).startsWith(`${repository}/${scenario.sourceRevision.toLowerCase()}/`)) {
+  if (declaredLicenseUrl.origin !== "https://raw.githubusercontent.com" ||
+      !normalizedPath(declaredLicenseUrl).startsWith(`${safeRepository}/${revision}/`)) {
     throw new Error("licenseUrl must be an immutable raw GitHub URL bound to sourceRevision");
   }
   for (const [name, url] of [
     ["repositoryUrl", repositoryUrl],
     ["sourceUrl", sourceUrl],
-    ["sourceArtifactUrl", sourceArtifactUrl],
-    ["visibilityEvidenceUrl", visibilityEvidenceUrl],
-    ["licenseUrl", licenseUrl]
+    ["sourceArtifactUrl", declaredSourceArtifactUrl],
+    ["visibilityEvidenceUrl", declaredVisibilityEvidenceUrl],
+    ["licenseUrl", declaredLicenseUrl]
   ] as const) {
     if (url.username || url.password || url.search || url.hash) {
       throw new Error(`${name} must not contain credentials, query, or fragment`);
     }
   }
-  return { visibilityEvidenceUrl, sourceArtifactUrl, licenseUrl };
+  return {
+    visibilityEvidenceUrl: new URL(`https://api.github.com/repos/${safeRepository}`),
+    sourceArtifactUrl: new URL(`https://github.com/${expectedSourceArtifactPath}`),
+    declaredLicenseUrl
+  };
 }
 
 function parseRepositoryProof(metadata: unknown, scenario: ReviewBenchScenarioV1): {
@@ -294,7 +311,7 @@ async function verifyRevisionLicense(
   fetchImpl: typeof fetch,
   scenario: ReviewBenchScenarioV1,
   declaredLicenseUrl: URL
-): Promise<{ spdxId: string; bytes: Uint8Array }> {
+): Promise<{ spdxId: string; bytes: Uint8Array; artifactUrl: URL }> {
   const repository = scenario.repository.toLowerCase();
   const endpoint = new URL(`https://api.github.com/repos/${repository}/license`);
   endpoint.searchParams.set("ref", scenario.sourceRevision);
@@ -316,8 +333,14 @@ async function verifyRevisionLicense(
       typeof record.path !== "string" || record.path.trim().length === 0) {
     throw new Error("GitHub revision license metadata must include base64 content and path");
   }
+  const encodedPath = record.path.split("/").map((segment) => {
+    if (segment.length === 0 || segment === "." || segment === ".." || segment.includes("\\") || segment.includes("\0")) {
+      throw new Error("GitHub revision license path must be canonical");
+    }
+    return encodeURIComponent(segment);
+  }).join("/");
   const expectedLicenseUrl = new URL(
-    `https://raw.githubusercontent.com/${repository}/${scenario.sourceRevision}/${record.path}`
+    `https://raw.githubusercontent.com/${repository}/${scenario.sourceRevision}/${encodedPath}`
   );
   if (declaredLicenseUrl.toString() !== expectedLicenseUrl.toString()) {
     throw new Error("licenseUrl must match the revision-specific GitHub license path");
@@ -326,7 +349,7 @@ async function verifyRevisionLicense(
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_LICENSE_ARTIFACT_BYTES) {
     throw new Error("GitHub revision license content is empty or oversized");
   }
-  return { spdxId: license.spdx_id, bytes };
+  return { spdxId: license.spdx_id, bytes, artifactUrl: expectedLicenseUrl };
 }
 
 async function readJsonResponse(response: Response, maximumBytes: number, label: string): Promise<unknown> {

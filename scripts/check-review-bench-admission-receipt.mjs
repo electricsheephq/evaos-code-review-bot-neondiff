@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  openSync,
+  readSync
+} from "node:fs";
 
 const MAX_RECEIPT_BYTES = 64 * 1024;
 const REQUIRED_KEYS = [
@@ -42,13 +48,10 @@ function parseArgs(argv) {
 }
 
 function readReceipt(path, label) {
-  const stats = statSync(path);
-  if (!stats.isFile() || stats.size === 0 || stats.size > MAX_RECEIPT_BYTES) {
-    throw new Error(`${label} must contain 1-${MAX_RECEIPT_BYTES} bytes`);
-  }
+  const bytes = readBoundedRegularFile(path, label);
   let receipt;
   try {
-    receipt = JSON.parse(readFileSync(path, "utf8"));
+    receipt = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw new Error(`${label} must be valid JSON`);
   }
@@ -72,6 +75,30 @@ function readReceipt(path, label) {
   const expected = createHash("sha256").update(stableJson(basis)).digest("hex");
   if (receiptSha256 !== expected) throw new Error(`${label} receiptSha256 mismatch`);
   return receipt;
+}
+
+function readBoundedRegularFile(path, label) {
+  const descriptor = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const before = fstatSync(descriptor);
+    if (!before.isFile() || before.size === 0 || before.size > MAX_RECEIPT_BYTES) {
+      throw new Error(`${label} must contain 1-${MAX_RECEIPT_BYTES} bytes`);
+    }
+    const buffer = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const bytesRead = readSync(descriptor, buffer, offset, buffer.byteLength - offset, offset);
+      if (bytesRead === 0) throw new Error(`${label} changed while being read`);
+      offset += bytesRead;
+    }
+    const after = fstatSync(descriptor);
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+      throw new Error(`${label} changed while being read`);
+    }
+    return buffer;
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function isIsoTimestamp(value) {
