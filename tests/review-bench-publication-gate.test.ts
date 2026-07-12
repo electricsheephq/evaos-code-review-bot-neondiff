@@ -48,6 +48,13 @@ describe("Review Bench public corpus gate", () => {
     }
   });
 
+  it("documents portable outside-checkout receipt generation and the reviewed publication handoff", () => {
+    const operatorDocs = readFileSync(join(repoRoot, "docs/operator-cli.md"), "utf8");
+    expect(operatorDocs).toContain("--receipt <outside-checkout-evidence-dir>/admission-receipt.json");
+    expect(operatorDocs).toMatch(/copy that exact no-clobber\s+receipt into the publication worktree/);
+    expect(operatorDocs).not.toContain("/Volumes/LEXAR/Codex/evals");
+  });
+
   it("exposes the packaged review-bench command and flags through CLI help", () => {
     const result = spawnSync("npx", ["tsx", "src/cli.ts", "review-bench", "--help"], {
       cwd: repoRoot,

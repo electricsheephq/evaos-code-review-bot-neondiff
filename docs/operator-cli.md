@@ -125,7 +125,17 @@ evaos-review-bot status --config config.local.json
   license artifacts must be served directly from their validated canonical
   origins; redirects are rejected. The command then creates one
   no-clobber receipt containing the corpus and verification-evidence hashes.
-  Write the receipt outside the checkout under `/Volumes/LEXAR/Codex/evals`.
+  Choose an evidence directory outside the checkout and run the command with
+  `--receipt <outside-checkout-evidence-dir>/admission-receipt.json`; the
+  command refuses checkout-local output and refuses to overwrite a receipt.
+  For a separately reviewed corpus-publication PR, copy that exact no-clobber
+  receipt into the publication worktree at
+  `docs/bench/review-bench-corpus-v1/admission-receipt.json`. Do not hand-edit
+  or regenerate the receipt inside the checkout. CI creates a second live
+  receipt under `$RUNNER_TEMP`, validates both receipts' self-hashes, and
+  compares their immutable corpus/source-verification claims. `admittedAt` and
+  the resulting `receiptSha256` may differ between the operator capture and CI
+  by design; neither is used to hide corpus or verification drift.
   The command does not invoke a model/provider, post to GitHub, publish a
   corpus, or switch a provider. A future public corpus under
   `docs/bench/review-bench-corpus-v1/` is admitted only when the mandatory CI
