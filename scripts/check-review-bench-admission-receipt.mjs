@@ -138,11 +138,11 @@ function readReceipt(path, label) {
       !/^[a-f0-9]{64}$/.test(receipt.corpusHash) ||
       !/^[a-f0-9]{64}$/.test(receipt.verificationEvidenceSha256) ||
       receipt.semanticEvidenceVersion !== "review-bench-oracle-evidence/v2" ||
-      receipt.semanticEvidenceVerifierVersion !== "review-bench-semantic-admission/v2" ||
+      receipt.semanticEvidenceVerifierVersion !== "review-bench-semantic-admission/v3" ||
       !/^[a-f0-9]{64}$/.test(receipt.semanticEvidenceSha256) ||
-      receipt.oracleSourceVerifierVersion !== "github-oracle-source-verifier/v1" ||
+      receipt.oracleSourceVerifierVersion !== "github-oracle-source-verifier/v2" ||
       !/^[a-f0-9]{64}$/.test(receipt.oracleSourceVerificationSha256) ||
-      receipt.adjudicationAgreementVersion !== "review-bench-adjudication-agreement/v2" ||
+      receipt.adjudicationAgreementVersion !== "review-bench-adjudication-agreement/v3" ||
       !Number.isSafeInteger(receipt.adjudicationScenarioCount) || receipt.adjudicationScenarioCount < 2 ||
       receipt.adjudicationScenarioCount !== receipt.scenarioCount ||
       !Number.isSafeInteger(receipt.actionabilityItemCount) || receipt.actionabilityItemCount < 150 ||

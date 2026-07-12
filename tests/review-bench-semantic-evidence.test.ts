@@ -516,6 +516,25 @@ describe("Review Bench oracle evidence v2", () => {
     }));
   });
 
+  it("allows a deletion-only clean control to contribute no candidate-actionability votes", () => {
+    const input = scenario({ control: true });
+    const packet = evidence(input);
+    packet.annotationUniverse.candidates = [];
+    packet.primary.labels = [];
+    packet.secondary.labels = [];
+    const clean = bindEvidence(input, packet);
+    const record = verifyReviewBenchOracleEvidence(clean.scenario, clean.bytes);
+    expect(bindReviewBenchCandidateAgreement(record, []).candidateAgreement).toEqual({
+      version: "review-bench-candidate-actionability/v2",
+      candidateUniverseSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      candidateUnitCount: 0,
+      bothActionableCount: 0,
+      primaryOnlyCount: 0,
+      secondaryOnlyCount: 0,
+      neitherCount: 0
+    });
+  });
+
   it("computes and enforces the preregistered adjudication agreement floors", () => {
     const defect = bindEvidence(scenario());
     const clean = bindEvidence(scenario({ control: true }));
@@ -528,7 +547,7 @@ describe("Review Bench oracle evidence v2", () => {
       [{ path: "src/state.ts", line: 10 }]
     );
     expect(computeReviewBenchAdjudicationAgreement([defectRecord, cleanRecord])).toEqual({
-      version: "review-bench-adjudication-agreement/v2",
+      version: "review-bench-adjudication-agreement/v3",
       scenarioCount: 2,
       actionabilityItemCount: 2,
       actionabilityBothActionableCount: 1,

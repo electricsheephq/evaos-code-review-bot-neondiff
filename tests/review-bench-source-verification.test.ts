@@ -83,6 +83,18 @@ function sourceDiffWithUnrelatedDeletion(marker: string): Uint8Array {
   ].join("\n"));
 }
 
+function pureDeletionDiff(path: string): Uint8Array {
+  return new TextEncoder().encode([
+    `diff --git a/${path} b/${path}`,
+    "deleted file mode 100644",
+    "index 3333333..0000000",
+    `--- a/${path}`,
+    "+++ /dev/null",
+    "@@ -1 +0,0 @@",
+    "-obsolete();"
+  ].join("\n"));
+}
+
 function oracleSourceArtifact(scenario: ReviewBenchScenarioV1): Uint8Array {
   return sourceDiff(`oracle-${scenario.repository.replace("/", "-")}`);
 }
@@ -330,6 +342,8 @@ function githubFetch(options: {
   serverDate?: string;
   timeline?: unknown[];
   comments?: unknown[];
+  reviewComments?: unknown[];
+  reviews?: unknown[];
   compareStatus?: string;
   compareBaseRevision?: string;
   oracleCommitDate?: string;
@@ -367,6 +381,12 @@ function githubFetch(options: {
             } : {})
           }
         });
+      }
+      if (parts[2] === "pulls" && parts[4] === "comments") {
+        return Response.json(options.reviewComments ?? []);
+      }
+      if (parts[2] === "pulls" && parts[4] === "reviews") {
+        return Response.json(options.reviews ?? []);
       }
       if (parts[2] === "pulls") {
         const pullNumber = Number(parts[3]);
@@ -787,6 +807,15 @@ describe("Review Bench public-source verification", () => {
       sourceArtifact: artifact,
       fetchImpl: githubFetch({
         sourceArtifact: artifact,
+        pullCommitShas: ["1".repeat(41), revision]
+      }),
+      verifiedAt: VERIFIED_AT
+    })).rejects.toThrow("immutable revision");
+    await expect(verifyGitHubReviewBenchSource({
+      scenario: pullDraft,
+      sourceArtifact: artifact,
+      fetchImpl: githubFetch({
+        sourceArtifact: artifact,
         pullHeadSha: "b".repeat(40),
         pullBaseSha: "f".repeat(40),
         pullCommitShas: [revision],
@@ -942,6 +971,21 @@ describe("Review Bench public-source verification", () => {
       writeFileSync(join(artifactsDirectory, `${holdout.provenance.sourceArtifactSha256}.diff`), betaArtifact);
       writeOracleEvidence(artifactsDirectory, train);
       writeOracleEvidence(artifactsDirectory, holdout);
+      let oracleCallsBeforeVisibility = 0;
+      const privateFetchBase = githubFetch({ privateRepository: true, sourceArtifact: alphaArtifact });
+      const privateFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname !== "/repos/example/alpha") oracleCallsBeforeVisibility += 1;
+        return privateFetchBase(input, init);
+      }) as typeof fetch;
+      await expect(runReviewBenchSourceAdmission({
+        corpusPath,
+        artifactsDirectory,
+        receiptPath: join(root, "private-repository-receipt.json"),
+        fetchImpl: privateFetch,
+        admittedAt: VERIFIED_AT
+      })).rejects.toThrow("public repository");
+      expect(oracleCallsBeforeVisibility).toBe(0);
       const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const selectedScenario = new URL(String(input)).pathname.includes("example/beta")
           ? holdout
@@ -963,11 +1007,11 @@ describe("Review Bench public-source verification", () => {
         corpusHash: expect.stringMatching(/^[a-f0-9]{64}$/),
         verificationEvidenceSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         semanticEvidenceVersion: "review-bench-oracle-evidence/v2",
-        semanticEvidenceVerifierVersion: "review-bench-semantic-admission/v2",
+        semanticEvidenceVerifierVersion: "review-bench-semantic-admission/v3",
         semanticEvidenceSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-        oracleSourceVerifierVersion: "github-oracle-source-verifier/v1",
+        oracleSourceVerifierVersion: "github-oracle-source-verifier/v2",
         oracleSourceVerificationSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-        adjudicationAgreementVersion: "review-bench-adjudication-agreement/v2",
+        adjudicationAgreementVersion: "review-bench-adjudication-agreement/v3",
         adjudicationScenarioCount: 2,
         actionabilityItemCount: 2,
         actionabilityBothActionableCount: 1,
@@ -1026,6 +1070,53 @@ describe("Review Bench public-source verification", () => {
         admittedAt: VERIFIED_AT
       })).rejects.toThrow("declared language Go");
       expect(existsSync(languageMismatchReceipt)).toBe(false);
+      writeFileSync(corpusPath, `${serializeReviewBenchCorpus(corpus)}\n`);
+
+      const deletionArtifact = pureDeletionDiff("src/obsolete.go");
+      const deletionDraft = await verifiedScenario({
+        repository: "example/gamma",
+        revision: "c".repeat(40),
+        artifact: deletionArtifact,
+        split: "train",
+        control: true,
+        language: "Go"
+      });
+      const deletionPacket = oracleEvidence(deletionDraft);
+      deletionPacket.annotationUniverse.candidates = [];
+      deletionPacket.primary.labels = [];
+      deletionPacket.secondary.labels = [];
+      const deletionEvidence = serializeReviewBenchOracleEvidence(deletionPacket);
+      const deletionControl = {
+        ...deletionDraft,
+        oracle: { ...deletionDraft.oracle, evidenceSha256: sha256(deletionEvidence) }
+      } as ReviewBenchScenarioV1;
+      const deletionCorpus = { ...corpus, scenarios: [train, deletionControl, holdout] };
+      writeFileSync(corpusPath, `${serializeReviewBenchCorpus(deletionCorpus)}\n`);
+      writeFileSync(
+        join(artifactsDirectory, `${deletionControl.provenance.sourceArtifactSha256}.diff`),
+        deletionArtifact
+      );
+      writeFileSync(
+        join(artifactsDirectory, `${deletionControl.oracle.evidenceSha256}.oracle.json`),
+        deletionEvidence
+      );
+      const deletionFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const path = new URL(String(input)).pathname;
+        const selectedScenario = path.includes("example/gamma")
+          ? deletionControl
+          : path.includes("example/beta") ? holdout : train;
+        const sourceArtifact = selectedScenario === deletionControl
+          ? deletionArtifact
+          : selectedScenario === holdout ? betaArtifact : alphaArtifact;
+        return githubFetchForScenario(selectedScenario, sourceArtifact)(input, init);
+      }) as typeof fetch;
+      await expect(runReviewBenchSourceAdmission({
+        corpusPath,
+        artifactsDirectory,
+        receiptPath: join(root, "deletion-only-language-receipt.json"),
+        fetchImpl: deletionFetch,
+        admittedAt: VERIFIED_AT
+      })).resolves.toEqual(expect.objectContaining({ cleanControlCount: 2 }));
       writeFileSync(corpusPath, `${serializeReviewBenchCorpus(corpus)}\n`);
 
       const racedParent = join(root, "receipt-parent");

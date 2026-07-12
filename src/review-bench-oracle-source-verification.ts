@@ -6,7 +6,7 @@ import type {
 import { containsSecretLikeText } from "./secrets.js";
 
 export const REVIEW_BENCH_ORACLE_SOURCE_VERIFIER_VERSION =
-  "github-oracle-source-verifier/v1" as const;
+  "github-oracle-source-verifier/v2" as const;
 
 const MAX_ORACLE_METADATA_BYTES = 512 * 1024;
 const MAX_COMPARE_METADATA_BYTES = 4 * 1024 * 1024;
@@ -253,16 +253,29 @@ async function verifyCleanObservation(
     `clean source PR metadata: ${scenario.scenarioId}`
   );
   const pull = requireRecord(pullDocument.value, "clean source PR metadata");
-  const head = requireRecord(pull.head, "clean source PR head");
   const base = requireRecord(pull.base, "clean source PR base");
   const baseRepository = requireRecord(base.repo, "clean source PR base repository");
   const mergeCommitSha = requireSha(pull.merge_commit_sha, "clean source PR merge commit");
   const mergedAt = normalizeGitHubTimestamp(pull.merged_at, "clean source PR merged_at");
   if (pull.number !== pullNumber || pull.state !== "closed" || pull.merged !== true ||
-      head.sha !== scenario.sourceRevision || base.ref !== defaultBranch ||
+      base.ref !== defaultBranch ||
       typeof baseRepository.full_name !== "string" || baseRepository.full_name.toLowerCase() !== repository) {
     throw new Error(`clean control must be an exact merged PR into the current default branch: ${scenario.scenarioId}`);
   }
+  const pullCommitsUrl = new URL(`https://api.github.com/repos/${repository}/pulls/${pullNumber}/commits`);
+  pullCommitsUrl.searchParams.set("per_page", "100");
+  const pullCommitsDocument = await fetchJsonDocument(
+    fetchImpl,
+    pullCommitsUrl,
+    MAX_COMPARE_METADATA_BYTES,
+    `clean source PR commits: ${scenario.scenarioId}`
+  );
+  rejectPaginatedEvidence(pullCommitsDocument.headers, `clean source PR commits: ${scenario.scenarioId}`);
+  const pullCommitShas = validatePullCommitShas(
+    pullCommitsDocument.value,
+    scenario.sourceRevision,
+    scenario.scenarioId
+  );
   const observationPullMatch = new URL(observation.sourceUrl).pathname.match(/\/pull\/([1-9][0-9]*)\/?$/);
   if (!observationPullMatch) throw new Error(`clean observation PR is invalid: ${scenario.scenarioId}`);
   const observationPullNumber = Number(observationPullMatch[1]);
@@ -367,6 +380,46 @@ async function verifyCleanObservation(
     comments.value,
     mergedAt,
     observedThrough,
+    scenario.scenarioId,
+    "comment"
+  );
+
+  const reviewCommentsUrl = new URL(
+    `https://api.github.com/repos/${repository}/pulls/${pullNumber}/comments`
+  );
+  reviewCommentsUrl.searchParams.set("per_page", "100");
+  reviewCommentsUrl.searchParams.set("since", mergedAt);
+  const reviewComments = await fetchJsonDocument(
+    fetchImpl,
+    reviewCommentsUrl,
+    MAX_COMPARE_METADATA_BYTES,
+    `clean source PR review comments: ${scenario.scenarioId}`
+  );
+  rejectPaginatedEvidence(
+    reviewComments.headers,
+    `clean source PR review comments: ${scenario.scenarioId}`
+  );
+  const reviewCommentProjection = validateCleanComments(
+    reviewComments.value,
+    mergedAt,
+    observedThrough,
+    scenario.scenarioId,
+    "review comment"
+  );
+
+  const reviewsUrl = new URL(`https://api.github.com/repos/${repository}/pulls/${pullNumber}/reviews`);
+  reviewsUrl.searchParams.set("per_page", "100");
+  const reviews = await fetchJsonDocument(
+    fetchImpl,
+    reviewsUrl,
+    MAX_COMPARE_METADATA_BYTES,
+    `clean source PR reviews: ${scenario.scenarioId}`
+  );
+  rejectPaginatedEvidence(reviews.headers, `clean source PR reviews: ${scenario.scenarioId}`);
+  const reviewProjection = validateCleanReviews(
+    reviews.value,
+    mergedAt,
+    observedThrough,
     scenario.scenarioId
   );
 
@@ -390,6 +443,7 @@ async function verifyCleanObservation(
     checkedSignals: observation.checkedSignals,
     defaultBranch,
     pullNumber,
+    pullCommitShas,
     mergeCommitSha,
     mergedAt,
     observationPullNumber,
@@ -397,7 +451,9 @@ async function verifyCleanObservation(
     mergeToObservation,
     historySha256: sha256(stableJson(mergeToObservation.commits)),
     timelineSha256: sha256(stableJson(timelineProjection)),
-    commentsSha256: sha256(stableJson(commentProjection))
+    commentsSha256: sha256(stableJson(commentProjection)),
+    reviewCommentsSha256: sha256(stableJson(reviewCommentProjection)),
+    reviewsSha256: sha256(stableJson(reviewProjection))
   }));
   return recordFor(scenario, sourceEvidenceSha256, metadataSha256, observation.sourceRevision);
 }
@@ -556,7 +612,8 @@ function validateCleanComments(
   value: unknown,
   mergedAt: string,
   observedThrough: string,
-  scenarioId: string
+  scenarioId: string,
+  surface: "comment" | "review comment"
 ): unknown[] {
   if (!Array.isArray(value)) throw new Error(`clean source PR comments must be an array: ${scenarioId}`);
   const projection: unknown[] = [];
@@ -578,13 +635,71 @@ function validateCleanComments(
       throw new Error(`clean source PR comment contains secret-like text: ${scenarioId}`);
     }
     if (Date.parse(updatedAt) >= Date.parse(mergedAt) && hasCorrectiveSignal(body.toLowerCase())) {
-      throw new Error(`clean source PR has post-merge corrective discussion: ${scenarioId}`);
+      throw new Error(
+        `clean source PR has post-merge corrective ${surface === "comment" ? "discussion" : "review discussion"}: ` +
+        scenarioId
+      );
     }
     if (Date.parse(createdAt) <= Date.parse(observedThrough)) {
       projection.push({
         id: typeof comment.id === "number" || typeof comment.id === "string" ? comment.id : null,
         createdAt,
         updatedAt,
+        bodySha256: sha256(body)
+      });
+    }
+  }
+  return projection;
+}
+
+function validatePullCommitShas(
+  value: unknown,
+  sourceRevision: string,
+  scenarioId: string
+): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 100) {
+    throw new Error(`clean source PR commits must contain 1-100 entries: ${scenarioId}`);
+  }
+  const shas = value.map((item, index) => {
+    const commit = requireRecord(item, `clean source PR commits[${index}]`);
+    return requireSha(commit.sha, `clean source PR commits[${index}].sha`);
+  });
+  if (new Set(shas).size !== shas.length) {
+    throw new Error(`clean source PR commits must be unique: ${scenarioId}`);
+  }
+  if (shas.at(-1) !== sourceRevision) {
+    throw new Error(`clean source PR final PR commit does not equal sourceRevision: ${scenarioId}`);
+  }
+  return shas;
+}
+
+function validateCleanReviews(
+  value: unknown,
+  mergedAt: string,
+  observedThrough: string,
+  scenarioId: string
+): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`clean source PR reviews must be an array: ${scenarioId}`);
+  const projection: unknown[] = [];
+  for (const [index, item] of value.entries()) {
+    const review = requireRecord(item, `clean source PR reviews[${index}]`);
+    const submittedAt = normalizeGitHubTimestamp(
+      review.submitted_at,
+      `clean source PR reviews[${index}].submitted_at`
+    );
+    const state = requireNonEmptyString(review.state, `clean source PR reviews[${index}].state`);
+    const body = typeof review.body === "string" ? review.body : "";
+    if (containsSecretLikeText(body)) {
+      throw new Error(`clean source PR review contains secret-like text: ${scenarioId}`);
+    }
+    if (Date.parse(submittedAt) >= Date.parse(mergedAt) && hasCorrectiveSignal(body.toLowerCase())) {
+      throw new Error(`clean source PR has post-merge corrective review summary: ${scenarioId}`);
+    }
+    if (Date.parse(submittedAt) <= Date.parse(observedThrough)) {
+      projection.push({
+        id: typeof review.id === "number" || typeof review.id === "string" ? review.id : null,
+        submittedAt,
+        state,
         bodySha256: sha256(body)
       });
     }

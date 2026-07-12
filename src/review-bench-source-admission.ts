@@ -203,15 +203,15 @@ export async function runReviewBenchSourceAdmission(input: {
     return artifact;
   };
   const fetchImpl = input.fetchImpl ?? buildReviewBenchGitHubFetch();
+  const proof = await reverifyReviewBenchCorpusPublicSources({
+    corpus,
+    sourceArtifactFor,
+    fetchImpl
+  });
   const oracleSourceProof = await reverifyReviewBenchCorpusOracleSources({
     corpus,
     semanticEvidenceRecords: semanticRecords,
     admittedAt,
-    fetchImpl
-  });
-  const proof = await reverifyReviewBenchCorpusPublicSources({
-    corpus,
-    sourceArtifactFor,
     fetchImpl
   });
   const receiptBasis = {
@@ -390,9 +390,9 @@ function assertScenarioLanguageInUnifiedDiff(
   scenario: ReviewBenchScenarioV1,
   diff: string
 ): void {
-  const { allAnchors } = parseNewSideUnifiedDiffAnchors(diff, scenario.scenarioId, new Map());
+  const { changedPaths } = parseNewSideUnifiedDiffAnchors(diff, scenario.scenarioId, new Map());
   const extensions = REVIEW_BENCH_LANGUAGE_EXTENSIONS[scenario.language];
-  const matchingPath = [...allAnchors.keys()].some((path) => {
+  const matchingPath = [...changedPaths].some((path) => {
     const normalizedPath = path.toLowerCase();
     return extensions.some((extension) => normalizedPath.endsWith(extension));
   });
@@ -408,10 +408,16 @@ function parseNewSideUnifiedDiffAnchors(
   diff: string,
   scenarioId: string,
   requiredAnchors: ReadonlyMap<string, ReadonlySet<number>>
-): { matchedAnchors: Map<string, Set<number>>; allAnchors: Map<string, Set<number>> } {
+): {
+  matchedAnchors: Map<string, Set<number>>;
+  allAnchors: Map<string, Set<number>>;
+  changedPaths: Set<string>;
+} {
   const matchedAnchors = new Map<string, Set<number>>();
   const allAnchors = new Map<string, Set<number>>();
+  const changedPaths = new Set<string>();
   let sawFileHeader = false;
+  let oldPath: string | null | undefined;
   let currentPath: string | null | undefined;
   let hunk: {
     oldLine: number;
@@ -468,12 +474,30 @@ function parseNewSideUnifiedDiffAnchors(
     if (metadataLine.startsWith("diff --git ")) {
       finishHunk();
       sawFileHeader = true;
+      oldPath = undefined;
       currentPath = undefined;
       return;
     }
-    if (metadataLine.startsWith("+++ ")) {
+    if (metadataLine.startsWith("--- ")) {
       const rawPath = metadataLine.slice(4).split("\t", 1)[0];
       if (rawPath === "/dev/null") {
+        oldPath = null;
+        return;
+      }
+      if (!rawPath.startsWith("a/")) {
+        throw new Error(`unsupported unified diff old-side path: ${scenarioId}`);
+      }
+      oldPath = requireCanonicalDiffPath(rawPath.slice(2), `unified diff old-side path: ${scenarioId}`);
+      return;
+    }
+    if (metadataLine.startsWith("+++ ")) {
+      if (oldPath === undefined) throw new Error(`unified diff new-side path has no old-side path: ${scenarioId}`);
+      const rawPath = metadataLine.slice(4).split("\t", 1)[0];
+      if (rawPath === "/dev/null") {
+        if (typeof oldPath !== "string") {
+          throw new Error(`unified diff cannot have /dev/null on both sides: ${scenarioId}`);
+        }
+        changedPaths.add(oldPath);
         currentPath = null;
         return;
       }
@@ -481,6 +505,8 @@ function parseNewSideUnifiedDiffAnchors(
         throw new Error(`unsupported unified diff new-side path: ${scenarioId}`);
       }
       currentPath = requireCanonicalDiffPath(rawPath.slice(2), `unified diff path: ${scenarioId}`);
+      if (typeof oldPath === "string") changedPaths.add(oldPath);
+      changedPaths.add(currentPath);
       return;
     }
     if (metadataLine.startsWith("@@")) {
@@ -505,7 +531,7 @@ function parseNewSideUnifiedDiffAnchors(
   });
   finishHunk();
   if (!sawFileHeader) throw new Error(`source artifact is not a git unified diff: ${scenarioId}`);
-  return { matchedAnchors, allAnchors };
+  return { matchedAnchors, allAnchors, changedPaths };
 }
 
 function recordAllAnchor(anchors: Map<string, Set<number>>, path: string, line: number): void {

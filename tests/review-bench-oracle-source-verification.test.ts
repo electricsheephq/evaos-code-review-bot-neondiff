@@ -403,7 +403,14 @@ describe("Review Bench live oracle-source verification", () => {
       signals: {
         timeline?: unknown[];
         comments?: unknown[];
+        reviewComments?: unknown[];
+        reviews?: unknown[];
         nextPage?: boolean;
+        reviewCommentsNextPage?: boolean;
+        reviewsNextPage?: boolean;
+        pullCommitsNextPage?: boolean;
+        pullCommitShas?: string[];
+        sourceHead?: string;
         currentHead?: string;
         serverDate?: string;
       } = {}
@@ -424,8 +431,32 @@ describe("Review Bench live oracle-source verification", () => {
           title: "Make state transitions atomic",
           merged_at: mergedAt,
           merge_commit_sha: mergeCommitSha,
-          head: { sha: item.sourceRevision },
+          head: { sha: signals.sourceHead ?? item.sourceRevision },
           base: { ref: "main", repo: { full_name: "example/alpha" } }
+        });
+      }
+      if (url.pathname === "/repos/example/alpha/pulls/7/commits") {
+        return Response.json(
+          (signals.pullCommitShas ?? [item.sourceRevision]).map((sha) => ({ sha })),
+          {
+            headers: signals.pullCommitsNextPage
+              ? { link: '<https://api.github.com/next>; rel="next"' }
+              : undefined
+          }
+        );
+      }
+      if (url.pathname === "/repos/example/alpha/pulls/7/comments") {
+        return Response.json(signals.reviewComments ?? [], {
+          headers: signals.reviewCommentsNextPage
+            ? { link: '<https://api.github.com/next>; rel="next"' }
+            : undefined
+        });
+      }
+      if (url.pathname === "/repos/example/alpha/pulls/7/reviews") {
+        return Response.json(signals.reviews ?? [], {
+          headers: signals.reviewsNextPage
+            ? { link: '<https://api.github.com/next>; rel="next"' }
+            : undefined
         });
       }
       if (url.pathname === "/repos/example/alpha/pulls/8") {
@@ -467,20 +498,29 @@ describe("Review Bench live oracle-source verification", () => {
       return new Response(observationDiff);
     }) as typeof fetch;
 
+    const baselineFetch = fetchWithMergedAt(BASE_DATE);
     const baselineResult = await reverifyReviewBenchCorpusOracleSources({
       corpus: corpus(item),
       semanticEvidenceRecords: [evidence],
-      fetchImpl: fetchWithMergedAt(BASE_DATE)
+      fetchImpl: baselineFetch
     });
     expect(baselineResult).toEqual(expect.objectContaining({
       oracleSourceVerificationSha256: expect.stringMatching(/^[a-f0-9]{64}$/)
     }));
+    const baselineUrls = vi.mocked(baselineFetch).mock.calls.map(([input]) => new URL(String(input)));
+    expect(baselineUrls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pathname: "/repos/example/alpha/pulls/7/comments",
+        search: `?per_page=100&since=${encodeURIComponent(BASE_DATE)}`
+      })
+    ]));
     const advancedResult = await reverifyOracleSourcesWithAdmission({
       corpus: corpus(item),
       semanticEvidenceRecords: [evidence],
       admittedAt: "2026-08-12T00:00:00.000Z",
       fetchImpl: fetchWithMergedAt(BASE_DATE, "Routine maintenance", {
         currentHead: "f".repeat(40),
+        sourceHead: "9".repeat(40),
         serverDate: "Wed, 12 Aug 2026 00:00:00 GMT",
         comments: [{
           id: 11,
@@ -526,6 +566,58 @@ describe("Review Bench live oracle-source verification", () => {
         }]
       })
     })).rejects.toThrow("post-merge corrective discussion");
+    await expect(reverifyReviewBenchCorpusOracleSources({
+      corpus: corpus(item),
+      semanticEvidenceRecords: [evidence],
+      fetchImpl: fetchWithMergedAt(BASE_DATE, "Routine maintenance", {
+        reviewComments: [{
+          id: 12,
+          created_at: "2026-06-02T00:00:00Z",
+          updated_at: "2026-06-02T00:00:00Z",
+          body: "This regressed the state transition and needs a fix."
+        }]
+      })
+    })).rejects.toThrow("post-merge corrective review discussion");
+    await expect(reverifyReviewBenchCorpusOracleSources({
+      corpus: corpus(item),
+      semanticEvidenceRecords: [evidence],
+      fetchImpl: fetchWithMergedAt(BASE_DATE, "Routine maintenance", {
+        reviews: [{
+          id: 13,
+          submitted_at: "2026-06-02T00:00:00Z",
+          state: "COMMENTED",
+          body: "A regression remains and needs a hotfix."
+        }]
+      })
+    })).rejects.toThrow("post-merge corrective review summary");
+    await expect(reverifyReviewBenchCorpusOracleSources({
+      corpus: corpus(item),
+      semanticEvidenceRecords: [evidence],
+      fetchImpl: fetchWithMergedAt(BASE_DATE, "Routine maintenance", {
+        reviewCommentsNextPage: true
+      })
+    })).rejects.toThrow("clean source PR review comments: scenario-clean_adjudication exceeds");
+    await expect(reverifyReviewBenchCorpusOracleSources({
+      corpus: corpus(item),
+      semanticEvidenceRecords: [evidence],
+      fetchImpl: fetchWithMergedAt(BASE_DATE, "Routine maintenance", {
+        reviewsNextPage: true
+      })
+    })).rejects.toThrow("clean source PR reviews: scenario-clean_adjudication exceeds");
+    await expect(reverifyReviewBenchCorpusOracleSources({
+      corpus: corpus(item),
+      semanticEvidenceRecords: [evidence],
+      fetchImpl: fetchWithMergedAt(BASE_DATE, "Routine maintenance", {
+        pullCommitShas: ["1".repeat(40), "2".repeat(40)]
+      })
+    })).rejects.toThrow("final PR commit does not equal sourceRevision");
+    await expect(reverifyReviewBenchCorpusOracleSources({
+      corpus: corpus(item),
+      semanticEvidenceRecords: [evidence],
+      fetchImpl: fetchWithMergedAt(BASE_DATE, "Routine maintenance", {
+        pullCommitsNextPage: true
+      })
+    })).rejects.toThrow("clean source PR commits: scenario-clean_adjudication exceeds");
     await expect(reverifyReviewBenchCorpusOracleSources({
       corpus: corpus(item),
       semanticEvidenceRecords: [evidence],

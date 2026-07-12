@@ -74,12 +74,18 @@ observation checkpoint is itself a separately pinned later PR merge into the
 same default branch. Admission proves its merge commit and the current head are
 on the source merge's lineage, exhaustively binds at most 250 source-to-checkpoint
 commits, rejects linked corrective commit messages, and checks one complete
-100-event PR timeline page plus one complete 100-comment post-merge page for
-cross-referenced or discussed regressions, hotfixes, and reverts. Evidence and
+100-event PR timeline page plus complete bounded pages for issue comments,
+inline review comments, and top-level review summaries for cross-referenced or
+discussed regressions, hotfixes, and reverts. The source PR identity is bound by
+the same exhaustive at-most-100 commit list used by provenance verification;
+mutable branch-head metadata is not evidence. Evidence and
 human decisions must predate admission, and clean decisions must follow the
 observation cutoff. Comment creation and update times are both checked, so an
 edited pre-merge comment cannot hide post-merge corrective discussion. More
-history or paginated signal evidence fails closed.
+history or paginated signal evidence fails closed. A deletion-only clean
+control may have an empty frozen line-candidate universe; it contributes to
+artifact-semantics agreement but cannot pad candidate-level actionability
+agreement.
 These are bounded negative-signal checks plus blinded human review; they do not
 prove that a latent or unlinked defect is impossible.
 
@@ -127,6 +133,8 @@ upstream GitHub diffs.
 - Gold paths are canonical repository-relative paths.
 - Gold lines are final/new-side context or added lines in the verified diff.
   Deletion-only lines cannot be gold anchors.
+- Canonical old-side paths from deletion-only hunks count as changed-language
+  evidence, while remaining ineligible as final-side gold or candidate anchors.
 - Candidate severity may differ from gold severity by at most one tier.
 - Same-path line delta zero is exact; line delta one through three is the
   intentional nearby-location tolerance.

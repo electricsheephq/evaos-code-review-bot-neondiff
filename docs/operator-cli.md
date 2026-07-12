@@ -137,8 +137,10 @@ evaos-review-bot status --config config.local.json
   verifies later-fix/revert/test-transition commits and ancestry, exact-head
   one-label review comments, and >=30-day merged-default-branch clean-control
   observation records whose cutoff is a pinned later PR merge, with bounded
-  source-to-checkpoint lineage, PR-timeline, and post-merge discussion checks.
-  More than 250 fixed-window commits or paginated timeline/comment
+  source-to-checkpoint lineage, PR-timeline, issue-comment, inline-review-comment,
+  and top-level-review-summary checks. Public repository/source/license proof
+  runs before any oracle comment or timeline request. More than 250 fixed-window
+  commits or paginated timeline/comment/review
   evidence fails closed. Finally it
   live-reverifies the repository,
   commit revisions, or closed-and-merged PR whose bounded exhaustive PR-commit
@@ -147,7 +149,8 @@ evaos-review-bot status --config config.local.json
   GitHub. Every defect gold label
   must identify a canonical repository-relative path and a final-revision
   (new-side) context or added line inside a verified diff hunk; deletion-only
-  lines are not valid Corpus v1 anchors. Each declared language must match at
+  lines are not valid Corpus v1 anchors, but a canonical deleted old-side path
+  still counts as changed-language evidence. Each declared language must match at
   least one changed source-file path in the verified diff before it contributes
   to the receipt's diversity count. Bug families are canonical regression
   taxonomy categories and cannot cross splits. Corpus v1 also fails closed on Git

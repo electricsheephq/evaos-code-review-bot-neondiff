@@ -320,7 +320,7 @@ async function verifySourceMetadata(
     }
     const commitShas = commitsValue.map((value, index) => {
       const commit = requireRecord(value, `GitHub pull request commits[${index}]`);
-      if (typeof commit.sha !== "string" || !/^[a-f0-9]{40,64}$/.test(commit.sha)) {
+      if (typeof commit.sha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit.sha)) {
         throw new Error(`GitHub pull request commits[${index}].sha must be an immutable revision`);
       }
       return commit.sha;

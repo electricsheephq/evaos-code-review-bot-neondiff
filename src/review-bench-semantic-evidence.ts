@@ -9,11 +9,11 @@ import type { Severity } from "./types.js";
 
 export const REVIEW_BENCH_ORACLE_EVIDENCE_VERSION = "review-bench-oracle-evidence/v2" as const;
 export const REVIEW_BENCH_SEMANTIC_EVIDENCE_VERIFIER_VERSION =
-  "review-bench-semantic-admission/v2" as const;
+  "review-bench-semantic-admission/v3" as const;
 export const REVIEW_BENCH_ADJUDICATION_AGREEMENT_VERSION =
-  "review-bench-adjudication-agreement/v2" as const;
+  "review-bench-adjudication-agreement/v3" as const;
 export const REVIEW_BENCH_CANDIDATE_ACTIONABILITY_VERSION =
-  "review-bench-candidate-actionability/v1" as const;
+  "review-bench-candidate-actionability/v2" as const;
 export const REVIEW_BENCH_MAX_ORACLE_EVIDENCE_BYTES = 1024 * 1024;
 
 export type ReviewBenchEvidenceRelation =
@@ -362,7 +362,24 @@ export function bindReviewBenchCandidateAgreement(
     }
     return { path: item.path, line: item.line };
   }).sort((a, b) => compareFixed(a.path, b.path) || a.line - b.line);
-  if (lines.length === 0) throw new Error(`line-actionability universe is empty: ${record.scenarioId}`);
+  if (lines.length === 0) {
+    if (record.primaryVerdict !== "verified_clean" || record.secondaryVerdict !== "verified_clean" ||
+        record.annotationUniverse.candidates.length !== 0 || record.labelAgreement.length !== 0) {
+      throw new Error(`line-actionability universe is empty: ${record.scenarioId}`);
+    }
+    return {
+      ...record,
+      candidateAgreement: {
+        version: REVIEW_BENCH_CANDIDATE_ACTIONABILITY_VERSION,
+        candidateUniverseSha256: sha256(new TextEncoder().encode(stableJson([]))),
+        candidateUnitCount: 0,
+        bothActionableCount: 0,
+        primaryOnlyCount: 0,
+        secondaryOnlyCount: 0,
+        neitherCount: 0
+      }
+    };
+  }
   const lineKeys = new Set<string>();
   for (const line of lines) {
     const key = stableJson(line);
