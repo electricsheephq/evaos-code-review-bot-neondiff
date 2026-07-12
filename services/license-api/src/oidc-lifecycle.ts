@@ -119,11 +119,9 @@ function validateLifecycleClaims(payload: JWTPayload, now: Date): LifecycleOidcC
     throw new Error("OIDC timestamp claims are invalid");
   }
   const iat = payload.iat as number;
-  const nbf = payload.nbf as number;
   const exp = payload.exp as number;
   const nowSeconds = Math.floor(now.getTime() / 1000);
   if (iat > nowSeconds + 5 || nowSeconds - iat > 300) throw new Error("OIDC iat is outside the allowed window");
-  if (nbf < iat - 5 || nbf > iat + 5) throw new Error("OIDC nbf is outside the allowed window");
   if (exp <= iat || exp - iat > 300) throw new Error("OIDC exp is outside the allowed window");
   return payload as LifecycleOidcClaims;
 }

@@ -306,6 +306,18 @@ describe("GitHub Actions OIDC verifier", () => {
     assert.equal(claims.run_id, "123456789");
   });
 
+  it("accepts GitHub's documented backdated nbf while enforcing a fresh iat", async () => {
+    const material = await signingMaterial("key-backdated-nbf");
+    keys = [material.jwk];
+    const verifier = createGitHubActionsOidcVerifier({ jwksUrl, now: () => NOW, cooldownDuration: 0 });
+    const now = Math.floor(NOW.getTime() / 1000);
+    const claims = await verifier.verify(
+      await sign(material.privateKey, "key-backdated-nbf", { nbf: now - 600 })
+    );
+    assert.equal(claims.iat, now);
+    assert.equal(claims.nbf, now - 600);
+  });
+
   it("rejects every mismatched protected-workflow claim and false ref protection", async () => {
     const material = await signingMaterial("key-claims");
     keys = [material.jwk];
