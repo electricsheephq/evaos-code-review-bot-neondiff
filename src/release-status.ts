@@ -1307,7 +1307,7 @@ function validateMandatoryActivationProofPath(input: {
     }
     if (scenario.expected !== expectedOutcome) failures.push(`matrix.${id}.expected must be ${expectedOutcome}`);
     if (scenario.actual !== expectedOutcome) failures.push(`matrix.${id}.actual must be ${expectedOutcome}`);
-    const expectedVisibility = id === "public_active" || id === "public_denied"
+    const expectedVisibility = id === "public_active" || id === "public_denied" || id === "disabled_policy_attempt"
       ? "public"
       : id === "private_active" || id === "private_denied"
         ? "private"

@@ -577,7 +577,14 @@ describe("beta release status", () => {
       { id: "private_active", visibility: "private", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 1, licenseApiCalls: 1 },
       ...deniedScenarioIds.map((id) => ({
         id,
-        visibility: id === "public_denied" ? "public" : id === "private_denied" ? "private" : id === "unknown_repo" ? "unknown" : "not_applicable",
+        visibility:
+          id === "public_denied" || id === "disabled_policy_attempt"
+            ? "public"
+            : id === "private_denied"
+              ? "private"
+              : id === "unknown_repo"
+                ? "unknown"
+                : "not_applicable",
         expected: "denied",
         actual: "denied",
         expectedLicenseApiCalls: ["missing_key", "forged_cache", "disabled_policy_attempt", "dashboard_provider_pre_activation"].includes(id) ? 0 : 1,
@@ -686,6 +693,116 @@ describe("beta release status", () => {
     expect(validManifest.licenseApi.ok).toBe(true);
     expect(validManifest.licenseApi.detail).toContain(`validated mandatory activation proof ${activationProofPath}`);
     expect(validManifest.ok).toBe(true);
+
+    const matrixArtifact = artifacts.find((artifact) => artifact.kind === "no-bypass-matrix")!;
+    const writeSynchronizedMatrixMutation = (
+      mutate: (record: (typeof scenarioRecords)[number]) => (typeof scenarioRecords)[number],
+      duplicateDisabledScenario = false
+    ): void => {
+      let mutatedRecords = scenarioRecords.map((record) =>
+        record.id === "disabled_policy_attempt" ? mutate({ ...record }) : record
+      );
+      if (duplicateDisabledScenario) {
+        mutatedRecords = [
+          ...mutatedRecords,
+          mutate({ ...scenarioRecords.find((record) => record.id === "disabled_policy_attempt")! })
+        ];
+      }
+      const matrixPayload = `${JSON.stringify({
+        evidenceKind: "no-bypass-matrix",
+        releaseVersion: "v1.0.4",
+        candidateHead: sourceHead,
+        packShasum,
+        packIntegrity,
+        harnessRunId,
+        records: mutatedRecords
+      })}\n`;
+      writeFileSync(join(root, matrixArtifact.ref), matrixPayload);
+      const mutatedArtifacts = artifacts.map((artifact) =>
+        artifact.kind === "no-bypass-matrix"
+          ? { ...artifact, sha256: createHash("sha256").update(matrixPayload).digest("hex") }
+          : artifact
+      );
+      writeFileSync(join(root, activationProofPath), JSON.stringify({
+        ...validProof,
+        matrix: {
+          ...validProof.matrix,
+          scenarios: mutatedRecords.map((record) => ({ ...record, resultSha256: digestRecord(record) }))
+        },
+        artifacts: mutatedArtifacts
+      }));
+    };
+
+    for (const visibility of ["not_applicable", "private", "unknown"] as const) {
+      writeSynchronizedMatrixMutation((record) => ({ ...record, visibility }));
+      const invalidVisibility = readPublicReleaseManifestStatus({
+        cwd: root,
+        manifestPath: "public-release.json",
+        expectedVersion: "v1.0.4",
+        now: new Date("2026-07-12T01:00:00.000Z")
+      });
+      expect(invalidVisibility.licenseApi.ok, visibility).toBe(false);
+      expect(invalidVisibility.licenseApi.detail).toContain(
+        "matrix.disabled_policy_attempt.visibility must be public"
+      );
+    }
+
+    const disabledScenarioMutations: Array<{
+      label: string;
+      mutate: (record: (typeof scenarioRecords)[number]) => (typeof scenarioRecords)[number];
+      expectedDetail: string;
+    }> = [
+      {
+        label: "allowed result",
+        mutate: (record) => ({ ...record, actual: "allowed" }),
+        expectedDetail: "matrix.disabled_policy_attempt.actual must be denied"
+      },
+      {
+        label: "expected API call",
+        mutate: (record) => ({ ...record, expectedLicenseApiCalls: 1 }),
+        expectedDetail: "matrix.disabled_policy_attempt.expectedLicenseApiCalls must be 0"
+      },
+      {
+        label: "observed API call",
+        mutate: (record) => ({ ...record, licenseApiCalls: 1 }),
+        expectedDetail: "matrix.disabled_policy_attempt.licenseApiCalls must be 0"
+      }
+    ];
+    for (const mutation of disabledScenarioMutations) {
+      writeSynchronizedMatrixMutation(mutation.mutate);
+      const invalidDisabledScenario = readPublicReleaseManifestStatus({
+        cwd: root,
+        manifestPath: "public-release.json",
+        expectedVersion: "v1.0.4",
+        now: new Date("2026-07-12T01:00:00.000Z")
+      });
+      expect(invalidDisabledScenario.licenseApi.ok, mutation.label).toBe(false);
+      expect(invalidDisabledScenario.licenseApi.detail).toContain(mutation.expectedDetail);
+    }
+
+    writeSynchronizedMatrixMutation((record) => record, true);
+    const duplicateDisabledScenario = readPublicReleaseManifestStatus({
+      cwd: root,
+      manifestPath: "public-release.json",
+      expectedVersion: "v1.0.4",
+      now: new Date("2026-07-12T01:00:00.000Z")
+    });
+    expect(duplicateDisabledScenario.licenseApi.ok).toBe(false);
+    expect(duplicateDisabledScenario.licenseApi.detail).toContain(
+      "matrix.scenarios must have unique named scenarios"
+    );
+
+    const originalMatrixPayload = `${JSON.stringify({
+      evidenceKind: "no-bypass-matrix",
+      releaseVersion: "v1.0.4",
+      candidateHead: sourceHead,
+      packShasum,
+      packIntegrity,
+      harnessRunId,
+      records: scenarioRecords
+    })}\n`;
+    writeFileSync(join(root, matrixArtifact.ref), originalMatrixPayload);
+    writeFileSync(join(root, activationProofPath), JSON.stringify(validProof));
 
     const manifestDocument = JSON.parse(readFileSync(join(root, "public-release.json"), "utf8"));
     manifestDocument.source.candidateHeadBeforeReleaseMetadata = "e".repeat(40);
