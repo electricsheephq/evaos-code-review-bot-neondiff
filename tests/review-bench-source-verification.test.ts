@@ -35,6 +35,19 @@ function sourceDiff(marker: string): Uint8Array {
   ].join("\n"));
 }
 
+function sourceDiffWithUnrelatedDeletion(marker: string): Uint8Array {
+  return new TextEncoder().encode([
+    "diff --git a/src/obsolete.ts b/src/obsolete.ts",
+    "deleted file mode 100644",
+    "index 3333333..0000000",
+    "--- a/src/obsolete.ts",
+    "+++ /dev/null",
+    "@@ -1 +0,0 @@",
+    "-obsolete();",
+    new TextDecoder().decode(sourceDiff(marker))
+  ].join("\n"));
+}
+
 function draftScenario(input: {
   repository: string;
   revision: string;
@@ -426,7 +439,7 @@ describe("Review Bench public-source verification", () => {
     try {
       const artifactsDirectory = join(root, "artifacts");
       mkdirSync(artifactsDirectory);
-      const alphaArtifact = sourceDiff("alpha");
+      const alphaArtifact = sourceDiffWithUnrelatedDeletion("alpha");
       const betaArtifact = sourceDiff("beta");
       const train = await verifiedScenario({
         repository: "example/alpha",
@@ -489,6 +502,7 @@ describe("Review Bench public-source verification", () => {
 
       for (const [name, labelOverride] of [
         ["missing-path", { path: "src/does-not-exist.ts" }],
+        ["deleted-file", { path: "src/obsolete.ts", line: 1 }],
         ["outside-hunk", { line: 999_999 }]
       ] as const) {
         const invalidAnchor = {

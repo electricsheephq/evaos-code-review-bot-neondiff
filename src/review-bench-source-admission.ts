@@ -156,7 +156,7 @@ function parseNewSideUnifiedDiffAnchors(
 ): Map<string, Set<number>> {
   const matchedAnchors = new Map<string, Set<number>>();
   let sawFileHeader = false;
-  let currentPath: string | undefined;
+  let currentPath: string | null | undefined;
   let hunk: {
     oldLine: number;
     newLine: number;
@@ -180,14 +180,20 @@ function parseNewSideUnifiedDiffAnchors(
         if (hunk.oldRemaining < 1 || hunk.newRemaining < 1) {
           throw new Error(`malformed unified diff context line: ${scenarioId}`);
         }
-        recordRequiredAnchor(matchedAnchors, requiredAnchors, currentPath!, hunk.newLine);
+        if (typeof currentPath !== "string") {
+          throw new Error(`deletion-only unified diff hunk contains new-side context: ${scenarioId}`);
+        }
+        recordRequiredAnchor(matchedAnchors, requiredAnchors, currentPath, hunk.newLine);
         hunk.oldLine += 1;
         hunk.newLine += 1;
         hunk.oldRemaining -= 1;
         hunk.newRemaining -= 1;
       } else if (prefix === "+") {
         if (hunk.newRemaining < 1) throw new Error(`malformed unified diff addition: ${scenarioId}`);
-        recordRequiredAnchor(matchedAnchors, requiredAnchors, currentPath!, hunk.newLine);
+        if (typeof currentPath !== "string") {
+          throw new Error(`deletion-only unified diff hunk contains an addition: ${scenarioId}`);
+        }
+        recordRequiredAnchor(matchedAnchors, requiredAnchors, currentPath, hunk.newLine);
         hunk.newLine += 1;
         hunk.newRemaining -= 1;
       } else if (prefix === "-") {
@@ -210,7 +216,7 @@ function parseNewSideUnifiedDiffAnchors(
     if (metadataLine.startsWith("+++ ")) {
       const rawPath = metadataLine.slice(4).split("\t", 1)[0];
       if (rawPath === "/dev/null") {
-        currentPath = undefined;
+        currentPath = null;
         return;
       }
       if (!rawPath.startsWith("b/")) {
@@ -220,7 +226,7 @@ function parseNewSideUnifiedDiffAnchors(
       return;
     }
     if (metadataLine.startsWith("@@")) {
-      if (!currentPath) throw new Error(`unified diff hunk has no new-side path: ${scenarioId}`);
+      if (currentPath === undefined) throw new Error(`unified diff hunk has no new-side path: ${scenarioId}`);
       const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$/.exec(metadataLine);
       if (!match) throw new Error(`malformed unified diff hunk header: ${scenarioId}`);
       const oldLine = Number(match[1]);
@@ -230,6 +236,9 @@ function parseNewSideUnifiedDiffAnchors(
       if (![oldLine, oldRemaining, newLine, newRemaining].every(Number.isSafeInteger) ||
           oldLine < 0 || newLine < 0 || oldRemaining < 0 || newRemaining < 0) {
         throw new Error(`unified diff hunk coordinates are invalid: ${scenarioId}`);
+      }
+      if (currentPath === null && newRemaining !== 0) {
+        throw new Error(`deletion-only unified diff hunk has new-side lines: ${scenarioId}`);
       }
       hunk = { oldLine, newLine, oldRemaining, newRemaining };
       if (oldRemaining === 0 && newRemaining === 0) hunk = undefined;
