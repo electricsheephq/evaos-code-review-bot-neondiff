@@ -20,8 +20,9 @@ for the semver/GA-line and npm dist-tag policy.
   tarball: an absent npm `gitHead` may be replaced only by exact
   package bytes, npm signatures, and Sigstore/SLSA provenance, while
   protected-main, predecessor, quarantine-ownership, and no-republish guards
-  remain fail-closed. Bounded registry reads reconcile ambiguous nonzero
-  promotion results. Promotion and public-install proof remain pending.
+  remain fail-closed. Recovery run 29190031396 completed without republish,
+  converged `latest=1.0.4`, removed the owned quarantine tag, and the public
+  install, API activation, cache no-bypass, and browser-dashboard proof passed.
 
 ## [1.0.4] - docs/releases/v1.0.4.md
 
@@ -36,9 +37,12 @@ for the semver/GA-line and npm dist-tag policy.
 - Require the strict release validator to preserve the public-repository
   visibility exercised by the retired disabled-enforcement/free-public bypass
   scenario.
-- Keep the release metadata truthful as a prepublication candidate until the
-  immutable GitHub Release, npm registry convergence, and installed-package
-  activation smoke complete.
+- Publish a real non-prerelease GitHub Release and immutable npm package, then
+  recover the reviewed-tarball `gitHead` metadata incident through verified
+  provenance without republishing.
+- Verify public install, npm signatures, API-backed activation, cache
+  no-bypass, local dashboard routes, and the installed browser interaction;
+  keep predecessor cleanup and Mac/v1.1 maturity explicitly pending.
 
 ## [1.0.3] - docs/releases/v1.0.3.md
 

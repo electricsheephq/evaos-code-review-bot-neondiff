@@ -12,7 +12,14 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
 - Keep provider credentials out of committed repo config.
 - Keep issue enrichment separate from PR review policy.
 - Keep public confidence uncalibrated until evaluation evidence exists; no percentages are displayed in this draft.
-- Preserve the current NeonDiff public boundary: source-available beta, public open-source repositories are free, and private or commercial repositories require the applicable NeonDiff license.
+- Preserve the current NeonDiff public boundary: source-available beta with
+  mandatory API-backed activation for public, private, internal, and unknown
+  repository work.
+
+The v1.0.4 package-allowlisted schema retains the compatibility label
+`free-source-available-beta` so the published tarball remains reproducible. That
+label does not authorize free review or bypass production activation. [#559](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559)
+tracks the typed rename in the next immutable package.
 
 ## Top-Level Fields
 

@@ -91,7 +91,10 @@ describe("NeonDiff public community funnel", () => {
       "docs/license-boundary.md",
       "docs/pricing.md",
       "docs/SETUP.md",
-      "docs/github-app-setup.md"
+      "docs/github-app-setup.md",
+      "CONTRIBUTING.md",
+      "docs/neondiff-config.md",
+      "docs/teams-marketplace-plan.md"
     ].map(read).join("\n");
     for (const retiredClaim of [
       /public(?: open-source)? repositor(?:y|ies) (?:are|is) free/i,

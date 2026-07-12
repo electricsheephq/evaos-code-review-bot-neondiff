@@ -5,7 +5,7 @@
     "name": "neondiff",
     "version": "1.0.4",
     "requiredForThisRelease": true,
-    "state": "release_candidate",
+    "state": "published",
     "previousReleasedPackageVersion": "1.0.3",
     "skippedPublicPackageVersions": [
       "v0.4.25-beta.1",
@@ -30,12 +30,12 @@
       "v0.4.45-beta.1",
       "v0.4.46-beta.1"
     ],
-    "note": "v1.0.4 is the reviewed CLI/dashboard npm package release candidate for mandatory API-backed activation. Publication and public-registry install proof remain pending; desktop app artifacts are not part of the npm package."
+    "note": "v1.0.4 is the published CLI/dashboard npm package for mandatory API-backed activation. npm latest, provenance recovery, isolated public install, API activation, no-bypass, and installed browser-dashboard proof are recorded in the publication proof; desktop app artifacts are not part of the npm package."
   },
   "source": {
-    "shaState": "pending_tag_stamp",
+    "shaState": "published",
     "candidateHeadBeforeReleaseMetadata": "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
-    "proof": "protected-main candidate 42db7c8ff7dba6ceac813238dcebfb54dc83851f passed mandatory production activation lifecycle run 29185155054; the annotated v1.0.4 tag, GitHub Release, and npm publication remain pending"
+    "proof": "annotated tag object c2dbb0fd69800785028eb42e30e72b2cc648eb3c peels to published release commit fc66d27b6ab9f6a1eb8282d289ef63407cd96982; recovery run 29190031396 promoted the existing immutable package without republish, and this later state stamp does not move the tag"
   },
   "releaseStages": {
     "launchCutLine": "1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not full signed desktop maturity.",
@@ -100,25 +100,21 @@
   "updateChannels": {
     "cli": {
       "requiredForThisRelease": true,
-      "state": "source_checkout",
+      "state": "published",
       "version": "v1.0.4",
-      "rollback": "git reset --hard refs/tags/v1.0.3",
-      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     },
     "daemon": {
       "requiredForThisRelease": true,
-      "state": "source_checkout",
+      "state": "published",
       "version": "v1.0.4",
-      "rollback": "git reset --hard refs/tags/v1.0.3",
-      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     },
     "browserDashboard": {
       "requiredForThisRelease": true,
-      "state": "source_checkout",
+      "state": "published",
       "version": "v1.0.4",
-      "rollback": "git reset --hard refs/tags/v1.0.3",
-      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
-      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     }
   }
 }

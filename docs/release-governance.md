@@ -153,9 +153,10 @@ Before tagging:
    - computed checkout issuance status and, when present, the raw manifest
      declaration that produced it
    - CLI, daemon, website, and desktop update-channel state
-   - rollback command or tracking issue for each required channel
-   - required-channel rollback fields with one source revert command such as
-     `git reset --hard refs/tags/<tag>` or `git revert <sha>`
+   - rollback command for each required channel; when a command does not yet
+     exist, record the owner-gating tracking issue and keep that channel blocked
+   - required source-checkout-channel rollback fields with one source revert
+     command such as `git reset --hard refs/tags/<tag>` or `git revert <sha>`
 7. `git status --short` is clean in the live checkout.
 
 For npm-published releases, confirm the repository or organization Actions
@@ -175,8 +176,11 @@ Node.js 26 for NeonDiff itself. Runner fleets must be on GitHub Actions runner
 that still target the older action runtime are post-launch desktop-release
 hygiene unless they block the current release.
 
-The manifest `rollback` field is intentionally only the source-revert step.
-Full operator rollback runbooks may restart launchd after that source revert,
+The manifest `rollback` field is intentionally only the source-revert step for
+source-checkout channels. It must not be advertised as rollback for an
+npm-published channel because it does not change npm `latest` or installed
+global packages. Full operator rollback runbooks may restart launchd after a
+source revert,
 but restart commands live outside the manifest rollback field. `launchctl
 kickstart` alone is a restart, not a rollback. `git checkout` detaches HEAD or
 resets the working tree; it is not accepted as a release rollback for this
