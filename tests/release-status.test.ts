@@ -329,7 +329,7 @@ describe("beta release status", () => {
     });
 
     expect(manifest).toMatchObject({
-      ok: true,
+      ok: false,
       version: "v1.0.4",
       docs: {
         ok: true,
@@ -351,29 +351,34 @@ describe("beta release status", () => {
         checkoutIssuanceTrackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/421"
       },
       updateChannels: {
-        ok: true
+        ok: false
       }
     });
     expect(manifest.updateChannels.channels).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           name: "cli",
+          ok: false,
           requiredForThisRelease: true,
           state: "published",
-          rollback: "git reset --hard refs/tags/v1.0.3"
+          trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+          detail: "cli state published blocks this release; requiredForThisRelease=true; missing rollback command"
         }),
         expect.objectContaining({
           name: "daemon",
+          ok: false,
           requiredForThisRelease: true,
           state: "published",
-          rollback: "git reset --hard refs/tags/v1.0.3"
+          trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+          detail: "daemon state published blocks this release; requiredForThisRelease=true; missing rollback command"
         }),
         expect.objectContaining({
           name: "browserDashboard",
+          ok: false,
           requiredForThisRelease: true,
           state: "published",
-          rollback: "git reset --hard refs/tags/v1.0.3",
-          rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff"
+          trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+          detail: "browserDashboard state published blocks this release; requiredForThisRelease=true; missing rollback command"
         })
       ])
     );
@@ -1069,23 +1074,23 @@ describe("beta release status", () => {
     });
 
     expect(status.publicRelease).toMatchObject({
-      ok: true,
+      ok: false,
       version: "v1.0.4"
     });
     expect(status.gates).toContainEqual({
       name: "public_update_channels",
-      ok: true,
-      detail: "cli=published; daemon=published; browserDashboard=published"
+      ok: false,
+      detail: "cli=published [BLOCKED]; daemon=published [BLOCKED]; browserDashboard=published [BLOCKED]"
     });
     const redactedOutput = stringifyRedactedJson({
       ...status,
       healthState: status.ok ? "runtime_ok" : "runtime_blocked",
       runtimeOk: status.ok
     });
-    expect(redactedOutput).toContain("git reset --hard refs/tags/v1.0.3");
-    expect(redactedOutput).toContain("cli=published; daemon=published");
+    expect(redactedOutput).not.toContain("git reset --hard refs/tags/v1.0.3");
+    expect(redactedOutput).toContain("cli=published [BLOCKED]; daemon=published [BLOCKED]");
     expect(redactedOutput).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327");
-    expect(redactedOutput).toContain("electricsheephq/evaos-code-review-bot-neondiff/issues/443");
+    expect(redactedOutput).toContain("electricsheephq/evaos-code-review-bot-neondiff/issues/559");
   });
 
   it("fails closed without throwing when collectReleaseStatus receives a missing public manifest path", () => {

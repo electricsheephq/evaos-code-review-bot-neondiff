@@ -69,6 +69,7 @@
       "dashboardProviderStatus": 200,
       "providerMode": "metadata_only",
       "providerResult": "configured_unverified",
+      "providerProofBoundary": "configuration_metadata_only_not_end_to_end_provider_inference",
       "provider": "zcode-glm",
       "redacted": true
     },
@@ -173,9 +174,11 @@
     ]
   },
   "followUps": [
+    "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/537",
     "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/556",
     "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/557",
     "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+    "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/561",
     "https://github.com/electricsheephq/neon-diff-agent-website/issues/45"
   ],
   "proofBoundary": {

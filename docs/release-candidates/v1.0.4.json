@@ -15,6 +15,7 @@
   "activationProofPath": "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
   "publicationProofPath": "docs/evidence/v1.0.4-publication-proof.json",
   "nextImmutablePackageIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+  "reviewSchedulerIsolationIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/561",
   "websiteActivationIssue": "https://github.com/electricsheephq/neon-diff-agent-website/issues/45",
   "packageArtifact": {
     "shasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",

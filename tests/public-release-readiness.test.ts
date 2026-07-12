@@ -242,22 +242,24 @@ describe("NeonDiff public release readiness", () => {
       requiredForThisRelease: true,
       state: "published",
       version: "v1.0.4",
-      rollback: "git reset --hard refs/tags/v1.0.3",
-      rollbackRepository: "electricsheephq/evaos-code-review-bot-neondiff",
-      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     });
     expect(manifest.updateChannels?.cli).toMatchObject({
       requiredForThisRelease: true,
       state: "published",
       version: "v1.0.4",
-      rollback: "git reset --hard refs/tags/v1.0.3"
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     });
     expect(manifest.updateChannels?.daemon).toMatchObject({
       requiredForThisRelease: true,
       state: "published",
       version: "v1.0.4",
-      rollback: "git reset --hard refs/tags/v1.0.3"
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     });
+    for (const channel of ["cli", "daemon", "browserDashboard"]) {
+      expect(manifest.updateChannels?.[channel]).not.toHaveProperty("rollback");
+      expect(manifest.updateChannels?.[channel]).not.toHaveProperty("rollbackRepository");
+    }
     expect(manifest.updateChannels?.website).toBeUndefined();
     expect(manifest.updateChannels?.desktop).toBeUndefined();
 
@@ -320,7 +322,13 @@ describe("NeonDiff public release readiness", () => {
           repoVisibilityScope?: string;
           rawKeyPresentInCommittedProof?: boolean;
         };
-        postactivation?: { dashboardProviderStatus?: number; providerMode?: string; providerResult?: string; redacted?: boolean };
+        postactivation?: {
+          dashboardProviderStatus?: number;
+          providerMode?: string;
+          providerResult?: string;
+          providerProofBoundary?: string;
+          redacted?: boolean;
+        };
         cacheNoBypass?: { diagnosticSource?: string; providerDenied?: boolean; dashboardProviderStatus?: number };
         browser?: { verifyButtonCount?: number; rawLicenseKeyVisible?: boolean; consoleWarnings?: number; consoleErrors?: number };
         artifacts?: Array<{ kind?: string; ref?: string; sha256?: string }>;
@@ -390,15 +398,18 @@ describe("NeonDiff public release readiness", () => {
           dashboardProviderStatus: 200,
           providerMode: "metadata_only",
           providerResult: "configured_unverified",
+          providerProofBoundary: "configuration_metadata_only_not_end_to_end_provider_inference",
           redacted: true
         },
         cacheNoBypass: { diagnosticSource: "cache", providerDenied: true, dashboardProviderStatus: 403 },
         browser: { verifyButtonCount: 1, rawLicenseKeyVisible: false, consoleWarnings: 0, consoleErrors: 0 }
       },
       followUps: [
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/537",
         "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/556",
         "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/557",
         "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/561",
         "https://github.com/electricsheephq/neon-diff-agent-website/issues/45"
       ]
     });
@@ -512,8 +523,10 @@ describe("NeonDiff public release readiness", () => {
 
     const packRoot = mkdtempSync(join(tmpdir(), "neondiff-published-pack-"));
     try {
+      const npmPackArgs = ["pack", "--json", "--ignore-scripts", "--pack-destination", packRoot];
+      expect(npmPackArgs).toContain("--ignore-scripts");
       const [pack] = JSON.parse(
-        execFileSync("npm", ["pack", "--json", "--pack-destination", packRoot], {
+        execFileSync("npm", npmPackArgs, {
           encoding: "utf8",
           maxBuffer: 5 * 1024 * 1024
         })
@@ -659,7 +672,10 @@ describe("NeonDiff public release readiness", () => {
     expect(JSON.stringify(liveCheckoutProof)).not.toMatch(/cs_live_|evt_|whsec_|nd_live_[A-Za-z0-9]|session_id=|fulfillment_token=|121 South/i);
 
     for (const channel of ["cli", "daemon", "browserDashboard"]) {
-      expect(manifest.updateChannels?.[channel]?.rollback).toBe("git reset --hard refs/tags/v1.0.3");
+      expect(manifest.updateChannels?.[channel]?.rollback).toBeUndefined();
+      expect(manifest.updateChannels?.[channel]?.trackingIssue).toBe(
+        "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
+      );
     }
 
     const desktopProof = JSON.parse(read("docs/evidence/v1.0.3-desktop-startup-smoke.json")) as {
@@ -787,16 +803,17 @@ describe("NeonDiff public release readiness", () => {
     const releaseNotes = read("docs/releases/v1.0.4.md");
 
     for (const heading of [
-      "### Highlights",
-      "### Changes",
-      "### Fixes",
-      "### Breaking / Migration",
-      "### Known Boundaries",
-      "### Release Verification"
+      "## Highlights",
+      "## Changes",
+      "## Fixes",
+      "## Breaking / Migration",
+      "## Known Boundaries",
+      "## Release Verification"
     ]) {
       expect(releaseNotes).toContain(heading);
     }
-    expect(releaseNotes.indexOf("### Highlights")).toBeLessThan(releaseNotes.indexOf("### Release Verification"));
+    expect(releaseNotes.indexOf("## Highlights")).toBeLessThan(releaseNotes.indexOf("## Release Verification"));
+    expect(releaseNotes).toMatch(/metadata_only\/configured_unverified[\s\S]*not end-to-end provider inference/i);
     expect(releaseNotes).not.toMatch(/^## (?:Publication And Recovery|Installed Public Package Proof|Production And Current-Head Proof)$/m);
   });
 

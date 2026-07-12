@@ -102,23 +102,19 @@
       "requiredForThisRelease": true,
       "state": "published",
       "version": "v1.0.4",
-      "rollback": "git reset --hard refs/tags/v1.0.3",
-      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     },
     "daemon": {
       "requiredForThisRelease": true,
       "state": "published",
       "version": "v1.0.4",
-      "rollback": "git reset --hard refs/tags/v1.0.3",
-      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff"
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     },
     "browserDashboard": {
       "requiredForThisRelease": true,
       "state": "published",
       "version": "v1.0.4",
-      "rollback": "git reset --hard refs/tags/v1.0.3",
-      "rollbackRepository": "electricsheephq/evaos-code-review-bot-neondiff",
-      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/443"
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
     }
   }
 }
