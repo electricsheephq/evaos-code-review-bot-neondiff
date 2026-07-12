@@ -94,6 +94,9 @@ async function verifyCommitOracle(
     revision,
     `oracle commit ancestry: ${scenario.scenarioId}`
   );
+  if (Date.parse(observedAt) < Date.parse(comparison.baseCommittedAt)) {
+    throw new Error(`oracle commit predates the reviewed revision: ${scenario.scenarioId}`);
+  }
   const diffBytes = await fetchBytes(
     fetchImpl,
     new URL(`https://github.com/${repository}/commit/${revision}.diff`),

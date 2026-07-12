@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { ReviewBenchScenarioV1 } from "../src/review-bench-corpus.js";
 import {
-  bindReviewBenchLineAgreement,
+  bindReviewBenchCandidateAgreement,
   computeReviewBenchGoldLabelsSha256,
   computeReviewBenchAdjudicationAgreement,
   computeReviewBenchSemanticEvidenceSha256,
@@ -501,14 +501,29 @@ describe("Review Bench oracle evidence v2", () => {
     expect(computeReviewBenchSemanticEvidenceSha256(records)).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("does not turn non-candidate diff lines into unanimous actionability votes", () => {
+    const defect = bindEvidence(scenario());
+    const record = verifyReviewBenchOracleEvidence(defect.scenario, defect.bytes);
+    const bound = bindReviewBenchCandidateAgreement(record, [
+      { path: "src/state.ts", line: 9 },
+      { path: "src/state.ts", line: 10 },
+      { path: "src/state.ts", line: 11 }
+    ]);
+    expect(bound.candidateAgreement).toEqual(expect.objectContaining({
+      candidateUnitCount: 1,
+      bothActionableCount: 1,
+      neitherCount: 0
+    }));
+  });
+
   it("computes and enforces the preregistered adjudication agreement floors", () => {
     const defect = bindEvidence(scenario());
     const clean = bindEvidence(scenario({ control: true }));
-    const defectRecord = bindReviewBenchLineAgreement(
+    const defectRecord = bindReviewBenchCandidateAgreement(
       verifyReviewBenchOracleEvidence(defect.scenario, defect.bytes),
       [{ path: "src/state.ts", line: 10 }]
     );
-    const cleanRecord = bindReviewBenchLineAgreement(
+    const cleanRecord = bindReviewBenchCandidateAgreement(
       verifyReviewBenchOracleEvidence(clean.scenario, clean.bytes),
       [{ path: "src/state.ts", line: 10 }]
     );
@@ -548,9 +563,9 @@ describe("Review Bench oracle evidence v2", () => {
     expect(() => computeReviewBenchAdjudicationAgreement([
       {
         ...defectRecord,
-        lineAgreement: {
-          ...defectRecord.lineAgreement!,
-          lineUnitCount: 10,
+        candidateAgreement: {
+          ...defectRecord.candidateAgreement!,
+          candidateUnitCount: 10,
           bothActionableCount: 9,
           primaryOnlyCount: 1,
           secondaryOnlyCount: 0,

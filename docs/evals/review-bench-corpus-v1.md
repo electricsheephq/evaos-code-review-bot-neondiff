@@ -86,19 +86,18 @@ prove that a latent or unlinked defect is impossible.
 Rubric and adjudication protocol are separate digest-named Markdown artifacts,
 each versioned in its first heading and hash-bound to the corpus and evidence.
 Canonical ASCII human adjudicator identities close Unicode/case aliasing.
-Admission computes actionability Cohen's kappa over the complete eligible
-final-side line universe of each verified diff. Frozen candidates and both
-adjudicators' decisions are projected onto that independently derived universe;
-unproposed lines count as jointly non-actionable, so candidate padding or silence
-cannot choose the denominator. Admission separately computes
+Admission computes actionability Cohen's kappa over the complete frozen
+candidate universe that both adjudicators explicitly rated. Verified final-side
+diff lines constrain where a candidate may exist, but unproposed lines do not
+manufacture unanimous negative votes or change the denominator. Admission separately computes
 one-unit-per-scenario artifact-semantics kappa for defect-versus-clean verdicts.
 It records both 2x2 marginal tables, rather than mixing clean scenarios with
 label units. Severity-within-one-tier agreement is computed only where both
 adjudicators marked a candidate actionable. Admission fails below 0.70, 0.70,
 and 0.85 respectively. The publication receipt gate additionally requires at
 least 150 scenarios, 125 defects, 25 clean controls, 30 P0/P1 gold labels, six
-artifact-verified languages, ten repositories, 150 eligible line units, 25
-unanimously actionable line units, and 25 unanimously rejected line units. Small draft receipts are valid intake
+artifact-verified defect languages, ten repositories, 150 frozen candidates, 25
+unanimously actionable candidates, and 25 unanimously rejected candidates. Small draft receipts are valid intake
 evidence but cannot pass the publication comparator or support a reliability
 claim.
 

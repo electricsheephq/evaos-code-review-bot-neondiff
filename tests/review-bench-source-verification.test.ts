@@ -553,6 +553,36 @@ describe("Review Bench public-source verification", () => {
     expect(() => validateReviewBenchCorpus(corpus)).not.toThrow();
   });
 
+  it("binds commit source metadata to the verified repository identity", async () => {
+    const artifact = sourceDiff("shared-commit");
+    const revision = "a".repeat(40);
+    const alpha = draftScenario({
+      repository: "example/alpha",
+      revision,
+      artifact,
+      split: "train"
+    });
+    const beta = draftScenario({
+      repository: "example/beta",
+      revision,
+      artifact,
+      split: "train"
+    });
+    const alphaRecord = await verifyGitHubReviewBenchSource({
+      scenario: alpha,
+      sourceArtifact: artifact,
+      fetchImpl: githubFetch({ sourceArtifact: artifact }),
+      verifiedAt: VERIFIED_AT
+    });
+    const betaRecord = await verifyGitHubReviewBenchSource({
+      scenario: beta,
+      sourceArtifact: artifact,
+      fetchImpl: githubFetch({ sourceArtifact: artifact }),
+      verifiedAt: VERIFIED_AT
+    });
+    expect(alphaRecord.sourceMetadataSha256).not.toBe(betaRecord.sourceMetadataSha256);
+  });
+
   it("rejects private repositories, license mismatches, and artifact hash mismatches", async () => {
     const artifact = new TextEncoder().encode("alpha diff");
     const draft = draftScenario({
@@ -939,11 +969,11 @@ describe("Review Bench public-source verification", () => {
         oracleSourceVerificationSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         adjudicationAgreementVersion: "review-bench-adjudication-agreement/v2",
         adjudicationScenarioCount: 2,
-        actionabilityItemCount: 4,
+        actionabilityItemCount: 2,
         actionabilityBothActionableCount: 1,
         actionabilityPrimaryOnlyCount: 0,
         actionabilitySecondaryOnlyCount: 0,
-        actionabilityNeitherCount: 3,
+        actionabilityNeitherCount: 1,
         actionabilityKappa: 1,
         artifactBothDefectCount: 1,
         artifactPrimaryOnlyDefectCount: 0,

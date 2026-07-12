@@ -12,8 +12,8 @@ export const REVIEW_BENCH_SEMANTIC_EVIDENCE_VERIFIER_VERSION =
   "review-bench-semantic-admission/v2" as const;
 export const REVIEW_BENCH_ADJUDICATION_AGREEMENT_VERSION =
   "review-bench-adjudication-agreement/v2" as const;
-export const REVIEW_BENCH_LINE_ACTIONABILITY_VERSION =
-  "review-bench-line-actionability/v1" as const;
+export const REVIEW_BENCH_CANDIDATE_ACTIONABILITY_VERSION =
+  "review-bench-candidate-actionability/v1" as const;
 export const REVIEW_BENCH_MAX_ORACLE_EVIDENCE_BYTES = 1024 * 1024;
 
 export type ReviewBenchEvidenceRelation =
@@ -123,7 +123,7 @@ export interface ReviewBenchSemanticEvidenceRecord {
   cleanObservation?: ReviewBenchCleanObservationV1;
   primaryVerdict: ReviewBenchArtifactSemantics;
   secondaryVerdict: ReviewBenchArtifactSemantics;
-  lineAgreement?: ReviewBenchLineAgreementV1;
+  candidateAgreement?: ReviewBenchCandidateAgreementV1;
   labelAgreement: Array<{
     labelId: string;
     primaryActionability: ReviewBenchLabelDecisionV1["actionability"];
@@ -133,10 +133,10 @@ export interface ReviewBenchSemanticEvidenceRecord {
   }>;
 }
 
-export interface ReviewBenchLineAgreementV1 {
-  version: typeof REVIEW_BENCH_LINE_ACTIONABILITY_VERSION;
-  lineUniverseSha256: string;
-  lineUnitCount: number;
+export interface ReviewBenchCandidateAgreementV1 {
+  version: typeof REVIEW_BENCH_CANDIDATE_ACTIONABILITY_VERSION;
+  candidateUniverseSha256: string;
+  candidateUnitCount: number;
   bothActionableCount: number;
   primaryOnlyCount: number;
   secondaryOnlyCount: number;
@@ -183,15 +183,15 @@ export function computeReviewBenchAdjudicationAgreement(
     else if (primaryDefect) artifactPrimaryOnlyDefectCount += 1;
     else if (secondaryDefect) artifactSecondaryOnlyDefectCount += 1;
     else artifactBothCleanCount += 1;
-    const lineAgreement = record.lineAgreement;
-    if (!lineAgreement || lineAgreement.version !== REVIEW_BENCH_LINE_ACTIONABILITY_VERSION) {
-      throw new Error(`missing line-actionability evidence: ${record.scenarioId}`);
+    const candidateAgreement = record.candidateAgreement;
+    if (!candidateAgreement || candidateAgreement.version !== REVIEW_BENCH_CANDIDATE_ACTIONABILITY_VERSION) {
+      throw new Error(`missing candidate-actionability evidence: ${record.scenarioId}`);
     }
-    actionabilityItemCount += lineAgreement.lineUnitCount;
-    actionabilityBothActionableCount += lineAgreement.bothActionableCount;
-    actionabilityPrimaryOnlyCount += lineAgreement.primaryOnlyCount;
-    actionabilitySecondaryOnlyCount += lineAgreement.secondaryOnlyCount;
-    actionabilityNeitherCount += lineAgreement.neitherCount;
+    actionabilityItemCount += candidateAgreement.candidateUnitCount;
+    actionabilityBothActionableCount += candidateAgreement.bothActionableCount;
+    actionabilityPrimaryOnlyCount += candidateAgreement.primaryOnlyCount;
+    actionabilitySecondaryOnlyCount += candidateAgreement.secondaryOnlyCount;
+    actionabilityNeitherCount += candidateAgreement.neitherCount;
     for (const label of record.labelAgreement) {
       if (label.primaryActionability === "actionable" &&
           label.secondaryActionability === "actionable" &&
@@ -348,12 +348,12 @@ export function computeReviewBenchSemanticEvidenceSha256(
   return sha256(new TextEncoder().encode(stableJson(sorted)));
 }
 
-export function bindReviewBenchLineAgreement(
+export function bindReviewBenchCandidateAgreement(
   record: ReviewBenchSemanticEvidenceRecord,
   eligibleLines: ReadonlyArray<{ path: string; line: number }>
 ): ReviewBenchSemanticEvidenceRecord {
-  if (record.lineAgreement !== undefined) {
-    throw new Error(`line-actionability evidence is already bound: ${record.scenarioId}`);
+  if (record.candidateAgreement !== undefined) {
+    throw new Error(`candidate-actionability evidence is already bound: ${record.scenarioId}`);
   }
   const lines = eligibleLines.map((item, index) => {
     requireCanonicalPath(item.path, `eligibleLines[${index}].path`);
@@ -374,6 +374,7 @@ export function bindReviewBenchLineAgreement(
   );
   const primaryActionable = new Set<string>();
   const secondaryActionable = new Set<string>();
+  const candidateUnits: string[] = [];
   for (const agreement of record.labelAgreement) {
     const candidate = candidateById.get(agreement.labelId);
     if (!candidate) throw new Error(`annotation candidate is missing from its universe: ${agreement.labelId}`);
@@ -381,16 +382,17 @@ export function bindReviewBenchLineAgreement(
     if (!lineKeys.has(key)) {
       throw new Error(`annotation candidate is outside the line-actionability universe: ${agreement.labelId}`);
     }
-    if (agreement.primaryActionability === "actionable") primaryActionable.add(key);
-    if (agreement.secondaryActionability === "actionable") secondaryActionable.add(key);
+    candidateUnits.push(agreement.labelId);
+    if (agreement.primaryActionability === "actionable") primaryActionable.add(agreement.labelId);
+    if (agreement.secondaryActionability === "actionable") secondaryActionable.add(agreement.labelId);
   }
   let bothActionableCount = 0;
   let primaryOnlyCount = 0;
   let secondaryOnlyCount = 0;
   let neitherCount = 0;
-  for (const key of lineKeys) {
-    const primary = primaryActionable.has(key);
-    const secondary = secondaryActionable.has(key);
+  for (const candidateId of candidateUnits) {
+    const primary = primaryActionable.has(candidateId);
+    const secondary = secondaryActionable.has(candidateId);
     if (primary && secondary) bothActionableCount += 1;
     else if (primary) primaryOnlyCount += 1;
     else if (secondary) secondaryOnlyCount += 1;
@@ -398,10 +400,10 @@ export function bindReviewBenchLineAgreement(
   }
   return {
     ...record,
-    lineAgreement: {
-      version: REVIEW_BENCH_LINE_ACTIONABILITY_VERSION,
-      lineUniverseSha256: sha256(new TextEncoder().encode(stableJson(lines))),
-      lineUnitCount: lines.length,
+    candidateAgreement: {
+      version: REVIEW_BENCH_CANDIDATE_ACTIONABILITY_VERSION,
+      candidateUniverseSha256: sha256(new TextEncoder().encode(stableJson(record.annotationUniverse.candidates))),
+      candidateUnitCount: candidateUnits.length,
       bothActionableCount,
       primaryOnlyCount,
       secondaryOnlyCount,

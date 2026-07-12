@@ -226,6 +226,36 @@ describe("Review Bench live oracle-source verification", () => {
     }));
   });
 
+  it("rejects a backdated descendant as later oracle evidence", async () => {
+    const item = scenario();
+    const diff = new TextEncoder().encode(
+      "diff --git a/src/state.ts b/src/state.ts\n--- a/src/state.ts\n+++ b/src/state.ts\n@@ -1 +1 @@\n-old\n+fixed\n"
+    );
+    const evidence = evidenceRecord(item, sha256(diff));
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(`/commits/${item.oracle.sourceRevision}`)) {
+        return Response.json({
+          sha: item.oracle.sourceRevision,
+          commit: { committer: { date: OBSERVED_AT } },
+          parents: [{ sha: "b".repeat(40) }]
+        });
+      }
+      if (url.pathname.includes("/compare/")) {
+        return Response.json(ancestryResponse(item.sourceRevision, item.oracle.sourceRevision, {
+          baseDate: "2026-07-13T00:00:00.000Z"
+        }));
+      }
+      return new Response(diff);
+    }) as typeof fetch;
+
+    await expect(reverifyReviewBenchCorpusOracleSources({
+      corpus: corpus(item),
+      semanticEvidenceRecords: [evidence],
+      fetchImpl
+    })).rejects.toThrow("oracle commit predates the reviewed revision");
+  });
+
   it("rejects nonexistent and unrelated later-fix commits", async () => {
     const item = scenario();
     const diff = new TextEncoder().encode("fix diff");

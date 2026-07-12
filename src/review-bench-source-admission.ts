@@ -26,7 +26,7 @@ import {
   reverifyReviewBenchCorpusPublicSources
 } from "./review-bench-source-verification.js";
 import {
-  bindReviewBenchLineAgreement,
+  bindReviewBenchCandidateAgreement,
   computeReviewBenchAdjudicationAgreement,
   computeReviewBenchSemanticEvidenceSha256,
   REVIEW_BENCH_ADJUDICATION_AGREEMENT_VERSION,
@@ -156,7 +156,7 @@ export async function runReviewBenchSourceAdmission(input: {
       semanticRecord.annotationUniverse.candidates,
       diff
     );
-    semanticRecords.push(bindReviewBenchLineAgreement(semanticRecord, eligibleLines));
+    semanticRecords.push(bindReviewBenchCandidateAgreement(semanticRecord, eligibleLines));
 
     for (const [kind, version, digest, suffix] of [
       [

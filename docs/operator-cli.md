@@ -128,9 +128,10 @@ evaos-review-bot status --config config.local.json
   reconciled cases to the exact reviewed artifact. A versioned, protocol-hash-
   bound annotation universe is frozen first; every candidate must be final-side
   diff-grounded and both adjudicators must rate it, including rejected
-  candidates. It projects those decisions onto the complete eligible final-side
-  line universe derived from the verified diff and computes line-level
-  actionability kappa >= 0.70,
+  candidates. Verified final-side lines constrain candidate grounding but do
+  not create automatic negative votes; the complete frozen candidate universe
+  is the actionability denominator. It computes candidate-level actionability
+  kappa >= 0.70,
   separate scenario-level defect/clean verdict kappa >= 0.70, and
   severity-within-one-tier agreement >= 0.85. It then live-
   verifies later-fix/revert/test-transition commits and ancestry, exact-head
@@ -170,8 +171,8 @@ evaos-review-bot status --config config.local.json
   source/agreement claims, including 2x2 agreement marginals and corpus
   composition counts. The publication comparator rejects fewer than 150 total
   scenarios, 125 defects, 25 clean controls, 30 P0/P1 gold labels, six verified
-  languages, ten repositories, 150 eligible line units, 25 unanimous actionable
-  line units, or 25 unanimous rejections; smaller receipts remain non-public
+  defect languages, ten repositories, 150 frozen candidates, 25 unanimous actionable
+  candidates, or 25 unanimous rejections; smaller receipts remain non-public
   intake evidence only. CI also requires `corpus.json`, `source-artifacts/`, and
   `admission-receipt.json` to be all present or all absent.
   A GitHub token is attached only to `api.github.com`; source diffs and raw

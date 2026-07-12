@@ -360,7 +360,11 @@ async function verifySourceMetadata(
   if (record.sha !== scenario.sourceRevision) {
     throw new Error("GitHub commit metadata sha does not equal sourceRevision");
   }
-  return sha256(stableJson({ kind: scenario.provenance.kind, sha: record.sha }));
+  return sha256(stableJson({
+    kind: scenario.provenance.kind,
+    repository,
+    sha: record.sha
+  }));
 }
 
 async function verifyRevisionLicense(
