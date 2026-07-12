@@ -120,6 +120,7 @@ describe("NeonDiff public release readiness", () => {
       releaseCommit?: string;
       githubReleaseUrl?: string;
       publishRunUrl?: string;
+      proofBoundaryPhase?: string;
       packageArtifact?: { shasum?: string; integrity?: string };
       registry?: { state?: string; gitHeadState?: string; latest?: string; releaseCandidate?: string };
       proofBoundary?: { allowed?: string[]; forbidden?: string[] };
@@ -135,6 +136,7 @@ describe("NeonDiff public release readiness", () => {
       releaseCommit: "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
       githubReleaseUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.4",
       publishRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185873762",
+      proofBoundaryPhase: "pre_recovery",
       proofRunUrl: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/29185155054",
       activationProofPath:
         "docs/evidence/v1.0.4/mandatory-activation-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
@@ -700,6 +702,32 @@ describe("NeonDiff public release readiness", () => {
     expect(publishStepHeader).toMatch(/WORKFLOW_REF:\s*\$\{\{\s*github\.workflow_ref\s*\}\}/);
     expect(publishStepHeader).toMatch(/WORKFLOW_SHA:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
     expect(publish).toMatch(/verify-recovery-dispatch/);
+    expect(publish).toMatch(/gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/);
+    const mutationGateStart = publish.indexOf("BEGIN V104_PROVENANCE_RECOVERY_MUTATION_GATE");
+    const recoveryMainFetch = publish.indexOf(
+      "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+      mutationGateStart
+    );
+    expect(recoveryMainFetch).toBeGreaterThan(mutationGateStart);
+    expect(recoveryMainFetch).toBeLessThan(
+      publish.indexOf('RECOVERY_RELEASE_METADATA_PATH="$RUNNER_TEMP/recovery-release-metadata.json"')
+    );
+    expect(publish).toMatch(/RECOVERY_MAIN_SHA="\$\(git rev-parse refs\/remotes\/origin\/main\)"/);
+    expect(publish).toMatch(/--main-sha "\$RECOVERY_MAIN_SHA"/);
+    expect(publish.indexOf('RECOVERY_RELEASE_METADATA_PATH="$RUNNER_TEMP/recovery-release-metadata.json"')).toBeGreaterThan(
+      mutationGateStart
+    );
+    expect(publish.indexOf('RECOVERY_RELEASE_METADATA_PATH="$RUNNER_TEMP/recovery-release-metadata.json"')).toBeLessThan(
+      publish.indexOf('node "$POLICY_SCRIPT" verify-recovery-dispatch')
+    );
+    expect(publish).toMatch(/--release-valid "\$RELEASE_VALID"/);
+    expect(publish).not.toContain("--release-valid true");
+    expect(publish).toMatch(/RECOVERY_PROOF_PATH="\$RUNNER_TEMP\/v1\.0\.4-recovery-dispatch-proof\.json"/);
+    expect(publish).toMatch(/--proof-output "\$RECOVERY_PROOF_PATH"/);
+    expect(publish).toMatch(/--recovery-proof "\$RECOVERY_PROOF_PATH"/);
+    expect(publish.indexOf('--proof-output "$RECOVERY_PROOF_PATH"')).toBeLessThan(
+      publish.indexOf('--recovery-proof "$RECOVERY_PROOF_PATH"')
+    );
     expect(publish).toMatch(/--github-ref "\$GITHUB_REF"/);
     expect(publish).toMatch(/--workflow-ref "\$WORKFLOW_REF"/);
     expect(publish).toMatch(/--workflow-sha "\$WORKFLOW_SHA"/);
@@ -727,6 +755,16 @@ describe("NeonDiff public release readiness", () => {
       publish.indexOf('node "$POLICY_SCRIPT" verify-pack')
     );
     expect(publish.indexOf('npm audit signatures --prefix "$SIGNATURE_VERIFY_ROOT" --json')).toBeLessThan(
+      publish.indexOf("BEGIN V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD")
+    );
+    const prepromotionMainFetch = publish.indexOf(
+      "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+      recoveryMainFetch + 1
+    );
+    expect(prepromotionMainFetch).toBeGreaterThan(
+      publish.indexOf('node "$POLICY_SCRIPT" verify-pack')
+    );
+    expect(prepromotionMainFetch).toBeLessThan(
       publish.indexOf("BEGIN V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD")
     );
     expect(publish).toMatch(/verify-recovery-channels/);

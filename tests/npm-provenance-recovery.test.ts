@@ -98,6 +98,8 @@ describe("v1.0.4 npm provenance recovery workflow", () => {
     writeFileSync(join(root, "scripts", "verify-npm-provenance.mjs"), "throw new Error('tag-root provenance verifier must not execute');\n");
     const state = join(root, "npm-state");
     writeFileSync(state, `LATEST=${JSON.stringify(initialLatest)}\nQUARANTINE=${JSON.stringify(initialQuarantine)}\nCHANNEL_READS=0\nPACKAGE_READS=0\n`);
+    const gitState = join(root, "git-state");
+    writeFileSync(gitState, "FETCHES=0\n");
     const npm = join(bin, "npm");
     writeFileSync(npm, `#!/usr/bin/env bash
 set -euo pipefail
@@ -173,13 +175,44 @@ printf '%s\\n' '{}'
 `, { mode: 0o700 });
     const gh = join(bin, "gh");
     writeFileSync(gh, `#!/usr/bin/env bash
-if [ "\${FAIL_STAGE:-}" = "attestation" ]; then exit 45; fi
-exit 0
+if [ "\${1:-}" = "api" ]; then
+  if [ "\${FAIL_STAGE:-}" = "release-metadata" ]; then exit 45; fi
+  if [ "\${FAIL_STAGE:-}" = "release-metadata-shape" ]; then
+    printf '%s\\n' '{"tag_name":"v1.0.4","draft":true,"prerelease":false}'
+    exit 0
+  fi
+  if [ "\${FAIL_STAGE:-}" = "release-metadata-tag" ]; then
+    printf '%s\\n' '{"tag_name":"v1.0.5","draft":false,"prerelease":false}'
+    exit 0
+  fi
+  if [ "\${FAIL_STAGE:-}" = "release-metadata-prerelease" ]; then
+    printf '%s\\n' '{"tag_name":"v1.0.4","draft":false,"prerelease":true}'
+    exit 0
+  fi
+  printf '%s\\n' '{"tag_name":"v1.0.4","draft":false,"prerelease":false}'
+  exit 0
+fi
+if [ "\${1:-}" = "attestation" ]; then
+  if [ "\${FAIL_STAGE:-}" = "attestation" ]; then exit 45; fi
+  exit 0
+fi
+echo "unexpected gh command: $*" >&2
+exit 46
 `, { mode: 0o700 });
     const git = join(bin, "git");
     writeFileSync(git, `#!/usr/bin/env bash
-if [ "\${1:-}" = "rev-parse" ] && [ "\${2:-}" = "refs/remotes/origin/main" ]; then
-  printf '%s\\n' "\${MAIN_SHA_OVERRIDE:-$GITHUB_SHA}"
+source "$GIT_STATE_FILE"
+if [ "\${1:-}" = "fetch" ]; then
+  FETCHES=$((FETCHES + 1))
+  printf 'FETCHES=%q\\n' "$FETCHES" > "$GIT_STATE_FILE"
+  if [ "\${FAIL_STAGE:-}" = "main-refetch" ]; then exit 45; fi
+  exit 0
+elif [ "\${1:-}" = "rev-parse" ] && [ "\${2:-}" = "refs/remotes/origin/main" ]; then
+  if [ "\${FAIL_STAGE:-}" = "main-advanced-before-promotion" ] && [ "$FETCHES" -ge 2 ]; then
+    printf '%040d\\n' 0 | tr '0' 'b'
+  else
+    printf '%s\\n' "\${MAIN_SHA_OVERRIDE:-$GITHUB_SHA}"
+  fi
 elif [ "\${1:-}" = "rev-list" ] && [ "\${2:-}" = "-n" ] && [ "\${3:-}" = "1" ]; then
   printf '%s\\n' "\${TAG_COMMIT_OVERRIDE:-${releaseCommit}}"
 else
@@ -195,12 +228,14 @@ fi
       bin,
       log,
       state,
+      gitState,
       provenanceVerifier,
       env: {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
         NPM_MUTATION_LOG: log,
         NPM_STATE_FILE: state,
+        GIT_STATE_FILE: gitState,
         FAIL_STAGE: "",
         PROVENANCE_RECOVERY: "true",
         RUNNER_TEMP: root,
@@ -224,7 +259,7 @@ fi
     initialState: { latest?: string; quarantine?: string } = {}
   ) {
     const block = extractBlock("V104_PROVENANCE_RECOVERY_MUTATION_GATE");
-    const { root, bin, log, state, env } = orchestrationHarness(
+    const { root, bin, log, state, gitState, env } = orchestrationHarness(
       initialState.latest ?? "1.0.3",
       initialState.quarantine ?? "1.0.4"
     );
@@ -247,7 +282,8 @@ fi
     return {
       result,
       commands: readFileSync(log, "utf8"),
-      registryState: readFileSync(state, "utf8")
+      registryState: readFileSync(state, "utf8"),
+      gitState: readFileSync(gitState, "utf8")
     };
   }
 
@@ -319,59 +355,64 @@ fi
       ""
     ].join("\n"));
     expect(commands).not.toMatch(/^publish\b/m);
-  });
+  }, 15_000);
 
-  it("leaves every npm mutation command unreachable when an upstream recovery gate fails", () => {
-    const rows: Array<[string, Record<string, string>]> = [
-      ["wrong event", { RELEASE_EVENT_NAME: "release" }],
-      ["wrong protected ref", { GITHUB_REF: "refs/tags/v1.0.4" }],
-      ["wrong workflow ref", { WORKFLOW_REF: "other" }],
-      ["wrong workflow sha", { WORKFLOW_SHA: "b".repeat(40) }],
-      ["stale fetched main sha", { MAIN_SHA_OVERRIDE: "b".repeat(40) }],
-      ["wrong tag", { RELEASE_TAG: "v1.0.5" }],
-      ["wrong tag commit", { TAG_COMMIT_OVERRIDE: "b".repeat(40) }],
-      ["recovery-mode downgrade", { PROVENANCE_RECOVERY: "false" }],
-      ["missing reviewed tarball", { REMOVE_FIXTURE: "tarball" }],
-      ["missing protected-main recovery policy", { REMOVE_FIXTURE: "recovery-policy" }],
-      ["invalid activation proof inventory", { REMOVE_FIXTURE: "proof-inventory" }],
-      ["missing activation evidence", { REMOVE_FIXTURE: "evidence" }],
-      ["activation attestation failure", { FAIL_STAGE: "attestation" }],
-      ["package missing", { FAIL_STAGE: "package-missing" }],
-      ["readiness failure", { FAIL_STAGE: "readiness" }],
-      ["registry failure", { FAIL_STAGE: "registry" }],
-      ["untrusted attestation URL", { FAIL_STAGE: "attestation-url" }],
-      ["attestation download failure", { FAIL_STAGE: "attestation-download" }],
-      ["provenance verifier failure", { FAIL_STAGE: "provenance" }],
-      ["missing verified provenance result", { FAIL_STAGE: "provenance-empty" }],
-      ["signature package install failure", { FAIL_STAGE: "signature-install" }],
-      ["signature audit failure", { FAIL_STAGE: "signature" }],
-      ["signature audit invalid result", { FAIL_STAGE: "signature-content" }],
-      ["channel registry failure", { FAIL_STAGE: "channel-registry" }],
-      ["channel metadata parse failure", { FAIL_STAGE: "channel-json" }],
-      ["prepromotion channel registry failure", { FAIL_STAGE: "prepromotion-channel-registry" }],
-      ["prepromotion channel parse failure", { FAIL_STAGE: "prepromotion-channel-json" }],
-      ["fallback policy failure", { FAIL_STAGE: "verify-pack" }]
-    ];
-    for (const [name, overrides] of rows) {
-      const { result, commands } = runOrchestration(overrides);
-      expect(result.status, name).not.toBe(0);
-      expect(commands, name).not.toMatch(/^(?:publish|dist-tag\s+(?:add|rm))\b/m);
-    }
-    for (const [name, state] of [
-      ["foreign predecessor", { latest: "9.9.9", quarantine: "1.0.4" }],
-      ["foreign quarantine", { latest: "1.0.3", quarantine: "9.9.9" }]
-    ] as const) {
-      const { result, commands } = runOrchestration({}, state);
-      expect(result.status, name).not.toBe(0);
-      expect(commands, name).not.toMatch(/^(?:publish|dist-tag\s+(?:add|rm))\b/m);
-    }
-  }, 60_000);
+  const upstreamFailureRows: Array<[string, Record<string, string>]> = [
+    ["wrong event", { RELEASE_EVENT_NAME: "release" }],
+    ["wrong protected ref", { GITHUB_REF: "refs/tags/v1.0.4" }],
+    ["wrong workflow ref", { WORKFLOW_REF: "other" }],
+    ["wrong workflow sha", { WORKFLOW_SHA: "b".repeat(40) }],
+    ["protected main refetch failure", { FAIL_STAGE: "main-refetch" }],
+    ["stale fetched main sha", { MAIN_SHA_OVERRIDE: "b".repeat(40) }],
+    ["wrong tag", { RELEASE_TAG: "v1.0.5" }],
+    ["wrong tag commit", { TAG_COMMIT_OVERRIDE: "b".repeat(40) }],
+    ["recovery-mode downgrade", { PROVENANCE_RECOVERY: "false" }],
+    ["release metadata fetch failure", { FAIL_STAGE: "release-metadata" }],
+    ["release metadata validation failure", { FAIL_STAGE: "release-metadata-shape" }],
+    ["release metadata tag mismatch", { FAIL_STAGE: "release-metadata-tag" }],
+    ["release metadata prerelease", { FAIL_STAGE: "release-metadata-prerelease" }],
+    ["missing reviewed tarball", { REMOVE_FIXTURE: "tarball" }],
+    ["missing protected-main recovery policy", { REMOVE_FIXTURE: "recovery-policy" }],
+    ["invalid activation proof inventory", { REMOVE_FIXTURE: "proof-inventory" }],
+    ["missing activation evidence", { REMOVE_FIXTURE: "evidence" }],
+    ["activation attestation failure", { FAIL_STAGE: "attestation" }],
+    ["package missing", { FAIL_STAGE: "package-missing" }],
+    ["readiness failure", { FAIL_STAGE: "readiness" }],
+    ["registry failure", { FAIL_STAGE: "registry" }],
+    ["untrusted attestation URL", { FAIL_STAGE: "attestation-url" }],
+    ["attestation download failure", { FAIL_STAGE: "attestation-download" }],
+    ["provenance verifier failure", { FAIL_STAGE: "provenance" }],
+    ["missing verified provenance result", { FAIL_STAGE: "provenance-empty" }],
+    ["signature package install failure", { FAIL_STAGE: "signature-install" }],
+    ["signature audit failure", { FAIL_STAGE: "signature" }],
+    ["signature audit invalid result", { FAIL_STAGE: "signature-content" }],
+    ["channel registry failure", { FAIL_STAGE: "channel-registry" }],
+    ["channel metadata parse failure", { FAIL_STAGE: "channel-json" }],
+    ["prepromotion channel registry failure", { FAIL_STAGE: "prepromotion-channel-registry" }],
+    ["prepromotion channel parse failure", { FAIL_STAGE: "prepromotion-channel-json" }],
+    ["fallback policy failure", { FAIL_STAGE: "verify-pack" }]
+  ];
+
+  it.each(upstreamFailureRows)("leaves npm mutations unreachable when the %s gate fails", (name, overrides) => {
+    const { result, commands } = runOrchestration(overrides);
+    expect(result.status, name).not.toBe(0);
+    expect(commands, name).not.toMatch(/^(?:publish|dist-tag\s+(?:add|rm))\b/m);
+  }, 15_000);
+
+  it.each([
+    ["foreign predecessor", { latest: "9.9.9", quarantine: "1.0.4" }],
+    ["foreign quarantine", { latest: "1.0.3", quarantine: "9.9.9" }]
+  ] as const)("leaves npm mutations unreachable for %s state", (name, state) => {
+    const { result, commands } = runOrchestration({}, state);
+    expect(result.status, name).not.toBe(0);
+    expect(commands, name).not.toMatch(/^(?:publish|dist-tag\s+(?:add|rm))\b/m);
+  }, 15_000);
 
   it("is idempotent after promotion and owned quarantine cleanup already converged", () => {
     const { result, commands } = runOrchestration({}, { latest: "1.0.4", quarantine: "" });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(commands).toBe("");
-  });
+  }, 15_000);
 
   it("converges transient package existence reads before the no-publish recovery guard", () => {
     const { result, commands, registryState } = runOrchestration({ FAIL_STAGE: "package-transient" });
@@ -383,7 +424,14 @@ fi
     ].join("\n"));
     expect(commands).not.toMatch(/^publish\b/m);
     expect(registryState).toMatch(/^PACKAGE_READS=3$/m);
-  });
+  }, 15_000);
+
+  it("blocks every npm mutation if protected main advances before promotion", () => {
+    const { result, commands, gitState } = runOrchestration({ FAIL_STAGE: "main-advanced-before-promotion" });
+    expect(result.status).not.toBe(0);
+    expect(commands).not.toMatch(/^(?:publish|dist-tag\s+(?:add|rm))\b/m);
+    expect(gitState).toMatch(/^FETCHES=2$/m);
+  }, 15_000);
 
   it("reconciles both accepted and rejected ambiguous promotion command failures", () => {
     const accepted = runOrchestration({ FAIL_STAGE: "promotion-accepted-error" });
@@ -402,5 +450,35 @@ fi
     expect(rejected.registryState).toMatch(/^LATEST=1\.0\.3$/m);
     expect(rejected.registryState).toMatch(/^QUARANTINE=1\.0\.4$/m);
     expect(rejected.registryState).toMatch(/^CHANNEL_READS=4$/m);
+  }, 15_000);
+
+  it("keeps non-recovery promotion command failures fail-fast", () => {
+    const block = extractBlock("V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD");
+    const policyScript = resolve("scripts/npm-release-policy.mjs");
+    const { root, bin, log } = harness();
+    const npm = join(bin, "npm");
+    writeFileSync(npm, `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$NPM_MUTATION_LOG"
+exit 47
+`, { mode: 0o700 });
+    chmodSync(npm, 0o700);
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", block], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        NPM_MUTATION_LOG: log,
+        PROVENANCE_RECOVERY: "false",
+        POLICY_SCRIPT: policyScript,
+        PREPROMOTION_TAG_VERSION: "1.0.3",
+        PREPROMOTION_QUARANTINE_VERSION: "1.0.4",
+        PACKAGE_VERSION: "1.0.4",
+        EXPECTED_PREDECESSOR: "1.0.3",
+        NPM_TAG: "latest"
+      }
+    });
+    expect(result.status).toBe(47);
+    expect(readFileSync(log, "utf8")).toBe("dist-tag add neondiff@1.0.4 latest\n");
   });
 });

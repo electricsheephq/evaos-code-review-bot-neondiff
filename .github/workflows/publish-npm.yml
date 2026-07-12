@@ -298,20 +298,41 @@ jobs:
             echo "::error::Protected-main npm execution must remain in provenance recovery mode"
             exit 1
           fi
+          RECOVERY_PROOF_PATH=""
           if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            RECOVERY_MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+            test "$RECOVERY_MAIN_SHA" = "$GITHUB_SHA" || {
+              echo "::error::Provenance recovery dispatch SHA is no longer the protected-main head"
+              exit 1
+            }
+            RECOVERY_PROOF_PATH="$RUNNER_TEMP/v1.0.4-recovery-dispatch-proof.json"
+            RECOVERY_RELEASE_METADATA_PATH="$RUNNER_TEMP/recovery-release-metadata.json"
+            rm -f "$RECOVERY_PROOF_PATH" "$RECOVERY_RELEASE_METADATA_PATH"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RECOVERY_RELEASE_METADATA_PATH"
+            RELEASE_VALID="$(node -e '
+              const release = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+              const valid = release?.tag_name === process.argv[2] && release?.draft === false && release?.prerelease === false;
+              process.stdout.write(valid ? "true" : "false");
+            ' "$RECOVERY_RELEASE_METADATA_PATH" "$RELEASE_TAG")"
+            test "$RELEASE_VALID" = "true" || {
+              echo "::error::Provenance recovery requires the existing non-draft, non-prerelease GitHub Release"
+              exit 1
+            }
             node "$POLICY_SCRIPT" verify-recovery-dispatch \
               --event-name "$RELEASE_EVENT_NAME" \
               --github-ref "$GITHUB_REF" \
               --workflow-ref "$WORKFLOW_REF" \
               --workflow-sha "$WORKFLOW_SHA" \
               --github-sha "$GITHUB_SHA" \
-              --main-sha "$(git rev-parse refs/remotes/origin/main)" \
+              --main-sha "$RECOVERY_MAIN_SHA" \
               --tag "$RELEASE_TAG" \
               --tag-commit "$EXPECTED_GIT_HEAD" \
               --package-version "$PACKAGE_VERSION" \
               --provenance-recovery "$PROVENANCE_RECOVERY" \
-              --release-valid true \
-              --package-exists "$PACKAGE_ALREADY_EXISTS"
+              --release-valid "$RELEASE_VALID" \
+              --package-exists "$PACKAGE_ALREADY_EXISTS" \
+              --proof-output "$RECOVERY_PROOF_PATH"
           fi
           node scripts/check-public-release-ready.mjs \
             --manifest docs/public-release-manifest.json \
@@ -409,7 +430,8 @@ jobs:
             --expected-package neondiff \
             --expected-repository "$GITHUB_REPOSITORY" \
             --expected-workflow .github/workflows/publish-npm.yml \
-            --expected-tag "$RELEASE_TAG"
+            --expected-tag "$RELEASE_TAG" \
+            --recovery-proof "$RECOVERY_PROOF_PATH"
           EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
           rm -f channel-metadata.json channel-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -431,6 +453,14 @@ jobs:
             --target-version "$PACKAGE_VERSION" \
             --expected-predecessor "$EXPECTED_PREDECESSOR" \
             --npm-tag "$NPM_TAG"
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            PREPROMOTION_MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+            test "$PREPROMOTION_MAIN_SHA" = "$GITHUB_SHA" || {
+              echo "::error::Protected main advanced before npm promotion; refusing dist-tag mutation"
+              exit 1
+            }
+          fi
           npm view neondiff dist-tags --json --prefer-online > prepromotion-channel.json
           PREPROMOTION_TAG_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(tags[process.argv[2]] ?? "")' prepromotion-channel.json "$NPM_TAG")"
           PREPROMOTION_QUARANTINE_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(tags["release-candidate"] ?? "")' prepromotion-channel.json)"
@@ -448,10 +478,14 @@ jobs:
             --expected-predecessor "$EXPECTED_PREDECESSOR" \
             --npm-tag "$NPM_TAG"
           if [ "$PREPROMOTION_TAG_VERSION" != "$PACKAGE_VERSION" ]; then
-            if npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"; then
-              echo "npm dist-tag promotion command was accepted; confirming registry state"
+            if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+              if npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"; then
+                echo "npm dist-tag promotion command was accepted; confirming registry state"
+              else
+                echo "::warning::npm dist-tag promotion returned nonzero; confirming registry state before deciding recovery outcome"
+              fi
             else
-              echo "::warning::npm dist-tag promotion returned nonzero; confirming registry state before deciding recovery outcome"
+              npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"
             fi
           fi
           # END V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD

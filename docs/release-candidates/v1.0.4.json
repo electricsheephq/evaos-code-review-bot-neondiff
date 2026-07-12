@@ -22,6 +22,7 @@
     "latest": "1.0.3",
     "releaseCandidate": "1.0.4"
   },
+  "proofBoundaryPhase": "pre_recovery",
   "proofBoundary": {
     "allowed": [
       "protected-main candidate passed production activation lifecycle and no-bypass proof",

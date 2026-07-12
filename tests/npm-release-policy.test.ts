@@ -248,12 +248,13 @@ describe("npm release policy", () => {
     expect(pack.shasum).toMatch(/^[a-f0-9]{40}$/);
   });
 
-  it("accepts an absent npm gitHead only with exact v1.0.4 verified provenance", () => {
+  it("accepts an absent npm gitHead only with exact v1.0.4 provenance and recovery-dispatch proof", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-npm-provenance-fallback-"));
     roots.push(root);
     const localPath = join(root, "pack.json");
     const remotePath = join(root, "remote.json");
     const provenancePath = join(root, "verified-provenance.json");
+    const recoveryProofPath = join(root, "recovery-dispatch-proof.json");
     const integrity = `sha512-${Buffer.from("reviewed-v1.0.4-tarball").toString("base64")}`;
     writeFileSync(localPath, JSON.stringify([{
       version: "1.0.4",
@@ -276,7 +277,7 @@ describe("npm release policy", () => {
       commit: releaseCommit
     }));
 
-    const result = spawnSync(process.execPath, [
+    const verifyPackArgs = [
       policyScript, "verify-pack",
       "--local-pack", localPath,
       "--remote-metadata", remotePath,
@@ -287,6 +288,33 @@ describe("npm release policy", () => {
       "--expected-repository", "electricsheephq/evaos-code-review-bot-neondiff",
       "--expected-workflow", ".github/workflows/publish-npm.yml",
       "--expected-tag", "v1.0.4"
+    ];
+    const unbound = spawnSync(process.execPath, verifyPackArgs, { encoding: "utf8" });
+    expect(unbound.status).not.toBe(0);
+    expect(unbound.stderr).toContain("protected-main recovery dispatch proof");
+
+    const mainSha = "a".repeat(40);
+    const dispatch = spawnSync(process.execPath, [
+      policyScript, "verify-recovery-dispatch",
+      "--event-name", "workflow_dispatch",
+      "--github-ref", "refs/heads/main",
+      "--workflow-ref", "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main",
+      "--workflow-sha", mainSha,
+      "--github-sha", mainSha,
+      "--main-sha", mainSha,
+      "--tag", "v1.0.4",
+      "--tag-commit", releaseCommit,
+      "--package-version", "1.0.4",
+      "--provenance-recovery", "true",
+      "--release-valid", "true",
+      "--package-exists", "true",
+      "--proof-output", recoveryProofPath
+    ], { encoding: "utf8" });
+    expect(dispatch.status, dispatch.stderr).toBe(0);
+
+    const result = spawnSync(process.execPath, [
+      ...verifyPackArgs,
+      "--recovery-proof", recoveryProofPath
     ], { encoding: "utf8" });
 
     expect(result.status).toBe(0);
@@ -294,6 +322,33 @@ describe("npm release policy", () => {
       version: "1.0.4",
       sourceIdentity: "verified_provenance_fallback"
     });
+
+    const exactProof = JSON.parse(readFileSync(recoveryProofPath, "utf8"));
+    for (const [field, value] of [
+      ["workflowSha", "b".repeat(40)],
+      ["mainSha", "b".repeat(40)],
+      ["tag", "v1.0.5"],
+      ["tagCommit", "b".repeat(40)],
+      ["packageVersion", "1.0.5"],
+      ["provenanceRecovery", false],
+      ["releaseValid", false],
+      ["packageExists", false]
+    ] as const) {
+      writeFileSync(recoveryProofPath, JSON.stringify({ ...exactProof, [field]: value }));
+      const rejected = spawnSync(process.execPath, [
+        ...verifyPackArgs,
+        "--recovery-proof", recoveryProofPath
+      ], { encoding: "utf8" });
+      expect(rejected.status, field).not.toBe(0);
+      expect(rejected.stderr, field).toContain("recovery dispatch proof does not match");
+    }
+    writeFileSync(recoveryProofPath, "not-json");
+    const malformedProof = spawnSync(process.execPath, [
+      ...verifyPackArgs,
+      "--recovery-proof", recoveryProofPath
+    ], { encoding: "utf8" });
+    expect(malformedProof.status).not.toBe(0);
+    expect(malformedProof.stderr).toContain("recovery dispatch proof is not valid JSON");
   });
 
   it("rejects malformed, mismatched, or under-bound provenance for an absent gitHead", () => {
@@ -302,6 +357,7 @@ describe("npm release policy", () => {
     const localPath = join(root, "pack.json");
     const remotePath = join(root, "remote.json");
     const provenancePath = join(root, "verified-provenance.json");
+    const recoveryProofPath = join(root, "recovery-dispatch-proof.json");
     const integrity = `sha512-${Buffer.from("reviewed-v1.0.4-tarball").toString("base64")}`;
     const exactProvenance = {
       package: "neondiff",
@@ -323,6 +379,23 @@ describe("npm release policy", () => {
       "dist.integrity": integrity,
       "dist.shasum": "1".repeat(40)
     }));
+    const mainSha = "a".repeat(40);
+    execFileSync(process.execPath, [
+      policyScript, "verify-recovery-dispatch",
+      "--event-name", "workflow_dispatch",
+      "--github-ref", "refs/heads/main",
+      "--workflow-ref", "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main",
+      "--workflow-sha", mainSha,
+      "--github-sha", mainSha,
+      "--main-sha", mainSha,
+      "--tag", "v1.0.4",
+      "--tag-commit", releaseCommit,
+      "--package-version", "1.0.4",
+      "--provenance-recovery", "true",
+      "--release-valid", "true",
+      "--package-exists", "true",
+      "--proof-output", recoveryProofPath
+    ]);
 
     const run = () => spawnSync(process.execPath, [
       policyScript, "verify-pack",
@@ -334,7 +407,8 @@ describe("npm release policy", () => {
       "--expected-package", "neondiff",
       "--expected-repository", "electricsheephq/evaos-code-review-bot-neondiff",
       "--expected-workflow", ".github/workflows/publish-npm.yml",
-      "--expected-tag", "v1.0.4"
+      "--expected-tag", "v1.0.4",
+      "--recovery-proof", recoveryProofPath
     ], { encoding: "utf8" });
 
     for (const [field, value] of [
@@ -399,6 +473,9 @@ describe("npm release policy", () => {
   });
 
   it("scopes protected-main provenance recovery to the exact existing v1.0.4 release", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-recovery-dispatch-proof-"));
+    roots.push(root);
+    const proofPath = join(root, "proof.json");
     const mainSha = "a".repeat(40);
     const exactArgs = [
       policyScript, "verify-recovery-dispatch",
@@ -413,10 +490,22 @@ describe("npm release policy", () => {
       "--package-version", "1.0.4",
       "--provenance-recovery", "true",
       "--release-valid", "true",
-      "--package-exists", "true"
+      "--package-exists", "true",
+      "--proof-output", proofPath
     ];
     const accepted = spawnSync(process.execPath, exactArgs, { encoding: "utf8" });
     expect(accepted.status).toBe(0);
+    expect(JSON.parse(readFileSync(proofPath, "utf8"))).toMatchObject({
+      eventName: "workflow_dispatch",
+      workflowSha: mainSha,
+      mainSha,
+      tag: "v1.0.4",
+      tagCommit: releaseCommit,
+      packageVersion: "1.0.4",
+      provenanceRecovery: true,
+      releaseValid: true,
+      packageExists: true
+    });
 
     const mutations: Array<[string, string]> = [
       ["--event-name", "release"],
@@ -433,6 +522,7 @@ describe("npm release policy", () => {
       ["--package-exists", "false"]
     ];
     for (const [flag, value] of mutations) {
+      rmSync(proofPath, { force: true });
       const args = [...exactArgs];
       args[args.indexOf(flag) + 1] = value;
       const rejected = spawnSync(process.execPath, args, { encoding: "utf8" });

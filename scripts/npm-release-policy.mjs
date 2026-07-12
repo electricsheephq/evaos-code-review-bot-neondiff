@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 const V104_PROVENANCE_RECOVERY = Object.freeze({
@@ -201,6 +201,38 @@ function verifyPack(args) {
       ) {
         fail("verified npm provenance fallback is scoped only to the v1.0.4 recovery");
       }
+      const recoveryProofPath = args.get("recovery-proof");
+      if (!recoveryProofPath) {
+        fail("npm gitHead fallback requires a protected-main recovery dispatch proof");
+      }
+      let recoveryProof;
+      try {
+        recoveryProof = JSON.parse(readFileSync(recoveryProofPath, "utf8"));
+      } catch {
+        fail("recovery dispatch proof is not valid JSON");
+      }
+      if (
+        recoveryProof?.schemaVersion !== 1
+        || recoveryProof?.kind !== "neondiff.npm.provenance-recovery-dispatch"
+        || recoveryProof?.eventName !== "workflow_dispatch"
+        || recoveryProof?.githubRef !== "refs/heads/main"
+        || recoveryProof?.workflowRef !== V104_PROVENANCE_RECOVERY.workflowRef
+        || typeof recoveryProof?.githubSha !== "string"
+        || !/^[0-9a-f]{40}$/.test(recoveryProof.githubSha)
+        || recoveryProof?.workflowSha !== recoveryProof.githubSha
+        || recoveryProof?.mainSha !== recoveryProof.githubSha
+        || recoveryProof?.package !== expectedPackage
+        || recoveryProof?.repository !== expectedRepository
+        || recoveryProof?.workflow !== expectedWorkflow
+        || recoveryProof?.tag !== expectedTag
+        || recoveryProof?.tagCommit !== expectedGitHead
+        || recoveryProof?.packageVersion !== expectedVersion
+        || recoveryProof?.provenanceRecovery !== true
+        || recoveryProof?.releaseValid !== true
+        || recoveryProof?.packageExists !== true
+      ) {
+        fail("recovery dispatch proof does not match the exact protected-main v1.0.4 recovery");
+      }
       let provenance;
       try {
         provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
@@ -266,16 +298,32 @@ function verifyRecoveryDispatch(args) {
   }
   if (!releaseValid) fail("provenance recovery requires the existing published GitHub Release");
   if (!packageExists) fail("provenance recovery requires the immutable npm package to already exist");
-  console.log(JSON.stringify({
+  const proof = {
+    schemaVersion: 1,
+    kind: "neondiff.npm.provenance-recovery-dispatch",
     eventName,
     githubRef,
     workflowRef,
     workflowSha,
+    githubSha,
+    mainSha,
+    package: V104_PROVENANCE_RECOVERY.package,
+    repository: V104_PROVENANCE_RECOVERY.repository,
+    workflow: V104_PROVENANCE_RECOVERY.workflow,
     tag,
     tagCommit,
     packageVersion,
+    provenanceRecovery,
+    releaseValid,
     packageExists
-  }));
+  };
+  const proofOutput = required(args, "proof-output");
+  try {
+    writeFileSync(proofOutput, `${JSON.stringify(proof)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch {
+    fail("provenance recovery dispatch proof could not be written exclusively");
+  }
+  console.log(JSON.stringify(proof));
 }
 
 function verifyRecoveryChannels(args) {
