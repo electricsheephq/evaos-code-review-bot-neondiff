@@ -236,11 +236,14 @@ export function parseSubscriptionLifecycleRequest(
       throw new LifecycleRequestError("currentPeriodEnd is forbidden for revoke");
     }
   } else if (command === "renew_paid" || command === "cancel_at_period_end") {
-    parsedPeriodEnd = readFuturePeriodEnd(body.currentPeriodEnd, now, true);
+    parsedPeriodEnd = readStrictPeriodEnd(body.currentPeriodEnd, true);
   } else if (body.currentPeriodEnd !== undefined) {
-    parsedPeriodEnd = readFuturePeriodEnd(body.currentPeriodEnd, now, false);
+    parsedPeriodEnd = readStrictPeriodEnd(body.currentPeriodEnd, false);
   }
 
+  if (command === "renew_paid" && cancelAtPeriodEnd) {
+    throw new LifecycleRequestError("cancelAtPeriodEnd must be false for renew_paid");
+  }
   if (command === "reconcile" && cancelAtPeriodEnd) {
     throw new LifecycleRequestError("cancelAtPeriodEnd must be false for reconcile");
   }
@@ -503,7 +506,7 @@ function readEventCreatedAt(value: unknown, now: Date): number {
   return timestamp;
 }
 
-function readFuturePeriodEnd(value: unknown, now: Date, required: boolean): string {
+function readStrictPeriodEnd(value: unknown, required: boolean): string {
   if (typeof value !== "string") {
     throw new LifecycleRequestError(
       required ? "currentPeriodEnd is required" : "currentPeriodEnd must be a timestamp"
@@ -515,9 +518,6 @@ function readFuturePeriodEnd(value: unknown, now: Date, required: boolean): stri
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString() !== value) {
     throw new LifecycleRequestError("currentPeriodEnd must be a valid timestamp");
-  }
-  if (milliseconds <= now.getTime()) {
-    throw new LifecycleRequestError("currentPeriodEnd must be in the future");
   }
   return value;
 }

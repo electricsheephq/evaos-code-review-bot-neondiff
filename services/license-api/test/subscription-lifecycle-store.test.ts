@@ -248,7 +248,11 @@ describe("checkout subscription lifecycle replay", () => {
     for (const [label, mutation] of [
       ["missing expiry", "update licenses set expires_at = null where license_key_hash = ?"],
       ["invalid expiry", "update licenses set expires_at = 'not-a-timestamp' where license_key_hash = ?"],
-      ["unsupported plan", "update licenses set plan = 'legacy_lifetime' where license_key_hash = ?"]
+      ["unsupported plan", "update licenses set plan = 'legacy_lifetime' where license_key_hash = ?"],
+      ["multiple seats", "update licenses set seats = 2 where license_key_hash = ?"],
+      ["public scope", "update licenses set repo_visibility_scope = 'public' where license_key_hash = ?"],
+      ["private repositories disabled", "update licenses set private_repo_allowed = 0 where license_key_hash = ?"],
+      ["updates disabled", "update licenses set update_entitlement = 0 where license_key_hash = ?"]
     ] as const) {
       const path = databasePath();
       const store = new LicenseStore(path, { now: () => NOW });
@@ -376,6 +380,84 @@ describe("checkout subscription lifecycle replay", () => {
     } finally {
       secondStore.close();
       firstStore.close();
+    }
+  });
+
+  it("reaches exact renewal and cancellation replays after their period ends", () => {
+    const delayedNow = new Date("2026-08-21T00:00:00.000Z");
+    for (const command of ["renew_paid", "cancel_at_period_end"] as const) {
+      const path = databasePath();
+      let storeNow = NOW;
+      const store = new LicenseStore(path, { now: () => storeNow });
+      try {
+        const issued = issueBound(store, {
+          idempotencyKey: `checkout-session:delayed-replay-${command}`,
+          externalSubscriptionId: `sub_delayed_replay_${command}`,
+          externalCheckoutId: `cs_delayed_replay_${command}`
+        });
+        const overrides = { eventId: `evt_delayed_replay_${command}` };
+        const original = command === "renew_paid"
+          ? renewal(issued.request, overrides)
+          : lifecycleRequest(command, issued.request, overrides);
+        applyLifecycle(store, original);
+
+        storeNow = delayedNow;
+        const delayed = command === "renew_paid"
+          ? renewal(issued.request, overrides, delayedNow)
+          : lifecycleRequest(command, issued.request, overrides, delayedNow);
+        assert.equal(delayed.requestHash, original.requestHash, command);
+        const replay = applyLifecycle(store, delayed);
+
+        assert.equal(replay.status, "replayed", command);
+        assert.equal(replay.replayed, true, command);
+        assert.equal(
+          inspectDatabase<{ count: number }>(
+            path,
+            "select count(*) as count from license_subscription_lifecycle_events"
+          )[0]?.count,
+          1,
+          command
+        );
+      } finally {
+        store.close();
+      }
+    }
+  });
+
+  it("rejects new renewal and cancellation events after their period ends", () => {
+    const delayedNow = new Date("2026-08-21T00:00:00.000Z");
+    for (const command of ["renew_paid", "cancel_at_period_end"] as const) {
+      const path = databasePath();
+      let storeNow = NOW;
+      const store = new LicenseStore(path, { now: () => storeNow });
+      try {
+        const issued = issueBound(store, {
+          idempotencyKey: `checkout-session:delayed-new-${command}`,
+          externalSubscriptionId: `sub_delayed_new_${command}`,
+          externalCheckoutId: `cs_delayed_new_${command}`
+        });
+        storeNow = delayedNow;
+        const overrides = { eventId: `evt_delayed_new_${command}` };
+        const request = command === "renew_paid"
+          ? renewal(issued.request, overrides, delayedNow)
+          : lifecycleRequest(command, issued.request, overrides, delayedNow);
+
+        assert.throws(
+          () => applyLifecycle(store, request),
+          (error: unknown) => errorName(error) === "SubscriptionLifecyclePolicyError",
+          command
+        );
+        assert.equal(
+          inspectDatabase<{ count: number }>(
+            path,
+            "select count(*) as count from license_subscription_lifecycle_events"
+          )[0]?.count,
+          0,
+          command
+        );
+      } finally {
+        store.close();
+      }
     }
   });
 

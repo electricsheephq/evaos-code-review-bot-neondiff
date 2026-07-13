@@ -772,6 +772,9 @@ export class LicenseStore {
         case "reconcile":
         case "cancel_at_period_end":
         case "payment_attention": {
+          if (input.command === "cancel_at_period_end") {
+            validateCancellationPeriodEnd(input.currentPeriodEnd, appliedAt);
+          }
           const stale = isStaleNonMutatingEvent(
             input.eventCreatedAt,
             binding.lastNonMutatingEventCreatedAt
@@ -1086,6 +1089,13 @@ function validatePaidPeriodEnd(
   return milliseconds;
 }
 
+function validateCancellationPeriodEnd(value: string, now: Date): void {
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds) || milliseconds <= now.getTime()) {
+    throw new SubscriptionLifecyclePolicyError("cancellation period end is invalid");
+  }
+}
+
 function isStaleNonMutatingEvent(
   eventCreatedAt: number,
   lastEventCreatedAt: number | undefined
@@ -1108,7 +1118,16 @@ function isLifecycleCompatibleEntitlement(record: LicenseRecord): boolean {
   return (
     record.expiresAt !== undefined &&
     Number.isFinite(Date.parse(record.expiresAt)) &&
-    CHECKOUT_LOOKUP_KEYS.some((lookupKey) => checkoutPolicyFor(lookupKey).plan === record.plan)
+    CHECKOUT_LOOKUP_KEYS.some((lookupKey) => {
+      const policy = checkoutPolicyFor(lookupKey);
+      return (
+        record.plan === policy.plan &&
+        record.seats === policy.seats &&
+        record.repoVisibilityScope === policy.repoVisibilityScope &&
+        record.privateRepoAllowed === policy.privateRepoAllowed &&
+        record.updateEntitlement === policy.updateEntitlement
+      );
+    })
   );
 }
 

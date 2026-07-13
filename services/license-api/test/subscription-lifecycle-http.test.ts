@@ -114,13 +114,15 @@ async function withLifecycleServer(
   }) => Promise<void>,
   options: {
     store?: LicenseStore;
+    now?: () => Date;
     subscriptionLifecycleRateLimiter?: RateLimiter;
     lifecycleRateLimiter?: RateLimiter;
     lifecycleOidcVerifier?: { verify(token: string): Promise<any> };
     trustFlyProxyHeaders?: boolean;
   } = {}
 ): Promise<void> {
-  const store = options.store ?? new LicenseStore(":memory:", { now: () => NOW });
+  const now = options.now ?? (() => NOW);
+  const store = options.store ?? new LicenseStore(":memory:", { now });
   const issuance = issuanceRequest();
   const issued = issueCheckoutLicense(store, issuance, ISSUANCE_SECRET);
   assert.equal(issued.httpStatus, 200);
@@ -128,7 +130,7 @@ async function withLifecycleServer(
   const started = await startLicenseServer({
     store,
     issuanceSecret: ISSUANCE_SECRET,
-    now: () => NOW,
+    now,
     rateLimiter: new RateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
     subscriptionLifecycleRateLimiter: options.subscriptionLifecycleRateLimiter,
     lifecycleRateLimiter: options.lifecycleRateLimiter,
@@ -287,6 +289,88 @@ describe("guarded subscription lifecycle HTTP endpoint", () => {
       assert.equal(terminal.status, 409);
       assert.deepEqual(terminal.json, { status: "terminally_revoked" });
       assert.ok(!terminal.text.includes("evt_after_terminal_http"));
+    });
+  });
+
+  it("replays exact renewals and cancellations after their period ends", async () => {
+    for (const command of ["renew_paid", "cancel_at_period_end"] as const) {
+      let now = NOW;
+      await withLifecycleServer(async ({ url, issuance }) => {
+        const body = lifecycleBody(command, issuance, {
+          eventId: `evt_delayed_${command}_http`
+        });
+        assert.equal((await post(url, "/v1/admin/licenses/lifecycle", body, AUTH)).status, 200);
+
+        now = new Date("2026-08-21T00:00:00.000Z");
+        const replay = await post(url, "/v1/admin/licenses/lifecycle", body, AUTH);
+        assert.equal(replay.status, 200, command);
+        assert.equal(replay.json.status, "replayed", command);
+        assert.equal(replay.json.replayed, true, command);
+      }, { now: () => now });
+    }
+  });
+
+  it("preserves conflict detection for changed lifecycle content after expiry", async () => {
+    let now = NOW;
+    await withLifecycleServer(async ({ url, issuance }) => {
+      const original = lifecycleBody("renew_paid", issuance, {
+        eventId: "evt_changed_after_expiry_http"
+      });
+      assert.equal((await post(url, "/v1/admin/licenses/lifecycle", original, AUTH)).status, 200);
+
+      now = new Date("2026-08-21T00:00:00.000Z");
+      const conflict = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        { ...original, currentPeriodEnd: "2026-08-14T00:00:00.000Z" },
+        AUTH
+      );
+      assert.equal(conflict.status, 409);
+      assert.deepEqual(conflict.json, { status: "conflict" });
+    }, { now: () => now });
+  });
+
+  it("rejects brand-new elapsed renewals and cancellations without consuming the event ID", async () => {
+    for (const command of ["renew_paid", "cancel_at_period_end"] as const) {
+      let now = new Date("2026-08-21T00:00:00.000Z");
+      await withLifecycleServer(async ({ url, issuance }) => {
+        const body = lifecycleBody(command, issuance, {
+          eventId: `evt_new_elapsed_${command}_http`
+        });
+        const rejected = await post(url, "/v1/admin/licenses/lifecycle", body, AUTH);
+        assert.equal(rejected.status, 400, command);
+        assert.deepEqual(rejected.json, { status: "invalid" }, command);
+
+        now = NOW;
+        const retry = await post(url, "/v1/admin/licenses/lifecycle", body, AUTH);
+        assert.equal(retry.status, 200, command);
+        assert.equal(retry.json.status, "updated", command);
+        assert.equal(retry.json.replayed, false, command);
+      }, { now: () => now });
+    }
+  });
+
+  it("rejects canceling renewals without consuming the event ID", async () => {
+    await withLifecycleServer(async ({ url, issuance }) => {
+      const eventId = "evt_canceling_renewal_http";
+      const rejected = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("renew_paid", issuance, { eventId, cancelAtPeriodEnd: true }),
+        AUTH
+      );
+      assert.equal(rejected.status, 400);
+      assert.deepEqual(rejected.json, { status: "invalid" });
+
+      const retry = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("renew_paid", issuance, { eventId, cancelAtPeriodEnd: false }),
+        AUTH
+      );
+      assert.equal(retry.status, 200);
+      assert.equal(retry.json.status, "updated");
+      assert.equal(retry.json.replayed, false);
     });
   });
 

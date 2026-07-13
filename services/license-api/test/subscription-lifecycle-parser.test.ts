@@ -344,6 +344,13 @@ test("requires paid active subscription-cycle evidence for renew_paid", () => {
   }
 });
 
+test("requires renew_paid to represent a non-canceling subscription", () => {
+  invalid(
+    validRenewal({ cancelAtPeriodEnd: true }),
+    /cancelAtPeriodEnd must be false for renew_paid/
+  );
+});
+
 test("enforces command-specific payment, period-end, cancellation, and reason fields", () => {
   const reconcile = validRenewal({
     providerEventType: "customer.subscription.updated",
@@ -439,15 +446,18 @@ test("preserves schema-v1 omitted-reason replay hashing while deriving a safe st
   assert.notEqual(provided.requestHash, omitted.requestHash);
 });
 
-test("validates optional or required period ends as strict future instants", () => {
+test("validates period ends as strict UTC instants without applying clock freshness", () => {
   for (const value of [
     "not-a-date",
-    "2026-07-13T12:00:00.000Z",
-    "2026-07-13T11:59:59.999Z",
     "2026-08-13",
     1786622400000
   ]) {
     invalid(validRenewal({ currentPeriodEnd: value }), /currentPeriodEnd/);
+  }
+  for (const value of ["2026-07-13T12:00:00.000Z", "2026-07-13T11:59:59.999Z"]) {
+    const parsed = parse(validRenewal({ currentPeriodEnd: value }));
+    assert.equal(parsed.command, "renew_paid");
+    assert.equal(parsed.currentPeriodEnd, value);
   }
 });
 

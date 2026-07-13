@@ -238,10 +238,14 @@ describe("checkout subscription binding backfill store", () => {
   });
 
   it("rejects legacy entitlements that the subscription lifecycle cannot project", () => {
-    for (const [label, plan, expiresAt] of [
-      ["missing expiry", "monthly_support", undefined],
-      ["invalid expiry", "monthly_support", "not-a-timestamp"],
-      ["unsupported plan", "legacy_lifetime", "2026-08-13T00:00:00.000Z"]
+    for (const [label, overrides] of [
+      ["missing expiry", { expiresAt: undefined }],
+      ["invalid expiry", { expiresAt: "not-a-timestamp" }],
+      ["unsupported plan", { plan: "legacy_lifetime" }],
+      ["multiple seats", { seats: 2 }],
+      ["public scope", { repoVisibilityScope: "public" }],
+      ["private repositories disabled", { privateRepoAllowed: false }],
+      ["updates disabled", { updateEntitlement: false }]
     ] as const) {
       const path = databasePath();
       const store = new LicenseStore(path);
@@ -251,12 +255,13 @@ describe("checkout subscription binding backfill store", () => {
           requestHash: `legacy-request-hash:${label}`,
           source: "checkout",
           externalRef: "legacy-checkout-reference",
-          plan,
+          plan: "monthly_support",
           repoVisibilityScope: "private",
           privateRepoAllowed: true,
           updateEntitlement: true,
           seats: 1,
-          ...(expiresAt !== undefined ? { expiresAt } : {})
+          expiresAt: "2026-08-13T00:00:00.000Z",
+          ...overrides
         });
 
         assert.throws(
