@@ -584,10 +584,19 @@ export class LicenseStore {
         return lifecycleResult("replayed", true, replayedRecord);
       }
 
-      if (record.status === "revoked") {
+      const sameSecondTerminalRenewal =
+        record.status === "revoked" &&
+        input.command === "renew_paid" &&
+        this.getTerminalRevocationEventCreatedAt(input.issuanceIdempotencyKey) ===
+          input.eventCreatedAt;
+      if (record.status === "revoked" && !sameSecondTerminalRenewal) {
         throw new SubscriptionLifecycleTerminalError("subscription entitlement is terminal");
       }
-      if (record.status !== "active" && record.status !== "expired") {
+      if (
+        record.status !== "active" &&
+        record.status !== "expired" &&
+        !sameSecondTerminalRenewal
+      ) {
         throw new SubscriptionLifecyclePolicyError("subscription entitlement state is invalid");
       }
 
@@ -603,7 +612,8 @@ export class LicenseStore {
           this.db
             .prepare(
               `update licenses
-               set expires_at = ?, status = 'active'
+               set expires_at = ?,
+                   status = case when status = 'revoked' then 'revoked' else 'active' end
                where license_key_hash = ?`
             )
             .run(new Date(effectivePeriodEnd).toISOString(), record.licenseKeyHash);
@@ -746,6 +756,23 @@ export class LicenseStore {
     return this.db
       .prepare("select * from license_subscription_lifecycle_events where event_id = ?")
       .get(eventId) as SubscriptionLifecycleEventRow | undefined;
+  }
+
+  private getTerminalRevocationEventCreatedAt(
+    issuanceIdempotencyKey: string
+  ): number | undefined {
+    const row = this.db
+      .prepare(
+        `select event_created_at
+         from license_subscription_lifecycle_events
+         where issuance_idempotency_key = ?
+           and command = 'revoke'
+           and result = 'terminally_revoked'
+         order by event_created_at desc, event_id desc
+         limit 1`
+      )
+      .get(issuanceIdempotencyKey) as { event_created_at: number } | undefined;
+    return row?.event_created_at;
   }
 
   getLicenseByHash(licenseKeyHash: string): LicenseRecord | undefined {
