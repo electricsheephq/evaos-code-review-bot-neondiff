@@ -4460,7 +4460,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("queues a second new same-head command while the one-shot ledger keeps it advisory", async () => {
+  it("does not queue a second new same-head request-changes command after the one-shot ledger survives restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-request-changes-second-command-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/repo-a"]);
@@ -4470,7 +4470,7 @@ describe("provider-aware review scheduler", () => {
       trustedAuthors: ["maintainer"],
       acknowledge: false
     };
-    const state = new ReviewStateStore(config.statePath);
+    let state = new ReviewStateStore(config.statePath);
     const commentsForPull = [
       comment(940, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`)
     ];
@@ -4509,6 +4509,8 @@ describe("provider-aware review scheduler", () => {
       options: { dryRun: false, useZCode: false },
       reviewPullImpl
     });
+    state.close();
+    state = new ReviewStateStore(config.statePath);
     commentsForPull.push(
       comment(941, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`)
     );
@@ -4521,14 +4523,15 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(first.commandReviewRequested).toBe(1);
-    expect(second.commandReviewRequested).toBe(1);
-    expect(selectedEvents).toEqual(["REQUEST_CHANGES", "COMMENT"]);
-    expect(state.listReviewQueueJobs().map((job) => job.commentId)).toEqual([940, 941]);
+    expect(second.commandReviewRequested).toBe(0);
+    expect(selectedEvents).toEqual(["REQUEST_CHANGES"]);
+    expect(state.listReviewQueueJobs().map((job) => job.commentId)).toEqual([940]);
+    expect(state.hasProcessedCommand("org/repo-a", 1, HEAD_A, 941)).toBe(true);
     expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
-      state: "ready_for_human",
-      event: "COMMENT",
+      state: "needs_fix",
+      event: "REQUEST_CHANGES",
       commandAction: "request-changes",
-      commandCommentId: 941
+      commandCommentId: 940
     });
     state.close();
   });

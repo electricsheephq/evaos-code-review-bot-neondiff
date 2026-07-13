@@ -1130,7 +1130,7 @@ describe("worker context budget preflight", () => {
     scenario.state.close();
   });
 
-  it("keeps the first blocking review durable when a second exact command posts an advisory in a separate evidence directory", async () => {
+  it("keeps the first blocking review durable and posts nothing for a second exact command", async () => {
     const headSha = "f".repeat(40);
     const first = await runOwnerPolicyReview({
       roots,
@@ -1151,35 +1151,24 @@ describe("worker context budget preflight", () => {
       commandCommentId: 60
     });
 
-    expect(second.result).toBe("reviewed_command");
-    expect(createdReviews.map((review) => review.event)).toEqual(["REQUEST_CHANGES", "COMMENT"]);
+    expect(second.result).toBe("skipped_processed");
+    expect(createdReviews.map((review) => review.event)).toEqual(["REQUEST_CHANGES"]);
     expect(second.state.getProcessedReview("electricsheephq/WorldOS", 519, headSha)).toEqual(blocking);
     expect(second.state.getReviewReadiness("electricsheephq/WorldOS", 519, headSha)).toMatchObject({
       state: "needs_fix",
       event: "REQUEST_CHANGES",
       reviewUrl: blocking?.reviewUrl
     });
-    expect(first.evidenceDir).not.toBe(second.evidenceDir);
     expect(first.evidenceDir).toContain("command-59");
-    expect(second.evidenceDir).toContain("command-60");
     expect(existsSync(join(first.evidenceDir, "review-event-decision.json"))).toBe(true);
-    expect(existsSync(join(second.evidenceDir, "review-event-decision.json"))).toBe(true);
     expect(existsSync(join(first.evidenceDir, "command.json"))).toBe(false);
-    expect(existsSync(join(second.evidenceDir, "command.json"))).toBe(false);
     expect(JSON.parse(readFileSync(join(first.evidenceDir, "posted-review.json"), "utf8"))).toEqual({
       event: "REQUEST_CHANGES",
       reviewId: 1,
       reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/519#pullrequestreview-1"
     });
-    expect(JSON.parse(readFileSync(join(second.evidenceDir, "posted-review.json"), "utf8"))).toEqual({
-      event: "COMMENT",
-      reviewId: 2,
-      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/519#pullrequestreview-2"
-    });
     expect(readFileSync(join(first.evidenceDir, "posted-review.json"), "utf8")).not.toContain("request-changes --repo");
-    expect(readFileSync(join(second.evidenceDir, "posted-review.json"), "utf8")).not.toContain("request-changes --repo");
     expect(JSON.stringify(readDecision(first.evidenceDir))).not.toContain("request-changes");
-    expect(JSON.stringify(readDecision(second.evidenceDir))).not.toContain("request-changes");
     second.state.close();
   });
 
@@ -1216,7 +1205,7 @@ describe("worker context budget preflight", () => {
     replay.state.close();
   });
 
-  it("does not contaminate a verified blocking row when a later advisory head reread fails", async () => {
+  it("does not post or contaminate a verified blocking row when a later exact command is replayed", async () => {
     const headSha = "2".repeat(40);
     const first = await runOwnerPolicyReview({
       roots,
@@ -1239,8 +1228,8 @@ describe("worker context budget preflight", () => {
       postReviewHeadLookupError: new Error("advisory reread unavailable")
     });
 
-    expect(advisory.result).toBe("posted_head_unverified");
-    expect(createdReviews.map((review) => review.event)).toEqual(["REQUEST_CHANGES", "COMMENT"]);
+    expect(advisory.result).toBe("skipped_processed");
+    expect(createdReviews.map((review) => review.event)).toEqual(["REQUEST_CHANGES"]);
     expect(advisory.state.getProcessedReview("electricsheephq/WorldOS", 521, headSha)).toEqual(blocking);
     advisory.state.close();
   });

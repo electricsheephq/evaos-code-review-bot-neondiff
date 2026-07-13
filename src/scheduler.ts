@@ -1196,9 +1196,31 @@ function latestPendingRequestChanges(input: {
   repo: string;
   pull: PullRequestSummary;
 }): ReviewEventAuthorizationReviewRequest | undefined {
-  return input.requests.filter((request) =>
+  const pending = input.requests.filter((request) =>
     !input.state.hasProcessedCommand(input.repo, input.pull.number, input.pull.head.sha, request.commentId)
-  ).at(-1);
+  );
+  if (pending.length === 0) return undefined;
+  const consumed = input.state.getReviewEventAuthorizationConsumption(
+    input.repo,
+    input.pull.number,
+    input.pull.head.sha
+  );
+  const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  if (consumed && processed?.status === "posted") {
+    for (const request of pending) {
+      input.state.recordProcessedCommand({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        commentId: request.commentId,
+        action: "request-changes",
+        status: "ignored",
+        author: request.author
+      });
+    }
+    return undefined;
+  }
+  return pending.at(-1);
 }
 
 export function admitPublicCommands(input: {

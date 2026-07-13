@@ -1485,7 +1485,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
   if (input.commandCommentId) {
     const consumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
-    if (consumption?.commentId === input.commandCommentId) {
+    const queuedRequestChanges = commandDecision.action === "request-changes" ||
+      exactOwnerReviewRequested ||
+      consumption?.commentId === input.commandCommentId;
+    if (consumption && queuedRequestChanges) {
       if (processed?.status === "posted") {
         await reconcileProcessedHeadAfterDirectReviewSafely({ config, github, state, repo, pull, dryRun: input.dryRun });
         return "skipped_processed";
