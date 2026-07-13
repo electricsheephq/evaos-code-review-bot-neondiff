@@ -584,19 +584,10 @@ export class LicenseStore {
         return lifecycleResult("replayed", true, replayedRecord);
       }
 
-      const sameSecondTerminalRenewal =
-        record.status === "revoked" &&
-        input.command === "renew_paid" &&
-        this.getTerminalRevocationEventCreatedAt(input.issuanceIdempotencyKey) ===
-          input.eventCreatedAt;
-      if (record.status === "revoked" && !sameSecondTerminalRenewal) {
+      if (record.status === "revoked") {
         throw new SubscriptionLifecycleTerminalError("subscription entitlement is terminal");
       }
-      if (
-        record.status !== "active" &&
-        record.status !== "expired" &&
-        !sameSecondTerminalRenewal
-      ) {
+      if (record.status !== "active" && record.status !== "expired") {
         throw new SubscriptionLifecyclePolicyError("subscription entitlement state is invalid");
       }
 
@@ -612,8 +603,7 @@ export class LicenseStore {
           this.db
             .prepare(
               `update licenses
-               set expires_at = ?,
-                   status = case when status = 'revoked' then 'revoked' else 'active' end
+               set expires_at = ?, status = 'active'
                where license_key_hash = ?`
             )
             .run(new Date(effectivePeriodEnd).toISOString(), record.licenseKeyHash);
@@ -649,16 +639,27 @@ export class LicenseStore {
               : "updated";
           break;
         }
-        case "revoke":
+        case "revoke": {
+          const storedExpiry = record.expiresAt ? Date.parse(record.expiresAt) : Number.NaN;
+          if (!Number.isFinite(storedExpiry)) {
+            throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+          }
+          // Revocation is terminal at the provider event second. Clamping can
+          // only remove time, and makes a same-second pre-revoke renewal
+          // converge with revoke-first without rewriting append-only history.
+          const terminalExpiry = new Date(
+            Math.min(storedExpiry, input.eventCreatedAt * 1_000)
+          ).toISOString();
           this.db
             .prepare(
               `update licenses
-               set status = 'revoked', revocation_reason = ?
+               set expires_at = ?, status = 'revoked', revocation_reason = ?
                where license_key_hash = ?`
             )
-            .run(input.reason ?? null, record.licenseKeyHash);
+            .run(terminalExpiry, input.reason ?? null, record.licenseKeyHash);
           result = "terminally_revoked";
           break;
+        }
         default:
           throw new SubscriptionLifecycleUnsupportedCommandError(
             "subscription lifecycle command is not implemented"
@@ -756,23 +757,6 @@ export class LicenseStore {
     return this.db
       .prepare("select * from license_subscription_lifecycle_events where event_id = ?")
       .get(eventId) as SubscriptionLifecycleEventRow | undefined;
-  }
-
-  private getTerminalRevocationEventCreatedAt(
-    issuanceIdempotencyKey: string
-  ): number | undefined {
-    const row = this.db
-      .prepare(
-        `select event_created_at
-         from license_subscription_lifecycle_events
-         where issuance_idempotency_key = ?
-           and command = 'revoke'
-           and result = 'terminally_revoked'
-         order by event_created_at desc, event_id desc
-         limit 1`
-      )
-      .get(issuanceIdempotencyKey) as { event_created_at: number } | undefined;
-    return row?.event_created_at;
   }
 
   getLicenseByHash(licenseKeyHash: string): LicenseRecord | undefined {

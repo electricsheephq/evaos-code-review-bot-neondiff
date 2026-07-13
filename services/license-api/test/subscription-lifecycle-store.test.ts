@@ -740,7 +740,7 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
           status: "revoked",
           plan: "monthly_support",
           seats: 1,
-          expiresAt: issued.expiresAt
+          expiresAt: NOW.toISOString()
         }
       });
       assert.equal(store.getLicenseByKey(issued.rawKey)?.revocationReason,
@@ -752,7 +752,7 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
           status: "revoked",
           plan: "monthly_support",
           seats: 1,
-          expiresAt: issued.expiresAt
+          expiresAt: NOW.toISOString()
         }
       });
       const ledger = inspectDatabase<{ normalized_transition: string; result: string }>(
@@ -836,7 +836,7 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
           status: "revoked",
           plan: "monthly_support",
           seats: 1,
-          expiresAt: "2026-08-20T00:00:00.000Z"
+          expiresAt: "2026-07-13T00:00:01.000Z"
         }
       });
       const changed = renewal(issued.request, {
@@ -924,17 +924,18 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
     }
   });
 
-  it("makes same-second paid renewal and revoke fully commutative with terminal dominance", () => {
-    const projections: Array<Record<string, unknown>> = [];
+  it("normalizes same-second renewal and revoke to one terminal entitlement without rewriting history", () => {
+    const entitlements: Array<Record<string, unknown>> = [];
+    const histories: Array<Array<Record<string, unknown>>> = [];
     for (const order of ["renew-first", "revoke-first"] as const) {
       const path = databasePath();
       const firstStore = new LicenseStore(path, { now: () => NOW });
       const secondStore = new LicenseStore(path, { now: () => NOW });
       try {
         const issued = issueBound(firstStore, {
-          idempotencyKey: `checkout-session:terminal-order-${order}`,
-          externalSubscriptionId: `sub_terminal_order_${order}`,
-          externalCheckoutId: `cs_terminal_order_${order}`
+          idempotencyKey: "checkout-session:terminal-order",
+          externalSubscriptionId: "sub_terminal_order",
+          externalCheckoutId: "cs_terminal_order"
         });
         assert.equal(activate(firstStore, {
           licenseKey: issued.rawKey,
@@ -951,24 +952,32 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
           eventId: `evt_terminal_revoke_${order}`,
           eventCreatedAt: NOW_SECONDS
         });
-        const events = order === "renew-first" ? [paid, revoked] : [revoked, paid];
-        const statuses = [
-          applyLifecycle(firstStore, events[0]!).status,
-          applyLifecycle(secondStore, events[1]!).status
-        ].sort();
+        if (order === "renew-first") {
+          assert.equal(applyLifecycle(firstStore, paid).status, "updated");
+          assert.equal(applyLifecycle(secondStore, revoked).status, "terminally_revoked");
+        } else {
+          assert.equal(applyLifecycle(firstStore, revoked).status, "terminally_revoked");
+          const beforeRejectedRenewal = firstStore.getLicenseByKey(issued.rawKey);
+          assert.throws(
+            () => applyLifecycle(secondStore, paid),
+            (error: unknown) => errorName(error) === "SubscriptionLifecycleTerminalError"
+          );
+          assert.deepEqual(secondStore.getLicenseByKey(issued.rawKey), beforeRejectedRenewal);
+        }
         const license = secondStore.getLicenseByKey(issued.rawKey)!;
         assert.equal(license.licenseKeyHash, issued.licenseKeyHash);
         assert.deepEqual(secondStore.listActivations(issued.licenseKeyHash), activations);
-        projections.push({
-          statuses,
-          entitlement: {
-            status: license.status,
-            plan: license.plan,
-            seats: license.seats,
-            expiresAt: license.expiresAt,
-            revocationReason: license.revocationReason
-          },
-          ledger: inspectDatabase<{
+        entitlements.push({
+          status: license.status,
+          plan: license.plan,
+          seats: license.seats,
+          expiresAt: license.expiresAt,
+          revocationReason: license.revocationReason,
+          licenseKeyHash: license.licenseKeyHash,
+          activations: secondStore.listActivations(issued.licenseKeyHash)
+        });
+        histories.push(
+          inspectDatabase<{
             command: string;
             normalized_transition: string;
             result: string;
@@ -978,36 +987,43 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
              from license_subscription_lifecycle_events
              order by command`
           ).map((row) => ({ ...row }))
-        });
+        );
       } finally {
         secondStore.close();
         firstStore.close();
       }
     }
 
-    assert.deepEqual(projections[0], projections[1]);
-    assert.deepEqual(projections[0], {
-      statuses: ["terminally_revoked", "updated"],
-      entitlement: {
-        status: "revoked",
-        plan: "monthly_support",
-        seats: 1,
-        expiresAt: "2026-08-20T00:00:00.000Z",
-        revocationReason: "provider subscription terminated"
-      },
-      ledger: [
-        {
-          command: "renew_paid",
-          normalized_transition: "renew_paid",
-          result: "updated"
-        },
-        {
-          command: "revoke",
-          normalized_transition: "revoke",
-          result: "terminally_revoked"
-        }
-      ]
+    assert.deepEqual(entitlements[0], entitlements[1]);
+    assert.deepEqual(entitlements[0], {
+      status: "revoked",
+      plan: "monthly_support",
+      seats: 1,
+      expiresAt: NOW.toISOString(),
+      revocationReason: "provider subscription terminated",
+      licenseKeyHash: (entitlements[0] as { licenseKeyHash: string }).licenseKeyHash,
+      activations: (entitlements[0] as { activations: unknown[] }).activations
     });
+    assert.deepEqual(histories[0], [
+      {
+        command: "renew_paid",
+        normalized_transition: "renew_paid",
+        result: "updated"
+      },
+      {
+        command: "revoke",
+        normalized_transition: "revoke",
+        result: "terminally_revoked"
+      }
+    ]);
+    assert.deepEqual(histories[1], [
+      {
+        command: "revoke",
+        normalized_transition: "revoke",
+        result: "terminally_revoked"
+      }
+    ]);
+    assert.notDeepEqual(histories[0], histories[1]);
   });
 
   it("rolls back every non-mutating watermark when its ledger insert fails", () => {
