@@ -110,6 +110,8 @@ export interface RevokeSubscriptionLifecycleRequest
     | "subscription_canceled"
     | "subscription_unpaid"
     | "subscription_incomplete_expired";
+  /** Preserves schema-v1 replay hashing when the wire payload omitted reason. */
+  readonly reasonProvided: boolean;
 }
 
 export type SubscriptionLifecycleRequestWithoutHash =
@@ -327,7 +329,8 @@ export function parseSubscriptionLifecycleRequest(
         command,
         providerEventType: providerEventType as RevokeSubscriptionLifecycleRequest["providerEventType"],
         subscriptionStatus: subscriptionStatus as RevokeSubscriptionLifecycleRequest["subscriptionStatus"],
-        reason: reason!
+        reason: reason!,
+        reasonProvided: body.reason !== undefined
       };
       break;
   }
@@ -415,7 +418,7 @@ export function canonicalSubscriptionLifecycleRequestHash(
         request.providerEventType,
         request.subscriptionStatus,
         request.cancelAtPeriodEnd,
-        request.reason ?? null
+        request.reasonProvided === false ? null : request.reason ?? null
       ];
       break;
   }

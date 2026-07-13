@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activateLicense,
@@ -18,6 +20,39 @@ const dbPath = "/data/license.sqlite";
 const litestreamVersion = "0.5.14";
 const litestreamLinuxX64Sha = "32083dd2af13840b273c538360b828368d7b82bbaa2c641106052dc7814ed956";
 const litestreamLinuxArm64Sha = "b49b3d01fb0a8b4d426ee613c080fba44acae0551587dc43525dcd93eee64b4f";
+const legacyRestoreVerifier = join(licenseApiDir, "src/verify-legacy-restore.ts");
+
+const legacySchema = `
+  create table licenses (
+    license_key_hash text primary key,
+    plan text not null,
+    repo_visibility_scope text not null,
+    private_repo_allowed integer not null default 1,
+    update_entitlement integer not null default 0,
+    seats integer not null default 1,
+    expires_at text,
+    status text not null default 'active',
+    revocation_reason text,
+    created_at text not null default (datetime('now'))
+  );
+  create table activations (
+    license_key_hash text not null,
+    machine_id text not null,
+    repo text,
+    activated_at text not null default (datetime('now')),
+    last_seen_at text not null default (datetime('now')),
+    primary key (license_key_hash, machine_id)
+  );
+  create table license_issuance_events (
+    idempotency_key text primary key,
+    license_key_hash text not null,
+    request_hash text not null,
+    source text,
+    external_ref text,
+    created_at text not null default (datetime('now')),
+    foreign key (license_key_hash) references licenses(license_key_hash)
+  );
+`;
 
 function readServiceFile(relativePath: string): string {
   return readFileSync(join(licenseApiDir, relativePath), "utf8");
@@ -151,8 +186,8 @@ describe("license service disaster recovery wiring", () => {
     expect(drRunbook).toContain(
       'litestream restore -timestamp "$PRE_V2_RECOVERY_TIMESTAMP" -config "$LITESTREAM_CONFIG" -o "$FRESH_RESTORE_PATH" "$LICENSE_DB_PATH"'
     );
-    expect(drRunbook).toContain('pragma quick_check');
-    expect(drRunbook).toContain('pragma user_version');
+    expect(drRunbook).toContain('node /app/dist/verify-legacy-restore.js "$FRESH_RESTORE_PATH"');
+    expect(drRunbook).not.toContain('sqlite3 "$FRESH_RESTORE_PATH"');
     expect(drRunbook).toContain("exact legacy schema signature");
     expect(drRunbook).toContain("non-writing replica destination");
     expect(deployRunbook).toContain("point-in-time restore command");
@@ -186,6 +221,34 @@ describe("license service disaster recovery wiring", () => {
     expect(serviceReadme).not.toContain("Cross-cutting: 429");
     expect(drRunbook).not.toContain("/Volumes/LEXAR/Codex");
     expect(drRunbook).not.toMatch(/AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|secret-access-key:\s+\S|account-key:\s+\S/i);
+  });
+
+  it("executes the shipped Node verifier against a real legacy restore and rejects non-legacy schema", () => {
+    const root = mkdtempSync(join(tmpdir(), "nd-license-restore-verifier-"));
+    try {
+      const legacyPath = join(root, "legacy.sqlite");
+      const legacyDb = new DatabaseSync(legacyPath);
+      legacyDb.exec(legacySchema);
+      legacyDb.close();
+
+      const verified = execFileSync(
+        process.execPath,
+        ["--import", "tsx", legacyRestoreVerifier, legacyPath],
+        { cwd: repoRoot, encoding: "utf8" }
+      );
+      expect(verified.trim()).toBe("legacy restore verification ok");
+
+      const v2Path = join(root, "v2.sqlite");
+      const v2Store = new LicenseStore(v2Path);
+      v2Store.close();
+      expect(() => execFileSync(
+        process.execPath,
+        ["--import", "tsx", legacyRestoreVerifier, v2Path],
+        { cwd: repoRoot, encoding: "utf8", stdio: "pipe" }
+      )).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

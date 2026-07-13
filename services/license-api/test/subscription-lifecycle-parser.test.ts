@@ -419,6 +419,26 @@ test("derives a non-secret revoke reason code and rejects arbitrary caller text"
   }
 });
 
+test("preserves schema-v1 omitted-reason replay hashing while deriving a safe stored reason", () => {
+  const omitted = parse(lifecycleBody("revoke", undefined, "canceled"));
+  assert.equal(omitted.command, "revoke");
+  assert.equal(omitted.reason, "subscription_canceled");
+  assert.equal(omitted.reasonProvided, false);
+  assert.equal(
+    omitted.requestHash,
+    "f263fb7a07ff32aafed816b368c7adf5bbe1b300ea59f58c54d08b9dd25c42b6"
+  );
+  assert.equal(canonicalSubscriptionLifecycleRequestHash(omitted), omitted.requestHash);
+
+  const provided = parse({
+    ...lifecycleBody("revoke", undefined, "canceled"),
+    reason: "subscription_canceled"
+  });
+  assert.equal(provided.command, "revoke");
+  assert.equal(provided.reasonProvided, true);
+  assert.notEqual(provided.requestHash, omitted.requestHash);
+});
+
 test("validates optional or required period ends as strict future instants", () => {
   for (const value of [
     "not-a-date",

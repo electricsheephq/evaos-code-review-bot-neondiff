@@ -72,17 +72,16 @@ PRE_V2_RECOVERY_TIMESTAMP="<recorded-rfc3339-timestamp>"
 FRESH_RESTORE_PATH="<fresh-nonexistent-license-db-path>"
 test ! -e "$FRESH_RESTORE_PATH"
 litestream restore -timestamp "$PRE_V2_RECOVERY_TIMESTAMP" -config "$LITESTREAM_CONFIG" -o "$FRESH_RESTORE_PATH" "$LICENSE_DB_PATH"
-test "$(sqlite3 "$FRESH_RESTORE_PATH" 'pragma quick_check')" = "ok"
-test "$(sqlite3 "$FRESH_RESTORE_PATH" 'pragma user_version')" = "0"
-sqlite3 "$FRESH_RESTORE_PATH" \
-  "select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%' order by type,name"
+node /app/dist/verify-legacy-restore.js "$FRESH_RESTORE_PATH"
 ```
 
-Compare the final query with the exact legacy schema signature from the reviewed
-pre-v2 source. Any extra/missing object or constraint is a stop condition. Keep
-the restored file detached while checking it; do not let a v2 process open it,
-and do not attach the pre-v2 image until quick-check, version, and exact legacy
-schema verification all pass. The command shape follows Litestream's
+The verifier ships in the Node 26 runtime image and uses built-in `node:sqlite`.
+It requires a regular file, opens it read-only, runs `pragma quick_check`,
+requires `user_version=0`, and compares every non-internal schema object and
+constraint with an in-memory exact legacy schema signature. Any mismatch is a
+stop condition. Keep the restored file detached while checking it; do not let a
+v2 process open it, and do not attach the pre-v2 image until verification passes.
+The restore command shape follows Litestream's
 [restore reference](https://litestream.io/reference/restore/): `-timestamp`
 selects the recovery point and `-o` keeps the source database path untouched.
 

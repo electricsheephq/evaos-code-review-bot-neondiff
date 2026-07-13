@@ -78,6 +78,11 @@ code, while supplying any other value fails with `400 invalid`. This prevents
 emails, payment/customer identifiers, CR/LF, and terminal controls from reaching
 SQLite, license responses, admin output, logs, or evidence.
 
+For schema-v1 replay compatibility, an omitted reason retains the historical
+canonical request hash (`null` in the reason slot) even though the normalized
+request and stored revocation use the derived safe code. Supplying the exact
+code is explicit content and therefore has its own canonical hash.
+
 ## Reference: server-owned checkout policy
 
 Checkout callers do not choose plan, trial length, maximum renewal period,
