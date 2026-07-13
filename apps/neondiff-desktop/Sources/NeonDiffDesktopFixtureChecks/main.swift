@@ -87,7 +87,7 @@ let validFixture = Data(
           "credentialPresent": true,
           "verification": "healthy"
         },
-        "license": {"entitlement": "public repositories", "credentialPresent": false, "updateChannel": "dev"},
+        "license": {"entitlement": "active", "credentialPresent": true, "updateChannel": "dev"},
         "github": {"connection": "connected", "login": "fixture-user", "repositoryCount": 1},
         "logText": "Fixture log: no live process was contacted."
       },
@@ -104,6 +104,22 @@ check(fixture.id == "providers-verified", "fixture id decodes")
 check(fixture.surface.section == .providers, "fixture selects Providers")
 check(fixture.environment.contentSize == nil, "content size remains a launch concern")
 check(fixture.state.provider?.credentialPresent == true, "fixture stores presence metadata only")
+
+let unreachableDoneFixture = try mutatedManifest(validFixture) { object in
+    object["surface"] = ["section": "overview", "onboardingStep": "done"]
+    var state = object["state"] as! [String: Any]
+    state["provider"] = NSNull()
+    object["state"] = state
+}
+expectFixtureFailure("unreachable onboarding done state", data: unreachableDoneFixture)
+
+let unactivatedDoneFixture = try mutatedManifest(validFixture) { object in
+    object["surface"] = ["section": "overview", "onboardingStep": "done"]
+    var state = object["state"] as! [String: Any]
+    state["license"] = ["entitlement": "not activated", "credentialPresent": false, "updateChannel": "dev"]
+    object["state"] = state
+}
+expectFixtureFailure("unactivated onboarding done state", data: unactivatedDoneFixture)
 
 let safeHyphenatedCopy = Data(
     String(decoding: validFixture, as: UTF8.self)
@@ -132,6 +148,138 @@ let unsupportedFixtureVersion = Data(
         .utf8
 )
 expectFixtureFailure("unsupported fixture schema", data: unsupportedFixtureVersion)
+
+let nonISOClockFixture = Data(
+    String(decoding: validFixture, as: UTF8.self)
+        .replacingOccurrences(of: "2026-07-10T12:00:00Z", with: "0")
+        .utf8
+)
+expectFixtureFailure("non-ISO fixture clock", data: nonISOClockFixture)
+
+let offsetClockFixture = Data(
+    String(decoding: validFixture, as: UTF8.self)
+        .replacingOccurrences(of: "2026-07-10T12:00:00Z", with: "2026-07-10T12:00:00+07:00")
+        .utf8
+)
+expectFixtureFailure("non-canonical offset fixture clock", data: offsetClockFixture)
+
+let invalidCalendarClockFixture = Data(
+    String(decoding: validFixture, as: UTF8.self)
+        .replacingOccurrences(of: "2026-07-10T12:00:00Z", with: "2026-02-30T12:00:00Z")
+        .utf8
+)
+expectFixtureFailure("invalid calendar fixture clock", data: invalidCalendarClockFixture)
+
+for clock in ["0000-01-01T00:00:00Z", "1500-02-29T00:00:00Z"] {
+    let fixture = Data(
+        String(decoding: validFixture, as: UTF8.self)
+            .replacingOccurrences(of: "2026-07-10T12:00:00Z", with: clock)
+            .utf8
+    )
+    expectFixtureFailure("out-of-contract fixture clock", data: fixture)
+}
+
+let stringContentSizeFixture = try mutatedManifest(validFixture) { object in
+    var environment = object["environment"] as! [String: Any]
+    environment["contentSize"] = ["width": "1040", "height": "680"]
+    object["environment"] = environment
+}
+expectFixtureFailure("string fixture content size", data: stringContentSizeFixture)
+
+let nonStringFixtureID = try mutatedManifest(validFixture) { object in
+    object["id"] = 1
+}
+expectFixtureFailure("non-string fixture id", data: nonStringFixtureID)
+
+let nonStringProviderURL = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var provider = state["provider"] as! [String: Any]
+    provider["baseURL"] = ["https://example.com"]
+    state["provider"] = provider
+    object["state"] = state
+}
+expectFixtureFailure("non-string provider base URL", data: nonStringProviderURL)
+
+let hostlessProviderURL = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var provider = state["provider"] as! [String: Any]
+    provider["baseURL"] = "https://"
+    state["provider"] = provider
+    object["state"] = state
+}
+expectFixtureFailure("hostless provider base URL", data: hostlessProviderURL)
+
+for (label, baseURL) in [
+    ("control-character provider base URL", "https://\nexample.com"),
+    ("backslash provider base URL", #"https://example.com\evil"#),
+    ("out-of-range provider port", "https://example.com:99999"),
+    ("zero provider port", "https://example.com:0"),
+    ("out-of-range IPv4 provider host", "https://256.256.256.256"),
+    ("ambiguous numeric provider host", "https://9999999999"),
+    ("provider URL userinfo", "https://@example.com"),
+    ("provider URL trailing whitespace", "https://example.com ")
+] {
+    let fixture = try mutatedManifest(validFixture) { object in
+        var state = object["state"] as! [String: Any]
+        var provider = state["provider"] as! [String: Any]
+        provider["baseURL"] = baseURL
+        state["provider"] = provider
+        object["state"] = state
+    }
+    expectFixtureFailure(label, data: fixture)
+}
+
+let canonicalIPv4ProviderURL = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var provider = state["provider"] as! [String: Any]
+    provider["baseURL"] = "http://127.0.0.1:11434/v1"
+    state["provider"] = provider
+    object["state"] = state
+}
+_ = try DesktopEvaluationFixture.decode(data: canonicalIPv4ProviderURL)
+
+let offsetRepositoryTimestamp = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var repositories = state["repositories"] as! [[String: Any]]
+    repositories[0]["lastReview"] = "2026-07-10T11:55:00+07:00"
+    state["repositories"] = repositories
+    object["state"] = state
+}
+expectFixtureFailure("non-canonical repository timestamp", data: offsetRepositoryTimestamp)
+
+let invalidCalendarRepositoryTimestamp = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var repositories = state["repositories"] as! [[String: Any]]
+    repositories[0]["lastReview"] = "2026-02-30T11:55:00Z"
+    state["repositories"] = repositories
+    object["state"] = state
+}
+expectFixtureFailure("invalid calendar repository timestamp", data: invalidCalendarRepositoryTimestamp)
+
+let unactivatedPostOnboardingFixture = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    state["license"] = ["entitlement": "not activated", "credentialPresent": false, "updateChannel": "dev"]
+    object["state"] = state
+}
+expectFixtureFailure("unactivated post-onboarding state", data: unactivatedPostOnboardingFixture)
+
+let oversizedRepositoryCount = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var github = state["github"] as! [String: Any]
+    github["repositoryCount"] = 10_001
+    state["github"] = github
+    object["state"] = state
+}
+expectFixtureFailure("oversized repository count", data: oversizedRepositoryCount)
+
+let semanticOversizedFixture = try mutatedManifest(validFixture) { object in
+    object["safeCopy"] = Array(repeating: String(repeating: "x", count: 3_000), count: 100)
+}
+expectFixtureFailure("semantic oversized fixture", data: semanticOversizedFixture)
+
+var whitespacePaddedFixture = validFixture
+whitespacePaddedFixture.append(Data(repeating: 0x20, count: 256 * 1_024))
+expectFixtureFailure("whitespace-padded oversized fixture", data: whitespacePaddedFixture)
 
 let unsupportedHealthFixture = Data(
     String(decoding: validFixture, as: UTF8.self)
@@ -252,27 +400,38 @@ expectCatalogFailure("symlinked catalog fixture", url: symlinkCatalogURL)
 let validManifest = Data(
     #"""
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "generatedAt": "2026-07-11T00:00:00Z",
       "repository": "electricsheephq/evaos-code-review-bot-neondiff",
       "headSHA": "ddbd45066473b833fcc8984dca0716ca9ef81e6d",
       "artifact": {
         "path": "artifacts/NeonDiffDesktop.app",
         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "hashAlgorithm": "sha256-tree-v1",
         "buildIdentity": "NeonDiffDesktop 1.1.0 fixture candidate"
       },
       "catalogSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "fixturesSHA256": "abababababababababababababababababababababababababababababababab",
       "platform": {
         "macOSVersion": "26.4",
         "xcodeVersion": "26.0",
         "swiftVersion": "6.2.4",
         "architecture": "arm64",
-        "backingScale": 2.0
+        "backingScale": 2.0,
+        "evidence": {"path": "validation/platform.json", "sha256": "8989898989898989898989898989898989898989898989898989898989898989"}
       },
       "testSummary": {
         "testCount": 7,
         "durationSeconds": 4.25,
-        "xcresultSHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "runner": "swift-testing",
+        "summary": {
+          "path": "tests/test-summary.json",
+          "sha256": "5656565656565656565656565656565656565656565656565656565656565656"
+        },
+        "result": {
+          "path": "tests/swift-testing.log",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
       },
       "cases": [
         {
@@ -286,7 +445,8 @@ let validManifest = Data(
           "screenshot": {"path": "tab-overview-1040x680.png", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
           "accessibility": {"path": "tab-overview-1040x680.ax.json", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
           "geometry": {"path": "tab-overview-1040x680.geometry.json", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
-          "goldenMetrics": {"ssim": 0.999, "changedPixelPercent": 0.1, "largestChangedRegionPercent": 0.05, "maskVersion": "v1"},
+          "readiness": {"path": "tab-overview-1040x680.readiness.json", "sha256": "4545454545454545454545454545454545454545454545454545454545454545"},
+          "visualBaseline": {"status": "captured-no-reference"},
           "expectedState": "healthy"
         },
         {
@@ -300,11 +460,17 @@ let validManifest = Data(
           "screenshot": {"path": "tab-overview-1280x800.png", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
           "accessibility": {"path": "tab-overview-1280x800.ax.json", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
           "geometry": {"path": "tab-overview-1280x800.geometry.json", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
-          "goldenMetrics": {"ssim": 0.999, "changedPixelPercent": 0.1, "largestChangedRegionPercent": 0.05, "maskVersion": "v1"},
+          "readiness": {"path": "tab-overview-1280x800.readiness.json", "sha256": "6767676767676767676767676767676767676767676767676767676767676767"},
+          "visualBaseline": {"status": "captured-no-reference"},
           "expectedState": "healthy"
         }
       ],
-      "scans": {"secretScanPassed": true, "releaseBoundaryPassed": true},
+      "scans": {
+        "secretScanPassed": true,
+        "releaseBoundaryPassed": true,
+        "secretScan": {"path": "validation/packet-safety-scan.json", "sha256": "1212121212121212121212121212121212121212121212121212121212121212"},
+        "releaseBoundary": {"path": "validation/release-boundary.log", "sha256": "3434343434343434343434343434343434343434343434343434343434343434"}
+      },
       "proofBoundary": "Deterministic source-build baseline only; not signed, notarized, or GA proof.",
       "unresolvedFindings": []
     }
@@ -314,6 +480,17 @@ let manifest = try DesktopEvaluationEvidenceManifest.decode(data: validManifest)
 check(manifest.headSHA == "ddbd45066473b833fcc8984dca0716ca9ef81e6d", "manifest pins exact source SHA")
 check(manifest.cases.count == 2, "manifest permits one fixture at two canonical sizes")
 check(manifest.cases.last?.requestedContentSize == DesktopEvaluationContentSize(width: 1280, height: 800), "manifest pins requested case geometry")
+
+let oversizedManifestString = try mutatedManifest(validManifest) { object in
+    var platform = object["platform"] as! [String: Any]
+    platform["xcodeVersion"] = String(repeating: "x", count: 5_000)
+    object["platform"] = platform
+}
+expectManifestFailure("oversized manifest string", data: oversizedManifestString)
+
+var whitespacePaddedManifest = validManifest
+whitespacePaddedManifest.append(Data(repeating: 0x20, count: 1024 * 1_024))
+expectManifestFailure("whitespace-padded oversized manifest", data: whitespacePaddedManifest)
 
 let invalidManifestHash = Data(
     String(decoding: validManifest, as: UTF8.self)
@@ -354,7 +531,6 @@ do {
 
 let failingRunManifest = Data(
     String(decoding: validManifest, as: UTF8.self)
-        .replacingOccurrences(of: #""ssim": 0.999"#, with: #""ssim": 0.8"#)
         .replacingOccurrences(
             of: #""unresolvedFindings": []"#,
             with: #""unresolvedFindings": [{"id":"layout-drift","severity":"P0","owner":"desktop-team","recordedAt":"2026-07-11T00:00:00Z","reason":"Baseline records the blocking drift for remediation."}]"#
@@ -363,7 +539,34 @@ let failingRunManifest = Data(
 )
 let failingManifest = try DesktopEvaluationEvidenceManifest.decode(data: failingRunManifest)
 check(failingManifest.unresolvedFindings.first?.severity == .p0, "manifest truthfully records blocking findings")
-check(failingManifest.cases.first?.goldenMetrics.ssim == 0.8, "manifest truthfully records below-threshold goldens")
+check(failingManifest.cases.first?.visualBaseline.status == .capturedNoReference, "manifest does not fabricate a comparison for a fresh baseline")
+
+for timestamp in [
+    "2026-02-30T00:00:00Z",
+    "2026-02-29T00:00:00Z",
+    "2026-07-11T24:00:00Z",
+    "2026-07-11T00:00:00+00:00",
+    "2026-07-11T00:00:00.000Z",
+    "1999-12-31T23:59:59Z",
+    "2100-01-01T00:00:00Z"
+] {
+    let invalidManifestTimestamp = try mutatedManifest(validManifest) { object in
+        object["generatedAt"] = timestamp
+    }
+    expectManifestFailure("manifest non-canonical timestamp \(timestamp)", data: invalidManifestTimestamp)
+}
+
+let leapDayManifestTimestamp = try mutatedManifest(validManifest) { object in
+    object["generatedAt"] = "2024-02-29T23:59:59Z"
+}
+_ = try DesktopEvaluationEvidenceManifest.decode(data: leapDayManifestTimestamp)
+
+let invalidCalendarFindingTimestamp = try mutatedManifest(failingRunManifest) { object in
+    var findings = object["unresolvedFindings"] as! [[String: Any]]
+    findings[0]["recordedAt"] = "2026-02-30T00:00:00Z"
+    object["unresolvedFindings"] = findings
+}
+expectManifestFailure("manifest finding invalid calendar timestamp", data: invalidCalendarFindingTimestamp)
 
 let emptyCasesManifest = try mutatedManifest(validManifest) { object in
     object["cases"] = []

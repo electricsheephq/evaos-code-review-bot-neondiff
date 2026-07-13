@@ -29,6 +29,10 @@ let package = Package(
             name: "NeonDiffDesktopAppCoreTests",
             dependencies: ["NeonDiffDesktopAppCore", "NeonDiffDesktopCore"]
         ),
+        .testTarget(
+            name: "NeonDiffDesktopEvaluationSupportTests",
+            dependencies: ["NeonDiffDesktopEvaluationSupport"]
+        ),
         .executableTarget(
             name: "NeonDiffDesktop",
             dependencies: [
@@ -48,8 +52,20 @@ let package = Package(
             dependencies: ["NeonDiffDesktopCore"]
         ),
         .executableTarget(
+            name: "NeonDiffDesktopCapture",
+            dependencies: ["NeonDiffDesktopCore"]
+        ),
+        .executableTarget(
+            name: "NeonDiffDesktopFixtureResolve",
+            dependencies: ["NeonDiffDesktopEvaluationSupport"]
+        ),
+        .executableTarget(
             name: "NeonDiffDesktopFixtureChecks",
             dependencies: ["NeonDiffDesktopCore", "NeonDiffDesktopEvaluationSupport"]
+        ),
+        .executableTarget(
+            name: "NeonDiffDesktopManifestChecks",
+            dependencies: ["NeonDiffDesktopEvaluationSupport"]
         ),
         .target(
             name: "NeonDiffDesktopEvaluationSupport",
