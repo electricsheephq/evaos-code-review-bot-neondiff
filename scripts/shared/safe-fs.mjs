@@ -13,8 +13,9 @@ export function walkDescriptorTree(root, visitor) {
       [helper, "--root", resolve(root)],
       { encoding: "utf8", maxBuffer: maximumOutputBytes }
     );
-  } catch {
-    throw new Error("descriptor-relative tree traversal failed");
+  } catch (error) {
+    const stderr = error?.stderr?.toString().trim();
+    throw new Error(stderr || (error instanceof Error ? error.message : String(error)));
   }
   for (const line of output.split("\n")) {
     if (!line) continue;

@@ -7,17 +7,23 @@ guard CommandLine.arguments.count == 2 else {
 }
 
 let url = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
-let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-guard url.isFileURL,
-      url.path.hasPrefix("/"),
-      values.isRegularFile == true,
-      values.isSymbolicLink != true else {
+let manifestData: Data
+do {
+    let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard url.isFileURL,
+          url.path.hasPrefix("/"),
+          values.isRegularFile == true,
+          values.isSymbolicLink != true else {
+        throw CocoaError(.fileReadInvalidFileName)
+    }
+    manifestData = try Data(contentsOf: url, options: [.mappedIfSafe])
+} catch {
     FileHandle.standardError.write(Data("manifest must be an absolute regular non-symlink file\n".utf8))
     exit(65)
 }
 
 let manifest = try DesktopEvaluationEvidenceManifest.decode(
-    data: Data(contentsOf: url, options: [.mappedIfSafe])
+    data: manifestData
 )
 let result: [String: Any] = [
     "ok": true,

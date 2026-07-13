@@ -235,7 +235,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            }), let action = item.action {
             NSApp.sendAction(action, to: item.target, from: item)
         }
-        guard NSApp.windows.isEmpty, remainingAttempts > 1 else { return }
+        guard NSApp.windows.isEmpty else { return }
+        guard remainingAttempts > 1 else {
+            NSLog(
+                "NeonDiff Desktop evaluation: failed to open a window through the Cmd+N menu action after exhausting retries"
+            )
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.openEvaluationWindowIfNeeded(remainingAttempts: remainingAttempts - 1)
         }

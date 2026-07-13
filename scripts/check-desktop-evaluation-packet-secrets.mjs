@@ -33,8 +33,15 @@ function isWithin(root, candidate) {
 
 function looksBinary(data) {
   const magic = data.subarray(0, 4).toString("hex");
+  let invalidUTF8 = false;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(data);
+  } catch {
+    invalidUTF8 = true;
+  }
   return ["7f454c46", "feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe", "bebafeca"].includes(magic)
-    || data.subarray(0, Math.min(data.length, 8192)).includes(0);
+    || data.subarray(0, Math.min(data.length, 8192)).includes(0)
+    || invalidUTF8;
 }
 
 const entries = [];
@@ -99,6 +106,10 @@ for (const entry of entries) {
       } else {
         unsupportedBinaryFiles.push(rel);
       }
+      continue;
+    }
+    if (looksBinary(entry.data)) {
+      unsupportedBinaryFiles.push(rel);
       continue;
     }
     scannedFiles += 1;

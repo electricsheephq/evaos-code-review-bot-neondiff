@@ -26,6 +26,7 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .top) {
             OperatorBackdrop()
+            EvaluationRootAccessibilityMarker(identifier: rootAccessibilityIdentifier)
             Rectangle()
                 .fill(NeonDiffTheme.accent)
                 .frame(height: 34)
@@ -55,7 +56,6 @@ struct ContentView: View {
         }
         .tint(NeonDiffTheme.accent)
         .buttonStyle(OperatorButtonStyle())
-        .accessibilityIdentifier(rootAccessibilityIdentifier)
         .preferredColorScheme(preferredColorScheme)
         .sheet(isPresented: $model.isOnboardingPresented) {
             OnboardingWizardView(model: model)
@@ -66,6 +66,19 @@ struct ContentView: View {
                 .interactiveDismissDisabled(model.onboardingFlow.currentStep != .done)
                 .onAppear { onSurfaceReady?() }
         }
+    }
+}
+
+private struct EvaluationRootAccessibilityMarker: View {
+    let identifier: String
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("NeonDiff Desktop root")
+            .accessibilityIdentifier(identifier)
+            .allowsHitTesting(false)
     }
 }
 

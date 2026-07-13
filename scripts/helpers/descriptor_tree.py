@@ -20,7 +20,11 @@ def emit(value):
 
 def stable_read(parent_fd, name, relative_path):
     global byte_count
-    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        dir_fd=parent_fd,
+    )
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):

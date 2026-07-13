@@ -115,9 +115,9 @@ private struct CaptureRunner {
             "ok": true,
             "fixtureId": ready.fixtureId,
             "windowNumber": ready.windowNumber,
-            "screenshot": evidence(screenshotURL),
-            "accessibility": evidence(accessibilityURL),
-            "geometry": evidence(geometryURL)
+            "screenshot": try evidence(screenshotURL),
+            "accessibility": try evidence(accessibilityURL),
+            "geometry": try evidence(geometryURL)
         ]
     }
 
@@ -304,12 +304,12 @@ private struct CaptureRunner {
         return AXValueGetValue(value as! AXValue, .cgSize, &size) ? size : nil
     }
 
-    private func evidence(_ url: URL) -> [String: String] {
-        ["path": url.lastPathComponent, "sha256": sha256(url)]
+    private func evidence(_ url: URL) throws -> [String: String] {
+        ["path": url.lastPathComponent, "sha256": try sha256(url)]
     }
 
-    private func sha256(_ url: URL) -> String {
-        guard let data = try? Data(contentsOf: url) else { return "" }
+    private func sha256(_ url: URL) throws -> String {
+        let data = try Data(contentsOf: url)
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 

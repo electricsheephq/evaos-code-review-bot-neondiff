@@ -542,4 +542,20 @@ describe("desktop evaluation packet integrity", { timeout: 30_000 }, () => {
     const result = verify(value.packet);
     expect(result.status).not.toBe(0);
   });
+
+  it("rejects binary content with an unknown extension anywhere outside the app artifact", () => {
+    const value = packetFixture();
+    const blob = join(value.packet, "cases", "fixture-00", "1040x680", "opaque-evidence");
+    writeFileSync(blob, Buffer.from([0xff, 0xfe, 0xfd]));
+
+    const scan = spawnSync(
+      "node",
+      ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", value.packet],
+      { encoding: "utf8" }
+    );
+    expect(scan.status).toBe(1);
+    expect(JSON.parse(scan.stdout).unsupportedBinaryFiles).toContain(
+      "cases/fixture-00/1040x680/opaque-evidence"
+    );
+  });
 });

@@ -151,11 +151,12 @@ describe("desktop evaluation production boundary", () => {
     expect(windowConfigurator).toMatch(/readinessAttemptCount \+= 1[\s\S]*readinessAttemptCount < 50[\s\S]*renderLatch\.isReady/);
     expect(windowConfigurator).toContain("window.isRestorable = false");
     expect(app).toContain("applicationShouldRestoreSecureApplicationState");
-    expect(app).toContain("startsUpdater: context == nil");
+    expect(app).toContain("failed to open a window through the Cmd+N menu action after exhausting retries");
     expect(app).toContain('keyEquivalent == "n"');
     expect(app).not.toContain('item(withTitle: "File")');
     expect(app).not.toContain('hasPrefix("New NeonDiff Desktop Window")');
-    expect(updater).toContain("startsUpdater: Bool = true");
+    expect(updater).toContain("Updates blocked pending native activation proof");
+    expect(updater).not.toContain("SPUStandardUpdaterController");
     expect(manifestBuilder).toContain('visualBaseline: { status: "captured-no-reference" }');
     expect(manifestBuilder).not.toContain("goldenMetrics");
     expect(runner).toContain("kill -KILL");
@@ -165,5 +166,44 @@ describe("desktop evaluation production boundary", () => {
     );
     expect(resolver).toContain("SIGKILL");
     expect(resolver).not.toContain("readDataToEndOfFile");
+  });
+
+  it("fails capture when evidence bytes cannot be read for hashing", () => {
+    const helper = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopCapture/main.swift",
+      "utf8"
+    );
+
+    expect(helper).toMatch(/private func evidence\(_ url: URL\) throws/);
+    expect(helper).toContain("try Data(contentsOf: url)");
+    expect(helper).not.toContain("guard let data = try? Data(contentsOf: url) else { return \"\" }");
+  });
+
+  it("routes missing manifest files through the stable exit-65 contract", { timeout: 30_000 }, () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-manifest-checks-"));
+    roots.push(root);
+    const result = spawnSync(
+      "swift",
+      [
+        "run",
+        "--package-path",
+        "apps/neondiff-desktop",
+        "NeonDiffDesktopManifestChecks",
+        join(root, "missing-manifest.json")
+      ],
+      { encoding: "utf8", timeout: 30_000 }
+    );
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(65);
+    expect(result.stderr).toContain("manifest must be an absolute regular non-symlink file");
+    expect(result.stderr).not.toMatch(/Fatal error|uncaught/i);
+  });
+
+  it("records the current Xcode host without treating issue 516 as an install blocker", () => {
+    const docs = readFileSync("apps/neondiff-desktop/docs/ui-evaluation.md", "utf8");
+
+    expect(docs).toMatch(/Xcode 26\.6 is installed and selected/);
+    expect(docs).toMatch(/hosted XCUITest\/`.xcresult` coverage remains #516/);
+    expect(docs).not.toContain("full-Xcode/storage gated");
   });
 });

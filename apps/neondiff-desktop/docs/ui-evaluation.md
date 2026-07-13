@@ -158,8 +158,9 @@ DEBUG-only slice must add named fixtures and launched capture for:
 
 Every case must settle explicitly before capture and produce screenshot, AX,
 and geometry hashes at minimum and baseline sizes. AppCore and real Core/AppCore
-Swift Testing targets landed in #529; full hosted XCUITest/`.xcresult` coverage
-remains #516 and full-Xcode/storage gated. Until the expanded launched matrix
+Swift Testing targets landed in #529. Xcode 26.6 is installed and selected on
+the development host; hosted XCUITest/`.xcresult` coverage remains #516 and is
+not blocked on installing Xcode. Until the expanded launched matrix
 and later interaction gates land, this contract does not prove layout stability,
 accessibility, signed/notarized distribution, browser/native parity, or GA.
 Website/native alignment also remains #520 work; that issue must bind a dated
