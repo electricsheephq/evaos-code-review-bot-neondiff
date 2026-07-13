@@ -21,7 +21,8 @@ const dbPath = "/data/license.sqlite";
 const litestreamVersion = "0.5.14";
 const litestreamLinuxX64Sha = "32083dd2af13840b273c538360b828368d7b82bbaa2c641106052dc7814ed956";
 const litestreamLinuxArm64Sha = "b49b3d01fb0a8b4d426ee613c080fba44acae0551587dc43525dcd93eee64b4f";
-const legacyRestoreVerifier = join(licenseApiDir, "dist/verify-legacy-restore.js");
+const licenseApiTypescriptCompiler = join(licenseApiDir, "node_modules/typescript/bin/tsc");
+const licenseApiTypescriptConfig = join(licenseApiDir, "tsconfig.json");
 
 const legacySchema = `
   create table licenses (
@@ -228,7 +229,16 @@ describe("license service disaster recovery wiring", () => {
     const root = mkdtempSync(join(tmpdir(), "nd-license-restore-verifier-"));
     try {
       const alternateCwd = join(root, "alternate-cwd");
+      const compiledRoot = join(root, "compiled-license-api");
       mkdirSync(alternateCwd);
+      execFileSync(process.execPath, [
+        licenseApiTypescriptCompiler,
+        "-p",
+        licenseApiTypescriptConfig,
+        "--outDir",
+        compiledRoot
+      ], { cwd: alternateCwd, stdio: "pipe" });
+      const legacyRestoreVerifier = join(compiledRoot, "verify-legacy-restore.js");
       const legacyPath = join(root, "legacy.sqlite");
       const legacyDb = new DatabaseSync(legacyPath);
       legacyDb.exec(legacySchema);
