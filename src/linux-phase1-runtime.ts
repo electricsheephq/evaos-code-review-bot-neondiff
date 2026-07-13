@@ -14,6 +14,8 @@ export type LinuxResourceSample = {
   processSwapBytes: number;
   processAlive: number;
   pid: number;
+  periodicFailure?: number;
+  nvidiaSmiDrift?: number;
 };
 
 type Session = {
@@ -177,6 +179,11 @@ function openPinnedNvidiaSmi(expectedNvidiaSmiSha256: string): number {
 }
 
 function queryVramBytes(pid: number, nvidiaSmiFd: number): { bytes: number; observed: number } {
+  // The descriptor is pinned and hashed at attach, then re-hashed before the
+  // run can terminate successfully. This prevents pathname replacement and
+  // fails terminal evidence on ordinary in-session inode mutation without
+  // adding full-binary hashing overhead to every one-second sample. A
+  // privileged mutate-and-restore attack is outside this evidence boundary.
   const output = execFileSync(`/proc/${process.pid}/fd/${nvidiaSmiFd}`, ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"], {
     encoding: "utf8",
     timeout: 5000,
@@ -211,7 +218,8 @@ function capture(session: Session, phase: string): LinuxResourceSample {
     swapBytes: hostSwapUsedBytes(),
     processSwapBytes: alive ? statusBytes(session.pid, "VmSwap") : 0,
     processAlive: alive ? 1 : 0,
-    pid: session.pid
+    pid: session.pid,
+    periodicFailure: session.periodicFailure ? 1 : 0
   };
   appendBoundedLinuxTrace(session.samples, sample);
   return sample;
@@ -251,6 +259,8 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
     },
     classify(samples: LinuxResourceSample[]) {
       if (samples.length === 0) return { status: "stopped" as const, errorCode: "resource_trace_empty" };
+      if (samples.some((sample) => sample.periodicFailure === 1)) return { status: "stopped" as const, errorCode: "periodic_resource_sampling_failed" };
+      if (samples.some((sample) => sample.nvidiaSmiDrift === 1)) return { status: "stopped" as const, errorCode: "nvidia_smi_descriptor_drift" };
       const baseline = samples[0].swapBytes;
       const sustained = samples.slice(-3);
       if (sustained.length === 3 && sustained.every((sample) => sample.swapBytes - baseline > SWAP_GROWTH_LIMIT_BYTES)) {
@@ -265,24 +275,18 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
       if (!session) throw new Error("resource monitor session is unknown");
       try {
         if (session.timer) clearInterval(session.timer);
-        if (session.periodicFailure) {
-          throw new Error(`periodic resource sampling failed: ${session.periodicFailure}`);
-        }
         const final = capture(session, "cleanup");
+        try {
+          if (session.nvidiaSmiFd !== undefined && sha256Descriptor(session.nvidiaSmiFd) !== expectedNvidiaSmiSha256) final.nvidiaSmiDrift = 1;
+        } catch {
+          final.nvidiaSmiDrift = 1;
+        }
         return [...session.samples.slice(0, -1), final];
       } finally {
-        let descriptorFailure: Error | undefined;
         if (session.nvidiaSmiFd !== undefined) {
-          try {
-            if (sha256Descriptor(session.nvidiaSmiFd) !== expectedNvidiaSmiSha256) descriptorFailure = new Error("nvidia-smi SHA-256 drifted during the monitoring session");
-          } catch (error) {
-            descriptorFailure = error instanceof Error ? error : new Error("nvidia-smi descriptor verification failed");
-          } finally {
-            closeSync(session.nvidiaSmiFd);
-          }
+          closeSync(session.nvidiaSmiFd);
         }
         sessions.delete(sessionRef.id);
-        if (descriptorFailure) throw descriptorFailure;
       }
     }
   };

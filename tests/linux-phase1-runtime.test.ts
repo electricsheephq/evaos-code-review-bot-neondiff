@@ -111,6 +111,13 @@ describe("GEX44 Linux Phase 1 runtime", () => {
     expect(() => createGex44ResourceMonitor({ nvidiaSmiSha256: "not-a-digest" })).toThrow(/nvidia-smi SHA-256/i);
   });
 
+  it("classifies periodic sampling and terminal descriptor drift without masking either signal", () => {
+    const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "0".repeat(64) });
+    const base = { capturedAt: "terminal", sequence: 1, phase: "cleanup", rssBytes: 0, vramBytes: 0, vramObserved: 0, swapBytes: 0, processSwapBytes: 0, processAlive: 0, pid: 42 };
+    expect(monitor.classify([{ ...base, periodicFailure: 1 }])).toEqual({ status: "stopped", errorCode: "periodic_resource_sampling_failed" });
+    expect(monitor.classify([{ ...base, nvidiaSmiDrift: 1 }])).toEqual({ status: "stopped", errorCode: "nvidia_smi_descriptor_drift" });
+  });
+
   it.skipIf(!functionalNvidiaSmi)("rejects a well-formed but incorrect pinned nvidia-smi digest", async () => {
     const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "f".repeat(64) });
     const session = await monitor.start();
