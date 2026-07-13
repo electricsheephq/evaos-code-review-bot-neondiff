@@ -122,7 +122,11 @@ decisions. Source candidate IDs are replaced by deterministic opaque
 packet-local IDs. Original allegation text is represented only by a SHA-256
 HMAC commitment keyed by a coordinator-only 256-bit blinding nonce and bound
 into the packet fingerprint; neither the nonce nor allegation text is shown to
-adjudicators, preventing low-entropy guess-and-confirm recovery from the packet.
+adjudicators. The coordinator MUST generate the nonce from 32 CSPRNG bytes,
+never reuse it across candidate manifests, and keep it outside the packet. The
+validator enforces the 256-bit encoding and rejects the all-zero value, but it
+cannot prove entropy; resistance to guess-and-confirm recovery depends on this
+operational requirement.
 Each path/line anchor asks the same fixed rubric-bound actionability question.
 This binds both humans to one frozen source-candidate universe without exposing
 source identities, allegation wording, or expected outcomes. Its copied
@@ -142,8 +146,11 @@ verdict or candidate decision. One-tier severity proximity remains an agreement
 metric; any non-identical final severity still requires resolution. A
 `defect_present` verdict requires at least one actionable, severity-bearing
 candidate, while an empty candidate universe is reserved for clean controls
-such as deletion-only diffs. The CLI exits nonzero for `needs_resolution`
-while preserving the immutable receipt for the resolver workflow.
+such as deletion-only diffs. The CLI exits with code 1 for `needs_resolution`
+while preserving the immutable receipt for the resolver workflow. This is a
+structured routing signal, not evidence corruption; automation must branch on
+the emitted `status` field instead of treating every nonzero result as a broken
+run.
 
 These commands make claimed independent human decisions inspectable; they do
 not authenticate a human identity, establish oracle truth, assemble a final

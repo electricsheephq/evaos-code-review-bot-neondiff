@@ -85,7 +85,7 @@ function fixture(): {
   const candidate: ReviewBenchAdjudicationCandidateV1 = {
     schemaVersion: "review-bench-adjudication-candidate/v1",
     candidateId: "candidate:public-safe-1",
-    blindingNonce: "a".repeat(64),
+    blindingNonce: sha256("fixture-blinding-nonce"),
     sourceArtifactSha256: sha256(DIFF),
     language: "TypeScript",
     annotationUniverse: {
@@ -250,6 +250,15 @@ describe("review-bench adjudication packet preparation", () => {
     const input = fixture();
     writeJson(input.candidatePath, { ...input.candidate, oracle: { answer: "hidden" } });
     expect(() => prepare(input)).toThrow(/unknown keys.*oracle/i);
+    expect(() => statSync(input.outputDirectory)).toThrow();
+  });
+
+  it("rejects an all-zero blinding nonce as trivially weak", () => {
+    const input = fixture();
+    input.candidate.blindingNonce = "0".repeat(64);
+    writeJson(input.candidatePath, input.candidate);
+
+    expect(() => prepare(input)).toThrow(/blindingNonce|all-zero|entropy|CSPRNG/i);
     expect(() => statSync(input.outputDirectory)).toThrow();
   });
 
@@ -651,6 +660,22 @@ describe("review-bench adjudication response verification", () => {
       ...paths,
       verifiedAt: VERIFIED_AT
     })).toThrow(/exist|no-clobber/i);
+  });
+
+  it("rejects overlong receipt leaf names before temporary publication", () => {
+    const prepared = prepare();
+    const paths = responsePaths(
+      prepared,
+      response(prepared.packet, "human:one"),
+      response(prepared.packet, "human:two")
+    );
+    paths.receiptPath = join(prepared.root, `${"r".repeat(129)}.json`);
+
+    expect(() => verifyReviewBenchAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      ...paths,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/128|length|component|bytes/i);
   });
 
   it("emits needs_resolution and a deterministic bounded queue without a resolver", () => {
