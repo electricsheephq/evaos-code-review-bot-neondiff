@@ -30,6 +30,14 @@ const BOUND_CHECKOUT_BINDING_FIELDS = new Set([
   "externalSubscriptionId",
   "externalCheckoutId"
 ]);
+const CHECKOUT_BINDING_BACKFILL_FIELDS = new Set([
+  "issuanceIdempotencyKey",
+  "provider",
+  "providerAccountId",
+  "providerMode",
+  "externalSubscriptionId",
+  "externalCheckoutId"
+]);
 
 export type SchemaMigrationStep =
   | "transaction-started"
@@ -272,6 +280,29 @@ export interface IssueBoundCheckoutLicenseInput {
 export class CheckoutIssuanceConflictError extends Error {}
 export class CheckoutIssuancePolicyError extends Error {}
 export class CheckoutIssuanceTransientError extends Error {}
+
+export class CheckoutBindingNotFoundError extends Error {}
+export class CheckoutBindingWrongSourceError extends Error {}
+export class CheckoutBindingConflictError extends Error {}
+export class CheckoutBindingPolicyError extends Error {}
+export class CheckoutBindingTransientError extends Error {}
+
+export interface BindCheckoutSubscriptionInput extends CheckoutSubscriptionBindingInput {
+  issuanceIdempotencyKey: string;
+}
+
+export interface BindCheckoutSubscriptionResult {
+  result: "bound" | "already_bound" | "would_bind";
+  issuanceFingerprint: string;
+}
+
+export function checkoutIssuanceFingerprint(issuanceIdempotencyKey: string): string {
+  return `iss_${createHash("sha256")
+    .update("neondiff:checkout-binding-backfill:issuance:v1\0")
+    .update(issuanceIdempotencyKey.trim())
+    .digest("hex")
+    .slice(0, 32)}`;
+}
 
 export class SubscriptionLifecycleNotFoundError extends Error {}
 export class SubscriptionLifecycleConflictError extends Error {}
@@ -533,6 +564,103 @@ export class LicenseStore {
         error.message.includes("UNIQUE constraint failed: checkout_subscription_bindings")
       ) {
         throw new CheckoutIssuanceConflictError("checkout correlation is already bound");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Bind an existing legacy checkout issuance to its immutable provider tuple.
+   * This owner-only backfill never accepts raw license or entitlement fields.
+   */
+  bindCheckoutSubscription(
+    input: BindCheckoutSubscriptionInput,
+    options: { dryRun?: boolean } = {}
+  ): BindCheckoutSubscriptionResult {
+    const validated = validateCheckoutBindingBackfillInput(input);
+    for (const key of Object.keys(options)) {
+      if (key !== "dryRun") {
+        throw new CheckoutBindingPolicyError(`unsupported checkout binding option: ${key}`);
+      }
+    }
+    if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
+      throw new CheckoutBindingPolicyError("dryRun must be boolean");
+    }
+    const issuanceFingerprint = checkoutIssuanceFingerprint(validated.issuanceIdempotencyKey);
+    let transactionStarted = false;
+    try {
+      this.db.exec("begin immediate");
+      transactionStarted = true;
+
+      const issuance = this.getIssuanceEvent(validated.issuanceIdempotencyKey);
+      if (!issuance) {
+        throw new CheckoutBindingNotFoundError("checkout issuance was not found");
+      }
+      if (issuance.source !== "checkout") {
+        throw new CheckoutBindingWrongSourceError("issuance is not checkout-owned");
+      }
+      const record = this.getLicenseByHash(issuance.license_key_hash);
+      if (!record) {
+        throw new CheckoutBindingNotFoundError("checkout issuance license was not found");
+      }
+
+      const requestedBinding: CheckoutSubscriptionBindingInput = {
+        provider: validated.provider,
+        providerAccountId: validated.providerAccountId,
+        providerMode: validated.providerMode,
+        externalSubscriptionId: validated.externalSubscriptionId,
+        externalCheckoutId: validated.externalCheckoutId
+      };
+      const existing = this.getCheckoutSubscriptionBinding(validated.issuanceIdempotencyKey);
+      if (existing) {
+        if (
+          existing.licenseKeyHash !== issuance.license_key_hash ||
+          !sameCheckoutBinding(existing, requestedBinding)
+        ) {
+          throw new CheckoutBindingConflictError(
+            "checkout issuance is already bound to different correlation"
+          );
+        }
+        this.db.exec("commit");
+        transactionStarted = false;
+        return { result: "already_bound", issuanceFingerprint };
+      }
+
+      if (options.dryRun) {
+        this.db.exec("rollback");
+        transactionStarted = false;
+        return { result: "would_bind", issuanceFingerprint };
+      }
+
+      this.db
+        .prepare(
+          `insert into checkout_subscription_bindings (
+            issuance_idempotency_key, license_key_hash, provider, provider_account_id,
+            provider_mode, external_subscription_id, external_checkout_id
+          ) values (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          validated.issuanceIdempotencyKey,
+          issuance.license_key_hash,
+          validated.provider,
+          validated.providerAccountId,
+          validated.providerMode,
+          validated.externalSubscriptionId,
+          validated.externalCheckoutId
+        );
+      this.db.exec("commit");
+      transactionStarted = false;
+      return { result: "bound", issuanceFingerprint };
+    } catch (error) {
+      if (transactionStarted) this.db.exec("rollback");
+      if (isSqliteBusy(error)) {
+        throw new CheckoutBindingTransientError("checkout binding storage is busy");
+      }
+      if (
+        error instanceof Error &&
+        error.message.includes("UNIQUE constraint failed: checkout_subscription_bindings")
+      ) {
+        throw new CheckoutBindingConflictError("checkout correlation is already bound");
       }
       throw error;
     }
@@ -1027,6 +1155,66 @@ function validateBoundCheckoutInput(
       )
     }
   };
+}
+
+function validateCheckoutBindingBackfillInput(
+  input: BindCheckoutSubscriptionInput
+): BindCheckoutSubscriptionInput {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new CheckoutBindingPolicyError("checkout binding input must be an object");
+  }
+  for (const key of Object.keys(input)) {
+    if (!CHECKOUT_BINDING_BACKFILL_FIELDS.has(key)) {
+      throw new CheckoutBindingPolicyError(`unsupported checkout binding field: ${key}`);
+    }
+  }
+  const issuanceIdempotencyKey = readCheckoutBindingString(
+    input.issuanceIdempotencyKey,
+    "issuanceIdempotencyKey",
+    200
+  );
+  if (!/^[A-Za-z0-9._:-]+$/.test(issuanceIdempotencyKey)) {
+    throw new CheckoutBindingPolicyError(
+      "issuanceIdempotencyKey contains unsupported characters"
+    );
+  }
+  if (input.provider !== "stripe") {
+    throw new CheckoutBindingPolicyError("provider must be stripe");
+  }
+  if (input.providerMode !== "test" && input.providerMode !== "live") {
+    throw new CheckoutBindingPolicyError("providerMode must be test or live");
+  }
+  return {
+    issuanceIdempotencyKey,
+    provider: "stripe",
+    providerAccountId: readCheckoutBindingString(
+      input.providerAccountId,
+      "providerAccountId",
+      160
+    ),
+    providerMode: input.providerMode,
+    externalSubscriptionId: readCheckoutBindingString(
+      input.externalSubscriptionId,
+      "externalSubscriptionId",
+      160
+    ),
+    externalCheckoutId: readCheckoutBindingString(
+      input.externalCheckoutId,
+      "externalCheckoutId",
+      160
+    )
+  };
+}
+
+function readCheckoutBindingString(value: unknown, field: string, max: number): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new CheckoutBindingPolicyError(`${field} is required`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > max) {
+    throw new CheckoutBindingPolicyError(`${field} is too long`);
+  }
+  return trimmed;
 }
 
 function readBoundedCheckoutString(value: unknown, field: string, max: number): string {
