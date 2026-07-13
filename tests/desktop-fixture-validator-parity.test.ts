@@ -33,6 +33,14 @@ describe("desktop fixture validator parity", () => {
     expect(() => validateDesktopEvaluationFixture(source)).toThrow(/clock is invalid/);
   });
 
+  it("rejects the same non-canonical offset clock vectors as the Swift fixture decoder", () => {
+    const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
+    for (const clock of ["2026-07-10T12:00:00+00:00", "2026-07-10T12:00:00+07:00"]) {
+      source.environment.clock = clock;
+      expect(() => validateDesktopEvaluationFixture(source)).toThrow(/clock is invalid/);
+    }
+  });
+
   it("rejects string dimensions and non-string IDs instead of coercing them", () => {
     const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
     source.environment.contentSize = { width: "1040", height: "680" };
@@ -46,6 +54,18 @@ describe("desktop fixture validator parity", () => {
     const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-providers.json", "utf8"));
     source.state.provider.baseURL = ["https://example.com"];
     expect(() => validateDesktopEvaluationFixture(source)).toThrow(/baseURL is invalid/);
+  });
+
+  it("rejects the same hostless provider URL as the Swift fixture decoder", () => {
+    const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-providers.json", "utf8"));
+    source.state.provider.baseURL = "https://";
+    expect(() => validateDesktopEvaluationFixture(source)).toThrow(/baseURL is invalid/);
+  });
+
+  it("rejects unactivated post-onboarding surfaces", () => {
+    const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
+    source.state.license = { entitlement: "not activated", credentialPresent: false, updateChannel: "dev" };
+    expect(() => validateDesktopEvaluationFixture(source)).toThrow(/post-onboarding.*activation/i);
   });
 
   it("rejects semantic and whitespace fixture payloads over the Swift byte limit", () => {

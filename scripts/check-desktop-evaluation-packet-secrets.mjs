@@ -17,12 +17,14 @@ const skippedImages = [];
 const validatedImages = [];
 const invalidImages = [];
 const skippedArtifactBinaries = [];
+const scannedArtifactBinaryStrings = [];
 const skippedArtifactSymlinks = [];
 const unsupportedBinaryFiles = [];
 const unsupportedEntries = [];
 const sensitiveFiles = [];
 let scannedFiles = 0;
 let scannedBytes = 0;
+let scannedArtifactBinaryBytes = 0;
 const maxFiles = 20_000;
 const maxBytes = 512 * 1024 * 1024;
 const artifactRoot = "artifacts/NeonDiffDesktop.app";
@@ -53,6 +55,21 @@ function isRecognizedArtifactBinary(path, data) {
   return executableMagic.has(magic)
     || binarySecretScanExtension.test(path)
     || recognizedArtifactExtension.test(path);
+}
+
+function printableASCIIStrings(data) {
+  const strings = [];
+  let current = "";
+  const flush = () => {
+    if (current.length >= 4) strings.push(current);
+    current = "";
+  };
+  for (const byte of data) {
+    if (byte === 0x09 || (byte >= 0x20 && byte <= 0x7e)) current += String.fromCharCode(byte);
+    else flush();
+  }
+  flush();
+  return strings.join("\n");
 }
 
 const entries = [];
@@ -100,6 +117,12 @@ for (const entry of entries) {
     if (entry.type === "directory") continue;
     if (/((^|\/)\.env(?:\.|$)|\.(?:pem|key|sqlite|db)$)/.test(rel)) sensitiveFiles.push(rel);
     if (rel.startsWith(`${artifactRoot}/`) && isRecognizedArtifactBinary(rel, entry.data)) {
+      scannedArtifactBinaryBytes += entry.stat.size;
+      if (scannedArtifactBinaryBytes > maxBytes) throw new Error("packet artifact binary scan bound exceeded");
+      const printableText = printableASCIIStrings(entry.data);
+      findings.push(...scanSecretText(rel, printableText));
+      findings.push(...scanCanonicalSecretText(rel, printableText));
+      scannedArtifactBinaryStrings.push(rel);
       skippedArtifactBinaries.push(rel);
       continue;
     }
@@ -141,6 +164,8 @@ const result = {
   validatedImages,
   invalidImages,
   skippedArtifactBinaries,
+  scannedArtifactBinaryStrings,
+  scannedArtifactBinaryBytes,
   skippedArtifactSymlinks,
   unsupportedBinaryFiles,
   unsupportedEntries,

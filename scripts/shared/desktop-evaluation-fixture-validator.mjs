@@ -142,6 +142,10 @@ export function validateDesktopEvaluationFixture(input) {
     && (input.state.license.entitlement !== "active" || !input.state.license.credentialPresent)) {
     fail("done onboarding requires API-backed activation");
   }
+  if ((step === null || step === undefined)
+    && (input.state.license.entitlement !== "active" || !input.state.license.credentialPresent)) {
+    fail("post-onboarding state requires API-backed activation");
+  }
   if (!Array.isArray(input.safeCopy) || input.safeCopy.length > 100 || input.safeCopy.some((value) => typeof value !== "string")) fail("safeCopy is invalid");
 
   return {

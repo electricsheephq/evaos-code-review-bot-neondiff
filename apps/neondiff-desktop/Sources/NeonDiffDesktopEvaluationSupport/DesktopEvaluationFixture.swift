@@ -224,7 +224,11 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
         guard id.range(of: #"^[a-z0-9][a-z0-9-]{0,63}$"#, options: .regularExpression) != nil else {
             throw DesktopEvaluationFixtureError.invalidValue("id")
         }
-        guard ISO8601DateFormatter().date(from: environment.clock) != nil else {
+        guard environment.clock.range(
+            of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"#,
+            options: .regularExpression
+        ) != nil,
+        ISO8601DateFormatter().date(from: environment.clock) != nil else {
             throw DesktopEvaluationFixtureError.invalidValue("clock")
         }
         guard environment.locale.range(of: #"^[A-Za-z0-9_@.-]{2,48}$"#, options: .regularExpression) != nil else {
@@ -260,6 +264,8 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
                   provider.model.utf8.count <= 256,
                   let url = URL(string: provider.baseURL),
                   ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  let host = url.host,
+                  !host.isEmpty,
                   url.user == nil,
                   url.password == nil else {
                 throw DesktopEvaluationFixtureError.invalidValue("provider")
@@ -298,7 +304,12 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
                   state.license.credentialPresent else {
                 throw DesktopEvaluationFixtureError.invalidValue("done onboarding requires API-backed activation")
             }
-        case .welcome, .provider, .daemon, nil:
+        case nil:
+            guard state.license.entitlement == .active,
+                  state.license.credentialPresent else {
+                throw DesktopEvaluationFixtureError.invalidValue("post-onboarding state requires API-backed activation")
+            }
+        case .welcome, .provider, .daemon:
             break
         }
         for outcome in scriptedOutcomes {

@@ -156,6 +156,13 @@ let nonISOClockFixture = Data(
 )
 expectFixtureFailure("non-ISO fixture clock", data: nonISOClockFixture)
 
+let offsetClockFixture = Data(
+    String(decoding: validFixture, as: UTF8.self)
+        .replacingOccurrences(of: "2026-07-10T12:00:00Z", with: "2026-07-10T12:00:00+07:00")
+        .utf8
+)
+expectFixtureFailure("non-canonical offset fixture clock", data: offsetClockFixture)
+
 let stringContentSizeFixture = try mutatedManifest(validFixture) { object in
     var environment = object["environment"] as! [String: Any]
     environment["contentSize"] = ["width": "1040", "height": "680"]
@@ -176,6 +183,22 @@ let nonStringProviderURL = try mutatedManifest(validFixture) { object in
     object["state"] = state
 }
 expectFixtureFailure("non-string provider base URL", data: nonStringProviderURL)
+
+let hostlessProviderURL = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var provider = state["provider"] as! [String: Any]
+    provider["baseURL"] = "https://"
+    state["provider"] = provider
+    object["state"] = state
+}
+expectFixtureFailure("hostless provider base URL", data: hostlessProviderURL)
+
+let unactivatedPostOnboardingFixture = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    state["license"] = ["entitlement": "not activated", "credentialPresent": false, "updateChannel": "dev"]
+    object["state"] = state
+}
+expectFixtureFailure("unactivated post-onboarding state", data: unactivatedPostOnboardingFixture)
 
 let semanticOversizedFixture = try mutatedManifest(validFixture) { object in
     object["safeCopy"] = Array(repeating: String(repeating: "x", count: 3_000), count: 100)

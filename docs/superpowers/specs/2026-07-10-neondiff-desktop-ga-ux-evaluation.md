@@ -194,7 +194,8 @@ Use pairwise scenarios rather than a full Cartesian product.
 
 - Home: initial, checking, ready, degraded, offline, stale.
 - Repositories: disconnected, authorizing, empty, discovered, selected,
-  rate-limited, permission-blocked, public/private/license states.
+  rate-limited, permission-blocked, activated public/private selections, and
+  activation-blocked states.
 - Providers: empty registry, key missing/stored, dirty, previewing, applying,
   verifying, cancelling, healthy, unverified, blocked, restart-required.
 - Policy: unloaded, loading, clean, dirty, invalid, preview-authorized,
@@ -202,7 +203,8 @@ Use pairwise scenarios rather than a full Cartesian product.
 - License: absent, stored, pending, active, invalid, offline.
 - Activity/Logs: empty, loading, populated, truncated, redacted failure.
 - Settings: invalid path, unsaved, saved, update checking/available/failed.
-- Onboarding: fresh public/private, resume, provider failure, GitHub failure,
+- Onboarding: fresh public/private repository selection with mandatory
+  activation, resume, activation failure, provider failure, GitHub failure,
   dry-run failure, complete.
 
 ## Cross-Tab Continuity Scenarios

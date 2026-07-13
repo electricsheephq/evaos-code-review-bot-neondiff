@@ -18,8 +18,10 @@ presence booleans. The loader rejects unknown fields, unsupported versions,
 non-canonical identifiers, secret-shaped values, author-machine paths,
 symlinked fixture files, duplicate catalog entries, and oversized input.
 Later onboarding fixtures must also satisfy the real flow's already-completed
-provider and daemon prerequisites; they are reachable public-flow snapshots,
-not arbitrary combinations of fields.
+provider and daemon prerequisites. The License step is explicitly blocked on
+API-backed activation, Done requires an active credential-backed entitlement,
+and every post-onboarding tab fixture is activated. They are reachable
+mandatory-activation flow snapshots, not arbitrary combinations of fields.
 
 In this nominal slice, `expectedActions`, `scriptedOutcomes`, and `safeCopy` are
 typed scenario metadata only. The runner does not click those actions or assert
@@ -150,10 +152,10 @@ DEBUG-only slice must add named fixtures and launched capture for:
 - provider configured-unverified, blocked, dirty, and in-progress states;
 - GitHub disconnected, device-code, connected, and recovery states;
 - daemon healthy, degraded, and offline states;
-- license absent/public, active-private, and private-blocked states;
+- activation required, active, expired/revoked, offline-cache, and service-blocked states;
 - logs empty, populated, and error states;
 - policy loaded, dirty, and previewed states;
-- public and private onboarding modes;
+- public and private repository-selection modes after mandatory activation;
 - native chrome and Settings-window state.
 
 Every case must settle explicitly before capture and produce screenshot, AX,

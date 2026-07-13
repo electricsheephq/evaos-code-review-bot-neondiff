@@ -541,6 +541,36 @@ describe("desktop evaluation packet integrity", { timeout: 30_000 }, () => {
     );
   });
 
+  it("scans printable secret text inside recognized app binary extensions", () => {
+    const value = packetFixture();
+    const resource = join(
+      value.packet,
+      "artifacts",
+      "NeonDiffDesktop.app",
+      "Contents",
+      "Resources",
+      "secret.car"
+    );
+    mkdirSync(join(resource, ".."), { recursive: true });
+    writeFileSync(resource, Buffer.concat([
+      Buffer.from([0xff, 0x00]),
+      Buffer.from(["gh", "p_", "fixture_secret_material_1234567890"].join(""))
+    ]));
+
+    const scan = spawnSync(
+      "node",
+      ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", value.packet],
+      { encoding: "utf8" }
+    );
+    expect(scan.status).toBe(1);
+    expect(JSON.parse(scan.stdout).findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({
+        file: "artifacts/NeonDiffDesktop.app/Contents/Resources/secret.car",
+        pattern: "github_token"
+      })])
+    );
+  });
+
   it("rejects a hash-consistent screenshot that is not PNG image evidence", () => {
     const value = packetFixture();
     const manifestPath = join(value.packet, "manifest.json");
