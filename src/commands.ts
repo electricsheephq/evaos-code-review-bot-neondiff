@@ -348,5 +348,5 @@ function isTrustedAuthor(author: string, config: CommandConfig): boolean {
 }
 
 function isExplicitTrustedAuthor(author: string, config: CommandConfig): boolean {
-  return author !== "*" && config.trustedAuthors.includes(author);
+  return author !== "*" || config.trustedAuthors.includes(author);
 }
