@@ -70,6 +70,9 @@ describe("desktop evaluation production boundary", () => {
       "node scripts/check-desktop-fixture-boundary.mjs"
     );
     expect(gate).toMatch(/swift run NeonDiffDesktopFixtureChecks/);
+    expect(gate).toMatch(
+      /name:\s*Desktop evaluation boundary contracts[\s\S]*?npm test -- --run tests\/desktop-evaluation-boundary\.test\.ts/
+    );
     expect(gate).toMatch(/npm run check:desktop-fixture-boundary/);
     expect(gate).toMatch(/release_bin\/NeonDiffDesktop/);
     expect(gate).toMatch(/NEONDIFF_DESKTOP_DIST_DIR=.*dist-release/);
@@ -189,25 +192,29 @@ describe("desktop evaluation production boundary", () => {
     expect(helper).not.toContain("guard let data = try? Data(contentsOf: url) else { return \"\" }");
   });
 
-  it("routes missing manifest files through the stable exit-65 contract", { timeout: 30_000 }, () => {
-    const root = mkdtempSync(join(tmpdir(), "neondiff-manifest-checks-"));
-    roots.push(root);
-    const result = spawnSync(
-      "swift",
-      [
-        "run",
-        "--package-path",
-        "apps/neondiff-desktop",
-        "NeonDiffDesktopManifestChecks",
-        join(root, "missing-manifest.json")
-      ],
-      { encoding: "utf8", timeout: 30_000 }
-    );
+  it.runIf(process.platform === "darwin")(
+    "routes missing manifest files through the stable exit-65 contract",
+    { timeout: 30_000 },
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "neondiff-manifest-checks-"));
+      roots.push(root);
+      const result = spawnSync(
+        "swift",
+        [
+          "run",
+          "--package-path",
+          "apps/neondiff-desktop",
+          "NeonDiffDesktopManifestChecks",
+          join(root, "missing-manifest.json")
+        ],
+        { encoding: "utf8", timeout: 30_000 }
+      );
 
-    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(65);
-    expect(result.stderr).toContain("manifest must be an absolute regular non-symlink file");
-    expect(result.stderr).not.toMatch(/Fatal error|uncaught/i);
-  });
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(65);
+      expect(result.stderr).toContain("manifest must be an absolute regular non-symlink file");
+      expect(result.stderr).not.toMatch(/Fatal error|uncaught/i);
+    }
+  );
 
   it("records the current Xcode host without treating issue 516 as an install blocker", () => {
     const docs = readFileSync("apps/neondiff-desktop/docs/ui-evaluation.md", "utf8");

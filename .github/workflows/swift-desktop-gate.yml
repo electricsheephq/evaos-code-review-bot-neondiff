@@ -123,6 +123,9 @@ jobs:
       - name: Node and Foundation secret-rule differential
         run: npm run check:secret-rule-differential
 
+      - name: Desktop evaluation boundary contracts
+        run: npm test -- --run tests/desktop-evaluation-boundary.test.ts
+
       - name: Build Swift Keychain checks target
         working-directory: apps/neondiff-desktop
         run: swift build --target NeonDiffDesktopKeychainChecks
