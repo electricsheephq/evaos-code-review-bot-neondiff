@@ -15,6 +15,7 @@ export type LinuxResourceSample = {
   processAlive: number;
   pid: number;
   periodicFailure?: number;
+  cleanupFailure?: number;
   nvidiaSmiDrift?: number;
 };
 
@@ -240,10 +241,13 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
       const session = sessions.get(sessionRef.id);
       if (!session) throw new Error("resource monitor session is unknown");
       if (session.nvidiaSmiFd !== undefined) throw new Error("resource monitor session is already attached");
-      session.pid = positivePid(resident.metadata?.pid);
-      session.processStartToken = processStartToken(session.pid);
-      if (!session.processStartToken) throw new Error("resident process start identity is unavailable");
-      session.nvidiaSmiFd = openPinnedNvidiaSmi(expectedNvidiaSmiSha256);
+      const pid = positivePid(resident.metadata?.pid);
+      const startToken = processStartToken(pid);
+      if (!startToken) throw new Error("resident process start identity is unavailable");
+      const nvidiaSmiFd = openPinnedNvidiaSmi(expectedNvidiaSmiSha256);
+      session.pid = pid;
+      session.processStartToken = startToken;
+      session.nvidiaSmiFd = nvidiaSmiFd;
       capture(session, "attached");
       session.timer = setInterval(() => {
         try { capture(session, "periodic"); }
@@ -259,8 +263,12 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
     },
     classify(samples: LinuxResourceSample[]) {
       if (samples.length === 0) return { status: "stopped" as const, errorCode: "resource_trace_empty" };
-      if (samples.some((sample) => sample.periodicFailure === 1)) return { status: "stopped" as const, errorCode: "periodic_resource_sampling_failed" };
-      if (samples.some((sample) => sample.nvidiaSmiDrift === 1)) return { status: "stopped" as const, errorCode: "nvidia_smi_descriptor_drift" };
+      const integrityFailures = [
+        samples.some((sample) => sample.periodicFailure === 1) ? "periodic_resource_sampling_failed" : undefined,
+        samples.some((sample) => sample.cleanupFailure === 1) ? "resource_cleanup_sampling_failed" : undefined,
+        samples.some((sample) => sample.nvidiaSmiDrift === 1) ? "nvidia_smi_descriptor_drift" : undefined
+      ].filter((value): value is string => value !== undefined);
+      if (integrityFailures.length > 0) return { status: "stopped" as const, errorCode: integrityFailures.join("+") };
       const baseline = samples[0].swapBytes;
       const sustained = samples.slice(-3);
       if (sustained.length === 3 && sustained.every((sample) => sample.swapBytes - baseline > SWAP_GROWTH_LIMIT_BYTES)) {
@@ -275,7 +283,29 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
       if (!session) throw new Error("resource monitor session is unknown");
       try {
         if (session.timer) clearInterval(session.timer);
-        const final = capture(session, "cleanup");
+        let final: LinuxResourceSample;
+        try {
+          final = capture(session, "cleanup");
+        } catch (error) {
+          if (!session.pid || !session.processStartToken || session.nvidiaSmiFd === undefined) throw error;
+          const previous = session.samples.at(-1);
+          const alive = processAlive(session.pid, session.processStartToken);
+          final = {
+            capturedAt: new Date().toISOString(),
+            sequence: ++session.sequence,
+            phase: "cleanup",
+            rssBytes: alive ? statusBytes(session.pid, "VmRSS") : 0,
+            vramBytes: previous?.vramBytes ?? 0,
+            vramObserved: 0,
+            swapBytes: previous?.swapBytes ?? 0,
+            processSwapBytes: alive ? statusBytes(session.pid, "VmSwap") : 0,
+            processAlive: alive ? 1 : 0,
+            pid: session.pid,
+            periodicFailure: session.periodicFailure ? 1 : 0,
+            cleanupFailure: 1
+          };
+          appendBoundedLinuxTrace(session.samples, final);
+        }
         try {
           if (session.nvidiaSmiFd !== undefined && sha256Descriptor(session.nvidiaSmiFd) !== expectedNvidiaSmiSha256) final.nvidiaSmiDrift = 1;
         } catch {
