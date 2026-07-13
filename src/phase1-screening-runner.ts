@@ -985,16 +985,20 @@ async function acquireRunLease(path: string): Promise<number> {
       const prior = parseJson<{ pid?: number }>(path);
       if (typeof prior.pid === "number" && isProcessAlive(prior.pid)) throw new Error(`Phase 1 output has an active exclusive run lease held by PID ${prior.pid}`);
       // Every conforming writer must own the crash-released loopback
-      // coordinator before touching the canonical lease, so no new lease can
-      // appear between this removal and the exclusive replacement open.
-      // lgtm[js/file-system-race]
-      rmSync(path, { force: true });
-      // The exclusive loopback coordinator remains held through this open.
-      // codeql[js/file-system-race]
-      // lgtm[js/file-system-race]
-      const fd = openSync(path, "wx", 0o600);
-      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
-      return fd;
+      // coordinator before replacing the canonical lease. Build the new lease
+      // under a unique name, then atomically replace the verified-stale path;
+      // there is no check/remove/reopen window on the canonical path.
+      const replacementPath = `${path}.${process.pid}.${randomUUID()}.replacement`;
+      const fd = openSync(replacementPath, "wx", 0o600);
+      try {
+        writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
+        renameSync(replacementPath, path);
+        return fd;
+      } catch (replacementError) {
+        closeSync(fd);
+        rmSync(replacementPath, { force: true });
+        throw replacementError;
+      }
     }
   } finally {
     await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
