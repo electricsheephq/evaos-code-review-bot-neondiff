@@ -44,8 +44,13 @@ const ownershipProof = {
 const runnerSourcePath = join(process.cwd(), "src", "phase1-screening-runner.ts");
 const harnessRepo = mkdtempSync(join(tmpdir(), "neondiff-phase1-harness-repo-"));
 const harnessRepoSource = join(harnessRepo, "src", "phase1-screening-runner.ts");
+const harnessEntrypoint = join(harnessRepo, "dist", "src", "phase1-characterization-cli.js");
+const harnessRunner = join(harnessRepo, "dist", "src", "phase1-screening-runner.js");
 mkdirSync(dirname(harnessRepoSource), { recursive: true });
+mkdirSync(dirname(harnessEntrypoint), { recursive: true });
 writeFileSync(harnessRepoSource, readFileSync(runnerSourcePath));
+writeFileSync(harnessEntrypoint, "export const entrypoint = true;\n");
+writeFileSync(harnessRunner, "export const runner = true;\n");
 execFileSync("git", ["init", "-q", harnessRepo]);
 execFileSync("git", ["-C", harnessRepo, "config", "user.email", "phase1@example.invalid"]);
 execFileSync("git", ["-C", harnessRepo, "config", "user.name", "Phase 1 Test"]);
@@ -141,7 +146,15 @@ function spec(outputDir: string): Phase1RunSpec {
       requiredMetrics: [],
       parameters: { temperature: 0.6, top_p: 0.95, top_k: 20 }
     },
-    harness: { commit: harnessCommit, sourcePath: harnessRepoSource, sourceSha256: digest(readFileSync(harnessRepoSource)) },
+    harness: {
+      commit: harnessCommit,
+      sourcePath: harnessRepoSource,
+      sourceSha256: digest(readFileSync(harnessRepoSource)),
+      entrypointPath: harnessEntrypoint,
+      entrypointSha256: digest(readFileSync(harnessEntrypoint)),
+      runnerPath: harnessRunner,
+      runnerSha256: digest(readFileSync(harnessRunner))
+    },
     parser: { version: "phase1-parser/v1", format: "json", sha256: digest("phase1-parser/v1:json") },
     gate: { version: "phase1-gate/v1", requiredTopLevelKeys: [], sha256: digest("phase1-gate/v1:") }
   };

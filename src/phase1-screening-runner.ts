@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { connect, createServer } from "node:net";
+import { fileURLToPath } from "node:url";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 export type Phase1TerminalStatus = "completed" | "failed" | "stopped" | "oom" | "schema_failed";
@@ -54,7 +55,15 @@ export interface Phase1RunSpec {
   inputs: Phase1Input[];
   prompt: { version: string; template: string; templateSha256: string; parameters?: Record<string, unknown> };
   request: { version: string; stream: boolean; outputBudgetTokens: number; requiredMetrics: string[]; responseFormat?: unknown; parameters: Record<string, unknown> };
-  harness: { commit: string; sourcePath: string; sourceSha256: string };
+  harness: {
+    commit: string;
+    sourcePath: string;
+    sourceSha256: string;
+    entrypointPath: string;
+    entrypointSha256: string;
+    runnerPath: string;
+    runnerSha256: string;
+  };
   parser: { version: string; format: "json"; sha256: string };
   gate: { version: string; requiredTopLevelKeys: string[]; sha256: string };
 }
@@ -160,6 +169,10 @@ export interface Phase1ResourceMonitorModule {
 
 export interface Phase1RunnerOptions {
   monitorModule?: Phase1ResourceMonitorModule;
+}
+
+export function phase1ScreeningRunnerModulePath(): string {
+  return fileURLToPath(import.meta.url);
 }
 
 type ResolvedRunnerOptions = { monitor?: Phase1ResourceMonitor; monitorIdentity?: Phase1ResourceMonitorModule };
@@ -933,11 +946,13 @@ function validateSpec(spec: Phase1RunSpec): void {
     ["parser", spec.parser.version],
     ["gate", spec.gate.version]
   ] as const) assertProtocolVersion(label, version);
-  for (const digest of [spec.target.modelSha256, spec.target.executableSha256, ...(spec.target.ownershipVerifierSha256 ? [spec.target.ownershipVerifierSha256] : []), spec.harness.sourceSha256, spec.prompt.templateSha256, spec.parser.sha256, spec.gate.sha256, ...spec.inputs.map((input) => input.sha256)]) {
+  for (const digest of [spec.target.modelSha256, spec.target.executableSha256, ...(spec.target.ownershipVerifierSha256 ? [spec.target.ownershipVerifierSha256] : []), spec.harness.sourceSha256, spec.harness.entrypointSha256, spec.harness.runnerSha256, spec.prompt.templateSha256, spec.parser.sha256, spec.gate.sha256, ...spec.inputs.map((input) => input.sha256)]) {
     if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("all declared SHA-256 digests must be lowercase 64-character hex");
   }
   if (!/^[a-f0-9]{40}$/.test(spec.harness.commit)) throw new Error("harness commit must be a full 40-character Git SHA");
-  if (resolve(spec.harness.sourcePath) !== spec.harness.sourcePath) throw new Error("harness source path must be absolute");
+  if ([spec.harness.sourcePath, spec.harness.entrypointPath, spec.harness.runnerPath].some((path) => resolve(path) !== path)) {
+    throw new Error("harness source and loaded JavaScript paths must be absolute");
+  }
   const reservedRequestKeys = new Set(["messages", "model", "stream", "response_format", "max_tokens"]);
   for (const key of Object.keys(spec.request.parameters)) if (reservedRequestKeys.has(key)) throw new Error(`reserved request parameter is runner-owned: ${key}`);
   if (!Number.isInteger(spec.request.outputBudgetTokens) || spec.request.outputBudgetTokens <= 0) throw new Error("request output budget must be a positive integer");
@@ -1270,6 +1285,8 @@ function assertManifestPayloadSecretSafe(spec: Phase1RunSpec): void {
   assertJsonValuesSecretSafe("required metric names", spec.request.requiredMetrics);
   assertJsonValuesSecretSafe("gate key names", spec.gate.requiredTopLevelKeys);
   assertSecretSafe("harness source path", spec.harness.sourcePath);
+  assertSecretSafe("harness entrypoint path", spec.harness.entrypointPath);
+  assertSecretSafe("harness runner path", spec.harness.runnerPath);
   for (const cell of spec.cells) {
     assertSecretSafe("cell identifier", cell.id);
     assertJsonValuesSecretSafe(`cell ${cell.id} executable arguments`, cell.executableArgs);

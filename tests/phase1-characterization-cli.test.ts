@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
+import { assertCharacterizationLoadedArtifacts, assertPinnedLoadedJavaScript } from "../src/phase1-characterization-cli.js";
 
 const cli = join(process.cwd(), "src", "phase1-characterization-cli.ts");
 const tsx = join(process.cwd(), "node_modules", ".bin", "tsx");
@@ -19,6 +20,43 @@ function run(args: string[]): { status: number | null; stderr: string; stdout: s
 }
 
 describe("private Phase 1 characterization entrypoint", () => {
+  it("binds each actually loaded JavaScript artifact to its declared canonical path and bytes", () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "phase1-characterization-loaded-js-")));
+    const entrypoint = join(directory, "entrypoint.js");
+    const runner = join(directory, "runner.js");
+    writeFileSync(entrypoint, "export const entrypoint = true;\n");
+    writeFileSync(runner, "export const runner = true;\n");
+    const entrypointSha256 = createHash("sha256").update("export const entrypoint = true;\n").digest("hex");
+
+    expect(() => assertPinnedLoadedJavaScript(entrypoint, entrypoint, entrypointSha256, "characterization entrypoint")).not.toThrow();
+    expect(() => assertPinnedLoadedJavaScript(entrypoint, runner, entrypointSha256, "characterization entrypoint")).toThrow(/loaded path/i);
+    expect(() => assertPinnedLoadedJavaScript(entrypoint, entrypoint, "0".repeat(64), "characterization entrypoint")).toThrow(/SHA-256/i);
+    expect(() => assertPinnedLoadedJavaScript(entrypoint.replace(/\.js$/, ".ts"), entrypoint.replace(/\.js$/, ".ts"), entrypointSha256, "characterization entrypoint")).toThrow(/built JavaScript/i);
+  });
+
+  it("requires both the loaded entrypoint and imported runner bytes named by the plan", () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "phase1-characterization-artifact-set-")));
+    const entrypoint = join(directory, "entrypoint.js");
+    const runner = join(directory, "runner.js");
+    writeFileSync(entrypoint, "export const entrypoint = true;\n");
+    writeFileSync(runner, "export const runner = true;\n");
+    const digest = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+    const plan = {
+      spec: {
+        harness: {
+          entrypointPath: entrypoint,
+          entrypointSha256: digest(entrypoint),
+          runnerPath: runner,
+          runnerSha256: digest(runner)
+        }
+      }
+    };
+
+    expect(() => assertCharacterizationLoadedArtifacts(plan, { entrypointPath: entrypoint, runnerPath: runner })).not.toThrow();
+    writeFileSync(runner, "export const runner = false;\n");
+    expect(() => assertCharacterizationLoadedArtifacts(plan, { entrypointPath: entrypoint, runnerPath: runner })).toThrow(/screening runner SHA-256/i);
+  });
+
   it("requires one explicit absolute plan and exposes no broad command surface", () => {
     const result = run([]);
     expect(result.status).toBe(1);
@@ -45,10 +83,40 @@ describe("private Phase 1 characterization entrypoint", () => {
     expect(result.stderr).toMatch(/SHA-256 does not match/);
   });
 
+  it("rejects a plan that omits the loaded entrypoint or runner identities", () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "phase1-characterization-missing-loaded-js-")));
+    const path = join(directory, "plan.json");
+    const bytes = JSON.stringify({
+      schemaVersion: "neondiff-phase1-characterization-plan/v1",
+      spec: { harness: {} },
+      baseUrl: "http://127.0.0.1:8080",
+      runtimeSha256: "0".repeat(64),
+      nvidiaSmiSha256: "0".repeat(64),
+      monitorModule: {}
+    });
+    writeFileSync(path, bytes);
+    const result = run(["--plan", path, "--sha256", createHash("sha256").update(bytes).digest("hex")]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/loaded JavaScript identities/i);
+  });
+
   it("requires the built pinned JavaScript runtime rather than executing mutable TypeScript source", () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), "phase1-characterization-cli-source-")));
     const path = join(directory, "plan.json");
-    const bytes = JSON.stringify({ schemaVersion: "neondiff-phase1-characterization-plan/v1", spec: {}, baseUrl: "http://127.0.0.1:8080", monitorModule: {} });
+    const runnerSource = join(process.cwd(), "src", "phase1-screening-runner.ts");
+    const bytes = JSON.stringify({
+      schemaVersion: "neondiff-phase1-characterization-plan/v1",
+      spec: {
+        harness: {
+          entrypointPath: cli,
+          entrypointSha256: createHash("sha256").update(readFileSync(cli)).digest("hex"),
+          runnerPath: runnerSource,
+          runnerSha256: createHash("sha256").update(readFileSync(runnerSource)).digest("hex")
+        }
+      },
+      baseUrl: "http://127.0.0.1:8080",
+      monitorModule: {}
+    });
     writeFileSync(path, bytes);
     const result = run(["--plan", path, "--sha256", createHash("sha256").update(bytes).digest("hex")]);
     expect(result.status).toBe(1);
