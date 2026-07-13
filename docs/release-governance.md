@@ -146,10 +146,14 @@ Before tagging:
      path (`checkoutIssuanceAuthenticatedProofPath`) with no raw bearer secret,
      license key, cookie, customer data, checkout payload secret, or raw response
      body. Generate it with `npx tsx src/cli.ts checkout-issuance-smoke
-     --dry-run false --confirm-live-issuance true --secret-env
-     LICENSE_ISSUANCE_SECRET --output
+     --provider-account-id <stripe-account-id> --provider-mode test
+     --external-subscription-id <test-subscription-id>
+     --external-checkout-id <test-checkout-session-id> --dry-run false
+     --confirm-live-issuance true --secret-env LICENSE_ISSUANCE_SECRET --output
      docs/evidence/license-checkout-issuance-authenticated.json` after the
-     paired Fly and server-side checkout secrets are configured.
+     paired Fly and server-side checkout secrets are configured. A live-mode
+     proof must use an explicitly supplied, matching live tuple; never reuse or
+     invent test identifiers for a live request.
    - computed checkout issuance status and, when present, the raw manifest
      declaration that produced it
    - CLI, daemon, website, and desktop update-channel state

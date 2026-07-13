@@ -87,11 +87,9 @@ website payment webhook. Keep the same value configured only on the license API
 and the server-side checkout webhook; never expose it to browser code, public
 docs, logs, or generated release packets.
 
-After setting the secret and deploying, capture a non-secret readiness proof for
-release-status: an unauthenticated request to the checkout issuance endpoint must
-return `401` with `{"status":"unauthorized"}`. A `503` response with
-`license issuance is not configured` means the Fly app is still missing
-`LICENSE_ISSUANCE_SECRET` and is not ready for paid/trial checkout activation.
+After setting the secret and deploying, an unauthenticated request to checkout
+issuance or subscription lifecycle must return a redacted `401`. A `503` means
+the service is not configured. Neither response is checkout readiness proof.
 
 The same Fly-only secret derives deterministic short-lived keys for
 `POST /v1/admin/licenses/issue-lifecycle`; it is never valid authorization for
@@ -102,51 +100,14 @@ pins the canonical repository IDs, protected `main` ref, workflow path,
 runner, and candidate SHA. Configure the GitHub environment approval policy
 before treating this route as production proof. No additional OIDC secret is
 required.
-This release-status proof intentionally verifies only the fail-closed public
-boundary. It does not prove that a valid server-side checkout webhook can issue
-a license or write the DB. Stable/GA manifests must also point
-`checkoutIssuanceAuthenticatedProofPath` at an owner-held redacted success proof
-under `docs/evidence/`. That proof may record `statusCode: 200`,
-`status: "issued"`, `replayed`, the checkout lookup key,
-`issuedLicensePrefix: "nd_live_"`, and a `sha256:<64-hex>` fingerprint of the
-issued license key. It must not store raw bearer headers,
-`LICENSE_ISSUANCE_SECRET`, raw `licenseKey`, cookies, customer data, checkout
-payload secrets, or raw response bodies.
-
-Use the repo-owned smoke helper for that owner-held success proof. Start with a
-dry run so the request shape is visible without reading the secret or sending a
-network request:
-
-```sh
-npx tsx src/cli.ts checkout-issuance-smoke \
-  --url https://neondiff-license.fly.dev/v1/admin/licenses/issue \
-  --release-version <release-version> \
-  --checkout-lookup-key neondiff_monthly \
-  --dry-run true
-```
-
-After the same issuance secret has been configured on the license API and the
-server-side checkout webhook, run the live proof capture from a clean checkout:
-
-```sh
-export LICENSE_ISSUANCE_SECRET="<owner-held-shared-secret>"
-npx tsx src/cli.ts checkout-issuance-smoke \
-  --url https://neondiff-license.fly.dev/v1/admin/licenses/issue \
-  --release-version <release-version> \
-  --checkout-lookup-key neondiff_monthly \
-  --secret-env LICENSE_ISSUANCE_SECRET \
-  --dry-run false \
-  --confirm-live-issuance true \
-  --output docs/evidence/license-checkout-issuance-authenticated.json
-```
-
-The command reads the bearer value only from `--secret-env`, never from argv,
-and writes only the strict redacted proof accepted by
-`checkoutIssuanceAuthenticatedProofPath`. It rejects non-HTTPS URLs before
-reading the secret. The smoke request uses a stable synthetic `idempotencyKey`
-as the replay key; `externalCheckoutId` mirrors that value only as smoke
-metadata, while the license API's idempotent issuance contract is keyed by
-`idempotencyKey`.
+Checkout remains held. Do not run authenticated production issuance, lifecycle,
+or checkout proof from this source change. Issue
+[#559](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559)
+owns the immutable version, public manifest, deploy, installed-client,
+activation/no-bypass, live Stripe, and checkout-reopening gates. Any eventual
+proof must remain redacted: status, replay result, lookup key, and opaque hash
+fingerprints are acceptable; bearer headers, the issuance secret, raw license
+keys, payment/customer identifiers, cookies, and raw bodies are not.
 
 ## 4. Deploy
 
@@ -169,86 +130,56 @@ curl -s -i -X POST https://neondiff-license.fly.dev/v1/admin/licenses/issue \
   -d '{}'
 ```
 
-## 5. Point a client config at the deployed URL
+## 5. Prepare the schema v2 rollout
 
-**Use a copy of the client config, not the committed one** — this step is
-for verifying the deploy, not for flipping enforcement on for real users
-yet. Take `config.example.json`, copy it somewhere scratch, and set:
+1. Keep checkout and lifecycle delivery stopped.
+2. Separate Stripe test and live accounts, modes, subscriptions, databases,
+   replica prefixes, and evidence. Sandbox proof is never live proof.
+3. Immediately before the v2 image rollout, verify and record a fresh pre-v2
+   Litestream recovery point. Do not copy the database file while SQLite is
+   open; WAL state may make that copy incomplete.
+4. Review [`subscription-lifecycle.md`](subscription-lifecycle.md), run its
+   focused contract/DR checks, and confirm any legacy checkout binding list.
 
-```jsonc
-{
-  "license": {
-    "enabled": true,
-    "apiBaseUrl": "https://neondiff-license.fly.dev"  // your app's URL
-  }
-}
-```
+## 6. Deploy and verify schema v2
 
-(`apiBaseUrl` is the exact field the client reads — see
-`src/license.ts`, `config.example.json`'s `_apiBaseUrlComment`.)
+Deploy only after the pre-v2 recovery point is reviewed. `LicenseStore` opens
+the database before the HTTP listener starts. It accepts only an empty database,
+the exact legacy three-table schema, or the exact schema v2 signature. Migration
+runs inside one immediate transaction; verification failure rolls back and
+prevents the service from starting.
 
-## 6. Verify: contract + a live smoke check
+After deploy, verify health, `user_version=2`, redacted admin readback, the real
+v1.0.4 activate/validate/deactivate contract, lifecycle idempotency, and
+mandatory-online outage behavior with `offlineGraceMs=0`. The local entitlement
+cache is diagnostic only; it does not authorize review during an outage.
 
-Two different things, both worth doing:
+## 7. Backfill and release handoff
 
-- **Contract test (pre-deploy correctness, already covered):**
-  `npm test` at the repo root runs
-  `tests/license-service-contract.test.ts`, which drives the real client
-  (`src/license.ts`) against the real service in-process (mocked
-  request/response objects, no network) through
-  activate → validate → deactivate → reactivate-different-machine. This
-  proves the HTTP contract shape is correct *before* you ever deploy — it
-  does not hit a live URL, so it's not a substitute for step 2 below, but
-  there's no need to re-run it post-deploy unless the service code changed.
-- **Live smoke check against the real URL (do this post-deploy):** issue a
-  throwaway key on the deployed instance and drive the three endpoints
-  directly:
+Run `bind-checkout-subscription ... --dry-run` first for every verified legacy
+`source=checkout` issuance. A production write needs explicit owner approval of
+the opaque fingerprint and exact provider tuple. Do not recover a raw key or
+mint a replacement during reconciliation. See
+[`admin-runbook.md`](admin-runbook.md).
 
-  ```sh
-  # on the fly machine, or against a copy of the volume — see admin-runbook.md
-  flyctl ssh console --app neondiff-license -C \
-    "LICENSE_DB_PATH=/data/license.sqlite node dist/admin.js issue --plan yearly --scope private --seats 1"
-  # copy the printed key, then from your workstation:
-  curl -s https://neondiff-license.fly.dev/healthz
-  curl -s -X POST https://neondiff-license.fly.dev/v1/license/activate \
-    -H 'Content-Type: application/json' \
-    -d '{"licenseKey":"<key from above>","machineId":"smoke-test-1"}'
-  ```
-
-  Confirm `/healthz` returns `{"status":"ok"}` and `activate` returns a
-  `200` with an `entitlement` object. Revoke the throwaway key afterward
-  (`admin.js revoke --key … --reason "deploy smoke test"`) so it doesn't
-  linger as a live, unaccounted-for seat.
-
-## 7. Promote
-
-Only after the live smoke check passes: wire the real URL into
-`docs/public-release-manifest.json`'s `licenseApi` slot (currently
-`"state": "pending"`) and flip `license.enabled` / `apiBaseUrl` in the
-actual shipped config for the release that turns enforcement on. This is a
-separate, deliberate change — do not fold it into a deploy-assets PR.
+Then hand the redacted source/contract evidence to #559. This runbook does not
+change a version, release candidate, public manifest, deployed client config,
+checkout state, or public package. Those remain separately reviewed release
+mutations.
 
 ## Rollback
 
-- **Bad release, service still reachable:** `flyctl releases --app
-  neondiff-license` to list, then `flyctl deploy --image <previous image
-  ref>` (or `flyctl releases rollback` if available on your `flyctl`
-  version) to go back to the last good image. The SQLite volume is
-  untouched by an image rollback — activations/keys persist.
-- **Service unreachable / stuck:** `flyctl apps restart neondiff-license`.
-  If a bad migration or admin action corrupted data, use the DR runbook before
-  replacing data. Litestream restore to a fresh/missing DB path is the primary
-  offsite recovery path; Fly volume snapshots remain a secondary rollback
-  surface (`flyctl volumes snapshots list` /
-  `flyctl volumes create --snapshot-id …` to a fresh volume, then swap the
-  mount). Before relying on snapshot rollback in an incident, verify the exact
-  snapshot commands against the `flyctl` version used by production operators
-  and record that version in the evidence packet. There is no in-app migration
-  system today.
-- **Emergency full stop:** `flyctl scale count 0 --app neondiff-license`
-  stops serving entirely. Since license checks fail closed only for
-  all supported review work, this is an emergency stop rather than a
-  customer-transparent action. Existing users see their entitlement checks
-  start failing (client behavior on
-  `apiBaseUrl` unreachable is a server-classified failure, not a silent
-  allow — see `README.md`'s HTTP-code table) until service is restored.
+Image rollback does not reverse the SQLite schema migration. Deploying a pre-v2
+image against a v2 database is not the rollback procedure.
+
+For a v2 migration or data failure, stop writes, preserve the affected volume,
+select the reviewed pre-v2 Litestream recovery point, and restore it to a fresh
+path or volume using the timestamp-selected point-in-time restore command in the
+DR runbook. Verify quick-check, `user_version=0`, and the exact legacy schema
+signature before attaching a pre-v2 image. Never overwrite the existing database
+and never copy or force-restore into an open SQLite path. Follow
+[`disaster-recovery.md`](disaster-recovery.md) for verification and evidence.
+
+An emergency service stop makes all supported review work fail closed; it is
+not customer-transparent and does not authorize cache fallback. Restoration,
+deployment, or traffic changes remain owner-gated operations under #559.

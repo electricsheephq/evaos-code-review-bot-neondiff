@@ -1,17 +1,28 @@
 # License Service Admin Readiness
 
-Issue: [#327](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327)
-Status: source-only readiness slice; mock-only proof
+Issues: [#327](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327),
+[#562](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/562)
+Status: v1.0.4 activation contract proven locally; subscription lifecycle and
+schema v2 rollout remain source-only
 
-This document defines the operator/admin boundary for NeonDiff's hosted or
-direct license service integration. It does not prove a staging endpoint,
-admin credential, billing webhook, production service, or customer-ready
-private-repo entitlement flow.
+This document defines the operator/admin boundary for NeonDiff's license
+service integration. It does not prove a staging endpoint, admin credential,
+billing webhook, production lifecycle deploy, checkout reopening, or
+customer-ready entitlement flow.
 
 ## Current Proof Boundary
 
-The source tree can model and test license-service outcomes locally. The proof
-in this slice is limited to mocked API responses and local cache behavior:
+The source tree runs the real v1.0.4 license client against the in-process
+license service. That contract proves checkout-bound issue, activate, paid
+renew, validate, cancel-at-period-end, expiry, terminal revoke, deactivate, and
+different-machine seat behavior without network or production mutation.
+
+The schema v2 subscription lifecycle slice remains source-only. It proves code,
+tests, migration rollback, and documentation; it does not prove a production
+database migration, legacy backfill, Stripe webhook, Fly deploy, or live
+checkout.
+
+Current local proof includes:
 
 - the client recognizes `expired`, `revoked`, `invalid`, `scope_mismatch`,
   `rate_limited`, `unsupported_client`, `clock_skew`, `network`, and `server`
@@ -20,8 +31,16 @@ in this slice is limited to mocked API responses and local cache behavior:
   missing, stale, non-active, or not scoped for the requested visibility;
 - entitlement cache metadata can include the license fingerprint, plan,
   repo visibility coverage, private-repo allowance, update entitlement,
-  expiry, offline grace metadata, and non-active revocation reason when supplied
-  by a service response;
+  expiry, diagnostic cache metadata, and non-active revocation reason when
+  supplied by a service response;
+- mandatory-online configuration uses `offlineGraceMs=0`; a successful
+  activation may create a diagnostic cache, but a simulated API outage returns
+  `source="none"` and the review gate fails closed;
+- checkout lifecycle authorization, correlation failures, results, and errors
+  are redacted and never echo a raw key or request identifiers;
+- lifecycle revocation persists only a status-derived non-secret reason code;
+  arbitrary provider/customer text and control characters fail closed before
+  storage or admin/client output;
 - secret-bearing values remain outside tracked config, GitHub evidence, and
   operator docs.
 
@@ -44,7 +63,7 @@ private repo contents, provider keys, or customer secrets:
 | Service throttles validation or activation | `rate_limited` | Keep the gate closed; do not treat throttling as live readiness. |
 | Client version is too old for the service contract | `unsupported_client` | Ask the operator to upgrade before retrying. |
 | Client/server time drift is outside service tolerance | `clock_skew` | Ask the operator to correct time sync before retrying. |
-| Network or service failure | `network` or `server` | Use only the existing short offline cache grace for active cached entitlements; otherwise fail closed. |
+| Network or service failure | `network` or `server` | With supported `offlineGraceMs=0`, cache is diagnostic only and review fails closed immediately. Restore the API; do not enable a client-side bypass. |
 
 When a 2xx response body provides a non-`active` status, that status is
 authoritative and the gate fails closed without writing an active cache.
@@ -69,9 +88,9 @@ response supplies them:
   closed even if `repoVisibilityScope` is `private` or `all`;
 - `updateEntitlement`: whether update-channel access is allowed;
 - `expiresAt`: entitlement expiry time;
-- `offlineGraceMs` and `graceUntil`: cache-grace metadata for operator
-  diagnosis; local `config.license.offlineGraceMs` remains the authority for
-  whether cached entitlement grace is accepted;
+- `offlineGraceMs` and `graceUntil`: legacy/diagnostic cache metadata only. The
+  supported mandatory-online configuration fixes `offlineGraceMs=0`; operators
+  must not use client-editable config to grant outage authority;
 - `revocationReason`: redacted, printable, length-capped reason such as refund,
   chargeback, manual disable, or policy violation; preserved only when the
   entitlement status is not `active`.
@@ -81,20 +100,44 @@ treated as an explicit fail-closed private-repo denial. Review gating still
 requires an active entitlement that covers the requested repo visibility and
 passes the existing freshness rules.
 
-## Required Live Readiness Inputs
+## Subscription lifecycle operator boundary
 
-A future PR or release gate needs all of the following before claiming live
-license-service readiness:
+The guarded endpoint is `POST /v1/admin/licenses/lifecycle`. Its five commands
+are `renew_paid`, `reconcile`, `cancel_at_period_end`, `payment_attention`, and
+`revoke`. Exact provider account, `test`/`live` mode, and subscription binding
+must match an immutable checkout issuance tuple. Server policy owns trial,
+maximum period, USD currency, scope, and one-seat authority.
+
+Legacy checkout binding uses the admin
+`bind-checkout-subscription` command. Run `--dry-run` first, review the opaque
+issuance fingerprint and exact tuple, and require explicit production owner
+approval before the write form. Never accept or print a raw key, and do not
+mint a replacement key during reconciliation.
+
+The complete matrix, result mapping, rollout steps, and redaction contract live
+in
+[`services/license-api/docs/subscription-lifecycle.md`](../services/license-api/docs/subscription-lifecycle.md).
+
+## Required live readiness inputs
+
+Issue
+[#559](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559)
+needs all of the following before claiming live lifecycle/release readiness:
 
 - a staging license API base URL;
 - staging admin credentials or delegated operator access;
-- a non-secret test license or fixture account with documented allowed scope;
-- redacted activation, status, refresh, and deactivate evidence;
-- proof that the admin path can issue, inspect, revoke, and restore an
-  entitlement without exposing private repo contents;
+- a separately identified sandbox and live provider account/mode/database;
+- a verified pre-v2 Litestream recovery point and timed fresh-volume restore;
+- redacted activation, status, refresh, deactivate, renewal, cancellation,
+  expiry, revocation, idempotency, and no-bypass evidence;
+- reviewed legacy-binding dry-run/output, if production data needs backfill;
+- proof that the admin path can inspect and restore an entitlement without
+  exposing private repo contents or minting replacement keys during
+  reconciliation;
 - secret scan and public-claims scan results for the exact evidence packet.
 
-Without those inputs, operators may claim only mocked/local contract coverage.
+Without those inputs, operators may claim only the real local v1.0.4 client
+contract and source-level schema/lifecycle coverage described above.
 
 ## Stop Conditions
 
@@ -107,12 +150,15 @@ Stop and return to the release captain if any of these occur:
 - the service returns a status outside the documented taxonomy;
 - live validation requires expanding GitHub App permissions;
 - evidence would imply production, GA, enterprise, marketplace, or calibrated
-  review-quality readiness from mocked responses alone.
+  review-quality readiness from local contract responses alone.
+- a rollback plan assumes a previous image reverses schema v2, copies an open
+  SQLite database, or restores over the existing volume;
+- test-mode evidence is presented as live-mode proof;
+- reconciliation attempts raw-key recovery or replacement-key minting.
 
-## Follow-Up
+## Release handoff
 
-The next slice should connect this source contract to a staging-only admin
-smoke once the endpoint and credentials exist. That follow-up should update
-issue `#327` with a redacted evidence path under
-the operator-configured `evidenceDir`, for example
-`<evidenceDir>/<date>/production-license-service/`.
+Checkout remains held. #559 owns version/manifest changes, deployment,
+installed-package verification, live activation, public release proof, and the
+decision to reopen checkout. This document, issue #562, and their local tests do
+not mutate or satisfy those release gates.

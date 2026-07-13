@@ -62,7 +62,7 @@ import {
   writeOutcomeLedgerPacket
 } from "./outcome-ledger.js";
 import {
-  buildCheckoutIssuanceSmokeRequestPreview,
+  buildCheckoutIssuanceSmokeRequestResult,
   runCheckoutIssuanceSmoke,
   validateCheckoutIssuanceUrl
 } from "./checkout-issuance-smoke.js";
@@ -204,6 +204,10 @@ async function main(): Promise<void> {
     const releaseVersion = parseSingleArg(args["release-version"] ?? "v1.0.0", "--release-version");
     const checkoutLookupKey = parseSingleArg(args["checkout-lookup-key"] ?? "neondiff_monthly", "--checkout-lookup-key");
     const idempotencyKey = args["idempotency-key"] ? parseSingleArg(args["idempotency-key"], "--idempotency-key") : undefined;
+    const providerAccountId = parseSingleArg(args["provider-account-id"] ?? "", "--provider-account-id");
+    const providerMode = parseSingleArg(args["provider-mode"] ?? "", "--provider-mode");
+    const externalSubscriptionId = parseSingleArg(args["external-subscription-id"] ?? "", "--external-subscription-id");
+    const externalCheckoutId = parseSingleArg(args["external-checkout-id"] ?? "", "--external-checkout-id");
     const urlCheck = validateCheckoutIssuanceUrl(url);
     if (!urlCheck.ok) {
       console.log(stringifyRedactedJson({
@@ -218,17 +222,33 @@ async function main(): Promise<void> {
     }
     const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
     if (dryRun) {
+      const requestResult = buildCheckoutIssuanceSmokeRequestResult({
+        releaseVersion,
+        checkoutLookupKey,
+        providerAccountId,
+        providerMode,
+        externalSubscriptionId,
+        externalCheckoutId,
+        ...(idempotencyKey ? { idempotencyKey } : {})
+      });
+      if (!requestResult.ok) {
+        console.log(stringifyRedactedJson({
+          ok: false,
+          command: "checkout-issuance-smoke",
+          errorCode: requestResult.errorCode,
+          detail: requestResult.detail,
+          proofBoundary: "No authenticated checkout issuance proof was produced."
+        }));
+        process.exitCode = 1;
+        return;
+      }
       console.log(stringifyRedactedJson({
         ok: true,
         command: "checkout-issuance-smoke",
         mode: "dry_run",
         url,
         releaseVersion,
-        requestPreview: buildCheckoutIssuanceSmokeRequestPreview({
-          releaseVersion,
-          checkoutLookupKey,
-          ...(idempotencyKey ? { idempotencyKey } : {})
-        }),
+        requestPreview: requestResult.requestPreview,
         proofBoundary: "Dry-run request preview only; no owner-held secret was read and no network request was sent."
       }));
       return;
@@ -238,6 +258,10 @@ async function main(): Promise<void> {
       url,
       releaseVersion,
       checkoutLookupKey,
+      providerAccountId,
+      providerMode,
+      externalSubscriptionId,
+      externalCheckoutId,
       confirmLiveIssuance: args["confirm-live-issuance"] === undefined
         ? false
         : parseBooleanArg(args["confirm-live-issuance"], "--confirm-live-issuance"),
@@ -3290,6 +3314,10 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--url", description: "Full /v1/admin/licenses/issue URL (default https://neondiff-license.fly.dev/v1/admin/licenses/issue)." },
       { name: "--release-version", description: "Release version recorded in the proof (default v1.0.0)." },
       { name: "--checkout-lookup-key", description: "Checkout lookup key to smoke: neondiff_monthly, neondiff_yearly, or neondiff_org_yearly." },
+      { name: "--provider-account-id", description: "Required Stripe account ID for the same test or live environment as the correlated objects." },
+      { name: "--provider-mode", description: "Required Stripe environment: test or live. Cross-environment correlation is rejected." },
+      { name: "--external-subscription-id", description: "Required Stripe subscription ID from the selected provider mode; no ID is synthesized." },
+      { name: "--external-checkout-id", description: "Required Stripe Checkout Session ID from the selected provider mode; no ID is synthesized." },
       { name: "--idempotency-key", description: "Optional stable smoke idempotency key; defaults to release/version/lookup-key." },
       { name: "--dry-run", description: "true by default; false sends the live POST." },
       { name: "--confirm-live-issuance", description: "Must be true with --dry-run false before reading --secret-env and sending the POST." },

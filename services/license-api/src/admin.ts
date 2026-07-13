@@ -1,4 +1,16 @@
-import { LicenseStore, type IssueLicenseInput, type LicenseRecord, type RepoVisibilityScope } from "./store.js";
+import {
+  CheckoutBindingConflictError,
+  CheckoutBindingNotFoundError,
+  CheckoutBindingPolicyError,
+  CheckoutBindingTransientError,
+  CheckoutBindingWrongSourceError,
+  LicenseStore,
+  checkoutIssuanceFingerprint,
+  type BindCheckoutSubscriptionInput,
+  type IssueLicenseInput,
+  type LicenseRecord,
+  type RepoVisibilityScope
+} from "./store.js";
 
 /**
  * Admin issuance CLI (no payment rails — this is how keys are minted until/if
@@ -8,6 +20,9 @@ import { LicenseStore, type IssueLicenseInput, type LicenseRecord, type RepoVisi
  *   revoke --key <k> [--reason <text>]
  *   list
  *   show   --key <k>
+ *   bind-checkout-subscription --issuance-idempotency-key <ref>
+ *          --provider stripe --provider-account-id <id> --provider-mode <test|live>
+ *          --external-subscription-id <id> --external-checkout-id <id> [--dry-run]
  *
  * `issue` prints the raw key EXACTLY ONCE; only the sha256 hash is stored.
  * `list`/`show` never print raw keys.
@@ -25,10 +40,97 @@ export function runAdmin(argv: string[], store: LicenseStore, out: (line: string
       return cmdList(store, out);
     case "show":
       return cmdShow(flags, store, out);
+    case "bind-checkout-subscription":
+      return cmdBindCheckoutSubscription(rest, store, out);
     default:
       out(usage());
       return command ? 2 : 0;
   }
+}
+
+function cmdBindCheckoutSubscription(
+  args: string[],
+  store: LicenseStore,
+  out: (line: string) => void
+): number {
+  const parsed = parseCheckoutBindingFlags(args);
+  if (!parsed) {
+    out(JSON.stringify({ result: "invalid" }));
+    return 2;
+  }
+  const issuanceFingerprint = checkoutIssuanceFingerprint(parsed.input.issuanceIdempotencyKey);
+  try {
+    out(JSON.stringify(store.bindCheckoutSubscription(parsed.input, { dryRun: parsed.dryRun })));
+    return 0;
+  } catch (error) {
+    let result: "invalid" | "not_found" | "wrong_source" | "conflict" | "unavailable";
+    let code: number;
+    if (error instanceof CheckoutBindingPolicyError) {
+      result = "invalid";
+      code = 2;
+    } else if (error instanceof CheckoutBindingNotFoundError) {
+      result = "not_found";
+      code = 1;
+    } else if (error instanceof CheckoutBindingWrongSourceError) {
+      result = "wrong_source";
+      code = 1;
+    } else if (error instanceof CheckoutBindingConflictError) {
+      result = "conflict";
+      code = 1;
+    } else if (error instanceof CheckoutBindingTransientError) {
+      result = "unavailable";
+      code = 1;
+    } else {
+      result = "unavailable";
+      code = 1;
+    }
+    out(JSON.stringify({ result, issuanceFingerprint }));
+    return code;
+  }
+}
+
+function parseCheckoutBindingFlags(
+  args: string[]
+): { input: BindCheckoutSubscriptionInput; dryRun: boolean } | undefined {
+  const valueFlags = new Set([
+    "issuance-idempotency-key",
+    "provider",
+    "provider-account-id",
+    "provider-mode",
+    "external-subscription-id",
+    "external-checkout-id"
+  ]);
+  const values = new Map<string, string>();
+  let dryRun = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--dry-run") {
+      if (dryRun || (args[index + 1] !== undefined && !args[index + 1]!.startsWith("--"))) {
+        return undefined;
+      }
+      dryRun = true;
+      continue;
+    }
+    if (!arg?.startsWith("--")) return undefined;
+    const name = arg.slice(2);
+    if (!valueFlags.has(name) || values.has(name)) return undefined;
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith("--")) return undefined;
+    values.set(name, value);
+    index += 1;
+  }
+  if ([...valueFlags].some((name) => !values.has(name))) return undefined;
+  return {
+    input: {
+      issuanceIdempotencyKey: values.get("issuance-idempotency-key")!,
+      provider: values.get("provider")! as "stripe",
+      providerAccountId: values.get("provider-account-id")!,
+      providerMode: values.get("provider-mode")! as "test" | "live",
+      externalSubscriptionId: values.get("external-subscription-id")!,
+      externalCheckoutId: values.get("external-checkout-id")!
+    },
+    dryRun
+  };
 }
 
 function cmdIssue(flags: Flags, store: LicenseStore, out: (line: string) => void): number {
@@ -116,7 +218,10 @@ function usage(): string {
     "         [--private-repo-allowed <true|false>] [--update-entitlement]",
     "  revoke --key <k> [--reason <text>]",
     "  list",
-    "  show   --key <k>"
+    "  show   --key <k>",
+    "  bind-checkout-subscription --issuance-idempotency-key <ref> --provider stripe",
+    "         --provider-account-id <id> --provider-mode <test|live>",
+    "         --external-subscription-id <id> --external-checkout-id <id> [--dry-run]"
   ].join("\n");
 }
 

@@ -3,6 +3,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname, platform } from "node:os";
 import { resolve } from "node:path";
+import {
+  checkoutProviderTupleFingerprint,
+  normalizeCheckoutProviderTuple,
+  type CheckoutProviderTupleInput
+} from "./checkout-issuance-smoke.js";
 
 const API_TIMEOUT_MS = 15_000;
 const CLI_TIMEOUT_MS = 20_000;
@@ -81,16 +86,12 @@ export type LicenseLifecycleSmokeResult =
       proofBoundary: string;
     };
 
-export interface LicenseLifecycleSmokeInput {
+interface LicenseLifecycleSmokeBaseInput {
   releaseVersion: string;
   candidateHead: string;
   packShasum: string;
   packIntegrity: string;
   apiBaseUrl: string;
-  issuanceAuthorization: {
-    kind: "shared-secret" | "github-oidc";
-    bearer: string;
-  };
   candidateCliPath: string;
   configPath: string;
   confirmLiveLifecycle: boolean;
@@ -101,6 +102,17 @@ export interface LicenseLifecycleSmokeInput {
   dashboardEvidenceRoot?: string;
   runDashboardProbe?: (phase: "preactivation" | "active") => Promise<DashboardProbeResult>;
 }
+
+export type LicenseLifecycleSmokeInput = LicenseLifecycleSmokeBaseInput & (
+  | {
+      issuanceAuthorization: { kind: "github-oidc"; bearer: string };
+      checkoutIssuanceCorrelation?: never;
+    }
+  | {
+      issuanceAuthorization: { kind: "shared-secret"; bearer: string };
+      checkoutIssuanceCorrelation: CheckoutProviderTupleInput;
+    }
+);
 
 export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput): Promise<LicenseLifecycleSmokeResult> {
   const boundary = "Disposable lifecycle only. The issuance bearer and raw license key stay in process memory or bounded candidate stdin and are never returned.";
@@ -145,6 +157,9 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
       preactivationDashboard = { setupBlockedBeforeActivation: true, providerBlockedBeforeActivation: true };
     }
     const githubOidcIssuance = input.issuanceAuthorization.kind === "github-oidc";
+    const checkoutIssuanceCorrelation = githubOidcIssuance
+      ? undefined
+      : normalizeCheckoutProviderTuple(input.checkoutIssuanceCorrelation!);
     const issuance = await postJson(
       fetchImpl,
       `${input.apiBaseUrl}${githubOidcIssuance ? "/v1/admin/licenses/issue-lifecycle" : "/v1/admin/licenses/issue"}`,
@@ -156,9 +171,15 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
             packIntegrity: input.packIntegrity
           }
         : {
-            idempotencyKey: `neondiff-lifecycle-${input.releaseVersion}-${issuanceIdentity.slice(0, 24)}`,
+            idempotencyKey: [
+              "neondiff-lifecycle",
+              input.releaseVersion,
+              issuanceIdentity.slice(0, 16),
+              checkoutIssuanceCorrelation!.providerMode,
+              checkoutProviderTupleFingerprint(checkoutIssuanceCorrelation!)
+            ].join("-"),
             checkoutLookupKey: "neondiff_monthly",
-            externalCheckoutId: `lifecycle-${issuanceIdentity.slice(0, 32)}`
+            ...checkoutIssuanceCorrelation
           },
       input.issuanceAuthorization.bearer
     );
@@ -379,6 +400,8 @@ function isValidInput(input: LicenseLifecycleSmokeInput): boolean {
       && (input.issuanceAuthorization.kind === "shared-secret" || input.issuanceAuthorization.kind === "github-oidc")
       && input.issuanceAuthorization.bearer.length >= 8
       && input.issuanceAuthorization.bearer.length <= 16 * 1024
+      && (input.issuanceAuthorization.kind === "github-oidc"
+        || Boolean(normalizeCheckoutProviderTuple(input.checkoutIssuanceCorrelation!)))
       && Boolean(input.candidateCliPath && input.configPath);
   } catch {
     return false;

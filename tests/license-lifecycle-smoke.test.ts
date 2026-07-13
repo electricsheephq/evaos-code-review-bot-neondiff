@@ -5,9 +5,16 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runLicenseLifecycleSmoke } from "../src/license-lifecycle-smoke.js";
+import { createInProcessLicenseApi } from "./helpers/in-process-license-api.js";
 
 describe("license lifecycle smoke", () => {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const sharedSecretCorrelation = {
+    providerAccountId: "acct_test_lifecycle_fixture",
+    providerMode: "test" as const,
+    externalSubscriptionId: "sub_test_lifecycle_fixture",
+    externalCheckoutId: "cs_test_lifecycle_fixture"
+  };
 
   it("keeps the trusted wrapper on GitHub OIDC without secret arguments or shared-secret stdin", () => {
     const script = readFileSync(resolve(repoRoot, "scripts", "run-license-lifecycle-smoke.mjs"), "utf8");
@@ -163,6 +170,7 @@ describe("license lifecycle smoke", () => {
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
       issuanceAuthorization: { kind: "shared-secret", bearer: "not-read" },
+      checkoutIssuanceCorrelation: sharedSecretCorrelation,
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: false,
@@ -177,6 +185,146 @@ describe("license lifecycle smoke", () => {
     });
     expect(result).toMatchObject({ ok: false, errorCode: "confirm_live_lifecycle_required" });
     expect(called).toBe(false);
+  });
+
+  it("sends the immutable Stripe tuple for shared-secret checkout issuance", async () => {
+    let observedBody: Record<string, unknown> | undefined;
+    const result = await runLicenseLifecycleSmoke({
+      releaseVersion: "v1.0.5",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
+      checkoutIssuanceCorrelation: sharedSecretCorrelation,
+      candidateCliPath: "/isolated/prefix/bin/neondiff",
+      configPath: "/isolated/config.local.json",
+      confirmLiveLifecycle: true,
+      fetchImpl: async (_url, init) => {
+        observedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ status: "server" }), { status: 500 });
+      },
+      runCandidateCommand: async () => {
+        throw new Error("candidate must not run after failed issuance");
+      }
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: "issuance_failed" });
+    expect(observedBody).toEqual({
+      idempotencyKey: expect.stringMatching(
+        /^neondiff-lifecycle-v1\.0\.5-[a-f0-9]{16}-test-[a-f0-9]{4}(?:_[a-f0-9]{4}){4}$/
+      ),
+      checkoutLookupKey: "neondiff_monthly",
+      provider: "stripe",
+      ...sharedSecretCorrelation
+    });
+  });
+
+  it("drives shared-secret issuance through the real listener and keeps test/live correlation out of errors", async () => {
+    const secretValue = "listener-fixture-lifecycle-secret";
+    const api = createInProcessLicenseApi(secretValue);
+    let localRemoved = false;
+    let candidateCalls = 0;
+    const baseInput = {
+      releaseVersion: "v1.0.5",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      issuanceAuthorization: { kind: "shared-secret" as const, bearer: secretValue },
+      checkoutIssuanceCorrelation: sharedSecretCorrelation,
+      candidateCliPath: "/isolated/prefix/bin/neondiff",
+      configPath: "/isolated/config.local.json",
+      confirmLiveLifecycle: true,
+      now: () => new Date("2026-07-13T00:00:00.000Z"),
+      fetchImpl: api.fetchImpl,
+      runCandidateCommand: async ({ args }: { args: string[] }) => {
+        candidateCalls += 1;
+        if (args[1] === "activate") {
+          return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "server" }), stderr: "" };
+        }
+        if (args[1] === "deactivate" && args.includes("false")) {
+          localRemoved = true;
+          return { exitCode: 0, stdout: JSON.stringify({ ok: true, status: "deactivated" }), stderr: "" };
+        }
+        if (args[1] === "status" && localRemoved) {
+          return { exitCode: 1, stdout: JSON.stringify({ ok: false, status: "missing" }), stderr: "" };
+        }
+        throw new Error("unexpected candidate command");
+      }
+    };
+
+    try {
+      const first = await runLicenseLifecycleSmoke(baseInput);
+      expect(first).toMatchObject({
+        ok: false,
+        errorCode: "candidate_failed",
+        cleanup: { localState: "confirmed_removed", remoteState: "confirmed_deactivated" }
+      });
+      const callsAfterFirst = candidateCalls;
+      const crossed = await runLicenseLifecycleSmoke({
+        ...baseInput,
+        checkoutIssuanceCorrelation: { ...sharedSecretCorrelation, providerMode: "live" }
+      });
+      expect(crossed).toMatchObject({
+        ok: false,
+        errorCode: "candidate_failed",
+        cleanup: { localState: "confirmed_removed", remoteState: "confirmed_deactivated" }
+      });
+      expect(candidateCalls).toBeGreaterThan(callsAfterFirst);
+      const serialized = JSON.stringify(crossed);
+      for (const sensitive of [
+        secretValue,
+        sharedSecretCorrelation.providerAccountId,
+        sharedSecretCorrelation.externalSubscriptionId,
+        sharedSecretCorrelation.externalCheckoutId
+      ]) {
+        expect(serialized).not.toContain(sensitive);
+      }
+    } finally {
+      api.close();
+    }
+  });
+
+  it("rejects an incomplete shared-secret correlation before reading the bearer or calling the API", async () => {
+    const secretValue = "must-not-cross-the-lifecycle-boundary";
+    let apiCalled = false;
+    let candidateCalled = false;
+    const result = await runLicenseLifecycleSmoke({
+      releaseVersion: "v1.0.5",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      issuanceAuthorization: { kind: "shared-secret", bearer: secretValue },
+      checkoutIssuanceCorrelation: {
+        ...sharedSecretCorrelation,
+        externalCheckoutId: ""
+      },
+      candidateCliPath: "/isolated/prefix/bin/neondiff",
+      configPath: "/isolated/config.local.json",
+      confirmLiveLifecycle: true,
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("API must not be called for an incomplete tuple");
+      },
+      runCandidateCommand: async () => {
+        candidateCalled = true;
+        throw new Error("candidate must not run for an incomplete tuple");
+      }
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: "invalid_input" });
+    expect(apiCalled).toBe(false);
+    expect(candidateCalled).toBe(false);
+    const serialized = JSON.stringify(result);
+    for (const sensitive of [
+      secretValue,
+      sharedSecretCorrelation.providerAccountId,
+      sharedSecretCorrelation.externalSubscriptionId
+    ]) {
+      expect(serialized).not.toContain(sensitive);
+    }
   });
 
   it("rejects a preactivation dashboard probe that does not prove setup blocking", async () => {
@@ -217,6 +365,7 @@ describe("license lifecycle smoke", () => {
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
       issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
+      checkoutIssuanceCorrelation: sharedSecretCorrelation,
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: true,
@@ -239,6 +388,7 @@ describe("license lifecycle smoke", () => {
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
       issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
+      checkoutIssuanceCorrelation: sharedSecretCorrelation,
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: true,
@@ -289,6 +439,7 @@ describe("license lifecycle smoke", () => {
         packIntegrity: `sha512-${"Y".repeat(86)}==`,
         apiBaseUrl: "https://neondiff-license.fly.dev",
         issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
+        checkoutIssuanceCorrelation: sharedSecretCorrelation,
         candidateCliPath: "/isolated/prefix/bin/neondiff",
         configPath: "/isolated/config.local.json",
         confirmLiveLifecycle: true,
@@ -319,6 +470,7 @@ describe("license lifecycle smoke", () => {
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
       issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
+      checkoutIssuanceCorrelation: sharedSecretCorrelation,
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: true,
@@ -371,6 +523,7 @@ describe("license lifecycle smoke", () => {
       packIntegrity: `sha512-${"Y".repeat(86)}==`,
       apiBaseUrl: "https://neondiff-license.fly.dev",
       issuanceAuthorization: { kind: "shared-secret", bearer: "fixture-secret" },
+      checkoutIssuanceCorrelation: sharedSecretCorrelation,
       candidateCliPath: "/isolated/prefix/bin/neondiff",
       configPath: "/isolated/config.local.json",
       confirmLiveLifecycle: true,

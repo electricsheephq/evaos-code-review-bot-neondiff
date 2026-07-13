@@ -14,9 +14,25 @@ const DEFAULT_CAPTURE_CONTEXT = {
 } as const;
 
 export type CheckoutLookupKey = "neondiff_monthly" | "neondiff_yearly" | "neondiff_org_yearly";
+export type CheckoutProviderMode = "test" | "live";
 export type CheckoutIssuanceFetch = typeof fetch;
 
-export interface CheckoutIssuanceSmokeInput {
+export interface CheckoutProviderTupleInput {
+  providerAccountId: string;
+  providerMode: string;
+  externalSubscriptionId: string;
+  externalCheckoutId: string;
+}
+
+export interface CheckoutProviderTuple {
+  provider: "stripe";
+  providerAccountId: string;
+  providerMode: CheckoutProviderMode;
+  externalSubscriptionId: string;
+  externalCheckoutId: string;
+}
+
+export interface CheckoutIssuanceSmokeInput extends CheckoutProviderTupleInput {
   url: string;
   releaseVersion: string;
   checkoutLookupKey: string;
@@ -33,8 +49,26 @@ export interface CheckoutIssuanceSmokeInput {
 export interface CheckoutIssuanceSmokeRequestPreview {
   idempotencyKey: string;
   checkoutLookupKey: CheckoutLookupKey;
+  provider: "stripe";
+  providerAccountId: string;
+  providerMode: CheckoutProviderMode;
+  externalSubscriptionId: string;
   externalCheckoutId: string;
 }
+
+export interface CheckoutIssuanceSmokeRequestSummary {
+  checkoutLookupKey: CheckoutLookupKey;
+  provider: "stripe";
+  providerMode: CheckoutProviderMode;
+}
+
+export type CheckoutIssuanceSmokeRequestResult =
+  | { ok: true; requestPreview: CheckoutIssuanceSmokeRequestPreview }
+  | {
+      ok: false;
+      errorCode: "invalid_provider_tuple" | "invalid_checkout_lookup_key";
+      detail: string;
+    };
 
 export interface AuthenticatedCheckoutIssuanceProof {
   evidenceKind: "license_api_checkout_issuance_authenticated";
@@ -59,7 +93,7 @@ export type CheckoutIssuanceSmokeResult =
       command: "checkout-issuance-smoke";
       proof: AuthenticatedCheckoutIssuanceProof;
       proofPath?: string;
-      requestPreview: CheckoutIssuanceSmokeRequestPreview;
+      requestPreview: CheckoutIssuanceSmokeRequestSummary;
       proofBoundary: string;
     }
   | {
@@ -69,6 +103,7 @@ export type CheckoutIssuanceSmokeResult =
         | "confirm_live_issuance_required"
         | "invalid_url"
         | "invalid_checkout_lookup_key"
+        | "invalid_provider_tuple"
         | "invalid_output_path"
         | "missing_secret_env"
         | "fetch_failed"
@@ -79,7 +114,7 @@ export type CheckoutIssuanceSmokeResult =
       detail: string;
       secretEnvName?: string;
       statusCode?: number;
-      requestPreview?: CheckoutIssuanceSmokeRequestPreview;
+      requestPreview?: CheckoutIssuanceSmokeRequestSummary;
       proofBoundary: string;
     };
 
@@ -87,14 +122,68 @@ export function buildCheckoutIssuanceSmokeRequestPreview(input: {
   releaseVersion: string;
   checkoutLookupKey: string;
   idempotencyKey?: string;
-}): CheckoutIssuanceSmokeRequestPreview {
+} & CheckoutProviderTupleInput): CheckoutIssuanceSmokeRequestPreview {
   const checkoutLookupKey = normalizeCheckoutLookupKey(input.checkoutLookupKey);
-  const idempotencyKey = input.idempotencyKey ?? defaultIdempotencyKey(input.releaseVersion, checkoutLookupKey);
+  const providerTuple = normalizeCheckoutProviderTuple(input);
+  const idempotencyKey = input.idempotencyKey
+    ?? defaultIdempotencyKey(input.releaseVersion, checkoutLookupKey, providerTuple);
   return {
     idempotencyKey,
     checkoutLookupKey,
-    externalCheckoutId: idempotencyKey
+    ...providerTuple
   };
+}
+
+export function buildCheckoutIssuanceSmokeRequestResult(input: {
+  releaseVersion: string;
+  checkoutLookupKey: string;
+  idempotencyKey?: string;
+} & CheckoutProviderTupleInput): CheckoutIssuanceSmokeRequestResult {
+  try {
+    return { ok: true, requestPreview: buildCheckoutIssuanceSmokeRequestPreview(input) };
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: error instanceof InvalidProviderTupleError
+        ? "invalid_provider_tuple"
+        : "invalid_checkout_lookup_key",
+      detail: error instanceof Error ? error.message : "invalid checkout issuance input"
+    };
+  }
+}
+
+export function normalizeCheckoutProviderTuple(
+  input: CheckoutProviderTupleInput
+): CheckoutProviderTuple {
+  const providerMode = input.providerMode?.trim();
+  if (providerMode !== "test" && providerMode !== "live") {
+    throw new InvalidProviderTupleError("providerMode must be test or live");
+  }
+  return {
+    provider: "stripe",
+    providerAccountId: readProviderTupleField(input.providerAccountId, "providerAccountId"),
+    providerMode,
+    externalSubscriptionId: readProviderTupleField(
+      input.externalSubscriptionId,
+      "externalSubscriptionId"
+    ),
+    externalCheckoutId: readProviderTupleField(input.externalCheckoutId, "externalCheckoutId")
+  };
+}
+
+export function checkoutProviderTupleFingerprint(tuple: CheckoutProviderTuple): string {
+  const digest = createHash("sha256")
+    .update("neondiff-checkout-provider-tuple-v1\0")
+    .update(JSON.stringify([
+      tuple.provider,
+      tuple.providerAccountId,
+      tuple.providerMode,
+      tuple.externalSubscriptionId,
+      tuple.externalCheckoutId
+    ]))
+    .digest("hex")
+    .slice(0, 20);
+  return digest.match(/.{4}/g)!.join("_");
 }
 
 export function validateCheckoutIssuanceUrl(url: string): { ok: true } | { ok: false; detail: string } {
@@ -111,12 +200,9 @@ export function validateCheckoutIssuanceUrl(url: string): { ok: true } | { ok: f
 }
 
 export async function runCheckoutIssuanceSmoke(input: CheckoutIssuanceSmokeInput): Promise<CheckoutIssuanceSmokeResult> {
-  let requestPreview: CheckoutIssuanceSmokeRequestPreview;
-  try {
-    requestPreview = buildCheckoutIssuanceSmokeRequestPreview(input);
-  } catch (error) {
-    return failure("invalid_checkout_lookup_key", error instanceof Error ? error.message : "invalid checkout lookup key");
-  }
+  const requestResult = buildCheckoutIssuanceSmokeRequestResult(input);
+  if (!requestResult.ok) return failure(requestResult.errorCode, requestResult.detail);
+  const { requestPreview } = requestResult;
 
   const urlCheck = validateCheckoutIssuanceUrl(input.url);
   if (!urlCheck.ok) return failure("invalid_url", urlCheck.detail, { requestPreview });
@@ -216,7 +302,7 @@ export async function runCheckoutIssuanceSmoke(input: CheckoutIssuanceSmokeInput
     command: "checkout-issuance-smoke",
     proof: proof.proof,
     ...(input.outputPath ? { proofPath: input.outputPath } : {}),
-    requestPreview,
+    requestPreview: summarizeCheckoutIssuanceRequest(requestPreview),
     proofBoundary: "Redacted authenticated checkout issuance proof only; raw license keys and bearer secrets are never written."
   };
 }
@@ -267,8 +353,41 @@ function normalizeCheckoutLookupKey(input: string): CheckoutLookupKey {
   throw new Error("checkoutLookupKey must be one of: neondiff_monthly, neondiff_yearly, neondiff_org_yearly");
 }
 
-function defaultIdempotencyKey(releaseVersion: string, checkoutLookupKey: CheckoutLookupKey): string {
-  return `neondiff-smoke-${releaseVersion}-${checkoutLookupKey}`;
+function defaultIdempotencyKey(
+  releaseVersion: string,
+  checkoutLookupKey: CheckoutLookupKey,
+  providerTuple: CheckoutProviderTuple
+): string {
+  return [
+    "neondiff-smoke",
+    releaseVersion,
+    checkoutLookupKey,
+    providerTuple.providerMode,
+    checkoutProviderTupleFingerprint(providerTuple)
+  ].join("-");
+}
+
+function summarizeCheckoutIssuanceRequest(
+  preview: CheckoutIssuanceSmokeRequestPreview
+): CheckoutIssuanceSmokeRequestSummary {
+  return {
+    checkoutLookupKey: preview.checkoutLookupKey,
+    provider: preview.provider,
+    providerMode: preview.providerMode
+  };
+}
+
+class InvalidProviderTupleError extends Error {}
+
+function readProviderTupleField(value: string, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new InvalidProviderTupleError(`${field} is required`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > 160) {
+    throw new InvalidProviderTupleError(`${field} is too long`);
+  }
+  return trimmed;
 }
 
 function resolveConfinedProofOutputPath(
@@ -394,8 +513,12 @@ function failure(
 function redactFailureExtra(
   extra: Partial<Extract<CheckoutIssuanceSmokeResult, { ok: false }>>
 ): Partial<Extract<CheckoutIssuanceSmokeResult, { ok: false }>> {
+  const requestPreview = extra.requestPreview as CheckoutIssuanceSmokeRequestPreview | undefined;
   return {
     ...extra,
+    ...(requestPreview
+      ? { requestPreview: summarizeCheckoutIssuanceRequest(requestPreview) }
+      : {}),
     ...(typeof extra.secretEnvName === "string"
       ? { secretEnvName: isSafeEnvName(extra.secretEnvName) ? extra.secretEnvName : "[redacted-secret]" }
       : {})

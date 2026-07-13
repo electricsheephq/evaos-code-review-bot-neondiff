@@ -4,35 +4,50 @@ Self-contained license service for NeonDiff API-backed entitlements
 ([#327](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/327)).
 It implements the exact HTTP contract the shipped client (`src/license.ts`)
 already calls — activate / validate / deactivate — backed by SQLite, with an
-admin CLI that mints keys. Checkout fulfillment may also use the guarded
-server-to-server issuance endpoint below; Stripe/Lovable publish wiring remains
-outside this package and must call the endpoint with an owner-held shared
-secret.
+admin CLI that mints keys. Guarded server-to-server routes issue checkout
+licenses and apply provider subscription lifecycle events. Stripe/Lovable
+publish wiring remains outside this package and must use the owner-held shared
+secret; checkout is still held pending the rollout proof in issue #559.
 
 The service is a separate package boundary; it does **not** import the review
 worker and can be deployed on its own (SQLite on a mounted volume).
 
 ## Contract
 
-Three `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
+Six `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
 
 | Endpoint | Request body | Success (200) | Denials |
 | --- | --- | --- | --- |
 | `/v1/license/activate` | `{ licenseKey, repo?, machineId }` | `{ entitlement: { status:"active", repoVisibilityScope, … } }` | 404 invalid · 403 revoked · 402 expired · **409 scope_mismatch** (seat exhausted) |
 | `/v1/license/validate` | `{ licenseKey, repo?, machineId }` | active entitlement | 404 invalid · 403 revoked · 402 expired · 409 scope_mismatch (never activated on this machine) |
 | `/v1/license/deactivate` | `{ licenseKey, repo?, machineId }` | `{ status:"active", … }` (idempotent) | 404 invalid |
-| `/v1/admin/licenses/issue` | `{ idempotencyKey, checkoutLookupKey, ... }` + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | `{ status:"issued", licenseKey:"nd_live_...", entitlement, replayed }` | 401 unauthorized · 400 malformed/unsupported plan · 409 idempotency conflict |
+| `/v1/admin/licenses/issue` | `{ idempotencyKey, checkoutLookupKey, ... }` + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | `{ status:"issued", licenseKey:"nd_live_...", entitlement, replayed }` | 401 unauthorized · 400 malformed/unsupported lookup or policy · 409 idempotency conflict |
 | `/v1/admin/licenses/issue-lifecycle` | exact release identity + GitHub Actions OIDC bearer | short-lived lifecycle license + all-scope entitlement | 401 invalid workflow token · 403 candidate SHA mismatch · 409 workflow-run conflict · 503 unconfigured |
+| `/v1/admin/licenses/lifecycle` | strict subscription command + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | redacted `{ status, replayed, entitlement }` | 400 invalid · 401 unauthorized · 404 not_found · 409 conflict/terminally_revoked · 429 rate_limited · 503 unavailable |
 
-Cross-cutting: 429 rate_limited (per-key throttle) · 400 malformed · 5xx server.
+Activation, validation, and deactivation use per-license-key rate limiting.
+Subscription lifecycle and release-lifecycle issuance use separate client-address rate-limit budgets.
+Checkout issuance has no generic `429`
+claim; its documented authorization, validation, conflict, and server outcomes
+apply. Cross-route failures include `400 malformed` and `5xx server` where the
+endpoint table or detailed section specifies them.
+
 `machineId` is the single-activation binding — one machine per seat (default
-`seats=1`). Only `sha256(licenseKey)` is ever stored; the raw key is never
-logged or echoed. `GET /healthz` → `{ "status": "ok" }`.
+`seats=1`). Only `sha256(licenseKey)` is stored. Activation, validation,
+deactivation, lifecycle, and admin inspection responses never echo a submitted
+raw key; issuance returns a raw key only to its authorized caller for one-shot
+fulfillment. `GET /healthz` → `{ "status": "ok" }`.
 
 The HTTP-code → client-classification map is fixed by the client
 (`402→expired · 429→rate_limited · 426→unsupported_client · 409→scope_mismatch ·
 403/410→revoked · 401/404→invalid · 5xx→server`); the service returns codes that
 match it.
+
+Lifecycle revocation derives a non-secret reason code from subscription status:
+`subscription_canceled`, `subscription_unpaid`, or
+`subscription_incomplete_expired`. Optional caller `reason` must exactly match
+that derived value; arbitrary provider/customer text and control characters are
+rejected before storage.
 
 ### Checkout issuance
 
@@ -43,19 +58,29 @@ disabled unless `LICENSE_ISSUANCE_SECRET` is configured, and it requires:
 {
   "idempotencyKey": "stripe-checkout-session-or-event-id",
   "checkoutLookupKey": "neondiff_monthly",
-  "customerEmail": "buyer@example.com",
-  "externalCustomerId": "cus_...",
+  "provider": "stripe",
+  "providerAccountId": "acct_...",
+  "providerMode": "test",
+  "externalSubscriptionId": "sub_...",
   "externalCheckoutId": "cs_...",
-  "seats": 1,
-  "expiresAt": "2027-07-08T00:00:00.000Z"
+  "seats": 1
 }
 ```
 
-Supported active checkout lookup keys are `neondiff_monthly`,
-`neondiff_yearly`, and `neondiff_org_yearly`; they map to
-`monthly_support`, `yearly_support`, and `org_yearly_support`. The endpoint
-issues private-repo entitlements with `updateEntitlement=true` and returns the
-raw `nd_live_...` license key to the caller for one-shot customer fulfillment.
+Supported lookup keys are `neondiff_monthly`, `neondiff_yearly`, and
+`neondiff_org_yearly`; they map to `monthly_support`, `yearly_support`, and
+`org_yearly_support`. Server policy owns plan, trial, maximum paid period,
+currency, scope, update access, and seats: monthly is 7 trial days / 62 maximum
+period days, individual yearly is 7 / 400, organization yearly is 30 / 400,
+and all three are USD, one seat, private scope, and update-entitled. Callers
+cannot supply customer identity, plan, expiry, scope, ownership, or seat
+authority. The optional compatibility `seats` field is accepted only when it
+is exactly `1`.
+
+The endpoint returns the raw `nd_live_...` license key to the authorized caller
+for one-shot customer fulfillment. The immutable provider account, test/live
+mode, subscription, and checkout tuple is recorded atomically with issuance.
+Test and live tuples never substitute for each other.
 
 Idempotency is keyed by `idempotencyKey`. Retries with identical request data
 return the same `licenseKey` and `replayed=true` without minting a duplicate
@@ -63,6 +88,12 @@ license. Reusing an idempotency key with different checkout data returns `409
 conflict`. SQLite stores only the license hash plus issuance metadata; the raw
 key is deterministically derived from `LICENSE_ISSUANCE_SECRET` and the
 idempotency key so webhook retries can be safe without storing raw key material.
+
+Checkout remains held. This source contract does not authorize reopening the
+website payment path; issue #559 owns version, manifest, deploy, install, and
+live activation proof. See
+[`docs/subscription-lifecycle.md`](docs/subscription-lifecycle.md) for the
+provider event matrix and rollout boundary.
 
 ### Release lifecycle issuance
 
@@ -134,13 +165,27 @@ npm run admin -- list
 
 # show a single license by key (adds its activations)
 npm run admin -- show --key nd_live_…
+
+# preview a legacy checkout correlation backfill; remove --dry-run only after
+# explicit production owner approval of the exact fingerprint and tuple
+npm run admin -- bind-checkout-subscription \
+  --issuance-idempotency-key <checkout-issuance-reference> \
+  --provider stripe \
+  --provider-account-id <provider-account-id> \
+  --provider-mode <test-or-live> \
+  --external-subscription-id <subscription-id> \
+  --external-checkout-id <checkout-id> \
+  --dry-run
 ```
 
 `issue` flags: `--plan <p>` (required), `--scope <public|private|all>`
 (required), `--seats N` (default 1), `--expires <iso>`,
 `--private-repo-allowed <true|false>`, `--update-entitlement`.
 
-See [`docs/admin-runbook.md`](docs/admin-runbook.md) for the operator runbook.
+See [`docs/admin-runbook.md`](docs/admin-runbook.md) for the operator runbook,
+[`docs/subscription-lifecycle.md`](docs/subscription-lifecycle.md) for the
+lifecycle reference/rollout, and
+[`docs/disaster-recovery.md`](docs/disaster-recovery.md) for recovery.
 
 ## Deploy
 

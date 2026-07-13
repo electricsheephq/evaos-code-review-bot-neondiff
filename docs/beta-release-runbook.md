@@ -400,11 +400,30 @@ npx tsx src/cli.ts review-head-gate \
     --url https://neondiff-license.fly.dev/v1/admin/licenses/issue \
     --release-version <release-version> \
     --checkout-lookup-key neondiff_monthly \
+    --provider-account-id <stripe-account-id> \
+    --provider-mode test \
+    --external-subscription-id <test-subscription-id> \
+    --external-checkout-id <test-checkout-session-id> \
     --secret-env LICENSE_ISSUANCE_SECRET \
     --dry-run false \
     --confirm-live-issuance true \
     --output docs/evidence/license-checkout-issuance-authenticated.json
   ```
+
+  Start with Stripe test-mode correlation. For a separately approved live proof,
+  change `--provider-mode` to `live` and supply the matching live account,
+  subscription, and Checkout Session IDs. Never mix test and live objects, and
+  never synthesize or guess production identifiers. Exact correlation is visible
+  only in the no-network dry-run preview; persisted success/error proof omits the
+  account, subscription, Checkout Session, bearer, and raw license key.
+  When `--idempotency-key` is omitted, the CLI derives an opaque tuple-scoped
+  default, so separately approved test and live proofs do not collide while an
+  exact retry within one environment remains stable.
+  The programmatic shared-secret branch of `runLicenseLifecycleSmoke` has the
+  same rule: `checkoutIssuanceCorrelation` is mandatory and must carry one
+  matching Stripe account/mode/subscription/Checkout Session tuple. The trusted
+  GitHub OIDC release-proof wrapper remains separate and does not accept a
+  shared secret or checkout tuple on argv.
 
   Run the same command with `--dry-run true` first when preparing a release
   packet; dry-run mode does not read the secret and does not send the POST.

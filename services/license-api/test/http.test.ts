@@ -7,6 +7,19 @@ import { RateLimiter } from "../src/service.ts";
 
 const fakeKey = (tag: string): string => ["nd", "live", `${tag}${"x".repeat(24 - tag.length)}`].join("_");
 
+function checkoutBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    idempotencyKey: "checkout-session:http-default",
+    checkoutLookupKey: "neondiff_monthly",
+    provider: "stripe",
+    providerAccountId: "acct_http_live",
+    providerMode: "live",
+    externalSubscriptionId: "sub_http_default",
+    externalCheckoutId: "cs_http_default",
+    ...overrides
+  };
+}
+
 async function post(
   url: string,
   path: string,
@@ -111,7 +124,9 @@ describe("license issuance transport", () => {
   const auth = { Authorization: `Bearer ${issuanceSecret}` };
 
   before(async () => {
-    store = new LicenseStore(":memory:");
+    store = new LicenseStore(":memory:", {
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
     const started = await startLicenseServer({
       store,
       issuanceSecret,
@@ -140,15 +155,13 @@ describe("license issuance transport", () => {
     const issued = await post(
       url,
       "/v1/admin/licenses/issue",
-      {
+      checkoutBody({
         idempotencyKey: "checkout-session-123",
         checkoutLookupKey: "neondiff_org_yearly",
-        customerEmail: "buyer@example.com",
-        externalCustomerId: "cus_123",
+        externalSubscriptionId: "sub_123",
         externalCheckoutId: "cs_123",
-        seats: 3,
-        expiresAt: "2027-07-08T00:00:00.000Z"
-      },
+        seats: 1
+      }),
       auth
     );
     assert.equal(issued.status, 200);
@@ -158,14 +171,16 @@ describe("license issuance transport", () => {
     assert.equal(issued.json.entitlement.plan, "org_yearly_support");
     assert.equal(issued.json.entitlement.repoVisibilityScope, "private");
     assert.equal(issued.json.entitlement.updateEntitlement, true);
-    assert.equal(issued.json.entitlement.seats, 3);
+    assert.equal(issued.json.entitlement.seats, 1);
+    assert.equal(issued.json.entitlement.expiresAt, "2026-08-07T00:00:00.000Z");
 
     const record = store.getLicenseByKey(issued.json.licenseKey);
     assert.ok(record);
     assert.equal(record.plan, "org_yearly_support");
     assert.equal(record.repoVisibilityScope, "private");
     assert.equal(record.updateEntitlement, true);
-    assert.equal(record.seats, 3);
+    assert.equal(record.seats, 1);
+    assert.equal(record.expiresAt, "2026-08-07T00:00:00.000Z");
 
     const activated = await post(url, "/v1/license/activate", {
       licenseKey: issued.json.licenseKey,
@@ -177,11 +192,12 @@ describe("license issuance transport", () => {
   });
 
   it("replays the same idempotency key without minting a duplicate license", async () => {
-    const body = {
+    const body = checkoutBody({
       idempotencyKey: "checkout-session-repeat",
       checkoutLookupKey: "neondiff_yearly",
+      externalSubscriptionId: "sub_repeat",
       externalCheckoutId: "cs_repeat"
-    };
+    });
     const first = await post(url, "/v1/admin/licenses/issue", body, auth);
     const second = await post(url, "/v1/admin/licenses/issue", body, auth);
     assert.equal(first.status, 200);
@@ -198,14 +214,23 @@ describe("license issuance transport", () => {
     const first = await post(
       url,
       "/v1/admin/licenses/issue",
-      { idempotencyKey: "checkout-session-conflict", checkoutLookupKey: "neondiff_monthly" },
+      checkoutBody({
+        idempotencyKey: "checkout-session-conflict",
+        externalSubscriptionId: "sub_conflict",
+        externalCheckoutId: "cs_conflict"
+      }),
       auth
     );
     assert.equal(first.status, 200);
     const conflict = await post(
       url,
       "/v1/admin/licenses/issue",
-      { idempotencyKey: "checkout-session-conflict", checkoutLookupKey: "neondiff_org_yearly" },
+      checkoutBody({
+        idempotencyKey: "checkout-session-conflict",
+        checkoutLookupKey: "neondiff_org_yearly",
+        externalSubscriptionId: "sub_conflict",
+        externalCheckoutId: "cs_conflict"
+      }),
       auth
     );
     assert.equal(conflict.status, 409);
@@ -216,11 +241,81 @@ describe("license issuance transport", () => {
     const res = await post(
       url,
       "/v1/admin/licenses/issue",
-      { idempotencyKey: "checkout-session-bad-plan", checkoutLookupKey: "neondiff_lifetime" },
+      checkoutBody({
+        idempotencyKey: "checkout-session-bad-plan",
+        checkoutLookupKey: "neondiff_lifetime",
+        externalSubscriptionId: "sub_bad_plan",
+        externalCheckoutId: "cs_bad_plan"
+      }),
       auth
     );
     assert.equal(res.status, 400);
     assert.equal(res.json.status, "invalid");
+  });
+
+  it("requires the complete checkout correlation tuple", async () => {
+    for (const field of [
+      "provider",
+      "providerAccountId",
+      "providerMode",
+      "externalSubscriptionId",
+      "externalCheckoutId"
+    ]) {
+      const body = checkoutBody({
+        idempotencyKey: `checkout-session:missing-${field}`,
+        externalSubscriptionId: `sub_missing_${field}`,
+        externalCheckoutId: `cs_missing_${field}`
+      });
+      delete body[field];
+      const response = await post(url, "/v1/admin/licenses/issue", body, auth);
+      assert.equal(response.status, 400);
+      assert.match(response.json.detail, new RegExp(`${field} is required`));
+    }
+  });
+
+  it("rejects caller entitlement authority and unknown fields", async () => {
+    for (const field of [
+      "expiresAt",
+      "plan",
+      "repoVisibilityScope",
+      "privateRepoAllowed",
+      "updateEntitlement",
+      "customerEmail",
+      "externalCustomerId",
+      "ownerId",
+      "unexpected"
+    ]) {
+      const response = await post(
+        url,
+        "/v1/admin/licenses/issue",
+        checkoutBody({
+          idempotencyKey: `checkout-session:authority-${field}`,
+          externalSubscriptionId: `sub_authority_${field}`,
+          externalCheckoutId: `cs_authority_${field}`,
+          [field]: "caller-value"
+        }),
+        auth
+      );
+      assert.equal(response.status, 400);
+      assert.equal(response.json.detail, "request contains an unknown field");
+      assert.ok(!JSON.stringify(response.json).includes(field));
+    }
+  });
+
+  it("rejects deprecated multi-seat checkout requests", async () => {
+    const response = await post(
+      url,
+      "/v1/admin/licenses/issue",
+      checkoutBody({
+        idempotencyKey: "checkout-session:multi-seat",
+        externalSubscriptionId: "sub_multi_seat",
+        externalCheckoutId: "cs_multi_seat",
+        seats: 3
+      }),
+      auth
+    );
+    assert.equal(response.status, 400);
+    assert.match(response.json.detail, /seats is deprecated and must be exactly 1/);
   });
 });
 
@@ -231,6 +326,7 @@ describe("lifecycle issuance transport", () => {
     const started = await startLicenseServer({
       store: isolatedStore,
       issuanceSecret: "lifecycle-issuance-secret",
+      trustFlyProxyHeaders: true,
       lifecycleRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
       lifecycleOidcVerifier: {
         verify: async () => {
@@ -270,6 +366,7 @@ describe("lifecycle issuance transport", () => {
     const started = await startLicenseServer({
       store: isolatedStore,
       issuanceSecret: "lifecycle-issuance-secret",
+      trustFlyProxyHeaders: true,
       lifecycleRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
       lifecycleOidcVerifier: {
         verify: async () => {
@@ -318,6 +415,44 @@ describe("lifecycle issuance transport", () => {
       );
       assert.equal(response.status, 413);
       assert.equal(response.json.status, "invalid");
+    } finally {
+      started.server.close();
+      isolatedStore.close();
+    }
+  });
+
+  it("ignores forged Fly client addresses for direct OIDC lifecycle requests", async () => {
+    const isolatedStore = new LicenseStore(":memory:");
+    let verifierCalls = 0;
+    const started = await startLicenseServer({
+      store: isolatedStore,
+      issuanceSecret: "lifecycle-issuance-secret",
+      lifecycleRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
+      lifecycleOidcVerifier: {
+        verify: async () => {
+          verifierCalls += 1;
+          throw new Error("invalid fixture token");
+        }
+      }
+    });
+    const body = {
+      releaseVersion: "v1.0.4",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`
+    };
+    try {
+      const first = await post(started.url, "/v1/admin/licenses/issue-lifecycle", body, {
+        Authorization: "Bearer first.invalid.token",
+        "Fly-Client-IP": "203.0.113.21"
+      });
+      const forgedRotation = await post(started.url, "/v1/admin/licenses/issue-lifecycle", body, {
+        Authorization: "Bearer second.invalid.token",
+        "Fly-Client-IP": "203.0.113.22"
+      });
+      assert.equal(first.status, 401);
+      assert.equal(forgedRotation.status, 429);
+      assert.equal(verifierCalls, 1);
     } finally {
       started.server.close();
       isolatedStore.close();

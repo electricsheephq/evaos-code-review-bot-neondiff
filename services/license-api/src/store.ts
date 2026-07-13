@@ -2,6 +2,141 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  CHECKOUT_LOOKUP_KEYS,
+  checkoutPolicyFor,
+  isCheckoutLookupKey,
+  type CheckoutLookupKey,
+  type CheckoutPolicy
+} from "./checkout-policy.js";
+import {
+  canonicalSubscriptionLifecycleRequestHash,
+  type ParsedSubscriptionLifecycleRequest,
+  type RenewPaidSubscriptionLifecycleRequest
+} from "./subscription-lifecycle.js";
+
+const SCHEMA_VERSION = 2;
+const DEFAULT_BUSY_TIMEOUT_MS = 250;
+const MAX_BUSY_TIMEOUT_MS = 1_000;
+const BOUND_CHECKOUT_INPUT_FIELDS = new Set([
+  "idempotencyKey",
+  "checkoutLookupKey",
+  "binding"
+]);
+const BOUND_CHECKOUT_BINDING_FIELDS = new Set([
+  "provider",
+  "providerAccountId",
+  "providerMode",
+  "externalSubscriptionId",
+  "externalCheckoutId"
+]);
+const CHECKOUT_BINDING_BACKFILL_FIELDS = new Set([
+  "issuanceIdempotencyKey",
+  "provider",
+  "providerAccountId",
+  "providerMode",
+  "externalSubscriptionId",
+  "externalCheckoutId"
+]);
+
+export type SchemaMigrationStep =
+  | "version-zero-classified"
+  | "transaction-started"
+  | "core-schema-created"
+  | "lifecycle-schema-created"
+  | "schema-verified"
+  | "version-set";
+
+export interface LicenseStoreOptions {
+  migrationHook?: (step: SchemaMigrationStep) => void;
+  /** Server-owned clock. Checkout callers cannot override it per issuance. */
+  now?: () => Date;
+  busyTimeoutMs?: number;
+}
+
+interface SchemaObjectSignature {
+  type: string;
+  name: string;
+  tableName: string;
+  sql: string;
+}
+
+const CORE_SCHEMA = `
+  create table licenses (
+    license_key_hash text primary key,
+    plan text not null,
+    repo_visibility_scope text not null,
+    private_repo_allowed integer not null default 1,
+    update_entitlement integer not null default 0,
+    seats integer not null default 1,
+    expires_at text,
+    status text not null default 'active',
+    revocation_reason text,
+    created_at text not null default (datetime('now'))
+  );
+
+  create table activations (
+    license_key_hash text not null,
+    machine_id text not null,
+    repo text,
+    activated_at text not null default (datetime('now')),
+    last_seen_at text not null default (datetime('now')),
+    primary key (license_key_hash, machine_id)
+  );
+
+  create table license_issuance_events (
+    idempotency_key text primary key,
+    license_key_hash text not null,
+    request_hash text not null,
+    source text,
+    external_ref text,
+    created_at text not null default (datetime('now')),
+    foreign key (license_key_hash) references licenses(license_key_hash)
+  );
+`;
+
+const LIFECYCLE_SCHEMA = `
+  create table checkout_subscription_bindings (
+    issuance_idempotency_key text primary key,
+    license_key_hash text not null unique,
+    provider text not null,
+    provider_account_id text not null,
+    provider_mode text not null,
+    external_subscription_id text not null,
+    external_checkout_id text not null,
+    last_non_mutating_event_created_at integer,
+    created_at text not null default (datetime('now')),
+    unique (provider, provider_account_id, provider_mode, external_subscription_id),
+    foreign key (issuance_idempotency_key) references license_issuance_events(idempotency_key),
+    foreign key (license_key_hash) references licenses(license_key_hash)
+  );
+
+  create table license_subscription_lifecycle_events (
+    event_id text primary key,
+    issuance_idempotency_key text not null,
+    license_key_hash text not null,
+    external_subscription_id text not null,
+    request_hash text not null,
+    event_created_at integer not null,
+    provider text not null,
+    provider_account_id text not null,
+    provider_mode text not null,
+    provider_event_type text not null,
+    command text not null,
+    payment_reference_fingerprint text,
+    normalized_transition text not null,
+    result text not null,
+    created_at text not null default (datetime('now')),
+    foreign key (issuance_idempotency_key) references checkout_subscription_bindings(issuance_idempotency_key),
+    foreign key (license_key_hash) references licenses(license_key_hash)
+  );
+
+  create index license_subscription_lifecycle_events_issuance_time_idx
+    on license_subscription_lifecycle_events (issuance_idempotency_key, event_created_at);
+`;
+
+const LEGACY_SCHEMA_SIGNATURE = expectedSchemaSignature(CORE_SCHEMA);
+const SCHEMA_V2_SIGNATURE = expectedSchemaSignature(`${CORE_SCHEMA}\n${LIFECYCLE_SCHEMA}`);
 
 export type LicenseStatus = "active" | "revoked" | "expired";
 export type RepoVisibilityScope = "public" | "private" | "all";
@@ -57,6 +192,36 @@ interface LicenseIssuanceRow {
   created_at: string;
 }
 
+interface CheckoutSubscriptionBindingRow {
+  issuance_idempotency_key: string;
+  license_key_hash: string;
+  provider: string;
+  provider_account_id: string;
+  provider_mode: string;
+  external_subscription_id: string;
+  external_checkout_id: string;
+  last_non_mutating_event_created_at: number | null;
+  created_at: string;
+}
+
+interface SubscriptionLifecycleEventRow {
+  event_id: string;
+  issuance_idempotency_key: string;
+  license_key_hash: string;
+  external_subscription_id: string;
+  request_hash: string;
+  event_created_at: number;
+  provider: string;
+  provider_account_id: string;
+  provider_mode: string;
+  provider_event_type: string;
+  command: string;
+  payment_reference_fingerprint: string | null;
+  normalized_transition: string;
+  result: string;
+  created_at: string;
+}
+
 /**
  * Deterministic at-rest identifier for a license key. Only the hash is ever
  * stored or logged; the raw key is printed once by the admin CLI at issuance
@@ -92,50 +257,156 @@ export interface IssueIdempotentLicenseInput extends IssueLicenseInput {
   externalRef?: string;
 }
 
+export interface CheckoutSubscriptionBindingInput {
+  readonly provider: "stripe";
+  readonly providerAccountId: string;
+  readonly providerMode: "test" | "live";
+  readonly externalSubscriptionId: string;
+  readonly externalCheckoutId: string;
+}
+
+export interface CheckoutSubscriptionBindingRecord extends CheckoutSubscriptionBindingInput {
+  issuanceIdempotencyKey: string;
+  licenseKeyHash: string;
+  lastNonMutatingEventCreatedAt?: number;
+  createdAt: string;
+}
+
+export interface IssueBoundCheckoutLicenseInput {
+  idempotencyKey: string;
+  checkoutLookupKey: CheckoutLookupKey;
+  binding: CheckoutSubscriptionBindingInput;
+}
+
+export class CheckoutIssuanceConflictError extends Error {}
+export class CheckoutIssuancePolicyError extends Error {}
+export class CheckoutIssuanceTransientError extends Error {}
+
+export class CheckoutBindingNotFoundError extends Error {}
+export class CheckoutBindingWrongSourceError extends Error {}
+export class CheckoutBindingConflictError extends Error {}
+export class CheckoutBindingPolicyError extends Error {}
+export class CheckoutBindingTransientError extends Error {}
+
+export interface BindCheckoutSubscriptionInput extends CheckoutSubscriptionBindingInput {
+  issuanceIdempotencyKey: string;
+}
+
+export interface BindCheckoutSubscriptionResult {
+  result: "bound" | "already_bound" | "would_bind";
+  issuanceFingerprint: string;
+}
+
+export function checkoutIssuanceFingerprint(issuanceIdempotencyKey: string): string {
+  return `iss_${createHash("sha256")
+    .update("neondiff:checkout-binding-backfill:issuance:v1\0")
+    .update(issuanceIdempotencyKey.trim())
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
+export class SubscriptionLifecycleNotFoundError extends Error {}
+export class SubscriptionLifecycleConflictError extends Error {}
+export class SubscriptionLifecyclePolicyError extends Error {}
+export class SubscriptionLifecycleTerminalError extends Error {}
+export class SubscriptionLifecycleTransientError extends Error {}
+export class SubscriptionLifecycleUnsupportedCommandError extends Error {}
+
+export interface SubscriptionLifecycleEntitlement {
+  status: LicenseStatus;
+  plan: string;
+  seats: number;
+  expiresAt: string;
+}
+
+export interface SubscriptionLifecycleApplyResult {
+  status:
+    | "updated"
+    | "replayed"
+    | "ignored_stale"
+    | "payment_attention"
+    | "terminally_revoked";
+  replayed: boolean;
+  entitlement: SubscriptionLifecycleEntitlement;
+}
+
 export class LicenseStore {
   private readonly db: DatabaseSync;
+  private readonly now: () => Date;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options: LicenseStoreOptions = {}) {
     if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
-    this.db = new DatabaseSync(dbPath);
-    this.db.exec("pragma foreign_keys = on");
-    this.ensureSchema();
+    this.now = options.now ?? (() => new Date());
+    this.db = new DatabaseSync(dbPath, { timeout: resolveBusyTimeout(options.busyTimeoutMs) });
+    try {
+      this.db.exec("pragma foreign_keys = on");
+      this.ensureSchema(options);
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
-  private ensureSchema(): void {
-    this.db.exec(`
-      create table if not exists licenses (
-        license_key_hash text primary key,
-        plan text not null,
-        repo_visibility_scope text not null,
-        private_repo_allowed integer not null default 1,
-        update_entitlement integer not null default 0,
-        seats integer not null default 1,
-        expires_at text,
-        status text not null default 'active',
-        revocation_reason text,
-        created_at text not null default (datetime('now'))
-      );
+  private ensureSchema(options: LicenseStoreOptions): void {
+    const version = this.readUserVersion();
+    if (version === SCHEMA_VERSION) {
+      this.verifySchemaV2();
+      return;
+    }
+    if (version !== 0) {
+      throw new Error(`unsupported license database schema version ${version}`);
+    }
 
-      create table if not exists activations (
-        license_key_hash text not null,
-        machine_id text not null,
-        repo text,
-        activated_at text not null default (datetime('now')),
-        last_seen_at text not null default (datetime('now')),
-        primary key (license_key_hash, machine_id)
-      );
+    options.migrationHook?.("version-zero-classified");
+    this.db.exec("begin immediate");
+    try {
+      // Another process may have completed the migration while this connection
+      // waited for the writer lock. Classify only the state protected by it.
+      const lockedVersion = this.readUserVersion();
+      if (lockedVersion === SCHEMA_VERSION) {
+        this.verifySchemaV2();
+        this.db.exec("commit");
+        return;
+      }
+      if (lockedVersion !== 0) {
+        throw new Error(`unsupported license database schema version ${lockedVersion}`);
+      }
+      const currentSignature = readSchemaSignature(this.db);
+      const isEmpty = currentSignature.length === 0;
+      const isLegacy = signaturesEqual(currentSignature, LEGACY_SCHEMA_SIGNATURE);
+      if (!isEmpty && !isLegacy) {
+        throw new Error("unknown non-empty schema at user_version 0");
+      }
 
-      create table if not exists license_issuance_events (
-        idempotency_key text primary key,
-        license_key_hash text not null,
-        request_hash text not null,
-        source text,
-        external_ref text,
-        created_at text not null default (datetime('now')),
-        foreign key (license_key_hash) references licenses(license_key_hash)
-      );
-    `);
+      options.migrationHook?.("transaction-started");
+      if (isEmpty) this.db.exec(CORE_SCHEMA);
+      options.migrationHook?.("core-schema-created");
+      this.db.exec(LIFECYCLE_SCHEMA);
+      options.migrationHook?.("lifecycle-schema-created");
+      this.verifySchemaV2();
+      options.migrationHook?.("schema-verified");
+      this.db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
+      options.migrationHook?.("version-set");
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  private readUserVersion(): number {
+    const row = this.db.prepare("pragma user_version").get() as { user_version: number };
+    return Number(row.user_version);
+  }
+
+  private verifySchemaV2(): void {
+    const actual = readSchemaSignature(this.db);
+    if (!sameStrings(schemaObjectKeys(actual), schemaObjectKeys(SCHEMA_V2_SIGNATURE))) {
+      throw new Error("license database schema v2 has unexpected objects");
+    }
+    if (!signaturesEqual(actual, SCHEMA_V2_SIGNATURE)) {
+      throw new Error("license database schema v2 has unexpected constraints");
+    }
   }
 
   close(): void {
@@ -195,6 +466,408 @@ export class LicenseStore {
     }
   }
 
+  /**
+   * Issue and bind a checkout license in one write transaction. Existing
+   * admin and release issuance continue through issueLicense and
+   * issueIdempotentLicense; only checkout fulfillment uses this stricter path.
+   */
+  issueBoundCheckoutLicense(
+    rawKey: string,
+    input: IssueBoundCheckoutLicenseInput
+  ): {
+    rawKey: string;
+    record: LicenseRecord;
+    binding: CheckoutSubscriptionBindingRecord;
+    replayed: boolean;
+  } {
+    const validatedInput = validateBoundCheckoutInput(input);
+    const policy = checkoutPolicyFor(validatedInput.checkoutLookupKey);
+    const requestHash = boundCheckoutRequestHash(validatedInput);
+    const issuedAt = this.now();
+    if (!Number.isFinite(issuedAt.getTime())) {
+      throw new Error("license store clock returned an invalid date");
+    }
+    let transactionStarted = false;
+    try {
+      this.db.exec("begin immediate");
+      transactionStarted = true;
+      const existing = this.getIssuanceEvent(validatedInput.idempotencyKey);
+      if (existing) {
+        if (existing.source !== "checkout") {
+          throw new CheckoutIssuanceConflictError("issuance reference is not checkout-owned");
+        }
+        const binding = this.getCheckoutSubscriptionBinding(validatedInput.idempotencyKey);
+        if (!binding) {
+          throw new CheckoutIssuanceConflictError("legacy checkout issuance is not bound");
+        }
+        const record = this.getLicenseByHash(existing.license_key_hash);
+        if (!record) {
+          throw new Error("issuance reference points to a missing license record");
+        }
+        validateStoredCheckoutEntitlement(record, policy, issuedAt);
+        if (hashLicenseKey(rawKey) !== existing.license_key_hash) {
+          throw new CheckoutIssuanceConflictError(
+            "issuance reference was issued with a different key derivation secret"
+          );
+        }
+        if (existing.request_hash !== requestHash) {
+          throw new CheckoutIssuanceConflictError(
+            "issuance reference was already used with different request data"
+          );
+        }
+        if (!sameCheckoutBinding(binding, validatedInput.binding)) {
+          throw new CheckoutIssuanceConflictError(
+            "issuance reference was already used with different checkout correlation"
+          );
+        }
+        this.db.exec("commit");
+        return { rawKey, record, binding, replayed: true };
+      }
+
+      const expiresAt = new Date(
+        issuedAt.getTime() + policy.trialDays * 24 * 60 * 60 * 1_000
+      ).toISOString();
+      const { record } = this.insertLicense(rawKey, {
+        plan: policy.plan,
+        repoVisibilityScope: policy.repoVisibilityScope,
+        privateRepoAllowed: policy.privateRepoAllowed,
+        updateEntitlement: policy.updateEntitlement,
+        seats: policy.seats,
+        expiresAt
+      });
+      this.db
+        .prepare(
+          `insert into license_issuance_events (
+            idempotency_key, license_key_hash, request_hash, source, external_ref
+          ) values (?, ?, ?, 'checkout', ?)`
+        )
+        .run(
+          validatedInput.idempotencyKey,
+          record.licenseKeyHash,
+          requestHash,
+          validatedInput.binding.externalCheckoutId
+        );
+      this.db
+        .prepare(
+          `insert into checkout_subscription_bindings (
+            issuance_idempotency_key, license_key_hash, provider, provider_account_id,
+            provider_mode, external_subscription_id, external_checkout_id
+          ) values (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          validatedInput.idempotencyKey,
+          record.licenseKeyHash,
+          validatedInput.binding.provider,
+          validatedInput.binding.providerAccountId,
+          validatedInput.binding.providerMode,
+          validatedInput.binding.externalSubscriptionId,
+          validatedInput.binding.externalCheckoutId
+        );
+      const binding = this.getCheckoutSubscriptionBinding(validatedInput.idempotencyKey);
+      if (!binding) throw new Error("checkout binding insert did not persist");
+      this.db.exec("commit");
+      return { rawKey, record, binding, replayed: false };
+    } catch (error) {
+      if (transactionStarted) this.db.exec("rollback");
+      if (isSqliteBusy(error)) {
+        throw new CheckoutIssuanceTransientError("checkout issuance storage is busy");
+      }
+      if (
+        error instanceof Error &&
+        error.message.includes("UNIQUE constraint failed: checkout_subscription_bindings")
+      ) {
+        throw new CheckoutIssuanceConflictError("checkout correlation is already bound");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Bind an existing legacy checkout issuance to its immutable provider tuple.
+   * This owner-only backfill never accepts raw license or entitlement fields.
+   */
+  bindCheckoutSubscription(
+    input: BindCheckoutSubscriptionInput,
+    options: { dryRun?: boolean } = {}
+  ): BindCheckoutSubscriptionResult {
+    const validated = validateCheckoutBindingBackfillInput(input);
+    for (const key of Object.keys(options)) {
+      if (key !== "dryRun") {
+        throw new CheckoutBindingPolicyError("unsupported checkout binding option");
+      }
+    }
+    if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
+      throw new CheckoutBindingPolicyError("dryRun must be boolean");
+    }
+    const issuanceFingerprint = checkoutIssuanceFingerprint(validated.issuanceIdempotencyKey);
+    let transactionStarted = false;
+    try {
+      this.db.exec("begin immediate");
+      transactionStarted = true;
+
+      const issuance = this.getIssuanceEvent(validated.issuanceIdempotencyKey);
+      if (!issuance) {
+        throw new CheckoutBindingNotFoundError("checkout issuance was not found");
+      }
+      if (issuance.source !== "checkout") {
+        throw new CheckoutBindingWrongSourceError("issuance is not checkout-owned");
+      }
+      const record = this.getLicenseByHash(issuance.license_key_hash);
+      if (!record) {
+        throw new CheckoutBindingNotFoundError("checkout issuance license was not found");
+      }
+      if (!isLifecycleCompatibleEntitlement(record)) {
+        throw new CheckoutBindingConflictError(
+          "checkout issuance entitlement is incompatible with subscription lifecycle"
+        );
+      }
+
+      const requestedBinding: CheckoutSubscriptionBindingInput = {
+        provider: validated.provider,
+        providerAccountId: validated.providerAccountId,
+        providerMode: validated.providerMode,
+        externalSubscriptionId: validated.externalSubscriptionId,
+        externalCheckoutId: validated.externalCheckoutId
+      };
+      const existing = this.getCheckoutSubscriptionBinding(validated.issuanceIdempotencyKey);
+      if (existing) {
+        if (
+          existing.licenseKeyHash !== issuance.license_key_hash ||
+          !sameCheckoutBinding(existing, requestedBinding)
+        ) {
+          throw new CheckoutBindingConflictError(
+            "checkout issuance is already bound to different correlation"
+          );
+        }
+        this.db.exec("commit");
+        transactionStarted = false;
+        return { result: "already_bound", issuanceFingerprint };
+      }
+
+      if (options.dryRun) {
+        this.db.exec("rollback");
+        transactionStarted = false;
+        return { result: "would_bind", issuanceFingerprint };
+      }
+
+      this.db
+        .prepare(
+          `insert into checkout_subscription_bindings (
+            issuance_idempotency_key, license_key_hash, provider, provider_account_id,
+            provider_mode, external_subscription_id, external_checkout_id
+          ) values (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          validated.issuanceIdempotencyKey,
+          issuance.license_key_hash,
+          validated.provider,
+          validated.providerAccountId,
+          validated.providerMode,
+          validated.externalSubscriptionId,
+          validated.externalCheckoutId
+        );
+      this.db.exec("commit");
+      transactionStarted = false;
+      return { result: "bound", issuanceFingerprint };
+    } catch (error) {
+      if (transactionStarted) this.db.exec("rollback");
+      if (isSqliteBusy(error)) {
+        throw new CheckoutBindingTransientError("checkout binding storage is busy");
+      }
+      if (
+        error instanceof Error &&
+        error.message.includes("UNIQUE constraint failed: checkout_subscription_bindings")
+      ) {
+        throw new CheckoutBindingConflictError("checkout correlation is already bound");
+      }
+      throw error;
+    }
+  }
+
+  /** Apply one checkout lifecycle event against its immutable issuance binding. */
+  applyCheckoutSubscriptionLifecycle(
+    input: ParsedSubscriptionLifecycleRequest
+  ): SubscriptionLifecycleApplyResult {
+    const appliedAt = this.now();
+    if (!Number.isFinite(appliedAt.getTime())) {
+      throw new SubscriptionLifecyclePolicyError("license store clock is invalid");
+    }
+    const requestHash = canonicalSubscriptionLifecycleRequestHash(input);
+    let transactionStarted = false;
+    try {
+      this.db.exec("begin immediate");
+      transactionStarted = true;
+
+      const issuance = this.getIssuanceEvent(input.issuanceIdempotencyKey);
+      if (!issuance || issuance.source !== "checkout") {
+        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
+      }
+
+      const existingEvent = this.getSubscriptionLifecycleEvent(input.eventId);
+      if (existingEvent) {
+        if (existingEvent.request_hash !== requestHash) {
+          throw new SubscriptionLifecycleConflictError(
+            "subscription lifecycle event conflicts with an existing event"
+          );
+        }
+        const replayedRecord = this.getLicenseByHash(existingEvent.license_key_hash);
+        if (!replayedRecord) {
+          throw new Error("subscription lifecycle event points to a missing license");
+        }
+        if (!isLifecycleCompatibleEntitlement(replayedRecord)) {
+          throw new SubscriptionLifecyclePolicyError(
+            "subscription entitlement is incompatible with lifecycle management"
+          );
+        }
+        const response = lifecycleResult("replayed", true, replayedRecord, appliedAt);
+        this.db.exec("commit");
+        transactionStarted = false;
+        return response;
+      }
+
+      const binding = this.getCheckoutSubscriptionBinding(input.issuanceIdempotencyKey);
+      if (
+        !binding ||
+        binding.licenseKeyHash !== issuance.license_key_hash ||
+        !sameLifecycleBinding(binding, input)
+      ) {
+        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
+      }
+      const record = this.getLicenseByHash(issuance.license_key_hash);
+      if (!record) {
+        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
+      }
+      if (!isLifecycleCompatibleEntitlement(record)) {
+        throw new SubscriptionLifecyclePolicyError(
+          "subscription entitlement is incompatible with lifecycle management"
+        );
+      }
+
+      if (record.status === "revoked") {
+        throw new SubscriptionLifecycleTerminalError("subscription entitlement is terminal");
+      }
+      if (record.status !== "active" && record.status !== "expired") {
+        throw new SubscriptionLifecyclePolicyError("subscription entitlement state is invalid");
+      }
+
+      let result: Exclude<SubscriptionLifecycleApplyResult["status"], "replayed">;
+      switch (input.command) {
+        case "renew_paid": {
+          const incomingPeriodEnd = validatePaidPeriodEnd(input, record.plan, appliedAt);
+          const storedPeriodEnd = record.expiresAt ? Date.parse(record.expiresAt) : Number.NaN;
+          if (!Number.isFinite(storedPeriodEnd)) {
+            throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+          }
+          const effectivePeriodEnd = Math.max(storedPeriodEnd, incomingPeriodEnd);
+          this.db
+            .prepare(
+              `update licenses
+               set expires_at = ?, status = 'active'
+               where license_key_hash = ?`
+            )
+            .run(new Date(effectivePeriodEnd).toISOString(), record.licenseKeyHash);
+          result = "updated";
+          break;
+        }
+        case "reconcile":
+        case "cancel_at_period_end":
+        case "payment_attention": {
+          const nonPaidPeriodEnd = input.command === "cancel_at_period_end"
+            ? input.currentPeriodEnd
+            : input.diagnosticCurrentPeriodEnd;
+          if (nonPaidPeriodEnd !== undefined) {
+            validateNonPaidPeriodEnd(nonPaidPeriodEnd, appliedAt);
+          }
+          const stale = isStaleNonMutatingEvent(
+            input.eventCreatedAt,
+            binding.lastNonMutatingEventCreatedAt
+          );
+          if (!stale) {
+            this.db
+              .prepare(
+                `update checkout_subscription_bindings
+                 set last_non_mutating_event_created_at = max(
+                   coalesce(last_non_mutating_event_created_at, ?), ?
+                 )
+                 where issuance_idempotency_key = ?`
+              )
+              .run(
+                input.eventCreatedAt,
+                input.eventCreatedAt,
+                input.issuanceIdempotencyKey
+              );
+          }
+          result = stale
+            ? "ignored_stale"
+            : input.command === "payment_attention"
+              ? "payment_attention"
+              : "updated";
+          break;
+        }
+        case "revoke": {
+          // Terminal expiry is authoritative provider-event metadata, not
+          // usable paid time. Deriving it solely from the revoke second makes
+          // every prior active/expired/renewed state converge identically.
+          const terminalExpiry = new Date(input.eventCreatedAt * 1_000).toISOString();
+          this.db
+            .prepare(
+              `update licenses
+               set expires_at = ?, status = 'revoked', revocation_reason = ?
+               where license_key_hash = ?`
+            )
+            .run(terminalExpiry, input.reason ?? null, record.licenseKeyHash);
+          result = "terminally_revoked";
+          break;
+        }
+        default:
+          throw new SubscriptionLifecycleUnsupportedCommandError(
+            "subscription lifecycle command is not implemented"
+          );
+      }
+      this.db
+        .prepare(
+          `insert into license_subscription_lifecycle_events (
+            event_id, issuance_idempotency_key, license_key_hash,
+            external_subscription_id, request_hash, event_created_at,
+            provider, provider_account_id, provider_mode, provider_event_type,
+            command, payment_reference_fingerprint, normalized_transition, result
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.eventId,
+          input.issuanceIdempotencyKey,
+          record.licenseKeyHash,
+          input.externalSubscriptionId,
+          requestHash,
+          input.eventCreatedAt,
+          input.provider,
+          input.providerAccountId,
+          input.providerMode,
+          input.providerEventType,
+          input.command,
+          input.command === "renew_paid" ? input.paymentReferenceFingerprint : null,
+          input.command,
+          result
+        );
+      const updated = this.getLicenseByHash(record.licenseKeyHash);
+      if (!updated) {
+        throw new Error("subscription entitlement update did not persist");
+      }
+      const response = lifecycleResult(result, false, updated, appliedAt);
+      this.db.exec("commit");
+      transactionStarted = false;
+      return response;
+    } catch (error) {
+      if (transactionStarted) this.db.exec("rollback");
+      if (isSqliteBusy(error)) {
+        throw new SubscriptionLifecycleTransientError(
+          "subscription lifecycle storage is temporarily unavailable"
+        );
+      }
+      throw error;
+    }
+  }
+
   private insertLicense(rawKey: string, input: IssueLicenseInput): { rawKey: string; record: LicenseRecord } {
     const licenseKeyHash = hashLicenseKey(rawKey);
     const seats = input.seats ?? 1;
@@ -226,6 +899,25 @@ export class LicenseStore {
     return this.db
       .prepare("select * from license_issuance_events where idempotency_key = ?")
       .get(idempotencyKey) as LicenseIssuanceRow | undefined;
+  }
+
+  private getCheckoutSubscriptionBinding(
+    idempotencyKey: string
+  ): CheckoutSubscriptionBindingRecord | undefined {
+    const row = this.db
+      .prepare(
+        "select * from checkout_subscription_bindings where issuance_idempotency_key = ?"
+      )
+      .get(idempotencyKey) as CheckoutSubscriptionBindingRow | undefined;
+    return row ? mapCheckoutSubscriptionBinding(row) : undefined;
+  }
+
+  private getSubscriptionLifecycleEvent(
+    eventId: string
+  ): SubscriptionLifecycleEventRow | undefined {
+    return this.db
+      .prepare("select * from license_subscription_lifecycle_events where event_id = ?")
+      .get(eventId) as SubscriptionLifecycleEventRow | undefined;
   }
 
   getLicenseByHash(licenseKeyHash: string): LicenseRecord | undefined {
@@ -325,4 +1017,416 @@ function mapActivation(row: ActivationRow): ActivationRecord {
     activatedAt: row.activated_at,
     lastSeenAt: row.last_seen_at
   };
+}
+
+function mapCheckoutSubscriptionBinding(
+  row: CheckoutSubscriptionBindingRow
+): CheckoutSubscriptionBindingRecord {
+  if (row.provider !== "stripe") {
+    throw new CheckoutIssuanceConflictError("checkout binding provider is unsupported");
+  }
+  if (row.provider_mode !== "test" && row.provider_mode !== "live") {
+    throw new CheckoutIssuanceConflictError("checkout binding mode is unsupported");
+  }
+  return {
+    issuanceIdempotencyKey: row.issuance_idempotency_key,
+    licenseKeyHash: row.license_key_hash,
+    provider: row.provider,
+    providerAccountId: row.provider_account_id,
+    providerMode: row.provider_mode,
+    externalSubscriptionId: row.external_subscription_id,
+    externalCheckoutId: row.external_checkout_id,
+    ...(row.last_non_mutating_event_created_at !== null
+      ? { lastNonMutatingEventCreatedAt: row.last_non_mutating_event_created_at }
+      : {}),
+    createdAt: row.created_at
+  };
+}
+
+function sameCheckoutBinding(
+  existing: CheckoutSubscriptionBindingRecord,
+  requested: CheckoutSubscriptionBindingInput
+): boolean {
+  return (
+    existing.provider === requested.provider &&
+    existing.providerAccountId === requested.providerAccountId &&
+    existing.providerMode === requested.providerMode &&
+    existing.externalSubscriptionId === requested.externalSubscriptionId &&
+    existing.externalCheckoutId === requested.externalCheckoutId
+  );
+}
+
+function sameLifecycleBinding(
+  binding: CheckoutSubscriptionBindingRecord,
+  request: ParsedSubscriptionLifecycleRequest
+): boolean {
+  return (
+    binding.provider === request.provider &&
+    binding.providerAccountId === request.providerAccountId &&
+    binding.providerMode === request.providerMode &&
+    binding.externalSubscriptionId === request.externalSubscriptionId
+  );
+}
+
+function validatePaidPeriodEnd(
+  request: RenewPaidSubscriptionLifecycleRequest,
+  plan: string,
+  now: Date
+): number {
+  const value = request.currentPeriodEnd;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    throw new SubscriptionLifecyclePolicyError("paid period end is invalid");
+  }
+  const milliseconds = Date.parse(value);
+  if (
+    !Number.isFinite(milliseconds) ||
+    new Date(milliseconds).toISOString() !== value ||
+    milliseconds <= now.getTime()
+  ) {
+    throw new SubscriptionLifecyclePolicyError("paid period end is invalid");
+  }
+  const maximumPeriodDays = maximumPeriodDaysForPlan(plan);
+  if (milliseconds > now.getTime() + maximumPeriodDays * 24 * 60 * 60 * 1_000) {
+    throw new SubscriptionLifecyclePolicyError("paid period end exceeds the plan maximum");
+  }
+  return milliseconds;
+}
+
+function validateNonPaidPeriodEnd(value: string, now: Date): void {
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds) || milliseconds <= now.getTime()) {
+    throw new SubscriptionLifecyclePolicyError("cancellation period end is invalid");
+  }
+}
+
+function isStaleNonMutatingEvent(
+  eventCreatedAt: number,
+  lastEventCreatedAt: number | undefined
+): boolean {
+  // Provider seconds are not unique. Equal-second events are concurrent and
+  // therefore all remain auditable non-stale updates; command precedence is
+  // carried by terminal revoke, monotonic renewal, and audit-only updates.
+  return lastEventCreatedAt !== undefined && eventCreatedAt < lastEventCreatedAt;
+}
+
+function maximumPeriodDaysForPlan(plan: string): number {
+  for (const lookupKey of CHECKOUT_LOOKUP_KEYS) {
+    const policy = checkoutPolicyFor(lookupKey);
+    if (policy.plan === plan) return policy.maximumPeriodDays;
+  }
+  throw new SubscriptionLifecyclePolicyError("subscription entitlement plan is invalid");
+}
+
+function isLifecycleCompatibleEntitlement(record: LicenseRecord): boolean {
+  return (
+    record.expiresAt !== undefined &&
+    Number.isFinite(Date.parse(record.expiresAt)) &&
+    CHECKOUT_LOOKUP_KEYS.some((lookupKey) => {
+      const policy = checkoutPolicyFor(lookupKey);
+      return (
+        record.plan === policy.plan &&
+        record.seats === policy.seats &&
+        record.repoVisibilityScope === policy.repoVisibilityScope &&
+        record.privateRepoAllowed === policy.privateRepoAllowed &&
+        record.updateEntitlement === policy.updateEntitlement
+      );
+    })
+  );
+}
+
+function lifecycleResult(
+  status: SubscriptionLifecycleApplyResult["status"],
+  replayed: boolean,
+  record: LicenseRecord,
+  appliedAt: Date
+): SubscriptionLifecycleApplyResult {
+  const expiresAt = record.expiresAt;
+  if (!expiresAt) {
+    throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+  }
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+  }
+  const effectiveStatus =
+    record.status === "active" && expiresAtMs <= appliedAt.getTime()
+      ? "expired"
+      : record.status;
+  return {
+    status,
+    replayed,
+    entitlement: {
+      status: effectiveStatus,
+      plan: record.plan,
+      seats: record.seats,
+      expiresAt
+    }
+  };
+}
+
+function resolveBusyTimeout(value: number | undefined): number {
+  const timeout = value ?? DEFAULT_BUSY_TIMEOUT_MS;
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > MAX_BUSY_TIMEOUT_MS) {
+    throw new Error(`busyTimeoutMs must be an integer from 1 to ${MAX_BUSY_TIMEOUT_MS}`);
+  }
+  return timeout;
+}
+
+function validateBoundCheckoutInput(
+  input: IssueBoundCheckoutLicenseInput
+): IssueBoundCheckoutLicenseInput {
+  for (const key of Object.keys(input)) {
+    if (!BOUND_CHECKOUT_INPUT_FIELDS.has(key)) {
+      throw new CheckoutIssuancePolicyError(`unsupported bound checkout field: ${key}`);
+    }
+  }
+  for (const key of Object.keys(input.binding)) {
+    if (!BOUND_CHECKOUT_BINDING_FIELDS.has(key)) {
+      throw new CheckoutIssuancePolicyError(`unsupported checkout binding field: ${key}`);
+    }
+  }
+  const idempotencyKey = readBoundedCheckoutString(input.idempotencyKey, "idempotencyKey", 200);
+  if (!/^[A-Za-z0-9._:-]+$/.test(idempotencyKey)) {
+    throw new CheckoutIssuancePolicyError("idempotencyKey contains unsupported characters");
+  }
+  const checkoutLookupKey = readBoundedCheckoutString(
+    input.checkoutLookupKey,
+    "checkoutLookupKey",
+    80
+  );
+  if (!isCheckoutLookupKey(checkoutLookupKey)) {
+    throw new CheckoutIssuancePolicyError(
+      `checkoutLookupKey must be one of: ${CHECKOUT_LOOKUP_KEYS.join(", ")}`
+    );
+  }
+  if (input.binding.provider !== "stripe") {
+    throw new CheckoutIssuancePolicyError("provider must be stripe");
+  }
+  if (input.binding.providerMode !== "test" && input.binding.providerMode !== "live") {
+    throw new CheckoutIssuancePolicyError("providerMode must be test or live");
+  }
+  return {
+    idempotencyKey,
+    checkoutLookupKey,
+    binding: {
+      provider: input.binding.provider,
+      providerAccountId: readBoundedCheckoutString(
+        input.binding.providerAccountId,
+        "providerAccountId",
+        160
+      ),
+      providerMode: input.binding.providerMode,
+      externalSubscriptionId: readBoundedCheckoutString(
+        input.binding.externalSubscriptionId,
+        "externalSubscriptionId",
+        160
+      ),
+      externalCheckoutId: readBoundedCheckoutString(
+        input.binding.externalCheckoutId,
+        "externalCheckoutId",
+        160
+      )
+    }
+  };
+}
+
+function validateCheckoutBindingBackfillInput(
+  input: BindCheckoutSubscriptionInput
+): BindCheckoutSubscriptionInput {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new CheckoutBindingPolicyError("checkout binding input must be an object");
+  }
+  for (const key of Object.keys(input)) {
+    if (!CHECKOUT_BINDING_BACKFILL_FIELDS.has(key)) {
+      throw new CheckoutBindingPolicyError("unsupported checkout binding field");
+    }
+  }
+  const issuanceIdempotencyKey = readCheckoutBindingString(
+    input.issuanceIdempotencyKey,
+    "issuanceIdempotencyKey",
+    200
+  );
+  if (!/^[A-Za-z0-9._:-]+$/.test(issuanceIdempotencyKey)) {
+    throw new CheckoutBindingPolicyError(
+      "issuanceIdempotencyKey contains unsupported characters"
+    );
+  }
+  if (input.provider !== "stripe") {
+    throw new CheckoutBindingPolicyError("provider must be stripe");
+  }
+  if (input.providerMode !== "test" && input.providerMode !== "live") {
+    throw new CheckoutBindingPolicyError("providerMode must be test or live");
+  }
+  return {
+    issuanceIdempotencyKey,
+    provider: "stripe",
+    providerAccountId: readCheckoutBindingString(
+      input.providerAccountId,
+      "providerAccountId",
+      160
+    ),
+    providerMode: input.providerMode,
+    externalSubscriptionId: readCheckoutBindingString(
+      input.externalSubscriptionId,
+      "externalSubscriptionId",
+      160
+    ),
+    externalCheckoutId: readCheckoutBindingString(
+      input.externalCheckoutId,
+      "externalCheckoutId",
+      160
+    )
+  };
+}
+
+function readCheckoutBindingString(value: unknown, field: string, max: number): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new CheckoutBindingPolicyError(`${field} is required`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > max) {
+    throw new CheckoutBindingPolicyError(`${field} is too long`);
+  }
+  return trimmed;
+}
+
+function readBoundedCheckoutString(value: unknown, field: string, max: number): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new CheckoutIssuancePolicyError(`${field} is required`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > max) {
+    throw new CheckoutIssuancePolicyError(`${field} is too long`);
+  }
+  return trimmed;
+}
+
+function boundCheckoutRequestHash(input: IssueBoundCheckoutLicenseInput): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        checkoutLookupKey: input.checkoutLookupKey,
+        provider: input.binding.provider,
+        providerAccountId: input.binding.providerAccountId,
+        providerMode: input.binding.providerMode,
+        externalSubscriptionId: input.binding.externalSubscriptionId,
+        externalCheckoutId: input.binding.externalCheckoutId
+      })
+    )
+    .digest("hex");
+}
+
+function validateStoredCheckoutEntitlement(
+  record: LicenseRecord,
+  policy: CheckoutPolicy,
+  now: Date
+): void {
+  if (
+    record.plan !== policy.plan ||
+    record.repoVisibilityScope !== policy.repoVisibilityScope ||
+    record.privateRepoAllowed !== policy.privateRepoAllowed ||
+    record.updateEntitlement !== policy.updateEntitlement ||
+    record.seats !== policy.seats ||
+    !record.expiresAt ||
+    !Number.isFinite(Date.parse(record.expiresAt))
+  ) {
+    throw new CheckoutIssuanceConflictError(
+      "checkout issuance entitlement does not match server policy"
+    );
+  }
+  if (record.status !== "active" || Date.parse(record.expiresAt) <= now.getTime()) {
+    throw new CheckoutIssuanceConflictError("checkout issuance is no longer usable");
+  }
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: string }).code;
+  return code === "ERR_SQLITE_ERROR" && /database is (?:locked|busy)/i.test(error.message);
+}
+
+function expectedSchemaSignature(schema: string): SchemaObjectSignature[] {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(schema);
+    return readSchemaSignature(db);
+  } finally {
+    db.close();
+  }
+}
+
+function readSchemaSignature(db: DatabaseSync): SchemaObjectSignature[] {
+  const rows = db
+    .prepare(
+      `select type, name, tbl_name, sql
+       from sqlite_schema
+       where name not like 'sqlite_%'
+       order by type, name`
+    )
+    .all() as unknown as Array<{ type: string; name: string; tbl_name: string; sql: string }>;
+  return rows.map((row) => ({
+    type: row.type,
+    name: row.name,
+    tableName: row.tbl_name,
+    sql: normalizeSchemaSql(row.sql)
+  }));
+}
+
+function normalizeSchemaSql(sql: string): string {
+  let result = "";
+  let pendingSpace = false;
+  let quote: "'" | '"' | "`" | null = null;
+
+  for (let index = 0; index < sql.length; index += 1) {
+    const character = sql[index]!;
+    if (quote) {
+      result += character;
+      if (character === quote) {
+        if (sql[index + 1] === quote) {
+          result += quote;
+          index += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+
+    if (character === "'" || character === '"' || character === "`") {
+      if (pendingSpace && result && !result.endsWith("(") && !result.endsWith(",")) result += " ";
+      pendingSpace = false;
+      quote = character;
+      result += character;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      pendingSpace = true;
+      continue;
+    }
+    if (character === "(" || character === ")" || character === "," || character === ";") {
+      result = result.trimEnd() + character;
+      pendingSpace = false;
+      continue;
+    }
+    if (pendingSpace && result && !result.endsWith("(") && !result.endsWith(",")) result += " ";
+    pendingSpace = false;
+    result += character.toLowerCase();
+  }
+
+  return result.trim().replace(/;$/, "");
+}
+
+function signaturesEqual(
+  actual: readonly SchemaObjectSignature[],
+  expected: readonly SchemaObjectSignature[]
+): boolean {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function schemaObjectKeys(signature: readonly SchemaObjectSignature[]): string[] {
+  return signature.map((object) => `${object.type}:${object.name}:${object.tableName}`);
+}
+
+function sameStrings(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
 }
