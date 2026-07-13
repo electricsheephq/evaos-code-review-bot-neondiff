@@ -116,11 +116,13 @@ export function buildCheckoutIssuanceSmokeRequestPreview(input: {
   idempotencyKey?: string;
 } & CheckoutProviderTupleInput): CheckoutIssuanceSmokeRequestPreview {
   const checkoutLookupKey = normalizeCheckoutLookupKey(input.checkoutLookupKey);
-  const idempotencyKey = input.idempotencyKey ?? defaultIdempotencyKey(input.releaseVersion, checkoutLookupKey);
+  const providerTuple = normalizeCheckoutProviderTuple(input);
+  const idempotencyKey = input.idempotencyKey
+    ?? defaultIdempotencyKey(input.releaseVersion, checkoutLookupKey, providerTuple);
   return {
     idempotencyKey,
     checkoutLookupKey,
-    ...normalizeCheckoutProviderTuple(input)
+    ...providerTuple
   };
 }
 
@@ -141,6 +143,21 @@ export function normalizeCheckoutProviderTuple(
     ),
     externalCheckoutId: readProviderTupleField(input.externalCheckoutId, "externalCheckoutId")
   };
+}
+
+export function checkoutProviderTupleFingerprint(tuple: CheckoutProviderTuple): string {
+  const digest = createHash("sha256")
+    .update("neondiff-checkout-provider-tuple-v1\0")
+    .update(JSON.stringify([
+      tuple.provider,
+      tuple.providerAccountId,
+      tuple.providerMode,
+      tuple.externalSubscriptionId,
+      tuple.externalCheckoutId
+    ]))
+    .digest("hex")
+    .slice(0, 20);
+  return digest.match(/.{4}/g)!.join("_");
 }
 
 export function validateCheckoutIssuanceUrl(url: string): { ok: true } | { ok: false; detail: string } {
@@ -318,8 +335,18 @@ function normalizeCheckoutLookupKey(input: string): CheckoutLookupKey {
   throw new Error("checkoutLookupKey must be one of: neondiff_monthly, neondiff_yearly, neondiff_org_yearly");
 }
 
-function defaultIdempotencyKey(releaseVersion: string, checkoutLookupKey: CheckoutLookupKey): string {
-  return `neondiff-smoke-${releaseVersion}-${checkoutLookupKey}`;
+function defaultIdempotencyKey(
+  releaseVersion: string,
+  checkoutLookupKey: CheckoutLookupKey,
+  providerTuple: CheckoutProviderTuple
+): string {
+  return [
+    "neondiff-smoke",
+    releaseVersion,
+    checkoutLookupKey,
+    providerTuple.providerMode,
+    checkoutProviderTupleFingerprint(providerTuple)
+  ].join("-");
 }
 
 function summarizeCheckoutIssuanceRequest(

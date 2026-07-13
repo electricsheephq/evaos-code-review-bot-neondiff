@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { hostname, platform } from "node:os";
 import { resolve } from "node:path";
 import {
+  checkoutProviderTupleFingerprint,
   normalizeCheckoutProviderTuple,
   type CheckoutProviderTupleInput
 } from "./checkout-issuance-smoke.js";
@@ -170,7 +171,13 @@ export async function runLicenseLifecycleSmoke(input: LicenseLifecycleSmokeInput
             packIntegrity: input.packIntegrity
           }
         : {
-            idempotencyKey: `neondiff-lifecycle-${input.releaseVersion}-${issuanceIdentity.slice(0, 24)}`,
+            idempotencyKey: [
+              "neondiff-lifecycle",
+              input.releaseVersion,
+              issuanceIdentity.slice(0, 16),
+              checkoutIssuanceCorrelation!.providerMode,
+              checkoutProviderTupleFingerprint(checkoutIssuanceCorrelation!)
+            ].join("-"),
             checkoutLookupKey: "neondiff_monthly",
             ...checkoutIssuanceCorrelation
           },

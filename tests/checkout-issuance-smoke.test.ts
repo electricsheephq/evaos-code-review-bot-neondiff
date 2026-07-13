@@ -200,7 +200,6 @@ describe("checkout issuance smoke", () => {
         releaseVersion: "v1.0.5",
         checkoutLookupKey: "neondiff_monthly",
         ...TEST_PROVIDER_TUPLE,
-        idempotencyKey: "neondiff-smoke-v1.0.5-listener-fixture",
         confirmLiveIssuance: true,
         secretEnvName: "LICENSE_ISSUANCE_SECRET",
         env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -213,11 +212,7 @@ describe("checkout issuance smoke", () => {
         providerMode: "live"
       });
 
-      expect(crossed).toMatchObject({
-        ok: false,
-        errorCode: "unexpected_status",
-        statusCode: 409
-      });
+      expect(crossed.ok).toBe(true);
       const serialized = JSON.stringify(crossed);
       for (const sensitive of [
         secretValue,
@@ -525,11 +520,28 @@ describe("checkout issuance smoke", () => {
     });
 
     expect(preview).toEqual({
-      idempotencyKey: "neondiff-smoke-v1.0.0-neondiff_org_yearly",
+      idempotencyKey: expect.stringMatching(
+        /^neondiff-smoke-v1\.0\.0-neondiff_org_yearly-test-[a-f0-9]{4}(?:_[a-f0-9]{4}){4}$/
+      ),
       checkoutLookupKey: "neondiff_org_yearly",
       provider: "stripe",
       ...TEST_PROVIDER_TUPLE
     });
+    const livePreview = buildCheckoutIssuanceSmokeRequestPreview({
+      releaseVersion: "v1.0.0",
+      checkoutLookupKey: "neondiff_org_yearly",
+      ...TEST_PROVIDER_TUPLE,
+      providerMode: "live"
+    });
+    expect(livePreview.idempotencyKey).not.toBe(preview.idempotencyKey);
+    for (const rawIdentifier of [
+      TEST_PROVIDER_TUPLE.providerAccountId,
+      TEST_PROVIDER_TUPLE.externalSubscriptionId,
+      TEST_PROVIDER_TUPLE.externalCheckoutId
+    ]) {
+      expect(preview.idempotencyKey).not.toContain(rawIdentifier);
+      expect(livePreview.idempotencyKey).not.toContain(rawIdentifier);
+    }
   });
 
   it("exposes a dry-run CLI preview that does not require the owner-held secret", async () => {
@@ -559,7 +571,7 @@ describe("checkout issuance smoke", () => {
     expect(output.command).toBe("checkout-issuance-smoke");
     expect(output.mode).toBe("dry_run");
     expect(output.requestPreview).toEqual({
-      idempotencyKey: "neondiff-smoke-v1.0.0-neondiff_org_yearly",
+      idempotencyKey: "neondiff-smoke-v1.0.0-[redacted-secret]",
       checkoutLookupKey: "neondiff_org_yearly",
       provider: "stripe",
       ...TEST_PROVIDER_TUPLE

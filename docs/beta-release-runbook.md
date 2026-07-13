@@ -416,6 +416,9 @@ npx tsx src/cli.ts review-head-gate \
   never synthesize or guess production identifiers. Exact correlation is visible
   only in the no-network dry-run preview; persisted success/error proof omits the
   account, subscription, Checkout Session, bearer, and raw license key.
+  When `--idempotency-key` is omitted, the CLI derives an opaque tuple-scoped
+  default, so separately approved test and live proofs do not collide while an
+  exact retry within one environment remains stable.
   The programmatic shared-secret branch of `runLicenseLifecycleSmoke` has the
   same rule: `checkoutIssuanceCorrelation` is mandatory and must carry one
   matching Stripe account/mode/subscription/Checkout Session tuple. The trusted

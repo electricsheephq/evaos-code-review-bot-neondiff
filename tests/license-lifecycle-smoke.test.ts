@@ -211,7 +211,9 @@ describe("license lifecycle smoke", () => {
 
     expect(result).toMatchObject({ ok: false, errorCode: "issuance_failed" });
     expect(observedBody).toEqual({
-      idempotencyKey: expect.stringMatching(/^neondiff-lifecycle-v1\.0\.5-[a-f0-9]{24}$/),
+      idempotencyKey: expect.stringMatching(
+        /^neondiff-lifecycle-v1\.0\.5-[a-f0-9]{16}-test-[a-f0-9]{4}(?:_[a-f0-9]{4}){4}$/
+      ),
       checkoutLookupKey: "neondiff_monthly",
       provider: "stripe",
       ...sharedSecretCorrelation
@@ -264,8 +266,12 @@ describe("license lifecycle smoke", () => {
         ...baseInput,
         checkoutIssuanceCorrelation: { ...sharedSecretCorrelation, providerMode: "live" }
       });
-      expect(crossed).toMatchObject({ ok: false, errorCode: "issuance_failed" });
-      expect(candidateCalls).toBe(callsAfterFirst);
+      expect(crossed).toMatchObject({
+        ok: false,
+        errorCode: "candidate_failed",
+        cleanup: { localState: "confirmed_removed", remoteState: "confirmed_deactivated" }
+      });
+      expect(candidateCalls).toBeGreaterThan(callsAfterFirst);
       const serialized = JSON.stringify(crossed);
       for (const sensitive of [
         secretValue,
