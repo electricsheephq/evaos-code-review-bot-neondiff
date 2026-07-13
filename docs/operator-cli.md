@@ -252,14 +252,23 @@ evaos-review-bot status --config config.local.json
   requires both `--dry-run false` and `--confirm true`.
   When `start` uses `--plist <path>`, `stop` can either pass the same `--plist`
   to boot out by domain/plist or omit `--plist` to boot out by service label.
-  `start` without `--plist` restarts an already loaded LaunchAgent; first-time
-  installation must pass `--plist`. Use only operator-owned plist paths. Live
+  `start` checks `launchctl print gui/<uid>/<label>` separately from plist
+  existence. It kickstarts a loaded service; when unloaded, it bootstraps the
+  supplied plist or the exact standard
+  `~/Library/LaunchAgents/<label>.plist`, then kickstarts it. A bootstrap race
+  is accepted only when bootstrap reports an explicit already-loaded signature
+  and a second launchd check proves the service became loaded. Other bootstrap
+  errors remain failures even if a service appears. Dry-run start issues only the read-only
+  `launchctl print gui/<uid>/<label>` probe needed to report the detected state
+  and exact plan; it performs no launchd mutation. An ambiguous probe response
+  fails closed with structured JSON instead of guessing whether the service is
+  loaded. Use only operator-owned plist paths. Live
   mutation with a `--plist` outside the NeonDiff package root requires
   `--allow-external-plist true`; dry-run still reports the warning and planned
   commands without mutating launchd. The external-plist warning is a lexical
   path check, not a realpath/symlink containment proof.
-  If a live `bootstrap` fails because the LaunchAgent is already loaded, rerun
-  `daemon start` without `--plist` to use the kickstart-only restart path.
+  The automatically selected exact standard LaunchAgent path does not require
+  the external-plist override; other external paths still do.
 - `daemon --config <config.json> --dry-run true --once true`: runs one
   daemon cycle and exits. This is intended for deterministic local smoke tests
   and operator diagnostics; omit `--once true` for the normal long-running
@@ -282,6 +291,28 @@ Classify whether the bot is idle, healthy-active, or blocked:
 ```bash
 npx tsx src/cli.ts runtime-inventory --json --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
+
+Recover the standard macOS LaunchAgent only after runtime inventory shows no
+active work. Inspect and approve the stop plan before mutating launchd:
+
+```bash
+npx tsx src/cli.ts daemon stop --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
+npx tsx src/cli.ts daemon stop --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
+```
+
+Once stop succeeds, dry-run start against the now-unloaded service so the plan
+shows the actual detected state and plist/bootstrap commands. Approve that exact
+label, config, state, plist path, and plan before confirmed start:
+
+```bash
+npx tsx src/cli.ts daemon start --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
+npx tsx src/cli.ts daemon start --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
+```
+
+Confirmed start remains activation-gated. If the operator-owned plist is not
+the standard `~/Library/LaunchAgents/<label>.plist`, pass its exact path with
+`--plist`; confirmed external paths additionally require
+`--allow-external-plist true`.
 
 `runtime-inventory` treats issue-enrichment runtime as a separate lane from PR
 review health. Failed issue-enrichment records remain blocking because an

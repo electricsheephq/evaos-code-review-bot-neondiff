@@ -284,18 +284,27 @@ neondiff daemon stop --launchd-label com.example.neondiff --dry-run true
 
 `daemon start` and `daemon stop` default to dry-run planning. Live launchd
 mutation requires both `--dry-run false` and `--confirm true`.
-`daemon start` without `--plist` restarts an already loaded LaunchAgent with
-`kickstart`; first-time LaunchAgent installation must pass the plist path so the
-dry-run plan includes `bootstrap`. If a live `bootstrap` fails because the
-LaunchAgent is already loaded, rerun `daemon start` without `--plist` to perform
-the kickstart-only restart path.
+`daemon start` first checks whether the label is registered in the current
+`gui/<uid>` launchd domain. A loaded service gets `kickstart -k`. An unloaded
+service gets `bootstrap` followed by `kickstart`; without `--plist`, NeonDiff
+uses `~/Library/LaunchAgents/<launchd-label>.plist` when that exact standard
+path exists. Pass `--plist` for any other first-time or recovery path. A
+concurrent loader that wins the race after the check is treated idempotently:
+NeonDiff confirms the service is now loaded and continues with `kickstart`.
+Dry-run output includes `launchdLoaded`, the selected operation, and the exact
+planned commands without bootstrapping or restarting the service. To derive
+that plan, dry-run start issues a read-only
+`launchctl print gui/<uid>/<launchd-label>` probe; an ambiguous response fails
+closed instead of guessing whether the service is loaded.
 Use only operator-owned plist paths. The CLI validates the plist `Label` against
 `--launchd-label` and warns when the plist lives outside the NeonDiff package
 root. Live mutation with an external plist also requires
 `--allow-external-plist true`; keep the default off unless the release issue
 names the exact operator-owned plist path. The external-plist check is a lexical
 path warning, not a realpath/symlink containment proof, so do not rely on it as
-a filesystem security boundary.
+a filesystem security boundary. The automatically selected exact standard
+LaunchAgent path does not require that override; explicitly supplied paths
+outside the package root still do.
 
 Live `review-pr` posting is intentionally harder than dry-run inspection. Use
 `--dry-run true` for normal local checks. A live scoped PR review requires

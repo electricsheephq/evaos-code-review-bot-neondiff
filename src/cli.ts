@@ -6,6 +6,10 @@ import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
 import { runDaemonCycle, shouldExitDaemonAfterFailedCycle } from "./daemon.js";
 import {
+  runLaunchdControlCommand,
+  type LaunchctlResult
+} from "./launchd-control.js";
+import {
   closeSync,
   existsSync,
   mkdirSync,
@@ -19,6 +23,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import {
   assertEvalOutputDirSafe,
   buildEvalPromotionDecisionMarkdown,
@@ -2514,11 +2519,12 @@ type DaemonControlResult = {
   dryRun?: boolean;
   launchdLabel?: string;
   launchdTarget?: string;
+  launchdLoaded?: boolean;
   operation?: "bootstrap_then_kickstart" | "kickstart_existing" | "bootout_plist" | "bootout_service" | "status";
   plistPath?: string;
   warning?: string;
   plannedCommands?: string[][];
-  results?: Array<{ command: string[]; exitCode: number; stdout?: string; stderr?: string; error?: string; signal?: string }>;
+  results?: LaunchctlResult[];
   status?: ReleaseStatus;
   error?: string;
 };
@@ -2590,84 +2596,26 @@ function runDaemonControlCommand(
   const confirm = args.confirm === "true";
   const allowExternalPlist = args["allow-external-plist"] === "true";
   const launchdLabel = parseLaunchdLabelArg(args["launchd-label"], "--launchd-label");
-  const plistPath = args.plist ? resolve(parseSingleArg(args.plist, "--plist")) : undefined;
-  if (plistPath) assertPlistLabelMatches(plistPath, launchdLabel);
+  const requestedPlistPath = args.plist ? resolve(parseSingleArg(args.plist, "--plist")) : undefined;
   const launchdTarget = launchdServiceTarget(launchdLabel);
-  const commands = buildDaemonLaunchctlCommands({
+  const standardPlistPath = defaultLaunchdPlistPath(launchdLabel);
+  return runLaunchdControlCommand({
     action,
-    launchdLabel,
-    ...(plistPath ? { plistPath } : {})
-  });
-  const operation = daemonControlOperation(action, plistPath);
-  const warning = plistPath ? daemonPlistWarning(plistPath) : undefined;
-  if (dryRun) {
-    return {
-      ok: true,
-      command: `daemon ${action}`,
-      dryRun,
-      launchdLabel,
-      launchdTarget,
-      operation,
-      ...(plistPath ? { plistPath } : {}),
-      ...(warning ? { warning } : {}),
-      plannedCommands: commands
-    };
-  }
-  const launchdSessionError = launchdUserSessionError();
-  if (launchdSessionError) {
-    return {
-      ok: false,
-      command: `daemon ${action}`,
-      dryRun,
-      launchdLabel,
-      launchdTarget,
-      operation,
-      ...(plistPath ? { plistPath } : {}),
-      ...(warning ? { warning } : {}),
-      plannedCommands: commands,
-      error: launchdSessionError
-    };
-  }
-  if (warning && !allowExternalPlist) {
-    return {
-      ok: false,
-      command: `daemon ${action}`,
-      dryRun,
-      launchdLabel,
-      launchdTarget,
-      operation,
-      ...(plistPath ? { plistPath } : {}),
-      warning,
-      plannedCommands: commands,
-      error: `daemon ${action} requires --allow-external-plist true when --dry-run false uses a --plist outside the NeonDiff package root`
-    };
-  }
-  if (!confirm) {
-    return {
-      ok: false,
-      command: `daemon ${action}`,
-      dryRun,
-      launchdLabel,
-      launchdTarget,
-      operation,
-      ...(plistPath ? { plistPath } : {}),
-      ...(warning ? { warning } : {}),
-      plannedCommands: commands,
-      error: `daemon ${action} requires --confirm true when --dry-run false is used`
-    };
-  }
-  const results = runLaunchctlPlan(commands);
-  return {
-    ok: results.every((result) => result.exitCode === 0),
-    command: `daemon ${action}`,
     dryRun,
+    confirm,
+    allowExternalPlist,
     launchdLabel,
     launchdTarget,
-    operation,
-    ...(plistPath ? { plistPath } : {}),
-    ...(warning ? { warning } : {}),
-    results
-  };
+    launchdDomain: launchdDomainTarget(),
+    standardPlistPath,
+    ...(requestedPlistPath ? { requestedPlistPath } : {})
+  }, {
+    executeLaunchctl: runLaunchctl,
+    plistExists: existsSync,
+    assertPlistLabelMatches,
+    plistWarning: daemonPlistWarning,
+    launchdSessionError: launchdUserSessionError
+  });
 }
 
 function currentDaemonPlatform(): string {
@@ -2692,30 +2640,8 @@ function unsupportedNonDarwinDaemonControl(
   };
 }
 
-function buildDaemonLaunchctlCommands(input: {
-  action: "start" | "stop";
-  launchdLabel: string;
-  plistPath?: string;
-}): string[][] {
-  const domain = launchdDomainTarget();
-  const service = launchdServiceTarget(input.launchdLabel);
-  if (input.action === "start") {
-    return [
-      ...(input.plistPath ? [["launchctl", "bootstrap", domain, input.plistPath]] : []),
-      ["launchctl", "kickstart", "-k", service]
-    ];
-  }
-  return input.plistPath
-    ? [["launchctl", "bootout", domain, input.plistPath]]
-    : [["launchctl", "bootout", service]];
-}
-
-function daemonControlOperation(
-  action: "start" | "stop",
-  plistPath?: string
-): "bootstrap_then_kickstart" | "kickstart_existing" | "bootout_plist" | "bootout_service" {
-  if (action === "start") return plistPath ? "bootstrap_then_kickstart" : "kickstart_existing";
-  return plistPath ? "bootout_plist" : "bootout_service";
+function defaultLaunchdPlistPath(launchdLabel: string): string {
+  return join(process.env.HOME || homedir(), "Library", "LaunchAgents", `${launchdLabel}.plist`);
 }
 
 function daemonPlistWarning(plistPath: string): string | undefined {
@@ -2726,34 +2652,10 @@ function daemonPlistWarning(plistPath: string): string | undefined {
   return "--plist is outside the NeonDiff package root; use only operator-owned plist paths";
 }
 
-function runLaunchctlPlan(commands: string[][]): Array<{
-  command: string[];
-  exitCode: number;
-  stdout?: string;
-  stderr?: string;
-  error?: string;
-  signal?: string;
-}> {
-  const results = [];
-  for (const command of commands) {
-    const result = runLaunchctl(command);
-    results.push(result);
-    if (result.exitCode !== 0) break;
-  }
-  return results;
-}
-
-function runLaunchctl(command: string[]): {
-  command: string[];
-  exitCode: number;
-  stdout?: string;
-  stderr?: string;
-  error?: string;
-  signal?: string;
-} {
+function runLaunchctl(command: string[]): LaunchctlResult {
   const [binary, ...args] = command;
   if (binary !== "launchctl") throw new Error(`unsupported daemon control command: ${command.join(" ")}`);
-  const result = spawnSync(binary, args, {
+  const result = spawnSync("/bin/launchctl", args, {
     encoding: "utf8",
     timeout: LAUNCHCTL_TIMEOUT_MS
   });
@@ -2785,7 +2687,7 @@ function assertPlistLabelMatches(plistPath: string, launchdLabel: string): void 
 }
 
 function readPlistLabel(plistPath: string): string {
-  const result = spawnSync("plutil", ["-extract", "Label", "raw", plistPath], {
+  const result = spawnSync("/usr/bin/plutil", ["-extract", "Label", "raw", plistPath], {
     encoding: "utf8",
     timeout: PLUTIL_TIMEOUT_MS
   });
