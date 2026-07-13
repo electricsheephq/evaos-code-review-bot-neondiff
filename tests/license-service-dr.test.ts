@@ -129,6 +129,7 @@ describe("license service disaster recovery wiring", () => {
     const adminRunbook = readServiceFile("docs/admin-runbook.md");
     const drRunbook = readServiceFile("docs/disaster-recovery.md");
     const lifecycleRunbook = readServiceFile("docs/subscription-lifecycle.md");
+    const serviceReadme = readServiceFile("README.md");
 
     expect(deployRunbook).toContain("disaster-recovery.md");
     expect(adminRunbook).toContain("disaster-recovery.md");
@@ -163,6 +164,14 @@ describe("license service disaster recovery wiring", () => {
     expect(deployRunbook).not.toContain("flip license.enabled");
     expect(deployRunbook).not.toContain("There is no in-app migration system");
     expect(drRunbook).not.toContain("inside the configured offline grace window");
+    expect(drRunbook).not.toContain("-force");
+    expect(serviceReadme).toContain(
+      "Activation, validation, and deactivation use per-license-key rate limiting."
+    );
+    expect(serviceReadme).toContain(
+      "Subscription lifecycle and release-lifecycle issuance use separate client-address rate-limit budgets."
+    );
+    expect(serviceReadme).not.toContain("Cross-cutting: 429");
     expect(drRunbook).not.toContain("/Volumes/LEXAR/Codex");
     expect(drRunbook).not.toMatch(/AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|secret-access-key:\s+\S|account-key:\s+\S/i);
   });

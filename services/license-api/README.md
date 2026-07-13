@@ -25,7 +25,13 @@ Six `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
 | `/v1/admin/licenses/issue-lifecycle` | exact release identity + GitHub Actions OIDC bearer | short-lived lifecycle license + all-scope entitlement | 401 invalid workflow token · 403 candidate SHA mismatch · 409 workflow-run conflict · 503 unconfigured |
 | `/v1/admin/licenses/lifecycle` | strict subscription command + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | redacted `{ status, replayed, entitlement }` | 400 invalid · 401 unauthorized · 404 not_found · 409 conflict/terminally_revoked · 429 rate_limited · 503 unavailable |
 
-Cross-cutting: 429 rate_limited (per-key throttle) · 400 malformed · 5xx server.
+Activation, validation, and deactivation use per-license-key rate limiting.
+Subscription lifecycle and release-lifecycle issuance use separate client-address rate-limit budgets.
+Checkout issuance has no generic `429`
+claim; its documented authorization, validation, conflict, and server outcomes
+apply. Cross-route failures include `400 malformed` and `5xx server` where the
+endpoint table or detailed section specifies them.
+
 `machineId` is the single-activation binding — one machine per seat (default
 `seats=1`). Only `sha256(licenseKey)` is stored. Activation, validation,
 deactivation, lifecycle, and admin inspection responses never echo a submitted

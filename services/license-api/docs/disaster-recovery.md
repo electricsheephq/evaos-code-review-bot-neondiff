@@ -176,9 +176,9 @@ During a production outage:
 2. Preserve the current volume and logs before mutation.
 3. Restore on staging first when time allows; if production replacement is
    required, restore only to a missing DB path or a fresh volume.
-4. Do not overwrite an existing production DB with `-force` unless the owner has
-   explicitly approved a data replacement and the evidence packet names the
-   selected replica timestamp.
+4. Never overwrite an existing production database. Owner approval may select
+   the reviewed replica timestamp and authorize attaching a fresh restore path
+   or volume; it cannot authorize an in-place overwrite.
 5. Verify the real-client outage path still returns `source="none"` and denies
    review with `offlineGraceMs=0`; the presence of a cache file is diagnostic
    evidence only.
