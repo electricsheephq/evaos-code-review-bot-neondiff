@@ -22,7 +22,7 @@ describe("GEX44 Linux Phase 1 runtime", () => {
   });
 
   it("preserves the run-start swap baseline while bounding a long trace", () => {
-    const sample = (index: number) => ({ capturedAt: String(index), phase: index === 0 ? "attached" : "periodic", rssBytes: 0, vramBytes: 0, swapBytes: index * 1024, processSwapBytes: 0, processAlive: 1, pid: 42 });
+    const sample = (index: number) => ({ capturedAt: String(index), sequence: index + 1, phase: index === 0 ? "attached" : "periodic", rssBytes: 0, vramBytes: 0, vramObserved: 1, swapBytes: index * 1024, processSwapBytes: 0, processAlive: 1, pid: 42 });
     const trace: ReturnType<typeof sample>[] = [];
     for (let index = 0; index < 10; index += 1) appendBoundedLinuxTrace(trace, sample(index), 4);
     expect(trace.map((entry) => entry.capturedAt)).toEqual(["0", "7", "8", "9"]);
@@ -104,8 +104,12 @@ describe("GEX44 Linux Phase 1 runtime", () => {
     const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: expectedSha256 });
     const session = await monitor.start();
     await monitor.attach(session, { metadata: { pid: process.pid } });
-    await expect(monitor.sample(session, { phase: "before" })).resolves.toMatchObject({ pid: process.pid, processAlive: 1 });
-    await expect(monitor.stop(session)).resolves.toEqual(expect.any(Array));
+    await expect(monitor.sample(session, { phase: "before" })).resolves.toMatchObject({ pid: process.pid, processAlive: 1, vramObserved: 0, sequence: 2 });
+    await expect(monitor.stop(session)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ sequence: 1 }),
+      expect.objectContaining({ sequence: 2 }),
+      expect.objectContaining({ sequence: 3 })
+    ]));
   });
 
   it("exposes the exact module path used for immutable runtime binding", () => {
