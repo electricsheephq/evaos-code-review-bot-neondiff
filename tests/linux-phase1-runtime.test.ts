@@ -129,6 +129,15 @@ describe("GEX44 Linux Phase 1 runtime", () => {
     });
   });
 
+  it("uses resident swap growth rather than noisy host-wide swap for stop decisions", () => {
+    const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "0".repeat(64) });
+    const base = { capturedAt: "sample", sequence: 1, phase: "periodic", rssBytes: 0, vramBytes: 0, vramObserved: 0, swapBytes: 0, processSwapBytes: 0, processAlive: 1, pid: 42 };
+    const hostNoise = [base, 1, 2, 3].map((entry, index) => typeof entry === "number" ? { ...base, sequence: index + 1, swapBytes: 128 * 1024 * 1024 } : entry);
+    expect(monitor.classify(hostNoise)).toBeUndefined();
+    const residentGrowth = [base, 1, 2, 3].map((entry, index) => typeof entry === "number" ? { ...base, sequence: index + 1, processSwapBytes: 65 * 1024 * 1024 } : entry);
+    expect(monitor.classify(residentGrowth)).toEqual({ status: "stopped", errorCode: "sustained_swap_growth" });
+  });
+
   it.skipIf(!functionalNvidiaSmi)("rejects a well-formed but incorrect pinned nvidia-smi digest", async () => {
     const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "f".repeat(64) });
     const session = await monitor.start();

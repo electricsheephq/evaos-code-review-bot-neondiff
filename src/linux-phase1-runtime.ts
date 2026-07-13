@@ -277,9 +277,9 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
         samples.some((sample) => sample.nvidiaSmiDrift === 1) ? "nvidia_smi_descriptor_drift" : undefined
       ].filter((value): value is string => value !== undefined);
       if (integrityFailures.length > 0) return { status: "stopped" as const, errorCode: integrityFailures.join("+") };
-      const baseline = samples[0].swapBytes;
+      const baseline = samples[0].processSwapBytes;
       const sustained = samples.slice(-3);
-      if (sustained.length === 3 && sustained.every((sample) => sample.swapBytes - baseline > SWAP_GROWTH_LIMIT_BYTES)) {
+      if (sustained.length === 3 && sustained.every((sample) => sample.processSwapBytes - baseline > SWAP_GROWTH_LIMIT_BYTES)) {
         return { status: "stopped" as const, errorCode: "sustained_swap_growth" };
       }
       const terminal = samples[samples.length - 1];
