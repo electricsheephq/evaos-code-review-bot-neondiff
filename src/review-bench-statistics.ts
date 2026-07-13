@@ -22,6 +22,7 @@ const Z_80_POWER = 0.842;
 const POWER_MARGIN = 0.05;
 const MAX_OBSERVATIONS = 10_000;
 const PROMOTION_CLEAN_CONTROL_FLOOR = 75;
+const MINIMUM_FINAL_BOOTSTRAP_STRATUM_PR_HEADS = 4;
 const COMPARISON_EPSILON = 1e-12;
 const REVIEW_BENCH_LANGUAGES: readonly ReviewBenchLanguage[] = [
   "TypeScript",
@@ -276,6 +277,11 @@ export function analyzePairedReviewBench(
   );
   const requiredDefectPrHeads = Math.max(MINIMUM_CONFIRMATION_DEFECT_PR_HEADS, poweredRecallN);
   const requiredObservationsAtPlannedLook = Math.ceil(input.expectedCohort.length * input.look.fraction);
+  const bootstrapStrata = groupStrata(clusters);
+  const minimumBootstrapStratumPrHeads = Math.min(...bootstrapStrata.map((stratum) => stratum.length));
+  const minimumBootstrapRecallStratumPrHeads = Math.min(
+    ...bootstrapStrata.map((stratum) => stratum.filter((cluster) => cluster.artifactSemantics === "defect_present").length)
+  );
   const safetyFailures = [
     ["candidate.secretFindings", candidateCounts.secretFindings],
     ["candidate.schemaFailures", candidateCounts.schemaFailures],
@@ -297,6 +303,14 @@ export function analyzePairedReviewBench(
       name: "final_look",
       passed: input.look.fraction === 1,
       detail: `${input.look.label}; interim looks cannot promote`
+    },
+    {
+      name: "bootstrap_stratum_support",
+      passed: input.look.fraction !== 1 || (
+        minimumBootstrapStratumPrHeads >= MINIMUM_FINAL_BOOTSTRAP_STRATUM_PR_HEADS
+        && minimumBootstrapRecallStratumPrHeads >= MINIMUM_FINAL_BOOTSTRAP_STRATUM_PR_HEADS
+      ),
+      detail: `minimum final stratum support ${minimumBootstrapStratumPrHeads} total / ${minimumBootstrapRecallStratumPrHeads} defect PR heads >= ${MINIMUM_FINAL_BOOTSTRAP_STRATUM_PR_HEADS}`
     },
     {
       name: "powered_unique_pr_heads",
@@ -339,9 +353,11 @@ export function analyzePairedReviewBench(
 
   const plannedLookSamplePassed = gatePassed(gates, "planned_look_sample");
   const poweredSamplePassed = gatePassed(gates, "powered_unique_pr_heads")
-    && gatePassed(gates, "powered_defect_pr_heads");
+    && gatePassed(gates, "powered_defect_pr_heads")
+    && gatePassed(gates, "bootstrap_stratum_support");
   const promotionPassed = [
     "final_look",
+    "bootstrap_stratum_support",
     "powered_unique_pr_heads",
     "powered_defect_pr_heads",
     "promotion_clean_controls",
@@ -575,6 +591,9 @@ function validateSealedCohort(
   lookFraction: 0.5 | 0.75 | 1
 ): void {
   const plannedLookSize = Math.ceil(expectedCohort.length * lookFraction);
+  if (lookFraction === 1 && observations.length !== expectedCohort.length) {
+    throw new Error("final look must contain the complete frozen cohort");
+  }
   if (observations.length > plannedLookSize) {
     throw new Error("planned look must use one frozen final cohort and its registered prefix");
   }

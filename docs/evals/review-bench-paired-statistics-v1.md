@@ -82,6 +82,11 @@ repository/language stratum must contain at least two distinct total PR-head
 clusters and at least two defect PR-head clusters. The endpoint-specific floor
 prevents clean controls from masking a singleton recall stratum and creating a
 mechanically degenerate confidence bound.
+At the final look, the immutable `bootstrap_stratum_support` gate separately
+requires at least four total and four defect PR-head clusters in every observed
+stratum. Underfilled final strata remain analyzable but return
+`insufficient_evidence`; interim looks retain the two-cluster data-quality
+floor because their prefixes are not promotion evidence.
 The analyzer fails closed on absent, unexpected, or underfilled strata rather
 than pooling an unstratified record.
 
@@ -109,7 +114,9 @@ measured in unique PR-head clusters, so multiple bug families on one PR cannot
 inflate the powered sample.
 They can return `interim_continue`, `stop_for_futility`,
 `stop_for_safety`, or `insufficient_evidence`; they cannot return `promote`.
-Only the complete final look can promote. An interim macro endpoint at least ten
+The final look must contain every observation in the frozen cohort; a strict
+prefix labeled `final` is rejected before analysis. Only that complete final
+look can promote. An interim macro endpoint at least ten
 percentage points behind baseline triggers the preregistered futility stop.
 
 This is `final-only-obf-data-quality-looks/v1`: it deliberately does not spend

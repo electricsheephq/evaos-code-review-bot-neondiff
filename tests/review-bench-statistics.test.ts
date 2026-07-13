@@ -385,13 +385,31 @@ describe("paired Review Bench promotion statistics", () => {
     }))).toThrow("minimumDefectPrHeads must be at least 2");
   });
 
+  it("requires at least four total and defect PR clusters per stratum at the final bootstrap look", () => {
+    const observations = Array.from({ length: 150 }, (_, index) => observation(index));
+    for (const index of [60, 90, 120]) {
+      observations[index] = observation(index, {
+        repository: observations[1]!.repository,
+        language: observations[1]!.language
+      });
+    }
+
+    const result = analyzePairedReviewBench(input(observations));
+    expect(result.gates).toContainEqual(expect.objectContaining({
+      name: "bootstrap_stratum_support",
+      passed: false,
+      detail: expect.stringContaining("2 total / 2 defect PR heads >= 4")
+    }));
+    expect(result.decision).toBe("insufficient_evidence");
+  });
+
   it("requires the exact sealed cohort rather than accepting a powered outcome-selected subset", () => {
     const complete = Array.from({ length: 150 }, (_, index) => observation(index));
     const completeInput = input(complete);
-    expect(analyzePairedReviewBench(input(complete.slice(0, 149), {
+    expect(() => analyzePairedReviewBench(input(complete.slice(0, 149), {
       expectedCohort: completeInput.expectedCohort,
       cohortManifestSha256: completeInput.cohortManifestSha256
-    })).decision).toBe("insufficient_evidence");
+    }))).toThrow("final look must contain the complete frozen cohort");
 
     expect(() => analyzePairedReviewBench(input(complete.slice(0, 75), {
       look: { label: "50_percent", fraction: 0.5 }
