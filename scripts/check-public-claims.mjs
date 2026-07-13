@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 
 const paths = [
   "README.md",
+  "LICENSE.md",
   "docs/SETUP.md",
+  "docs/setup-validation.md",
+  "docs/neondiff-desktop.md",
   "docs/github-app-setup.md",
   "docs/providers.md",
   "docs/license-boundary.md",
@@ -14,14 +17,14 @@ const paths = [
 
 const required = [
   /source-available/i,
-  /public open-source repositor(?:y|ies).*free/i,
+  /API-backed activation is required/i,
   /private.*commercial.*paid|paid.*private.*commercial/i,
   /\$100\/(?:year|yr)/i,
   /7-day trial/i,
   /30-day trial/i,
   /legacy lifetime licenses? remain honored/i,
   /org_yearly_support/i,
-  /NEONDIFF_LICENSE_KEY/,
+  /--license-key-stdin true/,
   /nd_live_/
 ];
 
@@ -35,6 +38,13 @@ const forbiddenClaims = [
   /\benterprise-ready\b/i,
   /\bCodeRabbit parity\b/i,
   /\bpublic launch is complete\b/i
+];
+
+const retiredFreeClaims = [
+  /public(?: open-source)? repositor(?:y|ies) (?:are|is) free/i,
+  /free (?:for|on) public repositor(?:y|ies)/i,
+  /public repos? with no license (?:may )?(?:pass|run|review)/i,
+  /PUBLIC · FREE/
 ];
 
 let failed = false;
@@ -60,6 +70,16 @@ for (const path of paths) {
         console.error(`${path}: forbidden public claims phrase outside boundary language: ${match}`);
         failed = true;
       }
+    }
+  }
+}
+
+for (const path of paths.filter((path) => !path.startsWith("docs/releases/"))) {
+  const text = readFileSync(path, "utf8");
+  for (const pattern of retiredFreeClaims) {
+    if (pattern.test(text)) {
+      console.error(`${path}: retired public-free claim remains: ${pattern}`);
+      failed = true;
     }
   }
 }

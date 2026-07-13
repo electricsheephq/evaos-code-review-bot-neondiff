@@ -400,11 +400,30 @@ npx tsx src/cli.ts review-head-gate \
     --url https://neondiff-license.fly.dev/v1/admin/licenses/issue \
     --release-version <release-version> \
     --checkout-lookup-key neondiff_monthly \
+    --provider-account-id <stripe-account-id> \
+    --provider-mode test \
+    --external-subscription-id <test-subscription-id> \
+    --external-checkout-id <test-checkout-session-id> \
     --secret-env LICENSE_ISSUANCE_SECRET \
     --dry-run false \
     --confirm-live-issuance true \
     --output docs/evidence/license-checkout-issuance-authenticated.json
   ```
+
+  Start with Stripe test-mode correlation. For a separately approved live proof,
+  change `--provider-mode` to `live` and supply the matching live account,
+  subscription, and Checkout Session IDs. Never mix test and live objects, and
+  never synthesize or guess production identifiers. Exact correlation is visible
+  only in the no-network dry-run preview; persisted success/error proof omits the
+  account, subscription, Checkout Session, bearer, and raw license key.
+  When `--idempotency-key` is omitted, the CLI derives an opaque tuple-scoped
+  default, so separately approved test and live proofs do not collide while an
+  exact retry within one environment remains stable.
+  The programmatic shared-secret branch of `runLicenseLifecycleSmoke` has the
+  same rule: `checkoutIssuanceCorrelation` is mandatory and must carry one
+  matching Stripe account/mode/subscription/Checkout Session tuple. The trusted
+  GitHub OIDC release-proof wrapper remains separate and does not accept a
+  shared secret or checkout tuple on argv.
 
   Run the same command with `--dry-run true` first when preparing a release
   packet; dry-run mode does not read the secret and does not send the POST.
@@ -482,10 +501,38 @@ record that as supporting evidence for provider/request throttling, not as proof
 that the bot should disable cooldown handling.
 
 Keep provider cooldown rows visible in `release:status`, then retry after the
-cooldown expires or resolve the ZCode provider source. The bot should run with
-one in-flight ZCode review by default; live configs that override
-`reviewConcurrency.maxActiveRuns` must set it to `1` unless a later release
-proves a higher concurrency is safe. A release may be green with provider
+cooldown expires or resolve the ZCode provider source. New installs should run
+with one in-flight ZCode review until an operator completes a bounded
+concurrency canary. Scheduler-enabled releases that promote above one must use
+the asynchronous ZCode transport and bounded parallel batch scheduler, set
+`reviewConcurrency.maxActiveRuns` and `reviewScheduler.maxProviderActive` to
+the intended cap, and keep org/repo caps no higher than the reviewed policy.
+The effective batch size is the lower of the review and provider caps, reduced
+by durable active leases.
+
+For a direct-to-three local canary, wait for existing review and issue leases to
+drain, promote the exact reviewed merge through the normal clean-checkout and
+launchd gates, then require all of the following before retaining three:
+
+- `daemon_cycle_complete.result.queue.execution` reports
+  `mode=bounded_parallel_batch`, `effectiveSlots=3`, and
+  `peakJobsInFlight=3` on a naturally eligible batch;
+- three `reviewer_session_jobs` intervals overlap for those exact PR heads;
+- issue enrichment remains at `maxActiveRuns=1` and can begin before the PR
+  batch completes;
+- no new Z.ai `429`, `1302`, or `1305`, timeout/retry growth, provider
+  cooldown, persistent SQLite lock, `owner_pid_not_alive`, orphan ZCode child,
+  duplicate comment, stale-head post, or unreleased lease appears during the
+  batch and the following 60-minute soak.
+
+Reduce the configured PR cap to two for provider throttling or severe latency
+without a correctness failure. Stop the daemon for duplicate/stale posting,
+persistent database locking, orphan children, lease corruption, or repeated
+cycle failures; source rollback remains a reviewed revert followed by a
+fast-forward promotion. Never infer concurrency from queue admission timestamps
+alone.
+
+A release may be green with provider
 cooldown rows only when all provider cooldown rows are still active and the
 packet names the affected PR head and follow-up.
 

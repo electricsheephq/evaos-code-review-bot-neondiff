@@ -42,15 +42,15 @@ readiness claims.
 | --- | --- | --- | --- | --- |
 | Intended buyer | Individual maintainer or OSS project | Private repo user or small commercial team | Org admin with multiple repos | Enterprise admin with compliance and support controls |
 | GitHub App install | Selected repos only | Selected private or commercial repos | Org install with repo allowlist required | Org install with allowlist, update ring, and support policy |
-| Billing | Free public open-source use | Direct license key or later Marketplace license | Seat or installation license; channel TBD | Contract or private offer; channel TBD |
+| Billing | Active individual support entitlement | Direct license key or later Marketplace license | Seat or installation license; channel TBD | Contract or private offer; channel TBD |
 | Provider settings | Local config per worker | Local config per worker | Central provider profile references, no stored provider secrets | Central provider policy plus approved provider catalog |
 | Policy | Local repo policy | Local repo policy plus private repo entitlement | Org policy templates with per-repo overrides | Locked templates, exception workflow, and audit export |
 | Audit logs | Local evidence only | Local evidence only | Admin-readable org audit events | Retention policy, export, and support packet controls |
 | Update ring | Manual source/beta updates | Beta/stable channel after public package exists | Org default ring with repo or worker override | Ring pinning, delayed rollout, and emergency hold |
 | Support boundary | Community/beta docs | Paid support for private/commercial use | Admin support for install/license/policy | Contracted support, escalation, and security review |
 
-MVP remains the current local-first source-available beta posture. Pro starts
-with paid private/commercial repo support. Team adds org administration and
+MVP remains the current local-first source-available beta posture with mandatory
+API-backed activation. Pro adds expanded individual/private support. Team adds org administration and
 installation/seat management. Enterprise adds controlled rollout, compliance
 evidence, and contractual support; it is not just a larger Team plan.
 

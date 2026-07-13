@@ -29,6 +29,37 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Enforce Review Bench public-corpus admission
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          publication_root=docs/bench/review-bench-corpus-v1
+          publication_artifact_count=0
+          [[ -f "$publication_root/corpus.json" ]] && publication_artifact_count=$((publication_artifact_count + 1))
+          [[ -d "$publication_root/source-artifacts" ]] && publication_artifact_count=$((publication_artifact_count + 1))
+          [[ -f "$publication_root/admission-receipt.json" ]] && publication_artifact_count=$((publication_artifact_count + 1))
+          if [[ "$publication_artifact_count" -eq 0 ]]; then
+            echo "No published Review Bench Corpus v1 subset is present."
+            exit 0
+          fi
+          if [[ "$publication_artifact_count" -ne 3 ]]; then
+            echo "Partial Review Bench Corpus v1 publication artifacts are forbidden." >&2
+            exit 1
+          fi
+          node dist/src/cli.js review-bench verify-sources \
+            --corpus docs/bench/review-bench-corpus-v1/corpus.json \
+            --artifacts docs/bench/review-bench-corpus-v1/source-artifacts \
+            --receipt "$RUNNER_TEMP/review-bench-live-receipt.json"
+          node scripts/check-review-bench-admission-receipt.mjs \
+            --live "$RUNNER_TEMP/review-bench-live-receipt.json" \
+            --committed docs/bench/review-bench-corpus-v1/admission-receipt.json
+
+      - name: Verify license API and OIDC lifecycle broker
+        run: |
+          npm ci --prefix services/license-api
+          npm test --prefix services/license-api
+          npm run build --prefix services/license-api
+
       - name: Focused public release tests
         run: npx vitest run tests/public-release-readiness.test.ts tests/public-community-funnel.test.ts tests/public-cli.test.ts tests/license.test.ts tests/release-status.test.ts --pool=forks --maxWorkers=1
 

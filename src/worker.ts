@@ -4,6 +4,7 @@ import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
   buildCommandStatusBody,
   buildCommandStatusMarker,
+  collectReviewEventAuthorizationAttempts,
   collectTrustedReviewCommands,
   decideCommandAction,
   isFinishingTouchCommandAction,
@@ -33,6 +34,13 @@ import { GitHubApi } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
+  authorizeAdmissionForVisibility,
+  isAuthenticProductionLicenseAdmission,
+  requireActiveProductionLicense,
+  type ProductionLicenseAdmission,
+  type RedactedLicenseDecision
+} from "./license-admission.js";
+import {
   buildPullFileFilterImpact,
   buildReviewSettingsPreview,
   filterPullFilesForProfile,
@@ -40,6 +48,12 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import {
+  decideReviewEventPolicy,
+  type ReviewEventAuthorizationAttempt,
+  type ReviewEventDecision,
+  type ReviewEventPolicyMode
+} from "./review-event-policy.js";
 import { selectReviewMode } from "./review-mode-router.js";
 import type { ReviewModeAnalysisPlan } from "./review-mode-types.js";
 import {
@@ -69,12 +83,16 @@ import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skil
 import { writeSecureFileSync } from "./temp-files.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+  POST_REVIEW_HEAD_UNVERIFIED_ERROR,
+  REVIEW_POSTED_HEAD_CHANGED_ERROR,
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
   type ProcessedStatus,
   type ReviewQueueJobState,
   type ReviewHeadClaim,
+  type ReviewEventAuthorizationConsumptionRecord,
   type ReviewFindingRecord,
   type ReviewReadinessRecord,
   type ReviewReadinessState,
@@ -96,6 +114,34 @@ const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
 const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private" | "unknown"; expiresAtMs: number }>();
+
+function hasDurableAuthorizedReviewOutcome(
+  consumption: ReviewEventAuthorizationConsumptionRecord | undefined
+): boolean {
+  if (!consumption) return false;
+  const receipt = Boolean(consumption.postedEvent) &&
+    Boolean(consumption.reviewUrl) &&
+    Boolean(consumption.postedAt);
+  const terminalNoop = consumption.terminalOutcome === "no_op" &&
+    Boolean(consumption.terminalReason) &&
+    Boolean(consumption.terminalAt);
+  return receipt || terminalNoop;
+}
+
+function recordConsumedAuthorizationIncident(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  triggerCommentId: number;
+}): boolean {
+  return input.state.recordReviewEventAuthorizationIncident({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    triggerCommentId: input.triggerCommentId,
+    error: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR
+  });
+}
 
 export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
   const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
@@ -149,6 +195,7 @@ export interface RunOnceOptions {
   pullNumber?: number;
   expectedHeadSha?: string;
   useZCode?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }
 
 export interface RunOnceResult {
@@ -233,6 +280,9 @@ export interface ProviderErrorClassification {
 export type ReviewPullResult =
   | "reviewed"
   | "reviewed_command"
+  | "posted_stale_head"
+  | "posted_head_unverified"
+  | "skipped_consumed_authorization"
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_policy"
@@ -266,6 +316,9 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "skipped_context_budget":
     case "skipped_provider_cooldown":
     case "skipped_stale_head":
+    case "posted_stale_head":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
       return false;
     default:
       return assertNever(status);
@@ -287,9 +340,6 @@ export function assertExpectedReviewPrHead(input: {
 
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const config = loadConfig(options.configPath);
-  const github = new GitHubApi(config.github);
-  const state = new ReviewStateStore(config.statePath);
-  const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   const result: RunOnceResult = {
     reposScanned: 0,
     pullsSeen: 0,
@@ -311,16 +361,23 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     baselinedExisting: 0,
     policySkips: []
   };
+  const repos = options.repo ? [options.repo] : listReposToScan(config);
+  const admittedRepos = repos.filter((repo) => {
+    result.reposScanned += 1;
+    const repoPolicy = resolveRepoProfile(config, repo);
+    if (repoPolicy.allowed) return true;
+    result.skippedPolicy += 1;
+    result.policySkips.push({ repo, reason: repoPolicy.reason });
+    return false;
+  });
+  if (admittedRepos.length === 0) return result;
+
+  const licenseAdmission = await resolveReviewDiscoveryAdmission(config, options.licenseAdmission);
+  const github = new GitHubApi(config.github);
+  const state = new ReviewStateStore(config.statePath);
+  const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   try {
-    const repos = options.repo ? [options.repo] : listReposToScan(config);
-    for (const repo of repos) {
-      result.reposScanned += 1;
-      const repoPolicy = resolveRepoProfile(config, repo);
-      if (!repoPolicy.allowed) {
-        result.skippedPolicy += 1;
-        result.policySkips.push({ repo, reason: repoPolicy.reason });
-        continue;
-      }
+    for (const repo of admittedRepos) {
       const pulls = options.pullNumber
         ? [await github.getPull(repo, options.pullNumber)]
         : await github.listOpenPulls(repo);
@@ -362,6 +419,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
             budget,
+            licenseAdmission,
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
@@ -373,25 +431,68 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
           result.failed += 1;
           continue;
         }
-        if (status === "reviewed" || status === "reviewed_command") result.reviewed += 1;
-        if (status === "skipped_draft") result.skippedDraft += 1;
-        if (status === "skipped_canary") result.skippedCanary += 1;
-        if (status === "skipped_policy" || status === "skipped_license_gate") result.skippedPolicy += 1;
-        if (status === "skipped_license_gate") result.skippedLicenseGate += 1;
-        if (status === "skipped_command_stop") result.skippedCommandStop += 1;
-        if (status === "skipped_command_explain") result.skippedCommandExplain += 1;
-        if (status === "skipped_finishing_touch_draft") result.skippedFinishingTouchDraft += 1;
-        if (status === "reviewed_command") result.commandReviewRequested += 1;
-        if (status === "skipped_processed") result.skippedProcessed += 1;
-        if (status === "skipped_capacity") result.skippedCapacity += 1;
-        if (status === "skipped_context_budget") result.skippedContextBudget += 1;
-        if (status === "skipped_provider_cooldown") result.skippedProviderCooldown += 1;
-        if (status === "skipped_stale_head") result.skippedStaleHead += 1;
+        applyReviewPullResultToRunOnceResult(result, status);
       }
     }
     return result;
   } finally {
     state.close();
+  }
+}
+
+export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, status: ReviewPullResult): void {
+  switch (status) {
+    case "reviewed":
+      result.reviewed += 1;
+      return;
+    case "reviewed_command":
+      result.reviewed += 1;
+      result.commandReviewRequested += 1;
+      return;
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      result.failed += 1;
+      return;
+    case "posted_stale_head":
+    case "skipped_stale_head":
+      result.skippedStaleHead += 1;
+      return;
+    case "skipped_draft":
+      result.skippedDraft += 1;
+      return;
+    case "skipped_canary":
+      result.skippedCanary += 1;
+      return;
+    case "skipped_policy":
+      result.skippedPolicy += 1;
+      return;
+    case "skipped_license_gate":
+      result.skippedPolicy += 1;
+      result.skippedLicenseGate += 1;
+      return;
+    case "skipped_command_stop":
+      result.skippedCommandStop += 1;
+      return;
+    case "skipped_command_explain":
+      result.skippedCommandExplain += 1;
+      return;
+    case "skipped_finishing_touch_draft":
+      result.skippedFinishingTouchDraft += 1;
+      return;
+    case "skipped_processed":
+      result.skippedProcessed += 1;
+      return;
+    case "skipped_capacity":
+      result.skippedCapacity += 1;
+      return;
+    case "skipped_context_budget":
+      result.skippedContextBudget += 1;
+      return;
+    case "skipped_provider_cooldown":
+      result.skippedProviderCooldown += 1;
+      return;
+    default:
+      assertNever(status);
   }
 }
 
@@ -404,11 +505,26 @@ export async function retryFailedHead(options: {
   useZCode?: boolean;
 }): Promise<RetryFailedHeadResult> {
   const config = loadConfig(options.configPath);
+  const licenseAdmission = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!licenseAdmission.ok) {
+    throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
+  }
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(1);
   try {
-    return await retryFailedHeadWithDeps({ config, github, state, budget, options, reviewPullImpl: reviewPull });
+    return await retryFailedHeadWithDeps({
+      config,
+      github,
+      state,
+      budget,
+      options,
+      reviewPullImpl: reviewPull,
+      licenseAdmission: licenseAdmission.admission
+    });
   } finally {
     state.close();
   }
@@ -421,8 +537,10 @@ export async function retryProviderCooldowns(options: {
   expiredOnly?: boolean;
   dryRun: boolean;
   useZCode?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryProviderCooldownsResult> {
   const config = loadConfig(options.configPath);
+  const licenseAdmission = await resolveReviewDiscoveryAdmission(config, options.licenseAdmission);
   const github = new GitHubApi(config.github);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(1);
@@ -433,7 +551,8 @@ export async function retryProviderCooldowns(options: {
       state,
       budget,
       options,
-      reviewPullImpl: reviewPull
+      reviewPullImpl: reviewPull,
+      licenseAdmission
     });
   } finally {
     state.close();
@@ -453,7 +572,9 @@ export async function retryProviderCooldownsWithDeps(input: {
     useZCode?: boolean;
   };
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryProviderCooldownsResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for provider retry cycles");
   const limit = input.options.limit ?? 5;
   if (!Number.isInteger(limit) || limit < 1) throw new Error("limit must be a positive integer");
   const expiredOnly = input.options.expiredOnly ?? true;
@@ -499,7 +620,8 @@ export async function retryProviderCooldownsWithDeps(input: {
         dryRun: input.options.dryRun,
         useZCode: input.options.useZCode
       },
-      reviewPullImpl: input.reviewPullImpl
+      reviewPullImpl: input.reviewPullImpl,
+      licenseAdmission: input.licenseAdmission
     });
     results.push(result);
   }
@@ -532,7 +654,9 @@ export async function retryFailedHeadWithDeps(input: {
     useZCode?: boolean;
   };
   reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult>;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): Promise<RetryFailedHeadResult> {
+  if (!input.licenseAdmission) throw new Error("production license admission is required for failed-head retry cycles");
   const { config, github, state, budget, options } = input;
   const repoPolicy = resolveRepoProfile(config, options.repo);
   if (!repoPolicy.allowed) {
@@ -654,6 +778,7 @@ export async function retryFailedHeadWithDeps(input: {
       dryRun: options.dryRun,
       useZCode: options.useZCode ?? true,
       budget,
+      licenseAdmission: input.licenseAdmission,
       processedHeadPolicy: "retry_failed_head"
     });
     const retryStatus = options.dryRun && (status === "reviewed" || status === "reviewed_command") ? "dry_run" : status;
@@ -813,10 +938,13 @@ function retryStatusCommentState(
     case "skipped_context_budget":
       return "skipped";
     case "skipped_stale_head":
+    case "posted_stale_head":
       return "stale_head";
     case "skipped_closed":
       return "closed_or_merged_before_review";
     case "failed":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
       return "failed";
     case "skipped_capacity":
       return "provider_deferred";
@@ -1017,7 +1145,17 @@ function retryQueuePatchForStatus(input: {
         lastError: input.processedError ?? "license_entitlement_required",
         sessionJobState: "assigned"
       };
+    case "posted_stale_head":
+      return {
+        state: "stale_retired",
+        ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
+        lastError: "retry_did_not_review=posted_stale_head",
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
+      };
     case "failed":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -1178,6 +1316,7 @@ export interface ReviewPullInput {
   processedHeadPolicy?: "normal" | "retry_failed_head";
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
+  licenseAdmission?: ProductionLicenseAdmission;
 }
 
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
@@ -1186,8 +1325,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
   if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
+  if (!input.licenseAdmission) throw new Error("production license admission is required for pull review");
+  const visibility = visibilityFromPullSummary(pull);
+  const visibilityDecision = authorizeAdmissionForVisibility(
+    input.licenseAdmission,
+    visibility,
+    "review_discovery"
+  );
+  if (!visibilityDecision.ok) {
+    recordLicenseAdmissionBlock({ config, state, repo, pull, decision: visibilityDecision.decision });
+    return "skipped_license_gate";
+  }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !input.allowActivationBaselineCommandLookup &&
@@ -1336,18 +1487,71 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
-  if (commandReviewRequested) {
+  // The scheduler pre-records request-changes before the worker re-resolves it. Re-read the exact
+  // queued comment even when no processed row exists so a consumed crash-recovery command cannot
+  // fall through as an ordinary advisory review.
+  const queuedAuthorization = input.commandCommentId && !commandReviewRequested
+    ? await lookupQueuedReviewEventAuthorization({
+      mode: reviewEventPolicyMode,
+      github,
+      repo,
+      pull,
+      commandCommentId: input.commandCommentId,
+      commandConfig: config.commands
+    })
+    : undefined;
+  let exactOwnerReviewRequested = queuedAuthorization?.status === "eligible";
+  const queuedProcessedCommand = input.commandCommentId
+    ? state.getProcessedCommand(repo, pull.number, pull.head.sha, input.commandCommentId)
+    : undefined;
+  const queuedOwnerRequestChanges = commandDecision.action === "request-changes" ||
+    queuedProcessedCommand?.action === "request-changes" ||
+    exactOwnerReviewRequested;
+  let manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
+  if (manualReviewRequested) {
     const livePull = await github.getPull(repo, pull.number);
     const stale = detectStalePullHead({ expected: pull, live: livePull, phase: "before_review" });
     if (stale) {
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
       recordStaleHeadSkip({ state, repo, pull, stale, evidenceDir });
       return "skipped_stale_head";
     }
   }
+  if (input.commandCommentId) {
+    const consumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
+    const queuedRequestChanges = queuedOwnerRequestChanges ||
+      consumption?.commentId === input.commandCommentId;
+    if (consumption && queuedRequestChanges) {
+      if (hasDurableAuthorizedReviewOutcome(consumption)) {
+        await reconcileProcessedHeadAfterDirectReviewSafely({ config, github, state, repo, pull, dryRun: input.dryRun });
+        return "skipped_processed";
+      }
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
+      mkdirSync(evidenceDir, { recursive: true });
+      const incidentRecorded = recordConsumedAuthorizationIncident({
+        state,
+        repo,
+        pull,
+        triggerCommentId: input.commandCommentId
+      });
+      if (!incidentRecorded) {
+        await reconcileProcessedHeadAfterDirectReviewSafely({ config, github, state, repo, pull, dryRun: input.dryRun });
+        return "skipped_processed";
+      }
+      writeRedactedJson(join(evidenceDir, "consumed-authorization-incident.json"), {
+        reason: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: input.commandCommentId,
+        consumedAt: consumption.consumedAt
+      });
+      return "skipped_consumed_authorization";
+    }
+  }
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
-    !commandReviewRequested &&
+    !manualReviewRequested &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1381,7 +1585,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
       return "skipped_processed";
     }
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
     const liveBeforeReview = await github.getPull(repo, pull.number);
     const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
     if (staleBeforeReview) {
@@ -1422,24 +1626,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   };
 
   try {
-    const licenseGate = await buildLicenseGateForPull({ config, github, repo, pull, dryRun: input.dryRun });
-    if (!licenseGate.ok) {
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
-      mkdirSync(evidenceDir, { recursive: true });
-      writeRedactedJson(join(evidenceDir, "license-gate.json"), licenseGate);
-      state.recordReviewReadiness({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        state: "blocked_on_proof",
-        reason: licenseGate.reason
-      });
-      return "skipped_license_gate";
-    }
-
     if (!acquireReviewCapacity()) return "skipped_capacity";
 
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
     if (commandReviewRequested) {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
     }
@@ -1608,7 +1797,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
     // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
     // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.
-    const selfConsistency = applySelfConsistencyRecheck({
+    const selfConsistency = await applySelfConsistencyRecheck({
       config,
       gate,
       files: reviewFiles,
@@ -1622,7 +1811,23 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
     const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
-    const event = selfConsistency.event;
+    const candidateEvent = selfConsistency.event;
+    const dryRunReviewEventResolution = input.dryRun
+      ? await resolveReviewEventDecision({
+          mode: reviewEventPolicyMode,
+          candidateEvent,
+          github,
+          state,
+          repo,
+          pull,
+          commandCommentId: input.commandCommentId,
+          commandConfig: config.commands,
+          dryRun: true
+        })
+      : undefined;
+    exactOwnerReviewRequested = exactOwnerReviewRequested || dryRunReviewEventResolution?.authorization.status === "eligible";
+    manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
+    const selectedEvent = dryRunReviewEventResolution?.decision.selectedEvent ?? candidateEvent;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
     const summary = buildSummary({
       repo,
@@ -1632,14 +1837,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dryRun: input.dryRun,
       commandDecision
     });
-    const walkthrough = config.walkthrough.enabled
+    const walkthrough = config.walkthrough.enabled && input.dryRun
       ? buildWalkthroughComment({
           repo,
           pull,
           files: reviewFiles,
           comments,
           dropped,
-          event,
+          event: selectedEvent,
           validation,
           proof,
           settingsPreview,
@@ -1663,7 +1868,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         })
       : undefined;
     const plan: ReviewPlan = {
-      event,
+      event: selectedEvent,
       comments,
       dropped,
       summary,
@@ -1674,9 +1879,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(enrichment ? { enrichment } : {})
     };
 
-    if (walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
-    if (enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
+    if (input.dryRun && walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
+    if (input.dryRun && enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
     if (input.dryRun) {
+      writeRedactedJson(
+        join(evidenceDir, "review-event-decision.json"),
+        buildReviewEventDecisionEvidence(dryRunReviewEventResolution!, true)
+      );
       writeDryRunOutcomeLedgerEvidence({
         evidenceDir,
         repo,
@@ -1697,28 +1906,45 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
             }
       });
     }
-    writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
+    if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     if (input.dryRun) {
       // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
       // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
-      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
-      return commandReviewRequested ? "reviewed_command" : "reviewed";
+      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event: plan.event });
+      return manualReviewRequested ? "reviewed_command" : "reviewed";
     }
 
     // Atomic per-head claim (#295): acquired here — after every eligibility/stale check and after the
     // dry-run branch, immediately before posting — so exactly one of a racing manual-review-pr and
     // daemon posts a review on this head. The loser records a structured skip and no-ops.
-    headClaim = state.tryClaimReviewHead({
+    const headClaimAttempt = state.tryClaimReviewHeadWithOutcome({
       repo,
       pullNumber: pull.number,
       headSha: pull.head.sha,
-      claimTtlMs: config.reviewConcurrency.leaseTtlMs
+      claimTtlMs: config.reviewConcurrency.leaseTtlMs,
+      // retry_failed_head is admitted only after the earlier processed-status validation; it must
+      // be able to replace that failed/deferred row after a successful provider retry.
+      allowProcessedOwnerSupersession: commandReviewRequested ||
+        (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
+        input.processedHeadPolicy === "retry_failed_head"
     });
-    if (!headClaim) {
-      recordConcurrentClaimSkip({ state, repo, pull, evidenceDir });
+    if (headClaimAttempt.status === "blocked") {
+      if (headClaimAttempt.reason === "active_claim") {
+        recordConcurrentClaimSkip({ state, repo, pull, evidenceDir });
+      } else {
+        await reconcileProcessedHeadAfterDirectReviewSafely({
+          config,
+          github,
+          state,
+          repo,
+          pull,
+          dryRun: input.dryRun
+        });
+      }
       return "skipped_processed";
     }
+    headClaim = headClaimAttempt.claim;
 
     const liveBeforePost = await github.getPull(repo, pull.number);
     const staleBeforePost = detectStalePullHead({ expected: pull, live: liveBeforePost, phase: "before_post" });
@@ -1727,7 +1953,148 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_stale_head";
     }
 
+    const authorization = await lookupQueuedReviewEventAuthorization({
+      mode: reviewEventPolicyMode,
+      github,
+      repo,
+      pull,
+      commandCommentId: input.commandCommentId,
+      commandConfig: config.commands
+    });
+    if (reviewEventPolicyMode === "trusted_command_only" && queuedOwnerRequestChanges) {
+      const concurrentConsumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
+      if (concurrentConsumption) {
+        const triggerCommentId = input.commandCommentId ??
+          (commandDecision.action === "request-changes" ? commandDecision.commandId : concurrentConsumption.commentId);
+        if (hasDurableAuthorizedReviewOutcome(concurrentConsumption)) {
+          await reconcileProcessedHeadAfterDirectReviewSafely({
+            config,
+            github,
+            state,
+            repo,
+            pull,
+            dryRun: input.dryRun
+          });
+          return "skipped_processed";
+        }
+        const incidentRecorded = recordConsumedAuthorizationIncident({
+          state,
+          repo,
+          pull,
+          triggerCommentId
+        });
+        if (!incidentRecorded) {
+          await reconcileProcessedHeadAfterDirectReviewSafely({
+            config,
+            github,
+            state,
+            repo,
+            pull,
+            dryRun: input.dryRun
+          });
+          return "skipped_processed";
+        }
+        writeRedactedJson(join(evidenceDir, "consumed-authorization-incident.json"), {
+          reason: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          commentId: triggerCommentId,
+          consumedAt: concurrentConsumption.consumedAt
+        });
+        return "skipped_consumed_authorization";
+      }
+    }
+    exactOwnerReviewRequested = exactOwnerReviewRequested || authorization.status === "eligible";
+    manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
+    if (reviewEventPolicyMode === "trusted_command_only") {
+      const liveBeforeConsume = await github.getPull(repo, pull.number);
+      const staleBeforeConsume = detectStalePullHead({ expected: pull, live: liveBeforeConsume, phase: "before_post" });
+      if (staleBeforeConsume) {
+        recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeConsume, evidenceDir });
+        return "skipped_stale_head";
+      }
+    }
+    const reviewEventResolution = decideAndConsumeReviewEvent({
+      mode: reviewEventPolicyMode,
+      candidateEvent,
+      authorization,
+      state,
+      repo,
+      pull,
+      dryRun: false
+    });
+    const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
+    if (
+      reviewEventResolution.consumed &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      writeRedactedJson(join(evidenceDir, "review-event-decision.json"), reviewEventDecisionEvidence);
+      return "skipped_stale_head";
+    }
+    writeRedactedJson(
+      join(evidenceDir, "review-event-decision.json"),
+      reviewEventDecisionEvidence
+    );
+    plan.event = reviewEventResolution.decision.selectedEvent;
+    const priorPostedBeforePublicPost = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    if (
+      reviewEventResolution.consumed &&
+      plan.event === "COMMENT" &&
+      priorPostedBeforePublicPost?.status === "posted" &&
+      priorPostedBeforePublicPost.event === "COMMENT"
+    ) {
+      if (reviewEventResolution.authorization.status !== "eligible") {
+        throw new Error("consumed owner authorization was not eligible for terminal no-op resolution");
+      }
+      const recorded = state.recordAuthorizedReviewNoop({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: reviewEventResolution.authorization.commentId,
+        author: reviewEventResolution.authorization.author,
+        reason: "candidate_comment_already_posted"
+      });
+      writeRedactedJson(join(evidenceDir, "authorized-review-noop.json"), {
+        reason: "candidate_comment_already_posted",
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: reviewEventResolution.authorization.commentId,
+        priorReviewUrl: priorPostedBeforePublicPost.reviewUrl,
+        recorded
+      });
+      await reconcileProcessedHeadAfterDirectReviewSafely({
+        config,
+        github,
+        state,
+        repo,
+        pull,
+        dryRun: input.dryRun
+      });
+      return "skipped_processed";
+    }
+    if (config.walkthrough.enabled) {
+      plan.walkthrough = buildWalkthroughComment({
+        repo,
+        pull,
+        files: reviewFiles,
+        comments,
+        dropped,
+        event: plan.event,
+        validation,
+        proof,
+        settingsPreview,
+        provider: buildReviewProviderMetadata(config),
+        postIssueComment: config.walkthrough.postIssueComment,
+        publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+      });
+    }
+    if (plan.walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), plan.walkthrough.body);
+    if (plan.enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), plan.enrichment.body);
+
     const reviewGithub = new GitHubApi(config.github);
+    const walkthroughPostAttempted = Boolean(plan.walkthrough?.postIssueComment && reviewGithub.canPostAsApp());
     plan.walkthroughComment = await postWalkthroughComment({
       github: reviewGithub,
       repo,
@@ -1735,6 +2102,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       evidenceDir,
       walkthrough: plan.walkthrough
     });
+    if (
+      walkthroughPostAttempted &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      return "skipped_stale_head";
+    }
+    const enrichmentPostAttempted = Boolean(
+      config.enrichment?.enabled === true && plan.enrichment?.postIssueComment && reviewGithub.canPostAsApp()
+    );
     plan.enrichmentComment = await postEnrichmentComment({
       enabled: config.enrichment?.enabled === true,
       dryRun: input.dryRun,
@@ -1744,28 +2120,124 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       enrichment: plan.enrichment,
       evidenceDir
     });
+    if (
+      enrichmentPostAttempted &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      return "skipped_stale_head";
+    }
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
+    if (await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })) {
+      return "skipped_stale_head";
+    }
+    const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    const preservedPriorBlockingRow = Boolean(
+      priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT"
+    );
+    const preservedPriorVerifiedBlockingRow = preservedPriorBlockingRow && !priorPosted?.error;
     const review = await reviewGithub.createReview({
       repo,
       pullNumber: pull.number,
-      event,
+      headSha: pull.head.sha,
+      event: plan.event,
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
-    state.recordProcessed({
-      repo,
-      pullNumber: pull.number,
-      headSha: pull.head.sha,
-      status: "posted",
-      event,
+    if (reviewEventResolution.consumed) {
+      if (
+        reviewEventResolution.authorization.status !== "eligible" ||
+        !review.html_url
+      ) {
+        throw new Error("consumed owner authorization did not produce a durable review receipt");
+      }
+      state.recordAuthorizedReviewPosted({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: reviewEventResolution.authorization.commentId,
+        author: reviewEventResolution.authorization.author,
+        event: plan.event,
+        reviewUrl: review.html_url,
+        preserveExistingBlocking: preservedPriorBlockingRow
+      });
+    } else if (!preservedPriorBlockingRow) {
+      state.recordProcessed({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        status: "posted",
+        event: plan.event,
+        reviewUrl: review.html_url
+      });
+    }
+    writeRedactedJsonBestEffort(join(evidenceDir, "posted-review.json"), {
+      event: plan.event,
+      reviewId: review.id,
       reviewUrl: review.html_url
     });
     // Public-safe findings ledger (#357): record the coordinates we just posted publicly so the
     // daemon calibration-observe pass can re-derive outcome labels later. BEST-EFFORT / FAIL-OPEN —
     // the review is already durable; observation bookkeeping must never block or fail the review.
     recordPostedReviewFindings({ state, repo, pull, comments });
+    let headChangedDuringPost = false;
+    let postReviewHeadLookupFailed = false;
+    try {
+      const liveAfterPost = await github.getPull(repo, pull.number);
+      headChangedDuringPost = liveAfterPost.head.sha !== pull.head.sha;
+      if (headChangedDuringPost) {
+        writeRedactedJsonBestEffort(join(evidenceDir, "head-changed-during-post.json"), {
+          reason: "head_changed_during_post",
+          repo,
+          pullNumber: pull.number,
+          expectedHeadSha: pull.head.sha,
+          liveHeadSha: liveAfterPost.head.sha,
+          reviewId: review.id
+        });
+      }
+    } catch (error) {
+      postReviewHeadLookupFailed = true;
+      writeRedactedJsonBestEffort(join(evidenceDir, "post-review-head-lookup-failed.json"), {
+        reason: "post_review_head_lookup_failed",
+        repo,
+        pullNumber: pull.number,
+        expectedHeadSha: pull.head.sha,
+        reviewId: review.id,
+        error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 300)
+      });
+    }
+    if ((headChangedDuringPost || postReviewHeadLookupFailed) && !preservedPriorVerifiedBlockingRow) {
+      const durablePosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
+      if (durablePosted?.status === "posted") {
+        const uncertaintyReason = headChangedDuringPost
+          ? REVIEW_POSTED_HEAD_CHANGED_ERROR
+          : POST_REVIEW_HEAD_UNVERIFIED_ERROR;
+        state.recordProcessed({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          ...(durablePosted.event ? { event: durablePosted.event } : {}),
+          ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
+          error: uncertaintyReason
+        });
+        state.recordReviewReadiness({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          state: headChangedDuringPost ? "stale" : "failed",
+          reason: uncertaintyReason,
+          ...(durablePosted.event ? { event: durablePosted.event } : {}),
+          ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
+          ...(input.commandCommentId
+            ? { commandAction: "request-changes" as const, commandCommentId: input.commandCommentId }
+            : {})
+        });
+      }
+    }
     releaseReviewCapacity();
-    if (input.processedHeadPolicy !== "retry_failed_head") {
+    if (headChangedDuringPost) return "posted_stale_head";
+    if (postReviewHeadLookupFailed) return "posted_head_unverified";
+    if (!headChangedDuringPost && !postReviewHeadLookupFailed && input.processedHeadPolicy !== "retry_failed_head") {
       await reconcileProcessedHeadAfterDirectReviewSafely({
         config,
         github,
@@ -1775,10 +2247,28 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         dryRun: input.dryRun
       });
     }
-    return commandReviewRequested ? "reviewed_command" : "reviewed";
+    return manualReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
     releaseReviewCapacity();
   }
+}
+
+async function resolveReviewDiscoveryAdmission(
+  config: BotConfig,
+  provided?: ProductionLicenseAdmission
+): Promise<ProductionLicenseAdmission> {
+  if (provided) {
+    if (!isAuthenticProductionLicenseAdmission(provided, "review_discovery")) {
+      throw new Error("production review-discovery admission is required");
+    }
+    return provided;
+  }
+  const result = await requireActiveProductionLicense({
+    operation: "review_discovery",
+    config: config.license!
+  });
+  if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
+  return result.admission;
 }
 
 async function reconcileProcessedHeadAfterDirectReviewSafely(input: {
@@ -2189,10 +2679,42 @@ function buildEvidenceDir(
   config: BotConfig,
   repo: string,
   pull: PullRequestSummary,
-  commandDecision: CommandDecision
+  commandDecision: CommandDecision,
+  commandCommentId?: number
 ): string {
   const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
-  return commandDecision.action !== "none" ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+  const scopedCommentId = commandDecision.action !== "none" ? commandDecision.commandId : commandCommentId;
+  return scopedCommentId ? join(evidenceBaseDir, `command-${scopedCommentId}`) : evidenceBaseDir;
+}
+
+function recordLicenseAdmissionBlock(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  decision: RedactedLicenseDecision;
+}): void {
+  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
+  mkdirSync(evidenceDir, { recursive: true });
+  writeRedactedJson(join(evidenceDir, "license-gate.json"), {
+    schemaVersion: 1,
+    ok: false,
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    status: input.decision.status,
+    checkedAt: input.decision.checkedAt,
+    ...(input.decision.classification ? { classification: input.decision.classification } : {}),
+    detail: input.decision.detail,
+    redacted: true
+  });
+  input.state.recordReviewReadiness({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    state: "blocked_on_proof",
+    reason: input.decision.detail
+  });
 }
 
 function isExistingPullWorktreeClean(config: BotConfig, repo: string, pull: PullRequestSummary): boolean {
@@ -2533,6 +3055,7 @@ function recordStaleHeadSkip(input: {
 }): void {
   mkdirSync(input.evidenceDir, { recursive: true });
   writeRedactedJson(join(input.evidenceDir, "stale-head.json"), input.stale);
+  if (input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha)?.status === "posted") return;
   input.state.recordProcessed({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -2540,6 +3063,20 @@ function recordStaleHeadSkip(input: {
     status: "skipped",
     error: `${input.stale.reason}: live=${input.stale.liveHeadSha}`
   });
+}
+
+async function recordStaleHeadBeforePostIfMoved(input: {
+  state: ReviewStateStore;
+  github: GitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+  evidenceDir: string;
+}): Promise<boolean> {
+  const live = await input.github.getPull(input.repo, input.pull.number);
+  const stale = detectStalePullHead({ expected: input.pull, live, phase: "before_post" });
+  if (!stale) return false;
+  recordStaleHeadSkip({ ...input, stale });
+  return true;
 }
 
 /**
@@ -2591,8 +3128,9 @@ export function recordConcurrentClaimSkip(input: {
   evidenceDir: string;
 }): void {
   // The other claimant owns this head (#295). Do NOT recordProcessed here: that would `insert or
-  // replace` the winner's row AND retire the winner's live claim. Record a skipped readiness note
-  // (separate table) plus an evidence file, matching the existing skip-evidence idiom, and log it.
+  // replace` the winner's row AND retire the winner's live claim. Do not write readiness either:
+  // the loser cannot distinguish an active winner from a winner that has just made terminal
+  // REQUEST_CHANGES/needs_fix truth durable. The winning claimant exclusively owns readiness.
   const evidence = {
     reason: "concurrent_review_claim_held",
     repo: input.repo,
@@ -2605,13 +3143,6 @@ export function recordConcurrentClaimSkip(input: {
   // network-data-to-evidence-file pattern itself is the evidence-packet design, triaged as a
   // class under #249).
   writeRedactedJson(join(input.evidenceDir, "concurrent-claim-skip.json"), evidence);
-  input.state.recordReviewReadiness({
-    repo: input.repo,
-    pullNumber: input.pull.number,
-    headSha: input.pull.head.sha,
-    state: "skipped",
-    reason: "concurrent_review_claim_held"
-  });
   console.warn(
     `[head-claim] concurrent claim held repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha}: skipping duplicate same-head review`
   );
@@ -2806,20 +3337,20 @@ function providerCooldownJitterMs(
   return Math.floor(Math.random() * (max + 1));
 }
 
-function applySelfConsistencyRecheck(input: {
+async function applySelfConsistencyRecheck(input: {
   config: BotConfig;
   gate: DeterministicReviewGateResult;
   files: PullFilePatch[];
   worktreePath: string;
   evidenceDir: string;
-}): { comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string } {
+}): Promise<{ comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string }> {
   const selfConsistencyConfig = input.config.reviewGate?.selfConsistency;
   if (!selfConsistencyConfig?.enabled) {
     return { comments: input.gate.comments, event: input.gate.event };
   }
 
   const providerId = selfConsistencyConfig.provider ?? input.config.zcode.providerId;
-  const result = runSelfConsistencyRecheck({
+  const result = await runSelfConsistencyRecheck({
     comments: input.gate.comments,
     files: input.files,
     config: selfConsistencyConfig,
@@ -2829,8 +3360,8 @@ function applySelfConsistencyRecheck(input: {
     ...(input.config.reviewGate?.categoryPrecisionFloors
       ? { categoryPrecisionFloors: input.config.reviewGate.categoryPrecisionFloors }
       : {}),
-    secondDraw: ({ comment, hunk }) => {
-      const draw = runZCodeReview({
+    secondDraw: async ({ comment, hunk }) => {
+      const draw = await runZCodeReview({
         cwd: input.worktreePath,
         prompt: buildSelfConsistencyPrompt(comment, hunk),
         cliPath: input.config.zcode.cliPath,
@@ -3311,6 +3842,128 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled retry status: ${String(value)}`);
 }
 
+interface ReviewEventResolution {
+  decision: ReviewEventDecision;
+  authorization: ReviewEventAuthorizationAttempt;
+  consumed: boolean;
+}
+
+async function resolveReviewEventDecision(input: {
+  mode: ReviewEventPolicyMode;
+  candidateEvent: ReviewEvent;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  commandCommentId?: number;
+  commandConfig: BotConfig["commands"];
+  dryRun: boolean;
+}): Promise<ReviewEventResolution> {
+  const authorization = await lookupQueuedReviewEventAuthorization({
+    mode: input.mode,
+    github: input.github,
+    repo: input.repo,
+    pull: input.pull,
+    commandCommentId: input.commandCommentId,
+    commandConfig: input.commandConfig
+  });
+  return decideAndConsumeReviewEvent({ ...input, authorization });
+}
+
+async function lookupQueuedReviewEventAuthorization(input: {
+  mode: ReviewEventPolicyMode;
+  github: GitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+  commandCommentId?: number;
+  commandConfig: BotConfig["commands"];
+}): Promise<ReviewEventAuthorizationAttempt> {
+  if (input.mode === "automatic") return { status: "missing" };
+  if (!input.commandCommentId) return { status: "missing" };
+
+  try {
+    const comment = await input.github.getIssueComment(input.repo, input.commandCommentId);
+    if (comment.id !== input.commandCommentId) {
+      return { status: "lookup_failed", commentId: input.commandCommentId };
+    }
+    const selected = collectReviewEventAuthorizationAttempts([comment], input.commandConfig, {
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha
+    }).selected;
+    return selected.status === "missing"
+      ? { status: "missing", commentId: input.commandCommentId }
+      : selected;
+  } catch {
+    return { status: "lookup_failed", commentId: input.commandCommentId };
+  }
+}
+
+function decideAndConsumeReviewEvent(input: {
+  mode: ReviewEventPolicyMode;
+  candidateEvent: ReviewEvent;
+  authorization: ReviewEventAuthorizationAttempt;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+}): ReviewEventResolution {
+  let authorization = input.authorization;
+  let consumed = false;
+  if (input.mode === "trusted_command_only" && !input.dryRun && authorization.status === "eligible") {
+    try {
+      consumed = input.state.tryConsumeReviewEventAuthorization({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        commentId: authorization.commentId,
+        author: authorization.author
+      });
+      if (!consumed) {
+        authorization = {
+          status: "consumed",
+          author: authorization.author,
+          commentId: authorization.commentId
+        };
+      }
+    } catch {
+      authorization = {
+        status: "state_error",
+        author: authorization.author,
+        commentId: authorization.commentId
+      };
+    }
+  }
+
+  return {
+    decision: decideReviewEventPolicy({
+      mode: input.mode,
+      candidateEvent: input.candidateEvent,
+      headSha: input.pull.head.sha,
+      authorization
+    }),
+    authorization,
+    consumed
+  };
+}
+
+function buildReviewEventDecisionEvidence(resolution: ReviewEventResolution, dryRun: boolean): Record<string, unknown> {
+  const { decision, authorization } = resolution;
+  const author = decision.author ?? authorization.author;
+  const commentId = decision.commentId ?? authorization.commentId;
+  return {
+    candidateEvent: decision.candidateEvent,
+    selectedEvent: decision.selectedEvent,
+    mode: decision.mode,
+    reason: decision.reason,
+    headSha: decision.headSha,
+    ...(author ? { author } : {}),
+    ...(commentId ? { commentId } : {}),
+    consumed: resolution.consumed,
+    dryRun
+  };
+}
+
 async function resolvePullCommandDecision(input: {
   config: BotConfig;
   github: GitHubApi;
@@ -3416,6 +4069,14 @@ function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"], publicConfidenc
 
 function writeRedactedJson(path: string, value: unknown): void {
   writeSecureFileSync(path, `${redactSecrets(JSON.stringify(value, null, 2))}\n`);
+}
+
+function writeRedactedJsonBestEffort(path: string, value: unknown): void {
+  try {
+    writeRedactedJson(path, value);
+  } catch {
+    // A successful remote review POST is already durable. Optional local evidence must never make it retryable.
+  }
 }
 
 function writeRedactedText(path: string, value: string): void {

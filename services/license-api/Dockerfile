@@ -3,13 +3,12 @@
 # NeonDiff license-api (#327) — deploy image.
 #
 # Build context MUST be the monorepo root (not this directory), because the
-# service has zero runtime dependencies of its own and its `tsc` build tool
-# comes from the root devDependency (see ../../package.json). Build with:
+# service keeps its runtime dependencies in its own locked package while its
+# `tsc` build tool is also available from the root devDependency. Build with:
 #   docker build -f services/license-api/Dockerfile -t neondiff-license .
 # from the repo root.
 #
-# Runtime is Node stdlib only (node:http, node:sqlite, node:fs, node:path) —
-# no npm dependencies are installed in the final image.
+# Runtime dependencies are installed from services/license-api/package-lock.json.
 
 ARG NODE_VERSION=26-slim
 ARG LITESTREAM_VERSION=0.5.14
@@ -42,8 +41,9 @@ WORKDIR /repo
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# Service source (package.json/tsconfig.json only needed for `tsc -p`).
-COPY services/license-api/package.json services/license-api/tsconfig.json services/license-api/
+# Service dependency lock and source.
+COPY services/license-api/package.json services/license-api/package-lock.json services/license-api/tsconfig.json services/license-api/
+RUN npm ci --prefix services/license-api --ignore-scripts
 COPY services/license-api/src services/license-api/src
 
 # Compile via the service's own build script, using the root-installed
@@ -55,10 +55,11 @@ FROM node:${NODE_VERSION} AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Compiled output only — no node_modules, no source, no devDependencies.
+# Compiled output plus production-only service dependencies; no source or devDependencies.
 COPY --from=build /repo/services/license-api/dist ./dist
 COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
-COPY services/license-api/package.json ./package.json
+COPY services/license-api/package.json services/license-api/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY services/license-api/litestream.yml /etc/litestream.yml
 COPY services/license-api/docker-entrypoint.sh /usr/local/bin/license-api-entrypoint
 

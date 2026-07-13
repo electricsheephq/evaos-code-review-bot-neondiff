@@ -44,7 +44,7 @@ struct NeonDiffDesktopApp: App {
         }
         let initialModel = context.map(DesktopEvaluationModelAdapter.makeModel(context:))
             ?? NeonDiffDesktopCompositionRoot.makeModel()
-        let initialUpdateController = NeonUpdateController(startsUpdater: context == nil)
+        let initialUpdateController = NeonUpdateController()
 #else
         let initialModel = NeonDiffDesktopCompositionRoot.makeModel()
         let initialUpdateController = NeonUpdateController()

@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import { LicenseStore } from "./store.js";
 import {
   issueCheckoutLicense,
@@ -16,13 +18,38 @@ import {
   type LicenseRequest,
   type ServiceResult
 } from "./service.js";
+import {
+  issueLifecycleLicense,
+  LifecycleRequestError,
+  parseLifecycleIssuanceRequest,
+  type LifecycleOidcVerifier
+} from "./oidc-lifecycle.js";
+import {
+  parseSubscriptionLifecycleRequest,
+  LifecycleRequestError as SubscriptionLifecycleRequestError
+} from "./subscription-lifecycle.js";
+import {
+  SubscriptionLifecycleConflictError,
+  SubscriptionLifecycleNotFoundError,
+  SubscriptionLifecyclePolicyError,
+  SubscriptionLifecycleTerminalError,
+  SubscriptionLifecycleTransientError,
+  SubscriptionLifecycleUnsupportedCommandError
+} from "./store.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
+
+class RequestBodyTooLargeError extends Error {}
 
 export interface LicenseHttpOptions {
   store: LicenseStore;
   rateLimiter?: RateLimiter;
+  lifecycleRateLimiter?: RateLimiter;
+  subscriptionLifecycleRateLimiter?: RateLimiter;
   issuanceSecret?: string;
+  lifecycleOidcVerifier?: LifecycleOidcVerifier;
+  /** Honor Fly's client-address header only when the listener runs behind Fly's trusted proxy. */
+  trustFlyProxyHeaders?: boolean;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;
 }
@@ -44,6 +71,11 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
   const now = options.now ?? (() => new Date());
   const rateLimiter =
     options.rateLimiter ?? new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
+  const lifecycleRateLimiter =
+    options.lifecycleRateLimiter ?? new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
+  const subscriptionLifecycleRateLimiter =
+    options.subscriptionLifecycleRateLimiter ??
+    new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method === "GET" && req.url === "/healthz") {
@@ -52,6 +84,22 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
     const path = req.url?.split("?")[0];
     if (req.method === "POST" && path === "/v1/admin/licenses/issue") {
       return handleIssuanceRequest(options, req, res);
+    }
+    if (req.method === "POST" && path === "/v1/admin/licenses/issue-lifecycle") {
+      const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
+      const lifecycleRateLimitKey = createHash("sha256").update(`lifecycle:${sourceAddress}`).digest("hex");
+      if (!lifecycleRateLimiter.allow(lifecycleRateLimitKey, now().getTime())) {
+        return writeJson(res, 429, { status: "rate_limited", detail: "too many lifecycle issuance requests" });
+      }
+      return handleLifecycleIssuanceRequest(options, req, res);
+    }
+    if (req.method === "POST" && path === "/v1/admin/licenses/lifecycle") {
+      return handleSubscriptionLifecycleRequest(
+        options,
+        subscriptionLifecycleRateLimiter,
+        req,
+        res
+      );
     }
 
     const route = path ? ROUTES[path] : undefined;
@@ -67,7 +115,8 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
     }
 
     // Per-key sliding window; the hot validate path is what the client polls.
-    if (!rateLimiter.allow(parsed.licenseKey, Date.now())) {
+    const rateLimitKey = createHash("sha256").update(parsed.licenseKey).digest("hex");
+    if (!rateLimiter.allow(rateLimitKey, Date.now())) {
       return writeResult(res, rateLimitedResult());
     }
 
@@ -78,6 +127,117 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       return writeJson(res, 500, { status: "server", detail: "internal error" });
     }
   };
+}
+
+async function handleSubscriptionLifecycleRequest(
+  options: LicenseHttpOptions,
+  rateLimiter: RateLimiter,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!options.issuanceSecret) {
+    return writeJson(res, 503, { status: "unavailable" });
+  }
+  if (!validateBearerSecret(req.headers.authorization, options.issuanceSecret)) {
+    return writeJson(res, 401, { status: "unauthorized" });
+  }
+
+  const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
+  const rateLimitKey = createHash("sha256")
+    .update(`subscription-lifecycle:${sourceAddress}`)
+    .digest("hex");
+  const requestTime = (options.now ?? (() => new Date()))();
+  if (!rateLimiter.allow(rateLimitKey, requestTime.getTime())) {
+    return writeJson(
+      res,
+      429,
+      { status: "rate_limited" },
+      { "Retry-After": "60" }
+    );
+  }
+
+  try {
+    const request = parseSubscriptionLifecycleRequest(await readBody(req), requestTime);
+    return writeJson(
+      res,
+      200,
+      options.store.applyCheckoutSubscriptionLifecycle(request)
+    );
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return writeJson(res, 413, { status: "invalid" });
+    }
+    if (
+      error instanceof SubscriptionLifecycleRequestError ||
+      error instanceof SubscriptionLifecyclePolicyError ||
+      error instanceof SubscriptionLifecycleUnsupportedCommandError
+    ) {
+      return writeJson(res, 400, { status: "invalid" });
+    }
+    if (error instanceof SubscriptionLifecycleNotFoundError) {
+      return writeJson(res, 404, { status: "not_found" });
+    }
+    if (error instanceof SubscriptionLifecycleConflictError) {
+      return writeJson(res, 409, { status: "conflict" });
+    }
+    if (error instanceof SubscriptionLifecycleTerminalError) {
+      return writeJson(res, 409, { status: "terminally_revoked" });
+    }
+    if (error instanceof SubscriptionLifecycleTransientError) {
+      return writeJson(res, 503, { status: "unavailable" });
+    }
+    return writeJson(res, 500, { status: "server" });
+  }
+}
+
+function resolveClientAddress(req: IncomingMessage, trustFlyProxyHeaders: boolean): string {
+  const forwardedAddress = req.headers["fly-client-ip"];
+  if (
+    trustFlyProxyHeaders &&
+    typeof forwardedAddress === "string" &&
+    isIP(forwardedAddress)
+  ) {
+    return forwardedAddress;
+  }
+  return req.socket.remoteAddress ?? "unknown";
+}
+
+async function handleLifecycleIssuanceRequest(
+  options: LicenseHttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!options.issuanceSecret || !options.lifecycleOidcVerifier) {
+    return writeJson(res, 503, { status: "server", detail: "lifecycle issuance is not configured" });
+  }
+  const authorization = Array.isArray(req.headers.authorization)
+    ? req.headers.authorization[0]
+    : req.headers.authorization;
+  if (!authorization?.startsWith("Bearer ") || authorization.length === "Bearer ".length) {
+    return writeJson(res, 401, { status: "unauthorized", detail: "lifecycle issuance authorization failed" });
+  }
+  try {
+    const claims = await options.lifecycleOidcVerifier.verify(authorization.slice("Bearer ".length));
+    const request = parseLifecycleIssuanceRequest(await readBody(req));
+    return writeResult(
+      res,
+      issueLifecycleLicense({
+        store: options.store,
+        request,
+        claims,
+        issuanceSecret: options.issuanceSecret,
+        now: (options.now ?? (() => new Date()))()
+      })
+    );
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return writeResult(res, malformedIssuanceResult(error.message), 413);
+    }
+    if (error instanceof LifecycleRequestError) {
+      return writeResult(res, malformedIssuanceResult(error.message));
+    }
+    return writeJson(res, 401, { status: "unauthorized", detail: "lifecycle issuance authorization failed" });
+  }
 }
 
 async function handleIssuanceRequest(
@@ -94,7 +254,14 @@ async function handleIssuanceRequest(
 
   try {
     const parsed = parseIssuanceRequest(await readBody(req));
-    return writeResult(res, issueCheckoutLicense(options.store, parsed, options.issuanceSecret));
+    return writeResult(
+      res,
+      issueCheckoutLicense(
+        options.store,
+        parsed,
+        options.issuanceSecret
+      )
+    );
   } catch (error) {
     return writeResult(
       res,
@@ -130,18 +297,25 @@ function parseRequest(raw: string): LicenseRequest {
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let tooLarge = false;
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
+      if (tooLarge) return;
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new Error("request body too large"));
-        req.destroy();
+        tooLarge = true;
+        chunks.length = 0;
+        reject(new RequestBodyTooLargeError("request body too large"));
         return;
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    req.on("end", () => {
+      if (!tooLarge) resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (error) => {
+      if (!tooLarge) reject(error);
+    });
   });
 }
 
@@ -149,8 +323,13 @@ function writeResult(res: ServerResponse, result: ServiceResult, overrideStatus?
   writeJson(res, overrideStatus ?? result.httpStatus, result.body);
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
+function writeJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {}
+): void {
   const payload = JSON.stringify(body);
-  res.writeHead(status, { "Content-Type": "application/json" });
+  res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(payload);
 }

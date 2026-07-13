@@ -1,8 +1,91 @@
-import { describe, expect, it } from "vitest";
-import { runDaemonCycle } from "../src/daemon.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  runDaemonCycle as runDaemonCycleImpl,
+  shouldExitDaemonAfterFailedCycle,
+  type RunDaemonCycleOptions
+} from "../src/daemon.js";
 import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
+import type { ProductionLicenseAdmission } from "../src/license-admission.js";
+
+const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
+  ...input,
+  admitDaemonCycleImpl: input.admitDaemonCycleImpl ?? (async () => undefined)
+});
 
 describe("daemon cycle resilience", () => {
+  it("exits on activation denial but keeps long-running daemons alive after recoverable runtime failures", () => {
+    const admissionDenied = { ok: false, failureKind: "admission_denied", error: "license missing" } as const;
+    const runtimeFailure = { ok: false, failureKind: "runtime_failure", error: "transient timeout" } as const;
+
+    expect(shouldExitDaemonAfterFailedCycle(admissionDenied, false)).toBe(true);
+    expect(shouldExitDaemonAfterFailedCycle(runtimeFailure, false)).toBe(false);
+    expect(shouldExitDaemonAfterFailedCycle(runtimeFailure, true)).toBe(true);
+  });
+
+  it("threads one cycle validation bundle into review, retry, and enrichment work", async () => {
+    const daemonCycle = { operation: "daemon_cycle" } as ProductionLicenseAdmission;
+    const reviewDiscovery = { operation: "review_discovery" } as ProductionLicenseAdmission;
+    const issueEnrichment = { operation: "issue_enrichment" } as ProductionLicenseAdmission;
+    const seen: unknown[] = [];
+
+    const result = await runDaemonCycleImpl({
+      cycle: 1,
+      dryRun: true,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      issueEnrichmentEnabled: true,
+      admitDaemonCycleImpl: async () => ({ daemonCycle, reviewDiscovery, issueEnrichment }),
+      runOnceImpl: async (options) => {
+        seen.push(options.licenseAdmission);
+        return successfulRunOnceResult();
+      },
+      retryProviderCooldownsImpl: async (options) => {
+        seen.push(options.licenseAdmission);
+        return successfulRetryResult();
+      },
+      issueEnrichmentCycleImpl: async (options) => {
+        seen.push(options.licenseAdmission);
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: () => undefined,
+      stderr: () => undefined
+    });
+
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual([issueEnrichment, reviewDiscovery, reviewDiscovery]);
+  });
+
+  it("denies a cycle before heartbeat, review, retry, or enrichment work", async () => {
+    const calls = { heartbeat: 0, review: 0, retry: 0, enrichment: 0 };
+    const stderr: string[] = [];
+    const result = await runDaemonCycleImpl({
+      cycle: 1,
+      dryRun: false,
+      pilotRepos: ["electricsheephq/WorldOS"],
+      monitoredRepos: ["electricsheephq/WorldOS"],
+      canaryPulls: [],
+      commandsEnabled: false,
+      issueEnrichmentEnabled: true,
+      admitDaemonCycleImpl: async () => { throw new Error("license missing: no license key is stored"); },
+      recordHeartbeatImpl: () => { calls.heartbeat += 1; },
+      runOnceImpl: async () => { calls.review += 1; throw new Error("must not run"); },
+      retryProviderCooldownsImpl: async () => { calls.retry += 1; throw new Error("must not run"); },
+      issueEnrichmentCycleImpl: async () => { calls.enrichment += 1; throw new Error("must not run"); },
+      stdout: () => undefined,
+      stderr: (line) => stderr.push(line)
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      failureKind: "admission_denied",
+      error: "license missing: no license key is stored"
+    });
+    expect(calls).toEqual({ heartbeat: 0, review: 0, retry: 0, enrichment: 0 });
+    expect(stderr).toHaveLength(1);
+  });
   it("logs runtime cycle failures without throwing out of the daemon loop", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -24,6 +107,7 @@ describe("daemon cycle resilience", () => {
     });
 
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ failureKind: "runtime_failure" });
     expect(stdout).toHaveLength(1);
     expect(JSON.parse(stdout[0]!)).toMatchObject({
       event: "daemon_cycle_start",
@@ -238,6 +322,7 @@ describe("daemon cycle resilience", () => {
     });
 
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ failureKind: "runtime_failure" });
     expect(heartbeats).toEqual([
       { event: "daemon_cycle_start" },
       { event: "daemon_cycle_failed", error: "second timeout" }
@@ -272,6 +357,7 @@ describe("daemon cycle resilience", () => {
     expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
       expect.objectContaining({
         event: "daemon_issue_enrichment",
+        phase: "complete",
         cycle: 9,
         result: expect.objectContaining({
           summary: expect.objectContaining({
@@ -281,6 +367,95 @@ describe("daemon cycle resilience", () => {
         })
       })
     ]));
+  });
+
+  it("starts issue enrichment while the review batch is still unresolved", async () => {
+    const stdout: string[] = [];
+    let releaseReview!: () => void;
+    const reviewBarrier = new Promise<void>((resolve) => { releaseReview = resolve; });
+    let issueStarted = false;
+
+    const cycle = runDaemonCycle({
+      cycle: 11,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => {
+        await reviewBarrier;
+        return successfulRunOnceResult();
+      },
+      issueEnrichmentCycleImpl: async () => {
+        issueStarted = true;
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    let overlapError: unknown;
+    try {
+      await vi.waitFor(() => expect(issueStarted).toBe(true), { timeout: 100 });
+    } catch (error) {
+      overlapError = error;
+    } finally {
+      releaseReview();
+    }
+    const result = await cycle;
+    if (overlapError) throw overlapError;
+
+    expect(result.ok).toBe(true);
+    expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "daemon_issue_enrichment_start", cycle: 11 }),
+      expect.objectContaining({ event: "daemon_issue_enrichment", phase: "complete", cycle: 11 })
+    ]));
+  });
+
+  it("waits for issue-lane cleanup before returning a review failure", async () => {
+    let releaseIssue!: () => void;
+    const issueBarrier = new Promise<void>((resolve) => { releaseIssue = resolve; });
+    let issueStarted = false;
+    let cycleSettled = false;
+
+    const cycle = runDaemonCycle({
+      cycle: 12,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => { throw new Error("review batch failed"); },
+      issueEnrichmentCycleImpl: async () => {
+        issueStarted = true;
+        await issueBarrier;
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: () => undefined,
+      stderr: () => undefined
+    });
+    void cycle.then(() => { cycleSettled = true; });
+
+    let startError: unknown;
+    try {
+      await vi.waitFor(() => expect(issueStarted).toBe(true), { timeout: 100 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(cycleSettled).toBe(false);
+    } catch (error) {
+      startError = error;
+    } finally {
+      releaseIssue();
+    }
+    const result = await cycle;
+    if (startError) throw startError;
+
+    expect(result).toMatchObject({ ok: false, failureKind: "runtime_failure", error: "review batch failed" });
   });
 
   it("keeps the daemon cycle healthy when issue enrichment fails", async () => {
@@ -338,6 +513,30 @@ function successfulRunOnceResult() {
     skippedStaleHead: 0,
     baselinedExisting: 0,
     policySkips: []
+  };
+}
+
+function successfulRetryResult() {
+  return {
+    ok: true as const,
+    checkedAt: "2026-07-01T00:00:00.000Z",
+    dryRun: true,
+    expiredOnly: true,
+    limit: 1,
+    candidates: 0,
+    attempted: 0,
+    results: [],
+    summary: {
+      reviewed: 0,
+      dryRun: 0,
+      remainedCooldown: 0,
+      failed: 0,
+      skippedStaleHead: 0,
+      skippedProcessed: 0,
+      skippedClosed: 0,
+      skippedCapacity: 0,
+      other: 0
+    }
   };
 }
 

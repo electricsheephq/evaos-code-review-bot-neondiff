@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFindings } from "./findings.js";
@@ -81,20 +81,20 @@ export interface ZCodeReviewFixtureAdapterOptions {
     evidenceDir?: string;
     timeoutMs?: number;
     retryMaxRetries?: number;
-  }) => ZCodeReviewResult;
+  }) => ZCodeReviewResult | Promise<ZCodeReviewResult>;
 }
 
 /**
- * Fixture-only wrapper for same-prompt adapter proof. Live review execution
- * continues to call runZCodeReview directly until a separate runtime adapter
- * proves async behavior, transport evidence, and selection policy.
+ * Fixture wrapper for same-prompt adapter proof. Live review execution calls
+ * the same asynchronous runZCodeReview transport directly; fixture injections
+ * may remain synchronous for deterministic adapter tests.
  */
 export function createZCodeReviewFixtureAdapter(options: ZCodeReviewFixtureAdapterOptions): ProviderRuntimeAdapter {
   return {
     id: "zcode",
     async execute(input) {
       const runReview = options.runReview ?? runZCodeReview;
-      const result = runReview({
+      const result = await runReview({
         cwd: options.cwd,
         prompt: input.prompt,
         cliPath: options.cliPath,
@@ -256,7 +256,7 @@ function quoteAdvisoryMarkdown(markdown: string): string {
   return trimmed.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
 }
 
-export function runZCodeReview(input: {
+export async function runZCodeReview(input: {
   cwd: string;
   prompt: string;
   cliPath: string;
@@ -266,7 +266,7 @@ export function runZCodeReview(input: {
   evidenceDir?: string;
   timeoutMs?: number;
   retryMaxRetries?: number;
-}): ZCodeReviewResult {
+}): Promise<ZCodeReviewResult> {
   const zcodeEnv = resolveZCodeProviderEnv({
     appConfigPath: input.appConfigPath,
     model: input.model,
@@ -280,8 +280,8 @@ export function runZCodeReview(input: {
   let lastParseError: unknown;
 
   for (let attempt = 1; attempt <= prompts.length; attempt += 1) {
-    const result = withTemporaryZCodeReviewPolicy(input.cwd, input.evidenceDir, () =>
-      spawnSync(process.execPath, [
+    const result = await withTemporaryZCodeReviewPolicy(input.cwd, input.evidenceDir, () =>
+      runZCodeProcess(process.execPath, [
         input.cliPath,
         "--cwd",
         input.cwd,
@@ -297,7 +297,6 @@ export function runZCodeReview(input: {
           providerEnv: zcodeEnv,
           retryMaxRetries: input.retryMaxRetries ?? 0
         }),
-        encoding: "utf8",
         maxBuffer: 20 * 1024 * 1024,
         timeout: input.timeoutMs ?? 180_000
       })
@@ -313,15 +312,15 @@ export function runZCodeReview(input: {
       writeSecureFileSync(join(input.evidenceDir, "zcode-last-stderr.txt"), stderr);
     }
 
+    if (result.error) {
+      throw enrichZCodeProcessError({
+        error: new Error(`ZCode failed before completion: ${result.error.message}`),
+        originalError: result.error,
+        signal: result.signal,
+        status: result.status
+      });
+    }
     if (result.status !== 0) {
-      if (result.error) {
-        throw enrichZCodeProcessError({
-          error: new Error(`ZCode failed before completion: ${result.error.message}`),
-          originalError: result.error,
-          signal: result.signal,
-          status: result.status
-        });
-      }
       throw new Error(`ZCode failed with status ${result.status}: ${stderr || stdout.slice(0, 1000)}`);
     }
 
@@ -371,9 +370,7 @@ export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: stri
     writeFileAtomic(join(evidenceDir, "zcode-review-policy.json"), `${JSON.stringify(policy, null, 2)}\n`, 0o600);
   }
 
-  try {
-    return run();
-  } finally {
+  const restore = () => {
     if (originalConfig) {
       mkdirSync(configDir, { recursive: true });
       writeFileAtomic(configPath, originalConfig.contents, originalConfig.mode);
@@ -387,7 +384,104 @@ export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: stri
         }
       }
     }
+  };
+
+  try {
+    const result = run();
+    if (isPromiseLike(result)) {
+      return result.finally(restore) as T;
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
   }
+}
+
+function isPromiseLike<T>(value: T): value is T & PromiseLike<unknown> & { finally(onFinally: () => void): unknown } {
+  return typeof value === "object" && value !== null && "then" in value && typeof value.then === "function" &&
+    "finally" in value && typeof value.finally === "function";
+}
+
+interface ZCodeProcessOptions {
+  env: NodeJS.ProcessEnv;
+  maxBuffer: number;
+  timeout: number;
+}
+
+interface ZCodeProcessResult {
+  stdout: string;
+  stderr: string;
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error?: Error & { code?: string };
+}
+
+function runZCodeProcess(command: string, args: string[], options: ZCodeProcessOptions): Promise<ZCodeProcessResult> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let spawnError: (Error & { code?: string }) | undefined;
+    let terminalError: (Error & { code?: string }) | undefined;
+    let closed = false;
+    let killTimer: NodeJS.Timeout | undefined;
+
+    const terminate = () => {
+      if (closed) return;
+      child.kill("SIGTERM");
+      killTimer ??= setTimeout(() => {
+        if (!closed) child.kill("SIGKILL");
+      }, 250);
+      killTimer.unref();
+    };
+
+    const timeout = setTimeout(() => {
+      const error = new Error(`spawn ${command} ETIMEDOUT`) as Error & { code?: string };
+      error.code = "ETIMEDOUT";
+      terminalError = error;
+      terminate();
+    }, options.timeout);
+    timeout.unref();
+
+    const capture = (target: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
+      if (terminalError) return;
+      if (stream === "stdout") stdoutBytes += chunk.length;
+      else stderrBytes += chunk.length;
+      if (stdoutBytes > options.maxBuffer || stderrBytes > options.maxBuffer) {
+        const error = new Error(`spawn ${command} ENOBUFS`) as Error & { code?: string };
+        error.code = "ENOBUFS";
+        terminalError = error;
+        terminate();
+        return;
+      }
+      target.push(chunk);
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk, "stdout"));
+    child.stderr.on("data", (chunk: Buffer) => capture(stderr, chunk, "stderr"));
+    child.on("error", (error: Error & { code?: string }) => {
+      spawnError = error;
+    });
+    child.on("close", (status, signal) => {
+      closed = true;
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      resolve({
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        status,
+        signal,
+        ...((terminalError ?? spawnError) ? { error: terminalError ?? spawnError } : {})
+      });
+    });
+  });
 }
 
 function writeFileAtomic(path: string, contents: string, mode: number): void {

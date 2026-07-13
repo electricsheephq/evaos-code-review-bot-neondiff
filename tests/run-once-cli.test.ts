@@ -4,9 +4,32 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parsePositiveInteger } from "../src/cli-args.js";
 import { buildRunOnceCliReport, runOnceCliCommand, runOnceCliExitCode, serializeRunOnceCliReport } from "../src/run-once-cli.js";
-import { assertExpectedReviewPrHead, type RunOnceResult } from "../src/worker.js";
+import { applyReviewPullResultToRunOnceResult, assertExpectedReviewPrHead, type ReviewPullResult, type RunOnceResult } from "../src/worker.js";
+import type { ProductionLicenseAdmission } from "../src/license-admission.js";
 
 describe("run-once CLI reporting", () => {
+  it("runs CLI-boundary admission once and forwards the exact token into review work", async () => {
+    const admission = { operation: "review_discovery" } as ProductionLicenseAdmission;
+    let admitCalls = 0;
+    let forwarded: ProductionLicenseAdmission | undefined;
+
+    const command = await runOnceCliCommand({
+      options: { dryRun: true, repo: "owner/repo" },
+      admitImpl: async () => {
+        admitCalls += 1;
+        return admission;
+      },
+      runOnceImpl: async (options) => {
+        forwarded = options.licenseAdmission;
+        return runOnceResult({ reposScanned: 1 });
+      }
+    });
+
+    expect(command.exitCode).toBe(0);
+    expect(admitCalls).toBe(1);
+    expect(forwarded).toBe(admission);
+  });
+
   it("prints invocation metadata with the structured runOnce result", () => {
     const result = runOnceResult({
       reposScanned: 1,
@@ -111,6 +134,17 @@ describe("run-once CLI reporting", () => {
       }
     });
     expect(runOnceCliExitCode(result)).toBe(1);
+  });
+
+  it.each([
+    ["posted_stale_head", 0, true],
+    ["posted_head_unverified", 1, false],
+    ["skipped_consumed_authorization", 1, false]
+  ] as const)("reports legacy run-once status %s exhaustively", (status, exitCode, ok) => {
+    const result = runOnceResult();
+    applyReviewPullResultToRunOnceResult(result, status as ReviewPullResult);
+    expect(buildRunOnceCliReport({ result, dryRun: false, useZCode: true })).toMatchObject({ ok, result });
+    expect(runOnceCliExitCode(result)).toBe(exitCode);
   });
 
   it("keeps broad-scan license gate skips ok so intentional proof blocks do not fail the sweep", () => {

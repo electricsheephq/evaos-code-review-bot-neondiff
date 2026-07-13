@@ -22,7 +22,7 @@ struct LegacyCoreChecksScenarioInventory: Sendable {
 }
 
 let legacyCoreChecksScenarioInventory: [LegacyCoreChecksScenario: LegacyCoreChecksScenarioInventory] = [
-    .onboardingFlowContracts: .init(assertionCount: 10, sortedMessageSHA256: "2f06c0bf60cb5ba0326c7ff260454831985fe8528fed73600b35bc3b80764513"),
+    .onboardingFlowContracts: .init(assertionCount: 10, sortedMessageSHA256: "fa52ef66cfc15da0fc622891de083cb4f8c6989b75cda294aa0dce7965ffed11"),
     .cliResolutionAndStandardInputContracts: .init(assertionCount: 5, sortedMessageSHA256: "3d313d66cf17ecdf294b1235dc1f34401b74f52d33ad7d78ed4fb3d783ce1a86"),
     .cliCancellationContracts: .init(assertionCount: 10, sortedMessageSHA256: "4d93d68b30b32e326aad8d2f93dacf515d346cc3fb373a1a9061f829f3c0c0ad"),
     .cliStandardInputTimeoutContracts: .init(assertionCount: 14, sortedMessageSHA256: "a979b18020324519db8eb863c445a7bd2ca9d3a61f7f8e6a447a3742527864d4"),
@@ -65,7 +65,7 @@ final class LegacyCoreChecksAggregate: @unchecked Sendable {
         }
         #expect(messages.count == 389)
         #expect(Set(messages).count == 295)
-        #expect(coreChecksSHA256(messages.sorted()) == "e459d3956cea8d9b839bf7cb86e0f81325d9dc714b6eea09b5177cba48fd91e0")
+        #expect(coreChecksSHA256(messages.sorted()) == "72e1d514eeaca9cc913d0f9318274572466e599e88acec0af35db6cc9ccb3a85")
     }
 }
 

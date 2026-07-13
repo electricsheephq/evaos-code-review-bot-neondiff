@@ -12,7 +12,14 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
 - Keep provider credentials out of committed repo config.
 - Keep issue enrichment separate from PR review policy.
 - Keep public confidence uncalibrated until evaluation evidence exists; no percentages are displayed in this draft.
-- Preserve the current NeonDiff public boundary: source-available beta, public open-source repositories are free, and private or commercial repositories require the applicable NeonDiff license.
+- Preserve the current NeonDiff public boundary: source-available beta with
+  mandatory API-backed activation for public, private, internal, and unknown
+  repository work.
+
+The v1.0.4 package-allowlisted schema retains the compatibility label
+`free-source-available-beta` so the published tarball remains reproducible. That
+label does not authorize free review or bypass production activation. [#559](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559)
+tracks the typed rename in the next immutable package.
 
 ## Top-Level Fields
 
@@ -205,6 +212,7 @@ comments, and decides `REQUEST_CHANGES` vs `COMMENT` (`src/review-gate.ts`, `src
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `maxInlineComments` | `integer` | `25` | Hard cap on inline comments posted per review. Findings are sorted severity-first, then by `confidence` descending (ties broken by path, line, title), so when the cap trims the list it always keeps the highest-confidence findings within each severity tier. |
+| `reviewEventPolicy.mode` | `"trusted_command_only" \| "automatic"` | `"trusted_command_only"` | Selects the public GitHub review event. The safe default requires a trusted exact-repo/PR/current-head command before a candidate `REQUEST_CHANGES` can be posted. `automatic` is explicit legacy compatibility only. |
 | `requestChangesConfidenceFloors` | `{ P0?: number, P1?: number }` | unset (no floors) | Optional per-severity confidence floor, each `0..1`, for counting a P0/P1 finding toward `REQUEST_CHANGES` eligibility. |
 | `retryDegradedConfidencePenalty` | `number` (`0..1`) | unset (no penalty) | Optional confidence subtracted (floored at 0) from findings recovered via the strict-JSON retry path (#304) before the gate runs. |
 | `selfConsistency` | `SelfConsistencyConfig` | unset (disabled) | Opt-in second-draw re-check for high-severity findings (#303). See below. |
@@ -216,6 +224,37 @@ comments, and decides `REQUEST_CHANGES` vs `COMMENT` (`src/review-gate.ts`, `src
 - **`requestChangesConfidenceFloors` is quieter-only and unknown keys are rejected.** The object accepts only the literal keys `P0` and `P1` — any other key (including lowercase `p0`, or a typo) throws a config validation error rather than being silently ignored. A configured floor can only *demote* a finding out of `REQUEST_CHANGES` eligibility; a below-floor P0/P1 still posts as an inline comment, it just no longer forces the stricter review event. Leaving both floors unset is byte-identical to the pre-#287 gate.
 - **`retryDegradedConfidencePenalty` is quieter-only and default-off.** It only ever lowers a degraded finding's confidence (floored at 0), which can only remove it from ranking/cap contention or push it below a `requestChangesConfidenceFloors` floor — never raise confidence or add a finding. Unset means retry-recovered findings are scored identically to clean first-pass findings.
 - **`categoryPrecisionFloors` is quieter-only and unknown categories are rejected.** Keys must be valid regression-taxonomy categories — anything else throws a config validation error. A floor can only demote a finding out of `REQUEST_CHANGES` eligibility (the finding still posts); a floor of `0` never demotes. Nothing reads the calibration aggregate at review time — the config file remains the single inspectable source of gate behavior.
+- **Upgrades fail safe.** Omitting `reviewGate.reviewEventPolicy` or its parent config resolves to `trusted_command_only`. Existing installations retain automatic review-event behavior only by explicitly setting `reviewGate.reviewEventPolicy.mode` to `automatic`; that mode is legacy compatibility, not the recommended operating posture.
+
+#### `reviewEventPolicy`
+
+With `mode: "trusted_command_only"`, a deterministic candidate `REQUEST_CHANGES` becomes a public
+`REQUEST_CHANGES` review only after this exact one-line PR comment from an explicit login in
+`commands.trustedAuthors`:
+
+```text
+@neondiff request-changes --repo owner/name --pr 123 --head <40-character-current-head-sha>
+```
+
+The configured bot mention must match, and the repository, positive PR number, and 40-character
+head SHA must match the live review target exactly. The command queues one manual review attempt and
+is one-shot for that exact `{repo, pull request, head SHA}`. A second command for an already consumed
+head may queue analysis, but it cannot grant another `REQUEST_CHANGES`; a new head requires a new
+exact command. Ordinary `review` and `re-review` commands queue advisory analysis only and never
+grant, inherit, or erase `REQUEST_CHANGES` authority. A wildcard `"*"` trusted-author entry never
+authorizes this event.
+
+Authorization is consumed after the final pre-post current-head check and before the GitHub review
+POST, including when the candidate event has already become `COMMENT`. Consumption is not rolled
+back after a timeout, 5xx response, or other post failure. Missing, malformed, untrusted,
+wildcard-only, wrong-repo, wrong-PR, stale-head, duplicate, already-consumed, comment-read-failed,
+or local-state-failed authorization all select advisory `COMMENT`; findings are retained.
+
+Every review POST includes the expected head as GitHub `commit_id`. That binds the review to the
+named commit, but it is not by itself proof that the head stayed current: NeonDiff also reads the PR
+immediately before posting and again after posting. A head change during the POST is recorded as
+`head_changed_during_post` and is not claimed as current-head proof. Settings-preview evidence shows
+the configured mode only; it does not claim that a current authorization exists.
 
 #### `selfConsistency`
 

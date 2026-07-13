@@ -1,5 +1,4 @@
 export type NeonDiffPricingPlanId =
-  | "free_oss"
   | "monthly_support"
   | "yearly_support"
   | "org_yearly_support"
@@ -15,37 +14,22 @@ export interface NeonDiffPricingPlan {
   name: string;
   priceUsd: number;
   displayPrice: string;
-  cadence: "public open-source repositories" | "month" | "year" | "legacy";
+  cadence: "month" | "year" | "legacy";
   summary: string;
   requiresPaidLicense: boolean;
   repoVisibilityScope: "public" | "private";
   commercialUse: boolean;
   autoUpdates: boolean;
   providerCreditsIncluded: false;
-  buyerSegment: "public" | "individual" | "organization" | "legacy";
+  buyerSegment: "individual" | "organization" | "legacy";
   availableForNewPurchase: boolean;
   trialDays?: 7 | 30;
   checkoutLookupKey?: NeonDiffActiveCheckoutLookupKey;
-  entitlementPlan?: Exclude<NeonDiffPricingPlanId, "free_oss">;
+  entitlementPlan?: NeonDiffPricingPlanId;
   legacyNote?: string;
 }
 
 export const NEONDIFF_PRICING_PLANS: readonly NeonDiffPricingPlan[] = [
-  {
-    id: "free_oss",
-    name: "Free OSS",
-    priceUsd: 0,
-    displayPrice: "$0",
-    cadence: "public open-source repositories",
-    summary: "Free local review for public open-source projects.",
-    requiresPaidLicense: false,
-    repoVisibilityScope: "public",
-    commercialUse: false,
-    autoUpdates: false,
-    providerCreditsIncluded: false,
-    buyerSegment: "public",
-    availableForNewPurchase: true
-  },
   {
     id: "monthly_support",
     name: "Individual Monthly",
@@ -127,8 +111,10 @@ export function buildPricingOutput() {
     currency: "USD",
     billingModel: "local-first support tiers",
     sourceAvailableBeta: true,
-    publicOpenSourceReposFree: true,
+    publicOpenSourceReposFree: false,
+    activationRequiredForSupportedReview: true,
     paidTierIncludes: [
+      "public repo review",
       "private repo review",
       "commercial usage",
       "auto-updates"
@@ -140,12 +126,6 @@ export function buildPricingOutput() {
     },
     plans: NEONDIFF_PRICING_PLANS,
     entitlementShape: {
-      freeOss: {
-        repoVisibilityScope: "public",
-        requiresPaidLicense: false,
-        commercialUse: false,
-        autoUpdates: false
-      },
       paidSupport: {
         repoVisibilityScope: "private",
         requiresPaidLicense: true,

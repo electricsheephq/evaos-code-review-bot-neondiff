@@ -122,11 +122,26 @@ describe("confidence calibration config", () => {
 });
 
 describe("review gate config", () => {
-  it("defaults review gate to the built-in inline comment cap without confidence floors", () => {
+  it("defaults review gate to the built-in inline comment cap and trusted-command-only event policy", () => {
     const config = loadConfigFromObject({});
 
-    expect(config.reviewGate).toMatchObject({ maxInlineComments: 25 });
+    expect(config.reviewGate).toMatchObject({
+      maxInlineComments: 25,
+      reviewEventPolicy: { mode: "trusted_command_only" }
+    });
     expect(config.reviewGate?.requestChangesConfidenceFloors).toBeUndefined();
+  });
+
+  it("accepts explicit automatic compatibility mode and rejects malformed review event policies", () => {
+    expect(loadConfigFromObject({ reviewGate: { reviewEventPolicy: { mode: "automatic" } } }).reviewGate?.reviewEventPolicy).toEqual({
+      mode: "automatic"
+    });
+    expect(() => loadConfigFromObject({ reviewGate: { reviewEventPolicy: { mode: "always_request_changes" } } })).toThrow(
+      /reviewGate\.reviewEventPolicy\.mode must be one of automatic or trusted_command_only/
+    );
+    expect(() => loadConfigFromObject({ reviewGate: { reviewEventPolicy: { mode: "automatic", extra: true } } })).toThrow(
+      /reviewGate\.reviewEventPolicy has unknown key "extra"; expected only mode/
+    );
   });
 
   it("accepts an explicit inline comment cap and per-severity confidence floors", () => {

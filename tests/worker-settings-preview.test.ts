@@ -6,6 +6,7 @@ import type { BotConfig } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
@@ -20,7 +21,15 @@ vi.mock("../src/git.js", async (importOriginal) => {
   };
 });
 
-const { buildReviewProviderMetadata, localDateFolder, reviewPull } = await import("../src/worker.js");
+const { buildReviewProviderMetadata, localDateFolder, reviewPull: reviewPullImpl } = await import("../src/worker.js");
+const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
+  ...input,
+  pull: {
+    ...input.pull,
+    base: { ...input.pull.base, repo: { ...input.pull.base.repo, private: false, visibility: "public" } }
+  },
+  licenseAdmission: input.licenseAdmission ?? testLicenseAdmission
+});
 
 describe("worker review settings preview evidence", () => {
   const roots: string[] = [];
@@ -79,6 +88,10 @@ describe("worker review settings preview evidence", () => {
       enabled: true,
       mode: "inline_review"
     });
+    expect(preview.reviewGate).toEqual({
+      reviewEventPolicy: { mode: "trusted_command_only" }
+    });
+    expect(preview).not.toHaveProperty("reviewEventAuthorization");
     expect(walkthrough).toContain("### Review Settings Preview");
     expect(walkthrough).toContain("Provider: GLM/Z.ai through ZCode (`zcode-glm`, zcode, model `GLM-5.2`).");
     expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");

@@ -10,9 +10,12 @@
     "maxActiveRuns": 5,
     "leaseTtlMs": 900000
   },
-  "_reviewGateComment": "Deterministic post-model gate: ranking, comment cap, and REQUEST_CHANGES eligibility. maxInlineComments matches the built-in default; the rest are default-off/quieter-only knobs. See docs/neondiff-config.md.",
+  "_reviewGateComment": "Deterministic post-model gate plus public review-event selection. trusted_command_only is the safe default; automatic is explicit legacy compatibility only. See docs/neondiff-config.md.",
   "reviewGate": {
     "maxInlineComments": 25,
+    "reviewEventPolicy": {
+      "mode": "trusted_command_only"
+    },
     "_requestChangesConfidenceFloorsComment": "Optional per-severity confidence floor for REQUEST_CHANGES eligibility (only P0/P1 keys allowed). Quieter-only: a below-floor finding still posts as a comment. Uncomment to enable.",
     "_retryDegradedConfidencePenaltyComment": "Optional 0..1 confidence penalty applied to findings recovered via the strict-JSON retry path. Quieter-only; unset means no penalty.",
     "selfConsistency": {
@@ -102,18 +105,19 @@
     }
   },
   "license": {
-    "_enabledComment": "Enable this for public/private license enforcement. Public repos may remain free; private repos fail closed without active entitlement.",
-    "enabled": false,
-    "_apiBaseUrlComment": "Set apiBaseUrl when enabling license enforcement.",
+    "_enabledComment": "The supported distribution requires live activation for every repository visibility; this value cannot disable enforcement.",
+    "enabled": true,
+    "_apiBaseUrlComment": "The supported distribution pins the canonical production license API.",
+    "apiBaseUrl": "https://neondiff-license.fly.dev",
     "_cachePathComment": "Defaults to a license/entitlement-cache.json file next to statePath when omitted.",
     "_keyPathComment": "For the beta file backend, keyPath defaults to license/license-key.txt next to statePath when omitted. The file is written with 0600 permissions.",
     "storageBackend": "file",
-    "keychainService": "com.electricsheephq.neondiff.license",
-    "keychainAccount": "default",
+    "keychainService": "com.electricsheephq.NeonDiffDesktop.secrets",
+    "keychainAccount": "license/default",
     "requestTimeoutMs": 10000,
-    "_offlineGraceMsComment": "Private-repo entitlement cache grace is capped at 15 minutes to limit revoked-license exposure during API outages.",
-    "offlineGraceMs": 900000,
-    "publicReposFree": true,
+    "_offlineGraceMsComment": "v1.0.4 grants no offline cache authority; setup and diagnostics remain available during outages.",
+    "offlineGraceMs": 0,
+    "publicReposFree": false,
     "privateReposRequireEntitlement": true,
     "updateEntitlementRequiresLicense": true
   },

@@ -15,7 +15,8 @@ enum VisualProofDesktopDependencies {
             fileWriter: VisualProofFileWriter(),
             providerVerifier: VisualProofProviderVerifier(),
             secretStore: VisualProofSecretStore(),
-            githubAuthenticator: VisualProofGitHubAuthenticator()
+            githubAuthenticator: VisualProofGitHubAuthenticator(),
+            productionBoundary: .quarantined
         )
     }
 }

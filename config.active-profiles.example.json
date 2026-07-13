@@ -42,6 +42,9 @@
   },
   "reviewGate": {
     "maxInlineComments": 25,
+    "reviewEventPolicy": {
+      "mode": "trusted_command_only"
+    },
     "selfConsistency": {
       "enabled": false,
       "severities": [

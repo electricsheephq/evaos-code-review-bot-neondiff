@@ -1,0 +1,319 @@
+{
+  "evidenceKind": "mandatory_activation_no_bypass",
+  "releaseVersion": "v1.0.4",
+  "observedAt": "2026-07-12T08:04:11.399Z",
+  "harness": {
+    "name": "neondiff-license-lifecycle-smoke",
+    "version": 1,
+    "sourceHead": "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+    "runId": "4c246a4cb724779c1e311fb7942c2046fc76df12afb6280e5c2c9ccbe0955a2a"
+  },
+  "installedCandidate": {
+    "packageVersion": "1.0.4",
+    "binaryVersion": "1.0.4",
+    "sourceHead": "42db7c8ff7dba6ceac813238dcebfb54dc83851f",
+    "packShasum": "526c04bd24673351b9cc7136d8747df00ffaa2be",
+    "packIntegrity": "sha512-ng6g4Ivn+eFzZWkxhDAOsvaimYQi8HWktnK9xTptNLg37EK/LRh2Xr5Y+sAYnX6Sqa1YBVd3iUZBMtQLQbYvcw==",
+    "installSource": "npm_pack_tarball"
+  },
+  "productionLifecycle": {
+    "apiBaseUrl": "https://neondiff-license.fly.dev",
+    "licenseFingerprint": "sha256:99b11e3b6ca66f416d8e0f8dec13ff026b811ba50abe91c7abb3b41cf81ebf33",
+    "steps": [
+      {
+        "id": "issue",
+        "outcome": "succeeded",
+        "statusCode": 200,
+        "apiBaseUrl": "https://neondiff-license.fly.dev",
+        "redactedResponse": {
+          "status": "issued"
+        },
+        "responseSha256": "db39729fbf39606818951fdd7f204be24a9e978e5d8eae13210b81d1ada858b8"
+      },
+      {
+        "id": "activate",
+        "outcome": "succeeded",
+        "statusCode": 200,
+        "apiBaseUrl": "https://neondiff-license.fly.dev",
+        "redactedResponse": {
+          "status": "active",
+          "source": "api"
+        },
+        "responseSha256": "e5b310ba6a63039dcfddf7b3790efcec023fd50c478b6a80efb7cb2821f61ff3"
+      },
+      {
+        "id": "validate_active",
+        "outcome": "succeeded",
+        "statusCode": 200,
+        "apiBaseUrl": "https://neondiff-license.fly.dev",
+        "redactedResponse": {
+          "status": "active",
+          "source": "api"
+        },
+        "responseSha256": "e5b310ba6a63039dcfddf7b3790efcec023fd50c478b6a80efb7cb2821f61ff3"
+      },
+      {
+        "id": "deactivate",
+        "outcome": "succeeded",
+        "statusCode": 200,
+        "apiBaseUrl": "https://neondiff-license.fly.dev",
+        "redactedResponse": {
+          "status": "deactivated"
+        },
+        "responseSha256": "61e8e39cc6ca2e8ad1e9d9c55fb64e7cbd2aec7ee2aa7195202679de79052f11"
+      },
+      {
+        "id": "validate_denied",
+        "outcome": "denied",
+        "statusCode": 409,
+        "apiBaseUrl": "https://neondiff-license.fly.dev",
+        "redactedResponse": {
+          "status": "scope_mismatch"
+        },
+        "responseSha256": "1f5bbf0030b90422c0722d0105bb6944f7fe9d1b058d68e5392b9a319853f693"
+      }
+    ]
+  },
+  "matrix": {
+    "bypassAllowedCases": 0,
+    "scenarios": [
+      {
+        "id": "public_active",
+        "visibility": "public",
+        "expected": "allowed",
+        "actual": "allowed",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "e86241864d32daef1b7b37ec2584bf11578298357d4705270dc2bf18f37547cf"
+      },
+      {
+        "id": "private_active",
+        "visibility": "private",
+        "expected": "allowed",
+        "actual": "allowed",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "d4135f25438afd68f799279856720570b79bc7a3007dd5c884c668b545a5c9c7"
+      },
+      {
+        "id": "unknown_repo",
+        "visibility": "unknown",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "2283019bf11f1bd809497bd4d994ce3b9e5524a5f1e98a1ac95e218073fe21b8"
+      },
+      {
+        "id": "public_denied",
+        "visibility": "public",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "a7c894e15f2301a64ddf1014076a555d1766a454538aa437ff62495afe046076"
+      },
+      {
+        "id": "private_denied",
+        "visibility": "private",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "7ec3ccccae0ef0bb775262b4882c623fbe0e678d1e78fb8a450efdf73ec03dc7"
+      },
+      {
+        "id": "missing_key",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 0,
+        "licenseApiCalls": 0,
+        "resultSha256": "97af2d992c8a29ace5bfe83944e6f1b7d2311740ecd497d40983dc433b0129d2"
+      },
+      {
+        "id": "missing_api_url",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "2fbe1182402aad54a12535d8906c0b6a2b4eaa20383f24a0db4a1bfbdbe83857"
+      },
+      {
+        "id": "offline",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "b98f9f8a54acbb037898968bb627956a437bedd15729b1c3c2587f1cfaac8bc1"
+      },
+      {
+        "id": "timeout",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "d885c417ccb53275530d7911ff2de893dc40250d46ae872d906c266fc52e59ad"
+      },
+      {
+        "id": "forged_cache",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 0,
+        "licenseApiCalls": 0,
+        "resultSha256": "944509eaf2da99710b138e291f5ab507d349487352050401e234c20022352484"
+      },
+      {
+        "id": "mismatched_cache",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "3d145e07aee6cd380a63dd1282e26f638aa8264010a1cf32e5ae945b6aef7e7f"
+      },
+      {
+        "id": "disabled_policy_attempt",
+        "visibility": "public",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 0,
+        "licenseApiCalls": 0,
+        "resultSha256": "639c6b77e5e83d7e6cf6b8872eb4fe7cf74024091925c646a312f66887fa3141"
+      },
+      {
+        "id": "fake_api",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "cfb7c014262fb941b22a3c1cde4e436fb48359a39c661598594f514e38a567b1"
+      },
+      {
+        "id": "rate_limited",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "98a5da4b8aa6a37e425ca80bdf639c7c7ec6cde7a94ab2a1079c7972652f4a57"
+      },
+      {
+        "id": "server_error",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "635e5daa00ef20106540b508210fde30ce3bab56daa5d28f010154f04e322f22"
+      },
+      {
+        "id": "malformed_response",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "f04f1e9b4a181a7fc8fc8a9ff44ec323001ed394b0d195a3f9f787ea66c76e5f"
+      },
+      {
+        "id": "revoked",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "738c4d042db7a3a9b69bf6baef657fd6323d47757c8c4acd74480f33a8975b03"
+      },
+      {
+        "id": "expired",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 1,
+        "licenseApiCalls": 1,
+        "resultSha256": "ecd373de277dcffc9c72d31f022a90d42c737f1a940b3153e21f3b35edd7c6ea"
+      },
+      {
+        "id": "dashboard_provider_pre_activation",
+        "visibility": "not_applicable",
+        "expected": "denied",
+        "actual": "denied",
+        "expectedLicenseApiCalls": 0,
+        "licenseApiCalls": 0,
+        "resultSha256": "b66b4c0fc91860bb4d0460d605f698d1cb4278b6ab0ce5e8d0d0953cfef3678d"
+      }
+    ]
+  },
+  "usefulWorkBoundaries": {
+    "reportPassed": true,
+    "totalTests": 197,
+    "requiredPassingTests": [
+      "providers verify license admission denies before provider-key stdin or provider network",
+      "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
+      "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
+      "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
+      "local HTML dashboard serves HTML status but blocks provider verification before activation"
+    ],
+    "resultSha256": "ed0575e9d58dabc0b2fa1f319fc1757f442fe6eb4a8f3f3f67c8252a1ab3259c"
+  },
+  "installUpgrade": {
+    "freshInstallPassed": true,
+    "upgradedFromVersion": "1.0.3",
+    "upgradePassed": true,
+    "resultSha256": "f12ab8b63fe0eaf412422d0837c78a3b6cf39ca17c10bd7f1b0d1123a7325108"
+  },
+  "dashboard": {
+    "setupBlockedBeforeActivation": true,
+    "providerBlockedBeforeActivation": true,
+    "activatedStatusVisible": true,
+    "resultSha256": "88db5f8b5e3797b3a1080bf3107f9517ff7677b0888ab6a3f3c641bb5f5b9e83"
+  },
+  "desktop": {
+    "brokerUnavailable": true,
+    "usefulWorkBlocked": true,
+    "resultSha256": "d3804db15e08bbf0e19920a86c6ded27fc105b56cc8a8308d7e906d33dae1fd2"
+  },
+  "redaction": {
+    "rawLicenseKeyAbsent": true,
+    "bearerTokenAbsent": true,
+    "privatePathsAbsent": true
+  },
+  "artifacts": [
+    {
+      "kind": "production-lifecycle",
+      "ref": "docs/evidence/v1.0.4/production-lifecycle-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
+      "sha256": "50220952428583c46db1b15c38a7705e24f2c7d1cc1b4f2f1a6fdb70388610bf"
+    },
+    {
+      "kind": "no-bypass-matrix",
+      "ref": "docs/evidence/v1.0.4/no-bypass-matrix-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
+      "sha256": "f9ca2b2548cb3624d26544ce0d8a20c09a43bff7c016651ae03f58f8623de91c"
+    },
+    {
+      "kind": "useful-work-boundaries",
+      "ref": "docs/evidence/v1.0.4/useful-work-boundaries-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
+      "sha256": "cdc2147ff6706c451a0e90880dbf246526c0cd654e78135214c67cbf8b62311a"
+    },
+    {
+      "kind": "dashboard",
+      "ref": "docs/evidence/v1.0.4/dashboard-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
+      "sha256": "a75d98cd4c3b70ddb91b2065ba92ff4271c49c97eea5d649a8bce07289f70cf6"
+    },
+    {
+      "kind": "desktop",
+      "ref": "docs/evidence/v1.0.4/desktop-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
+      "sha256": "ace63ad733837d89d6c6914c1c54cb397a4f3c7d13a58eb3abb7ef0f86d13fdb"
+    },
+    {
+      "kind": "install-upgrade",
+      "ref": "docs/evidence/v1.0.4/install-upgrade-42db7c8ff7dba6ceac813238dcebfb54dc83851f.json",
+      "sha256": "84e3476bce93af1177fd6263ea9e86557c47140f0a55ea5a1468847d0cf8f020"
+    }
+  ]
+}

@@ -82,6 +82,7 @@ import NeonDiffDesktopCore
         #expect(fixture.dashboard.calls.count == 1)
         #expect(fixture.dashboard.calls[0].arguments.first == "dashboard")
         #expect(fixture.dashboard.calls[0].arguments.contains("--open"))
+        #expect(fixture.dashboard.calls[0].workingDirectory == nil)
         #expect(fixture.cli.calls.isEmpty)
         #expect(fixture.model.dashboardProcessIdentifier == 42)
     }

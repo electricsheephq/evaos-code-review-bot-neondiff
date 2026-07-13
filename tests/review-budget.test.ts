@@ -8,6 +8,7 @@ import { buildReviewBudgetStatus, ReviewRunBudget } from "../src/review-budget.j
 import { ReviewStateStore, type ReviewQueueJobRecord } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { reviewPull } from "../src/worker.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 describe("review run budget", () => {
   const roots: string[] = [];
@@ -62,6 +63,7 @@ describe("review run budget", () => {
       pull: pull(1190, "new-head"),
       dryRun: true,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget
     });
 
@@ -135,6 +137,7 @@ describe("review run budget", () => {
       waitingProviderCapacity: 0,
       waitingOrgCapacity: 0,
       waitingRepoCapacity: 0,
+      waitingHeadActive: 0,
       waitingManualReserve: 0,
       waitingLeaseLimit: 0
     });
@@ -151,6 +154,143 @@ describe("review run budget", () => {
       reservedSlotsOpen: 1,
       backgroundSlotsAvailableBeforeReserve: 0
     });
+  });
+
+  it("projects the effective global cap and preserves its manual reserve", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-global-cap-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewConcurrency: {
+        maxActiveRuns: 2,
+        leaseTtlMs: 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 3,
+        maxOrgActive: 3,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 1,
+        backgroundPriority: 50
+      }
+    };
+    const now = new Date("2026-07-01T00:00:00.000Z");
+
+    const status = buildReviewBudgetStatus({
+      config,
+      now,
+      jobs: [
+        queueJob("background-a", { repo: "org/repo-a", state: "queued", priority: 1 }),
+        queueJob("background-b", { repo: "org/repo-b", state: "queued", priority: 2 }),
+        queueJob("manual", {
+          repo: "org/repo-c",
+          state: "queued",
+          lane: "manual",
+          source: "manual_command",
+          priority: 3
+        })
+      ]
+    });
+
+    expect(status.wouldLease.map((entry) => entry.jobId)).toEqual(["background-a", "manual"]);
+    expect(status.delayed).toEqual([
+      expect.objectContaining({ jobId: "background-b", reason: "manual_reserve" })
+    ]);
+    expect(status.manualReserve.backgroundSlotsAvailableBeforeReserve).toBe(1);
+  });
+
+  it("does not reserve a slot for a later manual job on a head already selected in the batch", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-same-head-manual-reserve-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewConcurrency: {
+        maxActiveRuns: 2,
+        leaseTtlMs: 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 2,
+        maxOrgActive: 2,
+        maxRepoActive: 2,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 1,
+        backgroundPriority: 50
+      }
+    };
+    const now = new Date("2026-07-13T00:00:00.000Z");
+    const status = buildReviewBudgetStatus({
+      config,
+      now,
+      jobs: [
+        queueJob("background-same-head", {
+          repo: "owner/repo-a",
+          pullNumber: 1,
+          headSha: "same-head",
+          state: "queued",
+          priority: 1
+        }),
+        queueJob("background-other-head", {
+          repo: "owner/repo-b",
+          pullNumber: 2,
+          headSha: "other-head",
+          state: "queued",
+          priority: 2
+        }),
+        queueJob("manual-same-head", {
+          repo: "owner/repo-a",
+          pullNumber: 1,
+          headSha: "same-head",
+          state: "queued",
+          lane: "manual",
+          source: "manual_command",
+          priority: 10
+        })
+      ]
+    });
+
+    expect(status.wouldLease.map((entry) => entry.jobId)).toEqual([
+      "background-same-head",
+      "background-other-head"
+    ]);
+    expect(status.delayed).toEqual([
+      expect.objectContaining({ jobId: "manual-same-head", reason: "head_active" })
+    ]);
+  });
+
+  it("reports retryable provider-deferred work blocked by its already-active exact head", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-provider-deferred-active-head-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const now = new Date("2026-07-13T00:00:00.000Z");
+    const coordinates = {
+      repo: "owner/repo-a",
+      pullNumber: 1,
+      headSha: "same-head"
+    };
+    const status = buildReviewBudgetStatus({
+      config,
+      now,
+      jobs: [
+        queueJob("active-same-head", { ...coordinates, state: "running" }),
+        queueJob("retry-same-head", {
+          ...coordinates,
+          state: "provider_deferred",
+          nextEligibleAt: "2026-07-12T23:59:00.000Z"
+        })
+      ]
+    });
+
+    expect(status.providerDeferred).toMatchObject({
+      total: 1,
+      retryable: 1,
+      readyToRetry: 0,
+      waitingHeadActive: 1
+    });
+    expect(status.delayed).toEqual([
+      expect.objectContaining({ jobId: "retry-same-head", reason: "head_active" })
+    ]);
   });
 
   it("separates retryable provider-deferred jobs from actionable ready-to-retry jobs", () => {
@@ -361,6 +501,7 @@ describe("review run budget", () => {
       pull: pull(1190, "new-head"),
       dryRun: true,
       useZCode: false,
+      licenseAdmission: testLicenseAdmission,
       budget
     });
 
@@ -438,7 +579,8 @@ function pull(number: number, sha: string): PullRequestSummary {
       sha: "base",
       ref: "main",
       repo: {
-        full_name: "owner/repo"
+        full_name: "owner/repo",
+        private: true
       }
     },
     html_url: `https://github.test/owner/repo/pull/${number}`

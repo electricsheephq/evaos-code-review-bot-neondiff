@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,13 @@ import {
 import { ReviewStateStore } from "../src/state.js";
 import { buildReviewPrompt } from "../src/zcode.js";
 import type { PullRequestSummary } from "../src/types.js";
+
+const repoRoot = process.cwd();
+const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
+const activatedCLIEnv = {
+  ...process.env,
+  NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${join(repoRoot, "tests/helpers/mock-production-license-api.mjs")}`.trim()
+};
 
 describe("repo memory packets", () => {
   const roots: string[] = [];
@@ -644,7 +652,7 @@ describe("repo memory packets", () => {
     });
 
     const stdout = execFileSync(process.execPath, [
-      "./node_modules/.bin/tsx",
+      tsxCli,
       "src/cli.ts",
       "build-memory-packet",
       "--config",
@@ -655,7 +663,7 @@ describe("repo memory packets", () => {
       outputDir,
       "--generated-at",
       generatedAt
-    ], { cwd: process.cwd(), encoding: "utf8" });
+    ], { cwd: repoRoot, encoding: "utf8", env: activatedCLIEnv });
     const parsed = JSON.parse(stdout);
 
     expect(parsed.ok).toBe(true);
@@ -703,7 +711,7 @@ describe("repo memory packets", () => {
     });
 
     const stdout = execFileSync(process.execPath, [
-      "./node_modules/.bin/tsx",
+      tsxCli,
       "src/cli.ts",
       "build-memory-packet",
       "--config",
@@ -714,7 +722,7 @@ describe("repo memory packets", () => {
       "1",
       "--generated-at",
       generatedAt
-    ], { cwd: process.cwd(), encoding: "utf8" });
+    ], { cwd: repoRoot, encoding: "utf8", env: activatedCLIEnv });
     const parsed = JSON.parse(stdout);
 
     expect(parsed.ok).toBe(true);
@@ -742,7 +750,7 @@ describe("repo memory packets", () => {
     });
 
     const stdout = execFileSync(process.execPath, [
-      "./node_modules/.bin/tsx",
+      tsxCli,
       "src/cli.ts",
       "build-memory-packet",
       "--config",
@@ -751,7 +759,7 @@ describe("repo memory packets", () => {
       repo,
       "--generated-at",
       generatedAt
-    ], { cwd: process.cwd(), encoding: "utf8" });
+    ], { cwd: repoRoot, encoding: "utf8", env: activatedCLIEnv });
     const parsed = JSON.parse(stdout);
 
     expect(parsed.ok).toBe(true);
@@ -774,7 +782,7 @@ describe("repo memory packets", () => {
 
     expect(() =>
       execFileSync(process.execPath, [
-        "./node_modules/.bin/tsx",
+        tsxCli,
         "src/cli.ts",
         "build-memory-packet",
         "--config",
@@ -783,7 +791,7 @@ describe("repo memory packets", () => {
         repo,
         "--generated-at",
         "July 2, 2026"
-      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+      ], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", env: activatedCLIEnv })
     ).toThrow(/canonical ISO timestamp/);
   });
 
@@ -803,7 +811,7 @@ describe("repo memory packets", () => {
 
     expect(() =>
       execFileSync(process.execPath, [
-        "./node_modules/.bin/tsx",
+        tsxCli,
         "src/cli.ts",
         "build-memory-packet",
         "--config",
@@ -812,7 +820,7 @@ describe("repo memory packets", () => {
         repo,
         "--output-dir",
         evidenceDir
-      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+      ], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", env: activatedCLIEnv })
     ).toThrow(/must not be inside the repository checkout/);
   });
 
@@ -831,7 +839,7 @@ describe("repo memory packets", () => {
 
     expect(() =>
       execFileSync(process.execPath, [
-        "./node_modules/.bin/tsx",
+        tsxCli,
         "src/cli.ts",
         "build-memory-packet",
         "--config",
@@ -840,7 +848,7 @@ describe("repo memory packets", () => {
         repo,
         "--state-path",
         join(root, "other.sqlite")
-      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+      ], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", env: activatedCLIEnv })
     ).toThrow(/must match the configured statePath/);
   });
 
@@ -864,7 +872,7 @@ describe("repo memory packets", () => {
 
     expect(() =>
       execFileSync(process.execPath, [
-        "./node_modules/.bin/tsx",
+        tsxCli,
         "src/cli.ts",
         "build-memory-packet",
         "--config",
@@ -873,7 +881,7 @@ describe("repo memory packets", () => {
         repo,
         "--output-dir",
         outputDir
-      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+      ], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", env: activatedCLIEnv })
     ).toThrow(/configured evidenceDir|repository checkout/);
   });
 
@@ -898,7 +906,7 @@ describe("repo memory packets", () => {
 
     expect(() =>
       execFileSync(process.execPath, [
-        "./node_modules/.bin/tsx",
+        tsxCli,
         "src/cli.ts",
         "build-memory-packet",
         "--config",
@@ -907,15 +915,31 @@ describe("repo memory packets", () => {
         repo,
         "--output-dir",
         join(symlinkedCheckout, "memory-packet")
-      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })
+      ], { cwd: repoRoot, encoding: "utf8", stdio: "pipe", env: activatedCLIEnv })
     ).toThrow(/configured evidenceDir|repository checkout/);
   });
 
   function writeConfig(config: unknown): string {
     const root = mkdtempSync(join(tmpdir(), "repo-memory-config-"));
     roots.push(root);
+    const keyPath = join(root, "fixture-license.key");
+    writeFileSync(keyPath, `${["nd", "live", "fixturememory0123456789"].join("_")}\n`, { mode: 0o600 });
     const path = join(root, "config.json");
-    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+    writeFileSync(path, `${JSON.stringify({
+      ...(config as Record<string, unknown>),
+      license: {
+        enabled: true,
+        apiBaseUrl: "https://neondiff-license.fly.dev",
+        cachePath: join(root, "fixture-entitlement.json"),
+        storageBackend: "file",
+        keyPath,
+        requestTimeoutMs: 1_000,
+        offlineGraceMs: 0,
+        publicReposFree: false,
+        privateReposRequireEntitlement: true,
+        updateEntitlementRequiresLicense: true
+      }
+    }, null, 2)}\n`);
     return path;
   }
 });

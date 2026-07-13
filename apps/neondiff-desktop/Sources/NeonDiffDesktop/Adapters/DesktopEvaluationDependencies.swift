@@ -15,7 +15,8 @@ enum DesktopEvaluationDependencies {
             fileWriter: EvaluationFileWriter(),
             providerVerifier: EvaluationProviderVerifier(fixture: fixture),
             secretStore: EvaluationSecretStore(accounts: credentialAccounts(in: fixture)),
-            githubAuthenticator: EvaluationGitHubAuthenticator()
+            githubAuthenticator: EvaluationGitHubAuthenticator(),
+            productionBoundary: .quarantined
         )
     }
 

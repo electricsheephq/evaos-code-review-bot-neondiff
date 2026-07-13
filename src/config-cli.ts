@@ -19,7 +19,7 @@ import { loadConfig, loadConfigFromObject, type BotConfig, type RepoProfileConfi
 import { isApiKeyEnvName } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
-const SECRET_KEY_PATTERN = /(?:token|secret|password|cookie|license|api[_-]?key(?!env)|privateKey)/i;
+const SECRET_KEY_PATTERN = /(?:token|secret|password|cookie|license(?:Key|Token|Secret)|api[_-]?key(?!env)|privateKey)/i;
 const REPO_PROFILE_DESKTOP_SAFE_FIELDS = [
   "enabled",
   "displayName",

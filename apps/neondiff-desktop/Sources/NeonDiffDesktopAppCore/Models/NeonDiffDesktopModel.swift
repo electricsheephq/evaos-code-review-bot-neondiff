@@ -117,6 +117,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var onboardingFlow = OnboardingFlow()
     @Published package var isOnboardingPresented = false
 
+    package var productionActivationBoundaryMessage: String {
+        "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
+    }
+
+    package var productionUsefulWorkAvailable: Bool {
+        dependencies.productionBoundary.nativeActivationBrokerVerified
+    }
+
     private let dependencies: DesktopAppDependencies
     private var providerVerificationTask: Task<Void, Never>?
     private var providerVerificationRequestGeneration: UInt64 = 0
@@ -478,7 +486,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             openBrowser: openBrowser
         )
         let dashboard = dependencies.dashboard
-        let workingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
+        let workingDirectory = dependencies.cliWorkingDirectory
 
         Task { [weak self] in
             guard let self else { return }
@@ -506,14 +514,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func previewStartDaemon() {
+        guard requireVerifiedNativeActivationBroker() else { return }
         runCLI(arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: startDaemonDryRunCommand)
     }
 
     package func previewStopDaemon() {
+        guard requireVerifiedNativeActivationBroker() else { return }
         runCLI(arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: stopDaemonDryRunCommand)
     }
 
     package func startDaemon() {
+        guard requireVerifiedNativeActivationBroker() else { return }
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
@@ -522,6 +533,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func stopDaemon() {
+        guard requireVerifiedNativeActivationBroker() else { return }
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
@@ -904,6 +916,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyProviderKey() {
+        guard requireVerifiedNativeActivationBroker() else {
+            providerVerification = nil
+            providerVerificationStatus = productionActivationBoundaryMessage
+            return
+        }
         if let providerVerificationSafetyLatchMessage {
             providerVerification = nil
             providerVerificationStatus = providerVerificationSafetyLatchMessage
@@ -1052,6 +1069,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func storeLicenseKey() {
+        guard requireVerifiedNativeActivationBroker() else { return }
         do {
             try dependencies.secretStore.setSecret(pendingLicenseKey, account: licenseKeyAccount)
             pendingLicenseKey = ""
@@ -1063,6 +1081,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func activateLicenseForOnboarding() {
+        guard requireVerifiedNativeActivationBroker() else {
+            onboardingFlow.licenseActivation = .servicePending
+            license.entitlement = "activation unavailable"
+            return
+        }
         if !pendingLicenseKey.isEmpty {
             storeLicenseKey()
         }
@@ -1086,8 +1109,32 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func completeOnboarding() {
+        guard dependencies.productionBoundary.nativeActivationBrokerVerified,
+              onboardingFlow.licenseActivation == .activated
+        else {
+            _ = requireVerifiedNativeActivationBroker()
+            isOnboardingPresented = true
+            return
+        }
         dependencies.preferences.set(true, forKey: onboardingCompletedKey)
         isOnboardingPresented = false
+    }
+
+    package func openReadOnlyAppFromQuarantinedOnboarding() {
+        guard !dependencies.productionBoundary.nativeActivationBrokerVerified else { return }
+        isOnboardingPresented = false
+        lastError = nil
+        logText = "Opened the read-only setup surface. \(productionActivationBoundaryMessage)"
+    }
+
+    @discardableResult
+    private func requireVerifiedNativeActivationBroker() -> Bool {
+        guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
+            lastError = productionActivationBoundaryMessage
+            logText = productionActivationBoundaryMessage
+            return false
+        }
+        return true
     }
 
     package func reopenOnboarding() {
@@ -1907,7 +1954,7 @@ private let githubRefreshTokenAccount = "github/user-refresh-token"
 private let githubTokenExpiresAtAccount = "github/user-token-expires-at"
 private let githubRefreshTokenExpiresAtAccount = "github/user-refresh-token-expires-at"
 private let githubUserLoginAccount = "github/user-login"
-private let onboardingCompletedKey = "neondiff.hasCompletedOnboarding"
+private let onboardingCompletedKey = "neondiff.hasCompletedActivationOnboarding.v2"
 
 private func isValidRepoName(_ value: String) -> Bool {
     let parts = value.split(separator: "/", omittingEmptySubsequences: false)

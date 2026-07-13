@@ -8,6 +8,7 @@ import type { GitHubApi } from "../src/github.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
+import { testLicenseAdmission } from "./helpers/license-admission.js";
 import {
   buildRepoMemoryContext,
   buildGitNexusContext,
@@ -24,12 +25,25 @@ import {
   recordFailedReview,
   recordProviderRateLimitCooldownIfNeeded,
   restoreFailedRetryRowIfNeeded,
-  retryFailedHeadWithDeps,
-  retryProviderCooldownsWithDeps,
-  reviewPull,
+  retryFailedHeadWithDeps as retryFailedHeadWithDepsImpl,
+  retryProviderCooldownsWithDeps as retryProviderCooldownsWithDepsImpl,
+  reviewPull as reviewPullImpl,
   runWithProviderRetry
 } from "../src/worker.js";
 import { formatZCodeTimeoutFailureError, isZCodeTimeoutError, parseZCodeTimeoutError } from "../src/zcode-timeout.js";
+
+const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
+  ...input,
+  pull: {
+    ...input.pull,
+    base: { ...input.pull.base, repo: { ...input.pull.base.repo, private: false, visibility: "public" } }
+  },
+  licenseAdmission: input.licenseAdmission ?? testLicenseAdmission
+});
+const retryFailedHeadWithDeps = (input: Parameters<typeof retryFailedHeadWithDepsImpl>[0]) =>
+  retryFailedHeadWithDepsImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission });
+const retryProviderCooldownsWithDeps = (input: Parameters<typeof retryProviderCooldownsWithDepsImpl>[0]) =>
+  retryProviderCooldownsWithDepsImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission });
 
 describe("worker review failures", () => {
   const roots: string[] = [];
@@ -3139,7 +3153,7 @@ describe("worker review failures", () => {
     state.close();
   });
 
-  it("records a concurrent-claim skip as a no-op that does not clobber the winner's processed row (#295)", () => {
+  it("records a concurrent-claim skip without clobbering the winner's processed row or readiness (#295)", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-claim-skip-"));
     roots.push(root);
     const state = new ReviewStateStore(join(root, "state.sqlite"));
@@ -3147,17 +3161,41 @@ describe("worker review failures", () => {
     const pull = pullSummary(289, "winner-head");
 
     // The winner has posted a real review + holds no lingering claim.
-    state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "posted", event: "COMMENT", reviewUrl: "https://github.test/r/1" });
+    const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/289#pullrequestreview-1";
+    state.recordProcessed({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl
+    });
+    state.recordReviewReadiness({
+      repo,
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      state: "needs_fix",
+      reason: "request_changes_review_posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl
+    });
     const evidenceDir = join(root, "evidence");
 
     recordConcurrentClaimSkip({ state, repo, pull, evidenceDir });
 
     // Loser must NOT overwrite the winner's processed row...
-    expect(state.getProcessedReview(repo, pull.number, pull.head.sha)).toMatchObject({ status: "posted", event: "COMMENT" });
-    // ...and records a skipped readiness note + evidence file instead.
+    expect(state.getProcessedReview(repo, pull.number, pull.head.sha)).toMatchObject({
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl
+    });
+    // The loser cannot know whether the winner is still active or already terminal, so it leaves
+    // readiness entirely to the winning claimant and records evidence only.
     expect(state.getReviewReadiness(repo, pull.number, pull.head.sha)).toMatchObject({
-      state: "skipped",
-      reason: "concurrent_review_claim_held"
+      state: "needs_fix",
+      reason: "request_changes_review_posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl
     });
     expect(JSON.parse(readFileSync(join(evidenceDir, "concurrent-claim-skip.json"), "utf8"))).toMatchObject({
       reason: "concurrent_review_claim_held"

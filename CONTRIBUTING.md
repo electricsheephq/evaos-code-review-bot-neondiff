@@ -104,7 +104,8 @@ Agents should read [AGENTS.md](AGENTS.md) before editing this repository.
 ## Pull Request Expectations
 
 - Preserve source-available beta wording unless #104 is updated with approved license text.
-- Preserve public open-source repos free and private/commercial repos paid.
+- Preserve mandatory API-backed activation for public, private, internal, and
+  unknown repository work; do not reintroduce a free-use bypass.
 - Preserve dry-run before live posting.
 - Preserve current-head duplicate suppression and stale-head checks.
 - Preserve secret-looking finding suppression.

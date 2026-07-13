@@ -1,6 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activateLicense,
@@ -12,12 +15,46 @@ import { createLicenseRequestListener } from "../services/license-api/src/http.j
 import { RateLimiter } from "../services/license-api/src/service.js";
 import { LicenseStore } from "../services/license-api/src/store.js";
 
-const repoRoot = process.cwd();
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const licenseApiDir = join(repoRoot, "services/license-api");
 const dbPath = "/data/license.sqlite";
 const litestreamVersion = "0.5.14";
 const litestreamLinuxX64Sha = "32083dd2af13840b273c538360b828368d7b82bbaa2c641106052dc7814ed956";
 const litestreamLinuxArm64Sha = "b49b3d01fb0a8b4d426ee613c080fba44acae0551587dc43525dcd93eee64b4f";
+const licenseApiTypescriptCompiler = join(licenseApiDir, "node_modules/typescript/bin/tsc");
+const licenseApiTypescriptConfig = join(licenseApiDir, "tsconfig.json");
+
+const legacySchema = `
+  create table licenses (
+    license_key_hash text primary key,
+    plan text not null,
+    repo_visibility_scope text not null,
+    private_repo_allowed integer not null default 1,
+    update_entitlement integer not null default 0,
+    seats integer not null default 1,
+    expires_at text,
+    status text not null default 'active',
+    revocation_reason text,
+    created_at text not null default (datetime('now'))
+  );
+  create table activations (
+    license_key_hash text not null,
+    machine_id text not null,
+    repo text,
+    activated_at text not null default (datetime('now')),
+    last_seen_at text not null default (datetime('now')),
+    primary key (license_key_hash, machine_id)
+  );
+  create table license_issuance_events (
+    idempotency_key text primary key,
+    license_key_hash text not null,
+    request_hash text not null,
+    source text,
+    external_ref text,
+    created_at text not null default (datetime('now')),
+    foreign key (license_key_hash) references licenses(license_key_hash)
+  );
+`;
 
 function readServiceFile(relativePath: string): string {
   return readFileSync(join(licenseApiDir, relativePath), "utf8");
@@ -33,8 +70,8 @@ function licenseConfig(root: string, apiBaseUrl: string): LicenseConfig {
     keychainService: "neondiff-dr-test",
     keychainAccount: "neondiff-dr-test",
     requestTimeoutMs: 5_000,
-    offlineGraceMs: 10_000,
-    publicReposFree: true,
+    offlineGraceMs: 0,
+    publicReposFree: false,
     privateReposRequireEntitlement: true,
     updateEntitlementRequiresLicense: false
   };
@@ -128,6 +165,8 @@ describe("license service disaster recovery wiring", () => {
     const deployRunbook = readServiceFile("docs/deploy.md");
     const adminRunbook = readServiceFile("docs/admin-runbook.md");
     const drRunbook = readServiceFile("docs/disaster-recovery.md");
+    const lifecycleRunbook = readServiceFile("docs/subscription-lifecycle.md");
+    const serviceReadme = readServiceFile("README.md");
 
     expect(deployRunbook).toContain("disaster-recovery.md");
     expect(adminRunbook).toContain("disaster-recovery.md");
@@ -137,12 +176,96 @@ describe("license service disaster recovery wiring", () => {
     expect(drRunbook).toContain("flyctl secrets set");
     expect(drRunbook).toContain("timed staging restore drill");
     expect(drRunbook).toContain("This source-only PR does not prove live replication");
+    expect(drRunbook).toContain("offlineGraceMs=0");
+    expect(drRunbook).toContain("diagnostic only");
+    expect(drRunbook).toContain("pre-v2");
+    expect(drRunbook).toContain("fresh path or volume");
+    expect(drRunbook).toContain("Image rollback does not reverse the SQLite schema migration");
+    expect(drRunbook).toContain("Migration failure prevents the service from starting");
+    expect(drRunbook).toContain("Never copy an open SQLite database");
+    expect(drRunbook).toContain('PRE_V2_RECOVERY_TIMESTAMP="<recorded-rfc3339-timestamp>"');
+    expect(drRunbook).toContain('FRESH_RESTORE_PATH="<fresh-nonexistent-license-db-path>"');
+    expect(drRunbook).toContain(
+      'litestream restore -timestamp "$PRE_V2_RECOVERY_TIMESTAMP" -config "$LITESTREAM_CONFIG" -o "$FRESH_RESTORE_PATH" "$LICENSE_DB_PATH"'
+    );
+    expect(drRunbook).toContain('node /app/dist/verify-legacy-restore.js "$FRESH_RESTORE_PATH"');
+    expect(drRunbook).not.toContain('sqlite3 "$FRESH_RESTORE_PATH"');
+    expect(drRunbook).toContain("exact legacy schema signature");
+    expect(drRunbook).toContain("non-writing replica destination");
+    expect(deployRunbook).toContain("point-in-time restore command");
+    expect(lifecycleRunbook).toContain("point-in-time restore command");
+    expect(drRunbook).not.toMatch(/rollback[\s\S]{0,500}restore -if-replica-exists/i);
+    expect(adminRunbook).toContain("bind-checkout-subscription");
+    expect(adminRunbook).toContain("--dry-run");
+    expect(adminRunbook).toContain("No raw-key recovery or replacement-key minting");
+    expect(deployRunbook).toContain("Checkout remains held");
+    expect(deployRunbook).toContain("#559");
+    expect(lifecycleRunbook).toContain("POST /v1/admin/licenses/lifecycle");
+    expect(lifecycleRunbook).toContain("renew_paid");
+    expect(lifecycleRunbook).toContain("reconcile");
+    expect(lifecycleRunbook).toContain("cancel_at_period_end");
+    expect(lifecycleRunbook).toContain("payment_attention");
+    expect(lifecycleRunbook).toContain("revoke");
+    expect(lifecycleRunbook).toContain("Checkout remains held");
+    expect(lifecycleRunbook).toContain("#559");
+    expect(adminRunbook).not.toContain("copy of the volume");
+    expect(adminRunbook).not.toContain("revoke and re-issue");
+    expect(deployRunbook).not.toContain("flip license.enabled");
+    expect(deployRunbook).not.toContain("There is no in-app migration system");
+    expect(drRunbook).not.toContain("inside the configured offline grace window");
+    expect(drRunbook).not.toContain("-force");
+    expect(serviceReadme).toContain(
+      "Activation, validation, and deactivation use per-license-key rate limiting."
+    );
+    expect(serviceReadme).toContain(
+      "Subscription lifecycle and release-lifecycle issuance use separate client-address rate-limit budgets."
+    );
+    expect(serviceReadme).not.toContain("Cross-cutting: 429");
     expect(drRunbook).not.toContain("/Volumes/LEXAR/Codex");
     expect(drRunbook).not.toMatch(/AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|secret-access-key:\s+\S|account-key:\s+\S/i);
   });
+
+  it("executes the shipped Node verifier against a real legacy restore and rejects non-legacy schema", () => {
+    const root = mkdtempSync(join(tmpdir(), "nd-license-restore-verifier-"));
+    try {
+      const alternateCwd = join(root, "alternate-cwd");
+      const compiledRoot = join(root, "compiled-license-api");
+      mkdirSync(alternateCwd);
+      execFileSync(process.execPath, [
+        licenseApiTypescriptCompiler,
+        "-p",
+        licenseApiTypescriptConfig,
+        "--outDir",
+        compiledRoot
+      ], { cwd: alternateCwd, stdio: "pipe" });
+      const legacyRestoreVerifier = join(compiledRoot, "verify-legacy-restore.js");
+      const legacyPath = join(root, "legacy.sqlite");
+      const legacyDb = new DatabaseSync(legacyPath);
+      legacyDb.exec(legacySchema);
+      legacyDb.close();
+
+      const verified = execFileSync(
+        process.execPath,
+        [legacyRestoreVerifier, legacyPath],
+        { cwd: alternateCwd, encoding: "utf8" }
+      );
+      expect(verified.trim()).toBe("legacy restore verification ok");
+
+      const v2Path = join(root, "v2.sqlite");
+      const v2Store = new LicenseStore(v2Path);
+      v2Store.close();
+      expect(() => execFileSync(
+        process.execPath,
+        [legacyRestoreVerifier, v2Path],
+        { cwd: alternateCwd, encoding: "utf8", stdio: "pipe" }
+      )).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
-describe("license service outage grace", () => {
+describe("license service mandatory-online outage behavior", () => {
   const roots: string[] = [];
   const stores: LicenseStore[] = [];
 
@@ -151,7 +274,7 @@ describe("license service outage grace", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("uses a real local license API activation, then fails closed after offline grace expires", async () => {
+  it("creates a diagnostic cache from real activation but never authorizes review during an outage", async () => {
     const root = mkdtempSync(join(tmpdir(), "nd-license-dr-"));
     roots.push(root);
     const store = new LicenseStore(join(root, "license.sqlite"));
@@ -170,55 +293,30 @@ describe("license service outage grace", () => {
     expect(activated).toMatchObject({ ok: true, status: "active", source: "api" });
     expect(existsSync(join(root, "entitlement.json"))).toBe(true);
 
-    const withinGraceStatus = await getLicenseStatus({
+    const outageStatus = await getLicenseStatus({
       config,
       repo: "owner/private",
       refresh: true,
-      now: new Date(base.getTime() + 5_000),
+      now: new Date(base.getTime() + 1),
       fetchImpl: outageFetch
     });
-    expect(withinGraceStatus).toMatchObject({
-      ok: true,
-      status: "active",
-      source: "cache",
-      stale: true,
-      classification: "network"
-    });
-
-    const withinGraceGate = await evaluateLicenseReviewGate({
-      config,
-      repo: "owner/private",
-      visibility: "private",
-      refresh: true,
-      now: new Date(base.getTime() + 5_000),
-      fetchImpl: outageFetch
-    });
-    expect(withinGraceGate).toMatchObject({ ok: true, status: "active" });
-
-    const afterGraceStatus = await getLicenseStatus({
-      config,
-      repo: "owner/private",
-      refresh: true,
-      now: new Date(base.getTime() + 11_000),
-      fetchImpl: outageFetch
-    });
-    expect(afterGraceStatus).toMatchObject({
+    expect(outageStatus).toMatchObject({
       ok: false,
       status: "network",
       source: "none",
       classification: "network"
     });
 
-    const afterGraceGate = await evaluateLicenseReviewGate({
+    const outageGate = await evaluateLicenseReviewGate({
       config,
       repo: "owner/private",
       visibility: "private",
       refresh: true,
-      now: new Date(base.getTime() + 11_000),
+      now: new Date(base.getTime() + 1),
       fetchImpl: outageFetch
     });
-    expect(afterGraceGate).toMatchObject({ ok: false, status: "network" });
-    expect(afterGraceGate.reason).toContain("license API network failure");
-    expect(afterGraceGate.reason).toContain("requires active entitlement");
+    expect(outageGate).toMatchObject({ ok: false, status: "network" });
+    expect(outageGate.reason).toContain("license API network failure");
+    expect(outageGate.reason).toContain("requires active entitlement");
   });
 });

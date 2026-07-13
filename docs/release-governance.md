@@ -146,16 +146,21 @@ Before tagging:
      path (`checkoutIssuanceAuthenticatedProofPath`) with no raw bearer secret,
      license key, cookie, customer data, checkout payload secret, or raw response
      body. Generate it with `npx tsx src/cli.ts checkout-issuance-smoke
-     --dry-run false --confirm-live-issuance true --secret-env
-     LICENSE_ISSUANCE_SECRET --output
+     --provider-account-id <stripe-account-id> --provider-mode test
+     --external-subscription-id <test-subscription-id>
+     --external-checkout-id <test-checkout-session-id> --dry-run false
+     --confirm-live-issuance true --secret-env LICENSE_ISSUANCE_SECRET --output
      docs/evidence/license-checkout-issuance-authenticated.json` after the
-     paired Fly and server-side checkout secrets are configured.
+     paired Fly and server-side checkout secrets are configured. A live-mode
+     proof must use an explicitly supplied, matching live tuple; never reuse or
+     invent test identifiers for a live request.
    - computed checkout issuance status and, when present, the raw manifest
      declaration that produced it
    - CLI, daemon, website, and desktop update-channel state
-   - rollback command or tracking issue for each required channel
-   - required-channel rollback fields with one source revert command such as
-     `git reset --hard refs/tags/<tag>` or `git revert <sha>`
+   - rollback command for each required channel; when a command does not yet
+     exist, record the owner-gating tracking issue and keep that channel blocked
+   - required source-checkout-channel rollback fields with one source revert
+     command such as `git reset --hard refs/tags/<tag>` or `git revert <sha>`
 7. `git status --short` is clean in the live checkout.
 
 For npm-published releases, confirm the repository or organization Actions
@@ -175,8 +180,11 @@ Node.js 26 for NeonDiff itself. Runner fleets must be on GitHub Actions runner
 that still target the older action runtime are post-launch desktop-release
 hygiene unless they block the current release.
 
-The manifest `rollback` field is intentionally only the source-revert step.
-Full operator rollback runbooks may restart launchd after that source revert,
+The manifest `rollback` field is intentionally only the source-revert step for
+source-checkout channels. It must not be advertised as rollback for an
+npm-published channel because it does not change npm `latest` or installed
+global packages. Full operator rollback runbooks may restart launchd after a
+source revert,
 but restart commands live outside the manifest rollback field. `launchctl
 kickstart` alone is a restart, not a rollback. `git checkout` detaches HEAD or
 resets the working tree; it is not accepted as a release rollback for this
@@ -189,14 +197,69 @@ verified prior package, reinstall that package on affected hosts, restart the
 host-specific daemon/dashboard, and preserve the immutable release tag and
 package as incident provenance.
 
-Stable npm publication uses a quarantine dist-tag first. Verify the registry
-integrity, shasum, and `gitHead` against the reviewed pack and annotated tag,
-then promote the package to `latest`. Manual retry runs must resolve the exact
+Stable npm publication uses a quarantine dist-tag first. Publish the exact
+tarball that passed the release gate, then verify registry integrity and
+shasum against that archive. Cryptographically verify the npm Sigstore bundle
+and require its signed SLSA statement to name this repository, publish
+workflow, release tag, and release commit before promoting to `latest`.
+`gitHead` remains useful registry metadata when present, but it is not a
+substitute for exact archive identity plus signed provenance. Manual retry runs must resolve the exact
 existing GitHub Release and prove it is published and non-prerelease before
 promotion. All NeonDiff npm releases share one workflow concurrency group.
 Before moving `latest` or `beta`, the workflow also requires the channel to be
 absent, already at the target, or exactly at the manifest-declared predecessor;
 an unexpected channel version blocks promotion instead of moving backward.
+
+### Mandatory Activation Proof Sequence
+
+For stable v1.0.4 and later, finish every package-included source, config,
+version, setup-doc, and runtime change before dispatching
+`license-lifecycle-proof.yml`. The protected-main candidate SHA is the source
+identity under proof.
+
+The trusted workflow installs the candidate's materialized tarball, proves a
+fresh install, upgrades an isolated v1.0.3 installation in place, and validates
+that the upgraded binary normalizes the legacy weakening fields to the
+mandatory-online production policy. That upgraded binary—not a separate fresh
+copy—runs the live lifecycle and installed-dashboard probes. A machine-readable
+19-scenario evaluator records each real admission-gate allow/deny outcome and
+license-API call count; the assembler rejects missing, duplicate, unexpected,
+or mismatched scenario rows. A separate machine-readable Vitest report binds
+the proof to passing CLI, provider, review, and dashboard tests that instrument
+the useful-work boundaries and assert they are not reached before activation.
+The workflow also compiles/tests the production Swift
+desktop quarantine on a GitHub-hosted Mac and binds the proof to the real
+composition root.
+
+The protected production job then obtains a custom-audience GitHub OIDC token
+and uses the dedicated lifecycle broker to exercise production issuance,
+activation, refresh, deactivation, and denied revalidation. It runs the
+installed dashboard before activation and while the disposable entitlement is
+active, proving setup/provider denial first and visible active status second.
+The workflow derives the aggregate plus all six child artifacts from those
+passing runs and attests the complete seven-file set. The Fly-held issuance
+secret never enters GitHub.
+
+The desktop child proves the current safe boundary: without a verified native
+activation broker, useful native work remains blocked. It does not prove native
+activation, signing/notarization, Sparkle operation, or installed-app readiness.
+
+After the run succeeds:
+
+1. Download the exact seven attested JSON artifacts without editing them.
+2. Verify every file locally with `gh attestation verify`, pinning the signer workflow,
+   candidate SHA, protected-main source ref, and GitHub-hosted runner.
+3. Commit that exact evidence set and the manifest links in
+   a follow-up evidence PR. That PR may change only files outside the npm
+   package allowlist; otherwise the candidate tarball identity changes and the
+   lifecycle proof must be rerun.
+4. Let the publish workflow independently verify the aggregate and every child
+   GitHub attestation, and require the current `npm pack` shasum/integrity to
+   match the installed candidate recorded by the proof.
+
+The final release/tag commit may descend from the candidate SHA because the
+evidence itself must be committed, but the package bytes must remain identical.
+Do not manually recreate, summarize, or reformat any attested evidence JSON.
 
 ### Partial Quarantine Promotion Recovery
 
@@ -205,12 +268,19 @@ does not complete, do not republish, retag, or unpublish the immutable package.
 Direct dist-tag mutation is not supported for recovery because it bypasses the
 serialized workflow's registry retries, provenance checks, channel predecessor
 guard, and quarantine ownership check. Rerun the hardened workflow from
-protected `main` for the exact existing release tag:
+the exact existing release tag ref:
+
+Immutable-package recovery waives only the normal 24-hour activation-proof
+freshness rule because the already-published bytes cannot be replaced. The
+proof must still pass the 30-day maximum-age ceiling, match the manifest
+candidate SHA and reviewed tarball identity, and retain valid workflow
+attestations. If that 30-day ceiling has expired, do not promote the package;
+produce a new replacement version and fresh protected lifecycle proof.
 
 ```bash
 gh workflow run publish-npm.yml \
   --repo electricsheephq/evaos-code-review-bot-neondiff \
-  --ref main \
+  --ref v<version> \
   -f tag=v<version>
 gh run list \
   --repo electricsheephq/evaos-code-review-bot-neondiff \
@@ -226,9 +296,46 @@ npm view neondiff@<version> version dist.integrity dist.shasum gitHead dist.atte
 test "$(npm view neondiff dist-tags.latest)" = "<version>"
 ```
 
+#### v1.0.4-only reviewed-tarball provenance recovery
+
+Run `29185873762` published the exact reviewed `neondiff@1.0.4` tarball under
+`release-candidate`, but npm 11.17.0 did not synthesize `gitHead` because the
+publish input was the prebuilt tarball rather than the Git checkout. The
+registry version is immutable. Do not republish, unpublish, retag, or directly
+edit dist-tags to compensate.
+
+The v1.0.4-only recovery loads reviewed workflow policy from the exact current
+protected-main SHA while retaining the annotated v1.0.4 tag checkout as the
+sole build and pack source. It cannot publish: the immutable npm version and
+matching non-prerelease GitHub Release must already exist. Missing `gitHead`
+is accepted only after exact shasum/integrity, npm signatures, and Sigstore/SLSA
+provenance verify the repository, publish workflow, tag, and release commit. A
+present malformed or mismatched `gitHead` remains fatal.
+
+After the recovery change is merged to protected main, dispatch only this
+bounded command:
+
+```bash
+gh workflow run publish-npm.yml \
+  --repo electricsheephq/evaos-code-review-bot-neondiff \
+  --ref main \
+  -f tag=v1.0.4 \
+  -f provenance_recovery=true
+```
+
+The recovery fails before mutation unless `latest=1.0.3` and
+`release-candidate=1.0.4`, or unless an idempotent rerun already has
+`latest=1.0.4` with quarantine either owned by `1.0.4` or absent. It preserves
+the package-wide concurrency group, predecessor guard, bounded registry
+confirmation (including ambiguous nonzero promotion results), and owned-only
+quarantine cleanup. This exception does not
+authorize missing `gitHead` for any later package version; fix the future
+publisher before cutting another npm release.
+
 Record the failed workflow URL, registry identity output, repaired dist-tags,
-and operator in the release tracker. If any identity field is missing or does
-not match, leave `latest` unchanged and treat the package as quarantined.
+and operator in the release tracker. Outside the bounded v1.0.4 provenance
+fallback, if any identity field is missing or does not match, leave `latest`
+unchanged and treat the package as quarantined.
 
 ## Tag And Release
 

@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import type { BotConfig } from "./config.js";
 import { getLicenseStatus, type LicenseStatusResult } from "./license.js";
+import { isAuthenticProductionLicenseAdmission, requireActiveProductionLicense } from "./license-admission.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import {
   doctorProviderRegistry,
@@ -559,6 +560,7 @@ export async function runLocalDashboardPreviewSmoke(input: {
   allowRemoteSmoke?: boolean;
   screenshotPath?: string;
   sourceSha?: string;
+  requireActiveProductionLicense?: typeof requireActiveProductionLicense;
 }): Promise<LocalDashboardPreviewSmokeResult> {
   const outputDir = resolve(input.outputDir);
   mkdirSync(outputDir, { recursive: true });
@@ -570,7 +572,8 @@ export async function runLocalDashboardPreviewSmoke(input: {
     port: input.port,
     launchdLabel: input.launchdLabel,
     openBrowser: false,
-    allowRemoteSmoke: input.allowRemoteSmoke
+    allowRemoteSmoke: input.allowRemoteSmoke,
+    requireActiveProductionLicense: input.requireActiveProductionLicense
   });
 
   try {
@@ -606,7 +609,9 @@ export async function runLocalDashboardPreviewSmoke(input: {
     const settledUiState = {
       htmlLoaded: htmlResponse.ok && html.includes("NeonDiff Dashboard"),
       statusApiLoaded: statusResponse.ok,
-      providerVerifyRouteLoaded: providerVerifyResponse.status === 200 || providerVerifyResponse.status === 422,
+      providerVerifyRouteLoaded: providerVerifyResponse.status === 200
+        || providerVerifyResponse.status === 403
+        || providerVerifyResponse.status === 422,
       controlsRendered,
       statusScriptRendered,
       providerVerifyStatus: providerVerifyResponse.status
@@ -646,6 +651,7 @@ export async function startLocalDashboardServer(input: {
   launchdLabel?: string;
   openBrowser?: boolean;
   allowRemoteSmoke?: boolean;
+  requireActiveProductionLicense?: typeof requireActiveProductionLicense;
 }): Promise<LocalDashboardServerHandle> {
   let latestVerification: ProviderApiKeyVerificationResult | undefined;
   let status = await buildLocalDashboardStatus({
@@ -681,6 +687,32 @@ export async function startLocalDashboardServer(input: {
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/provider/verify") {
+        const admission = await (input.requireActiveProductionLicense ?? requireActiveProductionLicense)({
+          operation: "provider_verify",
+          config: input.config.license!
+        });
+        if (!admission.ok) {
+          writeResponse(response, 403, "application/json; charset=utf-8", stringifyRedactedJson({
+            ok: false,
+            command: "dashboard verify-provider",
+            state: "blocked",
+            redacted: true,
+            detail: `license ${admission.decision.status}: ${admission.decision.detail}`,
+            troubleshooting: ["Activate NeonDiff with the canonical license service before provider verification."]
+          }));
+          return;
+        }
+        if (!isAuthenticProductionLicenseAdmission(admission.admission, "provider_verify")) {
+          writeResponse(response, 403, "application/json; charset=utf-8", stringifyRedactedJson({
+            ok: false,
+            command: "dashboard verify-provider",
+            state: "blocked",
+            redacted: true,
+            detail: "license invalid: production admission proof is not authentic",
+            troubleshooting: ["Activate NeonDiff with the canonical license service before provider verification."]
+          }));
+          return;
+        }
         const body = await readJsonBody(request);
         latestVerification = await verifyProviderApiKey({
           config: input.config,

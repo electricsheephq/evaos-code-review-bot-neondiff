@@ -174,6 +174,7 @@ struct ModelDependencyFixture {
     let preferences: MemoryPreferences
     let clock: TestClock
     let fileWriter: TemporaryFileWriter
+    let providerVerifier: RecordingProviderVerifier
     let secretStore: MemorySecretStore
     let githubAuthenticator: ScriptedGitHubAuthenticator
 
@@ -183,15 +184,21 @@ struct ModelDependencyFixture {
         cliOutcomes: [Result<CLIRunResult, Error>] = [],
         clipboardResult: Bool = true,
         urlResult: Bool = true,
-        githubAuthenticator: ScriptedGitHubAuthenticator = ScriptedGitHubAuthenticator()
+        githubAuthenticator: ScriptedGitHubAuthenticator = ScriptedGitHubAuthenticator(),
+        preferenceBools: [String: Bool] = [:],
+        productionBoundary: DesktopProductionBoundary = .testVerified
     ) {
         clipboard = RecordingClipboard(result: clipboardResult)
         urlOpener = RecordingURLOpener(result: urlResult)
         cli = ScriptedDesktopCLIExecutor(outcomes: cliOutcomes)
         dashboard = RecordingDashboardLauncher()
         preferences = MemoryPreferences()
+        for (key, value) in preferenceBools {
+            preferences.set(value, forKey: key)
+        }
         clock = TestClock(now: now)
         fileWriter = TemporaryFileWriter(root: root)
+        providerVerifier = RecordingProviderVerifier()
         secretStore = MemorySecretStore()
         self.githubAuthenticator = githubAuthenticator
         model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
@@ -202,9 +209,10 @@ struct ModelDependencyFixture {
             preferences: preferences,
             clock: clock,
             fileWriter: fileWriter,
-            providerVerifier: RecordingProviderVerifier(),
+            providerVerifier: providerVerifier,
             secretStore: secretStore,
-            githubAuthenticator: githubAuthenticator
+            githubAuthenticator: githubAuthenticator,
+            productionBoundary: productionBoundary
         ))
     }
 

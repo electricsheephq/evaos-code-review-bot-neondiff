@@ -12,6 +12,13 @@ import {
   startLocalDashboardServer,
   verifyProviderApiKey
 } from "../src/local-dashboard.js";
+import { createTestLicenseAdmission } from "./helpers/license-admission.js";
+
+const providerVerificationAdmission = await createTestLicenseAdmission({ operation: "provider_verify" });
+const admittedProviderVerification = async () => ({
+  ok: true as const,
+  admission: providerVerificationAdmission
+});
 
 describe("local HTML dashboard", () => {
   const servers: Server[] = [];
@@ -217,7 +224,7 @@ describe("local HTML dashboard", () => {
     expect(JSON.stringify(result)).not.toContain(fakeKey);
   });
 
-  it("serves HTML status and redacted provider verification routes", async () => {
+  it("serves HTML status but blocks provider verification before activation", async () => {
     const fakeKey = ["sk", "dashboard-route-1234567890"].join("-");
     const config = loadConfigFromObject({
       providers: {
@@ -254,8 +261,8 @@ describe("local HTML dashboard", () => {
       })
     });
     const resultText = await response.text();
-    expect(response.status).toBe(422);
-    expect(resultText).toContain("configured_unverified");
+    expect(response.status).toBe(403);
+    expect(resultText).toContain("license missing");
     expect(resultText).not.toContain(fakeKey);
     expect(resultText).not.toContain("dashboard-route");
   });
@@ -286,7 +293,8 @@ describe("local HTML dashboard", () => {
       apiKey: fakeKey,
       allowRemoteSmoke: false,
       screenshotPath,
-      sourceSha: "0123456789abcdef0123456789abcdef01234567"
+      sourceSha: "0123456789abcdef0123456789abcdef01234567",
+      requireActiveProductionLicense: admittedProviderVerification
     });
 
     expect(smoke).toMatchObject({
@@ -310,6 +318,24 @@ describe("local HTML dashboard", () => {
     const serialized = JSON.stringify(smoke) + readFileSync(smoke.packetPath, "utf8");
     expect(serialized).not.toContain(fakeKey);
     expect(serialized).not.toContain("preview-smoke-route");
+  });
+
+  it("treats an activation-blocked provider route as loaded in setup-safe preview smoke", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-dashboard-preview-blocked-"));
+    const smoke = await runLocalDashboardPreviewSmoke({
+      config: loadConfigFromObject({}),
+      configPath: join(outputDir, "config.local.json"),
+      configExists: false,
+      outputDir
+    });
+
+    expect(smoke).toMatchObject({
+      ok: true,
+      settledUiState: {
+        providerVerifyRouteLoaded: true,
+        providerVerifyStatus: 403
+      }
+    });
   });
 });
 

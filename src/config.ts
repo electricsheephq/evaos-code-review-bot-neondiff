@@ -8,6 +8,12 @@ import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import { resolveEnvAlias } from "./env-alias.js";
 import type { LicenseConfig } from "./license.js";
+import {
+  OFFICIAL_LICENSE_API_BASE_URL,
+  OFFICIAL_LICENSE_KEYCHAIN_ACCOUNT,
+  OFFICIAL_LICENSE_KEYCHAIN_SERVICE,
+  resolveProductionLicensePolicy
+} from "./license-production-policy.js";
 import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import {
   buildPublicConfidencePolicy,
@@ -24,6 +30,7 @@ import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChange
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
 import { validateRelativePacketPath, type RepoWikiContextConfig } from "./repo-wiki-context.js";
 import { DEFAULT_REVIEW_LENS_CONFIG, validateReviewLensConfig, type ReviewLensConfig } from "./review-lenses.js";
+import type { ReviewEventPolicyConfig } from "./review-event-policy.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -216,6 +223,8 @@ export interface ReviewSchedulerConfig {
 export interface ReviewGateConfig {
   /** Max inline comments posted per review; the highest-ranked findings survive the cap. */
   maxInlineComments: number;
+  /** The public GitHub event selection policy; defaults to trusted owner authorization only. */
+  reviewEventPolicy: ReviewEventPolicyConfig;
   /** Optional per-severity confidence floors for REQUEST_CHANGES eligibility (default off). */
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
   /** Optional confidence subtracted (0..1, floor 0) from findings recovered via the strict-JSON
@@ -344,7 +353,10 @@ const DEFAULT_CONFIG: BotConfig = {
     publicDisplay: buildPublicConfidencePolicy()
   },
   reviewGate: {
-    maxInlineComments: 25
+    maxInlineComments: 25,
+    reviewEventPolicy: {
+      mode: "trusted_command_only"
+    }
   },
   repoMemory: {
     enabled: false,
@@ -409,16 +421,16 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG,
   license: {
-    enabled: false,
-    apiBaseUrl: undefined,
+    enabled: true,
+    apiBaseUrl: OFFICIAL_LICENSE_API_BASE_URL,
     cachePath: "",
     storageBackend: "file",
     keyPath: undefined,
-    keychainService: "com.electricsheephq.neondiff.license",
-    keychainAccount: "default",
+    keychainService: OFFICIAL_LICENSE_KEYCHAIN_SERVICE,
+    keychainAccount: OFFICIAL_LICENSE_KEYCHAIN_ACCOUNT,
     requestTimeoutMs: 10_000,
-    offlineGraceMs: MAX_LICENSE_OFFLINE_GRACE_MS,
-    publicReposFree: true,
+    offlineGraceMs: 0,
+    publicReposFree: false,
     privateReposRequireEntitlement: true,
     updateEntitlementRequiresLicense: true
   },
@@ -677,11 +689,14 @@ function validateConfig(config: BotConfig): void {
   const issueEnrichment = config.issueEnrichment ?? DEFAULT_CONFIG.issueEnrichment!;
   config.issueEnrichment = issueEnrichment;
   validateIssueEnrichmentConfig(issueEnrichment, "config.issueEnrichment");
-  const license = { ...DEFAULT_CONFIG.license!, ...(config.license ?? {}) };
-  license.cachePath = license.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
-  if (license.storageBackend === "file" && !license.keyPath) {
-    license.keyPath = join(dirname(config.statePath), "license", "license-key.txt");
+  const configuredLicense = { ...DEFAULT_CONFIG.license!, ...(config.license ?? {}) };
+  delete configuredLicense.productionPolicy;
+  validateConfiguredLicensePolicyShape(configuredLicense, "config.license");
+  configuredLicense.cachePath = configuredLicense.cachePath || join(dirname(config.statePath), "license", "entitlement-cache.json");
+  if (configuredLicense.storageBackend === "file" && !configuredLicense.keyPath) {
+    configuredLicense.keyPath = join(dirname(config.statePath), "license", "license-key.txt");
   }
+  const license = resolveProductionLicensePolicy(configuredLicense);
   config.license = license;
   validateLicenseConfig(license, "config.license");
   const desktop = config.desktop ?? DEFAULT_CONFIG.desktop!;
@@ -801,6 +816,7 @@ function validatePublicCommandsConfig(value: unknown, label: string): void {
 function validateReviewGateConfig(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validatePositiveInteger(value.maxInlineComments, `${label}.maxInlineComments`);
+  validateReviewEventPolicyConfig(value.reviewEventPolicy, `${label}.reviewEventPolicy`);
   if (value.requestChangesConfidenceFloors !== undefined) {
     if (!isRecord(value.requestChangesConfidenceFloors)) {
       throw new Error(`${label}.requestChangesConfidenceFloors must be an object`);
@@ -830,6 +846,16 @@ function validateReviewGateConfig(value: unknown, label: string): void {
     }
   }
   if (value.selfConsistency !== undefined) validateSelfConsistencyConfig(value.selfConsistency, `${label}.selfConsistency`);
+}
+
+function validateReviewEventPolicyConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "mode") throw new Error(`${label} has unknown key "${key}"; expected only mode`);
+  }
+  if (value.mode !== "automatic" && value.mode !== "trusted_command_only") {
+    throw new Error(`${label}.mode must be one of automatic or trusted_command_only`);
+  }
 }
 
 function validateSelfConsistencyConfig(value: unknown, label: string): void {
@@ -1238,6 +1264,18 @@ function validateLicenseConfig(value: unknown, label: string): void {
   validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
   validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
   validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);
+}
+
+function validateConfiguredLicensePolicyShape(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalString(value.apiBaseUrl, `${label}.apiBaseUrl`);
+  validateNonNegativeInteger(value.offlineGraceMs, `${label}.offlineGraceMs`);
+  validateBoolean(value.publicReposFree, `${label}.publicReposFree`);
+  validateBoolean(value.privateReposRequireEntitlement, `${label}.privateReposRequireEntitlement`);
+  validateBoolean(value.updateEntitlementRequiresLicense, `${label}.updateEntitlementRequiresLicense`);
+  validateOptionalString(value.keychainService, `${label}.keychainService`);
+  validateOptionalString(value.keychainAccount, `${label}.keychainAccount`);
 }
 
 export function validateLicenseConfigOverride(value: LicenseConfig, label = "config.license"): void {

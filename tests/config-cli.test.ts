@@ -69,6 +69,14 @@ describe("desktop config CLI", () => {
     });
     expect(output.config.notes.customProviderHeader).toBe("[redacted-secret]");
     expect(output.config.customSecret).toBe("[redacted-secret]");
+    expect(output.config.license).toMatchObject({
+      enabled: true,
+      apiBaseUrl: "https://neondiff-license.fly.dev",
+      offlineGraceMs: 0,
+      publicReposFree: false,
+      privateReposRequireEntitlement: true,
+      productionPolicy: { mode: "mandatory_online" }
+    });
   });
 
   it("redacts empty secret values consistently", async () => {

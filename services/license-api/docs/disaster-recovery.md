@@ -3,10 +3,11 @@
 This runbook covers disaster recovery for the NeonDiff license API SQLite
 database at `/data/license.sqlite`.
 
-Issue scope: [#423](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/423).
+Issue scope: [#423](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/423)
+and [#562](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/562).
 This source-only PR does not prove live replication; it only adds the buildable
 Litestream wiring, owner runbook, static assertions, and local client outage
-grace verification. Live object storage, Fly secrets, deploy, and timed restore
+fail-closed verification. Live object storage, Fly secrets, deploy, and timed restore
 evidence remain Owner-gated.
 
 ## Targets
@@ -34,9 +35,55 @@ evidence remain Owner-gated.
   provider's recommended key variables.
 
 The container fails closed by default when `LICENSE_REPLICA_URL` is absent
-because this service is release-required for private-repo entitlements. Local
+because this service is release-required for supported review entitlements. Local
 development may set `LICENSE_LITESTREAM_REQUIRED=false` to run without
 replication.
+
+## Schema v2 recovery invariant
+
+Immediately before the schema v2 rollout, verify a recoverable Litestream point
+from the running pre-v2 database and record its timestamp/freshness in the
+owner-held evidence packet. This is the reviewed rollback point; a Fly image or
+filesystem copy is not.
+
+Never copy an open SQLite database. An open database may have authoritative WAL
+state that a plain copy of `license.sqlite` omits. Quiesce writes through the
+approved service/platform procedure, or restore through Litestream to a missing
+database path.
+
+Migration failure prevents the service from starting. The store migrates the
+exact legacy schema inside one immediate transaction, verifies the exact v2
+schema and constraints, and sets `user_version=2` only after verification.
+Failure rolls the transaction back and the HTTP listener never starts.
+
+Image rollback does not reverse the SQLite schema migration. A pre-v2 image is
+not approved to open a v2 database. Restore the reviewed pre-v2 Litestream point
+to a fresh path or volume, verify it separately, and only then attach it to the
+reviewed pre-v2 service. Preserve the failed volume for investigation; never
+overwrite it in place.
+
+The recorded rollback timestamp must be an RFC3339 instant that Litestream
+0.5.14 can select. A normal missing-file startup uses the latest replica state;
+that is not the schema-v2 rollback procedure. From a quiesced recovery shell,
+restore the selected point to a path that does not exist:
+
+```sh
+PRE_V2_RECOVERY_TIMESTAMP="<recorded-rfc3339-timestamp>"
+FRESH_RESTORE_PATH="<fresh-nonexistent-license-db-path>"
+test ! -e "$FRESH_RESTORE_PATH"
+litestream restore -timestamp "$PRE_V2_RECOVERY_TIMESTAMP" -config "$LITESTREAM_CONFIG" -o "$FRESH_RESTORE_PATH" "$LICENSE_DB_PATH"
+node /app/dist/verify-legacy-restore.js "$FRESH_RESTORE_PATH"
+```
+
+The verifier ships in the Node 26 runtime image and uses built-in `node:sqlite`.
+It requires a regular file, opens it read-only, runs `pragma quick_check`,
+requires `user_version=0`, and compares every non-internal schema object and
+constraint with an in-memory exact legacy schema signature. Any mismatch is a
+stop condition. Keep the restored file detached while checking it; do not let a
+v2 process open it, and do not attach the pre-v2 image until verification passes.
+The restore command shape follows Litestream's
+[restore reference](https://litestream.io/reference/restore/): `-timestamp`
+selects the recovery point and `-o` keeps the source database path untouched.
 
 ## Owner-only secret setup
 
@@ -85,10 +132,13 @@ volume; never destroy the production volume as a drill.
    prefix in the evidence packet.
 2. Create or reset a staging Fly app with a fresh `license_data` volume and no
    `/data/license.sqlite` file.
-3. Set the same shape of secrets as production, but point
-   `LICENSE_REPLICA_URL` at the staging restore replica/prefix.
-4. Deploy the image. The entrypoint must attempt:
-   `litestream restore -if-replica-exists -config "$LITESTREAM_CONFIG" "$LICENSE_DB_PATH"`.
+3. Give the drill read-only credentials to the source replica and a dedicated,
+   non-writing replica destination/prefix. Never run `litestream replicate`
+   against the production replica from the drill.
+4. For a current-state drill, restore to a fresh path and verify it before
+   starting the service. For the v2 rollback drill, use the point-in-time command
+   above with the recorded pre-v2 RFC3339 timestamp; do not use the entrypoint's
+   latest-state `-if-replica-exists` startup behavior as rollback proof.
 5. Wait for `/healthz` to pass and run admin `list` against the restored DB.
 6. Record end time and calculate restore duration. The drill passes only if
    duration is <= 30 minutes and the restored DB contains the expected license
@@ -99,6 +149,12 @@ volume; never destroy the production volume as a drill.
 If no backups are found, the entrypoint may initialize a new empty DB. That is
 acceptable for a brand-new staging replica, but it is not acceptable proof for
 production DR. Production restore proof must show expected existing rows.
+
+For the v2 rollout drill, also prove that the timestamp-selected pre-v2 recovery
+point passes `pragma quick_check`, reports `pragma user_version=0`, matches the
+exact legacy schema signature, and opens with the reviewed pre-v2 image on a
+fresh path or volume. Do not use the production replica destination for writes,
+and do not let staging write back into the production replica prefix.
 
 ## Verification cadence
 
@@ -129,11 +185,16 @@ process is alive; it does not prove offsite recovery data is current.
 
 ## Customer outage playbook
 
-The shipped client already has an offline entitlement cache. If the license API
-is unreachable, paying private-repo users with a fresh active cache should remain
-inside the configured offline grace window; once that window expires, the
-private-repo gate fails closed. This PR includes a local real-server test for
-activate -> stop server -> within-grace allow -> after-grace deny.
+The supported v1.0.4 configuration is mandatory-online:
+`offlineGraceMs=0`. A successful activation writes an entitlement cache for
+setup/status diagnosis, but that cache is diagnostic only and grants no review
+authority. If the API is unreachable, refreshed status reports
+`source="none"` with a network/server classification and the review gate fails
+closed immediately for public, private, internal, and unknown visibility.
+
+Do not raise `offlineGraceMs`, enable a public-repo bypass, or treat a cached
+`active` record as outage authorization. Recovery restores the API; it does not
+move authority into user-editable client config.
 
 During a production outage:
 
@@ -142,8 +203,18 @@ During a production outage:
 2. Preserve the current volume and logs before mutation.
 3. Restore on staging first when time allows; if production replacement is
    required, restore only to a missing DB path or a fresh volume.
-4. Do not overwrite an existing production DB with `-force` unless the owner has
-   explicitly approved a data replacement and the evidence packet names the
-   selected replica timestamp.
-5. Communicate the grace-window boundary clearly: cached private-repo users can
-   continue only while their cache remains inside `offlineGraceMs`.
+4. Never overwrite an existing production database. Owner approval may select
+   the reviewed replica timestamp and authorize attaching a fresh restore path
+   or volume; it cannot authorize an in-place overwrite.
+5. Verify the real-client outage path still returns `source="none"` and denies
+   review with `offlineGraceMs=0`; the presence of a cache file is diagnostic
+   evidence only.
+6. Keep checkout and subscription event delivery held until database and API
+   verification completes. Do not recover raw keys or mint replacement keys as
+   part of reconciliation.
+
+Issue
+[#559](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559)
+owns version, manifest, deploy, install, live activation, and checkout proof.
+This source-only PR does not prove live replication, production restore,
+production migration, or customer readiness.

@@ -358,7 +358,8 @@ struct RecordingDesktopDependencies {
             fileWriter: fileWriter,
             providerVerifier: providerVerifier,
             secretStore: secretStore,
-            githubAuthenticator: githubAuthenticator
+            githubAuthenticator: githubAuthenticator,
+            productionBoundary: .testVerified
         )
     }
 }
