@@ -107,6 +107,13 @@ describe("Review Bench public corpus gate", () => {
     expect(operatorDocs).not.toContain("/Volumes/LEXAR/Codex/evals");
   });
 
+  it("documents needs-resolution as an operator routing status rather than a broken run", () => {
+    const operatorDocs = readFileSync(join(repoRoot, "docs/operator-cli.md"), "utf8");
+    expect(operatorDocs).toContain("review-bench verify-adjudication");
+    expect(operatorDocs).toMatch(/exits\s+with code 1 for `needs_resolution`/);
+    expect(operatorDocs).toMatch(/branch on the emitted JSON `status`/);
+  });
+
   it("rejects a checkout-local receipt even when the CLI starts outside every git repository", () => {
     const root = mkdtempSync(join(tmpdir(), "review-bench-outside-cwd-"));
     const unsafeReceipt = join(repoRoot, `.review-bench-unsafe-${process.pid}.json`);

@@ -122,6 +122,14 @@ evaos-review-bot status --config config.local.json
   packet to a fresh or empty output root. It does not post comments, mutate
   GitHub, write SQLite, restart launchd, activate lenses, or widen
   issue-enrichment/PR review allowlists.
+- `review-bench prepare-adjudication` and `review-bench verify-adjudication`:
+  offline, provider-free commands for creating a blinded human packet and
+  binding two complete responses to an immutable receipt. Verification exits
+  with code 1 for `needs_resolution` after preserving that receipt. This is a
+  routing outcome rather than evidence corruption: shell and CI wrappers must
+  retain stdout and branch on the emitted JSON `status` before deciding that a
+  nonzero exit represents a broken run. A resolver may later close only the
+  frozen disagreements; these commands do not assemble or admit Corpus v1.
 - `review-bench verify-sources`: setup-safe Corpus v1 admission gate. It reads a
   corpus manifest, digest-named public source diffs, and digest-named
   `<oracle-evidence-sha256>.oracle.json` packets plus
