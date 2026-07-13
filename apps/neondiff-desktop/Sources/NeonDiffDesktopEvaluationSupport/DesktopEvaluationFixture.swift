@@ -66,9 +66,8 @@ public enum DesktopEvaluationProviderVerification: String, Codable, Sendable {
 
 public enum DesktopEvaluationLicenseEntitlement: String, Codable, Sendable {
     case notActivated = "not activated"
-    case publicRepositories = "public repositories"
-    case activePrivate = "active private"
-    case privateBlocked = "private blocked"
+    case active
+    case activationBlocked = "activation blocked"
 }
 
 public enum DesktopEvaluationUpdateChannel: String, Codable, Sendable {
@@ -92,12 +91,10 @@ public enum DesktopEvaluationAction: String, Codable, Sendable {
     case copyRedactedLog = "copy-redacted-log"
     case previewPolicy = "preview-policy"
     case inspectSettings = "inspect-settings"
-    case choosePublicSetup = "choose-public-setup"
-    case choosePrivateSetup = "choose-private-setup"
+    case beginSetup = "begin-setup"
     case chooseProvider = "choose-provider"
     case checkDaemon = "check-daemon"
-    case continuePublicSetup = "continue-public-setup"
-    case activatePrivateLicense = "activate-private-license"
+    case activateLicense = "activate-license"
     case finishOnboarding = "finish-onboarding"
 }
 
@@ -285,6 +282,21 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
         case .license, .done:
             guard state.runtimeReady != nil else {
                 throw DesktopEvaluationFixtureError.invalidValue("onboarding state has not completed daemon readiness")
+            }
+        case .welcome, .provider, .daemon, nil:
+            break
+        }
+        switch surface.onboardingStep {
+        case .license:
+            guard state.license.entitlement == .notActivated,
+                  !state.license.credentialPresent,
+                  expectedActions == [.activateLicense] else {
+                throw DesktopEvaluationFixtureError.invalidValue("license onboarding must be blocked on API-backed activation")
+            }
+        case .done:
+            guard state.license.entitlement == .active,
+                  state.license.credentialPresent else {
+                throw DesktopEvaluationFixtureError.invalidValue("done onboarding requires API-backed activation")
             }
         case .welcome, .provider, .daemon, nil:
             break

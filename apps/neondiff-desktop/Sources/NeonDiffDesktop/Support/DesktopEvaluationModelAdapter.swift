@@ -138,7 +138,7 @@ enum DesktopEvaluationModelAdapter {
             mode: .publicReposOnly,
             providerKeyStored: fixture.state.provider?.credentialPresent == true,
             daemonBootstrapChecked: fixture.state.runtimeReady != nil,
-            licenseActivation: fixture.state.license.entitlement == "active private" ? .activated : .servicePending
+            licenseActivation: fixture.state.license.entitlement == "active" ? .activated : .servicePending
         )
     }
 

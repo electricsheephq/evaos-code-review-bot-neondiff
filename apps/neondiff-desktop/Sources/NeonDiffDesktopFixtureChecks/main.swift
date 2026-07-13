@@ -87,7 +87,7 @@ let validFixture = Data(
           "credentialPresent": true,
           "verification": "healthy"
         },
-        "license": {"entitlement": "public repositories", "credentialPresent": false, "updateChannel": "dev"},
+        "license": {"entitlement": "active", "credentialPresent": true, "updateChannel": "dev"},
         "github": {"connection": "connected", "login": "fixture-user", "repositoryCount": 1},
         "logText": "Fixture log: no live process was contacted."
       },
@@ -112,6 +112,14 @@ let unreachableDoneFixture = try mutatedManifest(validFixture) { object in
     object["state"] = state
 }
 expectFixtureFailure("unreachable onboarding done state", data: unreachableDoneFixture)
+
+let unactivatedDoneFixture = try mutatedManifest(validFixture) { object in
+    object["surface"] = ["section": "overview", "onboardingStep": "done"]
+    var state = object["state"] as! [String: Any]
+    state["license"] = ["entitlement": "not activated", "credentialPresent": false, "updateChannel": "dev"]
+    object["state"] = state
+}
+expectFixtureFailure("unactivated onboarding done state", data: unactivatedDoneFixture)
 
 let safeHyphenatedCopy = Data(
     String(decoding: validFixture, as: UTF8.self)

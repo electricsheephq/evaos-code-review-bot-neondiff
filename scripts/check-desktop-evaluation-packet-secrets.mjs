@@ -44,6 +44,17 @@ function looksBinary(data) {
     || invalidUTF8;
 }
 
+function isRecognizedArtifactBinary(path, data) {
+  const magic = data.subarray(0, 4).toString("hex");
+  const executableMagic = new Set([
+    "7f454c46", "feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe", "bebafeca"
+  ]);
+  const recognizedArtifactExtension = /\.(?:a|car|dylib|metallib|mom|nib|so)$/i;
+  return executableMagic.has(magic)
+    || binarySecretScanExtension.test(path)
+    || recognizedArtifactExtension.test(path);
+}
+
 const entries = [];
 walkDescriptorTree(packet, (entry) => entries.push(entry));
 const entryPaths = new Set([artifactRoot, ...entries.map((entry) => entry.relativePath)]);
@@ -88,7 +99,7 @@ for (const entry of entries) {
     }
     if (entry.type === "directory") continue;
     if (/((^|\/)\.env(?:\.|$)|\.(?:pem|key|sqlite|db)$)/.test(rel)) sensitiveFiles.push(rel);
-    if (rel.startsWith(`${artifactRoot}/`) && looksBinary(entry.data)) {
+    if (rel.startsWith(`${artifactRoot}/`) && isRecognizedArtifactBinary(rel, entry.data)) {
       skippedArtifactBinaries.push(rel);
       continue;
     }

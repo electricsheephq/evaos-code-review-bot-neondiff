@@ -114,6 +114,10 @@ describe("desktop evaluation production boundary", () => {
       "apps/neondiff-desktop/scripts/capture-evaluation-baseline.sh",
       "utf8"
     );
+    const readiness = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift",
+      "utf8"
+    );
     const windowConfigurator = readFileSync(
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/NeonWindowConfigurator.swift",
       "utf8"
@@ -135,6 +139,12 @@ describe("desktop evaluation production boundary", () => {
     expect(helper).toContain("AXUIElementSetMessagingTimeout");
     expect(helper).toContain("screencapture timed out");
     expect(runner).toContain("canonical capture requires a clean worktree");
+    expect(runner).toContain("umask 077");
+    expect(runner).toMatch(/mktemp -d/);
+    expect(runner).not.toContain('tmp_root="/tmp/neondiff-desktop-evaluation/$run_id"');
+    expect(readiness).toContain("neondiff-desktop-evaluation\\.[A-Za-z0-9]{8}");
+    expect(readiness).toContain("runRoot.deletingLastPathComponent().path == allowedParent.path");
+    expect(readiness).toContain("values.isSymbolicLink != true");
     expect(runner).toContain("assert_clean_head");
     expect(runner).toContain('swift package --package-path "$package_dir" clean');
     expect(runner).toContain("NeonDiffDesktopCoreTests");

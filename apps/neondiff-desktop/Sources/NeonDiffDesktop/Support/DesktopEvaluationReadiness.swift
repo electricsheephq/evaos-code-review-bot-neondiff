@@ -13,17 +13,23 @@ struct DesktopEvaluationReadinessRequest {
         renderLatch: DesktopEvaluationRenderLatch
     ) throws {
         let url = URL(fileURLWithPath: outputPath).standardizedFileURL
-        let allowedRoot = URL(fileURLWithPath: "/tmp/neondiff-desktop-evaluation", isDirectory: true)
-            .standardizedFileURL
+        let allowedParent = URL(fileURLWithPath: "/tmp", isDirectory: true).standardizedFileURL
+        let parent = url.deletingLastPathComponent()
+        let runRoot = parent.deletingLastPathComponent()
         guard url.isFileURL,
-              url.path.hasPrefix(allowedRoot.path + "/"),
+              runRoot.deletingLastPathComponent().path == allowedParent.path,
+              runRoot.lastPathComponent.range(
+                of: #"^neondiff-desktop-evaluation\.[A-Za-z0-9]{8}$"#,
+                options: .regularExpression
+              ) != nil,
               url.pathExtension == "json" else {
             throw DesktopEvaluationReadinessError.unsafeOutputPath
         }
-        let parent = url.deletingLastPathComponent()
-        let values = try parent.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard values.isDirectory == true, values.isSymbolicLink != true else {
-            throw DesktopEvaluationReadinessError.unsafeOutputPath
+        for directory in [runRoot, parent] {
+            let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                throw DesktopEvaluationReadinessError.unsafeOutputPath
+            }
         }
         self.fixtureId = fixtureId
         self.outputURL = url
@@ -43,7 +49,7 @@ enum DesktopEvaluationReadinessError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsafeOutputPath: "Evaluation readiness output must be a regular /tmp/neondiff-desktop-evaluation JSON path."
+        case .unsafeOutputPath: "Evaluation readiness output must be inside a private capture workspace."
         case .invalidGeometry: "Evaluation window geometry is invalid."
         }
     }

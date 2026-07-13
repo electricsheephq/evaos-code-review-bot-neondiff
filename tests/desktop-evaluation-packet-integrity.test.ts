@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 import { deflateSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { validateDesktopEvaluationFixture } from "../scripts/shared/desktop-evaluation-fixture-validator.mjs";
 
 const roots: string[] = [];
 const headSHA = "a".repeat(40);
@@ -121,7 +122,7 @@ process.exit(99);
         runtimeReady: true,
         repositories: [],
         provider: null,
-        license: { entitlement: "public repositories", credentialPresent: false, updateChannel: "dev" },
+        license: { entitlement: "active", credentialPresent: true, updateChannel: "dev" },
         github: { connection: "disconnected", login: null, repositoryCount: 0 },
         logText: "Fixture log: nominal state."
       },
@@ -491,6 +492,52 @@ describe("desktop evaluation packet integrity", { timeout: 30_000 }, () => {
     expect(forgedUnsafe.status).toBe(1);
     expect(JSON.parse(forgedUnsafe.stdout).findings).toEqual(
       expect.arrayContaining([expect.objectContaining({ pattern: "canonical_secret" })])
+    );
+  });
+
+  it("rejects a canonical done fixture without API-backed activation", () => {
+    const value = packetFixture();
+    const fixture = JSON.parse(readFileSync(join(value.packet, "fixtures", "fixture-00.json"), "utf8"));
+    fixture.surface.onboardingStep = "done";
+    fixture.state.license = { entitlement: "not activated", credentialPresent: false, updateChannel: "dev" };
+    fixture.state.provider = {
+      id: "zcode-glm",
+      displayName: "Z.AI GLM",
+      adapter: "openai-compatible",
+      authMode: "api-key-env",
+      baseURL: "https://api.z.ai/api/coding/paas/v4",
+      model: "glm-5",
+      credentialPresent: true,
+      verification: "healthy"
+    };
+
+    expect(() => validateDesktopEvaluationFixture(fixture)).toThrow(/activation/i);
+  });
+
+  it("fails closed on invalid UTF-8 in a text-like app resource", () => {
+    const value = packetFixture();
+    const resource = join(
+      value.packet,
+      "artifacts",
+      "NeonDiffDesktop.app",
+      "Contents",
+      "Resources",
+      "secret.txt"
+    );
+    mkdirSync(join(resource, ".."), { recursive: true });
+    writeFileSync(resource, Buffer.concat([
+      Buffer.from([0xff]),
+      Buffer.from(["gh", "p_", "fixture_secret_material_1234567890"].join(""))
+    ]));
+
+    const scan = spawnSync(
+      "node",
+      ["scripts/check-desktop-evaluation-packet-secrets.mjs", "--packet", value.packet],
+      { encoding: "utf8" }
+    );
+    expect(scan.status).toBe(1);
+    expect(JSON.parse(scan.stdout).unsupportedBinaryFiles).toContain(
+      "artifacts/NeonDiffDesktop.app/Contents/Resources/secret.txt"
     );
   });
 

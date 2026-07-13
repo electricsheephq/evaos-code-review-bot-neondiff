@@ -64,7 +64,7 @@ struct DesktopEvaluationStateTests {
             ),
             repos: [RepoMonitor(name: "fixture/repository", enabled: true)],
             providers: providers,
-            license: LicenseStatus(entitlement: "public repositories"),
+            license: LicenseStatus(keyStored: true, entitlement: "active"),
             github: GitHubConnectionStatus(installationState: "connected", authorizedUserLogin: "fixture-user", discoveredRepositoryCount: 1),
             githubAuthorizationStatus: "connected as fixture-user",
             logText: "Fixture log: settled.",

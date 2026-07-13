@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 usage() {
   echo "usage: $0 --output <packet-directory>" >&2
@@ -25,8 +26,12 @@ assert_clean_head() {
     || { echo "source changed during canonical capture" >&2; exit 65; }
 }
 
-run_id="${head_sha}-$$"
-tmp_root="/tmp/neondiff-desktop-evaluation/$run_id"
+tmp_root=$(/usr/bin/mktemp -d "/tmp/neondiff-desktop-evaluation.XXXXXXXX") \
+  || { echo "could not create private capture workspace" >&2; exit 65; }
+[ -d "$tmp_root" ] && [ ! -L "$tmp_root" ] \
+  || { echo "capture workspace is not a private directory" >&2; exit 65; }
+[ "$(/usr/bin/stat -f '%Lp' "$tmp_root")" = 700 ] \
+  || { echo "capture workspace permissions are not private" >&2; exit 65; }
 mkdir -p "$tmp_root/fixtures" "$output/artifacts" "$output/fixtures" "$output/tests" "$output/cases" "$output/validation"
 cleanup_pid=
 capture_pid=

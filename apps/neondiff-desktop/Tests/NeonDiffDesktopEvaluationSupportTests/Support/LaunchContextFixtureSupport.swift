@@ -22,7 +22,7 @@ func temporaryFixture(contentSize: String = "null") throws -> URL {
         "runtimeReady": true,
         "repositories": [],
         "provider": null,
-        "license": {"entitlement": "public repositories", "credentialPresent": false, "updateChannel": "dev"},
+        "license": {"entitlement": "active", "credentialPresent": true, "updateChannel": "dev"},
         "github": {"connection": "disconnected", "login": null, "repositoryCount": 0},
         "logText": "Fixture log: deterministic launch."
       },

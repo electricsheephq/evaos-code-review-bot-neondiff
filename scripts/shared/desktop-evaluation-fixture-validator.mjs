@@ -8,13 +8,13 @@ const profiles = new Set(["default", "strict"]);
 const adapters = new Set(["openai-compatible", "zcode"]);
 const authModes = new Set(["none", "api-key-env", "zcode-app-config"]);
 const verificationStates = new Set(["healthy", "configured_unverified", "blocked", "dirty", "in_progress"]);
-const entitlements = new Set(["not activated", "public repositories", "active private", "private blocked"]);
+const entitlements = new Set(["not activated", "active", "activation blocked"]);
 const channels = new Set(["dev", "beta", "stable"]);
 const githubConnections = new Set(["disconnected", "device_code", "connected", "recovery"]);
 const actions = new Set([
   "refresh-status", "refresh-repositories", "verify-provider", "inspect-license", "copy-redacted-log",
-  "preview-policy", "inspect-settings", "choose-public-setup", "choose-private-setup", "choose-provider",
-  "check-daemon", "continue-public-setup", "activate-private-license", "finish-onboarding"
+  "preview-policy", "inspect-settings", "begin-setup", "choose-provider",
+  "check-daemon", "activate-license", "finish-onboarding"
 ]);
 const outcomes = new Set(["success", "failure", "cancelled"]);
 const canonicalSizes = new Set(["1040x680", "1280x800", "1440x900", "760x560", "560x700"]);
@@ -131,6 +131,17 @@ export function validateDesktopEvaluationFixture(input) {
   });
   if (!Array.isArray(input.expectedActions) || input.expectedActions.length > 50) fail("expectedActions is invalid");
   input.expectedActions.forEach((action) => enumValue(action, actions, "expected action"));
+  if (step === "license"
+    && (input.state.license.entitlement !== "not activated"
+      || input.state.license.credentialPresent
+      || input.expectedActions.length !== 1
+      || input.expectedActions[0] !== "activate-license")) {
+    fail("license onboarding must be blocked on API-backed activation");
+  }
+  if (step === "done"
+    && (input.state.license.entitlement !== "active" || !input.state.license.credentialPresent)) {
+    fail("done onboarding requires API-backed activation");
+  }
   if (!Array.isArray(input.safeCopy) || input.safeCopy.length > 100 || input.safeCopy.some((value) => typeof value !== "string")) fail("safeCopy is invalid");
 
   return {
