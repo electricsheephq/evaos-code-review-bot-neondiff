@@ -640,16 +640,10 @@ export class LicenseStore {
           break;
         }
         case "revoke": {
-          const storedExpiry = record.expiresAt ? Date.parse(record.expiresAt) : Number.NaN;
-          if (!Number.isFinite(storedExpiry)) {
-            throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
-          }
-          // Revocation is terminal at the provider event second. Clamping can
-          // only remove time, and makes a same-second pre-revoke renewal
-          // converge with revoke-first without rewriting append-only history.
-          const terminalExpiry = new Date(
-            Math.min(storedExpiry, input.eventCreatedAt * 1_000)
-          ).toISOString();
+          // Terminal expiry is authoritative provider-event metadata, not
+          // usable paid time. Deriving it solely from the revoke second makes
+          // every prior active/expired/renewed state converge identically.
+          const terminalExpiry = new Date(input.eventCreatedAt * 1_000).toISOString();
           this.db
             .prepare(
               `update licenses

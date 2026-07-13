@@ -1026,6 +1026,90 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
     assert.notDeepEqual(histories[0], histories[1]);
   });
 
+  it("normalizes same-second renewal and revoke from an already expired entitlement", () => {
+    const projections: Array<Record<string, unknown>> = [];
+    const histories: Array<Array<Record<string, unknown>>> = [];
+    for (const order of ["renew-first", "revoke-first"] as const) {
+      const path = databasePath();
+      const firstStore = new LicenseStore(path, { now: () => NOW });
+      const secondStore = new LicenseStore(path, { now: () => NOW });
+      try {
+        const issued = issueBound(firstStore, {
+          idempotencyKey: "checkout-session:expired-terminal-order",
+          externalSubscriptionId: "sub_expired_terminal_order",
+          externalCheckoutId: "cs_expired_terminal_order"
+        });
+        assert.equal(activate(firstStore, {
+          licenseKey: issued.rawKey,
+          machineId: "machine-expired-terminal-order",
+          repo: "owner/repo"
+        }, NOW).httpStatus, 200);
+        const db = new DatabaseSync(path);
+        db.prepare(
+          "update licenses set status = 'expired', expires_at = ? where license_key_hash = ?"
+        ).run("2026-07-12T00:00:00.000Z", issued.licenseKeyHash);
+        db.close();
+        const activations = firstStore.listActivations(issued.licenseKeyHash);
+        const paid = renewal(issued.request, {
+          eventId: `evt_expired_terminal_paid_${order}`,
+          eventCreatedAt: NOW_SECONDS,
+          currentPeriodEnd: "2026-08-20T00:00:00.000Z"
+        });
+        const revoked = lifecycleRequest("revoke", issued.request, {
+          eventId: `evt_expired_terminal_revoke_${order}`,
+          eventCreatedAt: NOW_SECONDS
+        });
+
+        if (order === "renew-first") {
+          assert.equal(applyLifecycle(firstStore, paid).status, "updated");
+          assert.equal(applyLifecycle(secondStore, revoked).status, "terminally_revoked");
+        } else {
+          assert.equal(applyLifecycle(firstStore, revoked).status, "terminally_revoked");
+          const terminal = firstStore.getLicenseByKey(issued.rawKey);
+          assert.throws(
+            () => applyLifecycle(secondStore, paid),
+            (error: unknown) => errorName(error) === "SubscriptionLifecycleTerminalError"
+          );
+          assert.deepEqual(secondStore.getLicenseByKey(issued.rawKey), terminal);
+        }
+
+        const license = secondStore.getLicenseByKey(issued.rawKey)!;
+        projections.push({
+          status: license.status,
+          plan: license.plan,
+          seats: license.seats,
+          expiresAt: license.expiresAt,
+          revocationReason: license.revocationReason,
+          licenseKeyHash: license.licenseKeyHash,
+          activations: secondStore.listActivations(issued.licenseKeyHash)
+        });
+        assert.deepEqual(secondStore.listActivations(issued.licenseKeyHash), activations);
+        histories.push(
+          inspectDatabase<{ command: string; result: string }>(
+            path,
+            `select command, result
+             from license_subscription_lifecycle_events
+             order by command`
+          ).map((row) => ({ ...row }))
+        );
+      } finally {
+        secondStore.close();
+        firstStore.close();
+      }
+    }
+
+    assert.deepEqual(projections[0], projections[1]);
+    assert.equal(projections[0]?.status, "revoked");
+    assert.equal(projections[0]?.expiresAt, NOW.toISOString());
+    assert.deepEqual(histories[0], [
+      { command: "renew_paid", result: "updated" },
+      { command: "revoke", result: "terminally_revoked" }
+    ]);
+    assert.deepEqual(histories[1], [
+      { command: "revoke", result: "terminally_revoked" }
+    ]);
+  });
+
   it("rolls back every non-mutating watermark when its ledger insert fails", () => {
     for (const command of ["reconcile", "cancel_at_period_end", "payment_attention"] as const) {
       const path = databasePath();
