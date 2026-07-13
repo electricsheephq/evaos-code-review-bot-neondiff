@@ -203,13 +203,41 @@ describe("phase 1 cohort selection", () => {
       "--allowed-output-root", trusted.allowedOutputRoot
     ];
     const selected = runPhase1CohortSelectionCli(["select", ...args]);
-    expect(selected).toEqual({ ok: true, command: "select", manifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(selected).toEqual({
+      ok: true,
+      command: "select",
+      selectionProfile: "stratified_transport",
+      manifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/)
+    });
     const manifestSha256 = (selected as { manifestSha256: string }).manifestSha256;
-    expect(runPhase1CohortSelectionCli(["verify", ...args])).toEqual({ ok: true, command: "verify", manifestSha256 });
-    expect(Object.keys(selected as object).sort()).toEqual(["command", "manifestSha256", "ok"]);
+    expect(runPhase1CohortSelectionCli(["verify", ...args])).toEqual({
+      ok: true,
+      command: "verify",
+      selectionProfile: "stratified_transport",
+      manifestSha256
+    });
+    expect(Object.keys(selected as object).sort()).toEqual(["command", "manifestSha256", "ok", "selectionProfile"]);
     expect(() => runPhase1CohortSelectionCli(["select", "--candidate-pool", f.candidatePoolPath])).toThrow(/usage/i);
     expect(() => runPhase1CohortSelectionCli(["select", ...args, "--unknown", "value"])).toThrow(/unknown option/i);
     expect(() => runPhase1CohortSelectionCli(["select", ...args, "--policy", f.policyPath])).toThrow(/duplicate option/i);
+
+    const natural = naturalFixture();
+    const naturalTrusted = selectionOptions(natural);
+    const naturalArgs = [
+      "--candidate-pool", natural.candidatePoolPath,
+      "--candidate-pool-sha256", naturalTrusted.candidatePoolSha256,
+      "--policy", natural.policyPath,
+      "--policy-sha256", naturalTrusted.policySha256,
+      "--output-dir", natural.outputDir,
+      "--allowed-output-root", naturalTrusted.allowedOutputRoot
+    ];
+    const naturalSelected = runPhase1CohortSelectionCli(["select", ...naturalArgs]);
+    expect(naturalSelected).toMatchObject({ ok: true, command: "select", selectionProfile: "natural_quality" });
+    expect(runPhase1CohortSelectionCli(["verify", ...naturalArgs])).toMatchObject({
+      ok: true,
+      command: "verify",
+      selectionProfile: "natural_quality"
+    });
   });
 
   it("runs the documented advisory-only select and verify package command", () => {
@@ -218,6 +246,9 @@ describe("phase 1 cohort selection", () => {
     const docs = readFileSync("docs/eval-harness.md", "utf8");
     expect(docs).toContain("npm run eval:phase1-cohort -- select");
     expect(docs).toContain("npm run eval:phase1-cohort -- verify");
+    expect(docs).toContain("stratified_transport");
+    expect(docs).toContain("natural_quality");
+    expect(docs).toMatch(/admissionEstimatedPromptTokens.*not.*exact.*provider|not.*exact.*provider.*admissionEstimatedPromptTokens/is);
     expect(docs).toMatch(/does not wire the\s+seal into production review, posting, runtime defaults, or CI enforcement/);
 
     const f = fixture();
@@ -237,6 +268,7 @@ describe("phase 1 cohort selection", () => {
       expect(selected).toEqual({
         ok: true,
         command: "select",
+        selectionProfile: "stratified_transport",
         manifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/)
       });
       const verified = JSON.parse(execFileSync("npm", [
@@ -245,6 +277,7 @@ describe("phase 1 cohort selection", () => {
       expect(verified).toEqual({
         ok: true,
         command: "verify",
+        selectionProfile: "stratified_transport",
         manifestSha256: selected.manifestSha256
       });
     } finally {
@@ -258,6 +291,7 @@ describe("phase 1 cohort selection", () => {
     ], { cwd: process.cwd(), encoding: "utf8" }));
     expect(help).toMatchObject({ ok: true, command: "help" });
     expect(help.usage).toContain("phase1-cohort-selection <select|verify>");
+    expect(help.usage).toContain("stratified_transport or natural_quality");
   });
 
   it("rejects non-regular candidate and policy input descriptors", () => {
@@ -619,7 +653,11 @@ describe("phase 1 cohort selection", () => {
     );
     expect(seal(f).manifestSha256).toBe(manifest.manifestSha256);
     expect(Object.fromEntries(Object.keys(modificationTimes).map((name) => [name, statSync(join(f.outputDir, name)).mtimeMs]))).toEqual(modificationTimes);
-    expect(verifyPhase1CohortSeal(selectionOptions(f))).toEqual({ ok: true, manifestSha256: manifest.manifestSha256 });
+    expect(verifyPhase1CohortSeal(selectionOptions(f))).toEqual({
+      ok: true,
+      selectionProfile: "stratified_transport",
+      manifestSha256: manifest.manifestSha256
+    });
 
     const runtime = JSON.parse(readFileSync(join(f.outputDir, "runtime-input-manifest.json"), "utf8")) as unknown;
     const runtimeText = JSON.stringify(runtime);

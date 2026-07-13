@@ -4,11 +4,17 @@ import { redactSecrets } from "./secrets.js";
 import {
   selectAndSealPhase1Cohort,
   verifyPhase1CohortSeal,
-  type Phase1CohortSelectionOptions
+  type Phase1CohortSelectionOptions,
+  type Phase1SelectionProfile
 } from "./phase1-cohort-selection.js";
 
 export type Phase1CohortSelectionCliResult =
-  | { ok: true; command: "select" | "verify"; manifestSha256: string }
+  | {
+    ok: true;
+    command: "select" | "verify";
+    selectionProfile: Phase1SelectionProfile;
+    manifestSha256: string;
+  }
   | { ok: true; command: "help"; usage: string };
 
 export function runPhase1CohortSelectionCli(args: string[]): Phase1CohortSelectionCliResult {
@@ -21,7 +27,12 @@ export function runPhase1CohortSelectionCli(args: string[]): Phase1CohortSelecti
   const result = command === "select"
     ? selectAndSealPhase1Cohort(options)
     : verifyPhase1CohortSeal(options);
-  return { ok: true, command, manifestSha256: result.manifestSha256 };
+  return {
+    ok: true,
+    command,
+    selectionProfile: result.selectionProfile,
+    manifestSha256: result.manifestSha256
+  };
 }
 
 function parseOptions(args: string[]): Phase1CohortSelectionOptions {
@@ -56,7 +67,7 @@ function parseOptions(args: string[]): Phase1CohortSelectionOptions {
 }
 
 function usage(): string {
-  return "usage: phase1-cohort-selection <select|verify> --candidate-pool <path> --candidate-pool-sha256 <sha256> --policy <path> --policy-sha256 <sha256> --output-dir <path> --allowed-output-root <path>";
+  return "usage: phase1-cohort-selection <select|verify> --candidate-pool <path> --candidate-pool-sha256 <sha256> --policy <path> --policy-sha256 <sha256> --output-dir <path> --allowed-output-root <path>; pinned policy selects stratified_transport or natural_quality";
 }
 
 function isMainModule(): boolean {

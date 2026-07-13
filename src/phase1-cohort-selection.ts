@@ -193,11 +193,19 @@ export function selectAndSealPhase1Cohort(options: Phase1CohortSelectionOptions)
   return { ...sealed.manifest, manifestSha256: sealed.manifestSha256 };
 }
 
-export function verifyPhase1CohortSeal(options: Phase1CohortSelectionOptions): { ok: true; manifestSha256: string } {
+export function verifyPhase1CohortSeal(options: Phase1CohortSelectionOptions): {
+  ok: true;
+  selectionProfile: Phase1SelectionProfile;
+  manifestSha256: string;
+} {
   const inputs = loadAndValidate(options);
   const sealed = buildSealedArtifacts(inputs);
   verifyArtifactBytes(options.outputDir, sealed.artifacts);
-  return { ok: true, manifestSha256: sealed.manifestSha256 };
+  return {
+    ok: true,
+    selectionProfile: sealed.manifest.selectionProfile,
+    manifestSha256: sealed.manifestSha256
+  };
 }
 
 function buildSealedArtifacts(inputs: {
