@@ -170,6 +170,15 @@ let invalidCalendarClockFixture = Data(
 )
 expectFixtureFailure("invalid calendar fixture clock", data: invalidCalendarClockFixture)
 
+for clock in ["0000-01-01T00:00:00Z", "1500-02-29T00:00:00Z"] {
+    let fixture = Data(
+        String(decoding: validFixture, as: UTF8.self)
+            .replacingOccurrences(of: "2026-07-10T12:00:00Z", with: clock)
+            .utf8
+    )
+    expectFixtureFailure("out-of-contract fixture clock", data: fixture)
+}
+
 let stringContentSizeFixture = try mutatedManifest(validFixture) { object in
     var environment = object["environment"] as! [String: Any]
     environment["contentSize"] = ["width": "1040", "height": "680"]
@@ -200,6 +209,23 @@ let hostlessProviderURL = try mutatedManifest(validFixture) { object in
 }
 expectFixtureFailure("hostless provider base URL", data: hostlessProviderURL)
 
+for (label, baseURL) in [
+    ("control-character provider base URL", "https://\nexample.com"),
+    ("backslash provider base URL", #"https://example.com\evil"#),
+    ("out-of-range provider port", "https://example.com:99999"),
+    ("provider URL userinfo", "https://@example.com"),
+    ("provider URL trailing whitespace", "https://example.com ")
+] {
+    let fixture = try mutatedManifest(validFixture) { object in
+        var state = object["state"] as! [String: Any]
+        var provider = state["provider"] as! [String: Any]
+        provider["baseURL"] = baseURL
+        state["provider"] = provider
+        object["state"] = state
+    }
+    expectFixtureFailure(label, data: fixture)
+}
+
 let offsetRepositoryTimestamp = try mutatedManifest(validFixture) { object in
     var state = object["state"] as! [String: Any]
     var repositories = state["repositories"] as! [[String: Any]]
@@ -224,6 +250,15 @@ let unactivatedPostOnboardingFixture = try mutatedManifest(validFixture) { objec
     object["state"] = state
 }
 expectFixtureFailure("unactivated post-onboarding state", data: unactivatedPostOnboardingFixture)
+
+let oversizedRepositoryCount = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var github = state["github"] as! [String: Any]
+    github["repositoryCount"] = 10_001
+    state["github"] = github
+    object["state"] = state
+}
+expectFixtureFailure("oversized repository count", data: oversizedRepositoryCount)
 
 let semanticOversizedFixture = try mutatedManifest(validFixture) { object in
     object["safeCopy"] = Array(repeating: String(repeating: "x", count: 3_000), count: 100)

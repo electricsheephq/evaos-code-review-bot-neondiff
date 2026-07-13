@@ -50,6 +50,14 @@ describe("desktop fixture validator parity", () => {
     expect(() => validateDesktopEvaluationFixture(source)).toThrow(/lastReview is invalid/);
   });
 
+  it("keeps fixture timestamps inside the shared modern-year contract", () => {
+    for (const clock of ["0000-01-01T00:00:00Z", "1500-02-29T00:00:00Z"]) {
+      const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
+      source.environment.clock = clock;
+      expect(() => validateDesktopEvaluationFixture(source)).toThrow(/clock is invalid/);
+    }
+  });
+
   it("rejects non-canonical offset repository timestamps", () => {
     const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
     source.state.repositories[0].lastReview = "2026-07-10T11:55:00+07:00";
@@ -85,10 +93,34 @@ describe("desktop fixture validator parity", () => {
     }
   });
 
+  it("rejects WHATWG-normalized control characters and backslashes in provider URLs", () => {
+    for (const baseURL of [
+      "https://\nexample.com",
+      "https://example.com\n",
+      "https://example.com\t/path",
+      "https://example.com\\evil",
+      "https://example.com:99999",
+      "https://@example.com",
+      "https://example.com "
+    ]) {
+      const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-providers.json", "utf8"));
+      source.state.provider.baseURL = baseURL;
+      expect(() => validateDesktopEvaluationFixture(source)).toThrow(/baseURL is invalid/);
+    }
+  });
+
   it("rejects unactivated post-onboarding surfaces", () => {
     const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
     source.state.license = { entitlement: "not activated", credentialPresent: false, updateChannel: "dev" };
     expect(() => validateDesktopEvaluationFixture(source)).toThrow(/post-onboarding.*activation/i);
+  });
+
+  it("caps repository counts inside the shared integer contract", () => {
+    const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
+    source.state.github.repositoryCount = 10_001;
+    expect(() => validateDesktopEvaluationFixture(source)).toThrow(/repositoryCount is invalid/);
+    source.state.github.repositoryCount = 1e20;
+    expect(() => validateDesktopEvaluationFixture(source)).toThrow(/repositoryCount is invalid/);
   });
 
   it("rejects semantic and whitespace fixture payloads over the Swift byte limit", () => {

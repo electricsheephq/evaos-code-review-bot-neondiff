@@ -237,7 +237,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
            !DesktopEvaluationContentSize.canonical.contains(contentSize) {
             throw DesktopEvaluationFixtureError.invalidValue("contentSize")
         }
-        guard state.github.repositoryCount >= 0 else {
+        guard (0...10_000).contains(state.github.repositoryCount) else {
             throw DesktopEvaluationFixtureError.invalidValue("github.repositoryCount")
         }
         guard state.repositories.count <= 100,
@@ -260,12 +260,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
                   provider.displayName.utf8.count <= 128,
                   !provider.model.isEmpty,
                   provider.model.utf8.count <= 256,
-                  let url = URL(string: provider.baseURL),
-                  ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-                  let host = url.host,
-                  !host.isEmpty,
-                  url.user == nil,
-                  url.password == nil else {
+                  Self.isCanonicalProviderURL(provider.baseURL) else {
                 throw DesktopEvaluationFixtureError.invalidValue("provider")
             }
         }
@@ -319,12 +314,24 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
 
     private static func isCanonicalTimestamp(_ value: String) -> Bool {
         guard value.range(
-            of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"#,
+            of: #"^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"#,
             options: .regularExpression
         ) != nil else { return false }
         let formatter = ISO8601DateFormatter()
         guard let date = formatter.date(from: value) else { return false }
         return formatter.string(from: date) == value
+    }
+
+    private static func isCanonicalProviderURL(_ value: String) -> Bool {
+        let grammar = #"^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$"#
+        guard value.range(of: grammar, options: [.regularExpression, .caseInsensitive]) != nil,
+              let url = URL(string: value),
+              let host = url.host,
+              !host.isEmpty,
+              url.user == nil,
+              url.password == nil else { return false }
+        if let port = url.port, !(1...65_535).contains(port) { return false }
+        return true
     }
 
     private static func validateShape(_ root: [String: Any]) throws {

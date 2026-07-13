@@ -18,6 +18,7 @@ const actions = new Set([
 ]);
 const outcomes = new Set(["success", "failure", "cancelled"]);
 const canonicalSizes = new Set(["1040x680", "1280x800", "1440x900", "760x560", "560x700"]);
+const canonicalProviderURL = /^https?:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/i;
 const maximumFixtureBytes = 256 * 1024;
 
 function fail(message) { throw new Error(`fixture schema: ${message}`); }
@@ -54,7 +55,7 @@ function publicSafe(value, path = "root") {
 }
 function isoDate(value, label) {
   if (typeof value !== "string"
-    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
+    || !/^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
     || Number.isNaN(Date.parse(value))
     || new Date(value).toISOString().replace(".000Z", "Z") !== value) {
     fail(`${label} is invalid`);
@@ -103,7 +104,7 @@ export function validateDesktopEvaluationFixture(input) {
     enumValue(provider.authMode, authModes, "provider.authMode");
     enumValue(provider.verification, verificationStates, "provider.verification");
     boolean(provider.credentialPresent, "provider.credentialPresent");
-    if (typeof provider.baseURL !== "string" || !/^https?:\/\//i.test(provider.baseURL)) fail("provider.baseURL is invalid");
+    if (typeof provider.baseURL !== "string" || !canonicalProviderURL.test(provider.baseURL)) fail("provider.baseURL is invalid");
     let url;
     try { url = new URL(provider.baseURL); } catch { fail("provider.baseURL is invalid"); }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) fail("provider.baseURL is invalid");
@@ -116,7 +117,9 @@ export function validateDesktopEvaluationFixture(input) {
   enumValue(input.state.github.connection, githubConnections, "github.connection");
   const login = input.state.github.login ?? null;
   if (login !== null && (typeof login !== "string" || !/^[A-Za-z0-9-]{1,39}$/.test(login))) fail("github.login is invalid");
-  if (!Number.isInteger(input.state.github.repositoryCount) || input.state.github.repositoryCount < 0) fail("github.repositoryCount is invalid");
+  if (!Number.isInteger(input.state.github.repositoryCount)
+    || input.state.github.repositoryCount < 0
+    || input.state.github.repositoryCount > 10_000) fail("github.repositoryCount is invalid");
   if (typeof input.state.logText !== "string") fail("state.logText is invalid");
 
   if (["daemon", "license", "done"].includes(step) && provider?.credentialPresent !== true) fail("onboarding provider prerequisite is incomplete");
