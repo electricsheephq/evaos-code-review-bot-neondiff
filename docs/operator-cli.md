@@ -257,8 +257,11 @@ evaos-review-bot status --config config.local.json
   supplied plist or the exact standard
   `~/Library/LaunchAgents/<label>.plist`, then kickstarts it. A bootstrap race
   is accepted only after a second launchd check proves the service became
-  loaded. Dry-run reports the detected state and plan but performs no launchd
-  mutation. Use only operator-owned plist paths. Live
+  loaded. Dry-run start issues only the read-only
+  `launchctl print gui/<uid>/<label>` probe needed to report the detected state
+  and exact plan; it performs no launchd mutation. An ambiguous probe response
+  fails closed with structured JSON instead of guessing whether the service is
+  loaded. Use only operator-owned plist paths. Live
   mutation with a `--plist` outside the NeonDiff package root requires
   `--allow-external-plist true`; dry-run still reports the warning and planned
   commands without mutating launchd. The external-plist warning is a lexical

@@ -292,7 +292,10 @@ path exists. Pass `--plist` for any other first-time or recovery path. A
 concurrent loader that wins the race after the check is treated idempotently:
 NeonDiff confirms the service is now loaded and continues with `kickstart`.
 Dry-run output includes `launchdLoaded`, the selected operation, and the exact
-planned commands without bootstrapping or restarting the service.
+planned commands without bootstrapping or restarting the service. To derive
+that plan, dry-run start issues a read-only
+`launchctl print gui/<uid>/<launchd-label>` probe; an ambiguous response fails
+closed instead of guessing whether the service is loaded.
 Use only operator-owned plist paths. The CLI validates the plist `Label` against
 `--launchd-label` and warns when the plist lives outside the NeonDiff package
 root. Live mutation with an external plist also requires

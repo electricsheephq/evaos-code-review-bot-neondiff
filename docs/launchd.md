@@ -53,32 +53,17 @@ Only switch to `--dry-run false` after:
 ## Supported Stop And Start Recovery
 
 Use the JSON-first CLI instead of choosing `bootstrap` or `kickstart` from
-plist existence alone:
-
-```bash
-neondiff daemon stop \
-  --launchd-label com.electricsheephq.evaos-code-review-bot \
-  --dry-run true
-neondiff daemon stop \
-  --launchd-label com.electricsheephq.evaos-code-review-bot \
-  --dry-run false \
-  --confirm true
-neondiff daemon start \
-  --config /absolute/path/to/config.local.json \
-  --launchd-label com.electricsheephq.evaos-code-review-bot \
-  --dry-run true
-neondiff daemon start \
-  --config /absolute/path/to/config.local.json \
-  --launchd-label com.electricsheephq.evaos-code-review-bot \
-  --dry-run false \
-  --confirm true
-```
+plist existence alone. The executable stop/start sequence and confirmation
+requirements live in [the operator CLI guide](operator-cli.md#common-operator-flows).
 
 After `bootout`, the plist normally remains at
 `~/Library/LaunchAgents/<label>.plist` while the service is absent from the
 launchd domain. `daemon start` detects that state, plans `bootstrap` followed by
 `kickstart -k`, and reports `launchdLoaded: false`. When the service is already
-loaded it plans only `kickstart -k`. If the plist is elsewhere, add its exact
+loaded it plans only `kickstart -k`. Dry-run start performs only the read-only
+`launchctl print gui/<uid>/<label>` probe needed to distinguish those states;
+an ambiguous probe failure is reported fail-closed and no mutation is planned.
+If the plist is elsewhere, add its exact
 operator-owned path with `--plist`; an external path still requires
 `--allow-external-plist true` for confirmed mutation.
 
