@@ -144,9 +144,10 @@ export interface Phase1ResourceSample {
 
 export interface Phase1ResourceMonitor {
   start(context: { target: Phase1Target; cell: Phase1Cell; outputDir: string }): Promise<{ id: string }>;
+  attach?(session: { id: string }, resident: Phase1Resident): Promise<void>;
   sample(session: { id: string }, context: { phase: "before" | "after"; input: Phase1Input }): Promise<Phase1ResourceSample>;
   classify?(samples: Phase1ResourceSample[]): { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined;
-  stop(session: { id: string }): Promise<Phase1ResourceSample>;
+  stop(session: { id: string }): Promise<Phase1ResourceSample | Phase1ResourceSample[]>;
 }
 
 export interface Phase1ResourceMonitorModule {
@@ -550,6 +551,17 @@ async function runPhase1ScreenWithLease(
         writeUnavailableMonitorEvidence(spec.outputDir, manifest, cell, infrastructureFailure ?? "monitor_start_failed");
       }
       continue;
+    }
+    if (resolvedOptions.monitor && monitorSession && resolvedOptions.monitor.attach) {
+      try { await resolvedOptions.monitor.attach(monitorSession, resident); }
+      catch (error) {
+        infrastructureFailure = `monitor attach failed: ${errorMessage(error)}`;
+        for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, "monitor_attach_failed");
+        try { await adapter.stop(resident); } catch (stopError) { infrastructureFailure = `resident stop after monitor attach failure failed: ${errorMessage(stopError)}`; }
+        const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
+        if (finalized.infrastructureFailure) infrastructureFailure = finalized.infrastructureFailure;
+        continue;
+      }
     }
     try {
       assertSecretSafe("resident argv", resident.argv.join("\n"));
@@ -1094,7 +1106,14 @@ async function finalizeMonitorEvidence(
 }> {
   let infrastructureFailure: string | undefined;
   let terminalClassification: { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined;
-  try { samples.push(validateResourceSample(await monitor.stop(session), "monitor stop resource sample")); }
+  try {
+    const stopped = await monitor.stop(session);
+    if (Array.isArray(stopped)) {
+      if (stopped.length > 16_384) throw new Error("monitor terminal trace exceeds the evidence sample cap");
+      const validated = stopped.map((sample, index) => validateResourceSample(sample, `monitor stop resource sample ${index}`));
+      samples.splice(0, samples.length, ...validated);
+    } else samples.push(validateResourceSample(stopped, "monitor stop resource sample"));
+  }
   catch (error) { infrastructureFailure = `monitor stop failed: ${errorMessage(error)}`; }
   try {
     terminalClassification = monitorClassify(monitor, samples);
@@ -1481,6 +1500,7 @@ async function loadResourceMonitorModule(identity: Phase1ResourceMonitorModule):
   if (!monitor || typeof monitor !== "object") throw new Error("resource monitor factory did not return an object");
   const candidate = monitor as Partial<Phase1ResourceMonitor>;
   if (typeof candidate.start !== "function" || typeof candidate.sample !== "function" || typeof candidate.stop !== "function"
+    || (candidate.attach !== undefined && typeof candidate.attach !== "function")
     || (candidate.classify !== undefined && typeof candidate.classify !== "function")) {
     throw new Error("resource monitor factory returned an invalid monitor implementation");
   }

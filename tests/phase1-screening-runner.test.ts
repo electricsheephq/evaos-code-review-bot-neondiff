@@ -69,6 +69,10 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
           if (kind === "start-empty") return {};
           return { id: "monitor" };
         },
+        async attach(_session, resident) {
+          if (kind === "attach-error") throw new Error("monitor attach exploded");
+          if (!resident.metadata || resident.metadata.pid !== 42) throw new Error("monitor did not receive resident metadata");
+        },
         async sample(_session, context) {
           if (kind === "throw-" + context.phase) throw new Error("monitor " + context.phase + " exploded");
           sequence += 1;
@@ -89,6 +93,7 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
         },
         async stop() {
           const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0 };
+          if (kind === "stop-array") return [{ ...base, capturedAt: "periodic", phase: "periodic" }, base];
           if (kind === "secret-stop") return { ...base, diagnostic: "Authorization: Bearer sk-secret-value-1234567890" };
           if (kind === "secret-fingerprint-stop") return { ...base, evidenceSha256: "sk-secret-value-1234567890" };
           if (kind === "stop-nan") return { ...base, swapBytes: Number.NaN };
@@ -146,7 +151,7 @@ function adapter(overrides: Partial<Phase1ResidentAdapter> = {}): Phase1Resident
   return {
     async start(context) {
       expect(existsSync(join(context.outputDir, "manifest.json"))).toBe(true);
-      return { id: "resident-1", argv: ["/opt/llama-server", "--model", "/models/qwen.gguf"] };
+      return { id: "resident-1", argv: ["/opt/llama-server", "--model", "/models/qwen.gguf"], metadata: { pid: 42 } };
     },
     async invoke(_resident, request) {
       return {
@@ -486,6 +491,21 @@ describe("Phase 1 screening runner", () => {
     const second = JSON.parse(readFileSync(join(secondDir, "resources", "warm-8k.json"), "utf8"));
     expect(first.samples[0].rssBytes).toBe(101);
     expect(second.samples[0].rssBytes).toBe(101);
+  });
+
+  it("attaches the pinned monitor after resident start and persists a bounded stop trace array", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-"));
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("stop-array") });
+    const resource = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resource.samples.map((sample: { phase: string }) => sample.phase)).toEqual(["periodic", "stopped"]);
+  });
+
+  it("fails closed and stops the resident when monitor attachment fails", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-fail-"));
+    let stopped = false;
+    await expect(runPhase1Screen(spec(outputDir), adapter({ async stop() { stopped = true; } }), { monitorModule: monitorModule("attach-error") })).rejects.toThrow(/monitor attach exploded/i);
+    expect(stopped).toBe(true);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
   });
 
   it("rejects relative or package imports because pinned monitors load as self-contained exact bytes", async () => {
