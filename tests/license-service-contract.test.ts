@@ -193,6 +193,15 @@ async function applyLifecycle(
   };
 }
 
+function expectLifecycleResponseRedacted(
+  response: { text: string },
+  rawKey: string
+): void {
+  for (const forbidden of [rawKey, "acct_contract", "sub_contract_", "cs_contract_"]) {
+    expect(response.text).not.toContain(forbidden);
+  }
+}
+
 describe("client ↔ service contract (real src/license.ts against real service)", () => {
   const roots: string[] = [];
   const closers: Array<() => void> = [];
@@ -330,6 +339,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
     lifecycleEvidence.push(renewed.text);
     expect(renewed.status).toBe(200);
     expect(renewed.json.status).toBe("updated");
+    expectLifecycleResponseRedacted(renewed, key);
 
     const activeAfterRenewal = await getLicenseStatus({
       config,
@@ -348,6 +358,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
     lifecycleEvidence.push(cancelled.text);
     expect(cancelled.status).toBe(200);
     expect(cancelled.json.status).toBe("updated");
+    expectLifecycleResponseRedacted(cancelled, key);
 
     const activeAfterCancellation = await getLicenseStatus({
       config,
@@ -399,7 +410,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
     );
     expect(revokedResponse.status).toBe(200);
     expect(revokedResponse.json.status).toBe("terminally_revoked");
-    expect(revokedResponse.text).not.toContain(key);
+    expectLifecycleResponseRedacted(revokedResponse, key);
 
     const revoked = await getLicenseStatus({
       config,
@@ -422,7 +433,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
     );
     expect(laterRenewal.status, laterRenewal.text).toBe(409);
     expect(laterRenewal.json).toEqual({ status: "terminally_revoked" });
-    expect(laterRenewal.text).not.toContain(key);
+    expectLifecycleResponseRedacted(laterRenewal, key);
 
     const stillRevoked = await getLicenseStatus({
       config,

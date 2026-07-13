@@ -22,6 +22,7 @@ export function createInProcessLicenseApi(issuanceSecret: string): InProcessLice
     const path = new URL(String(input)).pathname;
     const body = String(init?.body ?? "");
     return await new Promise<Response>((resolve, reject) => {
+      let requestErrorCallback: ((error: Error) => void) | undefined;
       const req: any = {
         method: init?.method ?? "POST",
         url: path,
@@ -30,11 +31,22 @@ export function createInProcessLicenseApi(issuanceSecret: string): InProcessLice
         on(event: string, callback: (value?: unknown) => void) {
           if (event === "data" && body) callback(Buffer.from(body));
           if (event === "end") callback();
-          if (event === "error") void callback;
+          if (event === "error") {
+            requestErrorCallback = callback as (error: Error) => void;
+          }
           return req;
         },
         destroy(error?: Error) {
-          if (error) reject(error);
+          if (!error) return;
+          if (requestErrorCallback) {
+            try {
+              requestErrorCallback(error);
+            } catch (callbackError) {
+              reject(callbackError);
+            }
+          } else {
+            reject(error);
+          }
         }
       };
       let statusCode = 200;
